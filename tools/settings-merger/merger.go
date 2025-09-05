@@ -86,7 +86,7 @@ func (sm *SettingsMerger) CreateBackup() (string, error) {
 		return "", nil
 	}
 
-	timestamp := time.Now().Format("20060102_150405")
+	timestamp := time.Now().Format("20060102_150405.000")
 	backupPath := fmt.Sprintf("%s.backup_%s", sm.settingsPath, timestamp)
 
 	if sm.dryRun {

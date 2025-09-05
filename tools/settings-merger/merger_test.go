@@ -449,7 +449,7 @@ func TestListBackups(t *testing.T) {
 	
 	// Create multiple backups
 	backup1, _ := merger.CreateBackup()
-	time.Sleep(10 * time.Millisecond) // Ensure different timestamps
+	time.Sleep(100 * time.Millisecond) // Ensure different timestamps
 	backup2, _ := merger.CreateBackup()
 	
 	backups, err := merger.ListBackups()
@@ -458,7 +458,7 @@ func TestListBackups(t *testing.T) {
 	}
 	
 	if len(backups) != 2 {
-		t.Errorf("Expected 2 backups, got %d", len(backups))
+		t.Errorf("Expected 2 backups, got %d. Backups: %v. Backup1: %s, Backup2: %s", len(backups), backups, backup1, backup2)
 	}
 	
 	// Verify both backups are in the list

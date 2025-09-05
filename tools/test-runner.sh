@@ -30,13 +30,13 @@ total_tests=0
 
 # Test 1: Fixture validation
 ((total_tests++))
-if ! run_test "Fixture Validation" "tools/irrlicht-replay --validate-only fixtures/session-start.json"; then
+if ! run_test "Fixture Validation" "./tools/irrlicht-replay --validate-only fixtures/session-start.json"; then
     ((failed_tests++))
 fi
 
 # Test 2: Edge case validation
 ((total_tests++))
-if ! run_test "Edge Case Validation" "tools/irrlicht-replay --validate-only fixtures/edge-cases/malformed-json.txt"; then
+if ! run_test "Edge Case Validation" "./tools/irrlicht-replay --validate-only fixtures/edge-cases/malformed-json.txt"; then
     # This should fail, so invert the logic
     echo "✅ Edge Case Validation: PASSED (correctly rejected malformed JSON)"
 else
@@ -50,9 +50,9 @@ if ! run_test "Settings Merger Unit Tests" "cd tools/settings-merger && go test 
     ((failed_tests++))
 fi
 
-# Test 4: irrlicht-hook build test
+# Test 4: Hook receiver integration test
 ((total_tests++))
-if ! run_test "Hook Binary Build" "cd tools/irrlicht-hook && go build -o irrlicht-hook ."; then
+if ! run_test "Hook Receiver Integration" "./tools/irrlicht-replay --hook-binary ./tools/irrlicht-hook/irrlicht-hook fixtures/session-start.json"; then
     ((failed_tests++))
 fi
 
@@ -65,9 +65,9 @@ fi
 # Test 6: Concurrency scenario validation
 ((total_tests++))
 if ! run_test "Concurrent Scenarios Validation" "
-    tools/irrlicht-replay --validate-only tests/scenarios/concurrent-2.json && \
-    tools/irrlicht-replay --validate-only tests/scenarios/concurrent-4.json && \
-    tools/irrlicht-replay --validate-only tests/scenarios/concurrent-8.json
+    ./tools/irrlicht-replay --validate-only tests/scenarios/concurrent-2.json && \
+    ./tools/irrlicht-replay --validate-only tests/scenarios/concurrent-4.json && \
+    ./tools/irrlicht-replay --validate-only tests/scenarios/concurrent-8.json
 "; then
     ((failed_tests++))
 fi
@@ -75,8 +75,7 @@ fi
 # Test 7: Kill switch environment variable
 ((total_tests++))
 if ! run_test "Kill Switch (Environment)" "
-    cd tools/irrlicht-hook && \
-    IRRLICHT_DISABLED=1 echo '{}' | ./irrlicht-hook; \
+    IRRLICHT_DISABLED=1 ./tools/irrlicht-replay --hook-binary ./tools/irrlicht-hook/irrlicht-hook fixtures/session-start.json >/dev/null 2>&1; \
     test \$? -eq 0  # Should exit successfully with status 0
 "; then
     ((failed_tests++))
