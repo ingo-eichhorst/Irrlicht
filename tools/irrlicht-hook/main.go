@@ -7,13 +7,31 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
 	MaxPayloadSize = 512 * 1024 // 512KB
 	AppSupportDir  = "Library/Application Support/Irrlicht"
+	Version        = "1.0.0"
+	MaxLogSize     = 10 * 1024 * 1024 // 10MB
+	MaxLogFiles    = 5
+)
+
+// Metrics tracks performance and resource usage
+type Metrics struct {
+	mu             sync.Mutex
+	eventsProcessed int64
+	totalLatencyMs  int64
+	lastEventTime   time.Time
+}
+
+var (
+	metrics = &Metrics{}
+	logger  *StructuredLogger
 )
 
 // HookEvent represents a Claude Code hook event
@@ -26,63 +44,121 @@ type HookEvent struct {
 
 // SessionState represents the current state of a session
 type SessionState struct {
-	Version       int                    `json:"version"`
-	SessionID     string                 `json:"session_id"`
-	State         string                 `json:"state"`
-	Model         string                 `json:"model,omitempty"`
-	CWD           string                 `json:"cwd,omitempty"`
-	TranscriptPath string                `json:"transcript_path,omitempty"`
-	FirstSeen     int64                  `json:"first_seen"`
-	UpdatedAt     int64                  `json:"updated_at"`
-	Confidence    string                 `json:"confidence"`
+	Version       int    `json:"version"`
+	SessionID     string `json:"session_id"`
+	State         string `json:"state"`
+	Model         string `json:"model,omitempty"`
+	CWD           string `json:"cwd,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	FirstSeen     int64  `json:"first_seen"`
+	UpdatedAt     int64  `json:"updated_at"`
+	Confidence    string `json:"confidence"`
+	EventCount    int    `json:"event_count"`
+	LastEvent     string `json:"last_event"`
+}
+
+// LogEntry represents a structured log entry
+type LogEntry struct {
+	Timestamp       string `json:"timestamp"`
+	Level           string `json:"level"`
+	EventType       string `json:"event_type,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	ProcessingTimeMs int64  `json:"processing_time_ms,omitempty"`
+	PayloadSizeBytes int    `json:"payload_size_bytes,omitempty"`
+	Result          string `json:"result"`
+	Message         string `json:"message,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+// StructuredLogger handles JSON-formatted logging with rotation
+type StructuredLogger struct {
+	logFile     *os.File
+	logPath     string
+	currentSize int64
+	mu          sync.Mutex
 }
 
 func main() {
+	startTime := time.Now()
+	
+	// Initialize structured logger
+	var err error
+	logger, err = NewStructuredLogger()
+	if err != nil {
+		log.Printf("Failed to initialize logger: %v", err)
+		os.Exit(1)
+	}
+	defer logger.Close()
+
+	// Check for version flag
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("irrlicht-hook version %s\n", Version)
+		fmt.Printf("Built with %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
+		os.Exit(0)
+	}
+
 	// Check for kill switch via environment variable
 	if os.Getenv("IRRLICHT_DISABLED") == "1" {
-		logEvent("Kill switch activated via IRRLICHT_DISABLED=1, exiting")
+		logger.LogInfo("", "", "Kill switch activated via IRRLICHT_DISABLED=1, exiting")
 		os.Exit(0)
 	}
 
 	// Check for kill switch in settings
 	if isDisabledInSettings() {
-		logEvent("Kill switch activated via settings, exiting")
+		logger.LogInfo("", "", "Kill switch activated via settings, exiting")
 		os.Exit(0)
 	}
 
 	// Read event from stdin
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		logError("Failed to read stdin: %v", err)
+		logger.LogError("", "", fmt.Sprintf("Failed to read stdin: %v", err))
 		os.Exit(1)
 	}
 
+	payloadSize := len(input)
+
 	// Check payload size
-	if len(input) > MaxPayloadSize {
-		logError("Payload size %d exceeds maximum %d", len(input), MaxPayloadSize)
+	if payloadSize > MaxPayloadSize {
+		logger.LogError("", "", fmt.Sprintf("Payload size %d exceeds maximum %d", payloadSize, MaxPayloadSize))
 		os.Exit(1)
 	}
 
 	// Parse event
 	var event HookEvent
 	if err := json.Unmarshal(input, &event); err != nil {
-		logError("Failed to parse JSON: %v", err)
+		logger.LogError("", "", fmt.Sprintf("Failed to parse JSON: %v", err))
 		os.Exit(1)
 	}
 
 	// Validate and sanitize
 	if err := validateEvent(&event); err != nil {
-		logError("Event validation failed: %v", err)
+		logger.LogError(event.HookEventName, event.SessionID, fmt.Sprintf("Event validation failed: %v", err))
 		os.Exit(1)
 	}
 
-	// Process event
+	// Process event with performance tracking
+	processStart := time.Now()
 	if err := processEvent(&event); err != nil {
-		logError("Failed to process event: %v", err)
+		processingTime := time.Since(processStart).Milliseconds()
+		logger.LogError(event.HookEventName, event.SessionID, fmt.Sprintf("Failed to process event: %v", err))
+		logger.LogProcessingTime(event.HookEventName, event.SessionID, processingTime, payloadSize, "error")
 		os.Exit(1)
 	}
 
-	logEvent("Successfully processed %s event for session %s", event.HookEventName, event.SessionID)
+	// Log successful processing with metrics
+	processingTime := time.Since(processStart).Milliseconds()
+	totalTime := time.Since(startTime).Milliseconds()
+	
+	// Update metrics
+	metrics.mu.Lock()
+	metrics.eventsProcessed++
+	metrics.totalLatencyMs += totalTime
+	metrics.lastEventTime = time.Now()
+	metrics.mu.Unlock()
+
+	logger.LogProcessingTime(event.HookEventName, event.SessionID, processingTime, payloadSize, "success")
+	logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Successfully processed event in %dms", totalTime))
 }
 
 // isDisabledInSettings checks if Irrlicht is disabled in Claude settings
@@ -203,6 +279,7 @@ func processEvent(event *HookEvent) error {
 		State:      state,
 		UpdatedAt:  now,
 		Confidence: "high",
+		LastEvent:  event.HookEventName,
 	}
 
 	// Extract additional data
@@ -218,12 +295,14 @@ func processEvent(event *HookEvent) error {
 		}
 	}
 
-	// Load existing state to preserve first_seen
+	// Load existing state to preserve first_seen and event_count
 	existingState, err := loadSessionState(event.SessionID)
 	if err == nil && existingState.FirstSeen > 0 {
 		sessionState.FirstSeen = existingState.FirstSeen
+		sessionState.EventCount = existingState.EventCount + 1
 	} else {
 		sessionState.FirstSeen = now
+		sessionState.EventCount = 1
 	}
 
 	// Save session state
@@ -302,47 +381,169 @@ func getSessionStatePath(sessionID string) string {
 	return filepath.Join(getInstancesDir(), sessionID+".json")
 }
 
-// logEvent logs an event message
-func logEvent(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
-	log.Printf("[irrlicht-hook] %s", message)
-	
-	// Also log to file if possible
-	if logFile := getLogFile(); logFile != nil {
-		fmt.Fprintf(logFile, "[%s] %s\n", time.Now().Format(time.RFC3339), message)
-		logFile.Close()
-	}
-}
-
-// logError logs an error message
-func logError(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
-	log.Printf("[irrlicht-hook] ERROR: %s", message)
-	
-	// Also log to file if possible
-	if logFile := getLogFile(); logFile != nil {
-		fmt.Fprintf(logFile, "[%s] ERROR: %s\n", time.Now().Format(time.RFC3339), message)
-		logFile.Close()
-	}
-}
-
-// getLogFile opens the log file for appending
-func getLogFile() *os.File {
+// NewStructuredLogger creates a new structured logger with rotation
+func NewStructuredLogger() (*StructuredLogger, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	logsDir := filepath.Join(homeDir, AppSupportDir, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to create logs directory: %w", err)
 	}
 
 	logPath := filepath.Join(logsDir, "events.log")
+	
+	// Open or create log file
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 
-	return file
+	// Get current file size
+	stat, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("failed to stat log file: %w", err)
+	}
+
+	sl := &StructuredLogger{
+		logFile:     file,
+		logPath:     logPath,
+		currentSize: stat.Size(),
+	}
+
+	// Check if rotation is needed
+	if sl.currentSize > MaxLogSize {
+		if err := sl.rotate(); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to rotate log: %w", err)
+		}
+	}
+
+	return sl, nil
+}
+
+// Close closes the log file
+func (sl *StructuredLogger) Close() error {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	
+	if sl.logFile != nil {
+		return sl.logFile.Close()
+	}
+	return nil
+}
+
+// LogInfo logs an info-level structured log entry
+func (sl *StructuredLogger) LogInfo(eventType, sessionID, message string) {
+	entry := LogEntry{
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Level:     "info",
+		EventType: eventType,
+		SessionID: sessionID,
+		Result:    "success",
+		Message:   message,
+	}
+	sl.writeEntry(entry)
+}
+
+// LogError logs an error-level structured log entry
+func (sl *StructuredLogger) LogError(eventType, sessionID, errorMsg string) {
+	entry := LogEntry{
+		Timestamp: time.Now().Format(time.RFC3339Nano),
+		Level:     "error",
+		EventType: eventType,
+		SessionID: sessionID,
+		Result:    "error",
+		Error:     errorMsg,
+	}
+	sl.writeEntry(entry)
+}
+
+// LogProcessingTime logs processing performance metrics
+func (sl *StructuredLogger) LogProcessingTime(eventType, sessionID string, processingTimeMs int64, payloadSize int, result string) {
+	entry := LogEntry{
+		Timestamp:       time.Now().Format(time.RFC3339Nano),
+		Level:           "info",
+		EventType:       eventType,
+		SessionID:       sessionID,
+		ProcessingTimeMs: processingTimeMs,
+		PayloadSizeBytes: payloadSize,
+		Result:          result,
+		Message:         "Event processing completed",
+	}
+	sl.writeEntry(entry)
+}
+
+// writeEntry writes a log entry to the file with rotation check
+func (sl *StructuredLogger) writeEntry(entry LogEntry) {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+
+	// Serialize entry to JSON
+	jsonData, err := json.Marshal(entry)
+	if err != nil {
+		log.Printf("Failed to marshal log entry: %v", err)
+		return
+	}
+
+	// Add newline
+	jsonData = append(jsonData, '\n')
+
+	// Check if rotation is needed before writing
+	if sl.currentSize+int64(len(jsonData)) > MaxLogSize {
+		if err := sl.rotate(); err != nil {
+			log.Printf("Failed to rotate log: %v", err)
+			return
+		}
+	}
+
+	// Write to current log file
+	n, err := sl.logFile.Write(jsonData)
+	if err != nil {
+		log.Printf("Failed to write log entry: %v", err)
+		return
+	}
+
+	sl.currentSize += int64(n)
+}
+
+// rotate rotates the log files
+func (sl *StructuredLogger) rotate() error {
+	// Close current file
+	if sl.logFile != nil {
+		sl.logFile.Close()
+	}
+
+	// Rotate existing files
+	for i := MaxLogFiles - 1; i >= 1; i-- {
+		oldPath := fmt.Sprintf("%s.%d", sl.logPath, i)
+		newPath := fmt.Sprintf("%s.%d", sl.logPath, i+1)
+		
+		if _, err := os.Stat(oldPath); err == nil {
+			if i == MaxLogFiles-1 {
+				// Remove the oldest file
+				os.Remove(newPath)
+			}
+			os.Rename(oldPath, newPath)
+		}
+	}
+
+	// Move current log to .1
+	if _, err := os.Stat(sl.logPath); err == nil {
+		os.Rename(sl.logPath, sl.logPath+".1")
+	}
+
+	// Create new log file
+	file, err := os.OpenFile(sl.logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create new log file: %w", err)
+	}
+
+	sl.logFile = file
+	sl.currentSize = 0
+
+	return nil
 }
