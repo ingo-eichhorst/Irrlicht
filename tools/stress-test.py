@@ -46,13 +46,15 @@ class StressTestRunner:
                 'Stop', 'SubagentStop', 'SessionEnd'
             ])
         
+        import os
+        username = os.environ.get('USER', 'testuser')
         event = {
             'hook_event_name': event_type,
             'session_id': session_id,
             'timestamp': f"{int(time.time() * 1000000)}",
             'data': {
-                'transcript_path': f'/Users/testuser/.claude/projects/stress-test-{session_id}/transcript.jsonl',
-                'cwd': f'/Users/testuser/projects/stress-test-{session_id}',
+                'transcript_path': f'/Users/{username}/.claude/projects/stress-test-{session_id}/transcript.jsonl',
+                'cwd': f'/Users/{username}/projects/stress-test-{session_id}',
                 'model': random.choice(['claude-3.7-sonnet', 'claude-3-haiku', 'claude-3-opus']),
             }
         }
