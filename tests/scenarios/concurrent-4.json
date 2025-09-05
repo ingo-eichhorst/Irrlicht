@@ -1,0 +1,152 @@
+{
+  "name": "Four Concurrent Sessions",
+  "description": "Tests medium concurrency with 4 sessions with mixed state transitions",
+  "delays_ms": [0, 50, 100, 150, 300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200],
+  "events": [
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_alpha",
+      "timestamp": "2024-09-05T14:30:00.000Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/alpha/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/alpha",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_beta", 
+      "timestamp": "2024-09-05T14:30:00.050Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/beta/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/beta",
+        "model": "claude-3-haiku"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_gamma",
+      "timestamp": "2024-09-05T14:30:00.100Z", 
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/gamma/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/gamma",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_delta",
+      "timestamp": "2024-09-05T14:30:00.150Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/delta/transcript.jsonl", 
+        "cwd": "/Users/ingo/projects/delta",
+        "model": "claude-3-opus"
+      }
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_alpha",
+      "timestamp": "2024-09-05T14:30:00.300Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/alpha/transcript.jsonl",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "UserPromptSubmit", 
+      "session_id": "sess_beta",
+      "timestamp": "2024-09-05T14:30:00.400Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/beta/transcript.jsonl",
+        "model": "claude-3-haiku"
+      }
+    },
+    {
+      "hook_event_name": "Notification",
+      "session_id": "sess_gamma",
+      "timestamp": "2024-09-05T14:30:00.600Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/gamma/transcript.jsonl",
+        "model": "claude-3.7-sonnet",
+        "notification_type": "confirmation_required"
+      }
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_delta", 
+      "timestamp": "2024-09-05T14:30:00.800Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/delta/transcript.jsonl",
+        "model": "claude-3-opus"
+      }
+    },
+    {
+      "hook_event_name": "Notification",
+      "session_id": "sess_alpha",
+      "timestamp": "2024-09-05T14:30:01.000Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/alpha/transcript.jsonl",
+        "model": "claude-3.7-sonnet",
+        "notification_type": "user_input_required"
+      }
+    },
+    {
+      "hook_event_name": "Stop",
+      "session_id": "sess_beta",
+      "timestamp": "2024-09-05T14:30:01.200Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/beta/transcript.jsonl", 
+        "model": "claude-3-haiku",
+        "stop_reason": "user_requested"
+      }
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_gamma",
+      "timestamp": "2024-09-05T14:30:01.400Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/gamma/transcript.jsonl",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "SubagentStop",
+      "session_id": "sess_delta",
+      "timestamp": "2024-09-05T14:30:01.600Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/delta/transcript.jsonl",
+        "model": "claude-3-opus",
+        "subagent_type": "code-reviewer"
+      }
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_alpha", 
+      "timestamp": "2024-09-05T14:30:01.800Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/alpha/transcript.jsonl",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "SessionEnd",
+      "session_id": "sess_gamma",
+      "timestamp": "2024-09-05T14:30:02.000Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/gamma/transcript.jsonl",
+        "model": "claude-3.7-sonnet",
+        "end_reason": "completed"
+      }
+    },
+    {
+      "hook_event_name": "SessionEnd",
+      "session_id": "sess_alpha",
+      "timestamp": "2024-09-05T14:30:02.200Z", 
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/alpha/transcript.jsonl",
+        "model": "claude-3.7-sonnet",
+        "end_reason": "completed"
+      }
+    }
+  ]
+}

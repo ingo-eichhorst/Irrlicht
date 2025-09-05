@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "sess_invalid_paths",
+  "timestamp": "2024-09-05T14:30:00.000Z",
+  "data": {
+    "transcript_path": "/etc/passwd",
+    "cwd": "/root",
+    "model": "claude-3.7-sonnet",
+    "malicious_path": "../../../sensitive-file",
+    "absolute_root": "/",
+    "windows_path": "C:\\Windows\\System32"
+  }
+}

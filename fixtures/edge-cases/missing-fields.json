@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "SessionStart",
+  "timestamp": "2024-09-05T14:30:00.000Z",
+  "data": {
+    "transcript_path": "/path/to/transcript.jsonl"
+  }
+}
