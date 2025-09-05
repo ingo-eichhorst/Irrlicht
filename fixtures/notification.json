@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "Notification",
+  "session_id": "sess_abc123def456", 
+  "timestamp": "2024-09-05T14:33:45.120Z",
+  "data": {
+    "transcript_path": "/Users/ingo/.claude/projects/my-project/transcript.jsonl",
+    "cwd": "/Users/ingo/projects/my-project",
+    "model": "claude-3.7-sonnet",
+    "notification_type": "user_input_required",
+    "message": "I need your confirmation to proceed with this change",
+    "context": "file_modification"
+  }
+}

@@ -1,0 +1,183 @@
+{
+  "name": "Eight Concurrent Sessions", 
+  "description": "Tests high concurrency stress with 8 sessions and rapid state changes",
+  "delays_ms": [0, 25, 50, 75, 100, 125, 150, 175, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 900, 1000, 1100],
+  "events": [
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_01",
+      "timestamp": "2024-09-05T14:30:00.000Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/proj-01/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/proj-01",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_02",
+      "timestamp": "2024-09-05T14:30:00.025Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/proj-02/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/proj-02", 
+        "model": "claude-3-haiku"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_03",
+      "timestamp": "2024-09-05T14:30:00.050Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/proj-03/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/proj-03",
+        "model": "claude-3-opus"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_04",
+      "timestamp": "2024-09-05T14:30:00.075Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/proj-04/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/proj-04",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_05", 
+      "timestamp": "2024-09-05T14:30:00.100Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/proj-05/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/proj-05",
+        "model": "claude-3-haiku"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_06",
+      "timestamp": "2024-09-05T14:30:00.125Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/proj-06/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/proj-06",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_07",
+      "timestamp": "2024-09-05T14:30:00.150Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/proj-07/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/proj-07",
+        "model": "claude-3-opus"
+      }
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "session_id": "sess_08",
+      "timestamp": "2024-09-05T14:30:00.175Z",
+      "data": {
+        "transcript_path": "/Users/ingo/.claude/projects/proj-08/transcript.jsonl",
+        "cwd": "/Users/ingo/projects/proj-08",
+        "model": "claude-3.7-sonnet"
+      }
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_01",
+      "timestamp": "2024-09-05T14:30:00.200Z",
+      "data": {"model": "claude-3.7-sonnet"}
+    },
+    {
+      "hook_event_name": "UserPromptSubmit", 
+      "session_id": "sess_03",
+      "timestamp": "2024-09-05T14:30:00.250Z",
+      "data": {"model": "claude-3-opus"}
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_05",
+      "timestamp": "2024-09-05T14:30:00.300Z",
+      "data": {"model": "claude-3-haiku"}
+    },
+    {
+      "hook_event_name": "Notification",
+      "session_id": "sess_02",
+      "timestamp": "2024-09-05T14:30:00.350Z",
+      "data": {"model": "claude-3-haiku", "notification_type": "user_input_required"}
+    },
+    {
+      "hook_event_name": "Notification",
+      "session_id": "sess_04", 
+      "timestamp": "2024-09-05T14:30:00.400Z",
+      "data": {"model": "claude-3.7-sonnet", "notification_type": "confirmation_required"}
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_07",
+      "timestamp": "2024-09-05T14:30:00.450Z",
+      "data": {"model": "claude-3-opus"}
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_08",
+      "timestamp": "2024-09-05T14:30:00.500Z",
+      "data": {"model": "claude-3.7-sonnet"}
+    },
+    {
+      "hook_event_name": "Stop",
+      "session_id": "sess_01",
+      "timestamp": "2024-09-05T14:30:00.550Z",
+      "data": {"model": "claude-3.7-sonnet", "stop_reason": "completed"}
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_06", 
+      "timestamp": "2024-09-05T14:30:00.600Z",
+      "data": {"model": "claude-3.7-sonnet"}
+    },
+    {
+      "hook_event_name": "Notification",
+      "session_id": "sess_03",
+      "timestamp": "2024-09-05T14:30:00.650Z",
+      "data": {"model": "claude-3-opus", "notification_type": "user_input_required"}
+    },
+    {
+      "hook_event_name": "SubagentStop",
+      "session_id": "sess_05",
+      "timestamp": "2024-09-05T14:30:00.700Z",
+      "data": {"model": "claude-3-haiku", "subagent_type": "code-reviewer"}
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "sess_02",
+      "timestamp": "2024-09-05T14:30:00.750Z",
+      "data": {"model": "claude-3-haiku"}
+    },
+    {
+      "hook_event_name": "Stop",
+      "session_id": "sess_04", 
+      "timestamp": "2024-09-05T14:30:00.800Z",
+      "data": {"model": "claude-3.7-sonnet", "stop_reason": "user_requested"}
+    },
+    {
+      "hook_event_name": "SessionEnd",
+      "session_id": "sess_07",
+      "timestamp": "2024-09-05T14:30:00.900Z",
+      "data": {"model": "claude-3-opus", "end_reason": "completed"}
+    },
+    {
+      "hook_event_name": "SessionEnd",
+      "session_id": "sess_08",
+      "timestamp": "2024-09-05T14:30:01.000Z",
+      "data": {"model": "claude-3.7-sonnet", "end_reason": "completed"}
+    },
+    {
+      "hook_event_name": "SessionEnd",
+      "session_id": "sess_06",
+      "timestamp": "2024-09-05T14:30:01.100Z",
+      "data": {"model": "claude-3.7-sonnet", "end_reason": "completed"}
+    }
+  ]
+}

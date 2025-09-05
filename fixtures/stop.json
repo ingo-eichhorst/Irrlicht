@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "sess_abc123def456",
+  "timestamp": "2024-09-05T14:35:20.890Z",
+  "data": {
+    "transcript_path": "/Users/ingo/.claude/projects/my-project/transcript.jsonl",
+    "cwd": "/Users/ingo/projects/my-project",
+    "model": "claude-3.7-sonnet",
+    "stop_reason": "user_requested",
+    "tokens_used": 8432,
+    "duration_ms": 125000
+  }
+}

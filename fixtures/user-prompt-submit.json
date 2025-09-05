@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "sess_abc123def456",
+  "timestamp": "2024-09-05T14:31:15.230Z",
+  "data": {
+    "transcript_path": "/Users/ingo/.claude/projects/my-project/transcript.jsonl",
+    "cwd": "/Users/ingo/projects/my-project",
+    "model": "claude-3.7-sonnet",
+    "prompt_length": 156,
+    "has_attachments": false,
+    "message_id": "msg_789xyz"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "hook_event_name": "SubagentStop",
+  "session_id": "sess_abc123def456",
+  "timestamp": "2024-09-05T14:34:12.450Z",
+  "data": {
+    "transcript_path": "/Users/ingo/.claude/projects/my-project/transcript.jsonl",
+    "cwd": "/Users/ingo/projects/my-project",
+    "model": "claude-3.7-sonnet",
+    "subagent_type": "code-reviewer",
+    "subagent_id": "sa_review_001",
+    "completion_status": "success",
+    "output_summary": "Code review completed with 3 suggestions"
+  }
+}

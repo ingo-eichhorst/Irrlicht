@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""
+irrlicht-replay - Test tool for replaying Claude Code hook events
+
+This tool pipes fixture JSON events to irrlicht-hook via stdin to test
+the hook processing pipeline without requiring actual Claude Code sessions.
+
+Usage:
+    # Single event from stdin
+    cat fixtures/session-start.json | irrlicht-replay
+    
+    # Single event from file  
+    irrlicht-replay fixtures/session-start.json
+    
+    # Multi-event scenario
+    irrlicht-replay --scenario tests/scenarios/concurrent-2.json
+    
+    # Test edge cases
+    irrlicht-replay --validate-only fixtures/edge-cases/malformed-json.txt
+"""
+
+import json
+import sys
+import os
+import subprocess
+import time
+import argparse
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+
+class EventValidator:
+    """Validates hook events against expected schema"""
+    
+    REQUIRED_FIELDS = ['hook_event_name', 'session_id', 'timestamp']
+    VALID_EVENTS = ['SessionStart', 'UserPromptSubmit', 'Notification', 'Stop', 'SubagentStop', 'SessionEnd']
+    MAX_PAYLOAD_SIZE = 512 * 1024  # 512KB
+    
+    @classmethod
+    def validate(cls, event: Dict[str, Any]) -> tuple[bool, str]:
+        """Validate a single event. Returns (is_valid, error_message)"""
+        
+        # Check payload size
+        payload_str = json.dumps(event)
+        if len(payload_str.encode('utf-8')) > cls.MAX_PAYLOAD_SIZE:
+            return False, f"Payload size {len(payload_str)} exceeds maximum {cls.MAX_PAYLOAD_SIZE}"
+        
+        # Check required top-level fields
+        for field in cls.REQUIRED_FIELDS:
+            if field not in event:
+                return False, f"Missing required field: {field}"
+        
+        # Check event type
+        event_name = event.get('hook_event_name')
+        if event_name not in cls.VALID_EVENTS:
+            return False, f"Invalid event name: {event_name}. Must be one of {cls.VALID_EVENTS}"
+        
+        # Check session_id format (basic validation)
+        session_id = event.get('session_id', '')
+        if not session_id or len(session_id) < 5:
+            return False, f"Invalid session_id: {session_id}"
+        
+        # Path sanitization check
+        data = event.get('data', {})
+        if 'transcript_path' in data:
+            path = data['transcript_path']
+            if cls._is_suspicious_path(path):
+                return False, f"Suspicious transcript path: {path}"
+        
+        if 'cwd' in data:
+            path = data['cwd']  
+            if cls._is_suspicious_path(path):
+                return False, f"Suspicious cwd path: {path}"
+        
+        return True, ""
+    
+    @classmethod
+    def _is_suspicious_path(cls, path: str) -> bool:
+        """Check if path looks suspicious (outside user domain)"""
+        suspicious_patterns = [
+            '/etc/', '/root/', '/var/', '/usr/', '/sys/', '/dev/', '/proc/',
+            '../', '..\\', 'C:\\', '\\\\', '//'
+        ]
+        return any(pattern in path for pattern in suspicious_patterns)
+
+class HookReplay:
+    """Main replay orchestrator"""
+    
+    def __init__(self, hook_binary_path: str = 'irrlicht-hook', verbose: bool = False):
+        self.hook_binary = hook_binary_path
+        self.verbose = verbose
+        
+    def replay_single(self, event: Dict[str, Any]) -> tuple[bool, str]:
+        """Replay a single event through the hook processor"""
+        
+        # Validate first
+        valid, error = EventValidator.validate(event)
+        if not valid:
+            return False, f"Validation failed: {error}"
+        
+        try:
+            # Convert event to JSON
+            event_json = json.dumps(event)
+            
+            if self.verbose:
+                print(f"Replaying event: {event['hook_event_name']} for session {event['session_id']}")
+            
+            # Run irrlicht-hook with event as stdin
+            process = subprocess.run(
+                [self.hook_binary],
+                input=event_json,
+                text=True,
+                capture_output=True,
+                timeout=10
+            )
+            
+            if process.returncode != 0:
+                return False, f"Hook process failed: {process.stderr}"
+            
+            return True, process.stdout or "Event processed successfully"
+            
+        except subprocess.TimeoutExpired:
+            return False, "Hook process timed out"
+        except FileNotFoundError:
+            return False, f"Hook binary not found: {self.hook_binary}"
+        except Exception as e:
+            return False, f"Unexpected error: {str(e)}"
+    
+    def replay_scenario(self, scenario_path: str) -> tuple[bool, List[str]]:
+        """Replay a multi-event scenario from JSON file"""
+        
+        try:
+            with open(scenario_path, 'r') as f:
+                scenario = json.load(f)
+            
+            events = scenario.get('events', [])
+            delays = scenario.get('delays_ms', [0] * len(events))
+            
+            if len(delays) < len(events):
+                delays.extend([0] * (len(events) - len(delays)))
+            
+            results = []
+            
+            for i, event in enumerate(events):
+                if i > 0 and delays[i] > 0:
+                    time.sleep(delays[i] / 1000.0)  # Convert ms to seconds
+                
+                success, message = self.replay_single(event)
+                status = "✓" if success else "✗"
+                results.append(f"{status} Event {i+1}: {message}")
+                
+                if not success:
+                    return False, results
+            
+            return True, results
+            
+        except Exception as e:
+            return False, [f"Scenario replay failed: {str(e)}"]
+
+def main():
+    parser = argparse.ArgumentParser(description='Replay Claude Code hook events for testing')
+    parser.add_argument('file', nargs='?', help='JSON file to replay (or read from stdin)')
+    parser.add_argument('--scenario', help='Multi-event scenario file to replay')
+    parser.add_argument('--validate-only', help='Only validate, do not replay')
+    parser.add_argument('--hook-binary', default='irrlicht-hook', help='Path to irrlicht-hook binary')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
+    
+    args = parser.parse_args()
+    
+    replay = HookReplay(args.hook_binary, args.verbose)
+    
+    # Validation-only mode
+    if args.validate_only:
+        try:
+            with open(args.validate_only, 'r') as f:
+                content = f.read()
+            
+            try:
+                event = json.loads(content)
+                valid, error = EventValidator.validate(event)
+                if valid:
+                    print(f"✓ {args.validate_only}: Valid")
+                    return 0
+                else:
+                    print(f"✗ {args.validate_only}: {error}")
+                    return 1
+            except json.JSONDecodeError as e:
+                print(f"✗ {args.validate_only}: Invalid JSON - {str(e)}")
+                return 1
+                
+        except FileNotFoundError:
+            print(f"✗ File not found: {args.validate_only}")
+            return 1
+    
+    # Scenario mode
+    if args.scenario:
+        success, results = replay.replay_scenario(args.scenario)
+        for result in results:
+            print(result)
+        return 0 if success else 1
+    
+    # Single event mode
+    try:
+        if args.file:
+            with open(args.file, 'r') as f:
+                event = json.load(f)
+        else:
+            # Read from stdin
+            event = json.load(sys.stdin)
+        
+        success, message = replay.replay_single(event)
+        print(f"{'✓' if success else '✗'} {message}")
+        return 0 if success else 1
+        
+    except json.JSONDecodeError as e:
+        print(f"✗ Invalid JSON: {str(e)}")
+        return 1
+    except FileNotFoundError:
+        print(f"✗ File not found: {args.file}")
+        return 1
+    except Exception as e:
+        print(f"✗ Error: {str(e)}")
+        return 1
+
+if __name__ == '__main__':
+    sys.exit(main())
