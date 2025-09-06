@@ -1,0 +1,10 @@
+{
+  "session_id": "sess_abc123def456",
+  "state": "working",
+  "model": "claude-3.7-sonnet",
+  "cwd": "/Users/testuser/projects/irrlicht",
+  "transcript_path": "/Users/testuser/.claude/projects/irrlicht/transcript.jsonl",
+  "updated_at": "2024-09-06T15:30:00.000Z",
+  "event_count": 5,
+  "last_event": "UserPromptSubmit"
+}

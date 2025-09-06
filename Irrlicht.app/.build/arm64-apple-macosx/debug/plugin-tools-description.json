@@ -1,0 +1,622 @@
+{
+  "builtTestProducts" : [
+    {
+      "binaryPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.xctest/Contents/MacOS/IrrlichtPackageTests",
+      "packagePath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app",
+      "productName" : "IrrlichtPackageTests"
+    }
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.Irrlicht-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "fileList" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/sources",
+      "importPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/IrrlichtApp.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Managers/SessionManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Models/SessionState.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Views/SessionListView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "Irrlicht",
+      "moduleOutputPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules/Irrlicht.swiftmodule",
+      "objects" : [
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/IrrlichtApp.swift.o",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionManager.swift.o",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionState.swift.o",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionListView.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-enable-batch-mode",
+        "-index-store-path",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-module-cache-path",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "Irrlicht_main",
+        "-swift-version",
+        "5",
+        "-F",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "irrlicht_app"
+      ],
+      "outputFileMapPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/IrrlichtApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionState.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionListView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules/Irrlicht.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/IrrlichtApp.swift",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Managers/SessionManager.swift",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Models/SessionState.swift",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Views/SessionListView.swift"
+      ],
+      "tempsPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.IrrlichtPackageTests-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "fileList" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/sources",
+      "importPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.derived/runner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules/IrrlichtTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "IrrlichtPackageTests",
+      "moduleOutputPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules/IrrlichtPackageTests.swiftmodule",
+      "objects" : [
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/runner.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-enable-batch-mode",
+        "-index-store-path",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-module-cache-path",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/IrrlichtPackageTests-Swift.h",
+        "-F",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "irrlicht_app"
+      ],
+      "outputFileMapPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules/IrrlichtPackageTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.derived/runner.swift"
+      ],
+      "tempsPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.IrrlichtTests-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "fileList" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build/sources",
+      "importPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Tests/SessionManagerTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "IrrlichtTests",
+      "moduleOutputPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules/IrrlichtTests.swiftmodule",
+      "objects" : [
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build/SessionManagerTests.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-enable-batch-mode",
+        "-index-store-path",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-module-cache-path",
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-swift-version",
+        "5",
+        "-F",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "irrlicht_app"
+      ],
+      "outputFileMapPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build/SessionManagerTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules/IrrlichtTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Tests/SessionManagerTests.swift"
+      ],
+      "tempsPath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "Irrlicht" : [
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "-module-name",
+      "Irrlicht",
+      "-package-name",
+      "irrlicht_app",
+      "-incremental",
+      "-c",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/IrrlichtApp.swift",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Managers/SessionManager.swift",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Models/SessionState.swift",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Views/SessionListView.swift",
+      "-I",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-enable-batch-mode",
+      "-index-store-path",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-module-cache-path",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "Irrlicht_main",
+      "-swift-version",
+      "5",
+      "-F",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "irrlicht_app",
+      "-driver-use-frontend-path",
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+    ],
+    "IrrlichtPackageTests" : [
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "-module-name",
+      "IrrlichtPackageTests",
+      "-package-name",
+      "irrlicht_app",
+      "-incremental",
+      "-c",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.derived/runner.swift",
+      "-I",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-enable-batch-mode",
+      "-index-store-path",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-module-cache-path",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/IrrlichtPackageTests-Swift.h",
+      "-F",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "irrlicht_app",
+      "-driver-use-frontend-path",
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+    ],
+    "IrrlichtTests" : [
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "-module-name",
+      "IrrlichtTests",
+      "-package-name",
+      "irrlicht_app",
+      "-incremental",
+      "-c",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Tests/SessionManagerTests.swift",
+      "-I",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-enable-batch-mode",
+      "-index-store-path",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-module-cache-path",
+      "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-swift-version",
+      "5",
+      "-F",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "irrlicht_app",
+      "-driver-use-frontend-path",
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "Irrlicht" : [
+
+    ],
+    "IrrlichtPackageTests" : [
+      "IrrlichtTests",
+      "Irrlicht"
+    ],
+    "IrrlichtTests" : [
+      "Irrlicht"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+    "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.derived/runner.swift" : {
+      "inputs" : [
+
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.derived/runner.swift"
+        }
+      ]
+    }
+  },
+  "traitConfiguration" : {
+    "enableAllTraits" : false
+  },
+  "writeCommands" : {
+    "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht-entitlement.plist"
+    },
+    "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/IrrlichtApp.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Managers/SessionManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Models/SessionState.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Irrlicht/Views/SessionListView.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/sources"
+    },
+    "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/IrrlichtApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionListView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionState.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.product/Objects.LinkFileList"
+    },
+    "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.derived/runner.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/sources"
+    },
+    "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/IrrlichtApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionListView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/Irrlicht.build/SessionState.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build/SessionManagerTests.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.product/Objects.LinkFileList"
+    },
+    "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/Tests/SessionManagerTests.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtTests.build/sources"
+    },
+    "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "session_id": "sess_malformed",
+  "state": "invalid_state",
+  "missing_required_fields": true,
+  // This is malformed JSON with comment
+  "updated_at": "not_a_date"
