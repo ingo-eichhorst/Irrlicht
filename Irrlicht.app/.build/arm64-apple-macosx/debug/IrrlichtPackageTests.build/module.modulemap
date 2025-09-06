@@ -1,4 +1,0 @@
-module IrrlichtPackageTests {
-    header "/Users/ingo/projects/multi-cc-bar/Irrlicht.app/.build/arm64-apple-macosx/debug/IrrlichtPackageTests.build/IrrlichtPackageTests-Swift.h"
-    requires objc
-}
