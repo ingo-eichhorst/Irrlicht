@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,19 +43,28 @@ type HookEvent struct {
 	Data          map[string]interface{} `json:"data"`
 }
 
+// SessionMetrics holds computed performance metrics from transcript analysis  
+type SessionMetrics struct {
+	MessagesPerMinute float64 `json:"messages_per_minute"`
+	ElapsedSeconds    int64   `json:"elapsed_seconds"`
+	LastMessageAt     int64   `json:"last_message_at"`
+	SessionStartAt    int64   `json:"session_start_at"`
+}
+
 // SessionState represents the current state of a session
 type SessionState struct {
-	Version       int    `json:"version"`
-	SessionID     string `json:"session_id"`
-	State         string `json:"state"`
-	Model         string `json:"model,omitempty"`
-	CWD           string `json:"cwd,omitempty"`
-	TranscriptPath string `json:"transcript_path,omitempty"`
-	FirstSeen     int64  `json:"first_seen"`
-	UpdatedAt     int64  `json:"updated_at"`
-	Confidence    string `json:"confidence"`
-	EventCount    int    `json:"event_count"`
-	LastEvent     string `json:"last_event"`
+	Version       int              `json:"version"`
+	SessionID     string           `json:"session_id"`
+	State         string           `json:"state"`
+	Model         string           `json:"model,omitempty"`
+	CWD           string           `json:"cwd,omitempty"`
+	TranscriptPath string          `json:"transcript_path,omitempty"`
+	FirstSeen     int64            `json:"first_seen"`
+	UpdatedAt     int64            `json:"updated_at"`
+	Confidence    string           `json:"confidence"`
+	EventCount    int              `json:"event_count"`
+	LastEvent     string           `json:"last_event"`
+	Metrics       *SessionMetrics  `json:"metrics,omitempty"`
 }
 
 // LogEntry represents a structured log entry
@@ -76,6 +86,175 @@ type StructuredLogger struct {
 	logPath     string
 	currentSize int64
 	mu          sync.Mutex
+}
+
+// MessageEvent represents a single message event from transcript
+type MessageEvent struct {
+	Timestamp time.Time
+	EventType string
+}
+
+// computeSessionMetrics analyzes transcript and computes performance metrics
+func computeSessionMetrics(transcriptPath string) *SessionMetrics {
+	if transcriptPath == "" {
+		return nil
+	}
+	
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		// Transcript doesn't exist yet or can't be read - not an error
+		return nil
+	}
+	defer file.Close()
+	
+	// Get file size and tail last 64KB
+	stat, err := file.Stat()
+	if err != nil {
+		return nil
+	}
+	fileSize := stat.Size()
+	
+	const maxTailSize = 64 * 1024 // 64KB
+	startPos := int64(0)
+	if fileSize > maxTailSize {
+		startPos = fileSize - maxTailSize
+	}
+	
+	// Seek to start position
+	_, err = file.Seek(startPos, io.SeekStart)
+	if err != nil {
+		return nil
+	}
+	
+	var messages []MessageEvent
+	scanner := bufio.NewScanner(file)
+	
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		
+		event := parseTranscriptLine(line)
+		if event != nil {
+			messages = append(messages, *event)
+		}
+	}
+	
+	if len(messages) == 0 {
+		return nil
+	}
+	
+	return calculateMetrics(messages)
+}
+
+// parseTranscriptLine attempts to parse a JSONL line into a message event
+func parseTranscriptLine(line string) *MessageEvent {
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return nil
+	}
+	
+	// Extract timestamp
+	var timestamp time.Time
+	if ts, ok := raw["timestamp"]; ok {
+		if tsStr, ok := ts.(string); ok {
+			if parsed, err := time.Parse(time.RFC3339, tsStr); err == nil {
+				timestamp = parsed
+			} else if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", tsStr); err == nil {
+				timestamp = parsed
+			}
+		}
+	}
+	
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+	}
+	
+	// Extract event type
+	eventType := "unknown"
+	if et, ok := raw["event_type"].(string); ok {
+		eventType = et
+	} else if et, ok := raw["type"].(string); ok {
+		eventType = et
+	} else if _, ok := raw["user_input"]; ok {
+		eventType = "user_message"
+	} else if _, ok := raw["assistant_output"]; ok {
+		eventType = "assistant_message"
+	} else if _, ok := raw["tool_call"]; ok {
+		eventType = "tool_call"
+	}
+	
+	// Only track message-related events
+	messageEvents := map[string]bool{
+		"user_message":      true,
+		"assistant_message": true,
+		"tool_call":         true,
+		"tool_result":       true,
+		"user_input":        true,
+		"assistant_output":  true,
+	}
+	
+	if !messageEvents[eventType] {
+		return nil
+	}
+	
+	return &MessageEvent{
+		Timestamp: timestamp,
+		EventType: eventType,
+	}
+}
+
+// calculateMetrics computes messages per minute and elapsed time
+func calculateMetrics(messages []MessageEvent) *SessionMetrics {
+	if len(messages) == 0 {
+		return nil
+	}
+	
+	// Find first and last message timestamps
+	firstMsg := messages[0]
+	lastMsg := messages[len(messages)-1]
+	
+	for _, msg := range messages {
+		if msg.Timestamp.Before(firstMsg.Timestamp) {
+			firstMsg = msg
+		}
+		if msg.Timestamp.After(lastMsg.Timestamp) {
+			lastMsg = msg
+		}
+	}
+	
+	elapsedSeconds := int64(lastMsg.Timestamp.Sub(firstMsg.Timestamp).Seconds())
+	
+	// Calculate messages per minute over last 60 seconds from latest message
+	windowStart := lastMsg.Timestamp.Add(-60 * time.Second)
+	recentMessages := 0
+	
+	for _, msg := range messages {
+		if msg.Timestamp.After(windowStart) || msg.Timestamp.Equal(windowStart) {
+			recentMessages++
+		}
+	}
+	
+	// Convert to messages per minute
+	var messagesPerMinute float64
+	if len(messages) > 1 {
+		timeSpan := lastMsg.Timestamp.Sub(firstMsg.Timestamp)
+		if timeSpan > 0 {
+			messagesPerMinute = float64(recentMessages) / timeSpan.Minutes()
+		} else {
+			messagesPerMinute = float64(recentMessages)
+		}
+	} else {
+		messagesPerMinute = 1.0 // Single message
+	}
+	
+	return &SessionMetrics{
+		MessagesPerMinute: messagesPerMinute,
+		ElapsedSeconds:    elapsedSeconds,
+		LastMessageAt:     lastMsg.Timestamp.Unix(),
+		SessionStartAt:    firstMsg.Timestamp.Unix(),
+	}
 }
 
 func main() {
@@ -292,6 +471,11 @@ func processEvent(event *HookEvent) error {
 		}
 		if transcriptPath, ok := data["transcript_path"].(string); ok {
 			sessionState.TranscriptPath = transcriptPath
+			
+			// Compute metrics from transcript analysis
+			if metrics := computeSessionMetrics(transcriptPath); metrics != nil {
+				sessionState.Metrics = metrics
+			}
 		}
 	}
 

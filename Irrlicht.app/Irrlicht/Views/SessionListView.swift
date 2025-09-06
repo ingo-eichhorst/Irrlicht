@@ -172,6 +172,26 @@ struct SessionRowView: View {
                             .foregroundColor(Color.secondary.opacity(0.7))
                     }
                 }
+                
+                // Show metrics if available
+                if let metrics = session.metrics {
+                    HStack(spacing: 8) {
+                        if metrics.messagesPerMinute > 0 {
+                            Label(metrics.formattedMessagesPerMinute, systemImage: "chart.line.uptrend.xyaxis")
+                                .font(.caption2)
+                                .foregroundColor(.blue)
+                        }
+                        
+                        if metrics.elapsedSeconds > 0 {
+                            Label(metrics.formattedElapsedTime, systemImage: "clock")
+                                .font(.caption2)
+                                .foregroundColor(.green)
+                        }
+                        
+                        Spacer()
+                    }
+                    .padding(.top, 1)
+                }
             }
         }
         .padding(.horizontal, 12)
