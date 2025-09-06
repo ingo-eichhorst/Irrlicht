@@ -83,6 +83,15 @@ rm -rf ~/Library/Application\ Support/Irrlicht/instances  # Clear all sessions
 killall swift  # Stop the app
 ```
 
+### Kill by Process Name
+```bash
+# Find Irrlicht specifically
+ps aux | grep Irrlicht
+
+# Kill by PID
+kill <PID>
+```
+
 ## Project Structure
 
 ```
