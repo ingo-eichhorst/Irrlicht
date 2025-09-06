@@ -58,6 +58,31 @@ Test that everything works:
 ls ~/Library/Application\ Support/Irrlicht/instances/
 ```
 
+## 🎯 Phase 2: Testing the UI
+
+### Quick Demo
+```bash
+# Run the SwiftUI menu bar app
+cd Irrlicht.app && swift run &
+
+# Create test sessions
+bash demo-phase2.sh
+
+# Look for 💡 lightbulb icon in menu bar, click to see sessions
+```
+
+### What You'll See
+- **Menu Bar**: Lightbulb icon with session glyphs ● ◔ ✓
+- **Dropdown**: Session list with "shortId · state · model · timeAgo" format  
+- **Real-time Updates**: File changes reflected within 2 seconds
+- **Empty State**: "No Claude Code sessions detected" when no files
+
+### Cleanup
+```bash
+rm -rf ~/Library/Application\ Support/Irrlicht/instances  # Clear all sessions
+killall swift  # Stop the app
+```
+
 ## Project Structure
 
 ```
