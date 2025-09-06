@@ -192,3 +192,43 @@ func TestTranscriptTailer_IncrementalProcessing(t *testing.T) {
 	// Check that more messages were processed
 	assert.True(t, len(tailer.metrics.MessageHistory) > 1)
 }
+
+func TestTranscriptTailer_TokenExtraction(t *testing.T) {
+	// Create temporary transcript file
+	tmpDir, err := os.MkdirTemp("", "transcript_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	transcriptPath := filepath.Join(tmpDir, "transcript.jsonl")
+	
+	// Write sample transcript data with token information
+	transcriptData := `{"timestamp": "2025-09-06T10:00:01.000Z", "event_type": "user_message", "message": "Hello", "model": "claude-3.5-sonnet"}
+{"timestamp": "2025-09-06T10:00:02.000Z", "event_type": "assistant_message", "message": "Hi there!", "usage": {"input_tokens": 50, "output_tokens": 25, "total_tokens": 75}, "model": "claude-3.5-sonnet"}
+{"timestamp": "2025-09-06T10:00:03.000Z", "event_type": "user_message", "message": "How are you?", "usage": {"input_tokens": 100, "output_tokens": 0, "total_tokens": 100}, "model": "claude-3.5-sonnet"}
+`
+	
+	err = os.WriteFile(transcriptPath, []byte(transcriptData), 0644)
+	require.NoError(t, err)
+	
+	// Create tailer
+	tailer := NewTranscriptTailer(transcriptPath)
+	
+	// Process transcript
+	metrics, err := tailer.TailAndProcess()
+	require.NoError(t, err)
+	
+	// Check that metrics were computed
+	assert.NotNil(t, metrics)
+	assert.Equal(t, 3, len(tailer.metrics.MessageHistory))
+	
+	// Check token extraction
+	assert.Equal(t, int64(100), metrics.TotalTokens) // Should be the latest/highest token count
+	assert.Equal(t, "claude-3.5-sonnet", metrics.ModelName)
+	
+	// Check context utilization was computed
+	assert.True(t, metrics.ContextUtilization >= 0)
+	assert.NotEmpty(t, metrics.PressureLevel)
+	// With 100 tokens out of 200K context window, should be very low utilization
+	assert.True(t, metrics.ContextUtilization < 1.0)
+	assert.Equal(t, "safe", metrics.PressureLevel)
+}

@@ -6,12 +6,20 @@ struct SessionMetrics: Codable {
     let elapsedSeconds: Int64       // elapsed time since session start
     let lastMessageAt: Date         // timestamp of last message
     let sessionStartAt: Date        // timestamp of first message/session start
+    let totalTokens: Int64          // total token count from transcript (0 if not available)
+    let modelName: String           // model name extracted from transcript ("" if not available) 
+    let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
+    let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
     
     enum CodingKeys: String, CodingKey {
         case messagesPerMinute = "messages_per_minute"
         case elapsedSeconds = "elapsed_seconds"  
         case lastMessageAt = "last_message_at"
         case sessionStartAt = "session_start_at"
+        case totalTokens = "total_tokens"
+        case modelName = "model_name"
+        case contextUtilization = "context_utilization_percentage"
+        case pressureLevel = "pressure_level"
     }
     
     // Computed properties for UI display
@@ -32,6 +40,62 @@ struct SessionMetrics: Codable {
     
     var formattedMessagesPerMinute: String {
         return String(format: "%.1f/min", messagesPerMinute)
+    }
+    
+    var formattedTokenCount: String {
+        if totalTokens == 0 { return "—" }
+        
+        if totalTokens < 1000 {
+            return "\(totalTokens)"
+        } else if totalTokens < 1000000 {
+            return String(format: "%.1fK", Double(totalTokens) / 1000)
+        } else {
+            return String(format: "%.1fM", Double(totalTokens) / 1000000)
+        }
+    }
+    
+    var formattedContextUtilization: String {
+        if contextUtilization == 0 && pressureLevel == "unknown" { return "—" }
+        return String(format: "%.1f%%", contextUtilization)
+    }
+    
+    var contextPressureIcon: String {
+        switch pressureLevel {
+        case "safe":
+            return "🟢"
+        case "caution":
+            return "🟡"
+        case "warning":
+            return "🔴"
+        case "critical":
+            return "⚠️"
+        case "unknown", "":
+            return "❓"
+        default:
+            return "❓"
+        }
+    }
+    
+    var contextPressureColor: String {
+        switch pressureLevel {
+        case "safe":
+            return "#10B981"   // emerald
+        case "caution":
+            return "#F59E0B"   // amber
+        case "warning":
+            return "#EF4444"   // red
+        case "critical":
+            return "#DC2626"   // dark red
+        case "unknown", "":
+            return "#6B7280"   // gray
+        default:
+            return "#6B7280"   // gray
+        }
+    }
+    
+    // Check if context utilization data is available
+    var hasContextData: Bool {
+        return totalTokens > 0 && !modelName.isEmpty && pressureLevel != "unknown" && !pressureLevel.isEmpty
     }
 }
 
