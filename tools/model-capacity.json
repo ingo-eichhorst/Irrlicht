@@ -61,6 +61,14 @@
       "display_name": "Claude 4.1 Opus",
       "notes": "Latest high-capability model"
     },
+    "claude-opus-4-1": {
+      "context_window": 200000,
+      "max_output": 64000,
+      "char_to_token_ratio": 3.2,
+      "family": "claude-4",
+      "display_name": "Claude Opus 4.1",
+      "notes": "Alias for claude-4.1-opus"
+    },
     "claude-3.7-sonnet": {
       "context_window": 200000,
       "max_output": 8192,

@@ -124,6 +124,31 @@ func (cm *CapacityManager) GetModelCapacity(modelName string) ModelCapacity {
 		return capacity
 	}
 	
+	// Try fuzzy matching for common variations
+	modelLower := strings.ToLower(modelName)
+	
+	// Handle specific pattern matches first
+	if strings.Contains(modelLower, "opus") && strings.Contains(modelLower, "4") {
+		if capacity, exists := cm.config.Models["claude-4.1-opus"]; exists {
+			capacity.DisplayName = fmt.Sprintf("%s (matched: claude-4.1-opus)", modelName)
+			return capacity
+		}
+	}
+	
+	if strings.Contains(modelLower, "sonnet") && strings.Contains(modelLower, "4") {
+		if capacity, exists := cm.config.Models["claude-4-sonnet"]; exists {
+			capacity.DisplayName = fmt.Sprintf("%s (matched: claude-4-sonnet)", modelName)
+			return capacity
+		}
+	}
+	
+	if strings.Contains(modelLower, "3.5") && strings.Contains(modelLower, "sonnet") {
+		if capacity, exists := cm.config.Models["claude-3.5-sonnet"]; exists {
+			capacity.DisplayName = fmt.Sprintf("%s (matched: claude-3.5-sonnet)", modelName)
+			return capacity
+		}
+	}
+	
 	// Try family-based lookup
 	for family, defaultCapacity := range cm.config.FamilyDefaults {
 		if strings.Contains(strings.ToLower(modelName), strings.ToLower(family)) {

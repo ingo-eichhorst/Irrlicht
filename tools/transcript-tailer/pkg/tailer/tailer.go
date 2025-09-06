@@ -6,13 +6,78 @@ import (
 	"fmt"
 	"io"
 	"os"
-	// "path/filepath"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	
 	// "github.com/ingo-eichhorst/multi-cc-bar/tools/model-capacity/pkg/capacity"
 )
+
+// normalizeModelName normalizes model names by removing date suffixes and handling aliases
+func normalizeModelName(rawModel string) string {
+	if rawModel == "" {
+		return ""
+	}
+	
+	// Handle common aliases first
+	aliases := map[string]string{
+		"opusplan": "claude-opus-4-1",
+		"sonnet":   "claude-sonnet-4",
+		"haiku":    "claude-haiku-4",
+	}
+	
+	if normalized, exists := aliases[rawModel]; exists {
+		return normalized
+	}
+	
+	// Remove date suffixes (e.g., "claude-opus-4-1-20250805" -> "claude-opus-4-1")
+	datePattern := regexp.MustCompile(`-\d{8}$`)
+	normalized := datePattern.ReplaceAllString(rawModel, "")
+	
+	// Convert full model IDs to shorter forms for capacity matching
+	// claude-opus-4-1-20250805 -> claude-4.1-opus
+	if strings.Contains(normalized, "claude-opus-4-1") {
+		return "claude-4.1-opus"
+	}
+	if strings.Contains(normalized, "claude-sonnet-4") {
+		return "claude-4-sonnet"
+	}
+	if strings.Contains(normalized, "claude-3.5-sonnet") {
+		return "claude-3.5-sonnet"
+	}
+	if strings.Contains(normalized, "claude-3.5-haiku") {
+		return "claude-3.5-haiku"
+	}
+	
+	return normalized
+}
+
+// getDefaultModelFromSettings reads the default model from Claude settings.json
+func getDefaultModelFromSettings() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	
+	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return ""
+	}
+	
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return ""
+	}
+	
+	if model, ok := settings["model"].(string); ok {
+		return normalizeModelName(model)
+	}
+	
+	return ""
+}
 
 // MessageEvent represents a single message event from transcript
 type MessageEvent struct {
@@ -120,6 +185,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		if err != nil {
 			// Log error but continue processing
 			fmt.Printf("Warning: failed to parse line: %v\n", err)
+			fmt.Printf("Problematic line: %s\n", line)
 			continue
 		}
 
@@ -132,6 +198,13 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	
 	// Compute current metrics
 	t.computeMetrics()
+	
+	// Use settings fallback if no model was found in transcript
+	if t.metrics.ModelName == "" {
+		if defaultModel := getDefaultModelFromSettings(); defaultModel != "" {
+			t.metrics.ModelName = defaultModel
+		}
+	}
 	
 	// Compute context utilization if we have capacity manager and model info
 	t.computeContextUtilization()
@@ -204,6 +277,11 @@ func (t *TranscriptTailer) isMessageEvent(eventType string) bool {
 		"tool_result":       true,
 		"user_input":        true,
 		"assistant_output":  true,
+		// Add support for Claude Code transcript event types
+		"user":              true,
+		"assistant":         true,
+		"tool_use":          true,
+		"message":           true,
 	}
 	return messageEvents[eventType]
 }
@@ -304,8 +382,27 @@ func (t *TranscriptTailer) extractModelInfo(raw map[string]interface{}) {
 		}
 	}
 	
+	// Check for message.model field (Claude Code format for assistant messages)
+	if modelName == "" {
+		if message, ok := raw["message"].(map[string]interface{}); ok {
+			if model, ok := message["model"].(string); ok {
+				modelName = model
+			}
+		}
+	}
+	
+	// If this is an assistant message, prioritize its model info (most recent)
+	if typeField, ok := raw["type"].(string); ok && typeField == "assistant" {
+		if message, ok := raw["message"].(map[string]interface{}); ok {
+			if model, ok := message["model"].(string); ok {
+				modelName = model
+			}
+		}
+	}
+	
 	if modelName != "" {
-		t.metrics.ModelName = modelName
+		// Normalize the model name before storing
+		t.metrics.ModelName = normalizeModelName(modelName)
 	}
 }
 
@@ -322,9 +419,37 @@ func (t *TranscriptTailer) extractTokenInfo(raw map[string]interface{}) {
 		if outputTokens, ok := usage["output_tokens"].(float64); ok {
 			totalTokens += int64(outputTokens)
 		}
+		if cacheReadTokens, ok := usage["cache_read_input_tokens"].(float64); ok {
+			totalTokens += int64(cacheReadTokens)
+		}
+		if cacheCreationTokens, ok := usage["cache_creation_input_tokens"].(float64); ok {
+			totalTokens += int64(cacheCreationTokens)
+		}
 		// Also check for total_tokens directly
 		if total, ok := usage["total_tokens"].(float64); ok {
 			totalTokens = int64(total)
+		}
+	}
+	
+	// Check message.usage field (Claude Code format)
+	if message, ok := raw["message"].(map[string]interface{}); ok {
+		if usage, ok := message["usage"].(map[string]interface{}); ok {
+			if inputTokens, ok := usage["input_tokens"].(float64); ok {
+				totalTokens += int64(inputTokens)
+			}
+			if outputTokens, ok := usage["output_tokens"].(float64); ok {
+				totalTokens += int64(outputTokens)
+			}
+			if cacheReadTokens, ok := usage["cache_read_input_tokens"].(float64); ok {
+				totalTokens += int64(cacheReadTokens)
+			}
+			if cacheCreationTokens, ok := usage["cache_creation_input_tokens"].(float64); ok {
+				totalTokens += int64(cacheCreationTokens)
+			}
+			// Also check for total_tokens directly
+			if total, ok := usage["total_tokens"].(float64); ok {
+				totalTokens = int64(total)
+			}
 		}
 	}
 	
@@ -346,7 +471,7 @@ func (t *TranscriptTailer) extractTokenInfo(raw map[string]interface{}) {
 		totalTokens = int64(tokenFloat)
 	}
 	
-	// Update running total
+	// Update to latest token count (current context window, not cumulative)
 	if totalTokens > 0 {
 		t.metrics.TotalTokens = totalTokens
 	}
@@ -364,18 +489,18 @@ func (t *TranscriptTailer) computeContextUtilization() {
 		return
 	}
 	
-	// Basic context utilization estimation
-	// Assume 200K context window for Claude models (standard)
-	contextWindow := int64(200000)
-	utilizationPercentage := (float64(t.metrics.TotalTokens) / float64(contextWindow)) * 100
+	// Context utilization calculation adjusted for autocompaction
+	// Claude Code autocompacts at ~80% of 200K = 160K effective usable context
+	effectiveContextWindow := int64(160000)
+	utilizationPercentage := (float64(t.metrics.TotalTokens) / float64(effectiveContextWindow)) * 100
 	
-	// Determine pressure level
+	// Determine pressure level based on proximity to autocompaction
 	pressureLevel := "safe"
-	if utilizationPercentage >= 96 {
+	if utilizationPercentage >= 95 {
 		pressureLevel = "critical"
-	} else if utilizationPercentage >= 81 {
+	} else if utilizationPercentage >= 85 {
 		pressureLevel = "warning"
-	} else if utilizationPercentage >= 51 {
+	} else if utilizationPercentage >= 60 {
 		pressureLevel = "caution"
 	}
 	

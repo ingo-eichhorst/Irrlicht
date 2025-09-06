@@ -99,12 +99,15 @@ class SessionManager: ObservableObject {
     // MARK: - Session Loading
     
     func loadExistingSessions() {
+        print("📂 Loading sessions from: \(instancesPath.path)")
         do {
             let fileURLs = try FileManager.default.contentsOfDirectory(
                 at: instancesPath,
                 includingPropertiesForKeys: [.contentModificationDateKey],
                 options: [.skipsHiddenFiles]
             ).filter { $0.pathExtension == "json" }
+            
+            print("📄 Found \(fileURLs.count) session files")
             
             var newSessions: [SessionState] = []
             

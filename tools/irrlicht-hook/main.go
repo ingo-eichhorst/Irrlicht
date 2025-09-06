@@ -38,10 +38,16 @@ var (
 
 // HookEvent represents a Claude Code hook event
 type HookEvent struct {
-	HookEventName string                 `json:"hook_event_name"`
-	SessionID     string                 `json:"session_id"`
-	Timestamp     string                 `json:"timestamp"`
-	Data          map[string]interface{} `json:"data"`
+	HookEventName   string                 `json:"hook_event_name"`
+	SessionID       string                 `json:"session_id"`
+	Timestamp       string                 `json:"timestamp"`
+	Data            map[string]interface{} `json:"data"`
+	// Direct fields that Claude Code sends at top level
+	TranscriptPath  string                 `json:"transcript_path,omitempty"`
+	CWD             string                 `json:"cwd,omitempty"`
+	Model           string                 `json:"model,omitempty"`
+	PermissionMode  string                 `json:"permission_mode,omitempty"`
+	Prompt          string                 `json:"prompt,omitempty"`
 }
 
 // SessionMetrics holds computed performance metrics from transcript analysis  
@@ -50,10 +56,10 @@ type SessionMetrics struct {
 	ElapsedSeconds       int64   `json:"elapsed_seconds"`
 	LastMessageAt        int64   `json:"last_message_at"`
 	SessionStartAt       int64   `json:"session_start_at"`
-	TotalTokens          int64   `json:"total_tokens,omitempty"`
-	ModelName            string  `json:"model_name,omitempty"`
-	ContextUtilization   float64 `json:"context_utilization_percentage,omitempty"`
-	PressureLevel        string  `json:"pressure_level,omitempty"`
+	TotalTokens          int64   `json:"total_tokens"`
+	ModelName            string  `json:"model_name"`
+	ContextUtilization   float64 `json:"context_utilization_percentage"`
+	PressureLevel        string  `json:"pressure_level"`
 }
 
 // SessionState represents the current state of a session
@@ -110,22 +116,22 @@ func computeSessionMetrics(transcriptPath string) *SessionMetrics {
 	
 	// Convert from transcript tailer metrics to hook metrics format
 	hookMetrics := &SessionMetrics{
-		MessagesPerMinute: metrics.MessagesPerMinute,
-		ElapsedSeconds:    metrics.ElapsedSeconds,
-		LastMessageAt:     metrics.LastMessageAt.Unix(),
-		SessionStartAt:    metrics.SessionStartAt.Unix(),
+		MessagesPerMinute:    metrics.MessagesPerMinute,
+		ElapsedSeconds:       metrics.ElapsedSeconds,
+		LastMessageAt:        metrics.LastMessageAt.Unix(),
+		SessionStartAt:       metrics.SessionStartAt.Unix(),
+		TotalTokens:          metrics.TotalTokens,
+		ModelName:            metrics.ModelName,
+		ContextUtilization:   metrics.ContextUtilization,
+		PressureLevel:        metrics.PressureLevel,
 	}
 	
-	// Add context utilization data if available
-	if metrics.TotalTokens > 0 {
-		hookMetrics.TotalTokens = metrics.TotalTokens
+	// Set defaults if values are missing
+	if hookMetrics.ModelName == "" {
+		hookMetrics.ModelName = "unknown"
 	}
-	if metrics.ModelName != "" {
-		hookMetrics.ModelName = metrics.ModelName
-	}
-	if metrics.ContextUtilization > 0 || metrics.PressureLevel != "unknown" {
-		hookMetrics.ContextUtilization = metrics.ContextUtilization
-		hookMetrics.PressureLevel = metrics.PressureLevel
+	if hookMetrics.PressureLevel == "" {
+		hookMetrics.PressureLevel = "unknown"
 	}
 	
 	return hookMetrics
@@ -184,6 +190,9 @@ func main() {
 		logger.LogError("", "", fmt.Sprintf("Failed to parse JSON: %v", err))
 		os.Exit(1)
 	}
+
+	// Log raw event for debugging Claude Code's actual payload
+	logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Raw event data: %s", string(input)))
 
 	// Validate and sanitize
 	if err := validateEvent(&event); err != nil {
@@ -272,7 +281,7 @@ func validateEvent(event *HookEvent) error {
 		return fmt.Errorf("invalid event type: %s", event.HookEventName)
 	}
 
-	// Sanitize paths
+	// Sanitize paths from Data field
 	if data := event.Data; data != nil {
 		if transcriptPath, ok := data["transcript_path"].(string); ok {
 			if err := validatePath(transcriptPath); err != nil {
@@ -283,6 +292,18 @@ func validateEvent(event *HookEvent) error {
 			if err := validatePath(cwd); err != nil {
 				return fmt.Errorf("invalid cwd: %w", err)
 			}
+		}
+	}
+	
+	// Sanitize paths from direct fields
+	if event.TranscriptPath != "" {
+		if err := validatePath(event.TranscriptPath); err != nil {
+			return fmt.Errorf("invalid transcript_path: %w", err)
+		}
+	}
+	if event.CWD != "" {
+		if err := validatePath(event.CWD); err != nil {
+			return fmt.Errorf("invalid cwd: %w", err)
 		}
 	}
 
@@ -336,7 +357,8 @@ func processEvent(event *HookEvent) error {
 		LastEvent:  event.HookEventName,
 	}
 
-	// Extract additional data
+	// Extract additional data from both Data field and direct fields
+	// Check Data field first (legacy format)
 	if data := event.Data; data != nil {
 		if model, ok := data["model"].(string); ok {
 			sessionState.Model = model
@@ -346,11 +368,24 @@ func processEvent(event *HookEvent) error {
 		}
 		if transcriptPath, ok := data["transcript_path"].(string); ok {
 			sessionState.TranscriptPath = transcriptPath
-			
-			// Compute metrics from transcript analysis
-			if metrics := computeSessionMetrics(transcriptPath); metrics != nil {
-				sessionState.Metrics = metrics
-			}
+		}
+	}
+	
+	// Check direct fields (current Claude Code format)
+	if event.Model != "" {
+		sessionState.Model = event.Model
+	}
+	if event.CWD != "" {
+		sessionState.CWD = event.CWD
+	}
+	if event.TranscriptPath != "" {
+		sessionState.TranscriptPath = event.TranscriptPath
+	}
+	
+	// Compute metrics if we have a transcript path
+	if sessionState.TranscriptPath != "" {
+		if metrics := computeSessionMetrics(sessionState.TranscriptPath); metrics != nil {
+			sessionState.Metrics = metrics
 		}
 	}
 
@@ -359,6 +394,29 @@ func processEvent(event *HookEvent) error {
 	if err == nil && existingState.FirstSeen > 0 {
 		sessionState.FirstSeen = existingState.FirstSeen
 		sessionState.EventCount = existingState.EventCount + 1
+		
+		// Preserve existing data if new event doesn't have it (fallback logic)
+		if sessionState.Model == "" && existingState.Model != "" {
+			sessionState.Model = existingState.Model
+		}
+		if sessionState.CWD == "" && existingState.CWD != "" {
+			sessionState.CWD = existingState.CWD
+		}
+		if sessionState.TranscriptPath == "" && existingState.TranscriptPath != "" {
+			sessionState.TranscriptPath = existingState.TranscriptPath
+			
+			// Recompute metrics if we have transcript path but no metrics yet
+			if sessionState.Metrics == nil {
+				if metrics := computeSessionMetrics(sessionState.TranscriptPath); metrics != nil {
+					sessionState.Metrics = metrics
+				}
+			}
+		}
+		
+		// Preserve existing metrics if we couldn't compute new ones
+		if sessionState.Metrics == nil && existingState.Metrics != nil {
+			sessionState.Metrics = existingState.Metrics
+		}
 	} else {
 		sessionState.FirstSeen = now
 		sessionState.EventCount = 1

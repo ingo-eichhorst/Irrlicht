@@ -154,13 +154,17 @@ struct SessionRowView: View {
                     
                     Spacer()
                     
-                    Text(session.timeAgo)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
+                        let formatter = RelativeDateTimeFormatter()
+                        formatter.unitsStyle = .abbreviated
+                        return Text(formatter.localizedString(for: session.updatedAt, relativeTo: timeline.date))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 HStack {
-                    Text(session.model)
+                    Text(session.effectiveModel)
                         .font(.caption)
                         .foregroundColor(.secondary)
                     

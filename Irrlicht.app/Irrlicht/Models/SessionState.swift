@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // Performance metrics from transcript analysis
 struct SessionMetrics: Codable {
@@ -110,6 +111,8 @@ struct SessionState: Identifiable, Codable {
     let lastEvent: String?      // last hook event type (optional)
     let metrics: SessionMetrics? // performance metrics from transcript analysis (optional)
     
+    private static let logger = Logger(subsystem: "com.anthropic.irrlicht", category: "SessionState")
+    
     // Custom coding keys to match JSON from irrlicht-hook
     enum CodingKeys: String, CodingKey {
         case id = "session_id"
@@ -158,6 +161,15 @@ struct SessionState: Identifiable, Codable {
             // Default to now if no valid date found
             updatedAt = Date()
         }
+        
+        // Log session data for debugging (after all properties are set)
+        let sessionId = id
+        let sessionState = state.rawValue
+        let topLevelModel = model
+        let metricsModelName = metrics?.modelName ?? "nil"
+        let safeEventCount = eventCount ?? 0
+        let safeLastEvent = lastEvent ?? "nil"
+        print("🔍 Decoded session: id=\(sessionId), state=\(sessionState), topLevelModel=\(topLevelModel), metricsModel=\(metricsModelName), eventCount=\(safeEventCount), lastEvent=\(safeLastEvent)")
     }
     
     // Regular initializer for testing/preview purposes
@@ -212,8 +224,15 @@ struct SessionState: Identifiable, Codable {
         return formatter.localizedString(for: updatedAt, relativeTo: Date())
     }
     
+    var effectiveModel: String {
+        // Prefer metrics.model_name if available, otherwise fall back to top-level model
+        let effective = metrics?.modelName.isEmpty == false ? metrics!.modelName : model
+        print("🎯 effectiveModel for \(shortId): using '\(effective)' (metrics='\(metrics?.modelName ?? "nil")', topLevel='\(model)')")
+        return effective
+    }
+    
     var displayName: String {
-        "\(shortId) · \(state.rawValue) · \(model) · \(timeAgo)"
+        "\(shortId) · \(state.rawValue) · \(effectiveModel) · \(timeAgo)"
     }
     
     var safeEventCount: Int {
