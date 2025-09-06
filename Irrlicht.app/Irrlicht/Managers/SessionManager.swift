@@ -10,7 +10,9 @@ class SessionManager: ObservableObject {
     private let instancesPath: URL
     private var fileSystemWatcher: DispatchSourceFileSystemObject?
     private var debounceTimer: Timer?
+    private var periodicUpdateTimer: Timer?
     private let debounceInterval: TimeInterval = 0.2 // 200ms debounce
+    private let updateInterval: TimeInterval = 1.0 // 1 second periodic updates
     private let finishedTTL: TimeInterval = 300 // 5 minutes TTL for finished sessions
     
     init() {
@@ -64,6 +66,14 @@ class SessionManager: ObservableObject {
         }
         
         fileSystemWatcher?.resume()
+        
+        // Start periodic update timer
+        periodicUpdateTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.loadExistingSessions()
+            }
+        }
+        
         isWatching = true
     }
     
@@ -72,6 +82,8 @@ class SessionManager: ObservableObject {
         fileSystemWatcher = nil
         debounceTimer?.invalidate()
         debounceTimer = nil
+        periodicUpdateTimer?.invalidate()
+        periodicUpdateTimer = nil
         isWatching = false
     }
     

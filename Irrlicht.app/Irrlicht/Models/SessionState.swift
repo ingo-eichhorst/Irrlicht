@@ -88,6 +88,14 @@ struct SessionState: Identifiable, Codable {
             case .finished: return "#10B981"  // emerald
             }
         }
+        
+        var emoji: String {
+            switch self {
+            case .working: return "🟣"   // purple circle
+            case .waiting: return "🟠"   // orange circle
+            case .finished: return "🟢"  // green circle
+            }
+        }
     }
     
     // Computed properties for UI display
