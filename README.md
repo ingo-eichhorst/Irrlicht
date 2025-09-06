@@ -72,9 +72,15 @@ bash demo-phase2.sh
 ```
 
 ### What You'll See
-- **Menu Bar**: Lightbulb icon with session glyphs ● ◔ ✓
+- **Menu Bar**: Individual colored status indicators for each session:
+  - 🟣 Working sessions (Claude is thinking/building)
+  - 🟠 Waiting sessions (needs your input)
+  - 🟢 Finished sessions (task complete)
+  - 💡 Dimmed lightbulb when no sessions
+- **Dynamic Sizing**: Indicators get smaller as session count increases
+- **Overflow Handling**: Shows first 5 sessions + "…" when 7+ sessions
 - **Dropdown**: Session list with "shortId · state · model · timeAgo" format  
-- **Real-time Updates**: File changes reflected within 2 seconds
+- **Real-time Updates**: Status changes reflected within 1 second
 - **Empty State**: "No Claude Code sessions detected" when no files
 
 ### Cleanup
@@ -91,6 +97,33 @@ ps aux | grep Irrlicht
 # Kill by PID
 kill <PID>
 ```
+
+## 🎨 Phase 3.5: Individual Status Indicators
+
+The menu bar now displays individual colored status indicators for each active Claude Code session, providing instant visual feedback without needing to click the dropdown.
+
+### Status Colors
+- **🟣 Purple Circle**: Working sessions (Claude is actively thinking, building, or processing)
+- **🟠 Orange Circle**: Waiting sessions (Claude is waiting for your input or response)  
+- **🟢 Green Circle**: Finished sessions (Task completed successfully)
+- **💡 Dimmed Lightbulb**: No active sessions detected
+
+### Dynamic Behavior
+- **Responsive Sizing**: Indicators automatically resize based on session count
+  - 1-2 sessions: Large indicators (14pt)
+  - 3-4 sessions: Medium indicators (12pt)  
+  - 5-6 sessions: Small indicators (10pt)
+  - 7+ sessions: Mini indicators (8pt)
+- **Overflow Management**: When 7+ sessions exist, shows first 5 + "…" overflow indicator
+- **Real-time Updates**: Status changes reflected within 1 second via periodic refresh
+- **State Transitions**: Smooth visual feedback as sessions change state
+
+### Technical Implementation
+- Colored Unicode emoji circles for native color support
+- MenuBarExtra with custom SwiftUI label
+- 1-second periodic timer combined with file system watching
+- Dynamic font sizing and spacing algorithms
+- Graceful overflow handling for many concurrent sessions
 
 ## Project Structure
 
@@ -242,8 +275,9 @@ Structured JSON logs with automatic rotation:
 
 - ✅ **Phase 0**: Contracts & Drift Guard (Complete)
 - ✅ **Phase 1**: Event Ingestion Core (Complete) 
-- 🚧 **Phase 2**: Menu Bar UI (Planned)
-- 🚧 **Phase 3**: Polish & Distribution (Planned)
+- ✅ **Phase 2**: Menu Bar UI (Complete)
+- ✅ **Phase 3**: Installer & Distribution Package (Complete)
+- ✅ **Phase 3.5**: Individual Status Indicators (Complete)
 
 ## Philosophy
 

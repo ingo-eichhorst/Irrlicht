@@ -1,0 +1,109 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2025-09-06",
+  "models": {
+    "claude-3.5-sonnet": {
+      "context_window": 200000,
+      "max_output": 8192,
+      "char_to_token_ratio": 3.5,
+      "family": "claude-3.5",
+      "display_name": "Claude 3.5 Sonnet",
+      "notes": "Standard Claude 3.5 model with 8K output"
+    },
+    "claude-3.5-haiku": {
+      "context_window": 200000,
+      "max_output": 8192,
+      "char_to_token_ratio": 3.8,
+      "family": "claude-3.5",
+      "display_name": "Claude 3.5 Haiku",
+      "notes": "Fast and efficient Claude 3.5 model"
+    },
+    "claude-3-opus": {
+      "context_window": 200000,
+      "max_output": 4096,
+      "char_to_token_ratio": 3.2,
+      "family": "claude-3",
+      "display_name": "Claude 3 Opus",
+      "notes": "Most capable Claude 3 model"
+    },
+    "claude-3-sonnet": {
+      "context_window": 200000,
+      "max_output": 4096,
+      "char_to_token_ratio": 3.4,
+      "family": "claude-3",
+      "display_name": "Claude 3 Sonnet",
+      "notes": "Balanced Claude 3 model"
+    },
+    "claude-3-haiku": {
+      "context_window": 200000,
+      "max_output": 4096,
+      "char_to_token_ratio": 3.7,
+      "family": "claude-3",
+      "display_name": "Claude 3 Haiku",
+      "notes": "Fast Claude 3 model"
+    },
+    "claude-4-sonnet": {
+      "context_window": 200000,
+      "max_output": 64000,
+      "char_to_token_ratio": 3.5,
+      "family": "claude-4",
+      "display_name": "Claude 4 Sonnet",
+      "notes": "Advanced Claude 4 with large output capacity",
+      "beta_features": {
+        "context_1m": 1000000
+      }
+    },
+    "claude-4.1-opus": {
+      "context_window": 200000,
+      "max_output": 64000,
+      "char_to_token_ratio": 3.2,
+      "family": "claude-4",
+      "display_name": "Claude 4.1 Opus",
+      "notes": "Latest high-capability model"
+    },
+    "claude-3.7-sonnet": {
+      "context_window": 200000,
+      "max_output": 8192,
+      "char_to_token_ratio": 3.5,
+      "family": "claude-3.7",
+      "display_name": "Claude 3.7 Sonnet",
+      "notes": "Enhanced Claude 3.5 with improved capabilities",
+      "beta_features": {
+        "output_128k": 128000
+      }
+    }
+  },
+  "family_defaults": {
+    "claude-3": {
+      "context_window": 200000,
+      "max_output": 4096,
+      "char_to_token_ratio": 3.4
+    },
+    "claude-3.5": {
+      "context_window": 200000,
+      "max_output": 8192,
+      "char_to_token_ratio": 3.6
+    },
+    "claude-3.7": {
+      "context_window": 200000,
+      "max_output": 8192,
+      "char_to_token_ratio": 3.5
+    },
+    "claude-4": {
+      "context_window": 200000,
+      "max_output": 64000,
+      "char_to_token_ratio": 3.3
+    }
+  },
+  "fallback": {
+    "default_context": 128000,
+    "default_output": 4096,
+    "default_ratio": 4.0,
+    "display_name": "Unknown Model"
+  },
+  "estimation_notes": {
+    "char_to_token_ratio": "Average characters per token, varies by language and content type",
+    "accuracy": "Ratios are estimates and may vary ±15% from actual tokenization",
+    "update_frequency": "Model capacities updated as new models are released"
+  }
+}
