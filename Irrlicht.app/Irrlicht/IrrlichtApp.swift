@@ -9,21 +9,26 @@ struct StatusIndicatorLabel: View {
             Image(systemName: "lightbulb")
                 .foregroundColor(.secondary)
         } else {
-            // Show individual status indicators
-            HStack(spacing: spacingForCount) {
-                ForEach(sessions.prefix(maxDisplayCount), id: \.id) { session in
-                    Text(session.state.emoji)
-                        .font(.system(size: fontSizeForCount))
-                }
-                
-                // Show overflow indicator if too many sessions
-                if sessions.count > maxDisplayCount {
-                    Text("…")
-                        .font(.system(size: fontSizeForCount))
-                        .foregroundColor(.secondary)
-                }
-            }
+            // Show individual status indicators as concatenated text
+            Text(statusDisplayString)
+                .font(.system(size: fontSizeForCount))
         }
+    }
+    
+    // Create concatenated emoji string with spacing
+    private var statusDisplayString: String {
+        let displaySessions = sessions.prefix(maxDisplayCount)
+        let emojiArray = displaySessions.map { $0.state.emoji }
+        
+        // Add overflow indicator if needed
+        var finalEmojis = emojiArray
+        if sessions.count > maxDisplayCount {
+            finalEmojis.append("…")
+        }
+        
+        // Join with spaces based on session count for visual clarity
+        let separator = spacingForCount > 1 ? " " : ""
+        return finalEmojis.joined(separator: separator)
     }
     
     // Dynamic sizing based on session count
