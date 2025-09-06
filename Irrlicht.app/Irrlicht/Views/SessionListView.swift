@@ -166,8 +166,8 @@ struct SessionRowView: View {
                     
                     Spacer()
                     
-                    if session.eventCount > 0 {
-                        Text("\(session.eventCount) events")
+                    if session.safeEventCount > 0 {
+                        Text("\(session.safeEventCount) events")
                             .font(.caption2)
                             .foregroundColor(Color.secondary.opacity(0.7))
                     }
