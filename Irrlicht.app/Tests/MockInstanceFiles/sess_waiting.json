@@ -1,0 +1,10 @@
+{
+  "session_id": "sess_xyz789ghi012",
+  "state": "waiting",
+  "model": "claude-3-haiku",
+  "cwd": "/Users/testuser/projects/chatbot",
+  "transcript_path": "/Users/testuser/.claude/projects/chatbot/transcript.jsonl",
+  "updated_at": "2024-09-06T15:25:00.000Z",
+  "event_count": 12,
+  "last_event": "Notification"
+}

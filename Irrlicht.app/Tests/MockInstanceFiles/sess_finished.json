@@ -1,0 +1,10 @@
+{
+  "session_id": "sess_old456finished",
+  "state": "finished",
+  "model": "claude-3-opus",
+  "cwd": "/Users/testuser/projects/completed",
+  "transcript_path": "/Users/testuser/.claude/projects/completed/transcript.jsonl",
+  "updated_at": "2024-09-06T15:00:00.000Z",
+  "event_count": 8,
+  "last_event": "SessionEnd"
+}
