@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	
+	"transcript-tailer/pkg/tailer"
 )
 
 const (
@@ -42,19 +44,32 @@ type HookEvent struct {
 	Data          map[string]interface{} `json:"data"`
 }
 
+// SessionMetrics holds computed performance metrics from transcript analysis  
+type SessionMetrics struct {
+	MessagesPerMinute    float64 `json:"messages_per_minute"`
+	ElapsedSeconds       int64   `json:"elapsed_seconds"`
+	LastMessageAt        int64   `json:"last_message_at"`
+	SessionStartAt       int64   `json:"session_start_at"`
+	TotalTokens          int64   `json:"total_tokens,omitempty"`
+	ModelName            string  `json:"model_name,omitempty"`
+	ContextUtilization   float64 `json:"context_utilization_percentage,omitempty"`
+	PressureLevel        string  `json:"pressure_level,omitempty"`
+}
+
 // SessionState represents the current state of a session
 type SessionState struct {
-	Version       int    `json:"version"`
-	SessionID     string `json:"session_id"`
-	State         string `json:"state"`
-	Model         string `json:"model,omitempty"`
-	CWD           string `json:"cwd,omitempty"`
-	TranscriptPath string `json:"transcript_path,omitempty"`
-	FirstSeen     int64  `json:"first_seen"`
-	UpdatedAt     int64  `json:"updated_at"`
-	Confidence    string `json:"confidence"`
-	EventCount    int    `json:"event_count"`
-	LastEvent     string `json:"last_event"`
+	Version       int              `json:"version"`
+	SessionID     string           `json:"session_id"`
+	State         string           `json:"state"`
+	Model         string           `json:"model,omitempty"`
+	CWD           string           `json:"cwd,omitempty"`
+	TranscriptPath string          `json:"transcript_path,omitempty"`
+	FirstSeen     int64            `json:"first_seen"`
+	UpdatedAt     int64            `json:"updated_at"`
+	Confidence    string           `json:"confidence"`
+	EventCount    int              `json:"event_count"`
+	LastEvent     string           `json:"last_event"`
+	Metrics       *SessionMetrics  `json:"metrics,omitempty"`
 }
 
 // LogEntry represents a structured log entry
@@ -77,6 +92,47 @@ type StructuredLogger struct {
 	currentSize int64
 	mu          sync.Mutex
 }
+
+
+// computeSessionMetrics analyzes transcript and computes performance metrics using enhanced tailer
+func computeSessionMetrics(transcriptPath string) *SessionMetrics {
+	if transcriptPath == "" {
+		return nil
+	}
+	
+	// Use the enhanced transcript tailer for analysis
+	transcriptTailer := tailer.NewTranscriptTailer(transcriptPath)
+	metrics, err := transcriptTailer.TailAndProcess()
+	if err != nil || metrics == nil {
+		// Transcript doesn't exist yet or can't be read - not an error
+		return nil
+	}
+	
+	// Convert from transcript tailer metrics to hook metrics format
+	hookMetrics := &SessionMetrics{
+		MessagesPerMinute: metrics.MessagesPerMinute,
+		ElapsedSeconds:    metrics.ElapsedSeconds,
+		LastMessageAt:     metrics.LastMessageAt.Unix(),
+		SessionStartAt:    metrics.SessionStartAt.Unix(),
+	}
+	
+	// Add context utilization data if available
+	if metrics.TotalTokens != nil {
+		hookMetrics.TotalTokens = *metrics.TotalTokens
+	}
+	if metrics.ModelName != nil {
+		hookMetrics.ModelName = *metrics.ModelName
+	}
+	if metrics.ContextUtilization != nil {
+		hookMetrics.ContextUtilization = *metrics.ContextUtilization
+	}
+	if metrics.PressureLevel != nil {
+		hookMetrics.PressureLevel = *metrics.PressureLevel
+	}
+	
+	return hookMetrics
+}
+
 
 func main() {
 	startTime := time.Now()
@@ -292,6 +348,11 @@ func processEvent(event *HookEvent) error {
 		}
 		if transcriptPath, ok := data["transcript_path"].(string); ok {
 			sessionState.TranscriptPath = transcriptPath
+			
+			// Compute metrics from transcript analysis
+			if metrics := computeSessionMetrics(transcriptPath); metrics != nil {
+				sessionState.Metrics = metrics
+			}
 		}
 	}
 

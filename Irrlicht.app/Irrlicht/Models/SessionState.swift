@@ -1,5 +1,104 @@
 import Foundation
 
+// Performance metrics from transcript analysis
+struct SessionMetrics: Codable {
+    let messagesPerMinute: Double   // messages per minute over sliding window
+    let elapsedSeconds: Int64       // elapsed time since session start
+    let lastMessageAt: Date         // timestamp of last message
+    let sessionStartAt: Date        // timestamp of first message/session start
+    let totalTokens: Int64          // total token count from transcript (0 if not available)
+    let modelName: String           // model name extracted from transcript ("" if not available) 
+    let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
+    let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
+    
+    enum CodingKeys: String, CodingKey {
+        case messagesPerMinute = "messages_per_minute"
+        case elapsedSeconds = "elapsed_seconds"  
+        case lastMessageAt = "last_message_at"
+        case sessionStartAt = "session_start_at"
+        case totalTokens = "total_tokens"
+        case modelName = "model_name"
+        case contextUtilization = "context_utilization_percentage"
+        case pressureLevel = "pressure_level"
+    }
+    
+    // Computed properties for UI display
+    var formattedElapsedTime: String {
+        let minutes = elapsedSeconds / 60
+        let seconds = elapsedSeconds % 60
+        
+        if minutes >= 60 {
+            let hours = minutes / 60
+            let remainingMinutes = minutes % 60
+            return String(format: "%dh %dm", hours, remainingMinutes)
+        } else if minutes > 0 {
+            return String(format: "%dm %ds", minutes, seconds)
+        } else {
+            return String(format: "%ds", seconds)
+        }
+    }
+    
+    var formattedMessagesPerMinute: String {
+        return String(format: "%.1f/min", messagesPerMinute)
+    }
+    
+    var formattedTokenCount: String {
+        if totalTokens == 0 { return "—" }
+        
+        if totalTokens < 1000 {
+            return "\(totalTokens)"
+        } else if totalTokens < 1000000 {
+            return String(format: "%.1fK", Double(totalTokens) / 1000)
+        } else {
+            return String(format: "%.1fM", Double(totalTokens) / 1000000)
+        }
+    }
+    
+    var formattedContextUtilization: String {
+        if contextUtilization == 0 && pressureLevel == "unknown" { return "—" }
+        return String(format: "%.1f%%", contextUtilization)
+    }
+    
+    var contextPressureIcon: String {
+        switch pressureLevel {
+        case "safe":
+            return "🟢"
+        case "caution":
+            return "🟡"
+        case "warning":
+            return "🔴"
+        case "critical":
+            return "⚠️"
+        case "unknown", "":
+            return "❓"
+        default:
+            return "❓"
+        }
+    }
+    
+    var contextPressureColor: String {
+        switch pressureLevel {
+        case "safe":
+            return "#10B981"   // emerald
+        case "caution":
+            return "#F59E0B"   // amber
+        case "warning":
+            return "#EF4444"   // red
+        case "critical":
+            return "#DC2626"   // dark red
+        case "unknown", "":
+            return "#6B7280"   // gray
+        default:
+            return "#6B7280"   // gray
+        }
+    }
+    
+    // Check if context utilization data is available
+    var hasContextData: Bool {
+        return totalTokens > 0 && !modelName.isEmpty && pressureLevel != "unknown" && !pressureLevel.isEmpty
+    }
+}
+
 struct SessionState: Identifiable, Codable {
     let id: String              // session_id
     let state: State            // working, waiting, finished
@@ -9,6 +108,7 @@ struct SessionState: Identifiable, Codable {
     let updatedAt: Date         // last modified timestamp
     let eventCount: Int?        // number of events processed (optional)
     let lastEvent: String?      // last hook event type (optional)
+    let metrics: SessionMetrics? // performance metrics from transcript analysis (optional)
     
     // Custom coding keys to match JSON from irrlicht-hook
     enum CodingKeys: String, CodingKey {
@@ -18,6 +118,7 @@ struct SessionState: Identifiable, Codable {
         case updatedAt = "updated_at"
         case eventCount = "event_count"
         case lastEvent = "last_event"
+        case metrics
     }
     
     // Custom decoder to handle multiple date formats and missing fields
@@ -31,6 +132,7 @@ struct SessionState: Identifiable, Codable {
         transcriptPath = try container.decodeIfPresent(String.self, forKey: .transcriptPath)
         eventCount = try container.decodeIfPresent(Int.self, forKey: .eventCount)
         lastEvent = try container.decodeIfPresent(String.self, forKey: .lastEvent)
+        metrics = try container.decodeIfPresent(SessionMetrics.self, forKey: .metrics)
         
         // Handle multiple date formats
         if let dateString = try? container.decode(String.self, forKey: .updatedAt) {
@@ -59,7 +161,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -68,6 +170,7 @@ struct SessionState: Identifiable, Codable {
         self.updatedAt = updatedAt
         self.eventCount = eventCount
         self.lastEvent = lastEvent
+        self.metrics = metrics
     }
     
     enum State: String, CaseIterable, Codable {
@@ -86,6 +189,14 @@ struct SessionState: Identifiable, Codable {
             case .working: return "#8B5CF6"   // purple
             case .waiting: return "#F59E0B"   // amber
             case .finished: return "#10B981"  // emerald
+            }
+        }
+        
+        var emoji: String {
+            switch self {
+            case .working: return "🟣"   // purple circle
+            case .waiting: return "🟠"   // orange circle
+            case .finished: return "🟢"  // green circle
             }
         }
     }

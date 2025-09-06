@@ -172,6 +172,44 @@ struct SessionRowView: View {
                             .foregroundColor(Color.secondary.opacity(0.7))
                     }
                 }
+                
+                // Show metrics if available
+                if let metrics = session.metrics {
+                    HStack(spacing: 8) {
+                        if metrics.messagesPerMinute > 0 {
+                            Label(metrics.formattedMessagesPerMinute, systemImage: "chart.line.uptrend.xyaxis")
+                                .font(.caption2)
+                                .foregroundColor(.blue)
+                        }
+                        
+                        if metrics.elapsedSeconds > 0 {
+                            Label(metrics.formattedElapsedTime, systemImage: "clock")
+                                .font(.caption2)
+                                .foregroundColor(.green)
+                        }
+                        
+                        // Context utilization indicator
+                        if metrics.hasContextData {
+                            HStack(spacing: 2) {
+                                Text(metrics.contextPressureIcon)
+                                    .font(.caption2)
+                                Text(metrics.formattedContextUtilization)
+                                    .font(.caption2)
+                                    .foregroundColor(Color(hex: metrics.contextPressureColor))
+                            }
+                        }
+                        
+                        // Token count indicator
+                        if metrics.totalTokens > 0 {
+                            Label(metrics.formattedTokenCount, systemImage: "textformat.abc")
+                                .font(.caption2)
+                                .foregroundColor(.purple)
+                        }
+                        
+                        Spacer()
+                    }
+                    .padding(.top, 1)
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -231,7 +269,17 @@ struct SessionListView_Previews: PreviewProvider {
                         transcriptPath: "/Users/user/.claude/projects/test/transcript.jsonl",
                         updatedAt: Date().addingTimeInterval(-60),
                         eventCount: 5,
-                        lastEvent: "UserPromptSubmit"
+                        lastEvent: "UserPromptSubmit",
+                        metrics: SessionMetrics(
+                            messagesPerMinute: 2.5,
+                            elapsedSeconds: 180,
+                            lastMessageAt: Date().addingTimeInterval(-30),
+                            sessionStartAt: Date().addingTimeInterval(-180),
+                            totalTokens: 15000,
+                            modelName: "claude-3.7-sonnet",
+                            contextUtilization: 7.5,
+                            pressureLevel: "safe"
+                        )
                     ),
                     SessionState(
                         id: "sess_xyz789ghi012",
@@ -241,7 +289,17 @@ struct SessionListView_Previews: PreviewProvider {
                         transcriptPath: "/Users/user/.claude/projects/another/transcript.jsonl",
                         updatedAt: Date().addingTimeInterval(-300),
                         eventCount: 12,
-                        lastEvent: "Notification"
+                        lastEvent: "Notification",
+                        metrics: SessionMetrics(
+                            messagesPerMinute: 1.8,
+                            elapsedSeconds: 420,
+                            lastMessageAt: Date().addingTimeInterval(-90),
+                            sessionStartAt: Date().addingTimeInterval(-420),
+                            totalTokens: 85000,
+                            modelName: "claude-3-haiku",
+                            contextUtilization: 42.5,
+                            pressureLevel: "caution"
+                        )
                     ),
                     SessionState(
                         id: "sess_old456finished",
@@ -251,7 +309,17 @@ struct SessionListView_Previews: PreviewProvider {
                         transcriptPath: "/Users/user/.claude/projects/completed/transcript.jsonl", 
                         updatedAt: Date().addingTimeInterval(-1800),
                         eventCount: 8,
-                        lastEvent: "SessionEnd"
+                        lastEvent: "SessionEnd",
+                        metrics: SessionMetrics(
+                            messagesPerMinute: 0.0,
+                            elapsedSeconds: 1200,
+                            lastMessageAt: Date().addingTimeInterval(-1800),
+                            sessionStartAt: Date().addingTimeInterval(-3000),
+                            totalTokens: 175000,
+                            modelName: "claude-3-opus",
+                            contextUtilization: 87.5,
+                            pressureLevel: "warning"
+                        )
                     )
                 ]
                 return manager
