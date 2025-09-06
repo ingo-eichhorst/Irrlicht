@@ -15,8 +15,12 @@ import (
 
 // HookConfig represents a Claude Code hook configuration
 type HookConfig struct {
-	Events  []string `json:"events"`
-	Command string   `json:"command"`
+	Type    string `json:"type"`
+	Command string `json:"command"`
+}
+
+type EventHookConfig struct {
+	Hooks []HookConfig `json:"hooks"`
 }
 
 // BackupInfo stores metadata about a backup
@@ -150,16 +154,22 @@ func (sm *SettingsMerger) MergeIrrlichtHooks() error {
 	}
 
 	// Define Irrlicht hook configuration
-	irrlichtHook := HookConfig{
-		Events: []string{
-			"SessionStart",
-			"UserPromptSubmit",
-			"Notification", 
-			"Stop",
-			"SubagentStop",
-			"SessionEnd",
-		},
+	hookConfig := HookConfig{
+		Type:    "command",
 		Command: "irrlicht-hook",
+	}
+	
+	eventHookConfig := EventHookConfig{
+		Hooks: []HookConfig{hookConfig},
+	}
+	
+	events := []string{
+		"SessionStart",
+		"UserPromptSubmit",
+		"Notification", 
+		"Stop",
+		"SubagentStop",
+		"SessionEnd",
 	}
 
 	// Check if hooks section exists
@@ -172,30 +182,52 @@ func (sm *SettingsMerger) MergeIrrlichtHooks() error {
 		}
 	}
 
-	// Check if Irrlicht hook already exists
-	irrlichtPath := "hooks.irrlicht"
-	existingHook := gjson.GetBytes(settingsJSON, irrlichtPath)
-	
-	if existingHook.Exists() {
-		sm.log("Irrlicht hook already exists, checking if update needed")
+	// Add hooks for each event
+	for _, event := range events {
+		eventPath := fmt.Sprintf("hooks.%s", event)
 		
-		// Compare existing hook with new configuration
-		var existing HookConfig
-		if err := json.Unmarshal([]byte(existingHook.Raw), &existing); err == nil {
-			if sm.hooksEqual(existing, irrlichtHook) {
-				sm.log("Existing hook configuration is identical, no changes needed")
-				return nil
+		// Check if event hook already exists
+		existingEvent := gjson.GetBytes(settingsJSON, eventPath)
+		if existingEvent.Exists() {
+			sm.log(fmt.Sprintf("Event %s hook already exists, checking if irrlicht-hook is present", event))
+			
+			// Check if irrlicht-hook is already in the hooks array
+			found := false
+			if existingEvent.IsArray() {
+				for _, item := range existingEvent.Array() {
+					if hooks := item.Get("hooks"); hooks.Exists() && hooks.IsArray() {
+						for _, hook := range hooks.Array() {
+							if cmd := hook.Get("command"); cmd.Exists() && cmd.String() == "irrlicht-hook" {
+								found = true
+								break
+							}
+						}
+					}
+					if found {
+						break
+					}
+				}
 			}
+			
+			if found {
+				sm.log(fmt.Sprintf("irrlicht-hook already configured for %s", event))
+				continue
+			}
+			
+			sm.log(fmt.Sprintf("Adding irrlicht-hook to existing %s event", event))
+			// Get existing array and append our config
+			existing := existingEvent.Array()
+			existing = append(existing, gjson.Parse(fmt.Sprintf(`{"hooks":[{"type":"command","command":"irrlicht-hook"}]}`)))
+			settingsJSON, err = sjson.SetBytes(settingsJSON, eventPath, existing)
+		} else {
+			sm.log(fmt.Sprintf("Adding new %s event hook", event))
+			// Create new event hook array with our config
+			settingsJSON, err = sjson.SetBytes(settingsJSON, eventPath, []EventHookConfig{eventHookConfig})
 		}
-		sm.log("Updating existing hook configuration")
-	} else {
-		sm.log("Adding new Irrlicht hook configuration")
-	}
-
-	// Add/update the Irrlicht hook
-	settingsJSON, err = sjson.SetBytes(settingsJSON, irrlichtPath, irrlichtHook)
-	if err != nil {
-		return fmt.Errorf("failed to set Irrlicht hook: %w", err)
+		
+		if err != nil {
+			return fmt.Errorf("failed to set %s hook: %w", event, err)
+		}
 	}
 
 	// Write updated settings
@@ -323,18 +355,27 @@ func (sm *SettingsMerger) GetPreview() (string, error) {
 	// Create a copy and perform merge
 	settingsJSON, _ := json.Marshal(current)
 	
-	irrlichtHook := HookConfig{
-		Events:  []string{"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SubagentStop", "SessionEnd"},
-		Command: "irrlicht-hook",
-	}
+	events := []string{"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SubagentStop", "SessionEnd"}
 
 	// Add hooks section if missing
 	if !gjson.GetBytes(settingsJSON, "hooks").Exists() {
 		settingsJSON, _ = sjson.SetBytes(settingsJSON, "hooks", map[string]interface{}{})
 	}
 
-	// Add Irrlicht hook
-	settingsJSON, _ = sjson.SetBytes(settingsJSON, "hooks.irrlicht", irrlichtHook)
+	// Add hooks for each event (for preview)
+	hookConfig := HookConfig{
+		Type:    "command",
+		Command: "irrlicht-hook",
+	}
+	
+	eventHookConfig := EventHookConfig{
+		Hooks: []HookConfig{hookConfig},
+	}
+	
+	for _, event := range events {
+		eventPath := fmt.Sprintf("hooks.%s", event)
+		settingsJSON, _ = sjson.SetBytes(settingsJSON, eventPath, []EventHookConfig{eventHookConfig})
+	}
 
 	// Parse the modified settings
 	var modified map[string]interface{}
@@ -347,25 +388,6 @@ func (sm *SettingsMerger) GetPreview() (string, error) {
 	return fmt.Sprintf("BEFORE:\n%s\n\nAFTER:\n%s\n", string(currentBytes), string(modifiedBytes)), nil
 }
 
-// hooksEqual compares two hook configurations
-func (sm *SettingsMerger) hooksEqual(a, b HookConfig) bool {
-	if a.Command != b.Command || len(a.Events) != len(b.Events) {
-		return false
-	}
-	
-	eventMap := make(map[string]bool)
-	for _, event := range a.Events {
-		eventMap[event] = true
-	}
-	
-	for _, event := range b.Events {
-		if !eventMap[event] {
-			return false
-		}
-	}
-	
-	return true
-}
 
 // writeSettings writes settings JSON to file with proper formatting
 func (sm *SettingsMerger) writeSettings(settingsJSON []byte) error {
