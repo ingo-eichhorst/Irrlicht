@@ -117,17 +117,15 @@ func computeSessionMetrics(transcriptPath string) *SessionMetrics {
 	}
 	
 	// Add context utilization data if available
-	if metrics.TotalTokens != nil {
-		hookMetrics.TotalTokens = *metrics.TotalTokens
+	if metrics.TotalTokens > 0 {
+		hookMetrics.TotalTokens = metrics.TotalTokens
 	}
-	if metrics.ModelName != nil {
-		hookMetrics.ModelName = *metrics.ModelName
+	if metrics.ModelName != "" {
+		hookMetrics.ModelName = metrics.ModelName
 	}
-	if metrics.ContextUtilization != nil {
-		hookMetrics.ContextUtilization = *metrics.ContextUtilization
-	}
-	if metrics.PressureLevel != nil {
-		hookMetrics.PressureLevel = *metrics.PressureLevel
+	if metrics.ContextUtilization > 0 || metrics.PressureLevel != "unknown" {
+		hookMetrics.ContextUtilization = metrics.ContextUtilization
+		hookMetrics.PressureLevel = metrics.PressureLevel
 	}
 	
 	return hookMetrics
