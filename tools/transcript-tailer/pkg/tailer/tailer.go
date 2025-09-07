@@ -112,6 +112,11 @@ type SessionMetrics struct {
 	ModelName         string       `json:"model_name,omitempty"`
 	ContextUtilization float64     `json:"context_utilization_percentage,omitempty"`
 	PressureLevel     string       `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
+	
+	// Raw event data for real-time client-side calculations
+	TotalEventCount           int64     `json:"total_event_count,omitempty"`           // Total events since session start
+	RecentEventCount          int64     `json:"recent_event_count,omitempty"`          // Events in last 5 minutes
+	RecentEventWindowStart    time.Time `json:"recent_event_window_start,omitempty"`  // Start of 5-minute window
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -143,10 +148,17 @@ func NewTranscriptTailer(path string) *TranscriptTailer {
 		lastOffset: 0,
 		metrics: &SessionMetrics{
 			MessageHistory: make([]MessageEvent, 0),
-			SessionStartAt: time.Now(),
+			SessionStartAt: time.Time{}, // Will be set from the first actual message timestamp
 		},
 		windowSize: 60 * time.Second,
 		// capacityMgr: capacityMgr,
+	}
+}
+
+// SetSessionStartTime allows preserving the session start time across multiple invocations
+func (t *TranscriptTailer) SetSessionStartTime(startTime time.Time) {
+	if t.metrics != nil {
+		t.metrics.SessionStartAt = startTime
 	}
 }
 
@@ -337,13 +349,19 @@ func (t *TranscriptTailer) computeMetrics() {
 	if len(t.metrics.MessageHistory) == 0 {
 		t.metrics.MessagesPerMinute = 0
 		t.metrics.ElapsedSeconds = 0
+		t.metrics.TotalEventCount = 0
+		t.metrics.RecentEventCount = 0
+		t.metrics.RecentEventWindowStart = time.Time{}
 		return
 	}
 	
-	// Use the latest message timestamp as our reference point
+	// Use current time as reference for real-time calculations
+	currentTime := time.Now()
+	
+	// Use the latest message timestamp as our reference point for legacy calculations
 	latestTime := t.metrics.LastMessageAt
 	if latestTime.IsZero() {
-		latestTime = time.Now()
+		latestTime = currentTime
 	}
 	
 	// Calculate elapsed time since session start
@@ -351,14 +369,36 @@ func (t *TranscriptTailer) computeMetrics() {
 		t.metrics.ElapsedSeconds = int64(latestTime.Sub(t.metrics.SessionStartAt).Seconds())
 	}
 	
-	// For messages per minute, use a sliding window from the latest timestamp
-	windowStart := latestTime.Add(-t.windowSize)
+	// Calculate raw event counts for client-side real-time calculations
+	t.metrics.TotalEventCount = int64(len(t.metrics.MessageHistory))
+	
+	// For recent events: use 5-minute window from current time
+	fiveMinutesAgo := currentTime.Add(-5 * time.Minute)
+	recentEventCount := int64(0)
+	
+	// Set window start to the later of session start or 5 minutes ago
+	windowStart := fiveMinutesAgo
+	if t.metrics.SessionStartAt.After(fiveMinutesAgo) {
+		windowStart = t.metrics.SessionStartAt
+	}
+	t.metrics.RecentEventWindowStart = windowStart
+	
+	// Count events in the recent window
+	for _, msg := range t.metrics.MessageHistory {
+		if msg.Timestamp.After(windowStart) || msg.Timestamp.Equal(windowStart) {
+			recentEventCount++
+		}
+	}
+	t.metrics.RecentEventCount = recentEventCount
+	
+	// Legacy calculation: For messages per minute, use a sliding window from the latest timestamp
+	legacyWindowStart := latestTime.Add(-t.windowSize)
 	messageCount := 0
 	
 	// Filter messages to sliding window and count
 	filteredHistory := make([]MessageEvent, 0, len(t.metrics.MessageHistory))
 	for _, msg := range t.metrics.MessageHistory {
-		if msg.Timestamp.After(windowStart) || msg.Timestamp.Equal(windowStart) {
+		if msg.Timestamp.After(legacyWindowStart) || msg.Timestamp.Equal(legacyWindowStart) {
 			filteredHistory = append(filteredHistory, msg)
 			messageCount++
 		}
@@ -367,7 +407,7 @@ func (t *TranscriptTailer) computeMetrics() {
 	// Update history to only keep recent messages
 	t.metrics.MessageHistory = filteredHistory
 	
-	// Convert to messages per minute
+	// Convert to messages per minute (legacy calculation)
 	if messageCount > 0 {
 		// Calculate actual time span of messages
 		if len(filteredHistory) > 1 {
@@ -525,15 +565,15 @@ func (t *TranscriptTailer) computeContextUtilization() {
 	}
 	
 	// Context utilization calculation adjusted for autocompaction
-	// Claude Code autocompacts at ~80% of 200K = 160K effective usable context
-	effectiveContextWindow := int64(160000)
+	// Claude Code autocompacts at ~155K tokens
+	effectiveContextWindow := int64(155000)
 	utilizationPercentage := (float64(t.metrics.TotalTokens) / float64(effectiveContextWindow)) * 100
 	
 	// Determine pressure level based on proximity to autocompaction
 	pressureLevel := "safe"
-	if utilizationPercentage >= 95 {
+	if utilizationPercentage >= 90 {
 		pressureLevel = "critical"
-	} else if utilizationPercentage >= 85 {
+	} else if utilizationPercentage >= 80 {
 		pressureLevel = "warning"
 	} else if utilizationPercentage >= 60 {
 		pressureLevel = "caution"

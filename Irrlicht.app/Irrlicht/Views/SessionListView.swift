@@ -256,27 +256,33 @@ struct SessionRowView: View {
                     let isActive = session.state != .finished
                     TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
                         let _ = timeline.date // Force refresh every second
-                        HStack(spacing: 8) {
-                            // Show elapsed time for all sessions
-                            if isActive {
-                                let elapsedSeconds = Int64(Date().timeIntervalSince(session.firstSeen))
-                                if elapsedSeconds > 0 {
-                                    Label(metrics.formattedRealtimeElapsedTime(sessionFirstSeen: session.firstSeen), systemImage: "clock")
-                                        .font(.caption2)
-                                        .foregroundColor(.primary)
+                        HStack(spacing: 0) {
+                            // Elapsed time (left-aligned)
+                            HStack {
+                                if isActive {
+                                    let elapsedSeconds = Int64(Date().timeIntervalSince(session.firstSeen))
+                                    if elapsedSeconds > 0 {
+                                        Label(metrics.formattedRealtimeElapsedTime(sessionFirstSeen: session.firstSeen), systemImage: "clock")
+                                            .font(.caption2)
+                                            .foregroundColor(.primary)
+                                    }
+                                } else {
+                                    // For finished sessions, use stored elapsed time
+                                    if metrics.elapsedSeconds > 0 {
+                                        Label(metrics.formattedElapsedTime, systemImage: "clock")
+                                            .font(.caption2)
+                                            .foregroundColor(.primary)
+                                    }
                                 }
-                            } else {
-                                // For finished sessions, use stored elapsed time
-                                if metrics.elapsedSeconds > 0 {
-                                    Label(metrics.formattedElapsedTime, systemImage: "clock")
-                                        .font(.caption2)
-                                        .foregroundColor(.primary)
-                                }
+                                Spacer()
                             }
+                            .frame(minWidth: 70, alignment: .leading)
                             
-                            // Context utilization indicator
-                            if metrics.hasContextData {
-                                HStack(spacing: 2) {
+                            Spacer()
+                            
+                            // Context utilization (center)
+                            HStack(spacing: 2) {
+                                if metrics.hasContextData {
                                     Text(metrics.contextPressureIcon)
                                         .font(.caption2)
                                     Text(metrics.formattedContextUtilization)
@@ -284,15 +290,20 @@ struct SessionRowView: View {
                                         .foregroundColor(Color(hex: metrics.contextPressureColor))
                                 }
                             }
-                            
-                            // Token count indicator
-                            if metrics.totalTokens > 0 {
-                                Label(metrics.formattedTokenCount, systemImage: "textformat.abc")
-                                    .font(.caption2)
-                                    .foregroundColor(.primary)
-                            }
+                            .frame(minWidth: 50)
                             
                             Spacer()
+                            
+                            // Token count (right-aligned)
+                            HStack {
+                                Spacer()
+                                if metrics.totalTokens > 0 {
+                                    Label(metrics.formattedTokenCount, systemImage: "textformat.abc")
+                                        .font(.caption2)
+                                        .foregroundColor(.primary)
+                                }
+                            }
+                            .frame(minWidth: 60, alignment: .trailing)
                         }
                         .padding(.top, 1)
                     }

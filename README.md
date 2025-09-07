@@ -1,4 +1,4 @@
-# Irrlicht — the tamed will-o'-the-wisp
+# ✦ Irrlicht — Claude Code Observability for MacOS
 
 ![Banner](banner.png)
 
