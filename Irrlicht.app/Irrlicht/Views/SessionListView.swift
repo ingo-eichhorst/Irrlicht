@@ -253,40 +253,49 @@ struct SessionRowView: View {
                 
                 // Show metrics if available
                 if let metrics = session.metrics {
-                    HStack(spacing: 8) {
-                        if metrics.messagesPerMinute > 0 {
-                            Label(metrics.formattedMessagesPerMinute, systemImage: "chart.line.uptrend.xyaxis")
-                                .font(.caption2)
-                                .foregroundColor(.primary)
-                        }
-                        
-                        if metrics.elapsedSeconds > 0 {
-                            Label(metrics.formattedElapsedTime, systemImage: "clock")
-                                .font(.caption2)
-                                .foregroundColor(.primary)
-                        }
-                        
-                        // Context utilization indicator
-                        if metrics.hasContextData {
-                            HStack(spacing: 2) {
-                                Text(metrics.contextPressureIcon)
-                                    .font(.caption2)
-                                Text(metrics.formattedContextUtilization)
-                                    .font(.caption2)
-                                    .foregroundColor(Color(hex: metrics.contextPressureColor))
+                    let isActive = session.state != .finished
+                    TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
+                        let _ = timeline.date // Force refresh every second
+                        HStack(spacing: 8) {
+                            // Show elapsed time for all sessions
+                            if isActive {
+                                let elapsedSeconds = Int64(Date().timeIntervalSince(session.firstSeen))
+                                if elapsedSeconds > 0 {
+                                    Label(metrics.formattedRealtimeElapsedTime(sessionFirstSeen: session.firstSeen), systemImage: "clock")
+                                        .font(.caption2)
+                                        .foregroundColor(.primary)
+                                }
+                            } else {
+                                // For finished sessions, use stored elapsed time
+                                if metrics.elapsedSeconds > 0 {
+                                    Label(metrics.formattedElapsedTime, systemImage: "clock")
+                                        .font(.caption2)
+                                        .foregroundColor(.primary)
+                                }
                             }
+                            
+                            // Context utilization indicator
+                            if metrics.hasContextData {
+                                HStack(spacing: 2) {
+                                    Text(metrics.contextPressureIcon)
+                                        .font(.caption2)
+                                    Text(metrics.formattedContextUtilization)
+                                        .font(.caption2)
+                                        .foregroundColor(Color(hex: metrics.contextPressureColor))
+                                }
+                            }
+                            
+                            // Token count indicator
+                            if metrics.totalTokens > 0 {
+                                Label(metrics.formattedTokenCount, systemImage: "textformat.abc")
+                                    .font(.caption2)
+                                    .foregroundColor(.primary)
+                            }
+                            
+                            Spacer()
                         }
-                        
-                        // Token count indicator
-                        if metrics.totalTokens > 0 {
-                            Label(metrics.formattedTokenCount, systemImage: "textformat.abc")
-                                .font(.caption2)
-                                .foregroundColor(.primary)
-                        }
-                        
-                        Spacer()
+                        .padding(.top, 1)
                     }
-                    .padding(.top, 1)
                 }
             }
         }
@@ -427,14 +436,12 @@ struct SessionListView_Previews: PreviewProvider {
                         transcriptPath: "/Users/user/.claude/projects/test/transcript.jsonl",
                         gitBranch: "main",
                         projectName: "multi-cc-bar",
+                        firstSeen: Date().addingTimeInterval(-180),
                         updatedAt: Date().addingTimeInterval(-60),
                         eventCount: 5,
                         lastEvent: "UserPromptSubmit",
                         metrics: SessionMetrics(
-                            messagesPerMinute: 2.5,
                             elapsedSeconds: 180,
-                            lastMessageAt: Date().addingTimeInterval(-30),
-                            sessionStartAt: Date().addingTimeInterval(-180),
                             totalTokens: 15000,
                             modelName: "claude-3.7-sonnet",
                             contextUtilization: 7.5,
@@ -449,14 +456,12 @@ struct SessionListView_Previews: PreviewProvider {
                         transcriptPath: "/Users/user/.claude/projects/another/transcript.jsonl",
                         gitBranch: "feature/ui-updates",
                         projectName: "multi-cc-bar",
+                        firstSeen: Date().addingTimeInterval(-420),
                         updatedAt: Date().addingTimeInterval(-300),
                         eventCount: 12,
                         lastEvent: "Notification",
                         metrics: SessionMetrics(
-                            messagesPerMinute: 1.8,
                             elapsedSeconds: 420,
-                            lastMessageAt: Date().addingTimeInterval(-90),
-                            sessionStartAt: Date().addingTimeInterval(-420),
                             totalTokens: 85000,
                             modelName: "claude-3-haiku",
                             contextUtilization: 42.5,
@@ -471,14 +476,12 @@ struct SessionListView_Previews: PreviewProvider {
                         transcriptPath: "/Users/user/.claude/projects/completed/transcript.jsonl", 
                         gitBranch: "main",
                         projectName: "another-project",
+                        firstSeen: Date().addingTimeInterval(-3000),
                         updatedAt: Date().addingTimeInterval(-1800),
                         eventCount: 8,
                         lastEvent: "SessionEnd",
                         metrics: SessionMetrics(
-                            messagesPerMinute: 0.0,
                             elapsedSeconds: 1200,
-                            lastMessageAt: Date().addingTimeInterval(-1800),
-                            sessionStartAt: Date().addingTimeInterval(-3000),
                             totalTokens: 175000,
                             modelName: "claude-3-opus",
                             contextUtilization: 87.5,

@@ -57,10 +57,7 @@ type HookEvent struct {
 
 // SessionMetrics holds computed performance metrics from transcript analysis  
 type SessionMetrics struct {
-	MessagesPerMinute    float64 `json:"messages_per_minute"`
 	ElapsedSeconds       int64   `json:"elapsed_seconds"`
-	LastMessageAt        int64   `json:"last_message_at"`
-	SessionStartAt       int64   `json:"session_start_at"`
 	TotalTokens          int64   `json:"total_tokens"`
 	ModelName            string  `json:"model_name"`
 	ContextUtilization   float64 `json:"context_utilization_percentage"`
@@ -114,13 +111,17 @@ type StructuredLogger struct {
 
 
 // computeSessionMetrics analyzes transcript and computes performance metrics using enhanced tailer
-func computeSessionMetrics(transcriptPath string) *SessionMetrics {
+func computeSessionMetrics(transcriptPath string, existingState *SessionState) *SessionMetrics {
 	if transcriptPath == "" {
 		return nil
 	}
 	
 	// Use the enhanced transcript tailer for analysis
 	transcriptTailer := tailer.NewTranscriptTailer(transcriptPath)
+	
+	// If we have existing metrics, preserve the original session start time
+	// Note: Session start time consistency is now handled by the transcript tailer itself
+	
 	metrics, err := transcriptTailer.TailAndProcess()
 	if err != nil || metrics == nil {
 		// Transcript doesn't exist yet or can't be read - not an error
@@ -129,10 +130,7 @@ func computeSessionMetrics(transcriptPath string) *SessionMetrics {
 	
 	// Convert from transcript tailer metrics to hook metrics format
 	hookMetrics := &SessionMetrics{
-		MessagesPerMinute:    metrics.MessagesPerMinute,
 		ElapsedSeconds:       metrics.ElapsedSeconds,
-		LastMessageAt:        metrics.LastMessageAt.Unix(),
-		SessionStartAt:       metrics.SessionStartAt.Unix(),
 		TotalTokens:          metrics.TotalTokens,
 		ModelName:            metrics.ModelName,
 		ContextUtilization:   metrics.ContextUtilization,
@@ -505,7 +503,7 @@ func processEvent(event *HookEvent) error {
 	
 	// Compute metrics if we have a transcript path
 	if sessionState.TranscriptPath != "" {
-		if metrics := computeSessionMetrics(sessionState.TranscriptPath); metrics != nil {
+		if metrics := computeSessionMetrics(sessionState.TranscriptPath, existingState); metrics != nil {
 			sessionState.Metrics = metrics
 		}
 	}
@@ -548,15 +546,46 @@ func processEvent(event *HookEvent) error {
 			
 			// Recompute metrics if we have transcript path but no metrics yet
 			if sessionState.Metrics == nil {
-				if metrics := computeSessionMetrics(sessionState.TranscriptPath); metrics != nil {
+				if metrics := computeSessionMetrics(sessionState.TranscriptPath, existingState); metrics != nil {
 					sessionState.Metrics = metrics
 				}
 			}
 		}
 		
-		// Preserve existing metrics if we couldn't compute new ones
+		// Preserve existing metrics if we couldn't compute new ones, or merge fields
 		if sessionState.Metrics == nil && existingState.Metrics != nil {
 			sessionState.Metrics = existingState.Metrics
+		} else if sessionState.Metrics != nil && existingState.Metrics != nil {
+			// Merge metrics: preserve existing values if new ones are missing/default
+			newMetrics := sessionState.Metrics
+			oldMetrics := existingState.Metrics
+			
+			mergedMetrics := &SessionMetrics{
+				ElapsedSeconds:     newMetrics.ElapsedSeconds,
+				TotalTokens:        newMetrics.TotalTokens,
+				ModelName:          newMetrics.ModelName,
+				ContextUtilization: newMetrics.ContextUtilization,
+				PressureLevel:      newMetrics.PressureLevel,
+			}
+			
+			// Preserve old values if new ones are missing/empty/zero
+			if mergedMetrics.ElapsedSeconds == 0 && oldMetrics.ElapsedSeconds > 0 {
+				mergedMetrics.ElapsedSeconds = oldMetrics.ElapsedSeconds
+			}
+			if mergedMetrics.TotalTokens == 0 && oldMetrics.TotalTokens > 0 {
+				mergedMetrics.TotalTokens = oldMetrics.TotalTokens
+			}
+			if (mergedMetrics.ModelName == "" || mergedMetrics.ModelName == "unknown") && oldMetrics.ModelName != "" && oldMetrics.ModelName != "unknown" {
+				mergedMetrics.ModelName = oldMetrics.ModelName
+			}
+			if mergedMetrics.ContextUtilization == 0 && oldMetrics.ContextUtilization > 0 {
+				mergedMetrics.ContextUtilization = oldMetrics.ContextUtilization
+			}
+			if (mergedMetrics.PressureLevel == "" || mergedMetrics.PressureLevel == "unknown") && oldMetrics.PressureLevel != "" && oldMetrics.PressureLevel != "unknown" {
+				mergedMetrics.PressureLevel = oldMetrics.PressureLevel
+			}
+			
+			sessionState.Metrics = mergedMetrics
 		}
 		
 		// Preserve transcript monitoring fields unless we're transitioning states
