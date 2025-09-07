@@ -43,6 +43,8 @@ type HookEvent struct {
 	HookEventName   string                 `json:"hook_event_name"`
 	SessionID       string                 `json:"session_id"`
 	Timestamp       string                 `json:"timestamp"`
+	Matcher         string                 `json:"matcher,omitempty"`
+	Reason          string                 `json:"reason,omitempty"`
 	Data            map[string]interface{} `json:"data"`
 	// Direct fields that Claude Code sends at top level
 	TranscriptPath  string                 `json:"transcript_path,omitempty"`
@@ -50,6 +52,7 @@ type HookEvent struct {
 	Model           string                 `json:"model,omitempty"`
 	PermissionMode  string                 `json:"permission_mode,omitempty"`
 	Prompt          string                 `json:"prompt,omitempty"`
+	Source          string                 `json:"source,omitempty"`
 }
 
 // SessionMetrics holds computed performance metrics from transcript analysis  
@@ -66,20 +69,22 @@ type SessionMetrics struct {
 
 // SessionState represents the current state of a session
 type SessionState struct {
-	Version       int              `json:"version"`
-	SessionID     string           `json:"session_id"`
-	State         string           `json:"state"`
-	Model         string           `json:"model,omitempty"`
-	CWD           string           `json:"cwd,omitempty"`
-	TranscriptPath string          `json:"transcript_path,omitempty"`
-	GitBranch     string           `json:"git_branch,omitempty"`
-	ProjectName   string           `json:"project_name,omitempty"`
-	FirstSeen     int64            `json:"first_seen"`
-	UpdatedAt     int64            `json:"updated_at"`
-	Confidence    string           `json:"confidence"`
-	EventCount    int              `json:"event_count"`
-	LastEvent     string           `json:"last_event"`
-	Metrics       *SessionMetrics  `json:"metrics,omitempty"`
+	Version          int              `json:"version"`
+	SessionID        string           `json:"session_id"`
+	State            string           `json:"state"`
+	CompactionState  string           `json:"compaction_state,omitempty"` // not_compacting, compacting, post_compact
+	Model            string           `json:"model,omitempty"`
+	CWD              string           `json:"cwd,omitempty"`
+	TranscriptPath   string           `json:"transcript_path,omitempty"`
+	GitBranch        string           `json:"git_branch,omitempty"`
+	ProjectName      string           `json:"project_name,omitempty"`
+	FirstSeen        int64            `json:"first_seen"`
+	UpdatedAt        int64            `json:"updated_at"`
+	Confidence       string           `json:"confidence"`
+	EventCount       int              `json:"event_count"`
+	LastEvent        string           `json:"last_event"`
+	LastMatcher      string           `json:"last_matcher,omitempty"`
+	Metrics          *SessionMetrics  `json:"metrics,omitempty"`
 }
 
 // LogEntry represents a structured log entry
@@ -276,6 +281,11 @@ func main() {
 
 	// Log raw event for debugging Claude Code's actual payload
 	logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Raw event data: %s", string(input)))
+	
+	// Log parsed event details for debugging
+	if event.Matcher != "" {
+		logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Event parsed with matcher: %s", event.Matcher))
+	}
 
 	// Validate and sanitize
 	if err := validateEvent(&event); err != nil {
@@ -427,19 +437,29 @@ func validatePath(path string) error {
 
 // processEvent processes the hook event and updates session state
 func processEvent(event *HookEvent) error {
-	// Map event to state
-	state := mapEventToState(event.HookEventName)
+	// Load existing state first for smart transitions
+	existingState, err := loadSessionState(event.SessionID)
+	
+	// Determine smart state transition
+	newState, newCompactionState, transitionReason := smartStateTransition(event, existingState)
 	
 	// Create session state
 	now := time.Now().Unix()
 	sessionState := SessionState{
-		Version:    1,
-		SessionID:  event.SessionID,
-		State:      state,
-		UpdatedAt:  now,
-		Confidence: "high",
-		LastEvent:  event.HookEventName,
+		Version:         1,
+		SessionID:       event.SessionID,
+		State:           newState,
+		CompactionState: newCompactionState,
+		UpdatedAt:       now,
+		Confidence:      "high",
+		LastEvent:       event.HookEventName,
+		LastMatcher:     event.Matcher,
 	}
+	
+	// Log the state transition decision
+	logger.LogInfo(event.HookEventName, event.SessionID, 
+		fmt.Sprintf("State transition: %s -> %s (compaction: %s, reason: %s, matcher: %s)", 
+			getPreviousState(existingState), newState, newCompactionState, transitionReason, event.Matcher))
 
 	// Extract additional data from both Data field and direct fields
 	// Check Data field first (legacy format)
@@ -486,9 +506,13 @@ func processEvent(event *HookEvent) error {
 		}
 	}
 
-	// Load existing state to preserve first_seen and event_count
-	existingState, err := loadSessionState(event.SessionID)
-	if err == nil && existingState.FirstSeen > 0 {
+	// Special handling for SessionStart: set model to "New Session" for new sessions
+	if event.HookEventName == "SessionStart" && (event.Source == "clear" || existingState == nil) {
+		sessionState.Model = "New Session"
+	}
+
+	// Use previously loaded existing state to preserve first_seen and event_count  
+	if err == nil && existingState != nil && existingState.FirstSeen > 0 {
 		sessionState.FirstSeen = existingState.FirstSeen
 		sessionState.EventCount = existingState.EventCount + 1
 		
@@ -536,10 +560,14 @@ func processEvent(event *HookEvent) error {
 	}
 
 	// Save session state
-	return saveSessionState(&sessionState)
+	if err := saveSessionState(&sessionState); err != nil {
+		return err
+	}
+	
+	return nil
 }
 
-// mapEventToState maps hook events to session states
+// mapEventToState maps hook events to session states (legacy simple mapping)
 func mapEventToState(eventName string) string {
 	switch eventName {
 	case "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact":
@@ -551,6 +579,143 @@ func mapEventToState(eventName string) string {
 	default:
 		return "working" // Default fallback
 	}
+}
+
+// smartStateTransition determines the new state considering previous state and event context
+func smartStateTransition(event *HookEvent, previousState *SessionState) (newState, newCompactionState string, transitionReason string) {
+	eventName := event.HookEventName
+	matcher := event.Matcher
+	
+	// Default values
+	newState = mapEventToState(eventName) // Start with simple mapping
+	newCompactionState = "not_compacting"
+	if previousState != nil && previousState.CompactionState != "" {
+		newCompactionState = previousState.CompactionState // Preserve existing compaction state
+	}
+	transitionReason = "simple_mapping"
+	
+	// Smart transitions based on event and context
+	switch eventName {
+	case "UserPromptSubmit":
+		// If previous state was "waiting" (from Notification), always transition to "working"
+		if previousState != nil && previousState.State == "waiting" {
+			newState = "working"
+			transitionReason = "user_response_after_notification"
+		}
+		// Clear post-compact state when user submits new prompt
+		if previousState != nil && previousState.CompactionState == "post_compact" {
+			newCompactionState = "not_compacting"
+			transitionReason = "user_prompt_after_compaction"
+		}
+		
+	case "SessionStart":
+		// Check event.Source field for clear events (Claude Code sends source, not matcher)
+		if event.Source == "clear" {
+			// Session after /clear command - treat like new session (finished state)
+			newState = "finished"
+			newCompactionState = "not_compacting"
+			transitionReason = "session_after_clear"
+		} else {
+			// Handle matcher-based SessionStart events
+			switch matcher {
+			case "compact":
+				// Session resuming after compaction
+				newState = "working"
+				newCompactionState = "post_compact"
+				transitionReason = "session_resumed_after_compaction"
+			case "resume":
+				// Session resuming from suspension
+				newState = "working"
+				newCompactionState = "not_compacting"
+				transitionReason = "session_resumed"
+			case "startup":
+				// New session startup
+				newState = "finished"
+				newCompactionState = "not_compacting"
+				transitionReason = "session_startup"
+			default:
+				// Regular SessionStart without specific matcher - treat as new session
+				newState = "finished"
+				newCompactionState = "not_compacting"
+				transitionReason = "session_start_new"
+			}
+		}
+		
+	case "PreCompact":
+		switch matcher {
+		case "auto":
+			// Automatic compaction starting due to context window
+			newState = "working"
+			newCompactionState = "compacting"
+			transitionReason = "auto_compaction_starting"
+		case "manual":
+			// Manual compaction from /compact command
+			newState = "working"
+			newCompactionState = "compacting"
+			transitionReason = "manual_compaction_starting"
+		default:
+			// PreCompact without specific matcher
+			newState = "working"
+			newCompactionState = "compacting"
+			transitionReason = "compaction_starting_unknown_trigger"
+		}
+		
+	case "Notification":
+		// Always transition to waiting for notifications
+		newState = "waiting"
+		transitionReason = "notification_requires_user_attention"
+		
+	case "PreToolUse":
+		// User responding to notification - transition to working
+		if previousState != nil && previousState.State == "waiting" {
+			newState = "working"
+			transitionReason = "tool_use_after_notification"
+		}
+		
+	case "PostToolUse", "Stop", "SubagentStop":
+		// Use simple mapping for these
+		transitionReason = "standard_event_mapping"
+		
+	case "SessionEnd":
+		// Handle SessionEnd with reason field
+		// Check both the direct Reason field and the Data map for the reason
+		var clearReason string
+		if event.Reason != "" {
+			clearReason = event.Reason
+		} else if event.Data != nil {
+			if reason, ok := event.Data["reason"].(string); ok {
+				clearReason = reason
+			}
+		}
+		
+		switch clearReason {
+		case "prompt_input_exit":
+			// User pressed ESC to decline notification
+			newState = "cancelled_by_user"
+			transitionReason = "user_cancelled_with_esc"
+		case "clear":
+			// Session cleared - preserve with special state
+			newState = "finished_clear"
+			transitionReason = "session_cleared"
+		default:
+			// Regular session end
+			newState = "finished"
+			transitionReason = "session_ended"
+		}
+	}
+	
+	return newState, newCompactionState, transitionReason
+}
+
+// getPreviousState returns the previous state as a string for logging
+func getPreviousState(previousState *SessionState) string {
+	if previousState == nil {
+		return "none"
+	}
+	if previousState.CompactionState != "" && previousState.CompactionState != "not_compacting" {
+		return fmt.Sprintf("%s(%s)", previousState.State, previousState.CompactionState)
+	}
+	return previousState.State
 }
 
 // loadSessionState loads existing session state from disk
@@ -569,6 +734,7 @@ func loadSessionState(sessionID string) (*SessionState, error) {
 
 	return &state, nil
 }
+
 
 // saveSessionState atomically saves session state to disk
 func saveSessionState(state *SessionState) error {

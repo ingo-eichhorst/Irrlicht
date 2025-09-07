@@ -166,7 +166,10 @@ func (sm *SettingsMerger) MergeIrrlichtHooks() error {
 	events := []string{
 		"SessionStart",
 		"UserPromptSubmit",
-		"Notification", 
+		"Notification",
+		"PreToolUse",
+		"PostToolUse",
+		"PreCompact", 
 		"Stop",
 		"SubagentStop",
 		"SessionEnd",
@@ -355,7 +358,7 @@ func (sm *SettingsMerger) GetPreview() (string, error) {
 	// Create a copy and perform merge
 	settingsJSON, _ := json.Marshal(current)
 	
-	events := []string{"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SubagentStop", "SessionEnd"}
+	events := []string{"SessionStart", "UserPromptSubmit", "Notification", "PreToolUse", "PostToolUse", "PreCompact", "Stop", "SubagentStop", "SessionEnd"}
 
 	// Add hooks section if missing
 	if !gjson.GetBytes(settingsJSON, "hooks").Exists() {
