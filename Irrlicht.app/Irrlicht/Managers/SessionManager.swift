@@ -320,6 +320,60 @@ class SessionManager: ObservableObject {
             }
         }
     }
+    
+    // MARK: - Session Management Actions
+    
+    func resetSessionState(sessionId: String) {
+        print("🔄 Resetting session state for \(sessionId) to finished")
+        
+        let sessionFilePath = instancesPath.appendingPathComponent("\(sessionId).json")
+        
+        do {
+            // Load existing session data
+            guard let existingData = try? Data(contentsOf: sessionFilePath),
+                  let existingJson = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any] else {
+                print("❌ Failed to load existing session data for reset")
+                lastError = "Failed to load session data for reset"
+                return
+            }
+            
+            // Update state to finished and timestamp
+            var updatedJson = existingJson
+            updatedJson["state"] = "finished"
+            updatedJson["updated_at"] = Int64(Date().timeIntervalSince1970)
+            
+            // Write back to file
+            let updatedData = try JSONSerialization.data(withJSONObject: updatedJson, options: [])
+            try updatedData.write(to: sessionFilePath)
+            
+            print("✅ Successfully reset session \(sessionId) to finished state")
+            
+        } catch {
+            print("❌ Failed to reset session state: \(error)")
+            lastError = "Failed to reset session: \(error.localizedDescription)"
+        }
+    }
+    
+    func deleteSession(sessionId: String) {
+        print("🗑️ Deleting session \(sessionId)")
+        
+        let sessionFilePath = instancesPath.appendingPathComponent("\(sessionId).json")
+        
+        do {
+            // Remove session file
+            try FileManager.default.removeItem(at: sessionFilePath)
+            
+            // Remove from session order
+            sessionOrder.removeAll { $0 == sessionId }
+            saveSessionOrder()
+            
+            print("✅ Successfully deleted session \(sessionId)")
+            
+        } catch {
+            print("❌ Failed to delete session: \(error)")
+            lastError = "Failed to delete session: \(error.localizedDescription)"
+        }
+    }
 }
 
 // MARK: - Supporting Data Structures

@@ -213,6 +213,11 @@ struct SessionRowView: View {
                     
                     Spacer()
                     
+                    // Show action buttons on hover
+                    if isHovered {
+                        SessionActionButtons(session: session)
+                    }
+                    
                     TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
                         let formatter = RelativeDateTimeFormatter()
                         formatter.unitsStyle = .abbreviated
@@ -293,6 +298,40 @@ struct SessionRowView: View {
                 isHovered = hovering
             }
         }
+    }
+}
+
+// MARK: - Session Action Buttons
+
+struct SessionActionButtons: View {
+    let session: SessionState
+    @EnvironmentObject var sessionManager: SessionManager
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            // Reset button
+            Button(action: {
+                sessionManager.resetSessionState(sessionId: session.id)
+            }) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Reset to finished state")
+            
+            // Delete button
+            Button(action: {
+                sessionManager.deleteSession(sessionId: session.id)
+            }) {
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Delete session")
+        }
+        .opacity(0.6)
     }
 }
 
