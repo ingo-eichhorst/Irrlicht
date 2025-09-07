@@ -6,10 +6,10 @@
 
 ## The Light System
 
-Each session appears as a simple glyph that tells the truth:
-- **●** **working** — the agent is thinking, building, streaming
-- **◔** **waiting** — it needs you; the story pauses for your judgment  
-- **✓** **finished** — the path ahead is clear again
+Each session appears as a simple icon that tells the truth:
+- **🟣** **working** — the agent is thinking, building, streaming (purple)
+- **🟠** **waiting** — it needs you; the story pauses for your judgment (orange)
+- **🟢** **finished** — the path ahead is clear again (green)
 
 No ghosts. **Hooks → State → Light.**
 
@@ -27,8 +27,8 @@ Claude Code Hook Events → Irrlicht Hook Receiver → State Machine → Menu Ba
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/anthropics/irrlicht.git
-   cd irrlicht
+   git clone https://github.com/ingo-eichhorst/Irrlicht.git
+   cd Irrlicht
    ```
 
 2. **Build the hook receiver:**
@@ -70,7 +70,7 @@ cd Irrlicht.app && swift run &
 # Create test sessions
 bash demo-phase2.sh
 
-# Look for 💡 lightbulb icon in menu bar, click to see sessions
+# Look for ✨ sparkle icon in menu bar, click to see sessions
 ```
 
 ### What You'll See
@@ -78,12 +78,13 @@ bash demo-phase2.sh
   - 🟣 Working sessions (Claude is thinking/building)
   - 🟠 Waiting sessions (needs your input)
   - 🟢 Finished sessions (task complete)
-  - 💡 Dimmed lightbulb when no sessions
+  - ✨ White sparkle when no sessions
 - **Dynamic Sizing**: Indicators get smaller as session count increases
 - **Overflow Handling**: Shows first 5 sessions + "…" when 7+ sessions
-- **Dropdown**: Session list with "shortId · state · model · timeAgo" format  
+- **Dropdown**: Session list with project name, git branch, state, and model info
 - **Real-time Updates**: Status changes reflected within 1 second
 - **Empty State**: "No Claude Code sessions detected" when no files
+- **Quit Button**: Right-click or button at bottom of dropdown to quit the app
 
 ### Cleanup
 ```bash
@@ -105,10 +106,10 @@ kill <PID>
 The menu bar now displays individual colored status indicators for each active Claude Code session, providing instant visual feedback without needing to click the dropdown.
 
 ### Status Colors
-- **🟣 Purple Circle**: Working sessions (Claude is actively thinking, building, or processing)
-- **🟠 Orange Circle**: Waiting sessions (Claude is waiting for your input or response)  
-- **🟢 Green Circle**: Finished sessions (Task completed successfully)
-- **💡 Dimmed Lightbulb**: No active sessions detected
+- **🔨 Purple Hammer**: Working sessions (Claude is actively thinking, building, or processing)
+- **⏳ Orange Hourglass**: Waiting sessions (Claude is waiting for your input or response)  
+- **✅ Green Checkmark**: Finished sessions (Task completed successfully)
+- **✨ White Sparkle**: No active sessions detected
 
 ### Dynamic Behavior
 - **Responsive Sizing**: Indicators automatically resize based on session count
@@ -121,11 +122,18 @@ The menu bar now displays individual colored status indicators for each active C
 - **State Transitions**: Smooth visual feedback as sessions change state
 
 ### Technical Implementation
-- Colored Unicode emoji circles for native color support
+- SF Symbols with state-based coloring for consistent native icons
 - MenuBarExtra with custom SwiftUI label
 - 1-second periodic timer combined with file system watching
 - Dynamic font sizing and spacing algorithms
 - Graceful overflow handling for many concurrent sessions
+
+### UI Features
+- **Header Icons**: Displays actual colored SF Symbol icons instead of text
+- **Git Branch Display**: Shows git branch in parentheses below project name
+- **Quit Button**: Convenient quit option at bottom of dropdown with hover effects
+- **Empty State Centering**: Properly centered "No sessions" message
+- **Session Layout**: Project name, git branch, state, model, and metrics in organized hierarchy
 
 ## Project Structure
 
@@ -188,9 +196,12 @@ Irrlicht responds to these Claude Code hook events:
 |-------|-------------|------------------|
 | `SessionStart` | New Claude Code session begins | → **working** |
 | `UserPromptSubmit` | User submits a prompt | → **working** |
+| `PreToolUse` | User responds to notification | → **working** |
+| `PostToolUse` | Tool execution completed | → **working** |
+| `PreCompact` | Context compaction starting | → **working** |
 | `Notification` | System needs user attention | → **waiting** |
 | `Stop` | Session stops (completed/cancelled) | → **finished** |
-| `SubagentStop` | Subagent completes task | → **working** |
+| `SubagentStop` | Subagent completes task | → **finished** |
 | `SessionEnd` | Session terminates | → **finished** |
 
 ## Configuration
@@ -206,7 +217,10 @@ The hook configuration is automatically added to `~/.claude/settings.json`:
       "enabled": true,
       "commands": {
         "SessionStart": ["irrlicht-hook"],
-        "UserPromptSubmit": ["irrlicht-hook"], 
+        "UserPromptSubmit": ["irrlicht-hook"],
+        "PreToolUse": ["irrlicht-hook"],
+        "PostToolUse": ["irrlicht-hook"],
+        "PreCompact": ["irrlicht-hook"],
         "Notification": ["irrlicht-hook"],
         "Stop": ["irrlicht-hook"],
         "SubagentStop": ["irrlicht-hook"],
@@ -280,6 +294,11 @@ Structured JSON logs with automatic rotation:
 - ✅ **Phase 2**: Menu Bar UI (Complete)
 - ✅ **Phase 3**: Installer & Distribution Package (Complete)
 - ✅ **Phase 3.5**: Individual Status Indicators (Complete)
+- ✅ **Phase 4**: UI Polish & Experience Improvements (Complete)
+  - SF Symbol icons with state-based colors
+  - Improved layout and visual hierarchy
+  - Git branch display and quit functionality
+  - Enhanced empty state and hover effects
 
 ## Philosophy
 
@@ -304,8 +323,8 @@ MIT License - see LICENSE file for details.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/anthropics/irrlicht/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/anthropics/irrlicht/discussions)
+- **Issues**: [GitHub Issues](https://github.com/ingo-eichhorst/Irrlicht/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/ingo-eichhorst/Irrlicht/discussions)
 
 ---
 
