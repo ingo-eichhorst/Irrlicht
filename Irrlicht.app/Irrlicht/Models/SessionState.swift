@@ -3,20 +3,14 @@ import os
 
 // Performance metrics from transcript analysis
 struct SessionMetrics: Codable {
-    let messagesPerMinute: Double   // messages per minute over sliding window
-    let elapsedSeconds: Int64       // elapsed time since session start
-    let lastMessageAt: Date         // timestamp of last message
-    let sessionStartAt: Date        // timestamp of first message/session start
+    let elapsedSeconds: Int64       // elapsed time when metrics were computed (for finished sessions)
     let totalTokens: Int64          // total token count from transcript (0 if not available)
     let modelName: String           // model name extracted from transcript ("" if not available) 
     let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
     
     enum CodingKeys: String, CodingKey {
-        case messagesPerMinute = "messages_per_minute"
-        case elapsedSeconds = "elapsed_seconds"  
-        case lastMessageAt = "last_message_at"
-        case sessionStartAt = "session_start_at"
+        case elapsedSeconds = "elapsed_seconds"
         case totalTokens = "total_tokens"
         case modelName = "model_name"
         case contextUtilization = "context_utilization_percentage"
@@ -37,10 +31,6 @@ struct SessionMetrics: Codable {
         } else {
             return String(format: "%ds", seconds)
         }
-    }
-    
-    var formattedMessagesPerMinute: String {
-        return String(format: "%.1f/min", messagesPerMinute)
     }
     
     var formattedTokenCount: String {
@@ -98,6 +88,23 @@ struct SessionMetrics: Codable {
     var hasContextData: Bool {
         return totalTokens > 0 && !modelName.isEmpty && pressureLevel != "unknown" && !pressureLevel.isEmpty
     }
+    
+    // Real-time elapsed time for active sessions
+    func formattedRealtimeElapsedTime(sessionFirstSeen: Date) -> String {
+        let seconds = Int64(Date().timeIntervalSince(sessionFirstSeen))
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        
+        if minutes >= 60 {
+            let hours = minutes / 60
+            let remainingMinutes = minutes % 60
+            return String(format: "%dh %dm", hours, remainingMinutes)
+        } else if minutes > 0 {
+            return String(format: "%dm %ds", minutes, remainingSeconds)
+        } else {
+            return String(format: "%ds", remainingSeconds)
+        }
+    }
 }
 
 struct SessionState: Identifiable, Codable {
@@ -108,6 +115,7 @@ struct SessionState: Identifiable, Codable {
     let transcriptPath: String? // path to transcript.jsonl (optional for backwards compatibility)
     let gitBranch: String?      // git branch name (optional)
     let projectName: String?    // project folder name (optional)
+    let firstSeen: Date         // when session was first created
     let updatedAt: Date         // last modified timestamp
     let eventCount: Int?        // number of events processed (optional)
     let lastEvent: String?      // last hook event type (optional)
@@ -125,6 +133,7 @@ struct SessionState: Identifiable, Codable {
         case gitBranch = "git_branch"
         case projectName = "project_name"
         case transcriptPath = "transcript_path"
+        case firstSeen = "first_seen"
         case updatedAt = "updated_at"
         case eventCount = "event_count"
         case lastEvent = "last_event"
@@ -145,6 +154,16 @@ struct SessionState: Identifiable, Codable {
         eventCount = try container.decodeIfPresent(Int.self, forKey: .eventCount)
         lastEvent = try container.decodeIfPresent(String.self, forKey: .lastEvent)
         metrics = try container.decodeIfPresent(SessionMetrics.self, forKey: .metrics)
+        
+        // Handle firstSeen date (unix timestamp format)
+        if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
+            firstSeen = Date(timeIntervalSince1970: timestamp)
+        } else if let timestamp = try? container.decode(Int.self, forKey: .firstSeen) {
+            firstSeen = Date(timeIntervalSince1970: Double(timestamp))
+        } else {
+            // Fallback to now if no valid date found
+            firstSeen = Date()
+        }
         
         // Handle multiple date formats
         if let dateString = try? container.decode(String.self, forKey: .updatedAt) {
@@ -182,7 +201,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -190,6 +209,7 @@ struct SessionState: Identifiable, Codable {
         self.transcriptPath = transcriptPath
         self.gitBranch = gitBranch
         self.projectName = projectName
+        self.firstSeen = firstSeen
         self.updatedAt = updatedAt
         self.eventCount = eventCount
         self.lastEvent = lastEvent
