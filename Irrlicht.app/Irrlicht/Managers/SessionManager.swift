@@ -8,6 +8,8 @@ class SessionManager: ObservableObject {
     @Published var lastError: String?
     
     private let instancesPath: URL
+    private let orderFilePath: URL
+    private var sessionOrder: [String] = []
     private var fileSystemWatcher: DispatchSourceFileSystemObject?
     private var debounceTimer: Timer?
     private var periodicUpdateTimer: Timer?
@@ -18,13 +20,16 @@ class SessionManager: ObservableObject {
     init() {
         // Initialize instances directory path
         let homeURL = FileManager.default.homeDirectoryForCurrentUser
-        self.instancesPath = homeURL
+        let supportPath = homeURL
             .appendingPathComponent("Library")
             .appendingPathComponent("Application Support")
             .appendingPathComponent("Irrlicht")
-            .appendingPathComponent("instances")
+        
+        self.instancesPath = supportPath.appendingPathComponent("instances")
+        self.orderFilePath = supportPath.appendingPathComponent("session-order.json")
         
         Task {
+            loadSessionOrder()
             startWatching()
             loadExistingSessions()
         }
@@ -133,16 +138,11 @@ class SessionManager: ObservableObject {
                 }
             }
             
-            // Sort sessions: active first, then by recency
-            newSessions.sort { lhs, rhs in
-                if lhs.state == .finished && rhs.state != .finished {
-                    return false
-                } else if lhs.state != .finished && rhs.state == .finished {
-                    return true
-                } else {
-                    return lhs.updatedAt > rhs.updatedAt
-                }
-            }
+            // Sort sessions according to saved order, with new sessions at the end
+            newSessions = sortSessionsByOrder(newSessions)
+            
+            // Update session order to include any new sessions and remove deleted ones
+            updateSessionOrder(with: newSessions)
             
             // Assign duplicate indexes for sessions with same project/branch
             assignDuplicateIndexes(&newSessions)
@@ -198,6 +198,102 @@ class SessionManager: ObservableObject {
         sessions.filter { $0.state == .finished }.count
     }
     
+    // MARK: - Session Order Management
+    
+    private func loadSessionOrder() {
+        do {
+            guard FileManager.default.fileExists(atPath: orderFilePath.path) else {
+                print("📋 No session order file found, starting with empty order")
+                return
+            }
+            
+            let data = try Data(contentsOf: orderFilePath)
+            let orderData = try JSONDecoder().decode(SessionOrderData.self, from: data)
+            sessionOrder = orderData.order
+            print("📋 Loaded session order with \(sessionOrder.count) sessions")
+        } catch {
+            print("📋 Failed to load session order: \(error)")
+            sessionOrder = []
+        }
+    }
+    
+    private func saveSessionOrder() {
+        do {
+            let orderData = SessionOrderData(version: 1, order: sessionOrder)
+            let data = try JSONEncoder().encode(orderData)
+            try data.write(to: orderFilePath)
+            print("💾 Saved session order with \(sessionOrder.count) sessions")
+        } catch {
+            print("💾 Failed to save session order: \(error)")
+            lastError = "Failed to save session order: \(error.localizedDescription)"
+        }
+    }
+    
+    private func sortSessionsByOrder(_ sessions: [SessionState]) -> [SessionState] {
+        // Create a map of session ID to session for quick lookup
+        let sessionMap = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        
+        var orderedSessions: [SessionState] = []
+        
+        // First, add sessions in the saved order
+        for sessionId in sessionOrder {
+            if let session = sessionMap[sessionId] {
+                orderedSessions.append(session)
+            }
+        }
+        
+        // Then add any new sessions that aren't in the saved order yet
+        let orderedIds = Set(sessionOrder)
+        let newSessions = sessions.filter { !orderedIds.contains($0.id) }
+        
+        // Sort new sessions: active first, then by recency (as fallback for new sessions)
+        let sortedNewSessions = newSessions.sorted { lhs, rhs in
+            if lhs.state == .finished && rhs.state != .finished {
+                return false
+            } else if lhs.state != .finished && rhs.state == .finished {
+                return true
+            } else {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+        }
+        
+        orderedSessions.append(contentsOf: sortedNewSessions)
+        
+        print("🔢 Sorted \(orderedSessions.count) sessions (\(sessionOrder.count) from saved order, \(sortedNewSessions.count) new)")
+        return orderedSessions
+    }
+    
+    private func updateSessionOrder(with sessions: [SessionState]) {
+        let currentSessionIds = Set(sessions.map { $0.id })
+        let orderedSessionIds = sessions.map { $0.id }
+        
+        // Only update if the order has changed
+        if sessionOrder != orderedSessionIds {
+            sessionOrder = orderedSessionIds
+            saveSessionOrder()
+            print("🔄 Updated session order: removed \(Set(sessionOrder).subtracting(currentSessionIds).count), added \(currentSessionIds.subtracting(Set(sessionOrder)).count)")
+        }
+    }
+    
+    func reorderSession(from sourceIndex: Int, to destinationIndex: Int) {
+        guard sourceIndex != destinationIndex,
+              sourceIndex >= 0, sourceIndex < sessions.count,
+              destinationIndex >= 0, destinationIndex <= sessions.count else {
+            return
+        }
+        
+        // Move session in the sessions array
+        let session = sessions.remove(at: sourceIndex)
+        let adjustedDestination = destinationIndex > sourceIndex ? destinationIndex - 1 : destinationIndex
+        sessions.insert(session, at: adjustedDestination)
+        
+        // Update the order array to match
+        sessionOrder = sessions.map { $0.id }
+        saveSessionOrder()
+        
+        print("🔄 Reordered session \(session.shortId) from \(sourceIndex) to \(adjustedDestination)")
+    }
+    
     // MARK: - Duplicate Session Handling
     
     private func assignDuplicateIndexes(_ sessions: inout [SessionState]) {
@@ -224,4 +320,11 @@ class SessionManager: ObservableObject {
             }
         }
     }
+}
+
+// MARK: - Supporting Data Structures
+
+private struct SessionOrderData: Codable {
+    let version: Int
+    let order: [String]
 }

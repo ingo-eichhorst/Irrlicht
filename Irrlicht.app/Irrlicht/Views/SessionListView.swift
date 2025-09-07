@@ -135,14 +135,30 @@ struct SessionListView: View {
     private var sessionListContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
-                ForEach(sessionManager.sessions) { session in
-                    SessionRowView(session: session)
+                ForEach(sessionManager.sessions.indices, id: \.self) { index in
+                    SessionRowView(session: sessionManager.sessions[index])
                         .contentShape(Rectangle())
                         .onTapGesture {
                             // TODO: Handle session selection in Phase 6
-                            print("Selected session: \(session.id)")
+                            print("Selected session: \(sessionManager.sessions[index].id)")
                         }
+                        .onDrag {
+                            return NSItemProvider(object: sessionManager.sessions[index].id as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: SessionDropDelegate(
+                            sessionManager: sessionManager,
+                            targetIndex: index
+                        ))
                 }
+                
+                // Drop zone at the end of the list
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(height: 20)
+                    .onDrop(of: [.text], delegate: SessionDropDelegate(
+                        sessionManager: sessionManager,
+                        targetIndex: sessionManager.sessions.count
+                    ))
             }
         }
         .frame(maxHeight: 400) // Limit height for scrolling
@@ -306,6 +322,52 @@ extension Color {
             blue:  Double(b) / 255,
             opacity: Double(a) / 255
         )
+    }
+}
+
+// MARK: - Drag and Drop Support
+
+struct SessionDropDelegate: DropDelegate {
+    let sessionManager: SessionManager
+    let targetIndex: Int
+    
+    func validateDrop(info: DropInfo) -> Bool {
+        return info.hasItemsConforming(to: [.text])
+    }
+    
+    func dropEntered(info: DropInfo) {
+        // Visual feedback could be added here
+    }
+    
+    func dropExited(info: DropInfo) {
+        // Clear visual feedback
+    }
+    
+    func performDrop(info: DropInfo) -> Bool {
+        guard let itemProvider = info.itemProviders(for: [.text]).first else {
+            return false
+        }
+        
+        itemProvider.loadObject(ofClass: NSString.self) { item, error in
+            guard let sessionId = item as? String else {
+                return
+            }
+            
+            DispatchQueue.main.async {
+                // Find the source index on the main thread
+                guard let sourceIndex = sessionManager.sessions.firstIndex(where: { $0.id == sessionId }) else {
+                    return
+                }
+                
+                sessionManager.reorderSession(from: sourceIndex, to: targetIndex)
+            }
+        }
+        
+        return true
+    }
+    
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
     }
 }
 
