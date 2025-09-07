@@ -51,6 +51,7 @@ No ghosts. **Hooks → State → Light.**
 - **Go 1.21+**: For building hook receiver and tools
 - **Swift 5.9+**: For SwiftUI menu bar application
 - **Python 3.8+**: For testing and utility scripts
+- **Claude Code**: Run one of the latest versions of Claude Code
 
 ### Installation
 
