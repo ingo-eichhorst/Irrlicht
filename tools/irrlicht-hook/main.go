@@ -85,6 +85,10 @@ type SessionState struct {
 	LastEvent        string           `json:"last_event"`
 	LastMatcher      string           `json:"last_matcher,omitempty"`
 	Metrics          *SessionMetrics  `json:"metrics,omitempty"`
+	
+	// Transcript monitoring for waiting state recovery
+	LastTranscriptSize int64     `json:"last_transcript_size,omitempty"`
+	WaitingStartTime   *int64    `json:"waiting_start_time,omitempty"`
 }
 
 // LogEntry represents a structured log entry
@@ -554,9 +558,31 @@ func processEvent(event *HookEvent) error {
 		if sessionState.Metrics == nil && existingState.Metrics != nil {
 			sessionState.Metrics = existingState.Metrics
 		}
+		
+		// Preserve transcript monitoring fields unless we're transitioning states
+		if existingState.State == newState {
+			sessionState.LastTranscriptSize = existingState.LastTranscriptSize
+			sessionState.WaitingStartTime = existingState.WaitingStartTime
+		}
 	} else {
 		sessionState.FirstSeen = now
 		sessionState.EventCount = 1
+	}
+
+	// Handle transcript monitoring for waiting state recovery
+	if newState == "waiting" {
+		// Store transcript size when entering waiting state
+		if sessionState.TranscriptPath != "" {
+			if stat, err := os.Stat(sessionState.TranscriptPath); err == nil {
+				sessionState.LastTranscriptSize = stat.Size()
+				waitingTime := now
+				sessionState.WaitingStartTime = &waitingTime
+			}
+		}
+	} else if existingState != nil && existingState.State == "waiting" && newState == "working" {
+		// Clear waiting state monitoring when transitioning away from waiting
+		sessionState.LastTranscriptSize = 0
+		sessionState.WaitingStartTime = nil
 	}
 
 	// Save session state
@@ -594,6 +620,22 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 	}
 	transitionReason = "simple_mapping"
 	
+	// Check for transcript changes if previous state was "waiting"
+	if previousState != nil && previousState.State == "waiting" && previousState.TranscriptPath != "" && previousState.WaitingStartTime != nil {
+		if stat, err := os.Stat(previousState.TranscriptPath); err == nil {
+			// If transcript has grown since we started waiting, transition to working
+			if stat.Size() > previousState.LastTranscriptSize {
+				newState = "working"
+				transitionReason = "transcript_activity_detected"
+				logger.LogInfo(eventName, event.SessionID, 
+					fmt.Sprintf("Transcript activity detected: size grew from %d to %d bytes", 
+						previousState.LastTranscriptSize, stat.Size()))
+				// Early return - we found activity
+				return newState, newCompactionState, transitionReason
+			}
+		}
+	}
+
 	// Smart transitions based on event and context
 	switch eventName {
 	case "UserPromptSubmit":
@@ -752,7 +794,7 @@ func saveSessionState(state *SessionState) error {
 
 	// Atomic write: write to temp file then rename
 	path := getSessionStatePath(state.SessionID)
-	tempPath := path + ".tmp"
+	tempPath := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
 
 	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write temp file: %w", err)
