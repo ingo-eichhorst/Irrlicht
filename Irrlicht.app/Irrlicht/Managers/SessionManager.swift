@@ -144,6 +144,9 @@ class SessionManager: ObservableObject {
                 }
             }
             
+            // Assign duplicate indexes for sessions with same project/branch
+            assignDuplicateIndexes(&newSessions)
+            
             sessions = newSessions
             lastError = nil
             
@@ -193,5 +196,32 @@ class SessionManager: ObservableObject {
     
     var finishedSessions: Int {
         sessions.filter { $0.state == .finished }.count
+    }
+    
+    // MARK: - Duplicate Session Handling
+    
+    private func assignDuplicateIndexes(_ sessions: inout [SessionState]) {
+        // Group sessions by project/branch combination
+        var duplicateGroups: [String: [Int]] = [:]
+        
+        for (index, session) in sessions.enumerated() {
+            let project = session.projectName ?? "unknown"
+            let branch = session.gitBranch ?? "no-git"
+            let key = "\(project)/\(branch)"
+            
+            if duplicateGroups[key] == nil {
+                duplicateGroups[key] = []
+            }
+            duplicateGroups[key]?.append(index)
+        }
+        
+        // Assign duplicate indexes for groups with more than one session
+        for (_, indices) in duplicateGroups {
+            if indices.count > 1 {
+                for (duplicateNumber, sessionIndex) in indices.enumerated() {
+                    sessions[sessionIndex].duplicateIndex = duplicateNumber + 1
+                }
+            }
+        }
     }
 }

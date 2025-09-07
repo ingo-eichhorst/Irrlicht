@@ -110,7 +110,11 @@ Claude Code sends these events to the hook receiver:
 - `SessionStart` → state: `working`
 - `UserPromptSubmit` → state: `working`  
 - `Notification` → state: `waiting`
+- `PreToolUse` → state: `working` (when user responds to notification)
+- `PostToolUse` → state: `working` (tool execution completed)
+- `PreCompact` → state: `working` (context compaction starting)
 - `Stop` → state: `finished`
+- `SubagentStop` → state: `finished`
 - `SessionEnd` → state: `finished`
 
 Each event updates the corresponding session's JSON state file, which the SwiftUI app monitors for changes.

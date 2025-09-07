@@ -5,9 +5,10 @@ struct StatusIndicatorLabel: View {
     
     var body: some View {
         if sessions.isEmpty {
-            // No sessions - show dimmed lightbulb
-            Image(systemName: "lightbulb")
-                .foregroundColor(.secondary)
+            // No sessions - show single sparkle
+            Image(systemName: "sparkle")
+                .font(.system(size: 14))
+                .foregroundColor(.white)
         } else {
             // Show individual status indicators as concatenated text
             Text(statusDisplayString)

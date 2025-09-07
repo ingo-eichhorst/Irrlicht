@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -70,6 +72,8 @@ type SessionState struct {
 	Model         string           `json:"model,omitempty"`
 	CWD           string           `json:"cwd,omitempty"`
 	TranscriptPath string          `json:"transcript_path,omitempty"`
+	GitBranch     string           `json:"git_branch,omitempty"`
+	ProjectName   string           `json:"project_name,omitempty"`
 	FirstSeen     int64            `json:"first_seen"`
 	UpdatedAt     int64            `json:"updated_at"`
 	Confidence    string           `json:"confidence"`
@@ -135,6 +139,85 @@ func computeSessionMetrics(transcriptPath string) *SessionMetrics {
 	}
 	
 	return hookMetrics
+}
+
+// extractGitBranch tries to get git branch from CWD
+func extractGitBranch(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = cwd
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	
+	branch := strings.TrimSpace(string(output))
+	if branch == "" || branch == "HEAD" {
+		return ""
+	}
+	
+	return branch
+}
+
+// extractProjectName extracts project name from CWD path
+func extractProjectName(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	
+	// Get the last directory name from the path
+	projectName := filepath.Base(cwd)
+	
+	// Handle edge cases
+	if projectName == "." || projectName == "/" || projectName == "" {
+		return ""
+	}
+	
+	return projectName
+}
+
+// extractGitBranchFromTranscript tries to extract gitBranch from transcript data  
+func extractGitBranchFromTranscript(transcriptPath string) string {
+	if transcriptPath == "" {
+		return ""
+	}
+	
+	// Read the last few lines of the transcript to find gitBranch
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	
+	// Read the file and look for gitBranch in recent lines
+	scanner := bufio.NewScanner(file)
+	var lines []string
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		// Keep only last 10 lines to avoid excessive memory usage
+		if len(lines) > 10 {
+			lines = lines[1:]
+		}
+	}
+	
+	// Search recent lines for gitBranch field
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		if strings.Contains(line, "gitBranch") {
+			// Try to parse this line as JSON
+			var data map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &data); err == nil {
+				if branch, ok := data["gitBranch"].(string); ok && branch != "" {
+					return branch
+				}
+			}
+		}
+	}
+	
+	return ""
 }
 
 
@@ -267,6 +350,7 @@ func validateEvent(event *HookEvent) error {
 	// Validate event type
 	validEvents := []string{
 		"SessionStart", "UserPromptSubmit", "Notification",
+		"PreToolUse", "PostToolUse", "PreCompact",
 		"Stop", "SubagentStop", "SessionEnd",
 	}
 	
@@ -382,6 +466,19 @@ func processEvent(event *HookEvent) error {
 		sessionState.TranscriptPath = event.TranscriptPath
 	}
 	
+	// Extract git branch and project name
+	if sessionState.CWD != "" {
+		sessionState.ProjectName = extractProjectName(sessionState.CWD)
+		sessionState.GitBranch = extractGitBranch(sessionState.CWD)
+	}
+	
+	// Try to get git branch from transcript if we have it (more reliable)
+	if sessionState.TranscriptPath != "" {
+		if transcriptBranch := extractGitBranchFromTranscript(sessionState.TranscriptPath); transcriptBranch != "" {
+			sessionState.GitBranch = transcriptBranch
+		}
+	}
+	
 	// Compute metrics if we have a transcript path
 	if sessionState.TranscriptPath != "" {
 		if metrics := computeSessionMetrics(sessionState.TranscriptPath); metrics != nil {
@@ -401,6 +498,22 @@ func processEvent(event *HookEvent) error {
 		}
 		if sessionState.CWD == "" && existingState.CWD != "" {
 			sessionState.CWD = existingState.CWD
+		}
+		if sessionState.GitBranch == "" && existingState.GitBranch != "" {
+			sessionState.GitBranch = existingState.GitBranch
+		}
+		if sessionState.ProjectName == "" && existingState.ProjectName != "" {
+			sessionState.ProjectName = existingState.ProjectName
+		}
+		
+		// Re-extract git branch and project if we have CWD but missing these fields
+		if sessionState.CWD != "" {
+			if sessionState.GitBranch == "" {
+				sessionState.GitBranch = extractGitBranch(sessionState.CWD)
+			}
+			if sessionState.ProjectName == "" {
+				sessionState.ProjectName = extractProjectName(sessionState.CWD)
+			}
 		}
 		if sessionState.TranscriptPath == "" && existingState.TranscriptPath != "" {
 			sessionState.TranscriptPath = existingState.TranscriptPath
@@ -429,7 +542,7 @@ func processEvent(event *HookEvent) error {
 // mapEventToState maps hook events to session states
 func mapEventToState(eventName string) string {
 	switch eventName {
-	case "SessionStart", "UserPromptSubmit":
+	case "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact":
 		return "working"
 	case "Notification":
 		return "waiting"

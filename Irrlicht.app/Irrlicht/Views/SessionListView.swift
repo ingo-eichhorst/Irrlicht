@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SessionListView: View {
     @EnvironmentObject var sessionManager: SessionManager
+    @State private var isQuitButtonHovered = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -17,6 +18,29 @@ struct SessionListView: View {
                 Divider()
                 errorView(error)
             }
+            
+            // Quit button at bottom
+            Divider()
+            Button("Quit Irrlicht") {
+                NSApplication.shared.terminate(nil)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 8)
+            .onHover { hovering in
+                isQuitButtonHovered = hovering
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(isQuitButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                    .animation(.easeInOut(duration: 0.2), value: isQuitButtonHovered)
+            )
         }
         .frame(width: 350)
         .background(Color(NSColor.windowBackgroundColor))
@@ -39,6 +63,7 @@ struct SessionListView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
         }
+        .frame(maxWidth: .infinity)
         .padding(20)
     }
     
@@ -54,9 +79,7 @@ struct SessionListView: View {
                 Text("—")
                     .foregroundColor(.secondary)
                 
-                Text(sessionManager.glyphStrip)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundColor(.primary)
+                sessionIconsView
             }
             
             Spacer()
@@ -65,6 +88,26 @@ struct SessionListView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+    
+    private var sessionIconsView: some View {
+        HStack(spacing: 2) {
+            if sessionManager.sessions.isEmpty {
+                Text("○")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.primary)
+            } else if sessionManager.sessions.count <= 3 {
+                ForEach(sessionManager.sessions.prefix(3)) { session in
+                    Image(systemName: session.state.glyph)
+                        .foregroundColor(Color(hex: session.state.color))
+                        .font(.system(size: 12))
+                }
+            } else {
+                Text("\(sessionManager.sessions.count) sessions")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.primary)
+            }
+        }
     }
     
     private var statusIndicator: some View {
@@ -134,14 +177,14 @@ struct SessionRowView: View {
     var body: some View {
         HStack(spacing: 8) {
             // State glyph
-            Text(session.state.glyph)
-                .font(.system(.body, design: .monospaced))
+            Image(systemName: session.state.glyph)
+                .font(.system(.body))
                 .foregroundColor(Color(hex: session.state.color))
                 .frame(width: 16)
             
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text(session.shortId)
+                    Text(session.projectName ?? "unknown")
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(.primary)
                     
@@ -160,6 +203,16 @@ struct SessionRowView: View {
                         return Text(formatter.localizedString(for: session.updatedAt, relativeTo: timeline.date))
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+                }
+                
+                if let branch = session.gitBranch {
+                    HStack {
+                        Text("(\(branch))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.8))
+                        
+                        Spacer()
                     }
                 }
                 
@@ -183,13 +236,13 @@ struct SessionRowView: View {
                         if metrics.messagesPerMinute > 0 {
                             Label(metrics.formattedMessagesPerMinute, systemImage: "chart.line.uptrend.xyaxis")
                                 .font(.caption2)
-                                .foregroundColor(.blue)
+                                .foregroundColor(.primary)
                         }
                         
                         if metrics.elapsedSeconds > 0 {
                             Label(metrics.formattedElapsedTime, systemImage: "clock")
                                 .font(.caption2)
-                                .foregroundColor(.green)
+                                .foregroundColor(.primary)
                         }
                         
                         // Context utilization indicator
@@ -207,7 +260,7 @@ struct SessionRowView: View {
                         if metrics.totalTokens > 0 {
                             Label(metrics.formattedTokenCount, systemImage: "textformat.abc")
                                 .font(.caption2)
-                                .foregroundColor(.purple)
+                                .foregroundColor(.primary)
                         }
                         
                         Spacer()
@@ -264,13 +317,15 @@ struct SessionListView_Previews: PreviewProvider {
             .environmentObject({
                 let manager = SessionManager()
                 // Add some mock sessions for preview
-                manager.sessions = [
+                let mockSessions = [
                     SessionState(
                         id: "sess_abc123def456",
                         state: .working,
                         model: "claude-3.7-sonnet", 
-                        cwd: "/Users/user/projects/test",
+                        cwd: "/Users/user/projects/multi-cc-bar",
                         transcriptPath: "/Users/user/.claude/projects/test/transcript.jsonl",
+                        gitBranch: "main",
+                        projectName: "multi-cc-bar",
                         updatedAt: Date().addingTimeInterval(-60),
                         eventCount: 5,
                         lastEvent: "UserPromptSubmit",
@@ -289,8 +344,10 @@ struct SessionListView_Previews: PreviewProvider {
                         id: "sess_xyz789ghi012",
                         state: .waiting,
                         model: "claude-3-haiku",
-                        cwd: "/Users/user/projects/another", 
+                        cwd: "/Users/user/projects/multi-cc-bar", 
                         transcriptPath: "/Users/user/.claude/projects/another/transcript.jsonl",
+                        gitBranch: "feature/ui-updates",
+                        projectName: "multi-cc-bar",
                         updatedAt: Date().addingTimeInterval(-300),
                         eventCount: 12,
                         lastEvent: "Notification",
@@ -309,8 +366,10 @@ struct SessionListView_Previews: PreviewProvider {
                         id: "sess_old456finished",
                         state: .finished,
                         model: "claude-3-opus",
-                        cwd: "/Users/user/projects/completed",
+                        cwd: "/Users/user/projects/another-project",
                         transcriptPath: "/Users/user/.claude/projects/completed/transcript.jsonl", 
+                        gitBranch: "main",
+                        projectName: "another-project",
                         updatedAt: Date().addingTimeInterval(-1800),
                         eventCount: 8,
                         lastEvent: "SessionEnd",
@@ -326,6 +385,9 @@ struct SessionListView_Previews: PreviewProvider {
                         )
                     )
                 ]
+                
+                // Assign duplicate indexes like the real SessionManager would
+                manager.sessions = mockSessions
                 return manager
             }())
     }

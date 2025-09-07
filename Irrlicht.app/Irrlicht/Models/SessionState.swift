@@ -80,17 +80,17 @@ struct SessionMetrics: Codable {
     var contextPressureColor: String {
         switch pressureLevel {
         case "safe":
-            return "#10B981"   // emerald
+            return "#34C759"   // system green
         case "caution":
-            return "#F59E0B"   // amber
+            return "#FF9500"   // system orange
         case "warning":
-            return "#EF4444"   // red
+            return "#FF3B30"   // system red
         case "critical":
-            return "#DC2626"   // dark red
+            return "#D70015"   // darker red
         case "unknown", "":
-            return "#6B7280"   // gray
+            return "#8E8E93"   // system gray
         default:
-            return "#6B7280"   // gray
+            return "#8E8E93"   // system gray
         }
     }
     
@@ -106,10 +106,15 @@ struct SessionState: Identifiable, Codable {
     let model: String           // claude-3.7-sonnet, etc.
     let cwd: String             // working directory
     let transcriptPath: String? // path to transcript.jsonl (optional for backwards compatibility)
+    let gitBranch: String?      // git branch name (optional)
+    let projectName: String?    // project folder name (optional)
     let updatedAt: Date         // last modified timestamp
     let eventCount: Int?        // number of events processed (optional)
     let lastEvent: String?      // last hook event type (optional)
     let metrics: SessionMetrics? // performance metrics from transcript analysis (optional)
+    
+    // For duplicate handling (not stored in JSON, computed by SessionManager)
+    var duplicateIndex: Int? = nil
     
     private static let logger = Logger(subsystem: "com.anthropic.irrlicht", category: "SessionState")
     
@@ -117,6 +122,8 @@ struct SessionState: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id = "session_id"
         case state, model, cwd
+        case gitBranch = "git_branch"
+        case projectName = "project_name"
         case transcriptPath = "transcript_path"
         case updatedAt = "updated_at"
         case eventCount = "event_count"
@@ -133,6 +140,8 @@ struct SessionState: Identifiable, Codable {
         model = try container.decodeIfPresent(String.self, forKey: .model) ?? "unknown"
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
         transcriptPath = try container.decodeIfPresent(String.self, forKey: .transcriptPath)
+        gitBranch = try container.decodeIfPresent(String.self, forKey: .gitBranch)
+        projectName = try container.decodeIfPresent(String.self, forKey: .projectName)
         eventCount = try container.decodeIfPresent(Int.self, forKey: .eventCount)
         lastEvent = try container.decodeIfPresent(String.self, forKey: .lastEvent)
         metrics = try container.decodeIfPresent(SessionMetrics.self, forKey: .metrics)
@@ -173,12 +182,14 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil) {
         self.id = id
         self.state = state
         self.model = model
         self.cwd = cwd
         self.transcriptPath = transcriptPath
+        self.gitBranch = gitBranch
+        self.projectName = projectName
         self.updatedAt = updatedAt
         self.eventCount = eventCount
         self.lastEvent = lastEvent
@@ -190,17 +201,17 @@ struct SessionState: Identifiable, Codable {
         
         var glyph: String {
             switch self {
-            case .working: return "●"
-            case .waiting: return "◔" 
-            case .finished: return "✓"
+            case .working: return "hammer.fill"
+            case .waiting: return "hourglass" 
+            case .finished: return "checkmark.circle.fill"
             }
         }
         
         var color: String {
             switch self {
-            case .working: return "#8B5CF6"   // purple
-            case .waiting: return "#F59E0B"   // amber
-            case .finished: return "#10B981"  // emerald
+            case .working: return "#8B5CF6"   // purple to match 🟣
+            case .waiting: return "#FF9500"   // system orange  
+            case .finished: return "#34C759"  // system green
             }
         }
         
@@ -218,6 +229,20 @@ struct SessionState: Identifiable, Codable {
         String(id.suffix(6))  // Show last 6 chars of session ID
     }
     
+    var friendlyName: String {
+        // Create user-friendly name from project and branch
+        let project = projectName ?? "unknown"
+        let branch = gitBranch ?? "no-git"
+        let baseName = "\(project)/\(branch)"
+        
+        // Add duplicate index if needed
+        if let index = duplicateIndex, index > 1 {
+            return "\(baseName) (\(index))"
+        } else {
+            return baseName
+        }
+    }
+    
     var timeAgo: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -232,7 +257,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     var displayName: String {
-        "\(shortId) · \(state.rawValue) · \(effectiveModel) · \(timeAgo)"
+        "\(friendlyName) · \(state.rawValue) · \(effectiveModel) · \(timeAgo)"
     }
     
     var safeEventCount: Int {

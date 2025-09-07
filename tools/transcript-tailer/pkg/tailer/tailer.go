@@ -15,6 +15,21 @@ import (
 	// "github.com/ingo-eichhorst/multi-cc-bar/tools/model-capacity/pkg/capacity"
 )
 
+// Helper functions for Go versions that don't have built-in min/max
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // normalizeModelName normalizes model names by removing date suffixes and handling aliases
 func normalizeModelName(rawModel string) string {
 	if rawModel == "" {
@@ -214,10 +229,30 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 
 // parseTranscriptLine attempts to parse a JSONL line into a message event
 func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, error) {
+	// Skip empty or whitespace-only lines
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil, nil
+	}
+	
+	// Skip lines that don't look like valid JSON (quick check)
+	if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+		// More detailed check for common partial line patterns
+		if strings.Contains(line, "input_tokens") || strings.Contains(line, "output_tokens") || 
+		   strings.Contains(line, "timestamp") || strings.Contains(line, "requestId") ||
+		   strings.Contains(line, "Sidechain") || strings.Contains(line, "userType") ||
+		   strings.Contains(line, "sessionId") || strings.Contains(line, "gitBranch") {
+			return nil, fmt.Errorf("detected partial JSON line (concurrent write): %s", 
+				string(line[0:min(50, len(line))]))
+		}
+		return nil, fmt.Errorf("invalid JSON format: %s", 
+			string(line[0:min(30, len(line))]))
+	}
+	
 	// Parse as generic JSON first
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("JSON unmarshal error: %w", err)
 	}
 
 	// Extract timestamp
