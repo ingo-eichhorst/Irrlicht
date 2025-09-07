@@ -1,4 +1,4 @@
-# ✦ Irrlicht — Claude Code Observability for MacOS
+# ✦ Irrlicht — Menu-Bar Telemetry for Claude Code (macOS)
 
 ![Banner](banner.png)
 
