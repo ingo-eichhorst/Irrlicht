@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "test-clear-new-session", 
+  "timestamp": "2025-09-07T13:00:01.000Z",
+  "source": "clear",
+  "transcript_path": "/Users/ingo/.claude/projects/-Users-ingo-projects-multi-cc-bar/test-clear-new-session.jsonl",
+  "cwd": "/Users/ingo/projects/multi-cc-bar"
+}

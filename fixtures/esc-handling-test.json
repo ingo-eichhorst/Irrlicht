@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "SessionEnd",
+  "session_id": "test-session-esc",
+  "timestamp": "2025-09-07T09:00:00.000Z",
+  "matcher": "",
+  "reason": "prompt_input_exit",
+  "data": {},
+  "transcript_path": "/Users/ingo/projects/test/transcript.jsonl",
+  "cwd": "/Users/ingo/projects/test",
+  "model": "claude-3-5-sonnet-20241022"
+}
