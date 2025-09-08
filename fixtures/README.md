@@ -38,7 +38,7 @@ Events map to Irrlicht states as follows:
 
 - `SessionStart`, `UserPromptSubmit` → **working**
 - `Notification` → **waiting** 
-- `Stop`, `SubagentStop`, `SessionEnd` → **finished**
+- `Stop`, `SubagentStop`, `SessionEnd` → **ready**
 
 ## Edge Cases
 

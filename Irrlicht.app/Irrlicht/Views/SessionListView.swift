@@ -253,7 +253,7 @@ struct SessionRowView: View {
                 
                 // Show metrics if available
                 if let metrics = session.metrics {
-                    let isActive = session.state != .finished
+                    let isActive = session.state != .ready
                     TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
                         let _ = timeline.date // Force refresh every second
                         HStack(spacing: 0) {
@@ -267,7 +267,7 @@ struct SessionRowView: View {
                                             .foregroundColor(.primary)
                                     }
                                 } else {
-                                    // For finished sessions, use stored elapsed time
+                                    // For ready sessions, use stored elapsed time
                                     if metrics.elapsedSeconds > 0 {
                                         Label(metrics.formattedElapsedTime, systemImage: "clock")
                                             .font(.caption2)
@@ -338,7 +338,7 @@ struct SessionActionButtons: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Reset to finished state")
+            .help("Reset to ready state")
             
             // Delete button
             Button(action: {
@@ -480,8 +480,8 @@ struct SessionListView_Previews: PreviewProvider {
                         )
                     ),
                     SessionState(
-                        id: "sess_old456finished",
-                        state: .finished,
+                        id: "sess_old456ready",
+                        state: .ready,
                         model: "claude-3-opus",
                         cwd: "/Users/user/projects/another-project",
                         transcriptPath: "/Users/user/.claude/projects/completed/transcript.jsonl", 

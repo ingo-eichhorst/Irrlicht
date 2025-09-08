@@ -11,7 +11,7 @@ Each glow means something true:
 
 * **●** working — the agent is thinking, building, streaming.
 * **◔** waiting — it needs you; the story pauses for your judgment.
-* **✓** finished — the path ahead is clear again.
+* **✓** ready — the path ahead is clear, ready for new work.
 
 No ghosts. **Hooks → State → Light.**
 Under the hood, Irrlicht listens to Claude Code’s lifecycle signals, turns them into a deterministic state machine, and renders them as quiet, legible beacons. Local-first, atomic writes, zero blur.
@@ -38,7 +38,7 @@ Under the hood, Irrlicht listens to Claude Code’s lifecycle signals, turns the
 ## Site & product copy (DE/EN)
 
 * **Hero (DE):** *Irrlicht — das gezähmte Statuslicht für Claude Code. Sieh jede Session auf einen Blick: ● arbeitet · ◔ wartet · ✓ fertig.*
-* **Hero (EN):** *Irrlicht — the tamed will-o’-the-wisp for Claude Code. One glance, all sessions: ● working · ◔ waiting · ✓ finished.*
+* **Hero (EN):** *Irrlicht — the tamed will-o'-the-wisp for Claude Code. One glance, all sessions: ● working · ◔ waiting · ✓ ready.*
 * **Proof line:** *Kein Spuk. Hooks. Local-first.*
 
 ## Why this sticks

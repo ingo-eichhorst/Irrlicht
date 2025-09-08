@@ -20,7 +20,7 @@ This document lists all Claude Code events and their resulting state transitions
 | **PreCompact** | Before context compaction | `working` → `working` | ✅ Yes | ❌ No |
 | **Stop** | Main agent finishes responding | `working` → `ready` | ✅ Yes | ✅ Yes |
 | **SubagentStop** | Subagent task completes | `working` → `ready` | ✅ Yes | ✅ Yes |
-| **SessionEnd** | Session terminates | `working/ready` → `idle` | ✅ Yes | ❌ No |
+| **SessionEnd** | Session terminates | Any state → delete session file | ✅ Yes | ❌ No |
 
 ## Detectable Non-Hook Events
 
@@ -38,6 +38,8 @@ This document lists all Claude Code events and their resulting state transitions
 | **Config Change** | Settings file modified | No state change | File watching | Configuration |
 | **Process Start** | Claude Code launches | `ready` → `ready` (ready) | Process monitoring | Application launch |
 | **Process Exit** | Claude Code terminates | Any state → delete session | Process monitoring | Application exit |
+
+-> A claude code instance is killed: current=session stays forever. expected: detect the exit. Potential detection: PID monitoring of the claude instance.
 
 ## Detailed State Flow
 
@@ -109,7 +111,11 @@ Application Launch
 - **Fires**: When session terminates
 - **Data**: `exit_reason` (clear/logout/prompt_input_exit/other)
 - **Blocking**: Cannot block, shows stderr only
-- **State**: Any state → kill session
+- **State**: ALL SessionEnd events → delete session file completely
+  - `reason: "clear"` → session cleared via `/clear` command
+  - `reason: "logout"` → user logged out
+  - `reason: "prompt_input_exit"` → user cancelled with ESC
+  - Other/no reason → unknown termination reason
 
 ## Tool-Specific Events (via PreToolUse/PostToolUse)
 

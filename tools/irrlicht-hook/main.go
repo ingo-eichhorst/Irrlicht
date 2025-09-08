@@ -458,6 +458,17 @@ func processEvent(event *HookEvent) error {
 		LastMatcher:     event.Matcher,
 	}
 	
+	// Handle special case: delete session file
+	if newState == "delete_session" {
+		logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Deleting session file due to SessionEnd (reason: %s)", transitionReason))
+		if err := deleteSessionFile(event.SessionID); err != nil {
+			logger.LogError(event.HookEventName, event.SessionID, fmt.Sprintf("Failed to delete session file: %v", err))
+			return err
+		}
+		logger.LogInfo(event.HookEventName, event.SessionID, "Session file deleted successfully")
+		return nil // Exit early since we deleted the file
+	}
+	
 	// Log the state transition decision
 	logger.LogInfo(event.HookEventName, event.SessionID, 
 		fmt.Sprintf("State transition: %s -> %s (compaction: %s, reason: %s, matcher: %s)", 
@@ -630,7 +641,7 @@ func mapEventToState(eventName string) string {
 	case "Notification":
 		return "waiting"
 	case "Stop", "SubagentStop", "SessionEnd":
-		return "finished"
+		return "ready"
 	default:
 		return "working" // Default fallback
 	}
@@ -682,8 +693,8 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 	case "SessionStart":
 		// Check event.Source field for clear events (Claude Code sends source, not matcher)
 		if event.Source == "clear" {
-			// Session after /clear command - treat like new session (finished state)
-			newState = "finished"
+			// Session after /clear command - treat like new session (ready state)
+			newState = "ready"
 			newCompactionState = "not_compacting"
 			transitionReason = "session_after_clear"
 		} else {
@@ -701,12 +712,12 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 				transitionReason = "session_resumed"
 			case "startup":
 				// New session startup
-				newState = "finished"
+				newState = "ready"
 				newCompactionState = "not_compacting"
 				transitionReason = "session_startup"
 			default:
 				// Regular SessionStart without specific matcher - treat as new session
-				newState = "finished"
+				newState = "ready"
 				newCompactionState = "not_compacting"
 				transitionReason = "session_start_new"
 			}
@@ -748,8 +759,8 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 		transitionReason = "standard_event_mapping"
 		
 	case "SessionEnd":
-		// Handle SessionEnd with reason field
-		// Check both the direct Reason field and the Data map for the reason
+		// SessionEnd always deletes the session file completely
+		// This handles all termination cases: clear, logout, prompt_input_exit, etc.
 		var clearReason string
 		if event.Reason != "" {
 			clearReason = event.Reason
@@ -759,19 +770,17 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 			}
 		}
 		
+		// Always delete the session file on SessionEnd, regardless of reason
+		newState = "delete_session"
 		switch clearReason {
 		case "prompt_input_exit":
-			// User pressed ESC to decline notification
-			newState = "cancelled_by_user"
-			transitionReason = "user_cancelled_with_esc"
+			transitionReason = "user_cancelled_with_esc_delete_file"
 		case "clear":
-			// Session cleared - preserve with special state
-			newState = "finished_clear"
-			transitionReason = "session_cleared"
+			transitionReason = "session_cleared_delete_file"
+		case "logout":
+			transitionReason = "session_logout_delete_file"
 		default:
-			// Regular session end
-			newState = "finished"
-			transitionReason = "session_ended"
+			transitionReason = "session_ended_delete_file"
 		}
 	}
 	
@@ -846,6 +855,19 @@ func getInstancesDir() string {
 // getSessionStatePath returns the path to a session state file
 func getSessionStatePath(sessionID string) string {
 	return filepath.Join(getInstancesDir(), sessionID+".json")
+}
+
+// deleteSessionFile deletes the session state file from disk
+func deleteSessionFile(sessionID string) error {
+	path := getSessionStatePath(sessionID)
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist, consider this success
+			return nil
+		}
+		return fmt.Errorf("failed to delete session file %s: %w", path, err)
+	}
+	return nil
 }
 
 // NewStructuredLogger creates a new structured logger with rotation

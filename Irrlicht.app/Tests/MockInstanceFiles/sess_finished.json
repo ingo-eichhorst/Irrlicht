@@ -1,6 +1,6 @@
 {
-  "session_id": "sess_old456finished",
-  "state": "finished",
+  "session_id": "sess_old456ready",
+  "state": "ready",
   "model": "claude-3-opus",
   "cwd": "/Users/testuser/projects/completed",
   "transcript_path": "/Users/testuser/.claude/projects/completed/transcript.jsonl",

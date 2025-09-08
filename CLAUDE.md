@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Rules
+- Always checkout a dedicated branch before working on an issue
+
 ## Overview
 
 Irrlicht is a macOS menu bar application that monitors Claude Code sessions, providing visual feedback on session states through a system of colored indicators. It consists of a Go-based hook receiver, a SwiftUI menu bar application, and several supporting tools.
@@ -21,7 +24,7 @@ Claude Code Hook Events → Go Hook Receiver → JSON State Files → SwiftUI Me
 
 **State Management:**
 - Session states stored as JSON files in `~/Library/Application Support/Irrlicht/instances/`
-- Three states: `working`, `waiting`, `finished`
+- Three states: `working`, `waiting`, `ready`
 - Real-time updates via file system monitoring and periodic refresh
 
 ## Development Commands
@@ -106,26 +109,7 @@ killall swift
 
 ## Hook Event Flow
 
-Claude Code sends these events to the hook receiver:
-- `SessionStart` → state: `working`
-- `UserPromptSubmit` → state: `working`  
-- `Notification` → state: `waiting`
-- `PreToolUse` → state: `working` (when user responds to notification)
-- `PostToolUse` → state: `working` (tool execution completed)
-- `PreCompact` → state: `working` (context compaction starting)
-- `Stop` → state: `finished`
-- `SubagentStop` → state: `finished`
-- `SessionEnd` → state: `finished`
-
-Each event updates the corresponding session's JSON state file, which the SwiftUI app monitors for changes.
-
-## Performance Features
-
-- **Metrics Tracking**: Messages/minute, elapsed time, token usage
-- **Context Utilization**: Real-time context pressure monitoring
-- **Transcript Analysis**: Live parsing of Claude Code transcripts for detailed metrics
-- **Dynamic UI**: Indicators resize based on session count
-- **Efficient Updates**: 1-second refresh cycle with file system watching
+see events.md
 
 ## Testing Approach
 
