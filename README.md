@@ -80,7 +80,7 @@ No ghosts. **Hooks → State → Light.**
 5. **Run Irrlicht UI:**
    ```bash
    cd Irrlicht.app
-   swift run
+   swift run &
    ```
 
 ## Configuration
