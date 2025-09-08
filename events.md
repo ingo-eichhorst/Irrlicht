@@ -20,7 +20,7 @@ This document lists all Claude Code events and their resulting state transitions
 | **PreCompact** | Before context compaction | `working` → `working` | ✅ Yes | ❌ No |
 | **Stop** | Main agent finishes responding | `working` → `ready` | ✅ Yes | ✅ Yes |
 | **SubagentStop** | Subagent task completes | `working` → `ready` | ✅ Yes | ✅ Yes |
-| **SessionEnd** | Session terminates | `working/ready` → `idle` | ✅ Yes | ❌ No |
+| **SessionEnd** | Session terminates | Any state → delete session file | ✅ Yes | ❌ No |
 
 ## Detectable Non-Hook Events
 
@@ -111,7 +111,11 @@ Application Launch
 - **Fires**: When session terminates
 - **Data**: `exit_reason` (clear/logout/prompt_input_exit/other)
 - **Blocking**: Cannot block, shows stderr only
-- **State**: Any state → kill session
+- **State**: ALL SessionEnd events → delete session file completely
+  - `reason: "clear"` → session cleared via `/clear` command
+  - `reason: "logout"` → user logged out
+  - `reason: "prompt_input_exit"` → user cancelled with ESC
+  - Other/no reason → unknown termination reason
 
 ## Tool-Specific Events (via PreToolUse/PostToolUse)
 
