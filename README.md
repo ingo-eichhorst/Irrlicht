@@ -22,7 +22,7 @@ Claude Code Hook Events → Irrlicht Hook Receiver → State Machine → Menu Ba
 Each session appears as a simple icon that tells the truth:
 - **🟣** **working** — the agent is thinking, building, streaming (purple)
 - **🟠** **waiting** — it needs you; the story pauses for your judgment (orange)
-- **🟢** **finished** — the path ahead is clear again (green)
+- **🟢** **ready** — the path ahead is clear, ready for new work (green)
 - **✦** **no sessions** — clean slate, ready for new work (white sparkle)
 
 No ghosts. **Hooks → State → Light.**
@@ -204,9 +204,9 @@ Irrlicht responds to these Claude Code hook events:
 | `PostToolUse` | Tool execution completed | → **working** |
 | `PreCompact` | Context compaction starting | → **working** |
 | `Notification` | System needs user attention | → **waiting** |
-| `Stop` | Session stops (completed/cancelled) | → **finished** |
-| `SubagentStop` | Subagent completes task | → **finished** |
-| `SessionEnd` | Session terminates | → **finished** |
+| `Stop` | Session stops (completed/cancelled) | → **ready** |
+| `SubagentStop` | Subagent completes task | → **ready** |
+| `SessionEnd` | Session terminates | → **ready** |
 
 ## Technical Details
 

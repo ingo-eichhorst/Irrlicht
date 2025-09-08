@@ -172,7 +172,7 @@ class SessionManager: ObservableObject {
     }
     
     var hasActiveSessions: Bool {
-        !sessions.filter { $0.state != .finished }.isEmpty
+        !sessions.filter { $0.state != .ready }.isEmpty
     }
     
     var workingSessions: Int {
@@ -183,8 +183,8 @@ class SessionManager: ObservableObject {
         sessions.filter { $0.state == .waiting }.count
     }
     
-    var finishedSessions: Int {
-        sessions.filter { $0.state == .finished }.count
+    var readySessions: Int {
+        sessions.filter { $0.state == .ready }.count
     }
     
     // MARK: - Session Order Management
@@ -237,9 +237,9 @@ class SessionManager: ObservableObject {
         
         // Sort new sessions: active first, then by recency (as fallback for new sessions)
         let sortedNewSessions = newSessions.sorted { lhs, rhs in
-            if lhs.state == .finished && rhs.state != .finished {
+            if lhs.state == .ready && rhs.state != .ready {
                 return false
-            } else if lhs.state != .finished && rhs.state == .finished {
+            } else if lhs.state != .ready && rhs.state == .ready {
                 return true
             } else {
                 return lhs.updatedAt > rhs.updatedAt
@@ -313,7 +313,7 @@ class SessionManager: ObservableObject {
     // MARK: - Session Management Actions
     
     func resetSessionState(sessionId: String) {
-        print("🔄 Resetting session state for \(sessionId) to finished")
+        print("🔄 Resetting session state for \(sessionId) to ready")
         
         let sessionFilePath = instancesPath.appendingPathComponent("\(sessionId).json")
         
@@ -326,16 +326,16 @@ class SessionManager: ObservableObject {
                 return
             }
             
-            // Update state to finished and timestamp
+            // Update state to ready and timestamp
             var updatedJson = existingJson
-            updatedJson["state"] = "finished"
+            updatedJson["state"] = "ready"
             updatedJson["updated_at"] = Int64(Date().timeIntervalSince1970)
             
             // Write back to file
             let updatedData = try JSONSerialization.data(withJSONObject: updatedJson, options: [])
             try updatedData.write(to: sessionFilePath)
             
-            print("✅ Successfully reset session \(sessionId) to finished state")
+            print("✅ Successfully reset session \(sessionId) to ready state")
             
         } catch {
             print("❌ Failed to reset session state: \(error)")

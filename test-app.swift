@@ -23,7 +23,7 @@ struct SessionState: Codable {
     }
     
     enum State: String, CaseIterable, Codable {
-        case working, waiting, finished
+        case working, waiting, ready
     }
 }
 

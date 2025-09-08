@@ -39,6 +39,8 @@ This document lists all Claude Code events and their resulting state transitions
 | **Process Start** | Claude Code launches | `ready` → `ready` (ready) | Process monitoring | Application launch |
 | **Process Exit** | Claude Code terminates | Any state → delete session | Process monitoring | Application exit |
 
+-> A claude code instance is killed: current=session stays forever. expected: detect the exit. Potential detection: PID monitoring of the claude instance.
+
 ## Detailed State Flow
 
 ```

@@ -630,7 +630,7 @@ func mapEventToState(eventName string) string {
 	case "Notification":
 		return "waiting"
 	case "Stop", "SubagentStop", "SessionEnd":
-		return "finished"
+		return "ready"
 	default:
 		return "working" // Default fallback
 	}
@@ -682,8 +682,8 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 	case "SessionStart":
 		// Check event.Source field for clear events (Claude Code sends source, not matcher)
 		if event.Source == "clear" {
-			// Session after /clear command - treat like new session (finished state)
-			newState = "finished"
+			// Session after /clear command - treat like new session (ready state)
+			newState = "ready"
 			newCompactionState = "not_compacting"
 			transitionReason = "session_after_clear"
 		} else {
@@ -701,12 +701,12 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 				transitionReason = "session_resumed"
 			case "startup":
 				// New session startup
-				newState = "finished"
+				newState = "ready"
 				newCompactionState = "not_compacting"
 				transitionReason = "session_startup"
 			default:
 				// Regular SessionStart without specific matcher - treat as new session
-				newState = "finished"
+				newState = "ready"
 				newCompactionState = "not_compacting"
 				transitionReason = "session_start_new"
 			}
@@ -766,11 +766,11 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 			transitionReason = "user_cancelled_with_esc"
 		case "clear":
 			// Session cleared - preserve with special state
-			newState = "finished_clear"
+			newState = "ready_clear"
 			transitionReason = "session_cleared"
 		default:
 			// Regular session end
-			newState = "finished"
+			newState = "ready"
 			transitionReason = "session_ended"
 		}
 	}

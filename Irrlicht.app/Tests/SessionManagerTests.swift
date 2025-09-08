@@ -91,13 +91,13 @@ final class SessionManagerTests: XCTestCase {
     func testStateGlyphs() {
         XCTAssertEqual(SessionState.State.working.glyph, "●")
         XCTAssertEqual(SessionState.State.waiting.glyph, "◔")
-        XCTAssertEqual(SessionState.State.finished.glyph, "✓")
+        XCTAssertEqual(SessionState.State.ready.glyph, "checkmark.circle.fill")
     }
     
     func testStateColors() {
         XCTAssertEqual(SessionState.State.working.color, "#8B5CF6")
         XCTAssertEqual(SessionState.State.waiting.color, "#F59E0B") 
-        XCTAssertEqual(SessionState.State.finished.color, "#10B981")
+        XCTAssertEqual(SessionState.State.ready.color, "#34C759")
     }
     
     // MARK: - Display Formatting Tests
@@ -145,7 +145,7 @@ final class SessionManagerTests: XCTestCase {
         sessionManager.sessions = [
             createMockSession(id: "1", state: .working),
             createMockSession(id: "2", state: .waiting),
-            createMockSession(id: "3", state: .finished)
+            createMockSession(id: "3", state: .ready)
         ]
         
         XCTAssertEqual(sessionManager.glyphStrip, "● ◔ ✓")
@@ -162,13 +162,13 @@ final class SessionManagerTests: XCTestCase {
     func testActiveSessionsDetection() {
         sessionManager.sessions = [
             createMockSession(id: "1", state: .working),
-            createMockSession(id: "2", state: .finished)
+            createMockSession(id: "2", state: .ready)
         ]
         
         XCTAssertTrue(sessionManager.hasActiveSessions)
         
         sessionManager.sessions = [
-            createMockSession(id: "1", state: .finished)
+            createMockSession(id: "1", state: .ready)
         ]
         
         XCTAssertFalse(sessionManager.hasActiveSessions)
@@ -179,12 +179,12 @@ final class SessionManagerTests: XCTestCase {
             createMockSession(id: "1", state: .working),
             createMockSession(id: "2", state: .working),
             createMockSession(id: "3", state: .waiting),
-            createMockSession(id: "4", state: .finished)
+            createMockSession(id: "4", state: .ready)
         ]
         
         XCTAssertEqual(sessionManager.workingSessions, 2)
         XCTAssertEqual(sessionManager.waitingSessions, 1)
-        XCTAssertEqual(sessionManager.finishedSessions, 1)
+        XCTAssertEqual(sessionManager.readySessions, 1)
     }
     
     // MARK: - Helper Methods

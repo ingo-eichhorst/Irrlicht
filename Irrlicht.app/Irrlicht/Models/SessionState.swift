@@ -3,7 +3,7 @@ import os
 
 // Performance metrics from transcript analysis
 struct SessionMetrics: Codable {
-    let elapsedSeconds: Int64       // elapsed time when metrics were computed (for finished sessions)
+    let elapsedSeconds: Int64       // elapsed time when metrics were computed (for ready sessions)
     let totalTokens: Int64          // total token count from transcript (0 if not available)
     let modelName: String           // model name extracted from transcript ("" if not available) 
     let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
@@ -109,7 +109,7 @@ struct SessionMetrics: Codable {
 
 struct SessionState: Identifiable, Codable {
     let id: String              // session_id
-    let state: State            // working, waiting, finished
+    let state: State            // working, waiting, ready
     let model: String           // claude-3.7-sonnet, etc.
     let cwd: String             // working directory
     let transcriptPath: String? // path to transcript.jsonl (optional for backwards compatibility)
@@ -145,7 +145,13 @@ struct SessionState: Identifiable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
         id = try container.decode(String.self, forKey: .id)
-        state = try container.decode(State.self, forKey: .state)
+        // Handle backwards compatibility: "finished" -> "ready"
+        let stateString = try container.decode(String.self, forKey: .state)
+        if stateString == "finished" {
+            state = .ready
+        } else {
+            state = State(rawValue: stateString) ?? .ready
+        }
         model = try container.decodeIfPresent(String.self, forKey: .model) ?? "unknown"
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
         transcriptPath = try container.decodeIfPresent(String.self, forKey: .transcriptPath)
@@ -217,13 +223,13 @@ struct SessionState: Identifiable, Codable {
     }
     
     enum State: String, CaseIterable, Codable {
-        case working, waiting, finished
+        case working, waiting, ready
         
         var glyph: String {
             switch self {
             case .working: return "hammer.fill"
             case .waiting: return "hourglass" 
-            case .finished: return "checkmark.circle.fill"
+            case .ready: return "checkmark.circle.fill"
             }
         }
         
@@ -231,7 +237,7 @@ struct SessionState: Identifiable, Codable {
             switch self {
             case .working: return "#8B5CF6"   // purple to match 🟣
             case .waiting: return "#FF9500"   // system orange  
-            case .finished: return "#34C759"  // system green
+            case .ready: return "#34C759"  // system green
             }
         }
         
@@ -239,7 +245,7 @@ struct SessionState: Identifiable, Codable {
             switch self {
             case .working: return "🟣"   // purple circle
             case .waiting: return "🟠"   // orange circle
-            case .finished: return "🟢"  // green circle
+            case .ready: return "🟢"  // green circle
             }
         }
     }
