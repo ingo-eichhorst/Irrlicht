@@ -1,132 +1,188 @@
-# Claude Code Complete Events & State Transitions Reference
+# Claude Code Events and State Transitions
 
-## Overview
+This document lists all Claude Code events and their resulting state transitions, based on official documentation and research as of 2025.
 
-This document provides a comprehensive analysis of all events and state transitions that can occur in Claude Code, based on extensive research of the official documentation and community resources as of 2025. Events are categorized by their detection method and whether they trigger hooks.
+## Primary Session States
 
-## Complete Claude Code Events Table
+- **`working`** - Claude actively processing/executing
+- **`waiting`** - Waiting for user input or permission
+- **`ready`** - No session started or task ready
 
-| Event Category | Event Name | Description | When It Fires | Hook Available | Detection Method | Parameters | State Impact | Implementation Status |
-|---|---|---|---|---|---|---|---|---|
-| **SESSION LIFECYCLE** | | | | | | | | |
-| Session Management | `SessionStart` | New session begins or resumes | Session startup, resume after clear/compact | ✅ Hook | Hook receiver | `source` (startup/resume/clear/compact), `session_id`, `transcript_path`, `cwd` | Creates session in working state | ✅ Implemented |
-| Session Management | `SessionEnd` | Session terminates | User exits, logout, or session closes | ✅ Hook | Hook receiver | `reason` (clear/logout/prompt_input_exit/other), `session_id` | Marks session as finished | ✅ Implemented |
-| Session Management | `SessionTimeout` | Session times out due to inactivity | Network timeout or API timeout | ❌ No Hook | Error monitoring | `timeout_duration`, `last_activity` | Session becomes disconnected | ❌ Not handled |
-| Session Management | `SessionReconnect` | Session reconnects after timeout | Successful reconnection to API | ❌ No Hook | Connection monitoring | `reconnect_attempt`, `success` | Session resumes | ❌ Not handled |
-| **USER INTERACTIONS** | | | | | | | | |
-| User Input | `UserPromptSubmit` | User submits a prompt | Before Claude processes user input | ✅ Hook | Hook receiver | `prompt`, `session_id`, `transcript_path` | Transitions to working state | ✅ Implemented |
-| User Input | `UserPromptEdit` | User edits their prompt | User modifies input before submitting | ❌ No Hook | Input field monitoring | `original_prompt`, `edited_prompt` | No state change | ❌ Not detected |
-| User Input | `UserInterrupt` | User interrupts Claude (Ctrl+C) | User cancels Claude's response | ❌ No Hook | Signal monitoring | `interruption_method` | Transitions to waiting | ❌ Not detected |
-| User Input | `UserIdle` | User inactive for extended period | 60+ seconds without input | 🟡 Notification | Notification system | `idle_duration` | Shows waiting notification | 🟡 Partial (notification only) |
-| **AGENT RESPONSES** | | | | | | | | |
-| Agent Lifecycle | `Stop` | Main agent finishes responding | Claude completes main response | ✅ Hook | Hook receiver | `stop_hook_active`, `session_id` | Transitions to finished/waiting | ✅ Implemented |
-| Agent Lifecycle | `SubagentStart` | Subagent begins execution | Subagent spawned from main agent | ❌ No Hook | Task tracking | `subagent_id`, `parent_session`, `task_description` | Creates subagent context | ❌ Not detected |
-| Agent Lifecycle | `SubagentStop` | Subagent completes task | Subagent finishes execution | ✅ Hook | Hook receiver | `stop_hook_active`, `subagent_id` | Subagent marked finished | ✅ Implemented |
-| Agent Lifecycle | `Notification` | Claude needs user input/permission | Requesting permission or user input | ✅ Hook | Hook receiver | `message`, `notification_type` | Transitions to waiting state | ✅ Implemented |
-| **TOOL EXECUTION** | | | | | | | | |
-| Tool Lifecycle | `PreToolUse` | Before tool execution | After parameters created, before execution | ✅ Hook | Hook receiver | `tool_name`, `tool_input`, `session_id` | Maintains working state | ✅ Implemented |
-| Tool Lifecycle | `PostToolUse` | After successful tool execution | Immediately after tool completes | ✅ Hook | Hook receiver | `tool_name`, `tool_input`, `tool_response` | Continues working state | ✅ Implemented |
-| Tool Lifecycle | `ToolError` | Tool execution fails | Tool encounters error/exception | ❌ No Hook | Error log monitoring | `tool_name`, `error_type`, `error_message` | May transition to error state | ❌ Not detected |
-| Tool Lifecycle | `ToolTimeout` | Tool execution times out | Tool exceeds time limit | ❌ No Hook | Timeout monitoring | `tool_name`, `timeout_duration` | Error state | ❌ Not detected |
-| Tool Lifecycle | `ToolPermissionDenied` | Tool blocked by permissions | Insufficient permissions for tool | ❌ No Hook | Permission monitoring | `tool_name`, `permission_required` | Shows permission error | ❌ Not detected |
-| **SPECIFIC TOOL EVENTS** | | | | | | | | |
-| File Operations | `FileRead` | File read operation | Read tool executed | 🟡 PreToolUse | Tool hook | `file_path`, `content_preview` | No state change | ✅ Via PreToolUse |
-| File Operations | `FileWrite` | File write operation | Write/Edit tool executed | 🟡 PreToolUse | Tool hook | `file_path`, `content` | No state change | ✅ Via PreToolUse |
-| File Operations | `FileCreate` | New file created | File created via Write tool | 🟡 PostToolUse | Tool hook | `file_path`, `file_size` | No state change | ✅ Via PostToolUse |
-| File Operations | `FileDelete` | File deleted | File removed via Bash/tool | 🟡 Tool Hook | Tool hook | `file_path` | No state change | ✅ Via tool hooks |
-| Shell Operations | `BashCommand` | Shell command execution | Bash tool used | 🟡 PreToolUse | Tool hook | `command`, `working_directory` | No state change | ✅ Via PreToolUse |
-| Shell Operations | `BashError` | Shell command fails | Non-zero exit code | 🟡 PostToolUse | Tool hook | `command`, `exit_code`, `stderr` | No state change | ✅ Via PostToolUse |
-| Web Operations | `WebFetch` | Web content retrieved | WebFetch/WebSearch tool used | 🟡 PreToolUse | Tool hook | `url`, `method` | No state change | ✅ Via PreToolUse |
-| Web Operations | `WebError` | Web request fails | HTTP error or network failure | 🟡 PostToolUse | Tool hook | `url`, `status_code`, `error` | No state change | ✅ Via PostToolUse |
-| **CONTEXT MANAGEMENT** | | | | | | | | |
-| Context Window | `PreCompact` | Before context compaction | Manual /compact or auto-compact | ✅ Hook | Hook receiver | `compact_type` (manual/auto), `tokens_before` | Working state maintained | ✅ Implemented |
-| Context Window | `PostCompact` | After context compaction | Context successfully compacted | ❌ No Hook | Transcript monitoring | `tokens_after`, `compression_ratio` | Returns to previous state | ❌ Not detected |
-| Context Window | `MicroCompact` | Micro-compact operation | Automatic old tool call removal | ❌ No Hook | Token monitoring | `tools_removed`, `tokens_saved` | Continues current state | ❌ Not detected |
-| Context Window | `ContextFull` | Context window approaching limit | Near 200k token limit | ❌ No Hook | Token counting | `current_tokens`, `limit` | Triggers auto-compact | ❌ Not detected |
-| **ERROR CONDITIONS** | | | | | | | | |
-| API Errors | `APITimeout` | API request timeout | Request exceeds timeout limit | ❌ No Hook | Error monitoring | `request_id`, `timeout_duration` | Connection error state | ❌ Not detected |
-| API Errors | `APIRateLimit` | Rate limit exceeded | Too many requests in time window | ❌ No Hook | HTTP response monitoring | `retry_after`, `limit_type` | Throttled state | ❌ Not detected |
-| API Errors | `APIError` | General API error | HTTP 4xx/5xx responses | ❌ No Hook | HTTP monitoring | `status_code`, `error_message` | Error state | ❌ Not detected |
-| System Errors | `NetworkDisconnect` | Network connectivity lost | Internet connection drops | ❌ No Hook | Network monitoring | `connection_type` | Offline state | ❌ Not detected |
-| System Errors | `SystemResourceLimit` | System resource exhaustion | Memory/disk/CPU limits hit | ❌ No Hook | System monitoring | `resource_type`, `usage` | Resource constrained | ❌ Not detected |
-| **CONFIGURATION EVENTS** | | | | | | | | |
-| Settings | `ConfigChange` | Configuration modified | Settings file updated | ❌ No Hook | File watching | `config_path`, `changes` | May affect behavior | ❌ Not detected |
-| Settings | `HookConfigChange` | Hook configuration changed | Hooks added/modified/removed | ❌ No Hook | Config file watching | `hook_changes` | Hook behavior changes | ❌ Not detected |
-| Settings | `ProjectConfigLoad` | Project settings loaded | Project-specific config applied | ❌ No Hook | Config loading | `project_path`, `config` | Project state change | ❌ Not detected |
-| **SUBAGENT EVENTS** | | | | | | | | |
-| Subagent Lifecycle | `SubagentSpawn` | New subagent created | Main agent delegates to subagent | ❌ No Hook | Task system monitoring | `subagent_type`, `parent_id` | Subagent working state | ❌ Not detected |
-| Subagent Lifecycle | `SubagentError` | Subagent encounters error | Subagent fails during execution | ❌ No Hook | Error monitoring | `subagent_id`, `error_details` | Subagent error state | ❌ Not detected |
-| Subagent Lifecycle | `SubagentTimeout` | Subagent times out | Subagent exceeds execution limit | ❌ No Hook | Timeout monitoring | `subagent_id`, `timeout` | Subagent terminated | ❌ Not detected |
-| **TRANSCRIPT EVENTS** | | | | | | | | |
-| Logging | `TranscriptWrite` | New entry added to transcript | Every interaction logged | ❌ No Hook | File monitoring | `entry_type`, `content` | No state change | 🟡 File watching possible |
-| Logging | `TranscriptRotate` | Transcript file rotated | Log rotation for size management | ❌ No Hook | File system monitoring | `old_file`, `new_file` | No state change | ❌ Not detected |
-| Logging | `TranscriptCorrupt` | Transcript file corruption | JSONL parsing errors | ❌ No Hook | Parse error monitoring | `line_number`, `error` | May affect recovery | ❌ Not detected |
-| **THINKING MODE EVENTS** | | | | | | | | |
-| Cognitive Processing | `ThinkingModeStart` | Extended thinking begins | "think", "ultrathink" commands | ❌ No Hook | Command detection | `thinking_level`, `budget` | Enhanced processing | ❌ Not detected |
-| Cognitive Processing | `ThinkingModeEnd` | Extended thinking completes | Thinking budget exhausted | ❌ No Hook | Response monitoring | `tokens_used`, `outcome` | Returns to normal | ❌ Not detected |
-| **PERMISSION EVENTS** | | | | | | | | |
-| Security | `PermissionRequest` | Tool requests permission | High-risk operations | ❌ No Hook | Security monitoring | `tool_name`, `risk_level` | Awaiting user approval | ❌ Not detected |
-| Security | `PermissionGranted` | User grants permission | User approves risky operation | ❌ No Hook | User interaction | `permission_type` | Operation proceeds | ❌ Not detected |
-| Security | `PermissionDenied` | User denies permission | User blocks risky operation | ❌ No Hook | User interaction | `permission_type` | Operation blocked | ❌ Not detected |
+## Official Hook Events (9 Total)
 
-## Detection Method Legend
+| Event | Trigger | State Transition | Hook Available | Can Block |
+|-------|---------|------------------|----------------|-----------|
+| **SessionStart** | New session starts or resumes | `idle` → `working` | ✅ Yes | ❌ No |
+| **UserPromptSubmit** | User submits prompt (before processing) | `waiting` → `working` | ✅ Yes | ✅ Yes |
+| **PreToolUse** | Before any tool execution | `working` → `working` | ✅ Yes | ✅ Yes |
+| **PostToolUse** | After successful tool completion | `working` → `working` | ✅ Yes | ❌ No |
+| **Notification** | Claude needs permission/input | `working` → `waiting` | ✅ Yes | ❌ No |
+| **PreCompact** | Before context compaction | `working` → `working` | ✅ Yes | ❌ No |
+| **Stop** | Main agent finishes responding | `working` → `ready` | ✅ Yes | ✅ Yes |
+| **SubagentStop** | Subagent task completes | `working` → `ready` | ✅ Yes | ✅ Yes |
+| **SessionEnd** | Session terminates | `working/ready` → `idle` | ✅ Yes | ❌ No |
 
-- **✅ Hook**: Official Claude Code hook available
-- **🟡 Partial Hook**: Detectable through existing hooks (PreToolUse/PostToolUse)  
-- **❌ No Hook**: No official hook, requires external monitoring
+## Detectable Non-Hook Events
 
-## State Transitions
+| Event | Trigger | State Transition | Detection Method | Frequency |
+|-------|---------|------------------|------------------|-----------|
+| **Session Resume** | User returns to existing session | `idle` → `working` | File system monitoring | Per session |
+| **User Interrupt** | Ctrl+C or ESC pressed | `working` → `ready` | Signal monitoring | User action |
+| **Context Full** | Token limit approaching | `working` → `working` (triggers auto-compact) | Token counting | Automatic |
+| **Tool Timeout** | Tool execution exceeds limit | `working` → `error` | Process monitoring | Error condition |
+| **Tool Error** | Tool fails with exception | `working` → `working` (error reported) | Error log monitoring | Error condition |
+| **API Timeout** | Network request times out | `working` → `error` | HTTP monitoring | Network issue |
+| **API Rate Limit** | Too many requests | `working` → `waiting` (throttled) | HTTP response codes | Rate limiting |
+| **Network Disconnect** | Internet connection lost | `working` → `error` | Network monitoring | Connection issue |
+| **Transcript Write** | New log entry added | `waiting` → `working` | File monitoring | Every interaction |
+| **Config Change** | Settings file modified | No state change | File watching | Configuration |
+| **Process Start** | Claude Code launches | `ready` → `ready` (ready) | Process monitoring | Application launch |
+| **Process Exit** | Claude Code terminates | Any state → delete session | Process monitoring | Application exit |
 
-Claude Code operates with these primary states:
+## Detailed State Flow
 
-1. **Idle**: No active session
-2. **Working**: Claude is processing/thinking/executing
-3. **Waiting**: Waiting for user input or permission
-4. **Finished**: Response complete, ready for next input
-5. **Error**: Error state requiring attention
-6. **Offline**: No connection to Claude API
+```
+Application Launch
+    ↓
+  ready ←─────────────────────────────────┐
+    ↓ SessionStart                        │
+ working ←─────────────┐                  │
+    ↓ Notification     │ UserPromptSubmit │ SessionEnd
+ waiting ──────────────┘                  │
+    ↓ Stop/SubagentStop                   │
+  ready ──────────────────────────────────┘
+    ↓ Error conditions
+  error → (manual recovery) → ready
+```
 
-## Current Irrlicht Implementation Status
+## Hook Event Details
 
-- **✅ Fully Implemented**: 9 events (core hook events)
-- **🟡 Partially Implemented**: 7 events (through existing hooks)
-- **❌ Not Implemented**: 30+ events (no detection mechanism)
+### SessionStart
+- **Fires**: When starting new session or resuming existing
+- **Data**: `source` (startup/resume/clear/compact), `session_id`, `transcript_path`
+- **Blocking**: Cannot block, shows stderr only
+- **State**: `idle` → `working`
 
-## Priority Events for Future Implementation
+### UserPromptSubmit  
+- **Fires**: Before Claude processes user input
+- **Data**: `prompt`, `session_id`, `transcript_path`  
+- **Blocking**: Can block with exit code 2
+- **State**: `waiting` → `working`
 
-### High Priority (User Experience Impact)
-1. **SessionTimeout/Reconnect**: Critical for reliability
-2. **APIError/NetworkDisconnect**: Essential for error handling
-3. **ContextFull**: Important for context management
-4. **UserInterrupt**: Needed for ESC key handling (Issue #13)
+### PreToolUse
+- **Fires**: After tool parameters created, before execution
+- **Data**: `tool_name`, `tool_input`, `session_id`
+- **Blocking**: Can block with exit code 2 or JSON response
+- **State**: `working` → `working` (maintained)
 
-### Medium Priority (Enhanced Monitoring)
-1. **SubagentStart/Stop**: Better subagent visibility
-2. **ToolError/Timeout**: Improved error reporting
-3. **ThinkingModeStart/End**: Extended thinking visibility
-4. **PermissionRequest**: Security awareness
+### PostToolUse
+- **Fires**: Immediately after successful tool completion
+- **Data**: `tool_name`, `tool_input`, `tool_response`
+- **Blocking**: Cannot block, informational only
+- **State**: `working` → `working` (continued)
 
-### Low Priority (Advanced Features)
-1. **TranscriptWrite**: Advanced logging
-2. **ConfigChange**: Dynamic configuration
-3. **MicroCompact**: Detailed context management
+### Notification
+- **Fires**: When Claude needs permission or user is idle (60s+)
+- **Data**: `message`, `notification_type`
+- **Blocking**: Cannot block, informational only
+- **State**: `working` → `waiting`
 
-## Technical Implementation Notes
+### PreCompact
+- **Fires**: Before manual `/compact` or automatic compaction
+- **Data**: `compact_type` (manual/auto)
+- **Blocking**: Cannot block, shows stderr only  
+- **State**: `working` → `working` (maintained during compaction)
 
-- Hook events have 60-second execution timeout
-- Exit code 0 = success, 2 = blocking error, others = non-blocking
-- Common parameters: `session_id`, `transcript_path`, `cwd`
-- Transcript files use JSONL format with UUIDs
-- Context window limit: 200k tokens across all models
-- Subagents support up to 10 concurrent operations
+### Stop
+- **Fires**: When main Claude agent completes response
+- **Data**: `session_id`, response completion info
+- **Blocking**: Can block with exit code 2
+- **State**: `working` → `ready`
 
-## References
+### SubagentStop  
+- **Fires**: When subagent (Task tool) completes
+- **Data**: `subagent_id`, completion status
+- **Blocking**: Can block with exit code 2
+- **State**: `working` → `ready`
 
-- [Official Claude Code Hooks Documentation](https://docs.anthropic.com/en/docs/claude-code/hooks)
-- [Claude Code Best Practices](https://www.anthropic.com/engineering/claude-code-best-practices)
-- [Subagents Documentation](https://docs.anthropic.com/en/docs/claude-code/sub-agents)
-- Community GitHub repositories and examples
+### SessionEnd
+- **Fires**: When session terminates
+- **Data**: `exit_reason` (clear/logout/prompt_input_exit/other)
+- **Blocking**: Cannot block, shows stderr only
+- **State**: Any state → kill session
+
+## Tool-Specific Events (via PreToolUse/PostToolUse)
+
+| Tool | PreToolUse Triggers | PostToolUse Triggers | Common State Flow |
+|------|-------------------|---------------------|-------------------|
+| **Bash** | Before command execution | After command completes | `working` → `working` |
+| **Read** | Before file read | After file read | `working` → `working` |
+| **Write/Edit** | Before file write | After file written | `working` → `working` |
+| **Task** | Before subagent spawn | After subagent completes | `working` → `working` → `ready` |
+| **WebFetch** | Before HTTP request | After response received | `working` → `working` |
+| **Grep/Glob** | Before search | After search results | `working` → `working` |
+
+## Hook Matchers and Filters
+
+### Session Source Matchers (SessionStart)
+- `startup` - Fresh application start → `ready`
+- `resume` - Resuming existing session → `ready`
+- `clear` - After session cleared → `ready`
+- `compact` - After context compaction → `ready`
+
+### Compact Type Matchers (PreCompact)
+- `manual` - User triggered `/compact` → `working`
+- `auto` - Automatic when context full → `working`
+
+### Tool Matchers (PreToolUse/PostToolUse)
+- `Task` - Subagent operations → `working`
+- `Bash` - Shell commands → `working`
+- `Read/Write/Edit` - File operations → `working`
+- `WebFetch/WebSearch` - Web requests → `working`
+- `Grep/Glob` - Search operations → `working`
+
+## State Persistence
+
+| State | Persisted Where | Duration | Recovery Method |
+|-------|----------------|----------|-----------------|
+| `working` | Session state files | Until completion | Resume or timeout |
+| `waiting` | Session state files | Until user input | User response |
+| `ready` | Session state files | Until new input | New prompt |
+| `error` | Error logs | Until resolved | Manual intervention |
+
+## Hook Configuration
+
+### Exit Codes
+- **0** - Continue normally
+- **1** - Show stderr, continue  
+- **2** - Block execution (where supported)
+
+### JSON Control (Advanced)
+```json
+{
+  "continue": true/false,
+  "stopReason": "message",
+  "suppressOutput": true/false,
+  "systemMessage": "warning"
+}
+```
+
+### Tool-Specific Control (PreToolUse)
+```json
+{
+  "permissionDecision": "allow/deny",
+  "feedback": "message to Claude"
+}
+```
+
+## Integration Notes
+
+- **File Locations**: State files in `~/Library/Application Support/Irrlicht/instances/`
+- **Environment**: `CLAUDE_PROJECT_DIR` available in all hooks
+- **Timeout**: 60 seconds default hook execution limit
+- **Parallel**: Multiple hooks run simultaneously
+- **Kill Switch**: `IRRLICHT_DISABLED=1` disables all hooks
 
 ---
 
-*Last updated: September 2025 based on latest Claude Code documentation and community research*
+*Based on official Anthropic Claude Code documentation and research - September 2025*
