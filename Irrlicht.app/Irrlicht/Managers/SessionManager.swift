@@ -15,7 +15,6 @@ class SessionManager: ObservableObject {
     private var periodicUpdateTimer: Timer?
     private let debounceInterval: TimeInterval = 0.2 // 200ms debounce
     private let updateInterval: TimeInterval = 1.0 // 1 second periodic updates
-    private let finishedTTL: TimeInterval = 300 // 5 minutes TTL for finished sessions
     
     init() {
         // Initialize instances directory path
@@ -120,16 +119,6 @@ class SessionManager: ObservableObject {
                 do {
                     let data = try Data(contentsOf: fileURL)
                     let session = try JSONDecoder().decode(SessionState.self, from: data)
-                    
-                    // Skip old finished sessions (TTL cleanup)
-                    if session.state == .finished {
-                        let age = Date().timeIntervalSince(session.updatedAt)
-                        if age > finishedTTL {
-                            // Remove old finished session files
-                            try? FileManager.default.removeItem(at: fileURL)
-                            continue
-                        }
-                    }
                     
                     newSessions.append(session)
                 } catch {
