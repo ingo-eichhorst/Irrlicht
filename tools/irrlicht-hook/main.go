@@ -1,1038 +1,136 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
-	"strings"
-	"sync"
-	"time"
-	
-	"transcript-tailer/pkg/tailer"
+
+	"irrlicht/hook/domain/event"
+	"irrlicht/hook/infrastructure/container"
 )
 
 const (
-	MaxPayloadSize = 512 * 1024 // 512KB
-	AppSupportDir  = "Library/Application Support/Irrlicht"
 	Version        = "1.0.0"
-	MaxLogSize     = 10 * 1024 * 1024 // 10MB
-	MaxLogFiles    = 5
+	MaxPayloadSize = 512 * 1024 // 512KB
 )
-
-// Metrics tracks performance and resource usage
-type Metrics struct {
-	mu             sync.Mutex
-	eventsProcessed int64
-	totalLatencyMs  int64
-	lastEventTime   time.Time
-}
-
-var (
-	metrics = &Metrics{}
-	logger  *StructuredLogger
-)
-
-// HookEvent represents a Claude Code hook event
-type HookEvent struct {
-	HookEventName   string                 `json:"hook_event_name"`
-	SessionID       string                 `json:"session_id"`
-	Timestamp       string                 `json:"timestamp"`
-	Matcher         string                 `json:"matcher,omitempty"`
-	Reason          string                 `json:"reason,omitempty"`
-	Data            map[string]interface{} `json:"data"`
-	// Direct fields that Claude Code sends at top level
-	TranscriptPath  string                 `json:"transcript_path,omitempty"`
-	CWD             string                 `json:"cwd,omitempty"`
-	Model           string                 `json:"model,omitempty"`
-	PermissionMode  string                 `json:"permission_mode,omitempty"`
-	Prompt          string                 `json:"prompt,omitempty"`
-	Source          string                 `json:"source,omitempty"`
-}
-
-// SessionMetrics holds computed performance metrics from transcript analysis  
-type SessionMetrics struct {
-	ElapsedSeconds       int64   `json:"elapsed_seconds"`
-	TotalTokens          int64   `json:"total_tokens"`
-	ModelName            string  `json:"model_name"`
-	ContextUtilization   float64 `json:"context_utilization_percentage"`
-	PressureLevel        string  `json:"pressure_level"`
-}
-
-// SessionState represents the current state of a session
-type SessionState struct {
-	Version          int              `json:"version"`
-	SessionID        string           `json:"session_id"`
-	State            string           `json:"state"`
-	CompactionState  string           `json:"compaction_state,omitempty"` // not_compacting, compacting, post_compact
-	Model            string           `json:"model,omitempty"`
-	CWD              string           `json:"cwd,omitempty"`
-	TranscriptPath   string           `json:"transcript_path,omitempty"`
-	GitBranch        string           `json:"git_branch,omitempty"`
-	ProjectName      string           `json:"project_name,omitempty"`
-	FirstSeen        int64            `json:"first_seen"`
-	UpdatedAt        int64            `json:"updated_at"`
-	Confidence       string           `json:"confidence"`
-	EventCount       int              `json:"event_count"`
-	LastEvent        string           `json:"last_event"`
-	LastMatcher      string           `json:"last_matcher,omitempty"`
-	Metrics          *SessionMetrics  `json:"metrics,omitempty"`
-	
-	// Transcript monitoring for waiting state recovery
-	LastTranscriptSize int64     `json:"last_transcript_size,omitempty"`
-	WaitingStartTime   *int64    `json:"waiting_start_time,omitempty"`
-}
-
-// LogEntry represents a structured log entry
-type LogEntry struct {
-	Timestamp       string `json:"timestamp"`
-	Level           string `json:"level"`
-	EventType       string `json:"event_type,omitempty"`
-	SessionID       string `json:"session_id,omitempty"`
-	ProcessingTimeMs int64  `json:"processing_time_ms,omitempty"`
-	PayloadSizeBytes int    `json:"payload_size_bytes,omitempty"`
-	Result          string `json:"result"`
-	Message         string `json:"message,omitempty"`
-	Error           string `json:"error,omitempty"`
-}
-
-// StructuredLogger handles JSON-formatted logging with rotation
-type StructuredLogger struct {
-	logFile     *os.File
-	logPath     string
-	currentSize int64
-	mu          sync.Mutex
-}
-
-
-// computeSessionMetrics analyzes transcript and computes performance metrics using enhanced tailer
-func computeSessionMetrics(transcriptPath string, existingState *SessionState) *SessionMetrics {
-	if transcriptPath == "" {
-		return nil
-	}
-	
-	// Use the enhanced transcript tailer for analysis
-	transcriptTailer := tailer.NewTranscriptTailer(transcriptPath)
-	
-	// If we have existing metrics, preserve the original session start time
-	// Note: Session start time consistency is now handled by the transcript tailer itself
-	
-	metrics, err := transcriptTailer.TailAndProcess()
-	if err != nil || metrics == nil {
-		// Transcript doesn't exist yet or can't be read - not an error
-		return nil
-	}
-	
-	// Convert from transcript tailer metrics to hook metrics format
-	hookMetrics := &SessionMetrics{
-		ElapsedSeconds:       metrics.ElapsedSeconds,
-		TotalTokens:          metrics.TotalTokens,
-		ModelName:            metrics.ModelName,
-		ContextUtilization:   metrics.ContextUtilization,
-		PressureLevel:        metrics.PressureLevel,
-	}
-	
-	// Set defaults if values are missing
-	if hookMetrics.ModelName == "" {
-		hookMetrics.ModelName = "unknown"
-	}
-	if hookMetrics.PressureLevel == "" {
-		hookMetrics.PressureLevel = "unknown"
-	}
-	
-	return hookMetrics
-}
-
-// extractGitBranch tries to get git branch from CWD
-func extractGitBranch(cwd string) string {
-	if cwd == "" {
-		return ""
-	}
-	
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	cmd.Dir = cwd
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	
-	branch := strings.TrimSpace(string(output))
-	if branch == "" || branch == "HEAD" {
-		return ""
-	}
-	
-	return branch
-}
-
-// extractProjectName extracts project name from CWD path
-func extractProjectName(cwd string) string {
-	if cwd == "" {
-		return ""
-	}
-	
-	// Get the last directory name from the path
-	projectName := filepath.Base(cwd)
-	
-	// Handle edge cases
-	if projectName == "." || projectName == "/" || projectName == "" {
-		return ""
-	}
-	
-	return projectName
-}
-
-// extractGitBranchFromTranscript tries to extract gitBranch from transcript data  
-func extractGitBranchFromTranscript(transcriptPath string) string {
-	if transcriptPath == "" {
-		return ""
-	}
-	
-	// Read the last few lines of the transcript to find gitBranch
-	file, err := os.Open(transcriptPath)
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	
-	// Read the file and look for gitBranch in recent lines
-	scanner := bufio.NewScanner(file)
-	var lines []string
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-		// Keep only last 10 lines to avoid excessive memory usage
-		if len(lines) > 10 {
-			lines = lines[1:]
-		}
-	}
-	
-	// Search recent lines for gitBranch field
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := lines[i]
-		if strings.Contains(line, "gitBranch") {
-			// Try to parse this line as JSON
-			var data map[string]interface{}
-			if err := json.Unmarshal([]byte(line), &data); err == nil {
-				if branch, ok := data["gitBranch"].(string); ok && branch != "" {
-					return branch
-				}
-			}
-		}
-	}
-	
-	return ""
-}
-
 
 func main() {
-	startTime := time.Now()
-	
-	// Initialize structured logger
-	var err error
-	logger, err = NewStructuredLogger()
+	// Initialize dependency injection container
+	di, err := container.NewContainer()
 	if err != nil {
-		log.Printf("Failed to initialize logger: %v", err)
+		fmt.Fprintf(os.Stderr, "Failed to initialize application: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Close()
+	defer di.Close()
 
-	// Check for version flag
+	// Handle version flag
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("irrlicht-hook version %s\n", Version)
 		fmt.Printf("Built with %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		os.Exit(0)
 	}
 
-	// Check for kill switch via environment variable
-	if os.Getenv("IRRLICHT_DISABLED") == "1" {
-		logger.LogInfo("", "", "Kill switch activated via IRRLICHT_DISABLED=1, exiting")
+	// Check if processing is disabled
+	if di.GetConfigService().IsDisabled() {
+		di.GetLogger().LogInfo("", "", "Processing disabled, exiting")
 		os.Exit(0)
 	}
 
-	// Check for kill switch in settings
-	if isDisabledInSettings() {
-		logger.LogInfo("", "", "Kill switch activated via settings, exiting")
-		os.Exit(0)
-	}
-
-	// Read event from stdin
-	input, err := io.ReadAll(os.Stdin)
+	// Read and validate input
+	hookEvent, err := readAndParseEvent(os.Stdin)
 	if err != nil {
-		logger.LogError("", "", fmt.Sprintf("Failed to read stdin: %v", err))
+		di.GetLogger().LogError("", "", fmt.Sprintf("Failed to read/parse event: %v", err))
 		os.Exit(1)
 	}
 
-	payloadSize := len(input)
+	// Process the event using the use case
+	useCase := di.GetProcessHookEventUseCase()
+	if err := useCase.Execute(hookEvent); err != nil {
+		di.GetLogger().LogError(hookEvent.HookEventName, hookEvent.SessionID, 
+			fmt.Sprintf("Event processing failed: %v", err))
+		os.Exit(1)
+	}
+}
+
+// readAndParseEvent reads from stdin and parses the hook event
+func readAndParseEvent(reader io.Reader) (*event.HookEvent, error) {
+	// Read all input
+	input, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read input: %w", err)
+	}
 
 	// Check payload size
+	payloadSize := len(input)
 	if payloadSize > MaxPayloadSize {
-		logger.LogError("", "", fmt.Sprintf("Payload size %d exceeds maximum %d", payloadSize, MaxPayloadSize))
-		os.Exit(1)
+		return nil, fmt.Errorf("payload size %d exceeds maximum %d", payloadSize, MaxPayloadSize)
 	}
 
-	// Parse event
-	var event HookEvent
-	if err := json.Unmarshal(input, &event); err != nil {
-		logger.LogError("", "", fmt.Sprintf("Failed to parse JSON: %v", err))
-		os.Exit(1)
+	// Parse JSON
+	var rawEvent map[string]interface{}
+	if err := json.Unmarshal(input, &rawEvent); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
-	// Log raw event for debugging Claude Code's actual payload
-	logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Raw event data: %s", string(input)))
-	
-	// Log parsed event details for debugging
-	if event.Matcher != "" {
-		logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Event parsed with matcher: %s", event.Matcher))
+	// Convert to domain event
+	hookEvent := event.FromRawMap(rawEvent)
+	if hookEvent == nil {
+		return nil, fmt.Errorf("failed to convert raw event to domain event")
 	}
 
-	// Validate and sanitize
-	if err := validateEvent(&event); err != nil {
-		logger.LogError(event.HookEventName, event.SessionID, fmt.Sprintf("Event validation failed: %v", err))
-		os.Exit(1)
-	}
-
-	// Process event with performance tracking
-	processStart := time.Now()
-	if err := processEvent(&event); err != nil {
-		processingTime := time.Since(processStart).Milliseconds()
-		logger.LogError(event.HookEventName, event.SessionID, fmt.Sprintf("Failed to process event: %v", err))
-		logger.LogProcessingTime(event.HookEventName, event.SessionID, processingTime, payloadSize, "error")
-		os.Exit(1)
-	}
-
-	// Log successful processing with metrics
-	processingTime := time.Since(processStart).Milliseconds()
-	totalTime := time.Since(startTime).Milliseconds()
-	
-	// Update metrics
-	metrics.mu.Lock()
-	metrics.eventsProcessed++
-	metrics.totalLatencyMs += totalTime
-	metrics.lastEventTime = time.Now()
-	metrics.mu.Unlock()
-
-	logger.LogProcessingTime(event.HookEventName, event.SessionID, processingTime, payloadSize, "success")
-	logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Successfully processed event in %dms", totalTime))
+	return hookEvent, nil
 }
 
-// isDisabledInSettings checks if Irrlicht is disabled in Claude settings
-func isDisabledInSettings() bool {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
+// Legacy types and functions for compatibility - these should be gradually removed
+// as the codebase is fully migrated to hexagonal architecture
 
-	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		return false // Settings file doesn't exist or can't be read
-	}
-
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return false // Invalid JSON
-	}
-
-	// Check hooks.irrlicht.disabled
-	if hooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		if irrlicht, ok := hooks["irrlicht"].(map[string]interface{}); ok {
-			if disabled, ok := irrlicht["disabled"].(bool); ok && disabled {
-				return true
-			}
-		}
-	}
-
-	return false
+// HookEvent represents a Claude Code hook event (legacy)
+type HookEvent struct {
+	HookEventName string                 `json:"hook_event_name"`
+	SessionID     string                 `json:"session_id"`
+	Timestamp     string                 `json:"timestamp"`
+	Matcher       string                 `json:"matcher,omitempty"`
+	Reason        string                 `json:"reason,omitempty"`
+	Data          map[string]interface{} `json:"data"`
+	// Direct fields that Claude Code sends at top level
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+	Model          string `json:"model,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	Prompt         string `json:"prompt,omitempty"`
+	Source         string `json:"source,omitempty"`
 }
 
-// validateEvent validates and sanitizes the hook event
-func validateEvent(event *HookEvent) error {
-	// Validate required fields
-	if event.HookEventName == "" {
-		return fmt.Errorf("missing hook_event_name")
-	}
-	if event.SessionID == "" {
-		return fmt.Errorf("missing session_id")
-	}
-
-	// Validate event type
-	validEvents := []string{
-		"SessionStart", "UserPromptSubmit", "Notification",
-		"PreToolUse", "PostToolUse", "PreCompact",
-		"Stop", "SubagentStop", "SessionEnd",
-	}
-	
-	valid := false
-	for _, validEvent := range validEvents {
-		if event.HookEventName == validEvent {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return fmt.Errorf("invalid event type: %s", event.HookEventName)
-	}
-
-	// Sanitize paths from Data field
-	if data := event.Data; data != nil {
-		if transcriptPath, ok := data["transcript_path"].(string); ok {
-			if err := validatePath(transcriptPath); err != nil {
-				return fmt.Errorf("invalid transcript_path: %w", err)
-			}
-		}
-		if cwd, ok := data["cwd"].(string); ok {
-			if err := validatePath(cwd); err != nil {
-				return fmt.Errorf("invalid cwd: %w", err)
-			}
-		}
-	}
-	
-	// Sanitize paths from direct fields
-	if event.TranscriptPath != "" {
-		if err := validatePath(event.TranscriptPath); err != nil {
-			return fmt.Errorf("invalid transcript_path: %w", err)
-		}
-	}
-	if event.CWD != "" {
-		if err := validatePath(event.CWD); err != nil {
-			return fmt.Errorf("invalid cwd: %w", err)
-		}
-	}
-
-	return nil
+// SessionMetrics holds computed performance metrics from transcript analysis (legacy)
+type SessionMetrics struct {
+	ElapsedSeconds     int64   `json:"elapsed_seconds"`
+	TotalTokens        int64   `json:"total_tokens"`
+	ModelName          string  `json:"model_name"`
+	ContextUtilization float64 `json:"context_utilization_percentage"`
+	PressureLevel      string  `json:"pressure_level"`
 }
 
-// validatePath checks if a path is safe (within user domain)
-func validatePath(path string) error {
-	// Check for suspicious patterns
-	suspicious := []string{
-		"/etc/", "/root/", "/var/", "/usr/", "/sys/", "/dev/", "/proc/",
-		"../", "..\\", "C:\\", "\\\\", "//",
-	}
-
-	for _, pattern := range suspicious {
-		if strings.Contains(path, pattern) {
-			return fmt.Errorf("suspicious path pattern: %s", pattern)
-		}
-	}
-
-	// Must be absolute path within user home
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot determine home directory")
-	}
-
-	if !filepath.IsAbs(path) {
-		return fmt.Errorf("path must be absolute")
-	}
-
-	if !strings.HasPrefix(path, homeDir) {
-		return fmt.Errorf("path must be within user home directory")
-	}
-
-	return nil
-}
-
-// processEvent processes the hook event and updates session state
-func processEvent(event *HookEvent) error {
-	// Load existing state first for smart transitions
-	existingState, err := loadSessionState(event.SessionID)
-	
-	// Determine smart state transition
-	newState, newCompactionState, transitionReason := smartStateTransition(event, existingState)
-	
-	// Create session state
-	now := time.Now().Unix()
-	sessionState := SessionState{
-		Version:         1,
-		SessionID:       event.SessionID,
-		State:           newState,
-		CompactionState: newCompactionState,
-		UpdatedAt:       now,
-		Confidence:      "high",
-		LastEvent:       event.HookEventName,
-		LastMatcher:     event.Matcher,
-	}
-	
-	// Handle special case: delete session file
-	if newState == "delete_session" {
-		logger.LogInfo(event.HookEventName, event.SessionID, fmt.Sprintf("Deleting session file due to SessionEnd (reason: %s)", transitionReason))
-		if err := deleteSessionFile(event.SessionID); err != nil {
-			logger.LogError(event.HookEventName, event.SessionID, fmt.Sprintf("Failed to delete session file: %v", err))
-			return err
-		}
-		logger.LogInfo(event.HookEventName, event.SessionID, "Session file deleted successfully")
-		return nil // Exit early since we deleted the file
-	}
-	
-	// Log the state transition decision
-	logger.LogInfo(event.HookEventName, event.SessionID, 
-		fmt.Sprintf("State transition: %s -> %s (compaction: %s, reason: %s, matcher: %s)", 
-			getPreviousState(existingState), newState, newCompactionState, transitionReason, event.Matcher))
-
-	// Extract additional data from both Data field and direct fields
-	// Check Data field first (legacy format)
-	if data := event.Data; data != nil {
-		if model, ok := data["model"].(string); ok {
-			sessionState.Model = model
-		}
-		if cwd, ok := data["cwd"].(string); ok {
-			sessionState.CWD = cwd
-		}
-		if transcriptPath, ok := data["transcript_path"].(string); ok {
-			sessionState.TranscriptPath = transcriptPath
-		}
-	}
-	
-	// Check direct fields (current Claude Code format)
-	if event.Model != "" {
-		sessionState.Model = event.Model
-	}
-	if event.CWD != "" {
-		sessionState.CWD = event.CWD
-	}
-	if event.TranscriptPath != "" {
-		sessionState.TranscriptPath = event.TranscriptPath
-	}
-	
-	// Extract git branch and project name
-	if sessionState.CWD != "" {
-		sessionState.ProjectName = extractProjectName(sessionState.CWD)
-		sessionState.GitBranch = extractGitBranch(sessionState.CWD)
-	}
-	
-	// Try to get git branch from transcript if we have it (more reliable)
-	if sessionState.TranscriptPath != "" {
-		if transcriptBranch := extractGitBranchFromTranscript(sessionState.TranscriptPath); transcriptBranch != "" {
-			sessionState.GitBranch = transcriptBranch
-		}
-	}
-	
-	// Compute metrics if we have a transcript path
-	if sessionState.TranscriptPath != "" {
-		if metrics := computeSessionMetrics(sessionState.TranscriptPath, existingState); metrics != nil {
-			sessionState.Metrics = metrics
-		}
-	}
-
-	// Special handling for SessionStart: set model to "New Session" for new sessions
-	if event.HookEventName == "SessionStart" && (event.Source == "clear" || existingState == nil) {
-		sessionState.Model = "New Session"
-	}
-
-	// Use previously loaded existing state to preserve first_seen and event_count  
-	if err == nil && existingState != nil && existingState.FirstSeen > 0 {
-		sessionState.FirstSeen = existingState.FirstSeen
-		sessionState.EventCount = existingState.EventCount + 1
-		
-		// Preserve existing data if new event doesn't have it (fallback logic)
-		if sessionState.Model == "" && existingState.Model != "" {
-			sessionState.Model = existingState.Model
-		}
-		if sessionState.CWD == "" && existingState.CWD != "" {
-			sessionState.CWD = existingState.CWD
-		}
-		if sessionState.GitBranch == "" && existingState.GitBranch != "" {
-			sessionState.GitBranch = existingState.GitBranch
-		}
-		if sessionState.ProjectName == "" && existingState.ProjectName != "" {
-			sessionState.ProjectName = existingState.ProjectName
-		}
-		
-		// Re-extract git branch and project if we have CWD but missing these fields
-		if sessionState.CWD != "" {
-			if sessionState.GitBranch == "" {
-				sessionState.GitBranch = extractGitBranch(sessionState.CWD)
-			}
-			if sessionState.ProjectName == "" {
-				sessionState.ProjectName = extractProjectName(sessionState.CWD)
-			}
-		}
-		if sessionState.TranscriptPath == "" && existingState.TranscriptPath != "" {
-			sessionState.TranscriptPath = existingState.TranscriptPath
-			
-			// Recompute metrics if we have transcript path but no metrics yet
-			if sessionState.Metrics == nil {
-				if metrics := computeSessionMetrics(sessionState.TranscriptPath, existingState); metrics != nil {
-					sessionState.Metrics = metrics
-				}
-			}
-		}
-		
-		// Preserve existing metrics if we couldn't compute new ones, or merge fields
-		if sessionState.Metrics == nil && existingState.Metrics != nil {
-			sessionState.Metrics = existingState.Metrics
-		} else if sessionState.Metrics != nil && existingState.Metrics != nil {
-			// Merge metrics: preserve existing values if new ones are missing/default
-			newMetrics := sessionState.Metrics
-			oldMetrics := existingState.Metrics
-			
-			mergedMetrics := &SessionMetrics{
-				ElapsedSeconds:     newMetrics.ElapsedSeconds,
-				TotalTokens:        newMetrics.TotalTokens,
-				ModelName:          newMetrics.ModelName,
-				ContextUtilization: newMetrics.ContextUtilization,
-				PressureLevel:      newMetrics.PressureLevel,
-			}
-			
-			// Preserve old values if new ones are missing/empty/zero
-			if mergedMetrics.ElapsedSeconds == 0 && oldMetrics.ElapsedSeconds > 0 {
-				mergedMetrics.ElapsedSeconds = oldMetrics.ElapsedSeconds
-			}
-			if mergedMetrics.TotalTokens == 0 && oldMetrics.TotalTokens > 0 {
-				mergedMetrics.TotalTokens = oldMetrics.TotalTokens
-			}
-			if (mergedMetrics.ModelName == "" || mergedMetrics.ModelName == "unknown") && oldMetrics.ModelName != "" && oldMetrics.ModelName != "unknown" {
-				mergedMetrics.ModelName = oldMetrics.ModelName
-			}
-			if mergedMetrics.ContextUtilization == 0 && oldMetrics.ContextUtilization > 0 {
-				mergedMetrics.ContextUtilization = oldMetrics.ContextUtilization
-			}
-			if (mergedMetrics.PressureLevel == "" || mergedMetrics.PressureLevel == "unknown") && oldMetrics.PressureLevel != "" && oldMetrics.PressureLevel != "unknown" {
-				mergedMetrics.PressureLevel = oldMetrics.PressureLevel
-			}
-			
-			sessionState.Metrics = mergedMetrics
-		}
-		
-		// Preserve transcript monitoring fields unless we're transitioning states
-		if existingState.State == newState {
-			sessionState.LastTranscriptSize = existingState.LastTranscriptSize
-			sessionState.WaitingStartTime = existingState.WaitingStartTime
-		}
-	} else {
-		sessionState.FirstSeen = now
-		sessionState.EventCount = 1
-	}
-
-	// Handle transcript monitoring for waiting state recovery
-	if newState == "waiting" {
-		// Store transcript size when entering waiting state
-		if sessionState.TranscriptPath != "" {
-			if stat, err := os.Stat(sessionState.TranscriptPath); err == nil {
-				sessionState.LastTranscriptSize = stat.Size()
-				waitingTime := now
-				sessionState.WaitingStartTime = &waitingTime
-			}
-		}
-	} else if existingState != nil && existingState.State == "waiting" && newState == "working" {
-		// Clear waiting state monitoring when transitioning away from waiting
-		sessionState.LastTranscriptSize = 0
-		sessionState.WaitingStartTime = nil
-	}
-
-	// Save session state
-	if err := saveSessionState(&sessionState); err != nil {
-		return err
-	}
-	
-	return nil
-}
-
-// mapEventToState maps hook events to session states (legacy simple mapping)
-func mapEventToState(eventName string) string {
-	switch eventName {
-	case "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact":
-		return "working"
-	case "Notification":
-		return "waiting"
-	case "Stop", "SubagentStop", "SessionEnd":
-		return "ready"
-	default:
-		return "working" // Default fallback
-	}
-}
-
-// smartStateTransition determines the new state considering previous state and event context
-func smartStateTransition(event *HookEvent, previousState *SessionState) (newState, newCompactionState string, transitionReason string) {
-	eventName := event.HookEventName
-	matcher := event.Matcher
-	
-	// Default values
-	newState = mapEventToState(eventName) // Start with simple mapping
-	newCompactionState = "not_compacting"
-	if previousState != nil && previousState.CompactionState != "" {
-		newCompactionState = previousState.CompactionState // Preserve existing compaction state
-	}
-	transitionReason = "simple_mapping"
-	
-	// Check for transcript changes if previous state was "waiting"
-	if previousState != nil && previousState.State == "waiting" && previousState.TranscriptPath != "" && previousState.WaitingStartTime != nil {
-		if stat, err := os.Stat(previousState.TranscriptPath); err == nil {
-			// If transcript has grown since we started waiting, transition to working
-			if stat.Size() > previousState.LastTranscriptSize {
-				newState = "working"
-				transitionReason = "transcript_activity_detected"
-				logger.LogInfo(eventName, event.SessionID, 
-					fmt.Sprintf("Transcript activity detected: size grew from %d to %d bytes", 
-						previousState.LastTranscriptSize, stat.Size()))
-				// Early return - we found activity
-				return newState, newCompactionState, transitionReason
-			}
-		}
-	}
-
-	// Smart transitions based on event and context
-	switch eventName {
-	case "UserPromptSubmit":
-		// If previous state was "waiting" (from Notification), always transition to "working"
-		if previousState != nil && previousState.State == "waiting" {
-			newState = "working"
-			transitionReason = "user_response_after_notification"
-		}
-		// Clear post-compact state when user submits new prompt
-		if previousState != nil && previousState.CompactionState == "post_compact" {
-			newCompactionState = "not_compacting"
-			transitionReason = "user_prompt_after_compaction"
-		}
-		
-	case "SessionStart":
-		// Check event.Source field for clear events (Claude Code sends source, not matcher)
-		if event.Source == "clear" {
-			// Session after /clear command - treat like new session (ready state)
-			newState = "ready"
-			newCompactionState = "not_compacting"
-			transitionReason = "session_after_clear"
-		} else {
-			// Handle matcher-based SessionStart events
-			switch matcher {
-			case "compact":
-				// Session resuming after compaction
-				newState = "working"
-				newCompactionState = "post_compact"
-				transitionReason = "session_resumed_after_compaction"
-			case "resume":
-				// Session resuming from suspension
-				newState = "working"
-				newCompactionState = "not_compacting"
-				transitionReason = "session_resumed"
-			case "startup":
-				// New session startup
-				newState = "ready"
-				newCompactionState = "not_compacting"
-				transitionReason = "session_startup"
-			default:
-				// Regular SessionStart without specific matcher - treat as new session
-				newState = "ready"
-				newCompactionState = "not_compacting"
-				transitionReason = "session_start_new"
-			}
-		}
-		
-	case "PreCompact":
-		switch matcher {
-		case "auto":
-			// Automatic compaction starting due to context window
-			newState = "working"
-			newCompactionState = "compacting"
-			transitionReason = "auto_compaction_starting"
-		case "manual":
-			// Manual compaction from /compact command
-			newState = "working"
-			newCompactionState = "compacting"
-			transitionReason = "manual_compaction_starting"
-		default:
-			// PreCompact without specific matcher
-			newState = "working"
-			newCompactionState = "compacting"
-			transitionReason = "compaction_starting_unknown_trigger"
-		}
-		
-	case "Notification":
-		// Always transition to waiting for notifications
-		newState = "waiting"
-		transitionReason = "notification_requires_user_attention"
-		
-	case "PreToolUse":
-		// User responding to notification - transition to working
-		if previousState != nil && previousState.State == "waiting" {
-			newState = "working"
-			transitionReason = "tool_use_after_notification"
-		}
-		
-	case "PostToolUse", "Stop", "SubagentStop":
-		// Use simple mapping for these
-		transitionReason = "standard_event_mapping"
-		
-	case "SessionEnd":
-		// SessionEnd always deletes the session file completely
-		// This handles all termination cases: clear, logout, prompt_input_exit, etc.
-		var clearReason string
-		if event.Reason != "" {
-			clearReason = event.Reason
-		} else if event.Data != nil {
-			if reason, ok := event.Data["reason"].(string); ok {
-				clearReason = reason
-			}
-		}
-		
-		// Always delete the session file on SessionEnd, regardless of reason
-		newState = "delete_session"
-		switch clearReason {
-		case "prompt_input_exit":
-			transitionReason = "user_cancelled_with_esc_delete_file"
-		case "clear":
-			transitionReason = "session_cleared_delete_file"
-		case "logout":
-			transitionReason = "session_logout_delete_file"
-		default:
-			transitionReason = "session_ended_delete_file"
-		}
-	}
-	
-	return newState, newCompactionState, transitionReason
-}
-
-// getPreviousState returns the previous state as a string for logging
-func getPreviousState(previousState *SessionState) string {
-	if previousState == nil {
-		return "none"
-	}
-	if previousState.CompactionState != "" && previousState.CompactionState != "not_compacting" {
-		return fmt.Sprintf("%s(%s)", previousState.State, previousState.CompactionState)
-	}
-	return previousState.State
-}
-
-// loadSessionState loads existing session state from disk
-func loadSessionState(sessionID string) (*SessionState, error) {
-	path := getSessionStatePath(sessionID)
-	
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var state SessionState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, err
-	}
-
-	return &state, nil
-}
-
-
-// saveSessionState atomically saves session state to disk
-func saveSessionState(state *SessionState) error {
-	// Ensure instances directory exists
-	instancesDir := getInstancesDir()
-	if err := os.MkdirAll(instancesDir, 0755); err != nil {
-		return fmt.Errorf("failed to create instances directory: %w", err)
-	}
-
-	// Marshal state to JSON
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal session state: %w", err)
-	}
-
-	// Atomic write: write to temp file then rename
-	path := getSessionStatePath(state.SessionID)
-	tempPath := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
-
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp file: %w", err)
-	}
-
-	if err := os.Rename(tempPath, path); err != nil {
-		os.Remove(tempPath) // Clean up temp file
-		return fmt.Errorf("failed to rename temp file: %w", err)
-	}
-
-	return nil
-}
-
-// getInstancesDir returns the path to the instances directory
-func getInstancesDir() string {
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, AppSupportDir, "instances")
-}
-
-// getSessionStatePath returns the path to a session state file
-func getSessionStatePath(sessionID string) string {
-	return filepath.Join(getInstancesDir(), sessionID+".json")
-}
-
-// deleteSessionFile deletes the session state file from disk
-func deleteSessionFile(sessionID string) error {
-	path := getSessionStatePath(sessionID)
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			// File doesn't exist, consider this success
-			return nil
-		}
-		return fmt.Errorf("failed to delete session file %s: %w", path, err)
-	}
-	return nil
-}
-
-// NewStructuredLogger creates a new structured logger with rotation
-func NewStructuredLogger() (*StructuredLogger, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	logsDir := filepath.Join(homeDir, AppSupportDir, "logs")
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create logs directory: %w", err)
-	}
-
-	logPath := filepath.Join(logsDir, "events.log")
-	
-	// Open or create log file
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %w", err)
-	}
-
-	// Get current file size
-	stat, err := file.Stat()
-	if err != nil {
-		file.Close()
-		return nil, fmt.Errorf("failed to stat log file: %w", err)
-	}
-
-	sl := &StructuredLogger{
-		logFile:     file,
-		logPath:     logPath,
-		currentSize: stat.Size(),
-	}
-
-	// Check if rotation is needed
-	if sl.currentSize > MaxLogSize {
-		if err := sl.rotate(); err != nil {
-			file.Close()
-			return nil, fmt.Errorf("failed to rotate log: %w", err)
-		}
-	}
-
-	return sl, nil
-}
-
-// Close closes the log file
-func (sl *StructuredLogger) Close() error {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
-	
-	if sl.logFile != nil {
-		return sl.logFile.Close()
-	}
-	return nil
-}
-
-// LogInfo logs an info-level structured log entry
-func (sl *StructuredLogger) LogInfo(eventType, sessionID, message string) {
-	entry := LogEntry{
-		Timestamp: time.Now().Format(time.RFC3339Nano),
-		Level:     "info",
-		EventType: eventType,
-		SessionID: sessionID,
-		Result:    "success",
-		Message:   message,
-	}
-	sl.writeEntry(entry)
-}
-
-// LogError logs an error-level structured log entry
-func (sl *StructuredLogger) LogError(eventType, sessionID, errorMsg string) {
-	entry := LogEntry{
-		Timestamp: time.Now().Format(time.RFC3339Nano),
-		Level:     "error",
-		EventType: eventType,
-		SessionID: sessionID,
-		Result:    "error",
-		Error:     errorMsg,
-	}
-	sl.writeEntry(entry)
-}
-
-// LogProcessingTime logs processing performance metrics
-func (sl *StructuredLogger) LogProcessingTime(eventType, sessionID string, processingTimeMs int64, payloadSize int, result string) {
-	entry := LogEntry{
-		Timestamp:       time.Now().Format(time.RFC3339Nano),
-		Level:           "info",
-		EventType:       eventType,
-		SessionID:       sessionID,
-		ProcessingTimeMs: processingTimeMs,
-		PayloadSizeBytes: payloadSize,
-		Result:          result,
-		Message:         "Event processing completed",
-	}
-	sl.writeEntry(entry)
-}
-
-// writeEntry writes a log entry to the file with rotation check
-func (sl *StructuredLogger) writeEntry(entry LogEntry) {
-	sl.mu.Lock()
-	defer sl.mu.Unlock()
-
-	// Serialize entry to JSON
-	jsonData, err := json.Marshal(entry)
-	if err != nil {
-		log.Printf("Failed to marshal log entry: %v", err)
-		return
-	}
-
-	// Add newline
-	jsonData = append(jsonData, '\n')
-
-	// Check if rotation is needed before writing
-	if sl.currentSize+int64(len(jsonData)) > MaxLogSize {
-		if err := sl.rotate(); err != nil {
-			log.Printf("Failed to rotate log: %v", err)
-			return
-		}
-	}
-
-	// Write to current log file
-	n, err := sl.logFile.Write(jsonData)
-	if err != nil {
-		log.Printf("Failed to write log entry: %v", err)
-		return
-	}
-
-	sl.currentSize += int64(n)
-}
-
-// rotate rotates the log files
-func (sl *StructuredLogger) rotate() error {
-	// Close current file
-	if sl.logFile != nil {
-		sl.logFile.Close()
-	}
-
-	// Rotate existing files
-	for i := MaxLogFiles - 1; i >= 1; i-- {
-		oldPath := fmt.Sprintf("%s.%d", sl.logPath, i)
-		newPath := fmt.Sprintf("%s.%d", sl.logPath, i+1)
-		
-		if _, err := os.Stat(oldPath); err == nil {
-			if i == MaxLogFiles-1 {
-				// Remove the oldest file
-				os.Remove(newPath)
-			}
-			os.Rename(oldPath, newPath)
-		}
-	}
-
-	// Move current log to .1
-	if _, err := os.Stat(sl.logPath); err == nil {
-		os.Rename(sl.logPath, sl.logPath+".1")
-	}
-
-	// Create new log file
-	file, err := os.OpenFile(sl.logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to create new log file: %w", err)
-	}
-
-	sl.logFile = file
-	sl.currentSize = 0
-
-	return nil
+// SessionState represents the current state of a session (legacy)
+type SessionState struct {
+	Version         int             `json:"version"`
+	SessionID       string          `json:"session_id"`
+	State           string          `json:"state"`
+	CompactionState string          `json:"compaction_state,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	CWD             string          `json:"cwd,omitempty"`
+	TranscriptPath  string          `json:"transcript_path,omitempty"`
+	GitBranch       string          `json:"git_branch,omitempty"`
+	ProjectName     string          `json:"project_name,omitempty"`
+	FirstSeen       int64           `json:"first_seen"`
+	UpdatedAt       int64           `json:"updated_at"`
+	Confidence      string          `json:"confidence"`
+	EventCount      int             `json:"event_count"`
+	LastEvent       string          `json:"last_event"`
+	LastMatcher     string          `json:"last_matcher,omitempty"`
+	Metrics         *SessionMetrics `json:"metrics,omitempty"`
+	// Transcript monitoring for waiting state recovery
+	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`
+	WaitingStartTime   *int64 `json:"waiting_start_time,omitempty"`
 }

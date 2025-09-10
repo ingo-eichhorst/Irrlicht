@@ -7,7 +7,7 @@ struct SessionMetrics: Codable {
     let totalTokens: Int64          // total token count from transcript (0 if not available)
     let modelName: String           // model name extracted from transcript ("" if not available) 
     let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
-    let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
+    let pressureLevel: String       // pressure level: "low", "medium", "high", "critical" ("unknown" if not available)
     
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -52,11 +52,11 @@ struct SessionMetrics: Codable {
     
     var contextPressureIcon: String {
         switch pressureLevel {
-        case "safe":
+        case "low":
             return "🟢"
-        case "caution":
+        case "medium":
             return "🟡"
-        case "warning":
+        case "high":
             return "🔴"
         case "critical":
             return "⚠️"
@@ -69,11 +69,11 @@ struct SessionMetrics: Codable {
     
     var contextPressureColor: String {
         switch pressureLevel {
-        case "safe":
+        case "low":
             return "#34C759"   // system green
-        case "caution":
+        case "medium":
             return "#FF9500"   // system orange
-        case "warning":
+        case "high":
             return "#FF3B30"   // system red
         case "critical":
             return "#D70015"   // darker red

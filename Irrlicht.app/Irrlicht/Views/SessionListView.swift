@@ -456,7 +456,7 @@ struct SessionListView_Previews: PreviewProvider {
                             totalTokens: 15000,
                             modelName: "claude-3.7-sonnet",
                             contextUtilization: 7.5,
-                            pressureLevel: "safe"
+                            pressureLevel: "low"
                         )
                     ),
                     SessionState(
@@ -476,7 +476,7 @@ struct SessionListView_Previews: PreviewProvider {
                             totalTokens: 85000,
                             modelName: "claude-3-haiku",
                             contextUtilization: 42.5,
-                            pressureLevel: "caution"
+                            pressureLevel: "medium"
                         )
                     ),
                     SessionState(
@@ -496,7 +496,7 @@ struct SessionListView_Previews: PreviewProvider {
                             totalTokens: 175000,
                             modelName: "claude-3-opus",
                             contextUtilization: 87.5,
-                            pressureLevel: "warning"
+                            pressureLevel: "high"
                         )
                     )
                 ]

@@ -91,7 +91,6 @@ killall swift
 **Go Components (`tools/`):**
 - `irrlicht-hook/`: Main hook receiver that processes Claude Code events
 - `settings-merger/`: Manages `~/.claude/settings.json` hook configuration
-- `model-capacity/`: Token capacity and context utilization tracking
 - `transcript-tailer/`: Real-time transcript analysis for performance metrics
 
 **SwiftUI App (`Irrlicht.app/`):**

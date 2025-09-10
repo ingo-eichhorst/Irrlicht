@@ -20,7 +20,7 @@ Claude Code ──(Hooks: stdin JSON)──▶ irrlicht-hook (CLI)
 Irrlicht.app (SwiftUI menubar)
   ├─ watches instances/*.json
   ├─ tails transcript.jsonl (last ~64 KB) → msgs/min, tokens_in
-  ├─ model-capacity.json → context_used_%
+  ├─ embedded model capacity data → context_used_%
   └─ actions: open/tail transcript, open cwd
 
 Installer (.pkg)
@@ -88,7 +88,7 @@ Installer (.pkg)
 
 **Goal:** Surface context pressure.
 
-* Add `model-capacity.json` (editable) and loader.
+* Add embedded model capacity data and loader.
 * Extract **tokens\_in** from transcript (when present); otherwise estimate via char→token slope per model.
 * Compute **context\_used\_%** = tokens\_in / capacity × 100; guard for unknown models.
   **Deliverables:** Capacity table, estimator, unit tests, UI wiring.

@@ -149,7 +149,6 @@ Example state file:
 ├── tools/
 │   ├── irrlicht-hook/         # Go binary that receives hook events
 │   ├── transcript-tailer/     # Real-time transcript analysis for metrics
-│   ├── model-capacity/        # Token capacity and context utilization data
 │   ├── settings-merger/       # Go tool for managing Claude Code settings
 │   ├── irrlicht-replay        # Python tool for testing event replay
 │   ├── test-runner.sh         # Comprehensive test suite
@@ -257,6 +256,7 @@ Structured JSON logs with automatic rotation:
 - Verify hook binary is in PATH: `which irrlicht-hook`
 - Check Claude Code settings: `cat ~/.claude/settings.json | jq .hooks.irrlicht`
 - Test with sample event: `./tools/irrlicht-replay fixtures/session-start.json`
+- View `irrlicht-hook` logs:
 
 **Sessions not updating:**
 - Restart Claude Code to reload hook configuration

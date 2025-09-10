@@ -2,6 +2,19 @@
 
 This document lists all Claude Code events and their resulting state transitions, based on official documentation and research as of 2025.
 
+## User Events (per CC instance)
+start claude code -> 'ready'
+User prompts CC -> 'working'
+CC prompts user -> 'waiting'
+User responds to CC prompt -> 'working'
+Error occurs (hit limits or guardrails) -> 'error'
+user exits CC or CC exits -> 'remove session'
+compacting -> working
+clear -> ready
+subagent start -> working (with indication that +1 subagents are working)
+subagent finished -> working (with indication that -1 subagents are working)
+process is started -> working
+
 ## Primary Session States
 
 - **`working`** - Claude actively processing/executing
@@ -40,6 +53,8 @@ This document lists all Claude Code events and their resulting state transitions
 | **Process Exit** | Claude Code terminates | Any state → delete session | Process monitoring | Application exit |
 
 -> A claude code instance is killed: current=session stays forever. expected: detect the exit. Potential detection: PID monitoring of the claude instance.
+
+-> after the process just died, like a reboot. The sessions should be auto cleaned up
 
 ## Detailed State Flow
 
