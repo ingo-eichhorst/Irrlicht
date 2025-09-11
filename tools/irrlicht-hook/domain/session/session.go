@@ -25,6 +25,17 @@ type Session struct {
 	// Transcript monitoring for waiting state recovery
 	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`
 	WaitingStartTime   *int64 `json:"waiting_start_time,omitempty"`
+	
+	// Processing state for incremental token counting
+	ProcessingState *ProcessingState `json:"processing_state,omitempty"`
+}
+
+// ProcessingState tracks the transcript processing state for incremental token counting
+type ProcessingState struct {
+	LastProcessedOffset int64     `json:"last_processed_offset"`
+	CumulativeTokens    int64     `json:"cumulative_tokens"`
+	LastProcessedAt     time.Time `json:"last_processed_at"`
+	TranscriptChecksum  string    `json:"transcript_checksum,omitempty"`
 }
 
 // Metrics holds computed performance metrics from transcript analysis  
@@ -138,6 +149,7 @@ func (s *Session) ToLegacySessionState() *LegacySessionState {
 		Metrics:            legacyMetrics,
 		LastTranscriptSize: s.LastTranscriptSize,
 		WaitingStartTime:   s.WaitingStartTime,
+		ProcessingState:    s.ProcessingState,
 	}
 }
 
@@ -160,8 +172,9 @@ type LegacySessionState struct {
 	LastMatcher      string                 `json:"last_matcher,omitempty"`
 	Metrics          *LegacySessionMetrics  `json:"metrics,omitempty"`
 	
-	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`
-	WaitingStartTime   *int64 `json:"waiting_start_time,omitempty"`
+	LastTranscriptSize int64             `json:"last_transcript_size,omitempty"`
+	WaitingStartTime   *int64            `json:"waiting_start_time,omitempty"`
+	ProcessingState    *ProcessingState  `json:"processing_state,omitempty"`
 }
 
 // LegacySessionMetrics represents the current SessionMetrics struct for compatibility
@@ -205,5 +218,6 @@ func FromLegacySessionState(legacy *LegacySessionState) *Session {
 		Metrics:            metrics,
 		LastTranscriptSize: legacy.LastTranscriptSize,
 		WaitingStartTime:   legacy.WaitingStartTime,
+		ProcessingState:    legacy.ProcessingState,
 	}
 }

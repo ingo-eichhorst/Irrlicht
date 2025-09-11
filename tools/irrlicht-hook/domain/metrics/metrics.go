@@ -8,10 +8,17 @@ import (
 // SessionMetrics holds computed performance metrics from transcript analysis  
 type SessionMetrics struct {
 	ElapsedSeconds       int64   `json:"elapsed_seconds"`
-	TotalTokens          int64   `json:"total_tokens"`
+	TotalTokens          int64   `json:"total_tokens"`           // Context size (for monitoring)
 	ModelName            string  `json:"model_name"`
 	ContextUtilization   float64 `json:"context_utilization_percentage"`
 	PressureLevel        string  `json:"pressure_level"`
+	
+	// ccusage-compatible consumption metrics
+	CumulativeInputTokens        int64   `json:"cumulative_input_tokens,omitempty"`
+	CumulativeOutputTokens       int64   `json:"cumulative_output_tokens,omitempty"`
+	CumulativeCacheCreationTokens int64  `json:"cumulative_cache_creation_tokens,omitempty"`
+	CumulativeCacheReadTokens     int64  `json:"cumulative_cache_read_tokens,omitempty"`
+	TotalConsumptionTokens       int64   `json:"total_consumption_tokens,omitempty"` // Sum of all consumption
 }
 
 // NewSessionMetrics creates a new SessionMetrics instance
@@ -60,6 +67,10 @@ func (sm *SessionMetrics) Update(elapsedSeconds, totalTokens int64, modelName st
 	sm.ModelName = modelName
 	sm.ContextUtilization = contextUtilization
 	sm.SetPressureLevel()
+	
+	// Calculate total consumption tokens (ccusage-compatible)
+	sm.TotalConsumptionTokens = sm.CumulativeInputTokens + sm.CumulativeOutputTokens + 
+		sm.CumulativeCacheCreationTokens + sm.CumulativeCacheReadTokens
 }
 
 // IsValid checks if the metrics have valid values

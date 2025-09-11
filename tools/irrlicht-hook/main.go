@@ -48,7 +48,7 @@ func main() {
 	// Process the event using the use case
 	useCase := di.GetProcessHookEventUseCase()
 	if err := useCase.Execute(hookEvent); err != nil {
-		di.GetLogger().LogError(hookEvent.HookEventName, hookEvent.SessionID, 
+		di.GetLogger().LogError(hookEvent.HookEventName, hookEvent.SessionID,
 			fmt.Sprintf("Event processing failed: %v", err))
 		os.Exit(1)
 	}

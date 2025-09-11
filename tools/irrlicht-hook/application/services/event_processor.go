@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/hook/adapters/outbound/transcript"
 	"irrlicht/hook/domain/event"
 	"irrlicht/hook/domain/metrics"
 	"irrlicht/hook/domain/session"
@@ -135,21 +136,9 @@ func (ep *EventProcessor) processEventToSession(hookEvent *event.HookEvent, exis
 	// Update session with event data
 	ep.updateSessionWithEventData(sess, hookEvent)
 
-	// Compute metrics if transcript is available
+	// Compute metrics if transcript is available using incremental processing
 	if sess.TranscriptPath != "" {
-		// Convert session metrics to domain metrics for analysis
-		var existingMetrics *metrics.SessionMetrics
-		if sess.Metrics != nil {
-			existingMetrics = &metrics.SessionMetrics{
-				ElapsedSeconds:       sess.Metrics.ElapsedSeconds,
-				TotalTokens:          sess.Metrics.TotalTokens,
-				ModelName:            sess.Metrics.ModelName,
-				ContextUtilization:   sess.Metrics.ContextUtilization,
-				PressureLevel:        sess.Metrics.PressureLevel,
-			}
-		}
-		
-		if newMetrics := ep.computeMetrics(sess.TranscriptPath, existingMetrics); newMetrics != nil {
+		if newMetrics := ep.computeMetricsIncremental(sess); newMetrics != nil {
 			// Convert back to session metrics
 			sess.Metrics = &session.Metrics{
 				ElapsedSeconds:       newMetrics.ElapsedSeconds,
@@ -220,6 +209,37 @@ func (ep *EventProcessor) computeMetrics(transcriptPath string, existingMetrics 
 	}
 
 	return newMetrics
+}
+
+// computeMetricsIncremental computes session metrics using incremental processing
+func (ep *EventProcessor) computeMetricsIncremental(sess *session.Session) *metrics.SessionMetrics {
+	if sess.TranscriptPath == "" {
+		return nil
+	}
+
+	// Cast to concrete type to access incremental method
+	if analyzer, ok := ep.transcriptAnalyzer.(*transcript.Analyzer); ok {
+		newMetrics, err := analyzer.ComputeSessionMetricsIncremental(sess)
+		if err != nil {
+			// Transcript analysis failed - return nil
+			return nil
+		}
+		return newMetrics
+	}
+
+	// Fallback to legacy method if cast fails
+	var existingMetrics *metrics.SessionMetrics
+	if sess.Metrics != nil {
+		existingMetrics = &metrics.SessionMetrics{
+			ElapsedSeconds:       sess.Metrics.ElapsedSeconds,
+			TotalTokens:          sess.Metrics.TotalTokens,
+			ModelName:            sess.Metrics.ModelName,
+			ContextUtilization:   sess.Metrics.ContextUtilization,
+			PressureLevel:        sess.Metrics.PressureLevel,
+		}
+	}
+
+	return ep.computeMetrics(sess.TranscriptPath, existingMetrics)
 }
 
 // updateWaitingStateTracking handles the transcript monitoring for waiting state recovery

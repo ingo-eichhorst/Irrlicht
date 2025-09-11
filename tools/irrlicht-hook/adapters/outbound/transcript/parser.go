@@ -66,9 +66,12 @@ func (p *Parser) parseJSONLine(line string) (*MessageEvent, error) {
 		}
 	}
 	
-	// Extract token counts
-	tokens := p.extractTokensFromJSON(data)
-	event.Tokens = tokens
+	// Extract token counts and detailed token info
+	tokenInfo := p.extractTokenInfoFromJSON(data)
+	event.TokenInfo = tokenInfo
+	if tokenInfo != nil {
+		event.Tokens = tokenInfo.TotalTokens
+	}
 	
 	// Only return events that have meaningful data or are message events
 	if !event.Timestamp.IsZero() || event.Type != "" || event.Tokens > 0 || p.isMessageEvent(event.Type) {
@@ -169,6 +172,59 @@ func (p *Parser) extractTokensFromJSON(data map[string]interface{}) int64 {
 	return totalTokens
 }
 
+// extractTokenInfoFromJSON extracts detailed token usage information from JSON data
+func (p *Parser) extractTokenInfoFromJSON(data map[string]interface{}) *TokenInfo {
+	var tokenInfo *TokenInfo
+
+	// Check usage field at root level (Claude API format)
+	if usage, ok := data["usage"].(map[string]interface{}); ok {
+		tokenInfo = p.extractTokenInfoFromUsage(usage)
+		if tokenInfo != nil {
+			return tokenInfo
+		}
+	}
+
+	// Check message.usage field (Claude Code format for assistant messages)
+	if message, ok := data["message"].(map[string]interface{}); ok {
+		if usage, ok := message["usage"].(map[string]interface{}); ok {
+			tokenInfo = p.extractTokenInfoFromUsage(usage)
+			if tokenInfo != nil {
+				return tokenInfo
+			}
+		}
+	}
+
+	// Check for token count in response metadata
+	if response, ok := data["response"].(map[string]interface{}); ok {
+		if usage, ok := response["usage"].(map[string]interface{}); ok {
+			tokenInfo = p.extractTokenInfoFromUsage(usage)
+			if tokenInfo != nil {
+				return tokenInfo
+			}
+		}
+	}
+
+	// Fallback: try to extract from direct token fields
+	tokenInfo = &TokenInfo{}
+	hasTokenData := false
+
+	if tokens, ok := data["total_tokens"].(float64); ok {
+		tokenInfo.TotalTokens = int64(tokens)
+		hasTokenData = true
+	} else if tokensStr, ok := data["total_tokens"].(string); ok {
+		if tokens, err := strconv.ParseInt(tokensStr, 10, 64); err == nil {
+			tokenInfo.TotalTokens = tokens
+			hasTokenData = true
+		}
+	}
+
+	if hasTokenData {
+		return tokenInfo
+	}
+
+	return nil
+}
+
 // extractTokensFromUsage extracts tokens from a usage object
 func (p *Parser) extractTokensFromUsage(usage map[string]interface{}) int64 {
 	// Check for total_tokens directly first (most accurate)
@@ -191,6 +247,51 @@ func (p *Parser) extractTokensFromUsage(usage map[string]interface{}) int64 {
 	}
 	
 	return totalTokens
+}
+
+// extractTokenInfoFromUsage extracts detailed token information from a usage object (ccusage-compatible)
+func (p *Parser) extractTokenInfoFromUsage(usage map[string]interface{}) *TokenInfo {
+	tokenInfo := &TokenInfo{}
+	hasData := false
+
+	// Extract input tokens
+	if inputTokens, ok := usage["input_tokens"].(float64); ok {
+		tokenInfo.InputTokens = int64(inputTokens)
+		hasData = true
+	}
+
+	// Extract output tokens
+	if outputTokens, ok := usage["output_tokens"].(float64); ok {
+		tokenInfo.OutputTokens = int64(outputTokens)
+		hasData = true
+	}
+
+	// Extract cache creation tokens (ccusage-compatible)
+	if cacheCreationTokens, ok := usage["cache_creation_input_tokens"].(float64); ok {
+		tokenInfo.CacheCreationInputTokens = int64(cacheCreationTokens)
+		hasData = true
+	}
+
+	// Extract cache read tokens (ccusage-compatible)  
+	if cacheReadTokens, ok := usage["cache_read_input_tokens"].(float64); ok {
+		tokenInfo.CacheReadInputTokens = int64(cacheReadTokens)
+		hasData = true
+	}
+
+	// Check for total_tokens directly first (most accurate)
+	if total, ok := usage["total_tokens"].(float64); ok {
+		tokenInfo.TotalTokens = int64(total)
+		hasData = true
+	} else if hasData {
+		// Calculate total from all token types (ccusage-style)
+		tokenInfo.TotalTokens = tokenInfo.InputTokens + tokenInfo.OutputTokens + 
+			tokenInfo.CacheCreationInputTokens + tokenInfo.CacheReadInputTokens
+	}
+
+	if hasData {
+		return tokenInfo
+	}
+	return nil
 }
 
 // ExtractModelFromJSON extracts model information from JSON data
