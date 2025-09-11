@@ -152,32 +152,34 @@ func (fsr *FilesystemSessionRepository) DeleteSession(sessionID string) error {
 func (fsr *FilesystemSessionRepository) ListSessions() ([]*session.Session, error) {
 	fsr.mu.RLock()
 	files, err := os.ReadDir(fsr.instancesDir)
-	fsr.mu.RUnlock()
-
 	if err != nil {
+		fsr.mu.RUnlock()
 		if os.IsNotExist(err) {
 			return []*session.Session{}, nil
 		}
 		return nil, fmt.Errorf("failed to read instances directory: %w", err)
 	}
 
-	var sessions []*session.Session
-
+	// Collect session IDs while holding the lock
+	var sessionIDs []string
 	for _, file := range files {
 		if file.IsDir() || !strings.HasSuffix(file.Name(), FileExtension) {
 			continue
 		}
-
 		// Extract session ID from filename
 		sessionID := strings.TrimSuffix(file.Name(), FileExtension)
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	fsr.mu.RUnlock()
 
-		// Load session
+	// Load sessions outside the lock to avoid deadlock
+	var sessions []*session.Session
+	for _, sessionID := range sessionIDs {
 		sess, err := fsr.LoadSession(sessionID)
 		if err != nil {
 			// Log error but continue with other sessions
 			continue
 		}
-
 		sessions = append(sessions, sess)
 	}
 

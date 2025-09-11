@@ -196,15 +196,22 @@ func (sl *StructuredLoggerAdapter) rotate() error {
 		if _, err := os.Stat(oldPath); err == nil {
 			if i == MaxLogFiles-1 {
 				// Remove the oldest file
-				os.Remove(newPath)
+				if err := os.Remove(newPath); err != nil && !os.IsNotExist(err) {
+					// Log error but continue rotation
+					log.Printf("Failed to remove old log file %s: %v", newPath, err)
+				}
 			}
-			os.Rename(oldPath, newPath)
+			if err := os.Rename(oldPath, newPath); err != nil {
+				log.Printf("Failed to rotate log file %s to %s: %v", oldPath, newPath, err)
+			}
 		}
 	}
 
 	// Move current log to .1
 	if _, err := os.Stat(sl.logPath); err == nil {
-		os.Rename(sl.logPath, sl.logPath+".1")
+		if err := os.Rename(sl.logPath, sl.logPath+".1"); err != nil {
+			log.Printf("Failed to rename current log file: %v", err)
+		}
 	}
 
 	// Create new log file
