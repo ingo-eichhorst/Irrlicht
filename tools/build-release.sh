@@ -7,6 +7,7 @@ set -e
 VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['version'])")
 BUILD_DIR="build"
 BINARY_NAME="irrlicht-hook"
+SHIM_NAME="irrlicht-shim"
 
 echo "🏗️  Building Irrlicht Hook Receiver v$VERSION"
 echo "============================================="
@@ -22,10 +23,12 @@ echo "Building for macOS..."
 echo "  Building macOS arm64..."
 cd core
 GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-darwin-arm64" ./cmd/irrlicht-hook/
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-darwin-arm64" ./cmd/irrlicht-shim/
 
 # macOS Intel (amd64)
 echo "  Building macOS amd64..."
 GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-darwin-amd64" ./cmd/irrlicht-hook/
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-darwin-amd64" ./cmd/irrlicht-shim/
 
 cd ..
 
@@ -34,16 +37,21 @@ echo "  Creating universal macOS binary..."
 lipo -create -output "$BUILD_DIR/${BINARY_NAME}-darwin-universal" \
     "$BUILD_DIR/${BINARY_NAME}-darwin-arm64" \
     "$BUILD_DIR/${BINARY_NAME}-darwin-amd64"
+lipo -create -output "$BUILD_DIR/${SHIM_NAME}-darwin-universal" \
+    "$BUILD_DIR/${SHIM_NAME}-darwin-arm64" \
+    "$BUILD_DIR/${SHIM_NAME}-darwin-amd64"
 
 # Build for other platforms (for future distribution)
 echo "Building for Linux..."
 cd core
 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-linux-amd64" ./cmd/irrlicht-hook/
+GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-linux-amd64" ./cmd/irrlicht-shim/
 cd ..
 
 echo "Building for Windows..."
 cd core
 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook/
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-windows-amd64.exe" ./cmd/irrlicht-shim/
 cd ..
 
 # Build macOS installer package
@@ -73,15 +81,22 @@ echo "📋 Checksums:"
 cat $BUILD_DIR/checksums.sha256
 
 echo ""
-echo "🧪 Testing universal binary..."
+echo "🧪 Testing universal binaries..."
 if $BUILD_DIR/${BINARY_NAME}-darwin-universal --version; then
-    echo "✅ Universal binary works!"
+    echo "✅ irrlicht-hook universal binary works!"
 else
-    echo "❌ Universal binary test failed"
+    echo "❌ irrlicht-hook universal binary test failed"
+    exit 1
+fi
+if $BUILD_DIR/${SHIM_NAME}-darwin-universal --version; then
+    echo "✅ irrlicht-shim universal binary works!"
+else
+    echo "❌ irrlicht-shim universal binary test failed"
     exit 1
 fi
 
 echo ""
 echo "🎉 Release artifacts ready in $BUILD_DIR/"
 echo "   Hook binary:      ${BINARY_NAME}-darwin-universal"
+echo "   Shim binary:      ${SHIM_NAME}-darwin-universal"
 echo "   Installer pkg:    Irrlicht-v${VERSION}.pkg"

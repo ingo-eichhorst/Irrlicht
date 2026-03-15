@@ -156,9 +156,9 @@ func (sm *SettingsMerger) MergeIrrlichtHooks() error {
 	// Define Irrlicht hook configuration
 	hookConfig := HookConfig{
 		Type:    "command",
-		Command: "irrlicht-hook",
+		Command: "irrlicht-shim",
 	}
-	
+
 	eventHookConfig := EventHookConfig{
 		Hooks: []HookConfig{hookConfig},
 	}
@@ -192,15 +192,15 @@ func (sm *SettingsMerger) MergeIrrlichtHooks() error {
 		// Check if event hook already exists
 		existingEvent := gjson.GetBytes(settingsJSON, eventPath)
 		if existingEvent.Exists() {
-			sm.log(fmt.Sprintf("Event %s hook already exists, checking if irrlicht-hook is present", event))
-			
-			// Check if irrlicht-hook is already in the hooks array
+			sm.log(fmt.Sprintf("Event %s hook already exists, checking if irrlicht-shim is present", event))
+
+			// Check if irrlicht-shim is already in the hooks array
 			found := false
 			if existingEvent.IsArray() {
 				for _, item := range existingEvent.Array() {
 					if hooks := item.Get("hooks"); hooks.Exists() && hooks.IsArray() {
 						for _, hook := range hooks.Array() {
-							if cmd := hook.Get("command"); cmd.Exists() && cmd.String() == "irrlicht-hook" {
+							if cmd := hook.Get("command"); cmd.Exists() && cmd.String() == "irrlicht-shim" {
 								found = true
 								break
 							}
@@ -211,16 +211,16 @@ func (sm *SettingsMerger) MergeIrrlichtHooks() error {
 					}
 				}
 			}
-			
+
 			if found {
-				sm.log(fmt.Sprintf("irrlicht-hook already configured for %s", event))
+				sm.log(fmt.Sprintf("irrlicht-shim already configured for %s", event))
 				continue
 			}
-			
-			sm.log(fmt.Sprintf("Adding irrlicht-hook to existing %s event", event))
+
+			sm.log(fmt.Sprintf("Adding irrlicht-shim to existing %s event", event))
 			// Get existing array and append our config
 			existing := existingEvent.Array()
-			existing = append(existing, gjson.Parse(fmt.Sprintf(`{"hooks":[{"type":"command","command":"irrlicht-hook"}]}`)))
+			existing = append(existing, gjson.Parse(`{"hooks":[{"type":"command","command":"irrlicht-shim"}]}`))
 			settingsJSON, err = sjson.SetBytes(settingsJSON, eventPath, existing)
 		} else {
 			sm.log(fmt.Sprintf("Adding new %s event hook", event))
@@ -368,9 +368,9 @@ func (sm *SettingsMerger) GetPreview() (string, error) {
 	// Add hooks for each event (for preview)
 	hookConfig := HookConfig{
 		Type:    "command",
-		Command: "irrlicht-hook",
+		Command: "irrlicht-shim",
 	}
-	
+
 	eventHookConfig := EventHookConfig{
 		Hooks: []HookConfig{hookConfig},
 	}

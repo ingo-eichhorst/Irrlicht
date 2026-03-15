@@ -220,7 +220,7 @@ func TestMergeIrrlichtHooks_NewFile(t *testing.T) {
 	}
 
 	// Current structure: per-event keys (e.g. hooks.SessionStart, hooks.Stop, ...)
-	// each containing an array of EventHookConfig with irrlicht-hook command
+	// each containing an array of EventHookConfig with irrlicht-shim command
 	eventsToCheck := []string{"SessionStart", "Stop", "UserPromptSubmit"}
 	for _, event := range eventsToCheck {
 		if _, exists := hooks[event]; !exists {
