@@ -1,0 +1,58 @@
+name: Update ARS Badge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  update-ars-badge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Install ARS CLI
+        run: go install github.com/ingo-eichhorst/agent-readyness/cmd/ars@latest
+
+      - name: Run ARS scan
+        run: |
+          ars scan . --no-llm --badge > ars-output.txt 2>&1 || true
+          cat ars-output.txt
+
+      - name: Extract and update ARS badge
+        run: |
+          ARS_BADGE=$(grep "img.shields.io/badge/ARS" ars-output.txt | head -1 || echo "")
+          echo "ARS Badge line: $ARS_BADGE"
+
+          if [ -n "$ARS_BADGE" ]; then
+            ARS_URL=$(echo "$ARS_BADGE" | grep -o 'https://img\.shields\.io/badge/ARS[^)]*' | head -1 || echo "")
+            echo "ARS URL: $ARS_URL"
+            if [ -n "$ARS_URL" ]; then
+              sed -i "s|https://img.shields.io/badge/ARS-[^)]*|${ARS_URL}|g" README.md
+              echo "README updated with ARS badge URL"
+            fi
+          fi
+
+      - name: Commit badge update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --staged --quiet; then
+            echo "No badge changes to commit"
+          else
+            git commit -m "chore: update ARS badge [skip ci]"
+            git push
+          fi

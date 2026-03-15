@@ -2,6 +2,8 @@
 
 ![Banner](banner.png)
 
+[![ARS](https://img.shields.io/badge/ARS-unknown-lightgrey)](https://github.com/ingo-eichhorst/agent-readyness)
+
 **Irrlicht** is a macOS menu bar application that monitors Claude Code sessions, providing instant visual feedback on session states. The name comes from German folklore—where an *Irrlicht* (will-o'-the-wisp) traditionally leads wanderers astray, this version does the opposite: it guides you with honest signals about where your attention is needed.
 
 ## Philosophy
