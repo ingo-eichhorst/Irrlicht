@@ -3,61 +3,75 @@ import SwiftUI
 struct SessionListView: View {
     @EnvironmentObject var sessionManager: SessionManager
     @State private var isQuitButtonHovered = false
+    @State private var isSettingsButtonHovered = false
     @State private var showSettings = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if sessionManager.sessions.isEmpty {
-                ConfigurationActionView()
-            } else {
-                sessionHeaderView
-                Divider()
-                sessionListContent
-            }
-            
-            if let error = sessionManager.lastError {
-                Divider()
-                errorView(error)
-            }
-            
-            // Settings and Quit buttons at bottom
-            Divider()
-            Button("Settings…") {
-                showSettings = true
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(.secondary)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, 6)
-            .sheet(isPresented: $showSettings) {
-                SettingsView(isPresented: $showSettings)
-            }
-
-
-            Divider()
-            Button("Quit Irrlicht") {
-                NSApplication.shared.terminate(nil)
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(.secondary)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, 8)
-            .onHover { hovering in
-                isQuitButtonHovered = hovering
-                if hovering {
-                    NSCursor.pointingHand.push()
+        if showSettings {
+            SettingsView(isPresented: $showSettings)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                if sessionManager.sessions.isEmpty {
+                    ConfigurationActionView()
                 } else {
-                    NSCursor.pop()
+                    sessionHeaderView
+                    Divider()
+                    sessionListContent
                 }
+
+                if let error = sessionManager.lastError {
+                    Divider()
+                    errorView(error)
+                }
+
+                // Settings and Quit buttons at bottom
+                Divider()
+                Button("Settings…") {
+                    showSettings = true
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 6)
+                .onHover { hovering in
+                    isSettingsButtonHovered = hovering
+                    if hovering {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isSettingsButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                        .animation(.easeInOut(duration: 0.2), value: isSettingsButtonHovered)
+                )
+
+                Divider()
+                Button("Quit Irrlicht") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 8)
+                .onHover { hovering in
+                    isQuitButtonHovered = hovering
+                    if hovering {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isQuitButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                        .animation(.easeInOut(duration: 0.2), value: isQuitButtonHovered)
+                )
             }
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isQuitButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
-                    .animation(.easeInOut(duration: 0.2), value: isQuitButtonHovered)
-            )
+            .frame(width: 350)
+            .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(width: 350)
-        .background(Color(NSColor.windowBackgroundColor))
     }
     
     // MARK: - Session Header
