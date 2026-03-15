@@ -9,6 +9,8 @@ BUILD_DIR="build"
 BINARY_NAME="irrlicht-hook"
 SHIM_NAME="irrlicht-shim"
 AIDER_TAIL_NAME="irrlicht-aider-tail"
+COPILOT_HOOK_NAME="irrlicht-hook-copilot"
+CURSOR_HOOK_NAME="irrlicht-hook-cursor"
 
 echo "🏗️  Building Irrlicht Hook Receiver v$VERSION"
 echo "============================================="
@@ -26,12 +28,16 @@ cd core
 GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-darwin-arm64" ./cmd/irrlicht-hook/
 GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-darwin-arm64" ./cmd/irrlicht-shim/
 GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-arm64" ./cmd/irrlicht-aider-tail/
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${COPILOT_HOOK_NAME}-darwin-arm64" ./cmd/irrlicht-hook-copilot/
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${CURSOR_HOOK_NAME}-darwin-arm64" ./cmd/irrlicht-hook-cursor/
 
 # macOS Intel (amd64)
 echo "  Building macOS amd64..."
 GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-darwin-amd64" ./cmd/irrlicht-hook/
 GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-darwin-amd64" ./cmd/irrlicht-shim/
 GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-amd64" ./cmd/irrlicht-aider-tail/
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${COPILOT_HOOK_NAME}-darwin-amd64" ./cmd/irrlicht-hook-copilot/
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${CURSOR_HOOK_NAME}-darwin-amd64" ./cmd/irrlicht-hook-cursor/
 
 cd ..
 
@@ -46,6 +52,28 @@ lipo -create -output "$BUILD_DIR/${SHIM_NAME}-darwin-universal" \
 lipo -create -output "$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-universal" \
     "$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-arm64" \
     "$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-amd64"
+lipo -create -output "$BUILD_DIR/${COPILOT_HOOK_NAME}-darwin-universal" \
+    "$BUILD_DIR/${COPILOT_HOOK_NAME}-darwin-arm64" \
+    "$BUILD_DIR/${COPILOT_HOOK_NAME}-darwin-amd64"
+lipo -create -output "$BUILD_DIR/${CURSOR_HOOK_NAME}-darwin-universal" \
+    "$BUILD_DIR/${CURSOR_HOOK_NAME}-darwin-arm64" \
+    "$BUILD_DIR/${CURSOR_HOOK_NAME}-darwin-amd64"
+
+# Build installer tools (macOS only — these manage platform-specific config files)
+echo "  Building installer tools (macOS)..."
+cd tools/copilot-hooks-merger
+GOOS=darwin GOARCH=arm64 go build -o "../../$BUILD_DIR/copilot-hooks-merger-darwin-arm64" .
+GOOS=darwin GOARCH=amd64 go build -o "../../$BUILD_DIR/copilot-hooks-merger-darwin-amd64" .
+cd ../cursor-hooks-merger
+GOOS=darwin GOARCH=arm64 go build -o "../../$BUILD_DIR/cursor-hooks-merger-darwin-arm64" .
+GOOS=darwin GOARCH=amd64 go build -o "../../$BUILD_DIR/cursor-hooks-merger-darwin-amd64" .
+cd ../..
+lipo -create -output "$BUILD_DIR/copilot-hooks-merger-darwin-universal" \
+    "$BUILD_DIR/copilot-hooks-merger-darwin-arm64" \
+    "$BUILD_DIR/copilot-hooks-merger-darwin-amd64"
+lipo -create -output "$BUILD_DIR/cursor-hooks-merger-darwin-universal" \
+    "$BUILD_DIR/cursor-hooks-merger-darwin-arm64" \
+    "$BUILD_DIR/cursor-hooks-merger-darwin-amd64"
 
 # Build for other platforms (for future distribution)
 echo "Building for Linux..."
@@ -53,6 +81,8 @@ cd core
 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-linux-amd64" ./cmd/irrlicht-hook/
 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-linux-amd64" ./cmd/irrlicht-shim/
 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${AIDER_TAIL_NAME}-linux-amd64" ./cmd/irrlicht-aider-tail/
+GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${COPILOT_HOOK_NAME}-linux-amd64" ./cmd/irrlicht-hook-copilot/
+GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${CURSOR_HOOK_NAME}-linux-amd64" ./cmd/irrlicht-hook-cursor/
 cd ..
 
 echo "Building for Windows..."
@@ -60,6 +90,8 @@ cd core
 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook/
 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-windows-amd64.exe" ./cmd/irrlicht-shim/
 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${AIDER_TAIL_NAME}-windows-amd64.exe" ./cmd/irrlicht-aider-tail/
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${COPILOT_HOOK_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook-copilot/
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${CURSOR_HOOK_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook-cursor/
 cd ..
 
 # Build macOS installer package
@@ -102,10 +134,26 @@ else
     echo "❌ irrlicht-shim universal binary test failed"
     exit 1
 fi
+if $BUILD_DIR/${COPILOT_HOOK_NAME}-darwin-universal --version; then
+    echo "✅ irrlicht-hook-copilot universal binary works!"
+else
+    echo "❌ irrlicht-hook-copilot universal binary test failed"
+    exit 1
+fi
+if $BUILD_DIR/${CURSOR_HOOK_NAME}-darwin-universal --version; then
+    echo "✅ irrlicht-hook-cursor universal binary works!"
+else
+    echo "❌ irrlicht-hook-cursor universal binary test failed"
+    exit 1
+fi
 
 echo ""
 echo "🎉 Release artifacts ready in $BUILD_DIR/"
-echo "   Hook binary:      ${BINARY_NAME}-darwin-universal"
-echo "   Shim binary:      ${SHIM_NAME}-darwin-universal"
-echo "   Aider tail:       ${AIDER_TAIL_NAME}-darwin-universal"
-echo "   Installer pkg:    Irrlicht-v${VERSION}.pkg"
+echo "   Hook binary:            ${BINARY_NAME}-darwin-universal"
+echo "   Shim binary:            ${SHIM_NAME}-darwin-universal"
+echo "   Aider tail:             ${AIDER_TAIL_NAME}-darwin-universal"
+echo "   Copilot hook binary:    ${COPILOT_HOOK_NAME}-darwin-universal"
+echo "   Cursor hook binary:     ${CURSOR_HOOK_NAME}-darwin-universal"
+echo "   Copilot hooks merger:   copilot-hooks-merger-darwin-universal"
+echo "   Cursor hooks merger:    cursor-hooks-merger-darwin-universal"
+echo "   Installer pkg:          Irrlicht-v${VERSION}.pkg"
