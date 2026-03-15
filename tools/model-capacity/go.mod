@@ -1,5 +1,5 @@
 module github.com/ingo-eichhorst/multi-cc-bar/tools/model-capacity
-
+# app-version: 0.1.0
 go 1.21
 
 require github.com/stretchr/testify v1.11.1

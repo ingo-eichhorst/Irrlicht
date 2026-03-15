@@ -3,7 +3,8 @@
 # build-release.sh - Cross-platform build script for Irrlicht hook receiver
 set -e
 
-VERSION="1.0.0"
+# Read version from version.json (single source of truth)
+VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['version'])")
 BUILD_DIR="build"
 BINARY_NAME="irrlicht-hook"
 
