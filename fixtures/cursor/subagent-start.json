@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "subagentStart",
+  "conversation_id": "conv_child456",
+  "model": "claude-sonnet-4-5",
+  "cursor_version": "0.45.0",
+  "workspace_roots": ["/Users/user/projects/myapp"],
+  "transcript_path": "/Users/user/.cursor/transcripts/conv_child456.jsonl",
+  "subagent_id": "sub_001",
+  "parent_conversation_id": "conv_abc123"
+}

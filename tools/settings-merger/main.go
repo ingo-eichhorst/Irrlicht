@@ -12,6 +12,7 @@ func main() {
 	var (
 		settingsPath = flag.String("settings", "", "Path to Claude settings.json file (default: ~/.claude/settings.json)")
 		action       = flag.String("action", "merge", "Action: merge, remove, restore, list-backups, preview")
+		target       = flag.String("target", "claude", "Target IDE: claude (default) or cursor")
 		backupPath   = flag.String("backup", "", "Path to backup file (for restore action)")
 		dryRun       = flag.Bool("dry-run", false, "Show what would be done without making changes")
 		verbose      = flag.Bool("verbose", false, "Enable verbose output")
@@ -24,7 +25,13 @@ func main() {
 		return
 	}
 
-	// Default settings path
+	// Cursor target: delegate to CursorMerger.
+	if strings.ToLower(*target) == "cursor" {
+		runCursorTarget(*action, *dryRun, *verbose)
+		return
+	}
+
+	// Default settings path (Claude Code)
 	if *settingsPath == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -95,6 +102,71 @@ func main() {
 	}
 }
 
+// runCursorTarget handles all --target cursor operations.
+func runCursorTarget(action string, dryRun, verbose bool) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Could not determine home directory: %v\n", err)
+		os.Exit(1)
+	}
+	hooksPath := filepath.Join(homeDir, ".cursor", "hooks.json")
+
+	cm := NewCursorMerger(hooksPath)
+	cm.SetDryRun(dryRun)
+	cm.SetVerbose(verbose)
+
+	switch strings.ToLower(action) {
+	case "merge":
+		backupPath, err := cm.CreateBackup()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating backup: %v\n", err)
+			os.Exit(1)
+		}
+		if backupPath != "" {
+			fmt.Printf("Created backup: %s\n", backupPath)
+		}
+		if err := cm.MergeCursorHooks(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error merging Cursor hooks: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Successfully merged cursor-hook configuration into ~/.cursor/hooks.json")
+
+	case "remove":
+		backupPath, err := cm.CreateBackup()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating backup: %v\n", err)
+			os.Exit(1)
+		}
+		if backupPath != "" {
+			fmt.Printf("Created backup: %s\n", backupPath)
+		}
+		if err := cm.RemoveCursorHooks(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error removing Cursor hooks: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Successfully removed cursor-hook configuration from ~/.cursor/hooks.json")
+
+	case "list-backups":
+		backups, err := cm.ListBackups()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error listing backups: %v\n", err)
+			os.Exit(1)
+		}
+		if len(backups) == 0 {
+			fmt.Println("No Cursor hooks.json backups found")
+		} else {
+			fmt.Printf("Found %d backup(s):\n", len(backups))
+			for _, b := range backups {
+				fmt.Printf("  %s\n", b)
+			}
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unsupported action '%s' for --target cursor. Supported: merge, remove, list-backups\n", action)
+		os.Exit(1)
+	}
+}
+
 func performMerge(merger *SettingsMerger) error {
 	// Create backup first
 	backupPath, err := merger.CreateBackup()
@@ -136,19 +208,20 @@ func performRemove(merger *SettingsMerger) error {
 }
 
 func showHelp() {
-	fmt.Println("Irrlicht Settings Merger - Safely manage Claude Code hook configuration")
+	fmt.Println("Irrlicht Settings Merger - Safely manage hook configuration for Claude Code and Cursor")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  settings-merger [options]")
 	fmt.Println()
 	fmt.Println("Actions:")
-	fmt.Println("  merge         Add Irrlicht hooks to settings (default)")
-	fmt.Println("  remove        Remove Irrlicht hooks from settings")  
-	fmt.Println("  restore       Restore settings from backup file")
+	fmt.Println("  merge         Add Irrlicht/cursor-hook configuration (default)")
+	fmt.Println("  remove        Remove hook configuration")
+	fmt.Println("  restore       Restore settings from backup file (Claude Code only)")
 	fmt.Println("  list-backups  List available backup files")
-	fmt.Println("  preview       Show what changes would be made")
+	fmt.Println("  preview       Show what changes would be made (Claude Code only)")
 	fmt.Println()
 	fmt.Println("Options:")
+	fmt.Println("  --target TARGET    Target IDE: claude (default) or cursor")
 	fmt.Println("  --settings PATH    Path to settings.json (default: ~/.claude/settings.json)")
 	fmt.Println("  --action ACTION    Action to perform")
 	fmt.Println("  --backup PATH      Backup file path (for restore)")
@@ -157,9 +230,11 @@ func showHelp() {
 	fmt.Println("  --help             Show this help")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  settings-merger                                    # Merge hooks")
-	fmt.Println("  settings-merger --action preview                   # Preview changes")
-	fmt.Println("  settings-merger --action remove                    # Remove hooks")
-	fmt.Println("  settings-merger --dry-run                          # Test run")
-	fmt.Println("  settings-merger --action restore --backup file     # Restore")
+	fmt.Println("  settings-merger                                       # Merge Claude Code hooks")
+	fmt.Println("  settings-merger --target cursor                       # Merge Cursor hooks")
+	fmt.Println("  settings-merger --target cursor --action remove       # Remove Cursor hooks")
+	fmt.Println("  settings-merger --action preview                      # Preview Claude Code changes")
+	fmt.Println("  settings-merger --action remove                       # Remove Claude Code hooks")
+	fmt.Println("  settings-merger --dry-run                             # Test run")
+	fmt.Println("  settings-merger --action restore --backup file        # Restore Claude Code")
 }

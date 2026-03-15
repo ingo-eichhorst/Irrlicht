@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "sessionStart",
+  "conversation_id": "conv_abc123",
+  "generation_id": "gen_xyz790",
+  "model": "claude-sonnet-4-5",
+  "cursor_version": "0.45.0",
+  "workspace_roots": ["/Users/user/projects/myapp"],
+  "user_email": "user@example.com",
+  "transcript_path": "/Users/user/.cursor/transcripts/conv_abc123.jsonl",
+  "source": "resume",
+  "permission_mode": "default"
+}

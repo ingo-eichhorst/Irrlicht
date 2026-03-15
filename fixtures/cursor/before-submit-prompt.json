@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "beforeSubmitPrompt",
+  "conversation_id": "conv_abc123",
+  "model": "claude-sonnet-4-5",
+  "cursor_version": "0.45.0",
+  "workspace_roots": ["/Users/user/projects/myapp"],
+  "transcript_path": "/Users/user/.cursor/transcripts/conv_abc123.jsonl",
+  "prompt": "Can you help me refactor this function?"
+}

@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "postToolUse",
+  "conversation_id": "conv_abc123",
+  "model": "claude-sonnet-4-5",
+  "cursor_version": "0.45.0",
+  "workspace_roots": ["/Users/user/projects/myapp"],
+  "transcript_path": "/Users/user/.cursor/transcripts/conv_abc123.jsonl",
+  "tool_name": "ReadFile",
+  "tool_input": {"path": "/Users/user/projects/myapp/src/main.go"},
+  "tool_response": {"content": "package main\n\nfunc main() {}\n"}
+}
