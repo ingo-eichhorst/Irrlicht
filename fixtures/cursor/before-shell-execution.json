@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "beforeShellExecution",
+  "conversation_id": "conv_abc123",
+  "generation_id": "gen_xyz794",
+  "model": "claude-sonnet-4-5",
+  "cursor_version": "0.45.0",
+  "workspace_roots": ["/Users/ingo/projects/my-project"],
+  "transcript_path": "/Users/ingo/projects/my-project/.cursor/transcript.jsonl",
+  "command": "go test ./...",
+  "working_dir": "/Users/ingo/projects/my-project"
+}

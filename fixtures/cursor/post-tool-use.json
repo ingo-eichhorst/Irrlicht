@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "postToolUse",
+  "conversation_id": "conv_abc123",
+  "generation_id": "gen_xyz792",
+  "model": "claude-sonnet-4-5",
+  "cursor_version": "0.45.0",
+  "workspace_roots": ["/Users/ingo/projects/my-project"],
+  "transcript_path": "/Users/ingo/projects/my-project/.cursor/transcript.jsonl",
+  "tool_name": "ReadFile",
+  "tool_input": {"path": "src/main.go"},
+  "tool_response": {"content": "package main\n\nfunc main() {...}"}
+}
