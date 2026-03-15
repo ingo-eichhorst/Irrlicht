@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Darwin
 
 @MainActor
 class SessionManager: ObservableObject {
@@ -141,6 +142,33 @@ class SessionManager: ObservableObject {
             }
             if !cancelledIds.isEmpty {
                 newSessions.removeAll { cancelledIds.contains($0.id) }
+            }
+
+            // Auto-cleanup orphaned sessions whose Claude Code process has exited.
+            // This catches the common case where Claude Code is force-quit or crashes
+            // without firing SessionEnd.
+            var orphanedIds: [String] = []
+            let staleTTL: TimeInterval = 3600 // 1 hour — for legacy sessions without PID
+            for session in newSessions {
+                let isOrphaned: Bool
+                if let pid = session.pid, pid > 0 {
+                    // PID-based check: probe with signal 0 (no signal sent, just liveness check)
+                    isOrphaned = kill(pid_t(pid), 0) != 0
+                } else {
+                    // Legacy session: no PID stored; only reap active states after TTL
+                    let isActive = session.state == .working || session.state == .waiting
+                    isOrphaned = isActive && session.updatedAt < Date().addingTimeInterval(-staleTTL)
+                }
+                if isOrphaned {
+                    let filePath = instancesPath.appendingPathComponent("\(session.id).json")
+                    try? FileManager.default.removeItem(at: filePath)
+                    orphanedIds.append(session.id)
+                    let pidDesc = session.pid.map { "pid=\($0)" } ?? "no-pid"
+                    print("🧹 Auto-deleted orphaned session \(session.shortId) (\(pidDesc))")
+                }
+            }
+            if !orphanedIds.isEmpty {
+                newSessions.removeAll { orphanedIds.contains($0.id) }
             }
 
             // Sort sessions according to saved order, with new sessions at the end

@@ -120,16 +120,17 @@ struct SessionState: Identifiable, Codable {
     let eventCount: Int?        // number of events processed (optional)
     let lastEvent: String?      // last hook event type (optional)
     let metrics: SessionMetrics? // performance metrics from transcript analysis (optional)
-    
+    let pid: Int?               // Claude Code process PID (optional for backwards compatibility)
+
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
-    
+
     private static let logger = Logger(subsystem: "com.anthropic.irrlicht", category: "SessionState")
-    
+
     // Custom coding keys to match JSON from irrlicht-hook
     enum CodingKeys: String, CodingKey {
         case id = "session_id"
-        case state, model, cwd
+        case state, model, cwd, pid
         case gitBranch = "git_branch"
         case projectName = "project_name"
         case transcriptPath = "transcript_path"
@@ -160,6 +161,7 @@ struct SessionState: Identifiable, Codable {
         eventCount = try container.decodeIfPresent(Int.self, forKey: .eventCount)
         lastEvent = try container.decodeIfPresent(String.self, forKey: .lastEvent)
         metrics = try container.decodeIfPresent(SessionMetrics.self, forKey: .metrics)
+        pid = try container.decodeIfPresent(Int.self, forKey: .pid)
         
         // Handle firstSeen date (unix timestamp format)
         if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
@@ -207,7 +209,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -220,6 +222,7 @@ struct SessionState: Identifiable, Codable {
         self.eventCount = eventCount
         self.lastEvent = lastEvent
         self.metrics = metrics
+        self.pid = pid
     }
     
     enum State: String, CaseIterable, Codable {

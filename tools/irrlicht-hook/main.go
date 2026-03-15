@@ -12,8 +12,9 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
-	
+
 	"transcript-tailer/pkg/tailer"
 )
 
@@ -83,9 +84,12 @@ type SessionState struct {
 	LastMatcher      string           `json:"last_matcher,omitempty"`
 	Metrics          *SessionMetrics  `json:"metrics,omitempty"`
 	
+	// Process monitoring: PID of the Claude Code process that owns this session
+	PID int `json:"pid,omitempty"`
+
 	// Transcript monitoring for waiting state recovery
-	LastTranscriptSize int64     `json:"last_transcript_size,omitempty"`
-	WaitingStartTime   *int64    `json:"waiting_start_time,omitempty"`
+	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`
+	WaitingStartTime   *int64 `json:"waiting_start_time,omitempty"`
 }
 
 // LogEntry represents a structured log entry
@@ -239,6 +243,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer logger.Close()
+
+	// Clean up sessions whose Claude Code processes have exited.
+	// This runs on every invocation so orphans are reaped opportunistically.
+	cleanupOrphanedSessions()
 
 	// Check for version flag
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
@@ -519,6 +527,13 @@ func processEvent(event *HookEvent) error {
 		}
 	}
 
+	// Capture the Claude Code process PID on SessionStart.
+	// irrlicht-hook is invoked as a child process by Claude Code, so os.Getppid()
+	// returns the PID of the Claude Code instance that owns this session.
+	if event.HookEventName == "SessionStart" {
+		sessionState.PID = os.Getppid()
+	}
+
 	// Special handling for SessionStart: set model to "New Session" for new sessions
 	if event.HookEventName == "SessionStart" && (event.Source == "clear" || existingState == nil) {
 		sessionState.Model = "New Session"
@@ -552,6 +567,11 @@ func processEvent(event *HookEvent) error {
 				sessionState.ProjectName = extractProjectName(sessionState.CWD)
 			}
 		}
+		// Preserve PID from existing state (set on SessionStart, carried forward)
+		if sessionState.PID == 0 && existingState.PID > 0 {
+			sessionState.PID = existingState.PID
+		}
+
 		if sessionState.TranscriptPath == "" && existingState.TranscriptPath != "" {
 			sessionState.TranscriptPath = existingState.TranscriptPath
 			
@@ -871,6 +891,93 @@ func deleteSessionFile(sessionID string) error {
 		return fmt.Errorf("failed to delete session file %s: %w", path, err)
 	}
 	return nil
+}
+
+// isProcessAlive checks if a process with the given PID is still running.
+// On macOS/Unix, FindProcess always succeeds; we use signal 0 to probe liveness.
+func isProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = process.Signal(syscall.Signal(0))
+	return err == nil
+}
+
+// cleanupOrphanedSessions scans all session files and removes those whose
+// Claude Code process has exited. Called at hook startup before processing
+// the current event, so orphaned sessions are reaped opportunistically.
+//
+// Sessions with a stored PID: deleted if the process is no longer alive.
+// Sessions without a PID (legacy): deleted if working/waiting and older than orphanTTL.
+func cleanupOrphanedSessions() {
+	const orphanTTL = int64(3600) // 1 hour
+
+	instancesDir := getInstancesDir()
+	entries, err := os.ReadDir(instancesDir)
+	if err != nil {
+		return // directory doesn't exist yet — nothing to clean
+	}
+
+	now := time.Now().Unix()
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) != ".json" || strings.Contains(name, ".tmp.") {
+			continue
+		}
+
+		filePath := filepath.Join(instancesDir, name)
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+
+		var state SessionState
+		if err := json.Unmarshal(data, &state); err != nil {
+			continue
+		}
+
+		// Terminal states managed elsewhere — skip them.
+		if state.State == "cancelled_by_user" {
+			continue
+		}
+
+		var shouldDelete bool
+		var reason string
+
+		if state.PID > 0 {
+			if !isProcessAlive(state.PID) {
+				shouldDelete = true
+				reason = fmt.Sprintf("process pid=%d exited", state.PID)
+			}
+		} else {
+			// Legacy session: no PID stored.  Only reap active states after TTL.
+			if state.State == "working" || state.State == "waiting" {
+				age := now - state.UpdatedAt
+				if age > orphanTTL {
+					shouldDelete = true
+					reason = fmt.Sprintf("no pid, %s session stale for %ds (TTL=%ds)", state.State, age, orphanTTL)
+				}
+			}
+		}
+
+		if shouldDelete {
+			if removeErr := os.Remove(filePath); removeErr != nil && !os.IsNotExist(removeErr) {
+				if logger != nil {
+					logger.LogError("cleanup", state.SessionID, fmt.Sprintf("failed to remove orphaned session: %v", removeErr))
+				}
+			} else if logger != nil {
+				logger.LogInfo("cleanup", state.SessionID, fmt.Sprintf("removed orphaned session: %s", reason))
+			}
+		}
+	}
 }
 
 // NewStructuredLogger creates a new structured logger with rotation
