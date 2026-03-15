@@ -2,7 +2,7 @@
 
 ![Banner](banner.png)
 
-[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ingo-eichhorst/COVERAGE_GIST_ID/raw/coverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ingo-eichhorst//raw/coverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/ingo-eichhorst/Irrlicht/main/version.json&query=$.version&label=version&color=%2334C759)](version.json)
 [![License](https://img.shields.io/badge/license-MIT-orange?color=%23FF9500)](LICENSE)
 
