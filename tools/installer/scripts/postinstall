@@ -1,0 +1,87 @@
+#!/bin/bash
+# postinstall — Irrlicht installer post-installation script
+#
+# Runs after files are copied. Configures Claude Code hooks via
+# irrlicht-settings-merger and launches Irrlicht.app.
+
+set -euo pipefail
+
+HOOK_BINARY="/usr/local/bin/irrlicht-hook"
+MERGER_BINARY="/usr/local/bin/irrlicht-settings-merger"
+APP_BUNDLE="/Applications/Irrlicht.app"
+
+# ---------------------------------------------------------------------------
+# Verify binaries are installed and executable
+# ---------------------------------------------------------------------------
+for binary in "$HOOK_BINARY" "$MERGER_BINARY"; do
+    if [[ ! -x "$binary" ]]; then
+        echo "❌  Expected binary not found or not executable: $binary" >&2
+        exit 1
+    fi
+done
+
+echo "✅  Binaries installed and executable"
+
+# ---------------------------------------------------------------------------
+# Ensure /usr/local/bin is on PATH (it may not be for installer scripts)
+# ---------------------------------------------------------------------------
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# ---------------------------------------------------------------------------
+# Configure Claude Code hooks
+#
+# The installer runs as root, but we want to configure hooks for the actual
+# user performing the installation. $USER and $HOME are set by the installer
+# to the calling user's values.
+# ---------------------------------------------------------------------------
+EFFECTIVE_USER="${USER:-}"
+EFFECTIVE_HOME="${HOME:-}"
+
+# Fallback: find the actual console user
+if [[ -z "$EFFECTIVE_USER" ]]; then
+    EFFECTIVE_USER=$(stat -f '%Su' /dev/console 2>/dev/null || echo "")
+fi
+if [[ -z "$EFFECTIVE_HOME" ]] && [[ -n "$EFFECTIVE_USER" ]]; then
+    EFFECTIVE_HOME=$(eval echo "~$EFFECTIVE_USER")
+fi
+
+if [[ -z "$EFFECTIVE_USER" ]] || [[ -z "$EFFECTIVE_HOME" ]]; then
+    echo "⚠️   Could not determine calling user — skipping Claude Code hook configuration" >&2
+    echo "    Run manually: irrlicht-settings-merger --action merge" >&2
+else
+    echo "Configuring Claude Code hooks for user: $EFFECTIVE_USER"
+    # Run as the actual user (not root) so the settings file is owned correctly
+    if sudo -u "$EFFECTIVE_USER" HOME="$EFFECTIVE_HOME" "$MERGER_BINARY" --action merge; then
+        echo "   ✅  Claude Code hooks configured"
+    else
+        echo "   ⚠️   Hook configuration failed — run manually:" >&2
+        echo "       irrlicht-settings-merger --action merge" >&2
+        # Non-fatal: don't block installation
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Launch Irrlicht.app for the calling user
+# ---------------------------------------------------------------------------
+if [[ -d "$APP_BUNDLE" ]] && [[ -n "$EFFECTIVE_USER" ]]; then
+    echo "Launching Irrlicht.app..."
+    # open -a runs in the user's session; launchctl asuser ensures GUI access
+    CONSOLE_UID=$(id -u "$EFFECTIVE_USER" 2>/dev/null || echo "")
+    if [[ -n "$CONSOLE_UID" ]]; then
+        launchctl asuser "$CONSOLE_UID" open -a "$APP_BUNDLE" &>/dev/null || true
+        echo "   ✅  Irrlicht.app launched"
+    else
+        echo "   ⚠️   Could not determine UID for $EFFECTIVE_USER — launch manually" >&2
+    fi
+fi
+
+echo ""
+echo "✅  Irrlicht installation complete!"
+echo ""
+echo "   irrlicht-hook is at:             $HOOK_BINARY"
+echo "   irrlicht-settings-merger is at:  $MERGER_BINARY"
+echo "   Irrlicht.app is at:              $APP_BUNDLE"
+echo ""
+echo "To uninstall: /usr/local/bin/irrlicht-uninstall.sh"
+
+exit 0
