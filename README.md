@@ -170,6 +170,7 @@ Example state file:
     ├── update-version.sh      # Version bump utility
     ├── stress-test.py         # Performance and load testing
     └── model-capacity.json    # Token capacity data by model
+validate.sh                    # Single validation entry point (build + test + integration)
 ```
 
 ### Building from Source
@@ -188,10 +189,20 @@ cd Irrlicht.app && swift build
 cd tools/settings-merger && go build -o settings-merger .
 ```
 
-### Running Tests
+### Validation
+
+The single entry point for verifying the full system contract:
 
 ```bash
-# Run the complete test suite
+./validate.sh
+```
+
+This runs in order: Go build → Swift build → Go tests → Swift tests → integration tests. Exit code 0 means all claims passed. **A change is not done until `./validate.sh` passes.**
+
+Individual components:
+
+```bash
+# Run the integration test suite
 ./tools/test-runner.sh
 
 # Run specific component tests
@@ -286,10 +297,55 @@ Structured JSON logs with automatic rotation:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Write tests for new functionality  
-4. Ensure all tests pass: `./tools/test-runner.sh`
+3. Write tests for new functionality
+4. Ensure all checks pass: `./validate.sh`
 5. Commit your changes with descriptive messages
 6. Submit a pull request
+
+**For AI coding agents:** run `./validate.sh` after every change. A task is only complete when exit code is 0. Never mark a task done based only on compilation. If validation fails, inspect the failing test and fix the root cause — do not skip or comment out failing assertions.
+
+## Coding Agent Support
+
+Irrlicht is designed to be **agent-verifiable**: an AI coding agent can inspect app state and validate its own changes without human assistance.
+
+### Passive observability — read current state
+
+Session state files are the ground truth. An agent can read them directly:
+
+```bash
+# See all active sessions
+ls ~/Library/Application\ Support/Irrlicht/instances/
+
+# Check session count and states
+cat ~/Library/Application\ Support/Irrlicht/instances/*.json | jq '{id: .session_id, state: .state}'
+```
+
+This works without any app changes — the state files are always present while sessions are active.
+
+### Active validation — run executable claims
+
+```bash
+./validate.sh   # must exit 0 before any change is considered done
+```
+
+The validation harness is a semantic firewall around agent-authored changes:
+
+```
+agent generates change → ./validate.sh executes claims → only exit 0 counts as success
+```
+
+### Visual verification
+
+To verify rendering without human review, open the menu bar popup and capture a screenshot:
+
+```bash
+# Open popup via AppleScript
+osascript -e 'tell application "System Events" to click menu bar item 1 of menu bar 2 of process "Irrlicht"'
+screencapture -x /tmp/irrlicht-check.png
+# Pass the image to your vision model for visual assertion
+```
+
+Tools like [Peekaboo](https://github.com/steipete/Peekaboo) combine screenshot capture and vision analysis into a single CLI call.
 
 ## Star History
 
