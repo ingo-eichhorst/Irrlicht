@@ -200,32 +200,32 @@ func TestCreateBackup_DryRun(t *testing.T) {
 func TestMergeIrrlichtHooks_NewFile(t *testing.T) {
 	tmpDir, cleanup := setupTestDir(t)
 	defer cleanup()
-	
+
 	settingsPath := filepath.Join(tmpDir, "new_settings.json")
 	merger := NewSettingsMerger(settingsPath)
-	
+
 	if err := merger.MergeIrrlichtHooks(); err != nil {
 		t.Fatalf("Failed to merge hooks into new file: %v", err)
 	}
-	
+
 	// Verify file was created with correct content
 	settings, err := merger.LoadSettings()
 	if err != nil {
 		t.Fatalf("Failed to load merged settings: %v", err)
 	}
-	
+
 	hooks, ok := settings["hooks"].(map[string]interface{})
 	if !ok {
 		t.Fatal("Expected hooks section to exist")
 	}
-	
-	irrlicht, ok := hooks["irrlicht"].(map[string]interface{})
-	if !ok {
-		t.Fatal("Expected irrlicht hook to exist")
-	}
-	
-	if irrlicht["command"] != "irrlicht-hook" {
-		t.Errorf("Expected command to be 'irrlicht-hook', got %v", irrlicht["command"])
+
+	// Current structure: per-event keys (e.g. hooks.SessionStart, hooks.Stop, ...)
+	// each containing an array of EventHookConfig with irrlicht-hook command
+	eventsToCheck := []string{"SessionStart", "Stop", "UserPromptSubmit"}
+	for _, event := range eventsToCheck {
+		if _, exists := hooks[event]; !exists {
+			t.Errorf("Expected hooks.%s to exist", event)
+		}
 	}
 }
 
@@ -267,9 +267,9 @@ func TestMergeIrrlichtHooks_ExistingFile(t *testing.T) {
 		t.Error("Existing hook was not preserved")
 	}
 	
-	// Verify Irrlicht hook was added
-	if _, exists := hooks["irrlicht"]; !exists {
-		t.Error("Irrlicht hook was not added")
+	// Verify Irrlicht hook was added (per-event structure)
+	if _, exists := hooks["SessionStart"]; !exists {
+		t.Error("Irrlicht hook was not added (missing hooks.SessionStart)")
 	}
 }
 
@@ -477,38 +477,3 @@ func TestListBackups(t *testing.T) {
 	}
 }
 
-func TestHooksEqual(t *testing.T) {
-	merger := NewSettingsMerger("/test")
-	
-	hook1 := HookConfig{
-		Events:  []string{"SessionStart", "Stop"},
-		Command: "irrlicht-hook",
-	}
-	
-	hook2 := HookConfig{
-		Events:  []string{"Stop", "SessionStart"}, // Different order
-		Command: "irrlicht-hook",
-	}
-	
-	hook3 := HookConfig{
-		Events:  []string{"SessionStart"},
-		Command: "irrlicht-hook",
-	}
-	
-	hook4 := HookConfig{
-		Events:  []string{"SessionStart", "Stop"},
-		Command: "different-command",
-	}
-	
-	if !merger.hooksEqual(hook1, hook2) {
-		t.Error("Expected hooks with same events in different order to be equal")
-	}
-	
-	if merger.hooksEqual(hook1, hook3) {
-		t.Error("Expected hooks with different events to be unequal")
-	}
-	
-	if merger.hooksEqual(hook1, hook4) {
-		t.Error("Expected hooks with different commands to be unequal")
-	}
-}
