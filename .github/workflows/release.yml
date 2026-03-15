@@ -103,16 +103,16 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Build installer package
         run: |
-          chmod +x ./tools/installer/create-installer-package.sh
+          chmod +x ./platform/macos/create-installer-package.sh
 
           if [[ -n "${SIGN_IDENTITY:-}" ]]; then
             echo "Building signed package…"
-            ./tools/installer/create-installer-package.sh \
+            ./platform/macos/create-installer-package.sh \
               --version "$VERSION" \
               --sign "$SIGN_IDENTITY"
           else
             echo "Building unsigned package…"
-            ./tools/installer/create-installer-package.sh \
+            ./platform/macos/create-installer-package.sh \
               --version "$VERSION"
           fi
 
