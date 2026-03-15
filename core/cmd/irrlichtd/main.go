@@ -17,6 +17,7 @@ import (
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/logging"
+	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/memory"
 	"irrlicht/core/adapters/outbound/metrics"
 	"irrlicht/core/adapters/outbound/security"
@@ -27,7 +28,10 @@ import (
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
 var Version = "dev"
 
-const tcpAddr = ":7837"
+const (
+	tcpAddr = ":7837"
+	tcpPort = 7837
+)
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
@@ -105,6 +109,14 @@ func main() {
 	go func() { _ = srv.Serve(unixL) }()
 	go func() { _ = srv.Serve(tcpL) }()
 
+	// mDNS/Bonjour advertisement — non-fatal if unavailable.
+	mdnsAdv, err := mdns.New(tcpPort)
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("mDNS advertisement failed (non-fatal): %v", err))
+	} else {
+		logger.LogInfo("startup", "", "mDNS: advertising _irrlicht._tcp on the local network")
+	}
+
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichtd %s listening on unix:%s and tcp:%s", Version, sockPath, tcpAddr))
 
 	// Wait for SIGTERM or SIGINT.
@@ -116,6 +128,11 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	if mdnsAdv != nil {
+		mdnsAdv.Shutdown(ctx)
+	}
+
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.LogError("shutdown", "", fmt.Sprintf("graceful shutdown error: %v", err))
 	}
