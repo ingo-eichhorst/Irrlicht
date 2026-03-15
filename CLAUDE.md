@@ -133,3 +133,68 @@ see events.md
 - SwiftUI tests using `swift test`
 - Concurrency testing with multiple simultaneous sessions
 - Build verification across macOS architectures (Intel/Apple Silicon)
+
+## Agent Verification
+
+AI coding agents can verify Irrlicht's UI state programmatically after making code changes.
+
+### Method 1: Debug state file (recommended)
+
+Set `IRRLICHT_DEBUG=1` when launching the app. On every session update, `SessionManager`
+writes current state to `~/.irrlicht/debug-state.json`:
+
+```bash
+IRRLICHT_DEBUG=1 swift run --package-path Irrlicht.app &
+# ... make changes, trigger hook events ...
+cat ~/.irrlicht/debug-state.json
+```
+
+Example output:
+```json
+{
+  "lastUpdated": "2026-03-15T22:17:52Z",
+  "readyCount": 1,
+  "sessionCount": 2,
+  "sessions": [
+    {
+      "contextUtilization": 42.5,
+      "id": "sess_abc123def456",
+      "model": "claude-sonnet-4-6",
+      "projectName": "mayor",
+      "state": "working",
+      "totalTokens": 85000
+    }
+  ],
+  "waitingCount": 0,
+  "workingCount": 1
+}
+```
+
+### Method 2: HTTP state endpoint
+
+When `irrlichtd` is running, query the `/state` endpoint for the same format:
+
+```bash
+curl -s http://127.0.0.1:7837/state | jq .
+```
+
+### Method 3: Screenshot + vision
+
+```bash
+# Open the menu bar (requires Irrlicht to be running)
+osascript -e 'tell application "System Events" to click menu bar item 1 of menu bar 2'
+# Capture screenshot
+screencapture -x /tmp/irrlicht-check.png
+# Then read the image with your vision model for visual verification
+```
+
+### Method 4: Accessibility tree inspection
+
+Session rows have accessibility identifiers for AXorcist/Peekaboo inspection:
+- Parent sessions: `session-card-<session-id>`
+- Subagent sessions: `subagent-card-<session-id>`
+
+```bash
+# Example with AXorcist (if installed)
+axorcist query --identifier "session-card-*"
+```

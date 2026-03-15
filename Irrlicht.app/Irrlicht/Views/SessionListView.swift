@@ -357,6 +357,8 @@ struct SessionRowView: View {
                 isHovered = hovering
             }
         }
+        .accessibilityIdentifier("session-card-\(session.id)")
+        .accessibilityLabel("\(session.projectName ?? "unknown") \(session.state.rawValue) \(session.effectiveModel)")
     }
 }
 
@@ -449,6 +451,8 @@ struct SubagentRowView: View {
                 isHovered = hovering
             }
         }
+        .accessibilityIdentifier("subagent-card-\(session.id)")
+        .accessibilityLabel("subagent \(session.state.rawValue)")
     }
 }
 

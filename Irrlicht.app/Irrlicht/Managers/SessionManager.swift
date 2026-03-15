@@ -188,6 +188,7 @@ class SessionManager: ObservableObject {
         sessions = newSessions
         lastError = nil
         checkContextPressureAlerts(sessions: newSessions)
+        writeDebugState()
     }
 
     // MARK: - File System Watching (legacy)
@@ -372,6 +373,7 @@ class SessionManager: ObservableObject {
             sessions = newSessions
             lastError = nil
             checkContextPressureAlerts(sessions: newSessions)
+            writeDebugState()
 
         } catch {
             lastError = "Failed to load sessions: \(error.localizedDescription)"
@@ -712,6 +714,74 @@ class SessionManager: ObservableObject {
             lastError = "Failed to delete session: \(error.localizedDescription)"
         }
     }
+
+    // MARK: - Debug State Dump (IRRLICHT_DEBUG=1)
+
+    private var isDebugMode: Bool {
+        ProcessInfo.processInfo.environment["IRRLICHT_DEBUG"] == "1"
+    }
+
+    /// Writes current session state to ~/.irrlicht/debug-state.json when IRRLICHT_DEBUG=1.
+    /// Agents can verify UI state with: cat ~/.irrlicht/debug-state.json
+    private func writeDebugState() {
+        guard isDebugMode else { return }
+
+        let debugDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".irrlicht")
+        let debugFile = debugDir.appendingPathComponent("debug-state.json")
+
+        do {
+            try FileManager.default.createDirectory(at: debugDir, withIntermediateDirectories: true)
+
+            let entries = sessions.map { session in
+                DebugSessionEntry(
+                    id: session.id,
+                    projectName: session.projectName,
+                    state: session.state.rawValue,
+                    model: session.effectiveModel,
+                    contextUtilization: session.metrics?.contextUtilization ?? 0.0,
+                    totalTokens: session.metrics?.totalTokens ?? 0
+                )
+            }
+
+            let formatter = ISO8601DateFormatter()
+            let debugState = DebugState(
+                sessions: entries,
+                sessionCount: sessions.count,
+                workingCount: workingSessions,
+                waitingCount: waitingSessions,
+                readyCount: readySessions,
+                lastUpdated: formatter.string(from: Date())
+            )
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(debugState)
+            try data.write(to: debugFile, options: .atomic)
+        } catch {
+            print("⚠️ Failed to write debug state: \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - Debug State Data Structures
+
+private struct DebugSessionEntry: Codable {
+    let id: String
+    let projectName: String?
+    let state: String
+    let model: String
+    let contextUtilization: Double
+    let totalTokens: Int64
+}
+
+private struct DebugState: Codable {
+    let sessions: [DebugSessionEntry]
+    let sessionCount: Int
+    let workingCount: Int
+    let waitingCount: Int
+    let readyCount: Int
+    let lastUpdated: String
 }
 
 // MARK: - Supporting Data Structures
