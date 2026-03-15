@@ -44,6 +44,10 @@ type SessionState struct {
 	// PID of the Claude Code process that owns this session (set on SessionStart).
 	PID int `json:"pid,omitempty"`
 
+	// ParentSessionID links a subagent session to its spawning parent session.
+	// Set from parent_session_id on SubagentStop events.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+
 	// Transcript monitoring for waiting-state recovery.
 	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`
 	WaitingStartTime   *int64 `json:"waiting_start_time,omitempty"`

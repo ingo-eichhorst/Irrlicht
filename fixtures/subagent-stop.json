@@ -1,6 +1,7 @@
 {
   "hook_event_name": "SubagentStop",
   "session_id": "sess_abc123def456",
+  "parent_session_id": "sess_parent789xyz",
   "timestamp": "2024-09-05T14:34:12.450Z",
   "data": {
     "transcript_path": "/Users/ingo/.claude/projects/my-project/transcript.jsonl",

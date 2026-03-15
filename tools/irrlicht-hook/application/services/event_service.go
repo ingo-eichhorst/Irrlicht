@@ -260,6 +260,9 @@ func (s *EventService) populateFromEvent(state *session.SessionState, evt *event
 		if v, ok := evt.Data["transcript_path"].(string); ok {
 			state.TranscriptPath = v
 		}
+		if v, ok := evt.Data["parent_session_id"].(string); ok {
+			state.ParentSessionID = v
+		}
 	}
 	// Direct fields override
 	if evt.Model != "" {
@@ -270,6 +273,9 @@ func (s *EventService) populateFromEvent(state *session.SessionState, evt *event
 	}
 	if evt.TranscriptPath != "" {
 		state.TranscriptPath = evt.TranscriptPath
+	}
+	if evt.ParentSessionID != "" {
+		state.ParentSessionID = evt.ParentSessionID
 	}
 }
 
@@ -297,6 +303,9 @@ func (s *EventService) inheritFromExisting(state *session.SessionState, existing
 	}
 	if state.PID == 0 && existing.PID > 0 {
 		state.PID = existing.PID
+	}
+	if state.ParentSessionID == "" && existing.ParentSessionID != "" {
+		state.ParentSessionID = existing.ParentSessionID
 	}
 	if state.TranscriptPath == "" && existing.TranscriptPath != "" {
 		state.TranscriptPath = existing.TranscriptPath

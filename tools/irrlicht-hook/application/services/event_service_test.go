@@ -545,6 +545,90 @@ func TestHandleEvent_LeavingWaiting_ClearsMonitoring(t *testing.T) {
 	}
 }
 
+func TestHandleEvent_SubagentStop_SetsParentSessionIDFromDirectField(t *testing.T) {
+	repo := newMockRepo()
+	svc := newSvc(repo)
+
+	evt := &event.HookEvent{
+		HookEventName:   "SubagentStop",
+		SessionID:       "sub1",
+		ParentSessionID: "parent1",
+	}
+	if err := svc.HandleEvent(evt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	state, _ := repo.Load("sub1")
+	if state.ParentSessionID != "parent1" {
+		t.Errorf("parent_session_id: got %q, want parent1", state.ParentSessionID)
+	}
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready", state.State)
+	}
+}
+
+func TestHandleEvent_SubagentStop_SetsParentSessionIDFromDataMap(t *testing.T) {
+	repo := newMockRepo()
+	svc := newSvc(repo)
+
+	evt := &event.HookEvent{
+		HookEventName: "SubagentStop",
+		SessionID:     "sub2",
+		Data: map[string]interface{}{
+			"parent_session_id": "parent2",
+		},
+	}
+	if err := svc.HandleEvent(evt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	state, _ := repo.Load("sub2")
+	if state.ParentSessionID != "parent2" {
+		t.Errorf("parent_session_id from data map: got %q, want parent2", state.ParentSessionID)
+	}
+}
+
+func TestHandleEvent_SubagentStop_DirectFieldOverridesDataMap(t *testing.T) {
+	repo := newMockRepo()
+	svc := newSvc(repo)
+
+	evt := &event.HookEvent{
+		HookEventName:   "SubagentStop",
+		SessionID:       "sub3",
+		ParentSessionID: "parent-direct",
+		Data: map[string]interface{}{
+			"parent_session_id": "parent-from-data",
+		},
+	}
+	if err := svc.HandleEvent(evt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	state, _ := repo.Load("sub3")
+	if state.ParentSessionID != "parent-direct" {
+		t.Errorf("direct field should override data map: got %q, want parent-direct", state.ParentSessionID)
+	}
+}
+
+func TestHandleEvent_ParentSessionID_InheritedFromExisting(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["sub4"] = &session.SessionState{
+		SessionID:       "sub4",
+		State:           session.StateReady,
+		ParentSessionID: "parent4",
+		FirstSeen:       100,
+		UpdatedAt:       100,
+	}
+	svc := newSvc(repo)
+
+	// Subsequent event without parent_session_id should preserve it
+	evt := &event.HookEvent{HookEventName: "PostToolUse", SessionID: "sub4"}
+	if err := svc.HandleEvent(evt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	state, _ := repo.Load("sub4")
+	if state.ParentSessionID != "parent4" {
+		t.Errorf("parent_session_id not inherited: got %q, want parent4", state.ParentSessionID)
+	}
+}
+
 func TestCleanupOrphanedSessions_SkipsCancelledByUser(t *testing.T) {
 	repo := newMockRepo()
 	svc := newSvc(repo)

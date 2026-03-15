@@ -7,19 +7,20 @@ const MaxPayloadSize = 512 * 1024 // 512KB
 
 // HookEvent represents a Claude Code hook event received via stdin.
 type HookEvent struct {
-	HookEventName  string                 `json:"hook_event_name"`
-	SessionID      string                 `json:"session_id"`
-	Timestamp      string                 `json:"timestamp"`
-	Matcher        string                 `json:"matcher,omitempty"`
-	Reason         string                 `json:"reason,omitempty"`
-	Data           map[string]interface{} `json:"data"`
-	TranscriptPath string                 `json:"transcript_path,omitempty"`
-	CWD            string                 `json:"cwd,omitempty"`
-	Model          string                 `json:"model,omitempty"`
-	PermissionMode string                 `json:"permission_mode,omitempty"`
-	Prompt         string                 `json:"prompt,omitempty"`
-	Source         string                 `json:"source,omitempty"`
-	ToolName       string                 `json:"tool_name,omitempty"`
+	HookEventName   string                 `json:"hook_event_name"`
+	SessionID       string                 `json:"session_id"`
+	Timestamp       string                 `json:"timestamp"`
+	Matcher         string                 `json:"matcher,omitempty"`
+	Reason          string                 `json:"reason,omitempty"`
+	Data            map[string]interface{} `json:"data"`
+	TranscriptPath  string                 `json:"transcript_path,omitempty"`
+	CWD             string                 `json:"cwd,omitempty"`
+	Model           string                 `json:"model,omitempty"`
+	PermissionMode  string                 `json:"permission_mode,omitempty"`
+	Prompt          string                 `json:"prompt,omitempty"`
+	Source          string                 `json:"source,omitempty"`
+	ToolName        string                 `json:"tool_name,omitempty"`
+	ParentSessionID string                 `json:"parent_session_id,omitempty"`
 }
 
 // validEventNames is the set of known valid hook event names.

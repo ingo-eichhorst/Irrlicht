@@ -121,6 +121,7 @@ struct SessionState: Identifiable, Codable {
     let lastEvent: String?      // last hook event type (optional)
     let metrics: SessionMetrics? // performance metrics from transcript analysis (optional)
     let pid: Int?               // Claude Code process PID (optional for backwards compatibility)
+    let parentSessionId: String? // parent session ID for subagent sessions (optional)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
@@ -139,6 +140,7 @@ struct SessionState: Identifiable, Codable {
         case eventCount = "event_count"
         case lastEvent = "last_event"
         case metrics
+        case parentSessionId = "parent_session_id"
     }
     
     // Custom decoder to handle multiple date formats and missing fields
@@ -162,7 +164,8 @@ struct SessionState: Identifiable, Codable {
         lastEvent = try container.decodeIfPresent(String.self, forKey: .lastEvent)
         metrics = try container.decodeIfPresent(SessionMetrics.self, forKey: .metrics)
         pid = try container.decodeIfPresent(Int.self, forKey: .pid)
-        
+        parentSessionId = try container.decodeIfPresent(String.self, forKey: .parentSessionId)
+
         // Handle firstSeen date (unix timestamp format)
         if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
             firstSeen = Date(timeIntervalSince1970: timestamp)
@@ -209,7 +212,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -223,6 +226,7 @@ struct SessionState: Identifiable, Codable {
         self.lastEvent = lastEvent
         self.metrics = metrics
         self.pid = pid
+        self.parentSessionId = parentSessionId
     }
     
     enum State: String, CaseIterable, Codable {
