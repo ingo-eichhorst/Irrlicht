@@ -1,0 +1,64 @@
+name: Update Coverage Badge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Run Go tests with coverage
+        run: |
+          total=0
+          count=0
+          for dir in tools/irrlicht-hook tools/settings-merger tools/model-capacity tools/transcript-tailer; do
+            if [ -d "$dir" ] && ls "$dir"/*.go "$dir"/**/*.go 2>/dev/null | head -1 | grep -q .; then
+              pct=$(cd "$dir" && go test ./... -coverprofile=coverage.out 2>/dev/null && go tool cover -func=coverage.out 2>/dev/null | grep "^total:" | awk '{print $3}' | tr -d '%' || echo "0")
+              if [ -n "$pct" ] && [ "$pct" != "0" ]; then
+                total=$(echo "$total + $pct" | bc)
+                count=$((count + 1))
+              fi
+            fi
+          done
+          if [ "$count" -gt 0 ]; then
+            COVERAGE=$(echo "scale=1; $total / $count" | bc)
+          else
+            COVERAGE="0.0"
+          fi
+          echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
+          echo "Coverage: $COVERAGE%"
+
+      - name: Determine badge color
+        run: |
+          pct="${COVERAGE%.*}"
+          if [ "$pct" -ge 80 ]; then
+            COLOR="brightgreen"
+          elif [ "$pct" -ge 60 ]; then
+            COLOR="yellow"
+          else
+            COLOR="red"
+          fi
+          echo "COLOR=$COLOR" >> $GITHUB_ENV
+
+      - name: Update Gist with coverage
+        env:
+          GIST_SECRET: ${{ secrets.GIST_SECRET }}
+          COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
+        run: |
+          curl -s -X PATCH \
+            -H "Authorization: token $GIST_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"files\":{\"coverage.json\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"label\\\":\\\"coverage\\\",\\\"message\\\":\\\"${COVERAGE}%\\\",\\\"color\\\":\\\"${COLOR}\\\"}\"}}}}" \
+            "https://api.github.com/gists/$COVERAGE_GIST_ID"
