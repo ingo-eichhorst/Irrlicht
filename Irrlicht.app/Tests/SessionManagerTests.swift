@@ -210,6 +210,115 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(sessionManager.readySessions, 1)
     }
     
+    // MARK: - SystemStatusDetector Tests
+
+    func testHookStatusBinaryMissing() {
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: false,
+            settingsData: nil
+        )
+        XCTAssertEqual(result, .binaryMissing)
+    }
+
+    func testHookStatusBinaryMissingIgnoresSettings() {
+        // Even if settings data is present, binary missing wins.
+        let data = makeFullyConfiguredSettingsData()
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: false,
+            settingsData: data
+        )
+        XCTAssertEqual(result, .binaryMissing)
+    }
+
+    func testHookStatusNotConfiguredWhenSettingsNil() {
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: true,
+            settingsData: nil
+        )
+        XCTAssertEqual(result, .notConfigured)
+    }
+
+    func testHookStatusNotConfiguredWhenInvalidJSON() {
+        let badData = "not valid json".data(using: .utf8)!
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: true,
+            settingsData: badData
+        )
+        XCTAssertEqual(result, .notConfigured)
+    }
+
+    func testHookStatusNotConfiguredWhenNoHooksKey() {
+        let data = #"{"otherKey": "value"}"#.data(using: .utf8)!
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: true,
+            settingsData: data
+        )
+        XCTAssertEqual(result, .notConfigured)
+    }
+
+    func testHookStatusNotConfiguredWhenEmptyHooksObject() {
+        let data = #"{"hooks": {}}"#.data(using: .utf8)!
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: true,
+            settingsData: data
+        )
+        XCTAssertEqual(result, .notConfigured)
+    }
+
+    func testHookStatusFullyConfigured() {
+        let data = makeFullyConfiguredSettingsData()
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: true,
+            settingsData: data
+        )
+        XCTAssertEqual(result, .fullyConfigured)
+    }
+
+    func testHookStatusPartiallyConfigured() {
+        let configured = ["SessionStart", "Stop"]
+        let data = makeSettingsData(configuredEvents: configured)
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: true,
+            settingsData: data
+        )
+        let expectedMissing = SystemStatusDetector.requiredEvents.filter {
+            !configured.contains($0)
+        }
+        XCTAssertEqual(result, .partiallyConfigured(missing: expectedMissing))
+    }
+
+    func testHookStatusPartiallyConfiguredListsAllMissing() {
+        // Only one event wired → the other 8 are reported as missing.
+        let data = makeSettingsData(configuredEvents: ["SessionStart"])
+        let result = SystemStatusDetector.detectHookStatus(
+            irrlichtHookInPath: true,
+            settingsData: data
+        )
+        guard case .partiallyConfigured(let missing) = result else {
+            return XCTFail("Expected partiallyConfigured, got \(result)")
+        }
+        let expectedCount = SystemStatusDetector.requiredEvents.count - 1
+        XCTAssertEqual(missing.count, expectedCount)
+        XCTAssertFalse(missing.contains("SessionStart"))
+    }
+
+    // MARK: - Helper Methods for SystemStatusDetector tests
+
+    /// Builds settings data with all required events fully configured.
+    private func makeFullyConfiguredSettingsData() -> Data {
+        makeSettingsData(configuredEvents: SystemStatusDetector.requiredEvents)
+    }
+
+    /// Builds settings data with only the given events wired to irrlicht-hook.
+    private func makeSettingsData(configuredEvents: [String]) -> Data {
+        var hooks: [String: Any] = [:]
+        for event in configuredEvents {
+            hooks[event] = [["hooks": [["type": "command", "command": "irrlicht-hook"]]]]
+        }
+        let settings: [String: Any] = ["hooks": hooks]
+        return try! JSONSerialization.data(withJSONObject: settings)
+    }
+
     // MARK: - Helper Methods
     
     private func createMockSession(id: String, state: SessionState.State) -> SessionState {
