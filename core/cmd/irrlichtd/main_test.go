@@ -156,6 +156,66 @@ func TestGate_WebSocketReceivesPush(t *testing.T) {
 	}
 }
 
+// TestGate_GetState verifies that GET /state returns the compact debug-state format
+// with sessions[].state — satisfying the gate: curl http://localhost:7837/state | jq '.sessions[].state'
+func TestGate_GetState(t *testing.T) {
+	srv := newTestStack(t)
+	defer srv.Close()
+
+	// POST an event so there's a session to report.
+	body := `{"hook_event_name":"Stop","session_id":"state-gate-1"}`
+	resp, err := http.Post(srv.URL+"/api/v1/events", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST status: got %d, want 204", resp.StatusCode)
+	}
+
+	resp, err = http.Get(srv.URL + "/state")
+	if err != nil {
+		t.Fatalf("GET /state: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /state status: got %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("Content-Type: got %q, want application/json", ct)
+	}
+
+	var state struct {
+		Sessions []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"sessions"`
+		SessionCount int    `json:"sessionCount"`
+		LastUpdated  string `json:"lastUpdated"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if state.LastUpdated == "" {
+		t.Error("lastUpdated must not be empty")
+	}
+	if state.SessionCount != len(state.Sessions) {
+		t.Errorf("sessionCount %d != len(sessions) %d", state.SessionCount, len(state.Sessions))
+	}
+	found := false
+	for _, s := range state.Sessions {
+		if s.ID == "state-gate-1" {
+			found = true
+			if s.State == "" {
+				t.Error("sessions[].state must not be empty")
+			}
+		}
+	}
+	if !found {
+		t.Error("state-gate-1 not found in GET /state response")
+	}
+}
+
 // TestGate_UIServed verifies that GET / returns 200 with HTML content.
 func TestGate_UIServed(t *testing.T) {
 	srv := newTestStack(t)
