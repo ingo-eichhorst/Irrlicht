@@ -50,7 +50,7 @@ with open('$VERSION_JSON', 'w') as f:
 "
 echo "  updated version.json"
 
-# 2. Update go.mod version comment (# app-version: x.y.z)
+# 2. Update go.mod version comment (// app-version: x.y.z)
 # This comment is a project convention for tracking app version in go.mod files.
 for gomod in $(find "$REPO_ROOT/tools" -name "go.mod"); do
     rel="${gomod#$REPO_ROOT/}"
@@ -61,11 +61,11 @@ ver = '$NEW_VERSION'
 with open(path, 'r') as f:
     content = f.read()
 
-if '# app-version:' in content:
-    content = re.sub(r'# app-version:.*', f'# app-version: {ver}', content)
+if '// app-version:' in content:
+    content = re.sub(r'// app-version:.*', f'// app-version: {ver}', content)
     action = 'version comment'
 else:
-    content = re.sub(r'(^module [^\n]*\n)', r'\1# app-version: ' + ver + r'\n', content, count=1, flags=re.MULTILINE)
+    content = re.sub(r'(^module [^\n]*\n)', r'\1// app-version: ' + ver + r'\n', content, count=1, flags=re.MULTILINE)
     action = 'added version comment'
 
 with open(path, 'w') as f:

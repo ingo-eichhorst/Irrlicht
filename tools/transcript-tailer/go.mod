@@ -1,5 +1,5 @@
 module transcript-tailer
-# app-version: 0.2.0
+// app-version: 0.2.0
 go 1.21
 
 require github.com/stretchr/testify v1.8.4
