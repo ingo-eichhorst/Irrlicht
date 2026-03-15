@@ -43,6 +43,7 @@ Temporary Items
 *.so
 *.dylib
 tools/irrlicht-hook/hook
+tools/settings-merger/settings-merger
 
 # Gas Town runtime directories
 .beads/

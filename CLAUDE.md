@@ -77,9 +77,11 @@ export IRRLICHT_DISABLED=1
 
 ### Development Workflow
 ```bash
-# Quick demo setup
+# Run SwiftUI app for manual testing
 cd Irrlicht.app && swift run &
-bash demo-phase2.sh
+
+# Replay sample events to test the hook receiver
+./tools/irrlicht-replay fixtures/session-start.json
 
 # Clean up test data
 rm -rf ~/Library/Application\ Support/Irrlicht/instances

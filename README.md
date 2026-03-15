@@ -148,23 +148,28 @@ Example state file:
 ### Project Structure
 
 ```
-├── Irrlicht.app/               # SwiftUI menu bar application
-│   ├── Irrlicht/              # Main app code
-│   ├── Tests/                 # SwiftUI app tests
+├── core/                      # Go hook receiver (single module, hexagonal architecture)
+│   ├── cmd/irrlicht-hook/     # Entry point
+│   ├── domain/                # SessionState, HookEvent, state machine
+│   ├── ports/                 # Inbound/outbound interfaces
+│   ├── adapters/              # stdin, filesystem, git, logging, metrics, security
+│   ├── application/services/  # EventService orchestration
+│   └── pkg/                   # tailer, capacity utilities
+├── Irrlicht.app/              # SwiftUI menu bar application
+│   ├── Irrlicht/              # Main app code (IrrlichtApp, SessionManager, Views)
+│   ├── Tests/                 # SwiftUI app tests + concurrency scenarios
 │   └── Package.swift          # Swift package configuration
 ├── fixtures/                  # Hook event samples and edge cases
-├── tests/scenarios/           # Multi-session concurrency test scenarios
-├── tools/
-│   ├── irrlicht-hook/         # Go binary that receives hook events
-│   ├── transcript-tailer/     # Real-time transcript analysis for metrics
-│   ├── model-capacity/        # Token capacity and context utilization data
-│   ├── settings-merger/       # Go tool for managing Claude Code settings
-│   ├── irrlicht-replay        # Python tool for testing event replay
-│   ├── test-runner.sh         # Comprehensive test suite
-│   ├── build-release.sh       # Cross-platform build script
-│   └── stress-test.py         # Performance and load testing
-└── specs/
-    └── story.md              # Brand story and design philosophy
+├── platform/macos/            # macOS installer package builder (.pkg)
+├── specs/                     # Design docs and adapter specs
+└── tools/
+    ├── settings-merger/       # Go tool for managing Claude Code hook config
+    ├── irrlicht-replay        # Python tool for testing event replay
+    ├── test-runner.sh         # Comprehensive test suite
+    ├── build-release.sh       # Cross-platform build script
+    ├── update-version.sh      # Version bump utility
+    ├── stress-test.py         # Performance and load testing
+    └── model-capacity.json    # Token capacity data by model
 ```
 
 ### Building from Source
@@ -174,7 +179,7 @@ Example state file:
 ./tools/build-release.sh
 
 # Build just the hook receiver
-cd tools/irrlicht-hook && go build -o irrlicht-hook .
+cd core && go build -o irrlicht-hook ./cmd/irrlicht-hook/
 
 # Build SwiftUI app
 cd Irrlicht.app && swift build

@@ -52,7 +52,7 @@ echo "  updated version.json"
 
 # 2. Update go.mod version comment (// app-version: x.y.z)
 # This comment is a project convention for tracking app version in go.mod files.
-for gomod in $(find "$REPO_ROOT/tools" -name "go.mod"); do
+for gomod in $(find "$REPO_ROOT/tools" "$REPO_ROOT/core" -name "go.mod"); do
     rel="${gomod#$REPO_ROOT/}"
     python3 -c "
 import re
@@ -105,7 +105,7 @@ echo "Version updated to $NEW_VERSION"
 echo ""
 echo "Files changed:"
 echo "  version.json"
-for gomod in $(find "$REPO_ROOT/tools" -name "go.mod"); do
+for gomod in $(find "$REPO_ROOT/tools" "$REPO_ROOT/core" -name "go.mod"); do
     echo "  ${gomod#$REPO_ROOT/}"
 done
 echo "  Irrlicht.app/Package.swift"
