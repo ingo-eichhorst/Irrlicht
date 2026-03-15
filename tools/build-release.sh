@@ -20,14 +20,14 @@ echo "Building for macOS..."
 
 # macOS Apple Silicon (arm64)
 echo "  Building macOS arm64..."
-cd tools/irrlicht-hook
-GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-darwin-arm64" ./cmd/irrlicht-hook/
+cd core
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-darwin-arm64" ./cmd/irrlicht-hook/
 
-# macOS Intel (amd64) 
+# macOS Intel (amd64)
 echo "  Building macOS amd64..."
-GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-darwin-amd64" ./cmd/irrlicht-hook/
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-darwin-amd64" ./cmd/irrlicht-hook/
 
-cd ../../
+cd ..
 
 # Create universal macOS binary
 echo "  Creating universal macOS binary..."
@@ -37,19 +37,19 @@ lipo -create -output "$BUILD_DIR/${BINARY_NAME}-darwin-universal" \
 
 # Build for other platforms (for future distribution)
 echo "Building for Linux..."
-cd tools/irrlicht-hook
-GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-linux-amd64" ./cmd/irrlicht-hook/
-cd ../../
+cd core
+GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-linux-amd64" ./cmd/irrlicht-hook/
+cd ..
 
 echo "Building for Windows..."
-cd tools/irrlicht-hook  
-GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook/
-cd ../../
+cd core
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook/
+cd ..
 
 # Build macOS installer package
 echo ""
 echo "Building macOS installer package..."
-./tools/installer/create-installer-package.sh --version "$VERSION"
+./platform/macos/create-installer-package.sh --version "$VERSION"
 
 # Calculate checksums (files only — build dir may contain Irrlicht.app bundle directory)
 echo "Calculating checksums..."

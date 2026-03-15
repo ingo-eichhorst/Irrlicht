@@ -35,7 +35,7 @@ Claude Code Hook Events → Go Hook Receiver → JSON State Files → SwiftUI Me
 ./tools/build-release.sh
 
 # Build just the hook receiver
-cd tools/irrlicht-hook && go build -o irrlicht-hook ./cmd/irrlicht-hook/
+cd core && go build -o irrlicht-hook ./cmd/irrlicht-hook/
 
 # Build SwiftUI app
 cd Irrlicht.app && swift build
@@ -54,7 +54,7 @@ cd Irrlicht.app && swift run
 
 # Run Go component tests
 cd tools/settings-merger && go test -v
-cd tools/irrlicht-hook && go test -v
+cd core && go test -v ./...
 
 # Test SwiftUI components
 cd Irrlicht.app && swift test
@@ -88,8 +88,8 @@ killall swift
 
 ## Code Structure
 
-**Go Components (`tools/`):**
-- `irrlicht-hook/`: Hook receiver using Hexagonal Architecture (Ports & Adapters)
+**Go Components:**
+- `core/`: Hook receiver using Hexagonal Architecture (Ports & Adapters); single Go module
   - `domain/session/` — SessionState, SessionMetrics, pure state machine
   - `domain/event/` — HookEvent struct and validation
   - `ports/inbound/` — EventHandler interface
@@ -102,9 +102,10 @@ killall swift
   - `adapters/outbound/security/` — path validation
   - `application/services/` — EventService orchestration (processEvent, cleanup, speculative wait)
   - `cmd/irrlicht-hook/` — entry point, dependency injection wiring only
-- `settings-merger/`: Manages `~/.claude/settings.json` hook configuration
-- `model-capacity/`: Token capacity and context utilization tracking
-- `transcript-tailer/`: Real-time transcript analysis for performance metrics
+  - `pkg/tailer/` — real-time transcript analysis for performance metrics
+  - `pkg/capacity/` — token capacity and context utilization tracking
+- `tools/settings-merger/`: Manages `~/.claude/settings.json` hook configuration
+- `platform/macos/`: macOS installer package builder
 
 **SwiftUI App (`Irrlicht.app/`):**
 - `Irrlicht/IrrlichtApp.swift`: Main app entry point

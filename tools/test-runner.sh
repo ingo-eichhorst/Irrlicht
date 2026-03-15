@@ -52,7 +52,7 @@ fi
 
 # Test 4: Hook receiver integration test
 ((total_tests++))
-if ! run_test "Hook Receiver Integration" "./tools/irrlicht-replay --hook-binary ./tools/irrlicht-hook/irrlicht-hook fixtures/session-start.json"; then
+if ! run_test "Hook Receiver Integration" "./tools/irrlicht-replay --hook-binary ./core/irrlicht-hook fixtures/session-start.json"; then
     ((failed_tests++))
 fi
 
@@ -75,7 +75,7 @@ fi
 # Test 7: Kill switch environment variable
 ((total_tests++))
 if ! run_test "Kill Switch (Environment)" "
-    IRRLICHT_DISABLED=1 ./tools/irrlicht-replay --hook-binary ./tools/irrlicht-hook/irrlicht-hook fixtures/session-start.json >/dev/null 2>&1; \
+    IRRLICHT_DISABLED=1 ./tools/irrlicht-replay --hook-binary ./core/irrlicht-hook fixtures/session-start.json >/dev/null 2>&1; \
     test \$? -eq 0  # Should exit successfully with status 0
 "; then
     ((failed_tests++))
