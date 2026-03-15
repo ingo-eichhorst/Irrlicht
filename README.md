@@ -282,6 +282,10 @@ Structured JSON logs with automatic rotation:
 5. Commit your changes with descriptive messages
 6. Submit a pull request
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ingo-eichhorst/Irrlicht&type=Date)](https://star-history.com/#ingo-eichhorst/Irrlicht&Date)
+
 ### License
 
 MIT License - see [LICENSE](LICENSE) file for details.
