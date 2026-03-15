@@ -131,6 +131,7 @@ func (s *EventService) HandleEvent(evt *event.HookEvent) error {
 		Confidence:      "high",
 		LastEvent:       evt.HookEventName,
 		LastMatcher:     evt.Matcher,
+		Adapter:         evt.Adapter,
 	}
 
 	// Extract model, CWD, transcript path — prefer direct fields, fall back to Data map.
@@ -340,6 +341,9 @@ func (s *EventService) inheritFromExisting(state *session.SessionState, existing
 	}
 	if state.ParentSessionID == "" && existing.ParentSessionID != "" {
 		state.ParentSessionID = existing.ParentSessionID
+	}
+	if state.Adapter == "" && existing.Adapter != "" {
+		state.Adapter = existing.Adapter
 	}
 	if state.TranscriptPath == "" && existing.TranscriptPath != "" {
 		state.TranscriptPath = existing.TranscriptPath

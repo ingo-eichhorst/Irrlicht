@@ -22,11 +22,14 @@ type SessionMetrics struct {
 	PressureLevel      string  `json:"pressure_level"`
 }
 
-// SessionState represents the current state of a Claude Code session.
+// SessionState represents the current state of a Claude Code or Copilot session.
 type SessionState struct {
 	Version         int             `json:"version"`
 	SessionID       string          `json:"session_id"`
 	State           string          `json:"state"`
+	// Adapter identifies the hook adapter that produced this session (e.g. "copilot").
+	// Empty means the default Claude Code adapter.
+	Adapter string `json:"adapter,omitempty"`
 	CompactionState string          `json:"compaction_state,omitempty"`
 	Model           string          `json:"model,omitempty"`
 	CWD             string          `json:"cwd,omitempty"`

@@ -1,0 +1,10 @@
+{
+  "timestamp": 1741042325000,
+  "cwd": "/Users/ingo/projects/my-project",
+  "toolName": "edit",
+  "toolArgs": "{\"path\": \"src/module.go\", \"content\": \"...\"}",
+  "toolResult": {
+    "resultType": "success",
+    "textResultForLlm": "File edited successfully"
+  }
+}

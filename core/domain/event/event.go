@@ -21,6 +21,10 @@ type HookEvent struct {
 	Source          string                 `json:"source,omitempty"`
 	ToolName        string                 `json:"tool_name,omitempty"`
 	ParentSessionID string                 `json:"parent_session_id,omitempty"`
+
+	// Adapter identifies the source of this event (e.g. "copilot").
+	// Empty means the default Claude Code adapter.
+	Adapter string `json:"adapter,omitempty"`
 }
 
 // validEventNames is the set of known valid hook event names.
