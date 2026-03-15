@@ -92,3 +92,10 @@ coverage/
 # OS generated files
 Thumbs.db
 ehthumbs.db
+
+# Gas Town (added by gt)
+.runtime/
+.claude/
+.logs/
+__pycache__/
+state.json
