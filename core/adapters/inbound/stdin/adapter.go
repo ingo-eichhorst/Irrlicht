@@ -21,22 +21,23 @@ func New(handler inbound.EventHandler) *Adapter {
 }
 
 // ReadAndHandle reads one event from stdin, validates the payload size, parses the
-// JSON, and calls the handler. It returns the raw payload size alongside any error.
-func (a *Adapter) ReadAndHandle() (payloadSize int, err error) {
+// JSON, and calls the handler. It returns the raw payload bytes, size, and any error.
+func (a *Adapter) ReadAndHandle() (payloadSize int, rawInput []byte, err error) {
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read stdin: %w", err)
+		return 0, nil, fmt.Errorf("failed to read stdin: %w", err)
 	}
 	payloadSize = len(input)
+	rawInput = input
 	if payloadSize > event.MaxPayloadSize {
-		return payloadSize, fmt.Errorf("payload size %d exceeds maximum %d", payloadSize, event.MaxPayloadSize)
+		return payloadSize, rawInput, fmt.Errorf("payload size %d exceeds maximum %d", payloadSize, event.MaxPayloadSize)
 	}
 	var evt event.HookEvent
 	if err := json.Unmarshal(input, &evt); err != nil {
-		return payloadSize, fmt.Errorf("failed to parse JSON: %w", err)
+		return payloadSize, rawInput, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	if err := a.handler.HandleEvent(&evt); err != nil {
-		return payloadSize, err
+		return payloadSize, rawInput, err
 	}
-	return payloadSize, nil
+	return payloadSize, rawInput, nil
 }

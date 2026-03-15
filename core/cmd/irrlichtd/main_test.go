@@ -134,12 +134,18 @@ func TestGate_WebSocketReceivesPush(t *testing.T) {
 		if msg == nil {
 			t.Fatal("ws: read timed out — no push received")
 		}
-		var state session.SessionState
-		if err := json.Unmarshal(msg, &state); err != nil {
+		var envelope struct {
+			Type    string              `json:"type"`
+			Session session.SessionState `json:"session"`
+		}
+		if err := json.Unmarshal(msg, &envelope); err != nil {
 			t.Fatalf("ws: decode: %v", err)
 		}
-		if state.SessionID != "ws-gate-1" {
-			t.Errorf("ws: session_id: got %q, want ws-gate-1", state.SessionID)
+		if envelope.Session.SessionID != "ws-gate-1" {
+			t.Errorf("ws: session_id: got %q, want ws-gate-1", envelope.Session.SessionID)
+		}
+		if envelope.Type == "" {
+			t.Error("ws: message type should not be empty")
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("ws: timed out waiting for push")

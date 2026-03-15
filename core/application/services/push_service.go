@@ -3,14 +3,14 @@ package services
 import (
 	"sync"
 
-	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 // PushService fans out session state changes to all subscribers.
 // It implements ports/outbound.PushBroadcaster.
 type PushService struct {
 	mu   sync.Mutex
-	subs []chan *session.SessionState
+	subs []chan outbound.PushMessage
 }
 
 // NewPushService creates a new PushService.
@@ -19,8 +19,8 @@ func NewPushService() *PushService {
 }
 
 // Subscribe returns a new buffered channel that will receive state updates.
-func (p *PushService) Subscribe() chan *session.SessionState {
-	ch := make(chan *session.SessionState, 16)
+func (p *PushService) Subscribe() chan outbound.PushMessage {
+	ch := make(chan outbound.PushMessage, 16)
 	p.mu.Lock()
 	p.subs = append(p.subs, ch)
 	p.mu.Unlock()
@@ -28,7 +28,7 @@ func (p *PushService) Subscribe() chan *session.SessionState {
 }
 
 // Unsubscribe removes a subscriber channel and closes it.
-func (p *PushService) Unsubscribe(ch chan *session.SessionState) {
+func (p *PushService) Unsubscribe(ch chan outbound.PushMessage) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i, sub := range p.subs {
@@ -40,16 +40,16 @@ func (p *PushService) Unsubscribe(ch chan *session.SessionState) {
 	}
 }
 
-// Broadcast sends the state to all subscribers. Slow subscribers are skipped.
-func (p *PushService) Broadcast(state *session.SessionState) {
+// Broadcast sends the message to all subscribers. Slow subscribers are skipped.
+func (p *PushService) Broadcast(msg outbound.PushMessage) {
 	p.mu.Lock()
-	subs := make([]chan *session.SessionState, len(p.subs))
+	subs := make([]chan outbound.PushMessage, len(p.subs))
 	copy(subs, p.subs)
 	p.mu.Unlock()
 
 	for _, ch := range subs {
 		select {
-		case ch <- state:
+		case ch <- msg:
 		default:
 			// skip slow subscriber
 		}

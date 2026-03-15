@@ -23,8 +23,9 @@ func NewHub(push outbound.PushBroadcaster) *Hub {
 	return &Hub{push: push}
 }
 
-// ServeWS upgrades the HTTP connection to WebSocket and streams state updates
-// until the client disconnects. Register on GET /api/v1/sessions/stream.
+// ServeWS upgrades the HTTP connection to WebSocket and streams typed session
+// state update messages until the client disconnects.
+// Register on GET /api/v1/sessions/stream.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -48,11 +49,11 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		select {
-		case state, ok := <-ch:
+		case msg, ok := <-ch:
 			if !ok {
 				return
 			}
-			data, err := json.Marshal(state)
+			data, err := json.Marshal(msg)
 			if err != nil {
 				continue
 			}

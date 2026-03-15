@@ -80,6 +80,7 @@ func (s *EventService) HandleEvent(evt *event.HookEvent) error {
 		fmt.Sprintf("Event matcher=%s source=%s", evt.Matcher, evt.Source))
 
 	existing, _ := s.repo.Load(evt.SessionID)
+	isNewSession := existing == nil
 
 	// Determine whether the transcript has grown since we entered waiting state.
 	transcriptActivity := s.detectTranscriptActivity(existing)
@@ -105,6 +106,10 @@ func (s *EventService) HandleEvent(evt *event.HookEvent) error {
 			return fmt.Errorf("failed to delete session file: %w", err)
 		}
 		s.log.LogInfo(evt.HookEventName, evt.SessionID, "Session file deleted")
+		if s.broadcaster != nil {
+			tombstone := &session.SessionState{SessionID: evt.SessionID, State: session.StateDeleteSession}
+			s.broadcaster.Broadcast(outbound.PushMessage{Type: outbound.PushTypeDeleted, Session: tombstone})
+		}
 		return nil
 	}
 
@@ -179,7 +184,11 @@ func (s *EventService) HandleEvent(evt *event.HookEvent) error {
 		return err
 	}
 	if s.broadcaster != nil {
-		s.broadcaster.Broadcast(state)
+		msgType := outbound.PushTypeUpdated
+		if isNewSession {
+			msgType = outbound.PushTypeCreated
+		}
+		s.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
 	}
 	return nil
 }
@@ -219,7 +228,7 @@ func (s *EventService) applySpeculativeWait(sessionID string) {
 		return
 	}
 	if s.broadcaster != nil {
-		s.broadcaster.Broadcast(state)
+		s.broadcaster.Broadcast(outbound.PushMessage{Type: outbound.PushTypeUpdated, Session: state})
 	}
 	s.log.LogInfo("speculative-wait", sessionID,
 		"Speculatively transitioned to waiting (PreToolUse pending approval)")

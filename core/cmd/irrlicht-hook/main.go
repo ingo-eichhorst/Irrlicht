@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -87,7 +92,7 @@ func main() {
 	// Read event from stdin and process.
 	stdinAdapter := stdin.New(svc)
 	processStart := time.Now()
-	payloadSize, err := stdinAdapter.ReadAndHandle()
+	payloadSize, rawInput, err := stdinAdapter.ReadAndHandle()
 	processingTime := time.Since(processStart).Milliseconds()
 	totalTime := time.Since(startTime).Milliseconds()
 
@@ -95,6 +100,13 @@ func main() {
 		logger.LogError("", "", err.Error())
 		logger.LogProcessingTime("", "", processingTime, payloadSize, "error")
 		os.Exit(1)
+	}
+
+	// Best-effort forward to irrlichtd daemon via Unix socket.
+	// This keeps the daemon's in-memory state in sync for WebSocket push delivery.
+	// Non-blocking: runs in background, failure is silently ignored.
+	if len(rawInput) > 0 {
+		go forwardToDaemon(rawInput)
 	}
 
 	appMetrics.mu.Lock()
@@ -105,6 +117,39 @@ func main() {
 
 	logger.LogProcessingTime("", "", processingTime, payloadSize, "success")
 	logger.LogInfo("", "", fmt.Sprintf("Successfully processed event in %dms", totalTime))
+}
+
+// forwardToDaemon sends the raw event JSON to irrlichtd via its Unix socket.
+// Uses a short timeout so it never delays the hook invocation.
+func forwardToDaemon(data []byte) {
+	sockPath := daemonSocketPath()
+	client := &http.Client{
+		Timeout: 200 * time.Millisecond,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: 100 * time.Millisecond}).DialContext(ctx, "unix", sockPath)
+			},
+		},
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://localhost/api/v1/events", bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
+}
+
+// daemonSocketPath returns the Unix socket path for irrlichtd.
+func daemonSocketPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/tmp/irrlichtd.sock"
+	}
+	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichtd.sock")
 }
 
 // isDisabledInSettings checks hooks.irrlicht.disabled in ~/.claude/settings.json.

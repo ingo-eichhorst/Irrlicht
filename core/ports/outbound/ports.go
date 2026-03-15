@@ -2,6 +2,19 @@ package outbound
 
 import "irrlicht/core/domain/session"
 
+// PushMessage is a typed WebSocket envelope for session state fan-out.
+type PushMessage struct {
+	Type    string                `json:"type"`
+	Session *session.SessionState `json:"session"`
+}
+
+// Valid PushMessage type constants.
+const (
+	PushTypeCreated = "session_created"
+	PushTypeUpdated = "session_updated"
+	PushTypeDeleted = "session_deleted"
+)
+
 // SessionRepository loads, saves, and deletes session state files.
 type SessionRepository interface {
 	Load(sessionID string) (*session.SessionState, error)
@@ -37,7 +50,7 @@ type PathValidator interface {
 
 // PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).
 type PushBroadcaster interface {
-	Broadcast(state *session.SessionState)
-	Subscribe() chan *session.SessionState
-	Unsubscribe(ch chan *session.SessionState)
+	Broadcast(msg PushMessage)
+	Subscribe() chan PushMessage
+	Unsubscribe(ch chan PushMessage)
 }
