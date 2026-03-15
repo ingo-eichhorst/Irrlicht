@@ -46,17 +46,22 @@ cd tools/irrlicht-hook
 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook/
 cd ../../
 
-# Calculate checksums
+# Build macOS installer package
+echo ""
+echo "Building macOS installer package..."
+./tools/installer/create-installer-package.sh --version "$VERSION"
+
+# Calculate checksums (files only — build dir may contain Irrlicht.app bundle directory)
 echo "Calculating checksums..."
 cd $BUILD_DIR
-shasum -a 256 * > checksums.sha256
+find . -maxdepth 1 -type f ! -name 'checksums.sha256' | sort | xargs shasum -a 256 > checksums.sha256
 cd ..
 
 # Show results
 echo ""
 echo "✅ Build completed successfully!"
 echo ""
-echo "📦 Built binaries:"
+echo "📦 Built artifacts:"
 ls -la $BUILD_DIR/
 
 echo ""
@@ -77,5 +82,6 @@ else
 fi
 
 echo ""
-echo "🎉 Release binaries ready in $BUILD_DIR/"
-echo "   Primary target: ${BINARY_NAME}-darwin-universal"
+echo "🎉 Release artifacts ready in $BUILD_DIR/"
+echo "   Hook binary:      ${BINARY_NAME}-darwin-universal"
+echo "   Installer pkg:    Irrlicht-v${VERSION}.pkg"
