@@ -22,7 +22,7 @@ struct SessionListView: View {
             
             // Settings and Quit buttons at bottom
             Divider()
-            Button("Settings\u{2026}") {
+            Button("Settings…") {
                 showSettings = true
             }
             .buttonStyle(.plain)
@@ -32,6 +32,7 @@ struct SessionListView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
+
 
             Divider()
             Button("Quit Irrlicht") {
