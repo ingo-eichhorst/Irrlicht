@@ -151,16 +151,45 @@ func TestCleanupOrphanedSessions_DeletesDeadProcess(t *testing.T) {
 	}
 }
 
-// TestSpawnSpeculativeWait_InvalidExe tests that an invalid executable path
-// logs an error but does not panic.
-func TestSpawnSpeculativeWait_InvalidExe(t *testing.T) {
+// TestScheduleSpeculativeWait_CancelsOnNewEvent tests that a pending timer is
+// cancelled when a new event arrives for the same session.
+func TestScheduleSpeculativeWait_CancelsOnNewEvent(t *testing.T) {
+	repo := newInternalMockRepo()
 	log := &nopLogger{}
 	svc := &EventService{
-		log:            log,
-		executablePath: "/nonexistent/binary",
+		repo:                 repo,
+		log:                  log,
+		SpeculativeWaitDelay: 100 * time.Millisecond,
 	}
-	// Should not panic even if the binary doesn't exist.
-	svc.spawnSpeculativeWait("test-session")
+
+	now := time.Now().Unix()
+	repo.states["cancel1"] = &session.SessionState{
+		SessionID: "cancel1",
+		State:     session.StateWorking,
+		LastEvent: "PreToolUse",
+		FirstSeen: now,
+		UpdatedAt: now,
+	}
+
+	// Schedule a speculative wait.
+	svc.scheduleSpeculativeWait("cancel1")
+
+	// Immediately cancel by scheduling again (simulates a new event arriving).
+	svc.scheduleSpeculativeWait("cancel1")
+
+	// Wait for the delay to pass; only the second timer should fire.
+	time.Sleep(200 * time.Millisecond)
+
+	// The session should have transitioned to waiting (second timer fired).
+	state := repo.states["cancel1"]
+	if state.State != session.StateWaiting {
+		t.Errorf("got %q, want waiting after timer fired", state.State)
+	}
+
+	// No pending timer should remain.
+	if _, ok := svc.pendingTimers.Load("cancel1"); ok {
+		t.Error("pending timer should have been cleaned up")
+	}
 }
 
 // internalMockRepo is a simple in-memory repo for internal tests.

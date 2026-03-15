@@ -3,7 +3,7 @@ package services
 import (
 	"fmt"
 	"os"
-	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,13 +30,15 @@ type EventService struct {
 	metrics   outbound.MetricsCollector
 	pathValid outbound.PathValidator
 
+	// broadcaster is optional; when set, Broadcast is called after every state save.
+	broadcaster outbound.PushBroadcaster
+
 	// SpeculativeWaitDelay is how long the background timer waits before
 	// speculatively transitioning to "waiting". Exported for test overrides.
 	SpeculativeWaitDelay time.Duration
 
-	// executablePath is the path to the current binary, used when spawning
-	// speculative-wait subprocesses. Defaults to os.Executable().
-	executablePath string
+	// pendingTimers maps sessionID -> *time.Timer for in-process speculative waits.
+	pendingTimers sync.Map
 }
 
 // NewEventService creates an EventService with all dependencies wired.
@@ -57,8 +59,18 @@ func NewEventService(
 	}
 }
 
+// SetBroadcaster wires in an optional broadcaster for push notifications.
+func (s *EventService) SetBroadcaster(b outbound.PushBroadcaster) {
+	s.broadcaster = b
+}
+
 // HandleEvent validates and processes a hook event, updating session state on disk.
 func (s *EventService) HandleEvent(evt *event.HookEvent) error {
+	// Cancel any pending speculative-wait timer for this session.
+	if v, loaded := s.pendingTimers.LoadAndDelete(evt.SessionID); loaded {
+		v.(*time.Timer).Stop()
+	}
+
 	// Validate event
 	if err := evt.Validate(s.pathValid.Validate); err != nil {
 		return fmt.Errorf("event validation failed: %w", err)
@@ -158,21 +170,31 @@ func (s *EventService) HandleEvent(evt *event.HookEvent) error {
 	// Handle waiting-state transcript monitoring.
 	s.updateWaitingMonitoring(state, existing, result.NewState, now)
 
-	// Spawn speculative wait for approval-prone tools.
+	// Schedule speculative wait for approval-prone tools.
 	if evt.HookEventName == "PreToolUse" && approvalProneTools[evt.ToolName] {
-		s.spawnSpeculativeWait(evt.SessionID)
+		s.scheduleSpeculativeWait(evt.SessionID)
 	}
 
-	return s.repo.Save(state)
+	if err := s.repo.Save(state); err != nil {
+		return err
+	}
+	if s.broadcaster != nil {
+		s.broadcaster.Broadcast(state)
+	}
+	return nil
 }
 
-// RunSpeculativeWait is the body of the background speculative-wait process.
-// It sleeps SpeculativeWaitDelay, then transitions the session to "waiting"
-// if the session is still in working state after a PreToolUse (meaning the
-// tool is pending user approval).
+// RunSpeculativeWait sleeps SpeculativeWaitDelay then attempts to transition
+// the session to "waiting" if still in working state after a PreToolUse.
+// Used by the irrlicht-hook --speculative-wait subprocess mode.
 func (s *EventService) RunSpeculativeWait(sessionID string) {
 	time.Sleep(s.SpeculativeWaitDelay)
+	s.applySpeculativeWait(sessionID)
+}
 
+// applySpeculativeWait performs the speculative-wait state transition without
+// any additional sleep. Called by both RunSpeculativeWait and the in-process timer.
+func (s *EventService) applySpeculativeWait(sessionID string) {
 	state, err := s.repo.Load(sessionID)
 	if err != nil || state == nil {
 		return
@@ -195,6 +217,9 @@ func (s *EventService) RunSpeculativeWait(sessionID string) {
 		s.log.LogError("speculative-wait", sessionID,
 			fmt.Sprintf("failed to save speculative state: %v", err))
 		return
+	}
+	if s.broadcaster != nil {
+		s.broadcaster.Broadcast(state)
 	}
 	s.log.LogInfo("speculative-wait", sessionID,
 		"Speculatively transitioned to waiting (PreToolUse pending approval)")
@@ -355,26 +380,22 @@ func (s *EventService) detectTranscriptActivity(existing *session.SessionState) 
 	return stat.Size() > existing.LastTranscriptSize
 }
 
-func (s *EventService) spawnSpeculativeWait(sessionID string) {
-	exe := s.executablePath
-	if exe == "" {
-		var err error
-		exe, err = os.Executable()
-		if err != nil {
-			s.log.LogError("PreToolUse", sessionID,
-				fmt.Sprintf("speculative wait: failed to get executable path: %v", err))
-			return
-		}
+// scheduleSpeculativeWait starts an in-process timer that transitions the session
+// to "waiting" if no new event arrives within SpeculativeWaitDelay.
+// Any previously pending timer for the same session is cancelled.
+func (s *EventService) scheduleSpeculativeWait(sessionID string) {
+	// Cancel existing timer for this session, if any.
+	if v, loaded := s.pendingTimers.LoadAndDelete(sessionID); loaded {
+		v.(*time.Timer).Stop()
 	}
-	cmd := exec.Command(exe, "--speculative-wait", sessionID)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		s.log.LogError("PreToolUse", sessionID,
-			fmt.Sprintf("speculative wait: failed to spawn background process: %v", err))
-		return
-	}
+
+	t := time.AfterFunc(s.SpeculativeWaitDelay, func() {
+		s.pendingTimers.Delete(sessionID)
+		s.applySpeculativeWait(sessionID)
+	})
+	s.pendingTimers.Store(sessionID, t)
 	s.log.LogInfo("PreToolUse", sessionID,
-		fmt.Sprintf("Spawned speculative wait (pid %d) for approval-prone tool", cmd.Process.Pid))
+		fmt.Sprintf("Scheduled speculative wait in %v for approval-prone tool", s.SpeculativeWaitDelay))
 }
 
 // isProcessAlive checks whether the process with the given PID is still running.

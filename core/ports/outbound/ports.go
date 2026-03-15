@@ -34,3 +34,10 @@ type MetricsCollector interface {
 type PathValidator interface {
 	Validate(path string) error
 }
+
+// PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).
+type PushBroadcaster interface {
+	Broadcast(state *session.SessionState)
+	Subscribe() chan *session.SessionState
+	Unsubscribe(ch chan *session.SessionState)
+}
