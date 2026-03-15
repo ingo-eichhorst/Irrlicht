@@ -42,6 +42,7 @@ Temporary Items
 *.dll
 *.so
 *.dylib
+tools/irrlicht-hook/hook
 
 # Test binary, built with `go test -c`
 *.test
