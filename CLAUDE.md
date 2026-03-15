@@ -35,7 +35,7 @@ Claude Code Hook Events → Go Hook Receiver → JSON State Files → SwiftUI Me
 ./tools/build-release.sh
 
 # Build just the hook receiver
-cd tools/irrlicht-hook && go build -o irrlicht-hook .
+cd tools/irrlicht-hook && go build -o irrlicht-hook ./cmd/irrlicht-hook/
 
 # Build SwiftUI app
 cd Irrlicht.app && swift build
@@ -89,7 +89,19 @@ killall swift
 ## Code Structure
 
 **Go Components (`tools/`):**
-- `irrlicht-hook/`: Main hook receiver that processes Claude Code events
+- `irrlicht-hook/`: Hook receiver using Hexagonal Architecture (Ports & Adapters)
+  - `domain/session/` — SessionState, SessionMetrics, pure state machine
+  - `domain/event/` — HookEvent struct and validation
+  - `ports/inbound/` — EventHandler interface
+  - `ports/outbound/` — SessionRepository, Logger, GitResolver, MetricsCollector interfaces
+  - `adapters/inbound/stdin/` — reads events from stdin
+  - `adapters/outbound/filesystem/` — JSON session file repository
+  - `adapters/outbound/logging/` — rotating structured JSON logger
+  - `adapters/outbound/git/` — git branch extraction
+  - `adapters/outbound/metrics/` — transcript-tailer wrapper
+  - `adapters/outbound/security/` — path validation
+  - `application/services/` — EventService orchestration (processEvent, cleanup, speculative wait)
+  - `cmd/irrlicht-hook/` — entry point, dependency injection wiring only
 - `settings-merger/`: Manages `~/.claude/settings.json` hook configuration
 - `model-capacity/`: Token capacity and context utilization tracking
 - `transcript-tailer/`: Real-time transcript analysis for performance metrics

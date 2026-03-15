@@ -20,11 +20,11 @@ echo "Building for macOS..."
 # macOS Apple Silicon (arm64)
 echo "  Building macOS arm64..."
 cd tools/irrlicht-hook
-GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-darwin-arm64" .
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-darwin-arm64" ./cmd/irrlicht-hook/
 
 # macOS Intel (amd64) 
 echo "  Building macOS amd64..."
-GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-darwin-amd64" .
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-darwin-amd64" ./cmd/irrlicht-hook/
 
 cd ../../
 
@@ -37,12 +37,12 @@ lipo -create -output "$BUILD_DIR/${BINARY_NAME}-darwin-universal" \
 # Build for other platforms (for future distribution)
 echo "Building for Linux..."
 cd tools/irrlicht-hook
-GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-linux-amd64" .
+GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-linux-amd64" ./cmd/irrlicht-hook/
 cd ../../
 
 echo "Building for Windows..."
 cd tools/irrlicht-hook  
-GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-windows-amd64.exe" .
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../../$BUILD_DIR/${BINARY_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook/
 cd ../../
 
 # Calculate checksums

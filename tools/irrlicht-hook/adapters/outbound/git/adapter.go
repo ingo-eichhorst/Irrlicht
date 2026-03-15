@@ -1,0 +1,84 @@
+package git
+
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+// Adapter implements ports/outbound.GitResolver using local git commands and
+// transcript file inspection.
+type Adapter struct{}
+
+// New returns a new git Adapter.
+func New() *Adapter { return &Adapter{} }
+
+// GetBranch returns the current git branch for the given working directory.
+// Returns "" if git is unavailable or the directory is not a git repo.
+func (a *Adapter) GetBranch(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" || branch == "HEAD" {
+		return ""
+	}
+	return branch
+}
+
+// GetProjectName returns the last path component of dir as the project name.
+func (a *Adapter) GetProjectName(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	name := filepath.Base(dir)
+	if name == "." || name == "/" || name == "" {
+		return ""
+	}
+	return name
+}
+
+// GetBranchFromTranscript tries to extract the gitBranch field from the last
+// few lines of a Claude Code transcript file.
+func (a *Adapter) GetBranchFromTranscript(transcriptPath string) string {
+	if transcriptPath == "" {
+		return ""
+	}
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) > 10 {
+			lines = lines[1:]
+		}
+	}
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		if !strings.Contains(line, "gitBranch") {
+			continue
+		}
+		var data map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &data); err == nil {
+			if branch, ok := data["gitBranch"].(string); ok && branch != "" {
+				return branch
+			}
+		}
+	}
+	return ""
+}
