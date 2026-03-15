@@ -145,37 +145,62 @@ struct SessionListView: View {
     }
     
     // MARK: - Session List
-    
+
+    private var sessionGroups: [SessionGroup] {
+        let allSessions = sessionManager.sessions
+        let sessionIds = Set(allSessions.map { $0.id })
+
+        // Identify subagent sessions (have a parentSessionId that exists in current sessions)
+        let subagentIds: Set<String> = Set(allSessions.compactMap { session in
+            guard let pid = session.parentSessionId, sessionIds.contains(pid) else { return nil }
+            return session.id
+        })
+
+        // Build groups in order of top-level sessions
+        return allSessions
+            .filter { !subagentIds.contains($0.id) }
+            .map { parent in
+                let subagents = allSessions.filter { $0.parentSessionId == parent.id }
+                return SessionGroup(parent: parent, subagents: subagents)
+            }
+    }
+
     private var sessionListContent: some View {
-        ScrollView {
+        let groups = sessionGroups
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
-                ForEach(sessionManager.sessions.indices, id: \.self) { index in
-                    SessionRowView(session: sessionManager.sessions[index])
+                ForEach(Array(groups.enumerated()), id: \.element.id) { groupIndex, group in
+                    // Parent row
+                    SessionRowView(session: group.parent)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            // TODO: Handle session selection in Phase 6
-                            print("Selected session: \(sessionManager.sessions[index].id)")
+                            print("Selected session: \(group.parent.id)")
                         }
                         .onDrag {
-                            return NSItemProvider(object: sessionManager.sessions[index].id as NSString)
+                            NSItemProvider(object: group.parent.id as NSString)
                         }
-                        .onDrop(of: [.text], delegate: SessionDropDelegate(
+                        .onDrop(of: [.text], delegate: SessionGroupDropDelegate(
                             sessionManager: sessionManager,
-                            targetIndex: index
+                            targetGroupIndex: groupIndex
                         ))
+
+                    // Subagent rows (indented, compact)
+                    ForEach(group.subagents) { subagent in
+                        SubagentRowView(session: subagent)
+                    }
                 }
-                
+
                 // Drop zone at the end of the list
                 Rectangle()
                     .fill(Color.clear)
                     .frame(height: 20)
-                    .onDrop(of: [.text], delegate: SessionDropDelegate(
+                    .onDrop(of: [.text], delegate: SessionGroupDropDelegate(
                         sessionManager: sessionManager,
-                        targetIndex: sessionManager.sessions.count
+                        targetGroupIndex: groups.count
                     ))
             }
         }
-        .frame(maxHeight: 400) // Limit height for scrolling
+        .frame(maxHeight: 400)
     }
     
     // MARK: - Error View
@@ -369,6 +394,74 @@ struct SessionActionButtons: View {
     }
 }
 
+// MARK: - Subagent Row View
+
+struct SubagentRowView: View {
+    let session: SessionState
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // Indentation
+            Spacer().frame(width: 24)
+
+            // State indicator (small)
+            Image(systemName: session.state.glyph)
+                .font(.system(size: 9))
+                .foregroundColor(Color(hex: session.state.color))
+                .frame(width: 12)
+
+            // Context utilization
+            if let metrics = session.metrics, metrics.hasContextData {
+                Text(metrics.formattedContextUtilization)
+                    .font(.caption2)
+                    .foregroundColor(Color(hex: metrics.contextPressureColor))
+            } else {
+                Text("—")
+                    .font(.caption2)
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+
+            Spacer()
+
+            // Duration
+            if let metrics = session.metrics {
+                let isActive = session.state == .working || session.state == .waiting
+                TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
+                    let _ = timeline.date
+                    Text(isActive
+                        ? metrics.formattedRealtimeElapsedTime(sessionFirstSeen: session.firstSeen)
+                        : (metrics.elapsedSeconds > 0 ? metrics.formattedElapsedTime : "—"))
+                        .font(.caption2)
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+            } else {
+                Text("—")
+                    .font(.caption2)
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+        .background(isHovered ? Color.accentColor.opacity(0.05) : Color.clear)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
+
+// MARK: - Session Group
+
+struct SessionGroup: Identifiable {
+    let parent: SessionState
+    let subagents: [SessionState]
+
+    var id: String { parent.id }
+    var allSessions: [SessionState] { [parent] + subagents }
+}
+
 // MARK: - Color Extension
 
 extension Color {
@@ -400,45 +493,29 @@ extension Color {
 
 // MARK: - Drag and Drop Support
 
-struct SessionDropDelegate: DropDelegate {
+struct SessionGroupDropDelegate: DropDelegate {
     let sessionManager: SessionManager
-    let targetIndex: Int
-    
+    let targetGroupIndex: Int
+
     func validateDrop(info: DropInfo) -> Bool {
         return info.hasItemsConforming(to: [.text])
     }
-    
-    func dropEntered(info: DropInfo) {
-        // Visual feedback could be added here
-    }
-    
-    func dropExited(info: DropInfo) {
-        // Clear visual feedback
-    }
-    
+
     func performDrop(info: DropInfo) -> Bool {
         guard let itemProvider = info.itemProviders(for: [.text]).first else {
             return false
         }
-        
+
         itemProvider.loadObject(ofClass: NSString.self) { item, error in
-            guard let sessionId = item as? String else {
-                return
-            }
-            
+            guard let parentId = item as? String else { return }
             DispatchQueue.main.async {
-                // Find the source index on the main thread
-                guard let sourceIndex = sessionManager.sessions.firstIndex(where: { $0.id == sessionId }) else {
-                    return
-                }
-                
-                sessionManager.reorderSession(from: sourceIndex, to: targetIndex)
+                sessionManager.reorderGroup(parentId: parentId, to: targetGroupIndex)
             }
         }
-        
+
         return true
     }
-    
+
     func dropUpdated(info: DropInfo) -> DropProposal? {
         return DropProposal(operation: .move)
     }
@@ -516,7 +593,28 @@ struct SessionListView_Previews: PreviewProvider {
                 ]
                 
                 // Assign duplicate indexes like the real SessionManager would
-                manager.sessions = mockSessions
+                manager.sessions = mockSessions + [
+                    SessionState(
+                        id: "sess_sub001agent",
+                        state: .working,
+                        model: "claude-3.7-sonnet",
+                        cwd: "/Users/user/projects/multi-cc-bar",
+                        gitBranch: "main",
+                        projectName: "multi-cc-bar",
+                        firstSeen: Date().addingTimeInterval(-90),
+                        updatedAt: Date().addingTimeInterval(-10),
+                        eventCount: 3,
+                        lastEvent: "UserPromptSubmit",
+                        metrics: SessionMetrics(
+                            elapsedSeconds: 90,
+                            totalTokens: 8000,
+                            modelName: "claude-3.7-sonnet",
+                            contextUtilization: 12.3,
+                            pressureLevel: "safe"
+                        ),
+                        parentSessionId: "sess_abc123def456"
+                    )
+                ]
                 return manager
             }())
     }

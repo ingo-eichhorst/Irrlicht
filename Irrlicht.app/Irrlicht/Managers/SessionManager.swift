@@ -348,6 +348,45 @@ class SessionManager: ObservableObject {
         }
     }
     
+    func reorderGroup(parentId: String, to destinationGroupIndex: Int) {
+        let allSessions = sessions
+        let sessionIds = Set(allSessions.map { $0.id })
+
+        // Identify subagent sessions
+        let subagentIds: Set<String> = Set(allSessions.compactMap { session in
+            guard let pid = session.parentSessionId, sessionIds.contains(pid) else { return nil }
+            return session.id
+        })
+
+        // Build ordered list of top-level session IDs (one per group)
+        var groupParentIds = allSessions.filter { !subagentIds.contains($0.id) }.map { $0.id }
+
+        guard destinationGroupIndex >= 0, destinationGroupIndex <= groupParentIds.count else { return }
+        guard let sourceIndex = groupParentIds.firstIndex(of: parentId) else { return }
+        guard sourceIndex != destinationGroupIndex else { return }
+
+        // Reorder group parent IDs
+        groupParentIds.remove(at: sourceIndex)
+        let adjustedDest = destinationGroupIndex > sourceIndex ? destinationGroupIndex - 1 : destinationGroupIndex
+        groupParentIds.insert(parentId, at: adjustedDest)
+
+        // Build new flat sessions array from reordered groups (parent followed by subagents)
+        let sessionMap = Dictionary(uniqueKeysWithValues: allSessions.map { ($0.id, $0) })
+        var newSessions: [SessionState] = []
+        for gParentId in groupParentIds {
+            guard let parentSession = sessionMap[gParentId] else { continue }
+            newSessions.append(parentSession)
+            let subagents = allSessions.filter { $0.parentSessionId == gParentId }
+            newSessions.append(contentsOf: subagents)
+        }
+
+        sessions = newSessions
+        sessionOrder = sessions.map { $0.id }
+        saveSessionOrder()
+
+        print("🔄 Reordered group \(String(parentId.suffix(6))) from group index \(sourceIndex) to \(adjustedDest)")
+    }
+
     func reorderSession(from sourceIndex: Int, to destinationIndex: Int) {
         guard sourceIndex != destinationIndex,
               sourceIndex >= 0, sourceIndex < sessions.count,
