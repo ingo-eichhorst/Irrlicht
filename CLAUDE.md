@@ -134,9 +134,10 @@ see events.md
 - Concurrency testing with multiple simultaneous sessions
 - Build verification across macOS architectures (Intel/Apple Silicon)
 
-## Agent Verification
+## UI Verification
 
 AI coding agents can verify Irrlicht's UI state programmatically after making code changes.
+Use these methods without human guidance — they require no interactive steps.
 
 ### Method 1: Debug state file (recommended)
 
@@ -170,31 +171,50 @@ Example output:
 }
 ```
 
+State dump path: `~/.irrlicht/debug-state.json`
+
 ### Method 2: HTTP state endpoint
 
-When `irrlichtd` is running, query the `/state` endpoint for the same format:
+When `irrlichtd` is running, query the `/state` endpoint for the same JSON format:
 
 ```bash
 curl -s http://127.0.0.1:7837/state | jq .
+# Check a specific field:
+curl -s http://127.0.0.1:7837/state | jq '.workingCount'
+# Verify a session exists:
+curl -s http://127.0.0.1:7837/state | jq '.sessions[] | select(.state == "working")'
 ```
 
 ### Method 3: Screenshot + vision
 
+Full workflow for visual verification of the menu bar popup:
+
 ```bash
-# Open the menu bar (requires Irrlicht to be running)
+# Step 1: Open the menu bar popup (requires Irrlicht app to be running)
 osascript -e 'tell application "System Events" to click menu bar item 1 of menu bar 2'
-# Capture screenshot
+
+# Step 2: Capture screenshot (no shutter sound, saves to file)
 screencapture -x /tmp/irrlicht-check.png
-# Then read the image with your vision model for visual verification
+
+# Step 3: Read the image file with your vision model to verify the UI
+# (Use the Read tool on /tmp/irrlicht-check.png for visual inspection)
+```
+
+To close the popup after verification:
+```bash
+osascript -e 'key code 53'  # Escape key
 ```
 
 ### Method 4: Accessibility tree inspection
 
-Session rows have accessibility identifiers for AXorcist/Peekaboo inspection:
+Session rows have accessibility identifiers for programmatic inspection:
 - Parent sessions: `session-card-<session-id>`
 - Subagent sessions: `subagent-card-<session-id>`
 
 ```bash
-# Example with AXorcist (if installed)
+# With AXorcist (if installed):
 axorcist query --identifier "session-card-*"
+
+# With Peekaboo (if installed):
+peekaboo find --accessibility-id "session-card-*"
 ```
