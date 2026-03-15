@@ -113,12 +113,14 @@ func (cm *CapacityManager) LoadConfig() error {
 
 // GetModelCapacity retrieves capacity info for a specific model
 func (cm *CapacityManager) GetModelCapacity(modelName string) ModelCapacity {
+	// Try to reload config if it's been modified. Must be called before acquiring
+	// the read lock since LoadConfig acquires a write lock; calling it under a read
+	// lock would deadlock.
+	_ = cm.LoadConfig()
+
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
-	
-	// Try to reload config if it's been modified
-	cm.LoadConfig()
-	
+
 	// Direct model lookup
 	if capacity, exists := cm.config.Models[modelName]; exists {
 		return capacity

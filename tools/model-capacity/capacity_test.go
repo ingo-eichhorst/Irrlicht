@@ -140,17 +140,17 @@ func TestEstimateTokensFromContent(t *testing.T) {
 	require.NoError(t, err)
 	
 	// Test with known model
-	text := "This is a test string with exactly forty chars" // 40 chars
+	text := "This is a test string with exactly forty chars" // 46 chars
 	estimation := cm.EstimateTokensFromContent(text, "claude-3.5-sonnet")
-	
-	assert.Equal(t, int64(10), estimation.Tokens) // 40 chars / 4 = 10 tokens
+
+	assert.Equal(t, int64(11), estimation.Tokens) // 46 chars / 4 = 11 tokens
 	assert.True(t, estimation.IsEstimated)
 	assert.Equal(t, "char_estimation", estimation.Method)
 	assert.Equal(t, 0.8, estimation.Confidence)
-	
+
 	// Test with unknown model
 	estimation = cm.EstimateTokensFromContent(text, "unknown-model")
-	assert.Equal(t, int64(10), estimation.Tokens)
+	assert.Equal(t, int64(11), estimation.Tokens)
 	assert.True(t, estimation.IsEstimated)
 	assert.Equal(t, "char_estimation", estimation.Method)
 	assert.Equal(t, 0.5, estimation.Confidence) // Lower confidence for unknown model
