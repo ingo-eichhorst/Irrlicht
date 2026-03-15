@@ -54,5 +54,9 @@ jobs:
             echo "No badge changes to commit"
           else
             git commit -m "chore: update ARS badge [skip ci]"
-            git push
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push && break
+              echo "Push attempt $i failed, retrying..."
+              sleep $((i * 3))
+            done
           fi
