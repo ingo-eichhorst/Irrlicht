@@ -39,21 +39,35 @@ var (
 	logger  *StructuredLogger
 )
 
+// approvalProneTools lists tool names that commonly require user approval.
+// PreToolUse events for these tools trigger speculative waiting.
+var approvalProneTools = map[string]bool{
+	"Bash":      true,
+	"Write":     true,
+	"Edit":      true,
+	"MultiEdit": true,
+}
+
+// speculativeWaitDelay is how long the background timer waits before
+// speculatively transitioning to "waiting" state. Exposed as var for test overrides.
+var speculativeWaitDelay = 2 * time.Second
+
 // HookEvent represents a Claude Code hook event
 type HookEvent struct {
-	HookEventName   string                 `json:"hook_event_name"`
-	SessionID       string                 `json:"session_id"`
-	Timestamp       string                 `json:"timestamp"`
-	Matcher         string                 `json:"matcher,omitempty"`
-	Reason          string                 `json:"reason,omitempty"`
-	Data            map[string]interface{} `json:"data"`
+	HookEventName  string                 `json:"hook_event_name"`
+	SessionID      string                 `json:"session_id"`
+	Timestamp      string                 `json:"timestamp"`
+	Matcher        string                 `json:"matcher,omitempty"`
+	Reason         string                 `json:"reason,omitempty"`
+	Data           map[string]interface{} `json:"data"`
 	// Direct fields that Claude Code sends at top level
-	TranscriptPath  string                 `json:"transcript_path,omitempty"`
-	CWD             string                 `json:"cwd,omitempty"`
-	Model           string                 `json:"model,omitempty"`
-	PermissionMode  string                 `json:"permission_mode,omitempty"`
-	Prompt          string                 `json:"prompt,omitempty"`
-	Source          string                 `json:"source,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+	Model          string `json:"model,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	Prompt         string `json:"prompt,omitempty"`
+	Source         string `json:"source,omitempty"`
+	ToolName       string `json:"tool_name,omitempty"`
 }
 
 // SessionMetrics holds computed performance metrics from transcript analysis  
@@ -234,7 +248,7 @@ func extractGitBranchFromTranscript(transcriptPath string) string {
 
 func main() {
 	startTime := time.Now()
-	
+
 	// Initialize structured logger
 	var err error
 	logger, err = NewStructuredLogger()
@@ -253,6 +267,13 @@ func main() {
 		fmt.Printf("irrlicht-hook version %s\n", Version)
 		fmt.Printf("Built with %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		os.Exit(0)
+	}
+
+	// Handle speculative wait mode: sleep then speculatively set state to waiting
+	// if no PostToolUse has arrived since the PreToolUse that triggered this.
+	if len(os.Args) > 2 && os.Args[1] == "--speculative-wait" {
+		runSpeculativeWait(os.Args[2])
+		return
 	}
 
 	// Check for kill switch via environment variable
@@ -443,6 +464,67 @@ func validatePath(path string) error {
 	}
 
 	return nil
+}
+
+// spawnSpeculativeWait launches a detached background process that will
+// speculatively transition the session to "waiting" after speculativeWaitDelay
+// if no PostToolUse arrives first (indicating the tool was auto-approved).
+func spawnSpeculativeWait(sessionID string) {
+	exe, err := os.Executable()
+	if err != nil {
+		logger.LogError("PreToolUse", sessionID, fmt.Sprintf("speculative wait: failed to get executable path: %v", err))
+		return
+	}
+
+	cmd := exec.Command(exe, "--speculative-wait", sessionID)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // Detach from parent process group
+	if err := cmd.Start(); err != nil {
+		logger.LogError("PreToolUse", sessionID, fmt.Sprintf("speculative wait: failed to spawn background process: %v", err))
+		return
+	}
+	logger.LogInfo("PreToolUse", sessionID, fmt.Sprintf("Spawned speculative wait (pid %d) for approval-prone tool", cmd.Process.Pid))
+}
+
+// runSpeculativeWait is the background process body. It sleeps speculativeWaitDelay,
+// then transitions the session to "waiting" if no PostToolUse has arrived
+// (i.e. LastEvent is still "PreToolUse"), meaning the tool is pending user approval.
+func runSpeculativeWait(sessionID string) {
+	// Respect kill switch
+	if os.Getenv("IRRLICHT_DISABLED") == "1" || isDisabledInSettings() {
+		return
+	}
+
+	time.Sleep(speculativeWaitDelay)
+
+	state, err := loadSessionState(sessionID)
+	if err != nil || state == nil {
+		return // Session gone or error — nothing to do
+	}
+
+	// Only proceed if the session is still in working state after a PreToolUse.
+	// PostToolUse would have updated LastEvent — if it arrived, we stand down.
+	if state.LastEvent != "PreToolUse" || state.State != "working" {
+		return
+	}
+
+	// Speculatively transition to waiting
+	now := time.Now().Unix()
+	state.State = "waiting"
+	state.UpdatedAt = now
+	state.WaitingStartTime = &now
+
+	// Capture transcript size for waiting-state recovery
+	if state.TranscriptPath != "" {
+		if stat, err := os.Stat(state.TranscriptPath); err == nil {
+			state.LastTranscriptSize = stat.Size()
+		}
+	}
+
+	if err := saveSessionState(state); err != nil {
+		logger.LogError("speculative-wait", sessionID, fmt.Sprintf("failed to save speculative state: %v", err))
+		return
+	}
+	logger.LogInfo("speculative-wait", sessionID, "Speculatively transitioned to waiting (PreToolUse pending approval)")
 }
 
 // processEvent processes the hook event and updates session state
@@ -645,11 +727,18 @@ func processEvent(event *HookEvent) error {
 		sessionState.WaitingStartTime = nil
 	}
 
+	// For approval-prone tool use, spawn a speculative wait: if no PostToolUse
+	// arrives within speculativeWaitDelay, transition to "waiting" proactively.
+	// This closes the ~6-second gap between PreToolUse and the Notification event.
+	if event.HookEventName == "PreToolUse" && approvalProneTools[event.ToolName] {
+		spawnSpeculativeWait(event.SessionID)
+	}
+
 	// Save session state
 	if err := saveSessionState(&sessionState); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
