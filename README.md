@@ -25,6 +25,7 @@ Each session appears as a simple icon that tells the truth:
 - **🟣** **working** — the agent is thinking, building, streaming (purple)
 - **🟠** **waiting** — it needs you; the story pauses for your judgment (orange)
 - **🟢** **ready** — the path ahead is clear, ready for new work (green)
+- **⚫** **cancelled_by_user** — session cancelled via ESC; auto-expires after 30s (gray)
 - **✦** **no sessions** — clean slate, ready for new work (white sparkle)
 
 No ghosts. **Hooks → State → Light.**
@@ -128,6 +129,7 @@ Example state file:
   "last_event": "UserPromptSubmit",
   "model": "claude-3.7-sonnet",
   "cwd": "/Users/ingo/projects/my-project",
+  "pid": 12345,
   "metrics": {
     "elapsed_seconds": 180,
     "total_tokens": 15000,
@@ -202,13 +204,13 @@ Irrlicht responds to these Claude Code hook events:
 |-------|-------------|------------------|
 | `SessionStart` | New Claude Code session begins | → **working** |
 | `UserPromptSubmit` | User submits a prompt | → **working** |
-| `PreToolUse` | User responds to notification | → **working** |
+| `PreToolUse` | Before tool execution; also triggers speculative waiting (2s background timer) for approval-prone tools | → **working** |
 | `PostToolUse` | Tool execution completed | → **working** |
 | `PreCompact` | Context compaction starting | → **working** |
 | `Notification` | System needs user attention | → **waiting** |
 | `Stop` | Session stops (completed/cancelled) | → **ready** |
 | `SubagentStop` | Subagent completes task | → **ready** |
-| `SessionEnd` | Session terminates | → **ready** |
+| `SessionEnd` | Session terminates | → delete session file; `reason=prompt_input_exit` → **cancelled_by_user** |
 
 ## Technical Details
 
@@ -222,7 +224,7 @@ Irrlicht follows a clean separation of concerns:
 
 ### Performance Specifications
 
-- **Latency**: <1ms average event processing time
+- **Latency**: <1ms average event processing time; speculative wait timer fires after 2s on PreToolUse for approval-prone tools
 - **Memory**: <5MB typical footprint
 - **Disk**: <100KB state files, <50MB logs (with rotation)
 - **Concurrency**: Tested up to 8 simultaneous sessions
@@ -264,6 +266,12 @@ Structured JSON logs with automatic rotation:
 - Restart Claude Code to reload hook configuration
 - Check IRRLICHT_DISABLED environment variable
 - Verify file permissions in state directory
+
+**Orphaned sessions (session stuck after Claude Code exits):**
+- Sessions include a `pid` field tracking the Claude Code process
+- The hook receiver and UI both run liveness checks; orphaned sessions are deleted automatically
+- Legacy sessions without a `pid` field are cleaned up after a 1-hour TTL
+- To manually clear orphaned sessions: `rm ~/Library/Application\ Support/Irrlicht/instances/*.json`
 
 ### Contributing
 

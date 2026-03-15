@@ -18,10 +18,12 @@
 Claude Code (N sessions)
    └─ Hooks ──▶ /usr/local/bin/irrlicht-hook (stdin JSON)
                   └─ writes: ~/Library/Application Support/Irrlicht/instances/<session_id>.json
+                  └─ records PID (os.Getppid()) in session file for orphan detection
                   └─ (optional) logs: .../logs/events.log
 
 Irrlicht.app (SwiftUI, MenuBarExtra)
    ├─ File watcher: .../instances/*.json  → render glyphs & dropdown
+   ├─ Process monitor: kill(pid, 0) liveness check on every refresh → deletes orphaned sessions
    ├─ Transcript tailer: tail last ~64 KB of transcript.jsonl → msgs/min, tokens_in
    ├─ Model table: context capacity per model → context_used_%
    └─ Actions: open/tail transcript, open cwd in Terminal/VS Code
@@ -38,8 +40,10 @@ Installer
 **1) Hook Receiver — `irrlicht-hook`**
 
 * Input: Claude Code **Hook** JSON on stdin; fields used: `hook_event_name`, `session_id`, `transcript_path`, `cwd`, `model`.
-* State map: `UserPromptSubmit→working`, `Notification→waiting`, `Stop|SubagentStop|SessionEnd→finished`, `SessionStart→working`.
+* State map: `UserPromptSubmit→working`, `Notification→waiting`, `Stop|SubagentStop→ready`, `SessionEnd(non-ESC)→delete`, `SessionEnd(prompt_input_exit)→cancelled_by_user`, `SessionStart→working`.
 * Output: Atomic upsert of `instances/<session_id>.json` (temp file + rename). Size cap 512 KB. Path sanitization.
+* Speculative waiting: On `PreToolUse` for approval-prone tools (Bash/Write/Edit/MultiEdit), spawns a detached background process. After 2s with no PostToolUse, transitions to `waiting` speculatively — eliminates the ~6s Notification delay visible to users.
+* Orphan cleanup: Records `pid` (via `os.Getppid()`) in every session file. On each hook invocation, scans all sessions: deletes if PID is no longer alive. Legacy sessions without PID are deleted after 1h TTL.
 
 **2) State Store (files)**
 
@@ -51,18 +55,25 @@ Installer
 * Tail last \~64 KB of `transcript_path` (JSONL) to compute **messages/min** (60 s window) and read/estimate **tokens\_in**.
 * Model→capacity table (editable JSON) to compute \*\*context\_used\_%\`. Optional local price table for cost (off by default).
 
-**4) Menu‑Bar App (SwiftUI)**
+**4) Process Monitor**
+
+* Both the hook receiver and the SwiftUI app run independent liveness checks using `kill(pid, 0)` (signal 0 — safe, no signal delivered).
+* Hook receiver: calls `cleanupOrphanedSessions()` on every invocation; deletes session files for dead PIDs.
+* SwiftUI app: runs liveness check in `loadExistingSessions()` (triggered every 1s and on file system events); deletes session files for dead PIDs.
+* Legacy sessions (no `pid` field): cleaned up after 1h TTL if in `working` or `waiting` state.
+
+**5) Menu‑Bar App (SwiftUI)**
 
 * `MenuBarExtra` + filesystem watcher (debounce 200 ms). Refresh loop ≤2 s.
 * Header renders glyphs; dropdown groups sessions with metrics and actions.
 
-**5) Installer / Uninstaller**
+**6) Installer / Uninstaller**
 
 * `.pkg` places: `Irrlicht.app`, `irrlicht-hook`, app‑support dirs, LaunchAgent.
 * Post‑install merges hooks into `~/.claude/settings.json` (JSON‑aware, idempotent). Backup & rollback.
 * Uninstaller removes artefacts and restores settings from backup (or prunes our entries only).
 
-**6) Fallback Scanner (heuristic)**
+**7) Fallback Scanner (heuristic)**
 
 * Before hooks are active for a session, infer:
 
@@ -77,10 +88,11 @@ Installer
 {
   "version": 1,
   "session_id": "abc123",
-  "state": "working|waiting|finished",
+  "state": "working|waiting|ready|cancelled_by_user",
   "model": "claude-3.7-sonnet",
   "cwd": "/path/to/project",
   "transcript_path": "/abs/path/transcript.jsonl",
+  "pid": 12345,
   "first_seen": 1725560000,
   "updated_at": 1725560123,
   "confidence": "high|low",

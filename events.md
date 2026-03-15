@@ -7,6 +7,7 @@ This document lists all Claude Code events and their resulting state transitions
 - **`working`** - Claude actively processing/executing
 - **`waiting`** - Waiting for user input or permission
 - **`ready`** - No session started or task ready
+- **`cancelled_by_user`** - Session cancelled by ESC (prompt_input_exit); auto-expires after 30s
 
 ## Official Hook Events (9 Total)
 
@@ -20,14 +21,14 @@ This document lists all Claude Code events and their resulting state transitions
 | **PreCompact** | Before context compaction | `working` → `working` | ✅ Yes | ❌ No |
 | **Stop** | Main agent finishes responding | `working` → `ready` | ✅ Yes | ✅ Yes |
 | **SubagentStop** | Subagent task completes | `working` → `ready` | ✅ Yes | ✅ Yes |
-| **SessionEnd** | Session terminates | Any state → delete session file | ✅ Yes | ❌ No |
+| **SessionEnd** | Session terminates | Any state → delete session file; `reason=prompt_input_exit` → `cancelled_by_user` | ✅ Yes | ❌ No |
 
 ## Detectable Non-Hook Events
 
 | Event | Trigger | State Transition | Detection Method | Frequency |
 |-------|---------|------------------|------------------|-----------|
 | **Session Resume** | User returns to existing session | `idle` → `working` | File system monitoring | Per session |
-| **User Interrupt** | Ctrl+C or ESC pressed | `working` → `ready` | Signal monitoring | User action |
+| **User Interrupt** | Ctrl+C or ESC pressed | `waiting` → `cancelled_by_user` (via SessionEnd with reason=prompt_input_exit) | SessionEnd hook | User action |
 | **Context Full** | Token limit approaching | `working` → `working` (triggers auto-compact) | Token counting | Automatic |
 | **Tool Timeout** | Tool execution exceeds limit | `working` → `error` | Process monitoring | Error condition |
 | **Tool Error** | Tool fails with exception | `working` → `working` (error reported) | Error log monitoring | Error condition |
@@ -49,10 +50,12 @@ Application Launch
   ready ←─────────────────────────────────┐
     ↓ SessionStart                        │
  working ←─────────────┐                  │
-    ↓ Notification     │ UserPromptSubmit │ SessionEnd
+    ↓ Notification     │ UserPromptSubmit │ SessionEnd (non-ESC)
  waiting ──────────────┘                  │
     ↓ Stop/SubagentStop                   │
   ready ──────────────────────────────────┘
+    ↓ SessionEnd (reason=prompt_input_exit)
+ cancelled_by_user → (auto-deleted after 30s)
     ↓ Error conditions
   error → (manual recovery) → ready
 ```
@@ -76,6 +79,7 @@ Application Launch
 - **Data**: `tool_name`, `tool_input`, `session_id`
 - **Blocking**: Can block with exit code 2 or JSON response
 - **State**: `working` → `working` (maintained)
+- **Speculative waiting**: For approval-prone tools (Bash, Write, Edit, MultiEdit), a detached background process is spawned. If no PostToolUse arrives within 2 seconds (tool was not auto-approved), the session is speculatively transitioned to `waiting`. When the real Notification fires ~6s later, the state is already correct — eliminating the visible delay.
 
 ### PostToolUse
 - **Fires**: Immediately after successful tool completion
@@ -111,11 +115,11 @@ Application Launch
 - **Fires**: When session terminates
 - **Data**: `exit_reason` (clear/logout/prompt_input_exit/other)
 - **Blocking**: Cannot block, shows stderr only
-- **State**: ALL SessionEnd events → delete session file completely
-  - `reason: "clear"` → session cleared via `/clear` command
-  - `reason: "logout"` → user logged out
-  - `reason: "prompt_input_exit"` → user cancelled with ESC
-  - Other/no reason → unknown termination reason
+- **State**:
+  - `reason: "prompt_input_exit"` → user pressed ESC on Notification prompt → state set to `cancelled_by_user` (gray); auto-deleted after 30s
+  - `reason: "clear"` → session cleared via `/clear` command → delete session file
+  - `reason: "logout"` → user logged out → delete session file
+  - Other/no reason → unknown termination → delete session file
 
 ## Tool-Specific Events (via PreToolUse/PostToolUse)
 
