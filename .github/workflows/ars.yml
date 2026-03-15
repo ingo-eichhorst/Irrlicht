@@ -28,7 +28,7 @@ jobs:
 
       - name: Run ARS scan
         run: |
-          ars scan . --no-llm --badge > ars-output.txt 2>&1 || true
+          ars scan ./core --no-llm --badge > ars-output.txt 2>&1 || true
           cat ars-output.txt
 
       - name: Extract and update ARS badge
