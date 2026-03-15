@@ -44,6 +44,9 @@ Temporary Items
 *.dylib
 tools/irrlicht-hook/hook
 
+# Gas Town runtime directories
+.beads/
+
 # Test binary, built with `go test -c`
 *.test
 
