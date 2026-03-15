@@ -87,17 +87,40 @@ final class SessionManagerTests: XCTestCase {
     }
     
     // MARK: - State Glyph Tests
-    
+
     func testStateGlyphs() {
-        XCTAssertEqual(SessionState.State.working.glyph, "●")
-        XCTAssertEqual(SessionState.State.waiting.glyph, "◔")
+        XCTAssertEqual(SessionState.State.working.glyph, "hammer.fill")
+        XCTAssertEqual(SessionState.State.waiting.glyph, "hourglass")
         XCTAssertEqual(SessionState.State.ready.glyph, "checkmark.circle.fill")
+        XCTAssertEqual(SessionState.State.cancelledByUser.glyph, "xmark.circle.fill")
     }
-    
+
     func testStateColors() {
         XCTAssertEqual(SessionState.State.working.color, "#8B5CF6")
-        XCTAssertEqual(SessionState.State.waiting.color, "#F59E0B") 
+        XCTAssertEqual(SessionState.State.waiting.color, "#FF9500")
         XCTAssertEqual(SessionState.State.ready.color, "#34C759")
+        XCTAssertEqual(SessionState.State.cancelledByUser.color, "#8E8E93")
+    }
+
+    func testCancelledByUserStateParsing() throws {
+        let jsonData = """
+        {
+            "session_id": "sess_cancelled123",
+            "state": "cancelled_by_user",
+            "model": "claude-3.7-sonnet",
+            "cwd": "/Users/test/projects/app",
+            "updated_at": 1234567890,
+            "first_seen": 1234567800,
+            "event_count": 3,
+            "last_event": "SessionEnd"
+        }
+        """.data(using: .utf8)!
+
+        let session = try JSONDecoder().decode(SessionState.self, from: jsonData)
+
+        XCTAssertEqual(session.id, "sess_cancelled123")
+        XCTAssertEqual(session.state, .cancelledByUser)
+        XCTAssertEqual(session.state.emoji, "⚫")
     }
     
     // MARK: - Display Formatting Tests
@@ -147,8 +170,8 @@ final class SessionManagerTests: XCTestCase {
             createMockSession(id: "2", state: .waiting),
             createMockSession(id: "3", state: .ready)
         ]
-        
-        XCTAssertEqual(sessionManager.glyphStrip, "● ◔ ✓")
+
+        XCTAssertEqual(sessionManager.glyphStrip, "hammer.fill hourglass checkmark.circle.fill")
     }
     
     func testGlyphStripWithManySessions() {

@@ -224,28 +224,32 @@ struct SessionState: Identifiable, Codable {
     
     enum State: String, CaseIterable, Codable {
         case working, waiting, ready
-        
+        case cancelledByUser = "cancelled_by_user"
+
         var glyph: String {
             switch self {
             case .working: return "hammer.fill"
-            case .waiting: return "hourglass" 
+            case .waiting: return "hourglass"
             case .ready: return "checkmark.circle.fill"
+            case .cancelledByUser: return "xmark.circle.fill"
             }
         }
-        
+
         var color: String {
             switch self {
             case .working: return "#8B5CF6"   // purple to match 🟣
-            case .waiting: return "#FF9500"   // system orange  
+            case .waiting: return "#FF9500"   // system orange
             case .ready: return "#34C759"  // system green
+            case .cancelledByUser: return "#8E8E93"  // system gray
             }
         }
-        
+
         var emoji: String {
             switch self {
             case .working: return "🟣"   // purple circle
             case .waiting: return "🟠"   // orange circle
             case .ready: return "🟢"  // green circle
+            case .cancelledByUser: return "⚫"  // black circle (cancelled/ended)
             }
         }
     }

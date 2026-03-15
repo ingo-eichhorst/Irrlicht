@@ -253,7 +253,7 @@ struct SessionRowView: View {
                 
                 // Show metrics if available
                 if let metrics = session.metrics {
-                    let isActive = session.state != .ready
+                    let isActive = session.state == .working || session.state == .waiting
                     TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
                         let _ = timeline.date // Force refresh every second
                         HStack(spacing: 0) {

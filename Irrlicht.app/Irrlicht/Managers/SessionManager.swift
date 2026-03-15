@@ -127,9 +127,25 @@ class SessionManager: ObservableObject {
                 }
             }
             
+            // Auto-cleanup cancelled_by_user sessions older than 30 seconds.
+            // These are terminal (no more events will fire) so they self-expire.
+            let cutoff = Date().addingTimeInterval(-30)
+            var cancelledIds: [String] = []
+            for session in newSessions where session.state == .cancelledByUser {
+                if session.updatedAt < cutoff {
+                    let filePath = instancesPath.appendingPathComponent("\(session.id).json")
+                    try? FileManager.default.removeItem(at: filePath)
+                    cancelledIds.append(session.id)
+                    print("🧹 Auto-deleted cancelled_by_user session \(session.shortId)")
+                }
+            }
+            if !cancelledIds.isEmpty {
+                newSessions.removeAll { cancelledIds.contains($0.id) }
+            }
+
             // Sort sessions according to saved order, with new sessions at the end
             newSessions = sortSessionsByOrder(newSessions)
-            
+
             // Update session order to include any new sessions and remove deleted ones
             updateSessionOrder(with: newSessions)
             
@@ -172,7 +188,7 @@ class SessionManager: ObservableObject {
     }
     
     var hasActiveSessions: Bool {
-        !sessions.filter { $0.state != .ready }.isEmpty
+        sessions.contains { $0.state == .working || $0.state == .waiting }
     }
     
     var workingSessions: Int {

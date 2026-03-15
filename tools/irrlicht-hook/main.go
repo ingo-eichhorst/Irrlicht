@@ -759,8 +759,6 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 		transitionReason = "standard_event_mapping"
 		
 	case "SessionEnd":
-		// SessionEnd always deletes the session file completely
-		// This handles all termination cases: clear, logout, prompt_input_exit, etc.
 		var clearReason string
 		if event.Reason != "" {
 			clearReason = event.Reason
@@ -769,17 +767,22 @@ func smartStateTransition(event *HookEvent, previousState *SessionState) (newSta
 				clearReason = reason
 			}
 		}
-		
-		// Always delete the session file on SessionEnd, regardless of reason
-		newState = "delete_session"
+
 		switch clearReason {
 		case "prompt_input_exit":
-			transitionReason = "user_cancelled_with_esc_delete_file"
+			// User pressed ESC on a notification prompt — session ended but show
+			// cancelled_by_user state briefly so the UI reflects the cancellation.
+			// The SwiftUI app auto-deletes these sessions after 30 seconds.
+			newState = "cancelled_by_user"
+			transitionReason = "user_cancelled_notification_with_esc"
 		case "clear":
+			newState = "delete_session"
 			transitionReason = "session_cleared_delete_file"
 		case "logout":
+			newState = "delete_session"
 			transitionReason = "session_logout_delete_file"
 		default:
+			newState = "delete_session"
 			transitionReason = "session_ended_delete_file"
 		}
 	}
