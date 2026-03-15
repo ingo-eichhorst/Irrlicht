@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# irrlicht-aider-notify — notifications shim for Aider's AIDER_NOTIFICATIONS_COMMAND.
+#
+# Called by aider whenever it transitions to waiting-for-user-input state after
+# an LLM response. Sends a Notification event to irrlicht-hook to signal that the
+# aider session is now waiting.
+#
+# Usage (set via environment before launching aider):
+#   AIDER_NOTIFICATIONS_COMMAND="irrlicht-aider-notify '<session-id>'"
+#
+# The irrlicht-aider wrapper sets this automatically.
+
+SESSION_ID="${1:-}"
+
+if [ -z "$SESSION_ID" ]; then
+    # Called without session ID — nothing to do.
+    exit 0
+fi
+
+if ! command -v irrlicht-hook >/dev/null 2>&1; then
+    exit 0
+fi
+
+if [ "${IRRLICHT_DISABLED:-0}" = "1" ]; then
+    exit 0
+fi
+
+TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"hook_event_name":"Notification","session_id":"%s","timestamp":"%s","adapter":"aider"}\n' \
+    "$SESSION_ID" "$TIMESTAMP" | irrlicht-hook || true

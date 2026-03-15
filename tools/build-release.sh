@@ -8,6 +8,7 @@ VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['versio
 BUILD_DIR="build"
 BINARY_NAME="irrlicht-hook"
 SHIM_NAME="irrlicht-shim"
+AIDER_TAIL_NAME="irrlicht-aider-tail"
 
 echo "🏗️  Building Irrlicht Hook Receiver v$VERSION"
 echo "============================================="
@@ -24,11 +25,13 @@ echo "  Building macOS arm64..."
 cd core
 GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-darwin-arm64" ./cmd/irrlicht-hook/
 GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-darwin-arm64" ./cmd/irrlicht-shim/
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-arm64" ./cmd/irrlicht-aider-tail/
 
 # macOS Intel (amd64)
 echo "  Building macOS amd64..."
 GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-darwin-amd64" ./cmd/irrlicht-hook/
 GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-darwin-amd64" ./cmd/irrlicht-shim/
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-amd64" ./cmd/irrlicht-aider-tail/
 
 cd ..
 
@@ -40,18 +43,23 @@ lipo -create -output "$BUILD_DIR/${BINARY_NAME}-darwin-universal" \
 lipo -create -output "$BUILD_DIR/${SHIM_NAME}-darwin-universal" \
     "$BUILD_DIR/${SHIM_NAME}-darwin-arm64" \
     "$BUILD_DIR/${SHIM_NAME}-darwin-amd64"
+lipo -create -output "$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-universal" \
+    "$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-arm64" \
+    "$BUILD_DIR/${AIDER_TAIL_NAME}-darwin-amd64"
 
 # Build for other platforms (for future distribution)
 echo "Building for Linux..."
 cd core
 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-linux-amd64" ./cmd/irrlicht-hook/
 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-linux-amd64" ./cmd/irrlicht-shim/
+GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${AIDER_TAIL_NAME}-linux-amd64" ./cmd/irrlicht-aider-tail/
 cd ..
 
 echo "Building for Windows..."
 cd core
 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${BINARY_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook/
 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-windows-amd64.exe" ./cmd/irrlicht-shim/
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${AIDER_TAIL_NAME}-windows-amd64.exe" ./cmd/irrlicht-aider-tail/
 cd ..
 
 # Build macOS installer package
@@ -99,4 +107,5 @@ echo ""
 echo "🎉 Release artifacts ready in $BUILD_DIR/"
 echo "   Hook binary:      ${BINARY_NAME}-darwin-universal"
 echo "   Shim binary:      ${SHIM_NAME}-darwin-universal"
+echo "   Aider tail:       ${AIDER_TAIL_NAME}-darwin-universal"
 echo "   Installer pkg:    Irrlicht-v${VERSION}.pkg"
