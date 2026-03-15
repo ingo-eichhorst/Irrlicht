@@ -30,7 +30,7 @@ struct SessionListView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 6)
             .sheet(isPresented: $showSettings) {
-                SettingsView()
+                SettingsView(isPresented: $showSettings)
             }
 
 

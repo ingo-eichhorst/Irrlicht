@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Binding var isPresented: Bool
     @AppStorage("sessionTTLMinutes") private var sessionTTLMinutes: Int = 30
-    @Environment(\.dismiss) private var dismiss
 
     private let ttlOptions: [(label: String, value: Int)] = [
         ("Never", 0),
@@ -41,7 +41,7 @@ struct SettingsView: View {
 
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done") { isPresented = false }
                     .keyboardShortcut(.defaultAction)
             }
         }
