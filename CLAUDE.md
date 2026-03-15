@@ -207,13 +207,18 @@ osascript -e 'key code 53'  # Escape key
 
 ### Method 4: Accessibility tree inspection
 
-Session rows have accessibility identifiers for programmatic inspection:
+Session rows and key UI elements have accessibility identifiers for AXorcist/Peekaboo inspection:
 - Parent sessions: `session-card-<session-id>`
 - Subagent sessions: `subagent-card-<session-id>`
+- State icon: `session-state-icon-<session-id>`
+- Model label: `session-model-label-<session-id>`
+- Context/metrics bar: `session-context-bar-<session-id>`
 
 ```bash
 # With AXorcist (if installed):
 axorcist query --identifier "session-card-*"
+axorcist query --identifier "session-state-icon-*"
+axorcist query --identifier "session-context-bar-*"
 
 # With Peekaboo (if installed):
 peekaboo find --accessibility-id "session-card-*"

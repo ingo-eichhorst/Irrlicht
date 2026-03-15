@@ -215,6 +215,8 @@ struct SessionRowView: View {
                 .font(.system(.body))
                 .foregroundColor(Color(hex: session.state.color))
                 .frame(width: 16)
+                .accessibilityIdentifier("session-state-icon-\(session.id)")
+                .accessibilityLabel("\(session.state.rawValue) state")
             
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
@@ -259,9 +261,11 @@ struct SessionRowView: View {
                     Text(session.effectiveModel)
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    
+                        .accessibilityIdentifier("session-model-label-\(session.id)")
+                        .accessibilityLabel("model \(session.effectiveModel)")
+
                     Spacer()
-                    
+
                     if session.safeEventCount > 0 {
                         Text("\(session.safeEventCount) events")
                             .font(.caption2)
@@ -325,6 +329,8 @@ struct SessionRowView: View {
                         }
                         .padding(.top, 1)
                     }
+                    .accessibilityIdentifier("session-context-bar-\(session.id)")
+                    .accessibilityLabel(metrics.hasContextData ? "context \(metrics.formattedContextUtilization)" : "no context data")
                 }
 
                 // Context pressure alert banner (visible at 80%+ for active sessions)
