@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,13 +12,13 @@ import (
 	"github.com/gorilla/websocket"
 
 	inboundhttp "irrlicht/core/adapters/inbound/http"
+	"irrlicht/core/adapters/outbound/git"
+	"irrlicht/core/adapters/outbound/logging"
 	"irrlicht/core/adapters/outbound/memory"
+	"irrlicht/core/adapters/outbound/metrics"
 	"irrlicht/core/adapters/outbound/security"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
-	"irrlicht/core/adapters/outbound/git"
-	"irrlicht/core/adapters/outbound/logging"
-	"irrlicht/core/adapters/outbound/metrics"
 	"irrlicht/core/domain/session"
 )
 
@@ -47,6 +48,9 @@ func newTestStack(t *testing.T) *httptest.Server {
 	handler.RegisterRoutes(mux)
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
+
+	uiSub, _ := fs.Sub(uiFS, "ui")
+	mux.Handle("/", http.FileServer(http.FS(uiSub)))
 
 	return httptest.NewServer(mux)
 }
@@ -149,5 +153,24 @@ func TestGate_WebSocketReceivesPush(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("ws: timed out waiting for push")
+	}
+}
+
+// TestGate_UIServed verifies that GET / returns 200 with HTML content.
+func TestGate_UIServed(t *testing.T) {
+	srv := newTestStack(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / status: got %d, want 200", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/html") {
+		t.Errorf("Content-Type: got %q, want text/html", ct)
 	}
 }

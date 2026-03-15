@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -24,6 +26,9 @@ import (
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 )
+
+//go:embed ui
+var uiFS embed.FS
 
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
 var Version = "dev"
@@ -83,6 +88,15 @@ func main() {
 
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
+
+	// Static web UI: serve the embedded ui/ directory at root.
+	// API routes registered above take precedence over the catch-all "/".
+	uiSub, err := fs.Sub(uiFS, "ui")
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to sub ui fs: %v", err))
+		os.Exit(1)
+	}
+	mux.Handle("/", http.FileServer(http.FS(uiSub)))
 
 	srv := &http.Server{Handler: mux}
 
