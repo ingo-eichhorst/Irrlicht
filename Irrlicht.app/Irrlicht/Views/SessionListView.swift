@@ -295,9 +295,9 @@ struct SessionRowView: View {
                                 Spacer()
                             }
                             .frame(minWidth: 70, alignment: .leading)
-                            
+
                             Spacer()
-                            
+
                             // Context utilization (center)
                             HStack(spacing: 2) {
                                 if metrics.hasContextData {
@@ -309,9 +309,9 @@ struct SessionRowView: View {
                                 }
                             }
                             .frame(minWidth: 50)
-                            
+
                             Spacer()
-                            
+
                             // Token count (right-aligned)
                             HStack {
                                 Spacer()
@@ -325,6 +325,27 @@ struct SessionRowView: View {
                         }
                         .padding(.top, 1)
                     }
+                }
+
+                // Context pressure alert banner (visible at 80%+ for active sessions)
+                if let metrics = session.metrics,
+                   session.state == .working || session.state == .waiting,
+                   metrics.contextUtilization >= 80 {
+                    let isCritical = metrics.contextUtilization >= 95
+                    HStack(spacing: 4) {
+                        Image(systemName: isCritical ? "exclamationmark.triangle.fill" : "exclamationmark.triangle")
+                            .font(.caption2)
+                            .foregroundColor(isCritical ? .red : .orange)
+                        Text("Switch to a fresh session soon")
+                            .font(.caption2)
+                            .foregroundColor(isCritical ? .red : .orange)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background((isCritical ? Color.red : Color.orange).opacity(0.08))
+                    .cornerRadius(4)
+                    .padding(.top, 2)
                 }
             }
         }

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Darwin
+import UserNotifications
 
 @MainActor
 class SessionManager: ObservableObject {
@@ -11,6 +12,10 @@ class SessionManager: ObservableObject {
     private let instancesPath: URL
     private let orderFilePath: URL
     private var sessionOrder: [String] = []
+
+    // Tracks which pressure thresholds (80, 95) have already fired a notification
+    // for each session ID. Prevents re-firing on every state update.
+    private var notifiedThresholds: [String: Set<Int>] = [:]
 
     // MARK: - File polling (legacy, active when IRRLICHT_USE_FILES=1)
 
@@ -46,6 +51,7 @@ class SessionManager: ObservableObject {
 
         Task {
             loadSessionOrder()
+            requestNotificationPermission()
             if self.useFilePolling {
                 self.startWatching()
                 self.loadExistingSessions()
@@ -181,6 +187,7 @@ class SessionManager: ObservableObject {
         assignDuplicateIndexes(&newSessions)
         sessions = newSessions
         lastError = nil
+        checkContextPressureAlerts(sessions: newSessions)
     }
 
     // MARK: - File System Watching (legacy)
@@ -364,6 +371,7 @@ class SessionManager: ObservableObject {
 
             sessions = newSessions
             lastError = nil
+            checkContextPressureAlerts(sessions: newSessions)
 
         } catch {
             lastError = "Failed to load sessions: \(error.localizedDescription)"
@@ -411,6 +419,59 @@ class SessionManager: ObservableObject {
 
     var readySessions: Int {
         sessions.filter { $0.state == .ready }.count
+    }
+
+    // MARK: - Context Pressure Notifications
+
+    private func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if granted {
+                print("✅ Notification permission granted")
+            } else if let error = error {
+                print("⚠️ Notification permission error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Checks active sessions for context utilization crossing 80% or 95% thresholds.
+    /// Fires a macOS notification the first time each threshold is crossed per session.
+    private func checkContextPressureAlerts(sessions: [SessionState]) {
+        let thresholds = [80, 95]
+        for session in sessions {
+            guard session.state == .working || session.state == .waiting,
+                  let metrics = session.metrics,
+                  metrics.contextUtilization > 0 else { continue }
+
+            let utilization = metrics.contextUtilization
+            var fired = notifiedThresholds[session.id] ?? Set<Int>()
+
+            for threshold in thresholds where Double(threshold) <= utilization && !fired.contains(threshold) {
+                fired.insert(threshold)
+                notifiedThresholds[session.id] = fired
+                sendContextPressureNotification(session: session, threshold: threshold, utilization: utilization)
+            }
+        }
+    }
+
+    private func sendContextPressureNotification(session: SessionState, threshold: Int, utilization: Double) {
+        let content = UNMutableNotificationContent()
+        content.title = "Context pressure: \(threshold)% threshold reached"
+        let label = session.projectName ?? session.shortId
+        content.body = "\(label) is at \(String(format: "%.1f%%", utilization)) context. Consider switching to a fresh session."
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "irrlicht-context-\(session.id)-\(threshold)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("⚠️ Failed to send context pressure notification: \(error.localizedDescription)")
+            } else {
+                print("🔔 Context pressure alert (\(threshold)%) fired for session \(session.shortId)")
+            }
+        }
     }
 
     // MARK: - Session Order Management
@@ -626,6 +687,7 @@ class SessionManager: ObservableObject {
 
     func deleteSession(sessionId: String) {
         print("🗑️ Deleting session \(sessionId)")
+        notifiedThresholds.removeValue(forKey: sessionId)
 
         let sessionFilePath = instancesPath.appendingPathComponent("\(sessionId).json")
 
