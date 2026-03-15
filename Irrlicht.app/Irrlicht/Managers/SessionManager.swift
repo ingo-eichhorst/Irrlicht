@@ -171,6 +171,28 @@ class SessionManager: ObservableObject {
                 newSessions.removeAll { orphanedIds.contains($0.id) }
             }
 
+            // TTL-based expiry for ready sessions.
+            // sessionTTLMinutes: 0 = never expire, >0 = expire after N minutes.
+            // Default is 30 when the key hasn't been set yet.
+            let effectiveTTL: Int = UserDefaults.standard.object(forKey: "sessionTTLMinutes") == nil
+                ? 30
+                : UserDefaults.standard.integer(forKey: "sessionTTLMinutes")
+            if effectiveTTL > 0 {
+                let ttlCutoff = Date().addingTimeInterval(-Double(effectiveTTL) * 60)
+                var expiredIds: [String] = []
+                for session in newSessions where session.state == .ready {
+                    if session.updatedAt < ttlCutoff {
+                        let filePath = instancesPath.appendingPathComponent("\(session.id).json")
+                        try? FileManager.default.removeItem(at: filePath)
+                        expiredIds.append(session.id)
+                        print("⏰ TTL-expired ready session \(session.shortId) (idle > \(effectiveTTL)m)")
+                    }
+                }
+                if !expiredIds.isEmpty {
+                    newSessions.removeAll { expiredIds.contains($0.id) }
+                }
+            }
+
             // Sort sessions according to saved order, with new sessions at the end
             newSessions = sortSessionsByOrder(newSessions)
 

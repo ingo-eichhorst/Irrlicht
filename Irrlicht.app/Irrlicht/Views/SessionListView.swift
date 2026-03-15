@@ -3,6 +3,7 @@ import SwiftUI
 struct SessionListView: View {
     @EnvironmentObject var sessionManager: SessionManager
     @State private var isQuitButtonHovered = false
+    @State private var showSettings = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,7 +20,19 @@ struct SessionListView: View {
                 errorView(error)
             }
             
-            // Quit button at bottom
+            // Settings and Quit buttons at bottom
+            Divider()
+            Button("Settings\u{2026}") {
+                showSettings = true
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 6)
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
+            }
+
             Divider()
             Button("Quit Irrlicht") {
                 NSApplication.shared.terminate(nil)
