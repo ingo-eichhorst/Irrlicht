@@ -1,7 +1,7 @@
 #!/bin/bash
 # create-installer-package.sh — Build Irrlicht-vX.X.X.pkg for macOS distribution
 #
-# Bundles irrlicht-hook, settings-merger, and Irrlicht.app into a signed/unsigned
+# Bundles irrlicht-hook, settings-merger, and the SwiftUI app into a signed/unsigned
 # .pkg installer using pkgbuild + productbuild.
 #
 # Usage:
@@ -13,7 +13,7 @@
 # Requirements:
 #   - macOS with Xcode Command Line Tools (pkgbuild, productbuild)
 #   - Go toolchain (for building irrlicht-hook and settings-merger)
-#   - Swift toolchain (for building Irrlicht.app)
+#   - Swift toolchain (for building frontend/macos)
 
 set -euo pipefail
 
@@ -98,10 +98,10 @@ lipo -create -output "$BUILD_DIR/settings-merger-darwin-universal" \
     "$BUILD_DIR/settings-merger-darwin-amd64"
 echo "   ✅  settings-merger built"
 
-echo "🔨  Building Irrlicht.app (release)..."
-cd "$REPO_ROOT/Irrlicht.app"
+echo "🔨  Building SwiftUI app (release)..."
+cd "$REPO_ROOT/frontend/macos"
 swift build -c release 2>&1 | tail -5
-echo "   ✅  Irrlicht.app built"
+echo "   ✅  SwiftUI app built"
 
 # ---------------------------------------------------------------------------
 # Assemble .app bundle
@@ -114,7 +114,7 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 
 # Copy executable (SPM places it in .build/release/<target-name>)
-SWIFT_EXECUTABLE="$REPO_ROOT/Irrlicht.app/.build/release/Irrlicht"
+SWIFT_EXECUTABLE="$REPO_ROOT/frontend/macos/.build/release/Irrlicht"
 if [[ ! -f "$SWIFT_EXECUTABLE" ]]; then
     echo "❌  Swift build output not found: $SWIFT_EXECUTABLE" >&2
     exit 1

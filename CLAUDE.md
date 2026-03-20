@@ -18,7 +18,7 @@ Claude Code Hook Events → Go Hook Receiver → JSON State Files → SwiftUI Me
 
 **Key Components:**
 - **irrlicht-hook** (Go): Receives Claude Code hook events and maintains session state files
-- **Irrlicht.app** (SwiftUI): Menu bar application that displays session states
+- **frontend/macos** (SwiftUI): Menu bar application that displays session states
 - **Settings merger** (Go): Manages Claude Code hook configuration
 - **Supporting tools**: Build scripts, test runners, and replay utilities
 
@@ -38,10 +38,10 @@ Claude Code Hook Events → Go Hook Receiver → JSON State Files → SwiftUI Me
 cd core && go build -o irrlicht-hook ./cmd/irrlicht-hook/
 
 # Build SwiftUI app
-cd Irrlicht.app && swift build
+cd frontend/macos && swift build
 
 # Run SwiftUI app
-cd Irrlicht.app && swift run
+cd frontend/macos && swift run
 ```
 
 ### Testing
@@ -57,7 +57,7 @@ cd tools/settings-merger && go test -v
 cd core && go test -v ./...
 
 # Test SwiftUI components
-cd Irrlicht.app && swift test
+cd frontend/macos && swift test
 ```
 
 ### Installation & Configuration
@@ -78,7 +78,7 @@ export IRRLICHT_DISABLED=1
 ### Development Workflow
 ```bash
 # Run SwiftUI app for manual testing
-cd Irrlicht.app && swift run &
+cd frontend/macos && swift run &
 
 # Replay sample events to test the hook receiver
 ./tools/irrlicht-replay fixtures/session-start.json
@@ -109,7 +109,7 @@ killall swift
 - `tools/settings-merger/`: Manages `~/.claude/settings.json` hook configuration
 - `platform/macos/`: macOS installer package builder
 
-**SwiftUI App (`Irrlicht.app/`):**
+**SwiftUI App (`frontend/macos/`):**
 - `Irrlicht/IrrlichtApp.swift`: Main app entry point
 - `Irrlicht/Models/SessionState.swift`: Session state and metrics data models
 - `Irrlicht/Managers/SessionManager.swift`: File system monitoring and state management
@@ -145,7 +145,7 @@ Set `IRRLICHT_DEBUG=1` when launching the app. On every session update, `Session
 writes current state to `~/.irrlicht/debug-state.json`:
 
 ```bash
-IRRLICHT_DEBUG=1 swift run --package-path Irrlicht.app &
+IRRLICHT_DEBUG=1 swift run --package-path frontend/macos &
 # ... make changes, trigger hook events ...
 cat ~/.irrlicht/debug-state.json
 ```

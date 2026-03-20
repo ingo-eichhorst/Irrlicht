@@ -17,7 +17,7 @@ Claude Code ──(Hooks: stdin JSON)──▶ irrlicht-hook (CLI)
                                          └─ writes JSON per session
                                          └─ logs minimal events
 
-Irrlicht.app (SwiftUI menubar)
+frontend/macos (SwiftUI menubar)
   ├─ watches instances/*.json
   ├─ tails transcript.jsonl (last ~64 KB) → msgs/min, tokens_in
   ├─ model-capacity.json → context_used_%
@@ -61,7 +61,7 @@ Installer (.pkg)
 * SwiftUI `MenuBarExtra`: render **glyph strip** (●/◔/✓) from `instances/*.json`.
 * Dropdown list with `shortId · state · model` and timestamps.
 * File‑watcher with 200 ms debounce; finished‑TTL pruning.
-  **Deliverables:** `Irrlicht.app` bundle; sample instance files.
+  **Deliverables:** `frontend/macos` bundle; sample instance files.
   **Exit criteria:** Create/update/delete files → UI reflects changes ≤2 s.
 
 ## Phase 3 — One‑Click Installer & Rollback

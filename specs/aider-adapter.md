@@ -202,7 +202,7 @@ irrlicht-aider-tail (Go)   ← tails JSONL
                               ↓
 irrlicht-hook / instances/$SESSION_ID.json
                               ↓
-Irrlicht.app menu bar
+frontend/macos menu bar
 ```
 
 ### 6.3 Notifications Shim

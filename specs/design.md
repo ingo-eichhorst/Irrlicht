@@ -21,7 +21,7 @@ Claude Code (N sessions)
                   └─ records PID (os.Getppid()) in session file for orphan detection
                   └─ (optional) logs: .../logs/events.log
 
-Irrlicht.app (SwiftUI, MenuBarExtra)
+frontend/macos (SwiftUI, MenuBarExtra)
    ├─ File watcher: .../instances/*.json  → render glyphs & dropdown
    ├─ Process monitor: kill(pid, 0) liveness check on every refresh → deletes orphaned sessions
    ├─ Transcript tailer: tail last ~64 KB of transcript.jsonl → msgs/min, tokens_in

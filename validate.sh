@@ -11,14 +11,14 @@ echo "==> Build: settings-merger"
 cd tools/settings-merger && go build . && cd ../..
 
 echo "==> Build: SwiftUI app"
-cd Irrlicht.app && swift build 2>&1 && cd ..
+cd frontend/macos && swift build 2>&1 && cd ../..
 
 echo "==> Test: Go components"
 cd core && go test ./... && cd ..
 cd tools/settings-merger && go test ./... && cd ../..
 
 echo "==> Test: SwiftUI components"
-cd Irrlicht.app && swift test 2>&1 && cd ..
+cd frontend/macos && swift test 2>&1 && cd ../..
 
 echo "==> Integration: hook receiver"
 ./tools/test-runner.sh

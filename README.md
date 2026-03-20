@@ -86,7 +86,7 @@ No ghosts. **Hooks → State → Light.**
 
 5. **Run Irrlicht UI:**
    ```bash
-   cd Irrlicht.app
+   cd frontend/macos
    swift run &
    ```
 
@@ -155,7 +155,7 @@ Example state file:
 │   ├── adapters/              # stdin, filesystem, git, logging, metrics, security
 │   ├── application/services/  # EventService orchestration
 │   └── pkg/                   # tailer, capacity utilities
-├── Irrlicht.app/              # SwiftUI menu bar application
+├── frontend/macos/            # SwiftUI menu bar application
 │   ├── Irrlicht/              # Main app code (IrrlichtApp, SessionManager, Views)
 │   ├── Tests/                 # SwiftUI app tests + concurrency scenarios
 │   └── Package.swift          # Swift package configuration
@@ -183,7 +183,7 @@ validate.sh                    # Single validation entry point (build + test + i
 cd core && go build -o irrlicht-hook ./cmd/irrlicht-hook/
 
 # Build SwiftUI app
-cd Irrlicht.app && swift build
+cd frontend/macos && swift build
 
 # Build settings merger
 cd tools/settings-merger && go build -o settings-merger .
@@ -207,7 +207,7 @@ Individual components:
 
 # Run specific component tests
 cd tools/settings-merger && go test -v
-cd Irrlicht.app && swift test
+cd frontend/macos && swift test
 
 # Test hook receiver with sample events
 ./tools/irrlicht-replay fixtures/session-start.json

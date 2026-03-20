@@ -8,7 +8,7 @@
 #   - version.json (single source of truth)
 #   - tools/build-release.sh
 #   - All go.mod files (module version comment)
-#   - Irrlicht.app/Package.swift (appVersion constant)
+#   - frontend/macos/Package.swift (appVersion constant)
 
 set -e
 
@@ -76,7 +76,7 @@ print(f'  updated $rel ({action})')
 done
 
 # 3. Update Package.swift appVersion constant
-PACKAGE_SWIFT="$REPO_ROOT/Irrlicht.app/Package.swift"
+PACKAGE_SWIFT="$REPO_ROOT/frontend/macos/Package.swift"
 if [ -f "$PACKAGE_SWIFT" ]; then
     python3 -c "
 import re, sys
@@ -96,7 +96,7 @@ else:
 with open(path, 'w') as f:
     f.write(content)
 
-print(f'  {action} Irrlicht.app/Package.swift (appVersion)')
+print(f'  {action} frontend/macos/Package.swift (appVersion)')
 "
 fi
 
@@ -108,7 +108,7 @@ echo "  version.json"
 for gomod in $(find "$REPO_ROOT/tools" "$REPO_ROOT/core" -name "go.mod"); do
     echo "  ${gomod#$REPO_ROOT/}"
 done
-echo "  Irrlicht.app/Package.swift"
+echo "  frontend/macos/Package.swift"
 echo ""
 echo "Next steps:"
 echo "  git add -A && git commit -m \"chore: bump version to $NEW_VERSION\""
