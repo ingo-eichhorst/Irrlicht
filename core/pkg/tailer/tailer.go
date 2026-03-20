@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	
-	// "github.com/ingo-eichhorst/multi-cc-bar/tools/model-capacity/pkg/capacity"
+
+	"irrlicht/core/pkg/capacity"
 )
 
 // Helper functions for Go versions that don't have built-in min/max
@@ -30,32 +30,49 @@ func max(a, b int) int {
 	return b
 }
 
-// normalizeModelName normalizes model names by removing date suffixes and handling aliases
+// normalizeModelName normalizes model names by removing date suffixes, extended
+// context markers, and handling aliases. The returned name is used as the key
+// for capacity lookups.
 func normalizeModelName(rawModel string) string {
 	if rawModel == "" {
 		return ""
 	}
-	
+
+	// Strip extended context suffix (e.g. "claude-opus-4-6[1m]")
+	rawModel = strings.TrimSuffix(rawModel, "[1m]")
+
 	// Handle common aliases first
 	aliases := map[string]string{
 		"opusplan": "claude-opus-4-1",
-		"sonnet":   "claude-sonnet-4",
-		"haiku":    "claude-haiku-4",
+		"sonnet":   "claude-sonnet-4-6",
+		"haiku":    "claude-haiku-4-5",
 	}
-	
+
 	if normalized, exists := aliases[rawModel]; exists {
 		return normalized
 	}
-	
-	// Remove date suffixes (e.g., "claude-opus-4-1-20250805" -> "claude-opus-4-1")
+
+	// Remove date suffixes (e.g., "claude-opus-4-6-20250715" -> "claude-opus-4-6")
 	datePattern := regexp.MustCompile(`-\d{8}$`)
 	normalized := datePattern.ReplaceAllString(rawModel, "")
-	
-	// Convert full model IDs to shorter forms for capacity matching
-	// claude-opus-4-1-20250805 -> claude-4.1-opus
-	if strings.Contains(normalized, "claude-opus-4-1") {
-		return "claude-4.1-opus"
+
+	// Match most-specific patterns first (longer model IDs before shorter)
+	if strings.Contains(normalized, "claude-opus-4-6") {
+		return "claude-opus-4-6"
 	}
+	if strings.Contains(normalized, "claude-sonnet-4-6") {
+		return "claude-sonnet-4-6"
+	}
+	if strings.Contains(normalized, "claude-sonnet-4-5") {
+		return "claude-sonnet-4-5"
+	}
+	if strings.Contains(normalized, "claude-haiku-4-5") {
+		return "claude-haiku-4-5"
+	}
+	if strings.Contains(normalized, "claude-opus-4-1") {
+		return "claude-opus-4-1"
+	}
+	// Generic claude-sonnet-4 fallback (e.g. claude-sonnet-4-20250514)
 	if strings.Contains(normalized, "claude-sonnet-4") {
 		return "claude-4-sonnet"
 	}
@@ -65,7 +82,7 @@ func normalizeModelName(rawModel string) string {
 	if strings.Contains(normalized, "claude-3.5-haiku") {
 		return "claude-3.5-haiku"
 	}
-	
+
 	return normalized
 }
 
@@ -129,7 +146,11 @@ type TranscriptTailer struct {
 	lastOffset  int64
 	metrics     *SessionMetrics
 	windowSize  time.Duration // Default 60 seconds
-	// capacityMgr *capacity.CapacityManager
+	capacityMgr *capacity.CapacityManager
+
+	// Context window override from transcript (context_management.context_window)
+	// or extended context model suffix ([1m]). Takes priority over capacity lookup.
+	contextWindowOverride int64
 
 	// Tool call pairing counters — accumulated across parsed lines.
 	toolUseCount    int // tool_use / tool_call events seen
@@ -138,28 +159,15 @@ type TranscriptTailer struct {
 
 // NewTranscriptTailer creates a new tailer for the given transcript path
 func NewTranscriptTailer(path string) *TranscriptTailer {
-	// Initialize capacity manager with default config path
-	// capacityConfigPath := filepath.Join("..", "model-capacity.json")
-	// if absPath, err := filepath.Abs(capacityConfigPath); err == nil {
-	// 	capacityConfigPath = absPath
-	// }
-	
-	// capacityMgr, err := capacity.NewCapacityManager(capacityConfigPath)
-	// if err != nil {
-	// 	// Fallback to nil if capacity manager fails to initialize
-	// 	fmt.Printf("Warning: failed to initialize capacity manager: %v\n", err)
-	// 	capacityMgr = nil
-	// }
-	
 	return &TranscriptTailer{
-		path:       path,
-		lastOffset: 0,
+		path:        path,
+		lastOffset:  0,
+		capacityMgr: capacity.DefaultCapacityManager(),
 		metrics: &SessionMetrics{
 			MessageHistory: make([]MessageEvent, 0),
 			SessionStartAt: time.Time{}, // Will be set from the first actual message timestamp
 		},
 		windowSize: 60 * time.Second,
-		// capacityMgr: capacityMgr,
 	}
 }
 
@@ -500,8 +508,19 @@ func (t *TranscriptTailer) extractModelInfo(raw map[string]interface{}) {
 	}
 	
 	if modelName != "" {
+		// Detect extended context suffix before normalization
+		if strings.Contains(modelName, "[1m]") {
+			t.contextWindowOverride = 1000000
+		}
 		// Normalize the model name before storing
 		t.metrics.ModelName = normalizeModelName(modelName)
+	}
+
+	// Extract context_management.context_window (most accurate source)
+	if cm, ok := raw["context_management"].(map[string]interface{}); ok {
+		if cw, ok := cm["context_window"].(float64); ok && cw > 0 {
+			t.contextWindowOverride = int64(cw)
+		}
 	}
 }
 
@@ -576,24 +595,41 @@ func (t *TranscriptTailer) extractTokenInfo(raw map[string]interface{}) {
 	}
 }
 
-// computeContextUtilization calculates context utilization percentage and pressure level
+// computeContextUtilization calculates context utilization percentage and pressure level.
+// It uses a three-step fallback chain for the effective context window:
+//  1. context_management.context_window from transcript (most accurate)
+//  2. CapacityManager per-model lookup
+//  3. Default 200K
 func (t *TranscriptTailer) computeContextUtilization() {
-	// For now, provide basic context utilization computation without the capacity manager
-	// This will be enhanced later when we integrate the capacity system properly
-	
 	if t.metrics.TotalTokens == 0 || t.metrics.ModelName == "" {
-		// Set defaults when we can't compute utilization
 		t.metrics.ContextUtilization = 0.0
 		t.metrics.PressureLevel = "unknown"
 		return
 	}
-	
-	// Context utilization calculation adjusted for autocompaction
-	// Claude Code autocompacts at ~155K tokens
-	effectiveContextWindow := int64(155000)
+
+	// Fallback chain for effective context window
+	var effectiveContextWindow int64
+
+	// 1. Transcript-reported context window (most accurate)
+	if t.contextWindowOverride > 0 {
+		effectiveContextWindow = t.contextWindowOverride
+	}
+
+	// 2. CapacityManager per-model lookup
+	if effectiveContextWindow <= 0 && t.capacityMgr != nil {
+		cap := t.capacityMgr.GetModelCapacity(t.metrics.ModelName)
+		if cap.ContextWindow > 0 {
+			effectiveContextWindow = cap.ContextWindow
+		}
+	}
+
+	// 3. Default fallback
+	if effectiveContextWindow <= 0 {
+		effectiveContextWindow = int64(200000)
+	}
+
 	utilizationPercentage := (float64(t.metrics.TotalTokens) / float64(effectiveContextWindow)) * 100
-	
-	// Determine pressure level based on proximity to autocompaction
+
 	pressureLevel := "safe"
 	if utilizationPercentage >= 90 {
 		pressureLevel = "critical"
@@ -602,7 +638,7 @@ func (t *TranscriptTailer) computeContextUtilization() {
 	} else if utilizationPercentage >= 60 {
 		pressureLevel = "caution"
 	}
-	
+
 	t.metrics.ContextUtilization = utilizationPercentage
 	t.metrics.PressureLevel = pressureLevel
 }
