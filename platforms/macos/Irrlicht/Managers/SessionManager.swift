@@ -33,6 +33,9 @@ class SessionManager: ObservableObject {
     private let maxReconnectDelay: TimeInterval = 30.0
     private var sessionMap: [String: SessionState] = [:]
 
+    /// GasTownProvider reference for forwarding gastown_state WebSocket messages.
+    weak var gasTownProvider: GasTownProvider?
+
     // MARK: - Mode selection
 
     private var useFilePolling: Bool {
@@ -157,7 +160,8 @@ class SessionManager: ObservableObject {
 
     private struct WsEnvelope: Decodable {
         let type: String
-        let session: SessionState
+        let session: SessionState?
+        let gastown: GasTownState?
     }
 
     private func handleWsMessage(_ text: String) {
@@ -166,12 +170,20 @@ class SessionManager: ObservableObject {
             let envelope = try JSONDecoder().decode(WsEnvelope.self, from: data)
             switch envelope.type {
             case "session_created", "session_updated":
-                sessionMap[envelope.session.id] = envelope.session
-                rebuildSessionsFromMap()
+                if let session = envelope.session {
+                    sessionMap[session.id] = session
+                    rebuildSessionsFromMap()
+                }
             case "session_deleted":
-                sessionMap.removeValue(forKey: envelope.session.id)
-                sessionOrder.removeAll { $0 == envelope.session.id }
-                rebuildSessionsFromMap()
+                if let session = envelope.session {
+                    sessionMap.removeValue(forKey: session.id)
+                    sessionOrder.removeAll { $0 == session.id }
+                    rebuildSessionsFromMap()
+                }
+            case "gastown_state":
+                if let gtState = envelope.gastown {
+                    gasTownProvider?.handleWebSocketUpdate(gtState)
+                }
             default:
                 print("⚠️ Unknown WS message type: \(envelope.type)")
             }

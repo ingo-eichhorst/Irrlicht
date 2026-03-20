@@ -186,9 +186,10 @@ func main() {
 			}
 		}()
 
-		// Poller: periodically fetch rig + polecat state via gt CLI.
+		// Poller: periodically fetch rig + polecat + convoy state via gt CLI,
+		// enrich with session data, and broadcast gastown_state via WebSocket.
 		if gtBin := gtResolver.Path(); gtBin != "" {
-			gtPoller = gastownadapter.NewPoller(gtCollector, gtBin, 5*time.Second)
+			gtPoller = gastownadapter.NewPoller(gtCollector, gtBin, 5*time.Second, memRepo, push)
 			pollerCtx, pollerCancel := context.WithCancel(context.Background())
 			defer pollerCancel()
 			go func() {
@@ -196,7 +197,7 @@ func main() {
 					logger.LogError("gastown-poller", "", fmt.Sprintf("poller error: %v", err))
 				}
 			}()
-			logger.LogInfo("startup", "", "Gas Town poller started (5s interval)")
+			logger.LogInfo("startup", "", "Gas Town poller started (5s interval, enriched mode)")
 		}
 	} else {
 		logger.LogInfo("startup", "", "Gas Town not detected — skipping daemon watcher")
@@ -290,23 +291,32 @@ func handleGetGasTown(collector *gastownadapter.Collector, poller *gastownadapte
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		// If poller is running, return its snapshot (daemon state + rigs + polecats).
-		if poller != nil {
-			if snap := poller.Snapshot(); snap != nil {
-				enc := json.NewEncoder(w)
-				enc.SetIndent("", "  ")
-				enc.Encode(snap)
-				return
-			}
+		if poller == nil {
+			json.NewEncoder(w).Encode(struct {
+				Detected bool `json:"detected"`
+			}{Detected: collector.Detected()})
+			return
 		}
 
-		// Fallback: return minimal state from collector only.
-		resp := struct {
-			Detected bool `json:"detected"`
-		}{
-			Detected: collector.Detected(),
+		// Return enriched gastown_state if available.
+		if state := poller.State(); state != nil {
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "  ")
+			enc.Encode(state)
+			return
 		}
-		json.NewEncoder(w).Encode(resp)
+
+		// Fallback to legacy snapshot.
+		if snap := poller.Snapshot(); snap != nil {
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "  ")
+			enc.Encode(snap)
+			return
+		}
+
+		json.NewEncoder(w).Encode(struct {
+			Detected bool `json:"detected"`
+		}{Detected: collector.Detected()})
 	}
 }
 
