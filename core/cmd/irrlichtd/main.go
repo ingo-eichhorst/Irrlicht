@@ -33,6 +33,8 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+//go:generate sh -c "mkdir -p ui && cp ../../../platforms/web/index.html ui/index.html"
+
 //go:embed ui
 var uiFS embed.FS
 
