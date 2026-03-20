@@ -244,6 +244,29 @@ struct SessionListView: View {
             }
     }
 
+    var projectGroups: [ProjectGroup] {
+        let groups = sessionGroups
+
+        // Group session groups by project directory (lastPathComponent of cwd)
+        var grouped: [String: [SessionGroup]] = [:]
+        for group in groups {
+            let cwd = group.parent.cwd
+            let projectDir: String
+            if cwd.isEmpty {
+                projectDir = "unknown"
+            } else {
+                let lastComponent = URL(fileURLWithPath: cwd).lastPathComponent
+                projectDir = lastComponent.isEmpty ? "unknown" : lastComponent
+            }
+            grouped[projectDir, default: []].append(group)
+        }
+
+        // Convert to ProjectGroup array, sorted by project name
+        return grouped.map { key, value in
+            ProjectGroup(projectDirectory: key, sessionGroups: value)
+        }.sorted { $0.projectDirectory < $1.projectDirectory }
+    }
+
     private var sessionListContent: some View {
         let groups = sessionGroups
         return ScrollView {
@@ -691,6 +714,13 @@ struct SessionGroup: Identifiable {
 
     var id: String { parent.id }
     var allSessions: [SessionState] { [parent] + subagents }
+}
+
+struct ProjectGroup: Identifiable {
+    let projectDirectory: String
+    let sessionGroups: [SessionGroup]
+
+    var id: String { projectDirectory }
 }
 
 // MARK: - Color Extension
