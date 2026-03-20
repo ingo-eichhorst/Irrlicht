@@ -94,11 +94,6 @@ GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$B
 GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${CURSOR_HOOK_NAME}-windows-amd64.exe" ./cmd/irrlicht-hook-cursor/
 cd ..
 
-# Build macOS installer package
-echo ""
-echo "Building macOS installer package..."
-./platform/macos/create-installer-package.sh --version "$VERSION"
-
 # Calculate checksums (files only — build dir may contain Irrlicht.app bundle directory)
 echo "Calculating checksums..."
 cd $BUILD_DIR
@@ -156,4 +151,3 @@ echo "   Copilot hook binary:    ${COPILOT_HOOK_NAME}-darwin-universal"
 echo "   Cursor hook binary:     ${CURSOR_HOOK_NAME}-darwin-universal"
 echo "   Copilot hooks merger:   copilot-hooks-merger-darwin-universal"
 echo "   Cursor hooks merger:    cursor-hooks-merger-darwin-universal"
-echo "   Installer pkg:          Irrlicht-v${VERSION}.pkg"

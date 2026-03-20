@@ -160,7 +160,6 @@ Example state file:
 │   ├── Tests/                 # SwiftUI app tests + concurrency scenarios
 │   └── Package.swift          # Swift package configuration
 ├── fixtures/                  # Hook event samples and edge cases
-├── platform/macos/            # macOS installer package builder (.pkg)
 ├── specs/                     # Design docs and adapter specs
 └── tools/
     ├── settings-merger/       # Go tool for managing Claude Code hook config

@@ -107,7 +107,6 @@ killall swift
   - `pkg/tailer/` — real-time transcript analysis for performance metrics
   - `pkg/capacity/` — token capacity and context utilization tracking
 - `tools/settings-merger/`: Manages `~/.claude/settings.json` hook configuration
-- `platform/macos/`: macOS installer package builder
 
 **SwiftUI App (`frontend/macos/`):**
 - `Irrlicht/IrrlichtApp.swift`: Main app entry point
