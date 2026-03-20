@@ -18,6 +18,7 @@ import (
 	inboundhttp "irrlicht/core/adapters/inbound/http"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
+	"irrlicht/core/adapters/outbound/gtbin"
 	"irrlicht/core/adapters/outbound/logging"
 	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/memory"
@@ -50,6 +51,14 @@ func main() {
 		log.Fatalf("failed to initialise logger: %v", err)
 	}
 	defer logger.Close()
+
+	// Resolve the gt binary path (GT_BIN env → common paths → which gt).
+	gtResolver := gtbin.New()
+	if p := gtResolver.Path(); p != "" {
+		logger.LogInfo("startup", "", fmt.Sprintf("gt binary: %s", p))
+	} else {
+		logger.LogError("startup", "", "gt binary not found (set GT_BIN or add gt to PATH)")
+	}
 
 	// Filesystem repository (persistent backing store).
 	fsRepo, err := filesystem.New()

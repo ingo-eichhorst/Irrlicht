@@ -54,3 +54,10 @@ type PushBroadcaster interface {
 	Subscribe() chan PushMessage
 	Unsubscribe(ch chan PushMessage)
 }
+
+// GTBinResolver resolves the path to the gt binary.
+type GTBinResolver interface {
+	// Path returns the resolved absolute path to the gt binary,
+	// or "" if the binary could not be found.
+	Path() string
+}
