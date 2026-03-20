@@ -16,8 +16,9 @@ const (
 // TranscriptEvent carries information about a single transcript change.
 type TranscriptEvent struct {
 	Type           EventType
+	Adapter        string // Source adapter name (e.g. "claude-code", "codex")
 	SessionID      string // UUID portion of the filename (without .jsonl)
-	ProjectDir     string // Leaf directory name under ~/.claude/projects/
+	ProjectDir     string // Leaf directory name under the watched root
 	TranscriptPath string // Absolute path to the .jsonl file
 	Size           int64  // Current file size in bytes (0 for removals)
 }

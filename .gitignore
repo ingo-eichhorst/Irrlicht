@@ -37,8 +37,8 @@ Temporary Items
 .apdisk
 
 # Web frontend embed copy (build artifact — source of truth: platforms/web/)
-# Run: go generate ./core/cmd/irrlichtd/ or platforms/build-release.sh
-core/cmd/irrlichtd/ui/
+# Run: go generate ./core/cmd/irrlichd/ or platforms/build-release.sh
+core/cmd/irrlichd/ui/
 
 # Go build artifacts
 *.exe

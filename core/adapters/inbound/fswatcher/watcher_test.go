@@ -1,4 +1,4 @@
-package transcript
+package fswatcher
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 
 	"irrlicht/core/domain/transcript"
 )
+
+const testAdapter = "test-agent"
 
 // helper: create a minimal projects root with one project subdir.
 func setupFakeProjects(t *testing.T) string {
@@ -26,9 +28,12 @@ func setupFakeProjects(t *testing.T) string {
 }
 
 func TestNewWithRoot(t *testing.T) {
-	w := NewWithRoot("/tmp/fake")
+	w := NewWithRoot("/tmp/fake", testAdapter)
 	if w.Root() != "/tmp/fake" {
 		t.Errorf("Root() = %q, want /tmp/fake", w.Root())
+	}
+	if w.Adapter() != testAdapter {
+		t.Errorf("Adapter() = %q, want %q", w.Adapter(), testAdapter)
 	}
 }
 
@@ -52,7 +57,7 @@ func TestExtractSessionID(t *testing.T) {
 
 func TestWatch_EmitsNewSession(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := NewWithRoot(root)
+	w := NewWithRoot(root, testAdapter)
 
 	ch := w.Subscribe()
 
@@ -75,6 +80,9 @@ func TestWatch_EmitsNewSession(t *testing.T) {
 	case ev := <-ch:
 		if ev.Type != transcript.EventNewSession {
 			t.Errorf("event type = %q, want %q", ev.Type, transcript.EventNewSession)
+		}
+		if ev.Adapter != testAdapter {
+			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
 		}
 		if ev.SessionID != "abc-123" {
 			t.Errorf("session ID = %q, want %q", ev.SessionID, "abc-123")
@@ -104,7 +112,7 @@ func TestWatch_EmitsActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWithRoot(root)
+	w := NewWithRoot(root, testAdapter)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -128,6 +136,9 @@ func TestWatch_EmitsActivity(t *testing.T) {
 		if ev.Type != transcript.EventActivity {
 			t.Errorf("event type = %q, want %q", ev.Type, transcript.EventActivity)
 		}
+		if ev.Adapter != testAdapter {
+			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
+		}
 		if ev.SessionID != "sess-001" {
 			t.Errorf("session ID = %q, want %q", ev.SessionID, "sess-001")
 		}
@@ -150,7 +161,7 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWithRoot(root)
+	w := NewWithRoot(root, testAdapter)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -171,6 +182,9 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 		if ev.Type != transcript.EventRemoved {
 			t.Errorf("event type = %q, want %q", ev.Type, transcript.EventRemoved)
 		}
+		if ev.Adapter != testAdapter {
+			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
+		}
 		if ev.SessionID != "sess-rm" {
 			t.Errorf("session ID = %q, want %q", ev.SessionID, "sess-rm")
 		}
@@ -189,7 +203,7 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 
 func TestWatch_NewProjectDir(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := NewWithRoot(root)
+	w := NewWithRoot(root, testAdapter)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -237,7 +251,7 @@ func TestWatch_NewProjectDir(t *testing.T) {
 
 func TestWatch_IgnoresNonJSONL(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := NewWithRoot(root)
+	w := NewWithRoot(root, testAdapter)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -279,7 +293,7 @@ func TestWatch_EmptyRoot_BlocksUntilCancel(t *testing.T) {
 }
 
 func TestSubscribeUnsubscribe(t *testing.T) {
-	w := NewWithRoot(t.TempDir())
+	w := NewWithRoot(t.TempDir(), testAdapter)
 	ch := w.Subscribe()
 
 	w.subMu.Lock()
@@ -302,7 +316,7 @@ func TestWatch_WaitsForRoot(t *testing.T) {
 	root := filepath.Join(tmp, "projects")
 	// root doesn't exist yet.
 
-	w := NewWithRoot(root)
+	w := NewWithRoot(root, testAdapter)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())

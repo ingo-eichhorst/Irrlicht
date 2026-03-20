@@ -1,6 +1,6 @@
 import Foundation
 
-/// Combined Gas Town snapshot from the irrlichtd /api/v1/gastown endpoint.
+/// Combined Gas Town snapshot from the irrlichd /api/v1/gastown endpoint.
 struct GasTownSnapshot: Codable {
     let detected: Bool
     let daemon: DaemonState?

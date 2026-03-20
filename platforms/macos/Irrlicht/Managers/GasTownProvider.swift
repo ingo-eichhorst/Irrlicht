@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-/// Polls the irrlichtd /api/v1/gastown endpoint for Gas Town state.
+/// Polls the irrlichd /api/v1/gastown endpoint for Gas Town state.
 @MainActor
 class GasTownProvider: ObservableObject {
     @Published var snapshot: GasTownSnapshot?

@@ -1,8 +1,8 @@
-// SessionDetector orchestrates TranscriptWatcher + ProcessWatcher +
-// GracePeriodTimer to detect and manage Claude Code sessions from transcript
+// SessionDetector orchestrates AgentWatchers + ProcessWatcher +
+// GracePeriodTimer to detect and manage agent sessions from transcript
 // file activity.
 //
-// It subscribes to TranscriptWatcher events and:
+// It subscribes to one or more AgentWatcher event streams and:
 //   - On new session: creates session state, discovers PID via lsof,
 //     registers with ProcessWatcher, derives parent_session_id
 //   - On activity: resets GracePeriodTimer, refreshes metrics
@@ -19,13 +19,14 @@ import (
 	processadapter "irrlicht/core/adapters/outbound/process"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/domain/transcript"
+	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
 
 // SessionDetector watches transcript files to detect sessions and orchestrate
 // ProcessWatcher + GracePeriodTimer for lifecycle management.
 type SessionDetector struct {
-	tw          outbound.TranscriptWatcher
+	watchers    []inbound.AgentWatcher
 	pw          outbound.ProcessWatcher // optional
 	gp          outbound.GracePeriodTimer
 	repo        outbound.SessionRepository
@@ -42,7 +43,7 @@ type SessionDetector struct {
 // NewSessionDetector creates a SessionDetector with all required dependencies.
 // pw and broadcaster may be nil (optional).
 func NewSessionDetector(
-	tw outbound.TranscriptWatcher,
+	watchers []inbound.AgentWatcher,
 	pw outbound.ProcessWatcher,
 	gp outbound.GracePeriodTimer,
 	repo outbound.SessionRepository,
@@ -52,7 +53,7 @@ func NewSessionDetector(
 	broadcaster outbound.PushBroadcaster,
 ) *SessionDetector {
 	return &SessionDetector{
-		tw:              tw,
+		watchers:        watchers,
 		pw:              pw,
 		gp:              gp,
 		repo:            repo,
@@ -64,11 +65,42 @@ func NewSessionDetector(
 	}
 }
 
-// Run subscribes to TranscriptWatcher events and processes them until ctx
-// is cancelled. It blocks for the lifetime of the detector.
+// Run subscribes to all AgentWatcher event streams, fans them into a single
+// channel, and processes events until ctx is cancelled. It blocks for the
+// lifetime of the detector.
 func (d *SessionDetector) Run(ctx context.Context) error {
-	ch := d.tw.Subscribe()
-	defer d.tw.Unsubscribe(ch)
+	merged := make(chan transcript.TranscriptEvent, 16)
+	var wg sync.WaitGroup
+
+	for _, w := range d.watchers {
+		ch := w.Subscribe()
+		wg.Add(1)
+		go func(watcher inbound.AgentWatcher, ch <-chan transcript.TranscriptEvent) {
+			defer wg.Done()
+			defer watcher.Unsubscribe(ch)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case ev, ok := <-ch:
+					if !ok {
+						return
+					}
+					select {
+					case merged <- ev:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}(w, ch)
+	}
+
+	// Close merged when all watcher goroutines exit.
+	go func() {
+		wg.Wait()
+		close(merged)
+	}()
 
 	// Seed project sessions map from existing sessions on disk.
 	d.seedFromDisk()
@@ -80,7 +112,7 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			d.gp.StopAll()
 			return ctx.Err()
-		case ev, ok := <-ch:
+		case ev, ok := <-merged:
 			if !ok {
 				d.gp.StopAll()
 				return nil
@@ -105,7 +137,7 @@ func (d *SessionDetector) handleTranscriptEvent(ev transcript.TranscriptEvent) {
 // onNewSession handles a new transcript file appearing.
 func (d *SessionDetector) onNewSession(ev transcript.TranscriptEvent) {
 	d.log.LogInfo("session-detector", ev.SessionID,
-		fmt.Sprintf("new session detected in %s", ev.ProjectDir))
+		fmt.Sprintf("new session detected in %s (adapter=%s)", ev.ProjectDir, ev.Adapter))
 
 	// Track project directory for parent derivation.
 	d.mu.Lock()
@@ -124,6 +156,7 @@ func (d *SessionDetector) onNewSession(ev transcript.TranscriptEvent) {
 			Version:        1,
 			SessionID:      ev.SessionID,
 			State:          session.StateWorking,
+			Adapter:        ev.Adapter,
 			TranscriptPath: ev.TranscriptPath,
 			FirstSeen:      now,
 			UpdatedAt:      now,
@@ -441,7 +474,7 @@ func (d *SessionDetector) seedFromDisk() {
 	for _, state := range states {
 		if state.TranscriptPath != "" {
 			// Extract project dir from transcript path.
-			// Path format: ~/.claude/projects/<project-dir>/<session-id>.jsonl
+			// Path format: ~/<agent-root>/<project-dir>/<session-id>.jsonl
 			if pdir := extractProjectDir(state.TranscriptPath); pdir != "" {
 				d.projectSessions[state.SessionID] = pdir
 			}

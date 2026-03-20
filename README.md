@@ -74,7 +74,7 @@ No ghosts. **Files → State → Light.**
 
 3. **Run the daemon:**
    ```bash
-   ./.build/irrlichtd-darwin-universal &
+   ./.build/irrlichd-darwin-universal &
    ```
 
 4. **Run Irrlicht UI:**
@@ -117,7 +117,7 @@ Example state file:
 
 ```
 ├── core/                      # Go daemon (single module, hexagonal architecture)
-│   ├── cmd/irrlichtd/         # Daemon entry point
+│   ├── cmd/irrlichd/         # Daemon entry point
 │   ├── domain/                # SessionState, TranscriptEvent, state types
 │   ├── ports/                 # Outbound interfaces
 │   ├── adapters/              # filesystem, transcript, process, graceperiod, git, logging, metrics
@@ -141,7 +141,7 @@ validate.sh                    # Single validation entry point (build + test + i
 ./platforms/build-release.sh
 
 # Build daemon
-cd core && go build ./cmd/irrlichtd/
+cd core && go build ./cmd/irrlichd/
 
 # Build SwiftUI app
 cd platforms/macos && swift build
@@ -183,7 +183,7 @@ See [events.md](events.md) for the full state machine.
 ### Architecture
 
 ```
-irrlichtd
+irrlichd
   ├── TranscriptWatcher  (fsnotify → FSEvents on macOS)
   ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking)
   ├── GracePeriodTimer   (per-session 2s idle → waiting)
@@ -229,7 +229,7 @@ Structured JSON logs with automatic rotation:
 - Look for error logs in `~/Library/Application\ Support/Irrlicht/logs/`
 
 **Sessions not updating:**
-- Check that irrlichtd is running: `curl http://127.0.0.1:7837/state`
+- Check that irrlichd is running: `curl http://127.0.0.1:7837/state`
 - Check IRRLICHT_DISABLED environment variable
 - Verify file permissions in state directory
 
