@@ -5,7 +5,7 @@ set -e
 
 # Read version from version.json (single source of truth)
 VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['version'])")
-BUILD_DIR="build"
+BUILD_DIR=".build"
 DAEMON_NAME="irrlichtd"
 
 echo "Building Irrlicht v$VERSION"
@@ -17,7 +17,7 @@ mkdir -p $BUILD_DIR
 
 # Sync web frontend into Go embed directory
 echo "Syncing web frontend..."
-cp frontend/web/index.html core/cmd/irrlichtd/ui/index.html
+cp platforms/web/index.html core/cmd/irrlichtd/ui/index.html
 
 # Build for macOS (both architectures)
 echo "Building for macOS..."

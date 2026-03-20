@@ -1,6 +1,6 @@
 # ✦ Irrlicht — Menu-Bar Telemetry for Claude Code (macOS)
 
-![Banner](banner.png)
+![Banner](assets/banner.png)
 
 [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ingo-eichhorst//raw/coverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/ingo-eichhorst/Irrlicht/main/version.json&query=$.version&label=version&color=%2334C759)](version.json)
@@ -36,7 +36,7 @@ No ghosts. **Files → State → Light.**
 
 ## Features
 
-![UI Features](irrlicht-explainer.png)
+![UI Features](assets/irrlicht-explainer.png)
 
 ### Menu Bar Indicators
 - **Individual colored status indicators** for each active Claude Code session
@@ -69,17 +69,17 @@ No ghosts. **Files → State → Light.**
 
 2. **Build the daemon:**
    ```bash
-   ./tools/build-release.sh
+   ./platforms/build-release.sh
    ```
 
 3. **Run the daemon:**
    ```bash
-   ./build/irrlichtd-darwin-universal &
+   ./.build/irrlichtd-darwin-universal &
    ```
 
 4. **Run Irrlicht UI:**
    ```bash
-   cd frontend/macos
+   cd platforms/macos
    swift run &
    ```
 
@@ -123,17 +123,14 @@ Example state file:
 │   ├── adapters/              # filesystem, transcript, process, graceperiod, git, logging, metrics
 │   ├── application/services/  # SessionDetector orchestration
 │   └── pkg/                   # tailer, capacity utilities
-├── frontend/macos/            # SwiftUI menu bar application
-│   ├── Irrlicht/              # Main app code (IrrlichtApp, SessionManager, Views)
-│   ├── Tests/                 # SwiftUI app tests + concurrency scenarios
-│   └── Package.swift          # Swift package configuration
+├── platforms/
+│   ├── macos/                 # SwiftUI menu bar application
+│   │   ├── Irrlicht/          # Main app code (IrrlichtApp, SessionManager, Views)
+│   │   ├── Tests/             # SwiftUI app tests + concurrency scenarios
+│   │   └── Package.swift      # Swift package configuration
+│   ├── web/                   # Web frontend (embedded into daemon)
+│   └── build-release.sh       # Release build script
 ├── fixtures/                  # Sample transcript files and edge cases
-├── specs/                     # Design docs and adapter specs
-└── tools/
-    ├── test-runner.sh         # Comprehensive test suite
-    ├── build-release.sh       # Build script
-    ├── update-version.sh      # Version bump utility
-    └── model-capacity.json    # Token capacity data by model
 validate.sh                    # Single validation entry point (build + test + integration)
 ```
 
@@ -141,13 +138,13 @@ validate.sh                    # Single validation entry point (build + test + i
 
 ```bash
 # Build all components
-./tools/build-release.sh
+./platforms/build-release.sh
 
 # Build daemon
 cd core && go build ./cmd/irrlichtd/
 
 # Build SwiftUI app
-cd frontend/macos && swift build
+cd platforms/macos && swift build
 ```
 
 ### Validation
@@ -163,12 +160,9 @@ This runs in order: Go build → Swift build → Go tests → Swift tests → in
 Individual components:
 
 ```bash
-# Run the integration test suite
-./tools/test-runner.sh
-
 # Run specific component tests
 cd core && go test -v ./...
-cd frontend/macos && swift test
+cd platforms/macos && swift test
 ```
 
 ### Session Detection
