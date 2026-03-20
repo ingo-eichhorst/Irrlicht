@@ -5,7 +5,7 @@ set -e
 
 # Read version from version.json (single source of truth)
 VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['version'])")
-BUILD_DIR="build"
+BUILD_DIR=".build"
 DAEMON_NAME="irrlichtd"
 
 echo "Building Irrlicht v$VERSION"
