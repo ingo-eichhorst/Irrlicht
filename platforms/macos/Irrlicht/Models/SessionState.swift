@@ -128,7 +128,7 @@ struct SessionState: Identifiable, Codable {
 
     private static let logger = Logger(subsystem: "com.anthropic.irrlicht", category: "SessionState")
 
-    // Custom coding keys to match JSON from irrlichtd
+    // Custom coding keys to match JSON from irrlichd
     enum CodingKeys: String, CodingKey {
         case id = "session_id"
         case state, model, cwd, pid

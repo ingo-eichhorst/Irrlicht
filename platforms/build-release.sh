@@ -6,7 +6,7 @@ set -e
 # Read version from version.json (single source of truth)
 VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['version'])")
 BUILD_DIR=".build"
-DAEMON_NAME="irrlichtd"
+DAEMON_NAME="irrlichd"
 
 echo "Building Irrlicht v$VERSION"
 echo "============================================="
@@ -15,9 +15,10 @@ echo "============================================="
 rm -rf $BUILD_DIR
 mkdir -p $BUILD_DIR
 
-# Sync web frontend into Go embed directory
+# Sync web frontend into Go embed directory (source of truth: platforms/web/)
 echo "Syncing web frontend..."
-cp platforms/web/index.html core/cmd/irrlichtd/ui/index.html
+mkdir -p core/cmd/irrlichd/ui
+cp platforms/web/index.html core/cmd/irrlichd/ui/index.html
 
 # Build for macOS (both architectures)
 echo "Building for macOS..."
@@ -25,11 +26,11 @@ echo "Building for macOS..."
 # macOS Apple Silicon (arm64)
 echo "  Building macOS arm64..."
 cd core
-GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${DAEMON_NAME}-darwin-arm64" ./cmd/irrlichtd/
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${DAEMON_NAME}-darwin-arm64" ./cmd/irrlichd/
 
 # macOS Intel (amd64)
 echo "  Building macOS amd64..."
-GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${DAEMON_NAME}-darwin-amd64" ./cmd/irrlichtd/
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${DAEMON_NAME}-darwin-amd64" ./cmd/irrlichd/
 
 cd ..
 
@@ -63,9 +64,9 @@ cat $BUILD_DIR/checksums.sha256
 echo ""
 echo "Testing universal binaries..."
 if $BUILD_DIR/${DAEMON_NAME}-darwin-universal --version; then
-    echo "irrlichtd universal binary works!"
+    echo "irrlichd universal binary works!"
 else
-    echo "irrlichtd universal binary test failed"
+    echo "irrlichd universal binary test failed"
     exit 1
 fi
 

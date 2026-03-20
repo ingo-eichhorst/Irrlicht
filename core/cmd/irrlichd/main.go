@@ -16,10 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"irrlicht/core/adapters/inbound/claudecode"
+	"irrlicht/core/adapters/inbound/codex"
+	gastownadapter "irrlicht/core/adapters/inbound/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
-	gastownadapter "irrlicht/core/adapters/outbound/gastown"
 	graceperiodadapter "irrlicht/core/adapters/outbound/graceperiod"
-	transcriptadapter "irrlicht/core/adapters/outbound/transcript"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
 	"irrlicht/core/adapters/outbound/logging"
@@ -30,8 +31,11 @@ import (
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
+
+//go:generate sh -c "mkdir -p ui && cp ../../../platforms/web/index.html ui/index.html"
 
 //go:embed ui
 var uiFS embed.FS
@@ -46,7 +50,7 @@ const (
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Printf("irrlichtd version %s\n", Version)
+		fmt.Printf("irrlichd version %s\n", Version)
 		fmt.Printf("Built with %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		os.Exit(0)
 	}
@@ -202,23 +206,28 @@ func main() {
 	// Register Gas Town API endpoint.
 	mux.HandleFunc("GET /api/v1/gastown", handleGetGasTown(gtCollector, gtPoller))
 
-	// Transcript watcher: watch ~/.claude/projects/** for session transcripts.
-	transcriptWatcher := transcriptadapter.New()
+	// Inbound adapters: watch agent transcript directories for session files.
+	claudeCodeWatcher := claudecode.New()
+	codexWatcher := codex.New()
+	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher}
 
-	// SessionDetector: orchestrates TranscriptWatcher + ProcessWatcher + GracePeriodTimer.
+	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher + GracePeriodTimer.
 	detector = services.NewSessionDetector(
-		transcriptWatcher, pwPort, gpTimer,
+		watchers, pwPort, gpTimer,
 		memRepo, logger, gitResolver, metricsCollector, push,
 	)
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()
-		logger.LogInfo("startup", "", fmt.Sprintf("TranscriptWatcher: watching %s", transcriptWatcher.Root()))
-		go func() {
-			if err := transcriptWatcher.Watch(detectorCtx); err != nil && err != context.Canceled {
-				logger.LogError("transcript", "", fmt.Sprintf("watcher error: %v", err))
-			}
-		}()
+		logger.LogInfo("startup", "", fmt.Sprintf("watching Claude Code (%s), Codex (%s)",
+			claudeCodeWatcher.Root(), codexWatcher.Root()))
+		for _, w := range watchers {
+			go func() {
+				if err := w.Watch(detectorCtx); err != nil && err != context.Canceled {
+					logger.LogError("agent-watcher", "", fmt.Sprintf("watcher error: %v", err))
+				}
+			}()
+		}
 		go func() {
 			if err := detector.Run(detectorCtx); err != nil && err != context.Canceled {
 				logger.LogError("session-detector", "", fmt.Sprintf("detector error: %v", err))
@@ -226,7 +235,7 @@ func main() {
 		}()
 	}
 
-	logger.LogInfo("startup", "", fmt.Sprintf("irrlichtd %s listening on unix:%s and tcp:%s", Version, sockPath, tcpAddr))
+	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, tcpAddr))
 
 	// Wait for SIGTERM or SIGINT.
 	sig := make(chan os.Signal, 1)
@@ -247,13 +256,13 @@ func main() {
 	}
 }
 
-// socketPath returns the Unix socket path for irrlichtd.
+// socketPath returns the Unix socket path for irrlichd.
 func socketPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "/tmp/irrlichtd.sock"
+		return "/tmp/irrlichd.sock"
 	}
-	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichtd.sock")
+	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichd.sock")
 }
 
 // registerReadRoutes registers the read-only HTTP endpoints on mux.

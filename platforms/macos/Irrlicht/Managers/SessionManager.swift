@@ -112,7 +112,7 @@ class SessionManager: ObservableObject {
 
         reconnectDelay = 1.0
         lastError = nil
-        print("🔌 WebSocket connected to irrlichtd")
+        print("🔌 WebSocket connected to irrlichd")
 
         do {
             while !Task.isCancelled {
@@ -438,6 +438,10 @@ class SessionManager: ObservableObject {
     // MARK: - Context Pressure Notifications
 
     private func requestNotificationPermission() {
+        guard Bundle.main.bundleIdentifier != nil else {
+            print("⚠️ Skipping notification setup (no bundle identifier — running via swift run?)")
+            return
+        }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
             if granted {
                 print("✅ Notification permission granted")
@@ -468,6 +472,7 @@ class SessionManager: ObservableObject {
     }
 
     private func sendContextPressureNotification(session: SessionState, threshold: Int, utilization: Double) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let content = UNMutableNotificationContent()
         content.title = "Context pressure: \(threshold)% threshold reached"
         let label = session.projectName ?? session.shortId

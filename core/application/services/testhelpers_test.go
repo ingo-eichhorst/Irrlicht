@@ -1,10 +1,14 @@
 package services_test
 
 import (
+	"context"
 	"errors"
 	"sync"
 
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/domain/transcript"
+	"irrlicht/core/ports/inbound"
 )
 
 // --- shared mock implementations for tests -----------------------------------
@@ -88,4 +92,100 @@ type mockMetrics struct{}
 
 func (m *mockMetrics) ComputeMetrics(path string) (*session.SessionMetrics, error) {
 	return nil, nil
+}
+
+// --- AgentWatcher mock -------------------------------------------------------
+
+// mockAgentWatcher implements inbound.AgentWatcher for tests.
+type mockAgentWatcher struct {
+	ch     chan transcript.TranscriptEvent
+	unsubs int
+}
+
+func newMockAgentWatcher() *mockAgentWatcher {
+	return &mockAgentWatcher{
+		ch: make(chan transcript.TranscriptEvent, 16),
+	}
+}
+
+func (w *mockAgentWatcher) Watch(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (w *mockAgentWatcher) Subscribe() <-chan transcript.TranscriptEvent {
+	return w.ch
+}
+
+func (w *mockAgentWatcher) Unsubscribe(ch <-chan transcript.TranscriptEvent) {
+	w.unsubs++
+}
+
+// --- ProcessWatcher mock -----------------------------------------------------
+
+// mockProcessWatcher implements outbound.ProcessWatcher for tests.
+type mockProcessWatcher struct {
+	watched map[int]string
+}
+
+func newMockProcessWatcher() *mockProcessWatcher {
+	return &mockProcessWatcher{watched: make(map[int]string)}
+}
+
+func (w *mockProcessWatcher) Watch(pid int, sessionID string) error {
+	w.watched[pid] = sessionID
+	return nil
+}
+
+func (w *mockProcessWatcher) Unwatch(pid int) {
+	delete(w.watched, pid)
+}
+
+func (w *mockProcessWatcher) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (w *mockProcessWatcher) Close() error { return nil }
+
+// --- GracePeriodTimer mock ---------------------------------------------------
+
+// mockGraceTimer implements outbound.GracePeriodTimer for tests.
+type mockGraceTimer struct {
+	resets  map[string]string // sessionID → transcriptPath
+	stops   map[string]bool
+	stopAll int
+}
+
+func newMockGraceTimer() *mockGraceTimer {
+	return &mockGraceTimer{
+		resets: make(map[string]string),
+		stops:  make(map[string]bool),
+	}
+}
+
+func (t *mockGraceTimer) Reset(sessionID, transcriptPath string) {
+	t.resets[sessionID] = transcriptPath
+}
+
+func (t *mockGraceTimer) Stop(sessionID string) {
+	t.stops[sessionID] = true
+}
+
+func (t *mockGraceTimer) StopAll() {
+	t.stopAll++
+}
+
+// --- helper to build SessionDetector for tests --------------------------------
+
+func newDetector(
+	tw *mockAgentWatcher,
+	pw *mockProcessWatcher,
+	gp *mockGraceTimer,
+	repo *mockRepo,
+) *services.SessionDetector {
+	return services.NewSessionDetector(
+		[]inbound.AgentWatcher{tw}, pw, gp, repo,
+		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
+	)
 }

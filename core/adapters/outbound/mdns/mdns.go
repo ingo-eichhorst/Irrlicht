@@ -1,4 +1,4 @@
-// Package mdns advertises irrlichtd via mDNS/Bonjour so it can be discovered
+// Package mdns advertises irrlichd via mDNS/Bonjour so it can be discovered
 // on the local network without manual IP configuration.
 package mdns
 
@@ -17,7 +17,7 @@ const (
 	domain      = "local."
 )
 
-// Advertiser broadcasts irrlichtd's presence via mDNS.
+// Advertiser broadcasts irrlichd's presence via mDNS.
 type Advertiser struct {
 	server *zeroconf.Server
 }
@@ -27,7 +27,7 @@ type Advertiser struct {
 func New(port int) (*Advertiser, error) {
 	host, err := os.Hostname()
 	if err != nil {
-		host = "irrlichtd"
+		host = "irrlichd"
 	}
 	// Strip domain suffixes that confuse mDNS responders.
 	host = strings.TrimSuffix(host, ".local")

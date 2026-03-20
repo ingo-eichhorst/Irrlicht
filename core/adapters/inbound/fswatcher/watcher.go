@@ -1,6 +1,7 @@
-// Package transcript implements an fsnotify-based watcher for Claude Code
-// transcript files under ~/.claude/projects/**.
-package transcript
+// Package fswatcher implements a generic fsnotify-based watcher for agent
+// transcript files. It watches a two-level directory tree (root/<project>/<id>.jsonl)
+// and emits TranscriptEvents tagged with the adapter name.
+package fswatcher
 
 import (
 	"context"
@@ -14,39 +15,41 @@ import (
 	"irrlicht/core/domain/transcript"
 )
 
-// projectsDir is the relative path from $HOME to the Claude projects directory.
-const projectsDir = ".claude/projects"
-
-// Watcher watches ~/.claude/projects/** for .jsonl transcript file events.
-// It implements outbound.TranscriptWatcher.
+// Watcher watches a directory tree for .jsonl transcript file events.
+// It implements inbound.AgentWatcher.
 type Watcher struct {
-	root string // resolved absolute path to ~/.claude/projects/
+	root    string // resolved absolute path to the watched directory
+	adapter string // adapter name set on emitted events
 
 	subMu sync.Mutex
 	subs  []chan transcript.TranscriptEvent
 }
 
-// New creates a Watcher targeting ~/.claude/projects/.
-// The directory does not need to exist yet — Watch will wait for it.
-func New() *Watcher {
+// New creates a Watcher for the given directory relative to $HOME.
+// adapter is the name set on all emitted TranscriptEvents (e.g. "claude-code").
+func New(relDir, adapter string) *Watcher {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return &Watcher{}
+		return &Watcher{adapter: adapter}
 	}
 	return &Watcher{
-		root: filepath.Join(home, projectsDir),
+		root:    filepath.Join(home, relDir),
+		adapter: adapter,
 	}
 }
 
-// NewWithRoot creates a Watcher targeting a custom root directory (for testing).
-func NewWithRoot(root string) *Watcher {
-	return &Watcher{root: root}
+// NewWithRoot creates a Watcher targeting a custom absolute root (for testing).
+func NewWithRoot(root, adapter string) *Watcher {
+	return &Watcher{root: root, adapter: adapter}
 }
 
-// Root returns the watched projects directory path.
+// Root returns the watched directory path.
 func (w *Watcher) Root() string { return w.root }
 
-// Watch begins watching the projects directory for transcript changes using
+// Adapter returns the adapter name.
+func (w *Watcher) Adapter() string { return w.adapter }
+
+// Watch begins watching the directory tree for transcript changes using
 // fsnotify (kqueue on macOS). It blocks until ctx is cancelled.
 //
 // The watcher dynamically adds subdirectories as they appear, so it catches
@@ -126,7 +129,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	// If a new directory was created under root, start watching it.
 	if ev.Op&fsnotify.Create != 0 {
 		if info, err := os.Stat(name); err == nil && info.IsDir() {
-			// Only watch direct children of the projects root.
+			// Only watch direct children of the root.
 			if filepath.Dir(name) == w.root {
 				_ = watcher.Add(name)
 			}
@@ -151,6 +154,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		size := fileSize(name)
 		w.broadcast(transcript.TranscriptEvent{
 			Type:           transcript.EventNewSession,
+			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
 			TranscriptPath: name,
@@ -161,6 +165,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		size := fileSize(name)
 		w.broadcast(transcript.TranscriptEvent{
 			Type:           transcript.EventActivity,
+			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
 			TranscriptPath: name,
@@ -170,6 +175,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	case ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 		w.broadcast(transcript.TranscriptEvent{
 			Type:           transcript.EventRemoved,
+			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
 			TranscriptPath: name,
@@ -198,11 +204,11 @@ func (w *Watcher) waitForRoot(ctx context.Context) error {
 		return nil
 	}
 
-	// Watch the parent directory for the projects dir to be created.
+	// Watch the parent directory for the root dir to be created.
 	parent := filepath.Dir(w.root)
 	if _, err := os.Stat(parent); err != nil {
 		// Even the parent doesn't exist — wait for it by polling
-		// the grandparent. Claude CLI creates these on first use.
+		// the grandparent. Agent CLIs create these on first use.
 		grandparent := filepath.Dir(parent)
 		return w.waitForDir(ctx, grandparent, w.root)
 	}

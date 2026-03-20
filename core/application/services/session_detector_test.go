@@ -5,107 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/domain/transcript"
 )
 
-// --- SessionDetector mock dependencies ---------------------------------------
-
-// mockTranscriptWatcher implements outbound.TranscriptWatcher for tests.
-type mockTranscriptWatcher struct {
-	ch     chan transcript.TranscriptEvent
-	unsubs int
-}
-
-func newMockTranscriptWatcher() *mockTranscriptWatcher {
-	return &mockTranscriptWatcher{
-		ch: make(chan transcript.TranscriptEvent, 16),
-	}
-}
-
-func (w *mockTranscriptWatcher) Watch(ctx context.Context) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (w *mockTranscriptWatcher) Subscribe() <-chan transcript.TranscriptEvent {
-	return w.ch
-}
-
-func (w *mockTranscriptWatcher) Unsubscribe(ch <-chan transcript.TranscriptEvent) {
-	w.unsubs++
-}
-
-// mockProcessWatcher implements outbound.ProcessWatcher for tests.
-type mockProcessWatcher struct {
-	watched map[int]string
-}
-
-func newMockProcessWatcher() *mockProcessWatcher {
-	return &mockProcessWatcher{watched: make(map[int]string)}
-}
-
-func (w *mockProcessWatcher) Watch(pid int, sessionID string) error {
-	w.watched[pid] = sessionID
-	return nil
-}
-
-func (w *mockProcessWatcher) Unwatch(pid int) {
-	delete(w.watched, pid)
-}
-
-func (w *mockProcessWatcher) Run(ctx context.Context) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (w *mockProcessWatcher) Close() error { return nil }
-
-// mockGraceTimer implements outbound.GracePeriodTimer for tests.
-type mockGraceTimer struct {
-	resets   map[string]string // sessionID → transcriptPath
-	stops    map[string]bool
-	stopAll  int
-}
-
-func newMockGraceTimer() *mockGraceTimer {
-	return &mockGraceTimer{
-		resets: make(map[string]string),
-		stops:  make(map[string]bool),
-	}
-}
-
-func (t *mockGraceTimer) Reset(sessionID, transcriptPath string) {
-	t.resets[sessionID] = transcriptPath
-}
-
-func (t *mockGraceTimer) Stop(sessionID string) {
-	t.stops[sessionID] = true
-}
-
-func (t *mockGraceTimer) StopAll() {
-	t.stopAll++
-}
-
-// --- helper to build SessionDetector for tests --------------------------------
-
-func newDetector(
-	tw *mockTranscriptWatcher,
-	pw *mockProcessWatcher,
-	gp *mockGraceTimer,
-	repo *mockRepo,
-) *services.SessionDetector {
-	return services.NewSessionDetector(
-		tw, pw, gp, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-	)
-}
-
 // --- tests -------------------------------------------------------------------
 
 func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -150,7 +57,7 @@ func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
 }
 
 func TestSessionDetector_Activity_ResetsGraceTimer(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -195,7 +102,7 @@ func TestSessionDetector_Activity_ResetsGraceTimer(t *testing.T) {
 }
 
 func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -238,7 +145,7 @@ func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
 }
 
 func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -276,7 +183,7 @@ func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
 }
 
 func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -310,7 +217,7 @@ func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 }
 
 func TestSessionDetector_GracePeriodExpiry_TransitionsToWaiting(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -336,7 +243,7 @@ func TestSessionDetector_GracePeriodExpiry_TransitionsToWaiting(t *testing.T) {
 }
 
 func TestSessionDetector_GracePeriodExpiry_SkipsNonWorking(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -359,7 +266,7 @@ func TestSessionDetector_GracePeriodExpiry_SkipsNonWorking(t *testing.T) {
 }
 
 func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -411,7 +318,7 @@ func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
 }
 
 func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -460,7 +367,7 @@ func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
 }
 
 func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -508,7 +415,7 @@ func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
 }
 
 func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -545,7 +452,7 @@ func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 }
 
 func TestSessionDetector_ContextCancel_StopsGracefully(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -571,7 +478,7 @@ func TestSessionDetector_ContextCancel_StopsGracefully(t *testing.T) {
 }
 
 func TestSessionDetector_Activity_UnknownSession_TreatedAsNew(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -604,7 +511,7 @@ func TestSessionDetector_Activity_UnknownSession_TreatedAsNew(t *testing.T) {
 }
 
 func TestSessionDetector_HandleProcessExit_TransitionsToReady(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -639,7 +546,7 @@ func TestSessionDetector_HandleProcessExit_TransitionsToReady(t *testing.T) {
 }
 
 func TestSessionDetector_HandleProcessExit_SkipsTerminalState(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -663,7 +570,7 @@ func TestSessionDetector_HandleProcessExit_SkipsTerminalState(t *testing.T) {
 }
 
 func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
@@ -680,7 +587,7 @@ func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
 }
 
 func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
-	tw := newMockTranscriptWatcher()
+	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
