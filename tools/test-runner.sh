@@ -42,7 +42,7 @@ fi
 
 # Test 3: SwiftUI tests
 ((total_tests++))
-if ! run_test "SwiftUI Tests" "cd frontend/macos && swift test"; then
+if ! run_test "SwiftUI Tests" "cd platforms/macos && swift test"; then
     ((failed_tests++))
 fi
 

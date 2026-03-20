@@ -74,12 +74,12 @@ No ghosts. **Files → State → Light.**
 
 3. **Run the daemon:**
    ```bash
-   ./build/irrlichtd-darwin-universal &
+   ./.build/irrlichtd-darwin-universal &
    ```
 
 4. **Run Irrlicht UI:**
    ```bash
-   cd frontend/macos
+   cd platforms/macos
    swift run &
    ```
 
@@ -123,7 +123,7 @@ Example state file:
 │   ├── adapters/              # filesystem, transcript, process, graceperiod, git, logging, metrics
 │   ├── application/services/  # SessionDetector orchestration
 │   └── pkg/                   # tailer, capacity utilities
-├── frontend/macos/            # SwiftUI menu bar application
+├── platforms/macos/            # SwiftUI menu bar application
 │   ├── Irrlicht/              # Main app code (IrrlichtApp, SessionManager, Views)
 │   ├── Tests/                 # SwiftUI app tests + concurrency scenarios
 │   └── Package.swift          # Swift package configuration
@@ -147,7 +147,7 @@ validate.sh                    # Single validation entry point (build + test + i
 cd core && go build ./cmd/irrlichtd/
 
 # Build SwiftUI app
-cd frontend/macos && swift build
+cd platforms/macos && swift build
 ```
 
 ### Validation
@@ -168,7 +168,7 @@ Individual components:
 
 # Run specific component tests
 cd core && go test -v ./...
-cd frontend/macos && swift test
+cd platforms/macos && swift test
 ```
 
 ### Session Detection

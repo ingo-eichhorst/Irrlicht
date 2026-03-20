@@ -18,7 +18,7 @@ Transcript Files → SessionDetector (file watcher) → In-Memory State → Swif
 
 **Key Components:**
 - **irrlichtd** (Go): Daemon that detects sessions via transcript file watching (FSEvents + kqueue), serves HTTP API and WebSocket push
-- **frontend/macos** (SwiftUI): Menu bar application that displays session states
+- **platforms/macos** (SwiftUI): Menu bar application that displays session states
 - **Supporting tools**: Build scripts, test runners
 
 **State Management:**
@@ -37,10 +37,10 @@ Transcript Files → SessionDetector (file watcher) → In-Memory State → Swif
 cd core && go build ./...
 
 # Build SwiftUI app
-cd frontend/macos && swift build
+cd platforms/macos && swift build
 
 # Run SwiftUI app
-cd frontend/macos && swift run
+cd platforms/macos && swift run
 ```
 
 ### Testing
@@ -52,7 +52,7 @@ cd frontend/macos && swift run
 cd core && go test -v ./...
 
 # Test SwiftUI components
-cd frontend/macos && swift test
+cd platforms/macos && swift test
 ```
 
 ### Installation & Configuration
@@ -64,7 +64,7 @@ export IRRLICHT_DISABLED=1
 ### Development Workflow
 ```bash
 # Run SwiftUI app for manual testing
-cd frontend/macos && swift run &
+cd platforms/macos && swift run &
 
 # Clean up test data
 rm -rf ~/Library/Application\ Support/Irrlicht/instances
@@ -90,7 +90,7 @@ killall swift
   - `pkg/tailer/` — real-time transcript analysis for performance metrics
   - `pkg/capacity/` — token capacity and context utilization tracking
 
-**SwiftUI App (`frontend/macos/`):**
+**SwiftUI App (`platforms/macos/`):**
 - `Irrlicht/IrrlichtApp.swift`: Main app entry point
 - `Irrlicht/Models/SessionState.swift`: Session state and metrics data models
 - `Irrlicht/Managers/SessionManager.swift`: File system monitoring and state management
@@ -124,7 +124,7 @@ Set `IRRLICHT_DEBUG=1` when launching the app. On every session update, `Session
 writes current state to `~/.irrlicht/debug-state.json`:
 
 ```bash
-IRRLICHT_DEBUG=1 swift run --package-path frontend/macos &
+IRRLICHT_DEBUG=1 swift run --package-path platforms/macos &
 # ... wait for sessions to appear ...
 cat ~/.irrlicht/debug-state.json
 ```
