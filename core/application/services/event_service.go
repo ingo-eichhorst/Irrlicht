@@ -33,6 +33,9 @@ type EventService struct {
 	// broadcaster is optional; when set, Broadcast is called after every state save.
 	broadcaster outbound.PushBroadcaster
 
+	// procWatcher is optional; when set, PIDs are registered for exit monitoring.
+	procWatcher outbound.ProcessWatcher
+
 	// SpeculativeWaitDelay is how long the background timer waits before
 	// speculatively transitioning to "waiting". Exported for test overrides.
 	SpeculativeWaitDelay time.Duration
@@ -62,6 +65,62 @@ func NewEventService(
 // SetBroadcaster wires in an optional broadcaster for push notifications.
 func (s *EventService) SetBroadcaster(b outbound.PushBroadcaster) {
 	s.broadcaster = b
+}
+
+// SetProcessWatcher wires in an optional process watcher for PID exit monitoring.
+func (s *EventService) SetProcessWatcher(pw outbound.ProcessWatcher) {
+	s.procWatcher = pw
+}
+
+// HandleProcessExit transitions a session to "ready" when its process exits.
+// Called by the ProcessWatcher callback.
+func (s *EventService) HandleProcessExit(pid int, sessionID string) {
+	state, err := s.repo.Load(sessionID)
+	if err != nil || state == nil {
+		s.log.LogInfo("process-exit", sessionID,
+			fmt.Sprintf("pid %d exited but session not found (already cleaned up)", pid))
+		return
+	}
+
+	// Already in a terminal state — nothing to do.
+	if state.State == session.StateReady || state.State == session.StateDeleteSession ||
+		state.State == session.StateCancelledByUser {
+		return
+	}
+
+	s.log.LogInfo("process-exit", sessionID,
+		fmt.Sprintf("pid %d exited, transitioning %s → ready", pid, state.State))
+
+	state.State = session.StateReady
+	state.UpdatedAt = time.Now().Unix()
+	state.Confidence = "high"
+
+	if err := s.repo.Save(state); err != nil {
+		s.log.LogError("process-exit", sessionID,
+			fmt.Sprintf("failed to save ready state: %v", err))
+		return
+	}
+
+	if s.broadcaster != nil {
+		s.broadcaster.Broadcast(outbound.PushMessage{
+			Type:    outbound.PushTypeUpdated,
+			Session: state,
+		})
+	}
+}
+
+// RegisterPID registers a session's PID with the ProcessWatcher for exit monitoring.
+func (s *EventService) RegisterPID(pid int, sessionID string) {
+	if s.procWatcher == nil || pid <= 0 {
+		return
+	}
+	if err := s.procWatcher.Watch(pid, sessionID); err != nil {
+		s.log.LogError("process-watch", sessionID,
+			fmt.Sprintf("failed to watch pid %d: %v", pid, err))
+	} else {
+		s.log.LogInfo("process-watch", sessionID,
+			fmt.Sprintf("watching pid %d for exit", pid))
+	}
 }
 
 // HandleEvent validates and processes a hook event, updating session state on disk.
@@ -160,6 +219,10 @@ func (s *EventService) HandleEvent(evt *event.HookEvent) error {
 		state.PID = os.Getppid()
 		if evt.Source == "clear" || existing == nil {
 			state.Model = "New Session"
+		}
+		// Register PID with ProcessWatcher for exit monitoring.
+		if state.PID > 0 {
+			s.RegisterPID(state.PID, evt.SessionID)
 		}
 	}
 

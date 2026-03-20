@@ -68,6 +68,20 @@ type GTBinResolver interface {
 	Path() string
 }
 
+// ProcessWatcher monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT and
+// invokes a callback when a watched process exits.
+type ProcessWatcher interface {
+	// Watch registers a PID for exit monitoring associated with a sessionID.
+	// If the process is already dead, the exit handler fires immediately.
+	Watch(pid int, sessionID string) error
+	// Unwatch stops monitoring the given PID.
+	Unwatch(pid int)
+	// Run starts the kqueue event loop. Blocks until ctx is cancelled.
+	Run(ctx context.Context) error
+	// Close releases kqueue resources.
+	Close() error
+}
+
 // TranscriptWatcher watches ~/.claude/projects/** for transcript file changes,
 // emitting events for new sessions, activity, and removals.
 type TranscriptWatcher interface {

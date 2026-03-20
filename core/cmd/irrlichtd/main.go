@@ -25,9 +25,11 @@ import (
 	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/memory"
 	"irrlicht/core/adapters/outbound/metrics"
+	processadapter "irrlicht/core/adapters/outbound/process"
 	"irrlicht/core/adapters/outbound/security"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/session"
 )
 
 //go:embed ui
@@ -91,6 +93,25 @@ func main() {
 	// Event service wired to memory repo + broadcaster.
 	svc := services.NewEventService(memRepo, logger, git.New(), metrics.New(), pathValidator)
 	svc.SetBroadcaster(push)
+
+	// ProcessWatcher: kqueue EVFILT_PROC NOTE_EXIT monitoring.
+	procWatcher, err := processadapter.New(svc.HandleProcessExit)
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("ProcessWatcher init failed (non-fatal): %v", err))
+	} else {
+		svc.SetProcessWatcher(procWatcher)
+		procCtx, procCancel := context.WithCancel(context.Background())
+		defer procCancel()
+		go func() {
+			if err := procWatcher.Run(procCtx); err != nil && err != context.Canceled {
+				logger.LogError("process-watcher", "", fmt.Sprintf("event loop error: %v", err))
+			}
+		}()
+		defer procWatcher.Close()
+
+		// Seed: register PIDs from existing sessions, use lsof for discovery.
+		seedProcessWatcher(memRepo, svc, logger)
+	}
 
 	// HTTP mux.
 	mux := http.NewServeMux()
@@ -188,6 +209,43 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.LogError("shutdown", "", fmt.Sprintf("graceful shutdown error: %v", err))
+	}
+}
+
+// seedProcessWatcher registers PIDs from existing sessions with the ProcessWatcher.
+// For sessions without PIDs, attempts one-time lsof discovery via transcript path.
+func seedProcessWatcher(
+	repo *memory.Store,
+	svc *services.EventService,
+	logger *logging.StructuredLogger,
+) {
+	states, err := repo.ListAll()
+	if err != nil {
+		logger.LogError("process-seed", "", fmt.Sprintf("failed to list sessions: %v", err))
+		return
+	}
+
+	for _, state := range states {
+		if state.State == session.StateReady || state.State == session.StateCancelledByUser {
+			continue
+		}
+
+		pid := state.PID
+
+		// One-time lsof PID discovery for sessions missing a PID.
+		if pid <= 0 && state.TranscriptPath != "" {
+			if discovered, err := processadapter.DiscoverPID(state.TranscriptPath); err == nil && discovered > 0 {
+				logger.LogInfo("process-seed", state.SessionID,
+					fmt.Sprintf("lsof discovered pid %d from transcript", discovered))
+				pid = discovered
+				state.PID = pid
+				_ = repo.Save(state)
+			}
+		}
+
+		if pid > 0 {
+			svc.RegisterPID(pid, state.SessionID)
+		}
 	}
 }
 
