@@ -69,7 +69,7 @@ No ghosts. **Files → State → Light.**
 
 2. **Build the daemon:**
    ```bash
-   ./tools/build-release.sh
+   ./platforms/build-release.sh
    ```
 
 3. **Run the daemon:**
@@ -123,17 +123,14 @@ Example state file:
 │   ├── adapters/              # filesystem, transcript, process, graceperiod, git, logging, metrics
 │   ├── application/services/  # SessionDetector orchestration
 │   └── pkg/                   # tailer, capacity utilities
-├── platforms/macos/            # SwiftUI menu bar application
-│   ├── Irrlicht/              # Main app code (IrrlichtApp, SessionManager, Views)
-│   ├── Tests/                 # SwiftUI app tests + concurrency scenarios
-│   └── Package.swift          # Swift package configuration
+├── platforms/
+│   ├── macos/                 # SwiftUI menu bar application
+│   │   ├── Irrlicht/          # Main app code (IrrlichtApp, SessionManager, Views)
+│   │   ├── Tests/             # SwiftUI app tests + concurrency scenarios
+│   │   └── Package.swift      # Swift package configuration
+│   ├── web/                   # Web frontend (embedded into daemon)
+│   └── build-release.sh       # Release build script
 ├── fixtures/                  # Sample transcript files and edge cases
-├── specs/                     # Design docs and adapter specs
-└── tools/
-    ├── test-runner.sh         # Comprehensive test suite
-    ├── build-release.sh       # Build script
-    ├── update-version.sh      # Version bump utility
-    └── model-capacity.json    # Token capacity data by model
 validate.sh                    # Single validation entry point (build + test + integration)
 ```
 
@@ -141,7 +138,7 @@ validate.sh                    # Single validation entry point (build + test + i
 
 ```bash
 # Build all components
-./tools/build-release.sh
+./platforms/build-release.sh
 
 # Build daemon
 cd core && go build ./cmd/irrlichtd/
@@ -163,9 +160,6 @@ This runs in order: Go build → Swift build → Go tests → Swift tests → in
 Individual components:
 
 ```bash
-# Run the integration test suite
-./tools/test-runner.sh
-
 # Run specific component tests
 cd core && go test -v ./...
 cd platforms/macos && swift test
