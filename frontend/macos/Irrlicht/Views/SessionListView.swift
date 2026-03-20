@@ -12,7 +12,7 @@ struct SessionListView: View {
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 if sessionManager.sessions.isEmpty {
-                    ConfigurationActionView()
+                    emptyStateView
                 } else {
                     sessionHeaderView
                     Divider()
@@ -74,6 +74,27 @@ struct SessionListView: View {
         }
     }
     
+    // MARK: - Empty State
+
+    private var emptyStateView: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "lightbulb.slash")
+                .font(.system(size: 24))
+                .foregroundColor(.secondary)
+
+            Text("No Claude Code sessions detected")
+                .font(.headline)
+                .foregroundColor(.secondary)
+
+            Text("Start a Claude Code session to see it here.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(20)
+    }
+
     // MARK: - Session Header
     
     private var sessionHeaderView: some View {
