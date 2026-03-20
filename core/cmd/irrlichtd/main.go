@@ -17,6 +17,7 @@ import (
 
 	inboundhttp "irrlicht/core/adapters/inbound/http"
 	"irrlicht/core/adapters/outbound/filesystem"
+	gastownadapter "irrlicht/core/adapters/outbound/gastown"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
 	"irrlicht/core/adapters/outbound/logging"
@@ -138,6 +139,21 @@ func main() {
 		logger.LogError("startup", "", fmt.Sprintf("mDNS advertisement failed (non-fatal): %v", err))
 	} else {
 		logger.LogInfo("startup", "", "mDNS: advertising _irrlicht._tcp on the local network")
+	}
+
+	// Gas Town collector: detect GT_ROOT and watch daemon/state.json.
+	gtCollector := gastownadapter.New()
+	if gtCollector.Detected() {
+		logger.LogInfo("startup", "", fmt.Sprintf("Gas Town detected at %s", gtCollector.Root()))
+		watchCtx, watchCancel := context.WithCancel(context.Background())
+		defer watchCancel()
+		go func() {
+			if err := gtCollector.Watch(watchCtx); err != nil && err != context.Canceled {
+				logger.LogError("gastown", "", fmt.Sprintf("watcher error: %v", err))
+			}
+		}()
+	} else {
+		logger.LogInfo("startup", "", "Gas Town not detected — skipping daemon watcher")
 	}
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichtd %s listening on unix:%s and tcp:%s", Version, sockPath, tcpAddr))
