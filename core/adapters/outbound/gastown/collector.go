@@ -1,5 +1,5 @@
 // Package gastown implements GT_ROOT detection, resolution, and daemon/state.json
-// file-system watching for Gas Town integration.
+// + rigs.json file-system watching for Gas Town integration.
 package gastown
 
 import (
@@ -14,17 +14,21 @@ import (
 	"irrlicht/core/domain/gastown"
 )
 
-// Collector detects Gas Town, resolves GT_ROOT, and watches daemon/state.json.
-// It implements outbound.GasTownCollector.
+// Collector detects Gas Town, resolves GT_ROOT, and watches daemon/state.json
+// and rigs.json for changes. It implements outbound.GasTownCollector.
 type Collector struct {
 	root     string // resolved GT_ROOT path ("" if not detected)
 	detected bool
 
 	mu    sync.RWMutex
 	state *gastown.DaemonState // latest parsed state
+	rigs  []gastown.RigState   // latest parsed rigs.json
 
 	subMu sync.Mutex
 	subs  []chan gastown.DaemonState
+
+	rigSubMu sync.Mutex
+	rigSubs  []chan []gastown.RigState
 }
 
 // New creates a Collector by probing for a Gas Town installation.
@@ -40,6 +44,10 @@ func New() *Collector {
 		// Best-effort initial read.
 		if s, err := readStateFile(stateFilePath(root)); err == nil {
 			c.state = s
+		}
+		// Best-effort initial rigs.json read.
+		if rigs, err := readRigsFile(rigsFilePath(root)); err == nil {
+			c.rigs = rigs
 		}
 	}
 
@@ -59,8 +67,17 @@ func (c *Collector) DaemonState() *gastown.DaemonState {
 	return c.state
 }
 
-// Watch begins watching daemon/state.json for changes using fsnotify (kqueue
-// on macOS). It blocks until ctx is cancelled.
+// Rigs returns the latest parsed rig definitions from rigs.json.
+func (c *Collector) Rigs() []gastown.RigState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make([]gastown.RigState, len(c.rigs))
+	copy(result, c.rigs)
+	return result
+}
+
+// Watch begins watching daemon/state.json and rigs.json for changes using
+// fsnotify (kqueue on macOS). It blocks until ctx is cancelled.
 func (c *Collector) Watch(ctx context.Context) error {
 	if !c.detected {
 		// Nothing to watch — block until context is done.
@@ -82,6 +99,11 @@ func (c *Collector) Watch(ctx context.Context) error {
 		return err
 	}
 
+	// Watch rigs.json (in the GT_ROOT directory).
+	if err := watcher.Add(c.root); err != nil {
+		return err
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -90,14 +112,16 @@ func (c *Collector) Watch(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			// Only react to writes/creates on state.json itself.
-			if filepath.Base(ev.Name) != "state.json" {
-				continue
-			}
+			base := filepath.Base(ev.Name)
 			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
 				continue
 			}
-			c.reload(statePath)
+			switch base {
+			case "state.json":
+				c.reload(statePath)
+			case "rigs.json":
+				c.reloadRigs(rigsFilePath(c.root))
+			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return nil
@@ -132,6 +156,28 @@ func (c *Collector) Unsubscribe(ch <-chan gastown.DaemonState) {
 	}
 }
 
+// SubscribeRigs returns a channel that receives updated rig lists when rigs.json changes.
+func (c *Collector) SubscribeRigs() <-chan []gastown.RigState {
+	ch := make(chan []gastown.RigState, 1)
+	c.rigSubMu.Lock()
+	c.rigSubs = append(c.rigSubs, ch)
+	c.rigSubMu.Unlock()
+	return ch
+}
+
+// UnsubscribeRigs removes a previously subscribed rigs channel.
+func (c *Collector) UnsubscribeRigs(ch <-chan []gastown.RigState) {
+	c.rigSubMu.Lock()
+	defer c.rigSubMu.Unlock()
+	for i, s := range c.rigSubs {
+		if s == ch {
+			c.rigSubs = append(c.rigSubs[:i], c.rigSubs[i+1:]...)
+			close(s)
+			return
+		}
+	}
+}
+
 // reload reads state.json and broadcasts the new state to subscribers.
 func (c *Collector) reload(path string) {
 	s, err := readStateFile(path)
@@ -153,6 +199,29 @@ func (c *Collector) reload(path string) {
 		}
 	}
 	c.subMu.Unlock()
+}
+
+// reloadRigs reads rigs.json and broadcasts the new rig list to subscribers.
+func (c *Collector) reloadRigs(path string) {
+	rigs, err := readRigsFile(path)
+	if err != nil {
+		return // transient
+	}
+
+	c.mu.Lock()
+	c.rigs = rigs
+	c.mu.Unlock()
+
+	c.rigSubMu.Lock()
+	snapshot := make([]gastown.RigState, len(rigs))
+	copy(snapshot, rigs)
+	for _, ch := range c.rigSubs {
+		select {
+		case ch <- snapshot:
+		default:
+		}
+	}
+	c.rigSubMu.Unlock()
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -186,6 +255,11 @@ func stateFilePath(root string) string {
 	return filepath.Join(root, "daemon", "state.json")
 }
 
+// rigsFilePath returns the rigs.json path under root.
+func rigsFilePath(root string) string {
+	return filepath.Join(root, "rigs.json")
+}
+
 // readStateFile reads and parses daemon/state.json.
 func readStateFile(path string) (*gastown.DaemonState, error) {
 	data, err := os.ReadFile(path)
@@ -197,4 +271,40 @@ func readStateFile(path string) (*gastown.DaemonState, error) {
 		return nil, err
 	}
 	return &s, nil
+}
+
+// readRigsFile reads and parses rigs.json.
+// rigs.json can be either:
+//   - an array of rig objects: [{"name": "irrlicht", ...}, ...]
+//   - an object with rig names as keys: {"irrlicht": {...}, ...}
+func readRigsFile(path string) ([]gastown.RigState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try array format first.
+	var rigs []gastown.RigState
+	if err := json.Unmarshal(data, &rigs); err == nil {
+		return rigs, nil
+	}
+
+	// Try object format: {"rig_name": {fields...}, ...}
+	var rigMap map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rigMap); err != nil {
+		return nil, err
+	}
+
+	rigs = make([]gastown.RigState, 0, len(rigMap))
+	for name, raw := range rigMap {
+		var rig gastown.RigState
+		if err := json.Unmarshal(raw, &rig); err != nil {
+			continue
+		}
+		if rig.Name == "" {
+			rig.Name = name
+		}
+		rigs = append(rigs, rig)
+	}
+	return rigs, nil
 }

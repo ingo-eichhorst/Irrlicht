@@ -68,6 +68,10 @@ struct IrrlichtApp: App {
             SessionListView()
                 .environmentObject(sessionManager)
                 .environmentObject(gasTownProvider)
+                .onAppear {
+                    // Wire gasTownProvider to sessionManager for WebSocket forwarding.
+                    sessionManager.gasTownProvider = gasTownProvider
+                }
         } label: {
             StatusIndicatorLabel(sessions: sessionManager.sessions)
         }

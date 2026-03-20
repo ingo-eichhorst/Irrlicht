@@ -8,17 +8,19 @@ import (
 	"irrlicht/core/domain/transcript"
 )
 
-// PushMessage is a typed WebSocket envelope for session state fan-out.
+// PushMessage is a typed WebSocket envelope for session and gastown state fan-out.
 type PushMessage struct {
 	Type    string                `json:"type"`
-	Session *session.SessionState `json:"session"`
+	Session *session.SessionState `json:"session,omitempty"`
+	GasTown *gastown.State        `json:"gastown,omitempty"`
 }
 
 // Valid PushMessage type constants.
 const (
-	PushTypeCreated = "session_created"
-	PushTypeUpdated = "session_updated"
-	PushTypeDeleted = "session_deleted"
+	PushTypeCreated       = "session_created"
+	PushTypeUpdated       = "session_updated"
+	PushTypeDeleted       = "session_deleted"
+	PushTypeGasTownState  = "gastown_state"
 )
 
 // SessionRepository loads, saves, and deletes session state files.

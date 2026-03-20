@@ -15,9 +15,15 @@ struct SessionListView: View {
                 if gasTownProvider.isAvailable {
                     gasTownHeaderView
                     Divider()
-                    gasTownRigsView
+                    gasTownContentView
                     if !sessionManager.sessions.isEmpty {
                         Divider()
+                        Text("Other Sessions")
+                            .font(.system(.caption, design: .monospaced))
+                            .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
                         sessionListContent
                     }
                 } else if sessionManager.sessions.isEmpty {
@@ -88,12 +94,17 @@ struct SessionListView: View {
     private var gasTownHeaderView: some View {
         HStack {
             HStack(spacing: 6) {
-                Image(systemName: "building.2.fill")
+                Text("⛽")
                     .font(.system(size: 12))
-                    .foregroundColor(.purple)
                 Text("Gas Town")
                     .font(.headline)
                     .foregroundColor(.primary)
+
+                if gasTownProvider.activeRigCount > 0 {
+                    Text("x\(gasTownProvider.activeRigCount)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
             }
 
             Spacer()
@@ -113,18 +124,27 @@ struct SessionListView: View {
         .padding(.vertical, 8)
     }
 
-    // MARK: - Gas Town Rigs
+    // MARK: - Gas Town Content (global agents + convoys + rigs)
 
-    private var gasTownRigsView: some View {
-        let rigs = gasTownProvider.rigs
-        let polecatsByRig = gasTownProvider.polecatsByRig
-        return ScrollView {
+    private var gasTownContentView: some View {
+        ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(rigs) { rig in
-                    RigRowView(rig: rig, polecats: polecatsByRig[rig.name] ?? [])
+                // Global agents (Mayor, Deacon)
+                ForEach(gasTownProvider.globalAgents) { agent in
+                    GlobalAgentRowView(agent: agent)
                 }
 
-                if rigs.isEmpty {
+                // Convoys section
+                if !gasTownProvider.convoys.isEmpty {
+                    ConvoySectionView(convoys: gasTownProvider.convoys)
+                }
+
+                // Codebases (rig rows with worktrees)
+                ForEach(gasTownProvider.codebases) { codebase in
+                    CodebaseRowView(codebase: codebase)
+                }
+
+                if gasTownProvider.codebases.isEmpty && gasTownProvider.globalAgents.isEmpty {
                     HStack {
                         Spacer()
                         Text("No rigs")
@@ -136,7 +156,7 @@ struct SessionListView: View {
                 }
             }
         }
-        .frame(maxHeight: 300)
+        .frame(maxHeight: 400)
     }
 
     // MARK: - Empty State
@@ -580,11 +600,137 @@ struct SubagentRowView: View {
     }
 }
 
-// MARK: - Rig Row View
+// MARK: - Global Agent Row View
 
-struct RigRowView: View {
-    let rig: RigState
-    let polecats: [PolecatState]
+struct GlobalAgentRowView: View {
+    let agent: GlobalAgent
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(agent.displayEmoji)
+                .font(.system(size: 12))
+
+            Text(agent.role.capitalized)
+                .font(.system(.body, design: .monospaced))
+                .foregroundColor(.primary)
+
+            Spacer()
+
+            Image(systemName: agent.stateGlyph)
+                .font(.system(size: 10))
+                .foregroundColor(Color(hex: agent.stateColor))
+
+            Text(agent.state)
+                .font(.caption2)
+                .foregroundColor(Color(hex: agent.stateColor))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(isHovered ? Color.accentColor.opacity(0.06) : Color.clear)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+        .accessibilityIdentifier("global-agent-\(agent.role)")
+    }
+}
+
+// MARK: - Convoy Section View
+
+struct ConvoySectionView: View {
+    let convoys: [WorkUnit]
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Convoy header
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                        .frame(width: 10)
+
+                    Text("🚚")
+                        .font(.system(size: 10))
+
+                    Text("Convoys")
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.semibold)
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                ForEach(convoys) { convoy in
+                    ConvoyRowView(convoy: convoy)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Convoy Row View
+
+struct ConvoyRowView: View {
+    let convoy: WorkUnit
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Spacer().frame(width: 20)
+
+            Text(convoy.name)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(convoy.isComplete ? .secondary : .primary)
+
+            Spacer()
+
+            // Dot-bar
+            Text(convoy.dotBar)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(Color(hex: convoy.dotColor))
+
+            // Fraction
+            Text(convoy.fractionString)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            if convoy.isComplete {
+                Text("✓")
+                    .font(.caption2)
+                    .foregroundColor(Color(hex: "#34C759"))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+        .opacity(convoy.isComplete ? 0.6 : 1.0)
+        .background(isHovered ? Color.accentColor.opacity(0.05) : Color.clear)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+        .accessibilityIdentifier("convoy-row-\(convoy.id)")
+    }
+}
+
+// MARK: - Codebase Row View (replaces RigRowView)
+
+struct CodebaseRowView: View {
+    let codebase: GasTownCodebase
     @State private var isExpanded = true
     @State private var isHovered = false
 
@@ -598,25 +744,20 @@ struct RigRowView: View {
                     .frame(width: 10)
 
                 Circle()
-                    .fill(rig.isOperational ? Color.green : Color.red)
+                    .fill(codebase.isOperational ? Color.green : Color.red)
                     .frame(width: 7, height: 7)
 
-                Text(rig.name)
+                Text(codebase.rig)
                     .font(.system(.body, design: .monospaced))
                     .foregroundColor(.primary)
 
                 Spacer()
 
-                // Service indicators
-                HStack(spacing: 8) {
-                    ServiceBadge(label: "W", running: rig.witnessRunning)
-                    ServiceBadge(label: "R", running: rig.refineryRunning)
-
-                    if rig.polecats > 0 {
-                        Text("\(rig.polecats) polecat\(rig.polecats == 1 ? "" : "s")")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
+                // Agent summary
+                if codebase.agentCount > 0 {
+                    Text("\(codebase.agentCount) agent\(codebase.agentCount == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
             .padding(.horizontal, 12)
@@ -634,60 +775,60 @@ struct RigRowView: View {
                 }
             }
 
-            // Expanded polecat rows
-            if isExpanded && !polecats.isEmpty {
-                ForEach(polecats) { polecat in
-                    PolecatRowView(polecat: polecat)
+            // Expanded agent rows
+            if isExpanded {
+                // Main worktree agents (witness, refinery, crew)
+                if let mainWt = codebase.mainWorktree {
+                    ForEach(mainWt.safeAgents) { agent in
+                        AgentRowView(agent: agent)
+                    }
+                }
+
+                // Polecat worktrees
+                ForEach(codebase.polecatWorktrees) { wt in
+                    ForEach(wt.safeAgents) { agent in
+                        AgentRowView(agent: agent)
+                    }
                 }
             }
         }
-        .accessibilityIdentifier("rig-row-\(rig.name)")
+        .accessibilityIdentifier("codebase-row-\(codebase.rig)")
     }
 }
 
-// MARK: - Service Badge
+// MARK: - Agent Row View (replaces PolecatRowView)
 
-struct ServiceBadge: View {
-    let label: String
-    let running: Bool
-
-    var body: some View {
-        Text(label)
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .foregroundColor(running ? .green : .red)
-    }
-}
-
-// MARK: - Polecat Row View
-
-struct PolecatRowView: View {
-    let polecat: PolecatState
+struct AgentRowView: View {
+    let agent: GasTownAgent
     @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 6) {
             Spacer().frame(width: 24)
 
-            Image(systemName: polecat.isWorking ? "hammer.fill" : "hourglass")
-                .font(.system(size: 9))
-                .foregroundColor(polecat.isWorking ? Color(hex: "#8B5CF6") : Color(hex: "#FF9500"))
-                .frame(width: 12)
+            Text(agent.displayEmoji)
+                .font(.system(size: 10))
+                .frame(width: 16)
 
-            Text(polecat.name)
+            Text(agent.displayLabel)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundColor(.primary)
 
-            if let issue = polecat.issue, !issue.isEmpty {
-                Text(issue)
+            if let beadId = agent.beadId, !beadId.isEmpty {
+                Text(beadId)
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.purple)
             }
 
             Spacer()
 
-            Text(polecat.state)
+            Image(systemName: agent.stateGlyph)
+                .font(.system(size: 9))
+                .foregroundColor(Color(hex: agent.stateColor))
+
+            Text(agent.state)
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundColor(Color(hex: agent.stateColor))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 3)
@@ -697,7 +838,7 @@ struct PolecatRowView: View {
                 isHovered = hovering
             }
         }
-        .accessibilityIdentifier("polecat-row-\(polecat.rig)-\(polecat.name)")
+        .accessibilityIdentifier("agent-row-\(agent.id)")
     }
 }
 
@@ -853,14 +994,12 @@ struct SessionListView_Previews: PreviewProvider {
             .environmentObject(GasTownProvider())
             .environmentObject({
                 let manager = SessionManager()
-                // Add some mock sessions for preview
-                let mockSessions = [
+                manager.sessions = [
                     SessionState(
                         id: "sess_abc123def456",
                         state: .working,
-                        model: "claude-3.7-sonnet", 
+                        model: "claude-sonnet-4-6",
                         cwd: "/Users/user/projects/multi-cc-bar",
-                        transcriptPath: "/Users/user/.claude/projects/test/transcript.jsonl",
                         gitBranch: "main",
                         projectName: "multi-cc-bar",
                         firstSeen: Date().addingTimeInterval(-180),
@@ -870,74 +1009,10 @@ struct SessionListView_Previews: PreviewProvider {
                         metrics: SessionMetrics(
                             elapsedSeconds: 180,
                             totalTokens: 15000,
-                            modelName: "claude-3.7-sonnet",
+                            modelName: "claude-sonnet-4-6",
                             contextUtilization: 7.5,
                             pressureLevel: "safe"
                         )
-                    ),
-                    SessionState(
-                        id: "sess_xyz789ghi012",
-                        state: .waiting,
-                        model: "claude-3-haiku",
-                        cwd: "/Users/user/projects/multi-cc-bar", 
-                        transcriptPath: "/Users/user/.claude/projects/another/transcript.jsonl",
-                        gitBranch: "feature/ui-updates",
-                        projectName: "multi-cc-bar",
-                        firstSeen: Date().addingTimeInterval(-420),
-                        updatedAt: Date().addingTimeInterval(-300),
-                        eventCount: 12,
-                        lastEvent: "Notification",
-                        metrics: SessionMetrics(
-                            elapsedSeconds: 420,
-                            totalTokens: 85000,
-                            modelName: "claude-3-haiku",
-                            contextUtilization: 42.5,
-                            pressureLevel: "caution"
-                        )
-                    ),
-                    SessionState(
-                        id: "sess_old456ready",
-                        state: .ready,
-                        model: "claude-3-opus",
-                        cwd: "/Users/user/projects/another-project",
-                        transcriptPath: "/Users/user/.claude/projects/completed/transcript.jsonl", 
-                        gitBranch: "main",
-                        projectName: "another-project",
-                        firstSeen: Date().addingTimeInterval(-3000),
-                        updatedAt: Date().addingTimeInterval(-1800),
-                        eventCount: 8,
-                        lastEvent: "SessionEnd",
-                        metrics: SessionMetrics(
-                            elapsedSeconds: 1200,
-                            totalTokens: 175000,
-                            modelName: "claude-3-opus",
-                            contextUtilization: 87.5,
-                            pressureLevel: "warning"
-                        )
-                    )
-                ]
-                
-                // Assign duplicate indexes like the real SessionManager would
-                manager.sessions = mockSessions + [
-                    SessionState(
-                        id: "sess_sub001agent",
-                        state: .working,
-                        model: "claude-3.7-sonnet",
-                        cwd: "/Users/user/projects/multi-cc-bar",
-                        gitBranch: "main",
-                        projectName: "multi-cc-bar",
-                        firstSeen: Date().addingTimeInterval(-90),
-                        updatedAt: Date().addingTimeInterval(-10),
-                        eventCount: 3,
-                        lastEvent: "UserPromptSubmit",
-                        metrics: SessionMetrics(
-                            elapsedSeconds: 90,
-                            totalTokens: 8000,
-                            modelName: "claude-3.7-sonnet",
-                            contextUtilization: 12.3,
-                            pressureLevel: "safe"
-                        ),
-                        parentSessionId: "sess_abc123def456"
                     )
                 ]
                 return manager
