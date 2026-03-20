@@ -1,0 +1,432 @@
+// SessionDetector orchestrates TranscriptWatcher + ProcessWatcher +
+// GracePeriodTimer to detect and manage Claude Code sessions from transcript
+// file activity, without relying on hook events.
+//
+// It subscribes to TranscriptWatcher events and:
+//   - On new session: creates session state, discovers PID via lsof,
+//     registers with ProcessWatcher, derives parent_session_id
+//   - On activity: resets GracePeriodTimer, refreshes metrics
+//   - On removed: stops timer, cleans up session
+package services
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"time"
+
+	processadapter "irrlicht/core/adapters/outbound/process"
+	"irrlicht/core/domain/session"
+	"irrlicht/core/domain/transcript"
+	"irrlicht/core/ports/outbound"
+)
+
+// SessionDetector watches transcript files to detect sessions and orchestrate
+// ProcessWatcher + GracePeriodTimer without requiring hook events.
+type SessionDetector struct {
+	tw          outbound.TranscriptWatcher
+	pw          outbound.ProcessWatcher // optional
+	gp          outbound.GracePeriodTimer
+	repo        outbound.SessionRepository
+	log         outbound.Logger
+	git         outbound.GitResolver
+	metrics     outbound.MetricsCollector
+	broadcaster outbound.PushBroadcaster // optional
+
+	// projectSessions tracks sessionID → projectDir for parent derivation.
+	mu              sync.Mutex
+	projectSessions map[string]string // sessionID → projectDir
+}
+
+// NewSessionDetector creates a SessionDetector with all required dependencies.
+// pw and broadcaster may be nil (optional).
+func NewSessionDetector(
+	tw outbound.TranscriptWatcher,
+	pw outbound.ProcessWatcher,
+	gp outbound.GracePeriodTimer,
+	repo outbound.SessionRepository,
+	log outbound.Logger,
+	git outbound.GitResolver,
+	metrics outbound.MetricsCollector,
+	broadcaster outbound.PushBroadcaster,
+) *SessionDetector {
+	return &SessionDetector{
+		tw:              tw,
+		pw:              pw,
+		gp:              gp,
+		repo:            repo,
+		log:             log,
+		git:             git,
+		metrics:         metrics,
+		broadcaster:     broadcaster,
+		projectSessions: make(map[string]string),
+	}
+}
+
+// Run subscribes to TranscriptWatcher events and processes them until ctx
+// is cancelled. It blocks for the lifetime of the detector.
+func (d *SessionDetector) Run(ctx context.Context) error {
+	ch := d.tw.Subscribe()
+	defer d.tw.Unsubscribe(ch)
+
+	// Seed project sessions map from existing sessions on disk.
+	d.seedFromDisk()
+
+	d.log.LogInfo("session-detector", "", "started — listening for transcript events")
+
+	for {
+		select {
+		case <-ctx.Done():
+			d.gp.StopAll()
+			return ctx.Err()
+		case ev, ok := <-ch:
+			if !ok {
+				d.gp.StopAll()
+				return nil
+			}
+			d.handleTranscriptEvent(ev)
+		}
+	}
+}
+
+// handleTranscriptEvent dispatches a transcript event to the appropriate handler.
+func (d *SessionDetector) handleTranscriptEvent(ev transcript.TranscriptEvent) {
+	switch ev.Type {
+	case transcript.EventNewSession:
+		d.onNewSession(ev)
+	case transcript.EventActivity:
+		d.onActivity(ev)
+	case transcript.EventRemoved:
+		d.onRemoved(ev)
+	}
+}
+
+// onNewSession handles a new transcript file appearing.
+func (d *SessionDetector) onNewSession(ev transcript.TranscriptEvent) {
+	d.log.LogInfo("session-detector", ev.SessionID,
+		fmt.Sprintf("new session detected in %s", ev.ProjectDir))
+
+	// Track project directory for parent derivation.
+	d.mu.Lock()
+	d.projectSessions[ev.SessionID] = ev.ProjectDir
+	d.mu.Unlock()
+
+	// Check if session already exists (from hook events).
+	existing, _ := d.repo.Load(ev.SessionID)
+	isNew := existing == nil
+
+	now := time.Now().Unix()
+
+	if isNew {
+		// Create a new session state from transcript discovery.
+		state := &session.SessionState{
+			Version:        1,
+			SessionID:      ev.SessionID,
+			State:          session.StateWorking,
+			TranscriptPath: ev.TranscriptPath,
+			FirstSeen:      now,
+			UpdatedAt:      now,
+			Confidence:     "medium", // file-based detection, not hook
+			EventCount:     1,
+			LastEvent:      "transcript_new",
+		}
+
+		// Derive parent_session_id from co-located sessions.
+		if parentID := d.deriveParentSessionID(ev.SessionID, ev.ProjectDir); parentID != "" {
+			state.ParentSessionID = parentID
+			d.log.LogInfo("session-detector", ev.SessionID,
+				fmt.Sprintf("derived parent_session_id=%s from project dir %s", parentID, ev.ProjectDir))
+		}
+
+		// Resolve git metadata from transcript path.
+		if b := d.git.GetBranchFromTranscript(ev.TranscriptPath); b != "" {
+			state.GitBranch = b
+		}
+
+		// Compute initial metrics.
+		if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
+			state.Metrics = m
+		}
+
+		if err := d.repo.Save(state); err != nil {
+			d.log.LogError("session-detector", ev.SessionID,
+				fmt.Sprintf("failed to save new session: %v", err))
+			return
+		}
+
+		d.broadcast(outbound.PushTypeCreated, state)
+	} else {
+		// Session already exists (created by hook). Update transcript path if missing.
+		if existing.TranscriptPath == "" {
+			existing.TranscriptPath = ev.TranscriptPath
+			existing.UpdatedAt = now
+			if err := d.repo.Save(existing); err != nil {
+				d.log.LogError("session-detector", ev.SessionID,
+					fmt.Sprintf("failed to update transcript path: %v", err))
+			}
+		}
+		// Derive parent if not already set.
+		if existing.ParentSessionID == "" {
+			if parentID := d.deriveParentSessionID(ev.SessionID, ev.ProjectDir); parentID != "" {
+				existing.ParentSessionID = parentID
+				existing.UpdatedAt = now
+				if err := d.repo.Save(existing); err != nil {
+					d.log.LogError("session-detector", ev.SessionID,
+						fmt.Sprintf("failed to update parent_session_id: %v", err))
+				} else {
+					d.log.LogInfo("session-detector", ev.SessionID,
+						fmt.Sprintf("derived parent_session_id=%s from project dir %s", parentID, ev.ProjectDir))
+				}
+			}
+		}
+	}
+
+	// One-time PID discovery via lsof.
+	d.discoverAndRegisterPID(ev.SessionID, ev.TranscriptPath)
+
+	// Start grace period timer.
+	d.gp.Reset(ev.SessionID, ev.TranscriptPath)
+}
+
+// onActivity handles transcript file writes.
+func (d *SessionDetector) onActivity(ev transcript.TranscriptEvent) {
+	// Reset the grace period timer — activity means the session is working.
+	d.gp.Reset(ev.SessionID, ev.TranscriptPath)
+
+	// Load session and refresh state.
+	state, err := d.repo.Load(ev.SessionID)
+	if err != nil || state == nil {
+		// Session not tracked yet — treat as new.
+		d.onNewSession(ev)
+		return
+	}
+
+	// If session was waiting, transition back to working on activity.
+	if state.State == session.StateWaiting {
+		d.log.LogInfo("session-detector", ev.SessionID,
+			"transcript activity while waiting → working")
+		state.State = session.StateWorking
+		state.LastTranscriptSize = 0
+		state.WaitingStartTime = nil
+	}
+
+	// Refresh metrics.
+	if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
+		state.Metrics = session.MergeMetrics(m, state.Metrics)
+	}
+
+	state.UpdatedAt = time.Now().Unix()
+	state.EventCount++
+	state.LastEvent = "transcript_activity"
+
+	if err := d.repo.Save(state); err != nil {
+		d.log.LogError("session-detector", ev.SessionID,
+			fmt.Sprintf("failed to save activity update: %v", err))
+		return
+	}
+
+	d.broadcast(outbound.PushTypeUpdated, state)
+}
+
+// onRemoved handles transcript file deletion.
+func (d *SessionDetector) onRemoved(ev transcript.TranscriptEvent) {
+	d.log.LogInfo("session-detector", ev.SessionID, "transcript removed")
+
+	// Stop grace period timer.
+	d.gp.Stop(ev.SessionID)
+
+	// Remove from project tracking.
+	d.mu.Lock()
+	delete(d.projectSessions, ev.SessionID)
+	d.mu.Unlock()
+
+	// Transition to ready if the session still exists.
+	state, err := d.repo.Load(ev.SessionID)
+	if err != nil || state == nil {
+		return
+	}
+
+	if state.State == session.StateReady || state.State == session.StateDeleteSession ||
+		state.State == session.StateCancelledByUser {
+		return
+	}
+
+	state.State = session.StateReady
+	state.UpdatedAt = time.Now().Unix()
+	state.Confidence = "high"
+	state.LastEvent = "transcript_removed"
+
+	if err := d.repo.Save(state); err != nil {
+		d.log.LogError("session-detector", ev.SessionID,
+			fmt.Sprintf("failed to save removal state: %v", err))
+		return
+	}
+
+	d.broadcast(outbound.PushTypeUpdated, state)
+}
+
+// HandleGracePeriodExpiry is the callback for GracePeriodTimer. When a session
+// has been idle for the grace period and has no open tool calls, transition it
+// to waiting.
+func (d *SessionDetector) HandleGracePeriodExpiry(sessionID string) {
+	state, err := d.repo.Load(sessionID)
+	if err != nil || state == nil {
+		return
+	}
+
+	// Only transition working sessions.
+	if state.State != session.StateWorking {
+		return
+	}
+
+	d.log.LogInfo("session-detector", sessionID,
+		"grace period expired, no open tool calls → waiting")
+
+	now := time.Now().Unix()
+	state.State = session.StateWaiting
+	state.UpdatedAt = now
+	state.WaitingStartTime = &now
+
+	if state.TranscriptPath != "" {
+		if m, _ := d.metrics.ComputeMetrics(state.TranscriptPath); m != nil {
+			state.Metrics = session.MergeMetrics(m, state.Metrics)
+		}
+	}
+
+	if err := d.repo.Save(state); err != nil {
+		d.log.LogError("session-detector", sessionID,
+			fmt.Sprintf("failed to save waiting state: %v", err))
+		return
+	}
+
+	d.broadcast(outbound.PushTypeUpdated, state)
+}
+
+// deriveParentSessionID finds a likely parent session for a new session in the
+// same project directory. A parent is an existing working session with an open
+// tool call (typically the Agent tool that spawned the subagent).
+func (d *SessionDetector) deriveParentSessionID(childID, projectDir string) string {
+	d.mu.Lock()
+	candidates := make([]string, 0, 4)
+	for sid, pdir := range d.projectSessions {
+		if pdir == projectDir && sid != childID {
+			candidates = append(candidates, sid)
+		}
+	}
+	d.mu.Unlock()
+
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	// Look for a candidate that is working with an open tool call.
+	for _, sid := range candidates {
+		state, err := d.repo.Load(sid)
+		if err != nil || state == nil {
+			continue
+		}
+		if state.State == session.StateWorking &&
+			state.Metrics != nil && state.Metrics.HasOpenToolCall {
+			return sid
+		}
+	}
+
+	// Fallback: if exactly one other working session exists in the same project
+	// dir, assume it's the parent (common case for first subagent).
+	var workingCandidate string
+	workingCount := 0
+	for _, sid := range candidates {
+		state, err := d.repo.Load(sid)
+		if err != nil || state == nil {
+			continue
+		}
+		if state.State == session.StateWorking {
+			workingCandidate = sid
+			workingCount++
+		}
+	}
+	if workingCount == 1 {
+		return workingCandidate
+	}
+
+	return ""
+}
+
+// discoverAndRegisterPID uses lsof to find the PID that has a transcript file
+// open, then registers it with the ProcessWatcher for exit monitoring.
+func (d *SessionDetector) discoverAndRegisterPID(sessionID, transcriptPath string) {
+	if d.pw == nil || transcriptPath == "" {
+		return
+	}
+
+	// Check if session already has a PID.
+	state, _ := d.repo.Load(sessionID)
+	if state != nil && state.PID > 0 {
+		return
+	}
+
+	pid, err := processadapter.DiscoverPID(transcriptPath)
+	if err != nil || pid <= 0 {
+		return
+	}
+
+	d.log.LogInfo("session-detector", sessionID,
+		fmt.Sprintf("lsof discovered pid %d", pid))
+
+	// Store PID in session state.
+	if state != nil {
+		state.PID = pid
+		state.UpdatedAt = time.Now().Unix()
+		_ = d.repo.Save(state)
+	}
+
+	// Register with ProcessWatcher.
+	if err := d.pw.Watch(pid, sessionID); err != nil {
+		d.log.LogError("session-detector", sessionID,
+			fmt.Sprintf("failed to watch pid %d: %v", pid, err))
+	}
+}
+
+// seedFromDisk populates the projectSessions map from existing sessions.
+func (d *SessionDetector) seedFromDisk() {
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, state := range states {
+		if state.TranscriptPath != "" {
+			// Extract project dir from transcript path.
+			// Path format: ~/.claude/projects/<project-dir>/<session-id>.jsonl
+			if pdir := extractProjectDir(state.TranscriptPath); pdir != "" {
+				d.projectSessions[state.SessionID] = pdir
+			}
+		}
+	}
+}
+
+// broadcast sends a push notification if a broadcaster is configured.
+func (d *SessionDetector) broadcast(msgType string, state *session.SessionState) {
+	if d.broadcaster != nil {
+		d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
+	}
+}
+
+// extractProjectDir extracts the project directory name from a transcript path.
+// Expected format: .../<project-dir>/<session-id>.jsonl
+func extractProjectDir(transcriptPath string) string {
+	if transcriptPath == "" {
+		return ""
+	}
+	// filepath.Dir gives us the directory containing the file,
+	// filepath.Base of that gives us the project directory name.
+	dir := filepath.Dir(transcriptPath)
+	if dir == "." || dir == "/" {
+		return ""
+	}
+	return filepath.Base(dir)
+}
