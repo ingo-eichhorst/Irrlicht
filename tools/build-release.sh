@@ -15,6 +15,10 @@ echo "============================================="
 rm -rf $BUILD_DIR
 mkdir -p $BUILD_DIR
 
+# Sync web frontend into Go embed directory
+echo "Syncing web frontend..."
+cp frontend/web/index.html core/cmd/irrlichtd/ui/index.html
+
 # Build for macOS (both architectures)
 echo "Building for macOS..."
 
