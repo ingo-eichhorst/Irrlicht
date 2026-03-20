@@ -122,6 +122,7 @@ func main() {
 	// HTTP mux.
 	mux := http.NewServeMux()
 	registerReadRoutes(mux, memRepo)
+	// Gas Town endpoint registered after poller is available (see below).
 
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
@@ -170,6 +171,7 @@ func main() {
 
 	// Gas Town collector: detect GT_ROOT and watch daemon/state.json.
 	gtCollector := gastownadapter.New()
+	var gtPoller *gastownadapter.Poller
 	if gtCollector.Detected() {
 		logger.LogInfo("startup", "", fmt.Sprintf("Gas Town detected at %s", gtCollector.Root()))
 		watchCtx, watchCancel := context.WithCancel(context.Background())
@@ -179,9 +181,25 @@ func main() {
 				logger.LogError("gastown", "", fmt.Sprintf("watcher error: %v", err))
 			}
 		}()
+
+		// Poller: periodically fetch rig + polecat state via gt CLI.
+		if gtBin := gtResolver.Path(); gtBin != "" {
+			gtPoller = gastownadapter.NewPoller(gtCollector, gtBin, 5*time.Second)
+			pollerCtx, pollerCancel := context.WithCancel(context.Background())
+			defer pollerCancel()
+			go func() {
+				if err := gtPoller.Run(pollerCtx); err != nil && err != context.Canceled {
+					logger.LogError("gastown-poller", "", fmt.Sprintf("poller error: %v", err))
+				}
+			}()
+			logger.LogInfo("startup", "", "Gas Town poller started (5s interval)")
+		}
 	} else {
 		logger.LogInfo("startup", "", "Gas Town not detected — skipping daemon watcher")
 	}
+
+	// Register Gas Town API endpoint.
+	mux.HandleFunc("GET /api/v1/gastown", handleGetGasTown(gtCollector, gtPoller))
 
 	// Transcript watcher: watch ~/.claude/projects/** for session transcripts.
 	transcriptWatcher := transcriptadapter.New()
@@ -256,6 +274,30 @@ func handleGetSessions(repo outbound.SessionRepository) http.HandlerFunc {
 			return
 		}
 		json.NewEncoder(w).Encode(sessions)
+	}
+}
+
+func handleGetGasTown(collector *gastownadapter.Collector, poller *gastownadapter.Poller) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// If poller is running, return its snapshot (daemon state + rigs + polecats).
+		if poller != nil {
+			if snap := poller.Snapshot(); snap != nil {
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				enc.Encode(snap)
+				return
+			}
+		}
+
+		// Fallback: return minimal state from collector only.
+		resp := struct {
+			Detected bool `json:"detected"`
+		}{
+			Detected: collector.Detected(),
+		}
+		json.NewEncoder(w).Encode(resp)
 	}
 }
 
