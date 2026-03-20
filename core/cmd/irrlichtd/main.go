@@ -18,6 +18,7 @@ import (
 	inboundhttp "irrlicht/core/adapters/inbound/http"
 	"irrlicht/core/adapters/outbound/filesystem"
 	gastownadapter "irrlicht/core/adapters/outbound/gastown"
+	graceperiodadapter "irrlicht/core/adapters/outbound/graceperiod"
 	transcriptadapter "irrlicht/core/adapters/outbound/transcript"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
@@ -29,7 +30,7 @@ import (
 	"irrlicht/core/adapters/outbound/security"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
-	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 //go:embed ui
@@ -90,28 +91,44 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Event service wired to memory repo + broadcaster.
-	svc := services.NewEventService(memRepo, logger, git.New(), metrics.New(), pathValidator)
+	// Shared adapters for both EventService and SessionDetector.
+	gitResolver := git.New()
+	metricsCollector := metrics.New()
+
+	// Event service (handles HTTP hook events — legacy path).
+	svc := services.NewEventService(memRepo, logger, gitResolver, metricsCollector, pathValidator)
 	svc.SetBroadcaster(push)
 
+	// --- File-based SessionDetector (primary detection path) ---
+	// Forward-reference: detector is assigned before any callbacks can fire,
+	// because ProcessWatcher and GracePeriodTimer only invoke callbacks after
+	// SessionDetector.Run() subscribes to TranscriptWatcher events.
+	var detector *services.SessionDetector
+
 	// ProcessWatcher: kqueue EVFILT_PROC NOTE_EXIT monitoring.
-	procWatcher, err := processadapter.New(svc.HandleProcessExit)
+	// Exit callback routes to SessionDetector for lifecycle management.
+	var pwPort outbound.ProcessWatcher
+	pw, err := processadapter.New(func(pid int, sessionID string) {
+		detector.HandleProcessExit(pid, sessionID)
+	})
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("ProcessWatcher init failed (non-fatal): %v", err))
 	} else {
-		svc.SetProcessWatcher(procWatcher)
+		pwPort = pw
 		procCtx, procCancel := context.WithCancel(context.Background())
 		defer procCancel()
 		go func() {
-			if err := procWatcher.Run(procCtx); err != nil && err != context.Canceled {
+			if err := pw.Run(procCtx); err != nil && err != context.Canceled {
 				logger.LogError("process-watcher", "", fmt.Sprintf("event loop error: %v", err))
 			}
 		}()
-		defer procWatcher.Close()
-
-		// Seed: register PIDs from existing sessions, use lsof for discovery.
-		seedProcessWatcher(memRepo, svc, logger)
+		defer pw.Close()
 	}
+
+	// GracePeriodTimer: per-session 2s idle timer → waiting when no open tool calls.
+	gpTimer := graceperiodadapter.New(2*time.Second, func(sessionID string) {
+		detector.HandleGracePeriodExpiry(sessionID)
+	})
 
 	// HTTP mux.
 	mux := http.NewServeMux()
@@ -180,13 +197,24 @@ func main() {
 
 	// Transcript watcher: watch ~/.claude/projects/** for session transcripts.
 	transcriptWatcher := transcriptadapter.New()
+
+	// SessionDetector: orchestrates TranscriptWatcher + ProcessWatcher + GracePeriodTimer.
+	detector = services.NewSessionDetector(
+		transcriptWatcher, pwPort, gpTimer,
+		memRepo, logger, gitResolver, metricsCollector, push,
+	)
 	{
-		watchCtx, watchCancel := context.WithCancel(context.Background())
-		defer watchCancel()
+		detectorCtx, detectorCancel := context.WithCancel(context.Background())
+		defer detectorCancel()
 		logger.LogInfo("startup", "", fmt.Sprintf("TranscriptWatcher: watching %s", transcriptWatcher.Root()))
 		go func() {
-			if err := transcriptWatcher.Watch(watchCtx); err != nil && err != context.Canceled {
+			if err := transcriptWatcher.Watch(detectorCtx); err != nil && err != context.Canceled {
 				logger.LogError("transcript", "", fmt.Sprintf("watcher error: %v", err))
+			}
+		}()
+		go func() {
+			if err := detector.Run(detectorCtx); err != nil && err != context.Canceled {
+				logger.LogError("session-detector", "", fmt.Sprintf("detector error: %v", err))
 			}
 		}()
 	}
@@ -209,43 +237,6 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.LogError("shutdown", "", fmt.Sprintf("graceful shutdown error: %v", err))
-	}
-}
-
-// seedProcessWatcher registers PIDs from existing sessions with the ProcessWatcher.
-// For sessions without PIDs, attempts one-time lsof discovery via transcript path.
-func seedProcessWatcher(
-	repo *memory.Store,
-	svc *services.EventService,
-	logger *logging.StructuredLogger,
-) {
-	states, err := repo.ListAll()
-	if err != nil {
-		logger.LogError("process-seed", "", fmt.Sprintf("failed to list sessions: %v", err))
-		return
-	}
-
-	for _, state := range states {
-		if state.State == session.StateReady || state.State == session.StateCancelledByUser {
-			continue
-		}
-
-		pid := state.PID
-
-		// One-time lsof PID discovery for sessions missing a PID.
-		if pid <= 0 && state.TranscriptPath != "" {
-			if discovered, err := processadapter.DiscoverPID(state.TranscriptPath); err == nil && discovered > 0 {
-				logger.LogInfo("process-seed", state.SessionID,
-					fmt.Sprintf("lsof discovered pid %d from transcript", discovered))
-				pid = discovered
-				state.PID = pid
-				_ = repo.Save(state)
-			}
-		}
-
-		if pid > 0 {
-			svc.RegisterPID(pid, state.SessionID)
-		}
 	}
 }
 

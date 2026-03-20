@@ -602,3 +602,125 @@ func TestSessionDetector_Activity_UnknownSession_TreatedAsNew(t *testing.T) {
 		t.Errorf("state: got %q, want working", state.State)
 	}
 }
+
+func TestSessionDetector_HandleProcessExit_TransitionsToReady(t *testing.T) {
+	tw := newMockTranscriptWatcher()
+	pw := newMockProcessWatcher()
+	gp := newMockGraceTimer()
+	repo := newMockRepo()
+
+	repo.states["exit1"] = &session.SessionState{
+		SessionID: "exit1",
+		State:     session.StateWorking,
+		PID:       12345,
+		FirstSeen: time.Now().Unix(),
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	det := newDetector(tw, pw, gp, repo)
+
+	det.HandleProcessExit(12345, "exit1")
+
+	state, _ := repo.Load("exit1")
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready", state.State)
+	}
+	if state.Confidence != "high" {
+		t.Errorf("confidence: got %q, want high", state.Confidence)
+	}
+	if state.LastEvent != "process_exit" {
+		t.Errorf("last_event: got %q, want process_exit", state.LastEvent)
+	}
+
+	// Grace period timer should have been stopped.
+	if !gp.stops["exit1"] {
+		t.Error("grace period timer should have been stopped")
+	}
+}
+
+func TestSessionDetector_HandleProcessExit_SkipsTerminalState(t *testing.T) {
+	tw := newMockTranscriptWatcher()
+	pw := newMockProcessWatcher()
+	gp := newMockGraceTimer()
+	repo := newMockRepo()
+
+	repo.states["exit2"] = &session.SessionState{
+		SessionID: "exit2",
+		State:     session.StateReady, // already terminal
+		PID:       12345,
+		FirstSeen: time.Now().Unix(),
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	det := newDetector(tw, pw, gp, repo)
+
+	det.HandleProcessExit(12345, "exit2")
+
+	state, _ := repo.Load("exit2")
+	if state.State != session.StateReady {
+		t.Errorf("state should remain ready, got %q", state.State)
+	}
+}
+
+func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
+	tw := newMockTranscriptWatcher()
+	pw := newMockProcessWatcher()
+	gp := newMockGraceTimer()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, gp, repo)
+
+	// Should not panic for unknown session.
+	det.HandleProcessExit(99999, "nonexistent")
+
+	// Grace period timer should still be stopped (defensive).
+	if !gp.stops["nonexistent"] {
+		t.Error("grace period timer should have been stopped even for unknown session")
+	}
+}
+
+func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
+	tw := newMockTranscriptWatcher()
+	pw := newMockProcessWatcher()
+	gp := newMockGraceTimer()
+	repo := newMockRepo()
+
+	repo.states["seed1"] = &session.SessionState{
+		SessionID:      "seed1",
+		State:          session.StateWorking,
+		PID:            42,
+		TranscriptPath: "/home/.claude/projects/-Users-test/seed1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// Ready session should NOT be seeded.
+	repo.states["seed2"] = &session.SessionState{
+		SessionID: "seed2",
+		State:     session.StateReady,
+		PID:       99,
+		FirstSeen: time.Now().Unix(),
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	det := newDetector(tw, pw, gp, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Active session PID should be registered.
+	if sid, ok := pw.watched[42]; !ok {
+		t.Error("PID 42 should be watched")
+	} else if sid != "seed1" {
+		t.Errorf("PID 42 session: got %q, want seed1", sid)
+	}
+
+	// Ready session PID should NOT be registered.
+	if _, ok := pw.watched[99]; ok {
+		t.Error("PID 99 should not be watched (ready session)")
+	}
+}

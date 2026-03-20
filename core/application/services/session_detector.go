@@ -303,6 +303,47 @@ func (d *SessionDetector) HandleGracePeriodExpiry(sessionID string) {
 	d.broadcast(outbound.PushTypeUpdated, state)
 }
 
+// HandleProcessExit transitions a session to "ready" when its process exits.
+// It stops the grace period timer and cleans up internal tracking.
+func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
+	// Stop grace period timer for this session.
+	d.gp.Stop(sessionID)
+
+	// Remove from project tracking.
+	d.mu.Lock()
+	delete(d.projectSessions, sessionID)
+	d.mu.Unlock()
+
+	state, err := d.repo.Load(sessionID)
+	if err != nil || state == nil {
+		d.log.LogInfo("process-exit", sessionID,
+			fmt.Sprintf("pid %d exited but session not found (already cleaned up)", pid))
+		return
+	}
+
+	// Already in a terminal state — nothing to do.
+	if state.State == session.StateReady || state.State == session.StateDeleteSession ||
+		state.State == session.StateCancelledByUser {
+		return
+	}
+
+	d.log.LogInfo("process-exit", sessionID,
+		fmt.Sprintf("pid %d exited, transitioning %s → ready", pid, state.State))
+
+	state.State = session.StateReady
+	state.UpdatedAt = time.Now().Unix()
+	state.Confidence = "high"
+	state.LastEvent = "process_exit"
+
+	if err := d.repo.Save(state); err != nil {
+		d.log.LogError("process-exit", sessionID,
+			fmt.Sprintf("failed to save ready state: %v", err))
+		return
+	}
+
+	d.broadcast(outbound.PushTypeUpdated, state)
+}
+
 // deriveParentSessionID finds a likely parent session for a new session in the
 // same project directory. A parent is an existing working session with an open
 // tool call (typically the Agent tool that spawned the subagent).
@@ -388,7 +429,8 @@ func (d *SessionDetector) discoverAndRegisterPID(sessionID, transcriptPath strin
 	}
 }
 
-// seedFromDisk populates the projectSessions map from existing sessions.
+// seedFromDisk populates the projectSessions map from existing sessions and
+// registers PIDs of active sessions with the ProcessWatcher.
 func (d *SessionDetector) seedFromDisk() {
 	states, err := d.repo.ListAll()
 	if err != nil {
@@ -396,14 +438,31 @@ func (d *SessionDetector) seedFromDisk() {
 	}
 
 	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	for _, state := range states {
 		if state.TranscriptPath != "" {
 			// Extract project dir from transcript path.
 			// Path format: ~/.claude/projects/<project-dir>/<session-id>.jsonl
 			if pdir := extractProjectDir(state.TranscriptPath); pdir != "" {
 				d.projectSessions[state.SessionID] = pdir
+			}
+		}
+	}
+	d.mu.Unlock()
+
+	// Register known PIDs with ProcessWatcher. PID discovery via lsof for
+	// sessions without PIDs is deferred to onNewSession/onActivity events
+	// to avoid blocking the event loop at startup.
+	if d.pw != nil {
+		for _, state := range states {
+			if state.State == session.StateReady || state.State == session.StateCancelledByUser ||
+				state.State == session.StateDeleteSession {
+				continue
+			}
+			if state.PID > 0 {
+				if err := d.pw.Watch(state.PID, state.SessionID); err != nil {
+					d.log.LogError("session-detector-seed", state.SessionID,
+						fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
+				}
 			}
 		}
 	}
