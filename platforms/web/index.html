@@ -460,6 +460,229 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Gas Town section */
+    .gt-section {
+      margin-bottom: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .gt-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .gt-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-bright);
+      letter-spacing: 0.04em;
+    }
+
+    .gt-title .gt-emoji { font-size: 16px; }
+    .gt-title .gt-count {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .gt-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .gt-status-label {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .gt-body { padding: 0; }
+
+    /* Global agent row */
+    .gt-agent-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.15s;
+    }
+
+    .gt-agent-row:last-child { border-bottom: none; }
+    .gt-agent-row:hover { background: var(--surface-hover); }
+
+    .gt-agent-emoji { font-size: 14px; flex-shrink: 0; }
+
+    .gt-agent-role {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--text);
+      flex: 1;
+    }
+
+    .gt-agent-state {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Convoy section */
+    .gt-convoy-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .gt-convoy-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 18px 7px 32px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .gt-convoy-row:last-child { border-bottom: none; }
+
+    .gt-convoy-name {
+      color: var(--text);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .gt-convoy-name.done { color: var(--muted); }
+
+    .gt-dotbar {
+      letter-spacing: 2px;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .gt-convoy-fraction {
+      font-size: 11px;
+      color: var(--muted);
+      flex-shrink: 0;
+      min-width: 40px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .gt-convoy-check {
+      color: var(--ready);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    /* Codebase (rig) section */
+    .gt-codebase-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .gt-codebase-header:hover { background: var(--surface-hover); }
+
+    .gt-rig-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .gt-rig-name {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      flex: 1;
+    }
+
+    .gt-rig-count {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .gt-rig-agents { padding-left: 14px; }
+
+    .gt-rig-agent-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 18px 6px 32px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 12px;
+      transition: background 0.15s;
+    }
+
+    .gt-rig-agent-row:last-child { border-bottom: none; }
+    .gt-rig-agent-row:hover { background: var(--surface-hover); }
+
+    .gt-rig-agent-emoji { font-size: 12px; flex-shrink: 0; }
+
+    .gt-rig-agent-name {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text);
+      flex: 1;
+    }
+
+    .gt-bead-id {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--working);
+    }
+
+    .gt-rig-agent-state {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .gt-section-label {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 10px 0 8px 0;
+    }
+
     /* Responsive */
     @media (max-width: 768px) {
       header { padding: 16px 20px; }
@@ -502,15 +725,18 @@
   </header>
 
   <main>
+    <div id="gt-container" style="display:none" aria-label="Gas Town"></div>
     <div id="empty-state">
       <div class="empty-dot"></div>
       <p>awaiting sessions</p>
     </div>
+    <div id="sessions-label" class="gt-section-label" style="display:none">Other Sessions</div>
     <div class="session-grid" id="session-grid" aria-live="polite"></div>
   </main>
 
   <script>
     const sessions = new Map();
+    let gtState = null;
 
     // --- SVG Icons ---
     const svgIcons = {
@@ -673,7 +899,126 @@
       '</div>';
     }
 
+    // --- Gas Town rendering ---
+    const roleEmoji = { mayor: '🎩', deacon: '📋', witness: '🦉', refinery: '🏭', polecat: '👷', crew: '🧑‍💻' };
+    function stateColor(s) {
+      if (s === 'working') return 'var(--working)';
+      if (s === 'waiting') return 'var(--waiting)';
+      if (s === 'ready' || s === 'running') return 'var(--ready)';
+      return 'var(--muted)';
+    }
+
+    function dotBar(total, done) {
+      const maxDots = 7;
+      const totalDots = Math.min(total, maxDots);
+      if (totalDots <= 0) return '';
+      const filled = total <= maxDots ? done : Math.round(done / total * maxDots);
+      return '●'.repeat(Math.min(filled, totalDots)) + '○'.repeat(Math.max(totalDots - filled, 0));
+    }
+
+    function renderGasTown() {
+      const container = document.getElementById('gt-container');
+      const label = document.getElementById('sessions-label');
+      if (!gtState || !gtState.running) {
+        container.style.display = 'none';
+        label.style.display = 'none';
+        return;
+      }
+
+      container.style.display = 'block';
+      const ga = gtState.global_agents || [];
+      const codebases = gtState.codebases || [];
+      const workUnits = gtState.work_units || [];
+      const convoys = workUnits.filter(w => w.type === 'convoy');
+
+      // Count active rigs
+      const activeRigs = codebases.filter(cb =>
+        (cb.worktrees || []).some(wt =>
+          (wt.agents || []).some(a => a.state === 'working')
+        )
+      ).length;
+
+      let html = '<div class="gt-section">';
+      // Header
+      html += '<div class="gt-header">';
+      html += '<div class="gt-title"><span class="gt-emoji">⛽</span> Gas Town';
+      if (activeRigs > 0) html += ' <span class="gt-count">x' + activeRigs + '</span>';
+      html += '</div>';
+      html += '<div class="gt-status-label"><div class="gt-status-dot" style="background:var(--ready)"></div>running</div>';
+      html += '</div>';
+
+      html += '<div class="gt-body">';
+
+      // Global agents
+      for (const a of ga) {
+        html += '<div class="gt-agent-row">';
+        html += '<span class="gt-agent-emoji">' + (roleEmoji[a.role] || '👤') + '</span>';
+        html += '<span class="gt-agent-role">' + esc(a.role.charAt(0).toUpperCase() + a.role.slice(1)) + '</span>';
+        html += '<span class="gt-agent-state" style="color:' + stateColor(a.state) + '">' + esc(a.state) + '</span>';
+        html += '</div>';
+      }
+
+      // Convoys
+      if (convoys.length > 0) {
+        html += '<div class="gt-convoy-header">🚚 Convoys</div>';
+        for (const c of convoys) {
+          const isDone = c.done >= c.total;
+          html += '<div class="gt-convoy-row">';
+          html += '<span class="gt-convoy-name' + (isDone ? ' done' : '') + '">' + esc(c.name) + '</span>';
+          html += '<span class="gt-dotbar" style="color:' + (isDone ? 'var(--ready)' : 'var(--working)') + '">' + dotBar(c.total, c.done) + '</span>';
+          html += '<span class="gt-convoy-fraction">' + c.done + ' / ' + c.total + '</span>';
+          if (isDone) html += '<span class="gt-convoy-check">✓</span>';
+          html += '</div>';
+        }
+      }
+
+      // Codebases
+      for (const cb of codebases) {
+        const allAgents = (cb.worktrees || []).flatMap(wt => wt.agents || []);
+        const isOp = cb.status === 'operational';
+        html += '<div class="gt-codebase-header">';
+        html += '<div class="gt-rig-dot" style="background:' + (isOp ? 'var(--ready)' : 'var(--pressure-high)') + '"></div>';
+        html += '<span class="gt-rig-name">' + esc(cb.rig) + '</span>';
+        if (allAgents.length > 0) html += '<span class="gt-rig-count">' + allAgents.length + ' agent' + (allAgents.length === 1 ? '' : 's') + '</span>';
+        html += '</div>';
+
+        // Main worktree agents
+        const mainWt = (cb.worktrees || []).find(wt => wt.is_main);
+        if (mainWt) {
+          for (const a of (mainWt.agents || [])) {
+            html += renderRigAgent(a);
+          }
+        }
+        // Polecat worktrees
+        for (const wt of (cb.worktrees || []).filter(wt => !wt.is_main)) {
+          for (const a of (wt.agents || [])) {
+            html += renderRigAgent(a);
+          }
+        }
+      }
+
+      html += '</div></div>';
+      container.innerHTML = html;
+
+      // Show "Other Sessions" label if there are sessions too
+      const active = [...sessions.values()].filter(s => s.state !== 'delete_session');
+      label.style.display = active.length > 0 ? 'block' : 'none';
+    }
+
+    function renderRigAgent(a) {
+      const emoji = roleEmoji[a.role] || '👤';
+      const name = a.name || a.role.charAt(0).toUpperCase() + a.role.slice(1);
+      let html = '<div class="gt-rig-agent-row">';
+      html += '<span class="gt-rig-agent-emoji">' + emoji + '</span>';
+      html += '<span class="gt-rig-agent-name">' + esc(name) + '</span>';
+      if (a.bead_id) html += '<span class="gt-bead-id">' + esc(a.bead_id) + '</span>';
+      html += '<span class="gt-rig-agent-state" style="color:' + stateColor(a.state) + '">' + esc(a.state) + '</span>';
+      html += '</div>';
+      return html;
+    }
+
     function render() {
+      renderGasTown();
       const grid = document.getElementById('session-grid');
       const empty = document.getElementById('empty-state');
       const active = [...sessions.values()].filter(s => s.state !== 'delete_session');
@@ -742,15 +1087,18 @@
     setInterval(tickElapsed, 1000);
 
     // --- Initial load ---
-    fetch('/api/v1/sessions')
-      .then(r => r.json())
-      .then(list => {
-        if (Array.isArray(list)) {
-          list.forEach(s => sessions.set(s.session_id, s));
-        }
-        render();
-      })
-      .catch(err => console.error('initial load:', err));
+    Promise.all([
+      fetch('/api/v1/sessions').then(r => r.json()).catch(() => []),
+      fetch('/api/v1/gastown').then(r => r.json()).catch(() => null),
+    ]).then(([sessionList, gt]) => {
+      if (Array.isArray(sessionList)) {
+        sessionList.forEach(s => sessions.set(s.session_id, s));
+      }
+      if (gt && gt.running) {
+        gtState = gt;
+      }
+      render();
+    });
 
     // --- WebSocket with exponential backoff ---
     let ws = null;
@@ -776,7 +1124,13 @@
       ws.onmessage = function(evt) {
         var msg;
         try { msg = JSON.parse(evt.data); } catch(e) { return; }
-        if (!msg || !msg.session) return;
+        if (!msg) return;
+        if (msg.type === 'gastown_state' && msg.gastown) {
+          gtState = msg.gastown;
+          render();
+          return;
+        }
+        if (!msg.session) return;
         var s = msg.session;
         if (msg.type === 'session_deleted' || s.state === 'delete_session') {
           sessions.delete(s.session_id);
