@@ -117,6 +117,10 @@ type SessionMetrics struct {
 	TotalEventCount           int64     `json:"total_event_count,omitempty"`           // Total events since session start
 	RecentEventCount          int64     `json:"recent_event_count,omitempty"`          // Events in last 5 minutes
 	RecentEventWindowStart    time.Time `json:"recent_event_window_start,omitempty"`  // Start of 5-minute window
+
+	// Tool call tracking — count unmatched tool_use/tool_result pairs
+	HasOpenToolCall  bool `json:"has_open_tool_call"`            // True when OpenToolCallCount > 0
+	OpenToolCallCount int `json:"open_tool_call_count,omitempty"` // Number of tool_use events without matching tool_result
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -126,6 +130,10 @@ type TranscriptTailer struct {
 	metrics     *SessionMetrics
 	windowSize  time.Duration // Default 60 seconds
 	// capacityMgr *capacity.CapacityManager
+
+	// Tool call pairing counters — accumulated across parsed lines.
+	toolUseCount    int // tool_use / tool_call events seen
+	toolResultCount int // tool_result events seen
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path
@@ -342,6 +350,14 @@ func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
 	if t.metrics.SessionStartAt.IsZero() || event.Timestamp.Before(t.metrics.SessionStartAt) {
 		t.metrics.SessionStartAt = event.Timestamp
 	}
+
+	// Track tool call pairing
+	switch event.EventType {
+	case "tool_use", "tool_call":
+		t.toolUseCount++
+	case "tool_result":
+		t.toolResultCount++
+	}
 }
 
 // computeMetrics calculates messages per minute and elapsed time
@@ -391,6 +407,14 @@ func (t *TranscriptTailer) computeMetrics() {
 	}
 	t.metrics.RecentEventCount = recentEventCount
 	
+	// Compute open tool call count from pairing counters.
+	openCalls := t.toolUseCount - t.toolResultCount
+	if openCalls < 0 {
+		openCalls = 0 // Guard against starting mid-stream where we see results without uses
+	}
+	t.metrics.OpenToolCallCount = openCalls
+	t.metrics.HasOpenToolCall = openCalls > 0
+
 	// Legacy calculation: For messages per minute, use a sliding window from the latest timestamp
 	legacyWindowStart := latestTime.Add(-t.windowSize)
 	messageCount := 0

@@ -20,6 +20,10 @@ type SessionMetrics struct {
 	ModelName          string  `json:"model_name"`
 	ContextUtilization float64 `json:"context_utilization_percentage"`
 	PressureLevel      string  `json:"pressure_level"`
+
+	// Tool call tracking — count unmatched tool_use/tool_result pairs.
+	HasOpenToolCall   bool `json:"has_open_tool_call"`
+	OpenToolCallCount int  `json:"open_tool_call_count,omitempty"`
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.
@@ -78,6 +82,8 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		ModelName:          newM.ModelName,
 		ContextUtilization: newM.ContextUtilization,
 		PressureLevel:      newM.PressureLevel,
+		HasOpenToolCall:    newM.HasOpenToolCall,
+		OpenToolCallCount:  newM.OpenToolCallCount,
 	}
 	if merged.ElapsedSeconds == 0 && oldM.ElapsedSeconds > 0 {
 		merged.ElapsedSeconds = oldM.ElapsedSeconds
