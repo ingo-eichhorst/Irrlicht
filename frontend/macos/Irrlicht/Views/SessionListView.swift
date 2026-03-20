@@ -2,16 +2,25 @@ import SwiftUI
 
 struct SessionListView: View {
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var gasTownProvider: GasTownProvider
     @State private var isQuitButtonHovered = false
     @State private var isSettingsButtonHovered = false
     @State private var showSettings = false
-    
+
     var body: some View {
         if showSettings {
             SettingsView(isPresented: $showSettings)
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                if sessionManager.sessions.isEmpty {
+                if gasTownProvider.isAvailable {
+                    gasTownHeaderView
+                    Divider()
+                    gasTownRigsView
+                    if !sessionManager.sessions.isEmpty {
+                        Divider()
+                        sessionListContent
+                    }
+                } else if sessionManager.sessions.isEmpty {
                     emptyStateView
                 } else {
                     sessionHeaderView
@@ -74,6 +83,62 @@ struct SessionListView: View {
         }
     }
     
+    // MARK: - Gas Town Header
+
+    private var gasTownHeaderView: some View {
+        HStack {
+            HStack(spacing: 6) {
+                Image(systemName: "building.2.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(.purple)
+                Text("Gas Town")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+            }
+
+            Spacer()
+
+            if gasTownProvider.isDaemonRunning {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                    Text("running")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - Gas Town Rigs
+
+    private var gasTownRigsView: some View {
+        let rigs = gasTownProvider.rigs
+        let polecatsByRig = gasTownProvider.polecatsByRig
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(rigs) { rig in
+                    RigRowView(rig: rig, polecats: polecatsByRig[rig.name] ?? [])
+                }
+
+                if rigs.isEmpty {
+                    HStack {
+                        Spacer()
+                        Text("No rigs")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .frame(maxHeight: 300)
+    }
+
     // MARK: - Empty State
 
     private var emptyStateView: some View {
@@ -497,6 +562,127 @@ struct SubagentRowView: View {
     }
 }
 
+// MARK: - Rig Row View
+
+struct RigRowView: View {
+    let rig: RigState
+    let polecats: [PolecatState]
+    @State private var isExpanded = true
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Rig header
+            HStack(spacing: 6) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8))
+                    .foregroundColor(.secondary)
+                    .frame(width: 10)
+
+                Circle()
+                    .fill(rig.isOperational ? Color.green : Color.red)
+                    .frame(width: 7, height: 7)
+
+                Text(rig.name)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.primary)
+
+                Spacer()
+
+                // Service indicators
+                HStack(spacing: 8) {
+                    ServiceBadge(label: "W", running: rig.witnessRunning)
+                    ServiceBadge(label: "R", running: rig.refineryRunning)
+
+                    if rig.polecats > 0 {
+                        Text("\(rig.polecats) polecat\(rig.polecats == 1 ? "" : "s")")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isHovered ? Color.accentColor.opacity(0.06) : Color.clear)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            }
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isHovered = hovering
+                }
+            }
+
+            // Expanded polecat rows
+            if isExpanded && !polecats.isEmpty {
+                ForEach(polecats) { polecat in
+                    PolecatRowView(polecat: polecat)
+                }
+            }
+        }
+        .accessibilityIdentifier("rig-row-\(rig.name)")
+    }
+}
+
+// MARK: - Service Badge
+
+struct ServiceBadge: View {
+    let label: String
+    let running: Bool
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundColor(running ? .green : .red)
+    }
+}
+
+// MARK: - Polecat Row View
+
+struct PolecatRowView: View {
+    let polecat: PolecatState
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Spacer().frame(width: 24)
+
+            Image(systemName: polecat.isWorking ? "hammer.fill" : "hourglass")
+                .font(.system(size: 9))
+                .foregroundColor(polecat.isWorking ? Color(hex: "#8B5CF6") : Color(hex: "#FF9500"))
+                .frame(width: 12)
+
+            Text(polecat.name)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.primary)
+
+            if let issue = polecat.issue, !issue.isEmpty {
+                Text(issue)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Text(polecat.state)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+        .background(isHovered ? Color.accentColor.opacity(0.05) : Color.clear)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+        .accessibilityIdentifier("polecat-row-\(polecat.rig)-\(polecat.name)")
+    }
+}
+
 // MARK: - Session Group
 
 struct SessionGroup: Identifiable {
@@ -571,6 +757,7 @@ struct SessionGroupDropDelegate: DropDelegate {
 struct SessionListView_Previews: PreviewProvider {
     static var previews: some View {
         SessionListView()
+            .environmentObject(GasTownProvider())
             .environmentObject({
                 let manager = SessionManager()
                 // Add some mock sessions for preview

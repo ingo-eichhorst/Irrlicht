@@ -61,11 +61,13 @@ struct StatusIndicatorLabel: View {
 @main
 struct IrrlichtApp: App {
     @StateObject private var sessionManager = SessionManager()
-    
+    @StateObject private var gasTownProvider = GasTownProvider()
+
     var body: some Scene {
         MenuBarExtra {
             SessionListView()
                 .environmentObject(sessionManager)
+                .environmentObject(gasTownProvider)
         } label: {
             StatusIndicatorLabel(sessions: sessionManager.sessions)
         }
