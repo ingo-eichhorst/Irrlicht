@@ -1,6 +1,6 @@
 # ✦ Irrlicht — Menu-Bar Telemetry for Claude Code (macOS)
 
-![Banner](banner.png)
+![Banner](assets/banner.png)
 
 [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ingo-eichhorst//raw/coverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/ingo-eichhorst/Irrlicht/main/version.json&query=$.version&label=version&color=%2334C759)](version.json)
@@ -36,7 +36,7 @@ No ghosts. **Files → State → Light.**
 
 ## Features
 
-![UI Features](irrlicht-explainer.png)
+![UI Features](assets/irrlicht-explainer.png)
 
 ### Menu Bar Indicators
 - **Individual colored status indicators** for each active Claude Code session
