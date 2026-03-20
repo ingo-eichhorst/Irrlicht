@@ -268,28 +268,23 @@ struct SessionListView: View {
     }
 
     private var sessionListContent: some View {
-        let groups = sessionGroups
+        let allProjectGroups = projectGroups
+        // Pre-compute starting flat index for each project group (for drag/drop continuity)
+        var startIndices: [String: Int] = [:]
+        var runningIndex = 0
+        for pg in allProjectGroups {
+            startIndices[pg.id] = runningIndex
+            runningIndex += pg.sessionGroups.count
+        }
+        let totalGroups = runningIndex
+
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
-                ForEach(Array(groups.enumerated()), id: \.element.id) { groupIndex, group in
-                    // Parent row
-                    SessionRowView(session: group.parent)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            print("Selected session: \(group.parent.id)")
-                        }
-                        .onDrag {
-                            NSItemProvider(object: group.parent.id as NSString)
-                        }
-                        .onDrop(of: [.text], delegate: SessionGroupDropDelegate(
-                            sessionManager: sessionManager,
-                            targetGroupIndex: groupIndex
-                        ))
-
-                    // Subagent rows (indented, compact)
-                    ForEach(group.subagents) { subagent in
-                        SubagentRowView(session: subagent)
-                    }
+                ForEach(allProjectGroups) { projectGroup in
+                    ProjectGroupSectionView(
+                        projectGroup: projectGroup,
+                        startingGroupIndex: startIndices[projectGroup.id] ?? 0
+                    )
                 }
 
                 // Drop zone at the end of the list
@@ -298,7 +293,7 @@ struct SessionListView: View {
                     .frame(height: 20)
                     .onDrop(of: [.text], delegate: SessionGroupDropDelegate(
                         sessionManager: sessionManager,
-                        targetGroupIndex: groups.count
+                        targetGroupIndex: totalGroups
                     ))
             }
         }
@@ -721,6 +716,74 @@ struct ProjectGroup: Identifiable {
     let sessionGroups: [SessionGroup]
 
     var id: String { projectDirectory }
+}
+
+// MARK: - Project Group Section View
+
+struct ProjectGroupSectionView: View {
+    let projectGroup: ProjectGroup
+    let startingGroupIndex: Int
+    @EnvironmentObject var sessionManager: SessionManager
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Collapsible project header
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                        .frame(width: 10)
+
+                    Text(projectGroup.projectDirectory)
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.semibold)
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+
+                    let count = projectGroup.sessionGroups.count
+                    Text("\(count) \(count == 1 ? "session" : "sessions")")
+                        .font(.caption2)
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Session rows (indented under the project header)
+            if isExpanded {
+                ForEach(Array(projectGroup.sessionGroups.enumerated()), id: \.element.id) { localIndex, group in
+                    SessionRowView(session: group.parent)
+                        .padding(.leading, 8)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            print("Selected session: \(group.parent.id)")
+                        }
+                        .onDrag {
+                            NSItemProvider(object: group.parent.id as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: SessionGroupDropDelegate(
+                            sessionManager: sessionManager,
+                            targetGroupIndex: startingGroupIndex + localIndex
+                        ))
+
+                    ForEach(group.subagents) { subagent in
+                        SubagentRowView(session: subagent)
+                            .padding(.leading, 8)
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier("project-group-\(projectGroup.projectDirectory)")
+    }
 }
 
 // MARK: - Color Extension
