@@ -5,6 +5,7 @@ import (
 
 	"irrlicht/core/domain/gastown"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/domain/transcript"
 )
 
 // PushMessage is a typed WebSocket envelope for session state fan-out.
@@ -65,6 +66,20 @@ type GTBinResolver interface {
 	// Path returns the resolved absolute path to the gt binary,
 	// or "" if the binary could not be found.
 	Path() string
+}
+
+// TranscriptWatcher watches ~/.claude/projects/** for transcript file changes,
+// emitting events for new sessions, activity, and removals.
+type TranscriptWatcher interface {
+	// Watch begins watching the Claude projects directory for transcript
+	// changes. It blocks until ctx is cancelled or an unrecoverable error
+	// occurs. Subdirectories are watched dynamically as they appear.
+	Watch(ctx context.Context) error
+	// Subscribe returns a channel that receives transcript events whenever
+	// a .jsonl file is created, modified, or removed.
+	Subscribe() <-chan transcript.TranscriptEvent
+	// Unsubscribe removes a previously subscribed channel and closes it.
+	Unsubscribe(ch <-chan transcript.TranscriptEvent)
 }
 
 // GasTownCollector detects Gas Town presence, resolves GT_ROOT, and watches

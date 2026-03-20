@@ -18,6 +18,7 @@ import (
 	inboundhttp "irrlicht/core/adapters/inbound/http"
 	"irrlicht/core/adapters/outbound/filesystem"
 	gastownadapter "irrlicht/core/adapters/outbound/gastown"
+	transcriptadapter "irrlicht/core/adapters/outbound/transcript"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
 	"irrlicht/core/adapters/outbound/logging"
@@ -154,6 +155,19 @@ func main() {
 		}()
 	} else {
 		logger.LogInfo("startup", "", "Gas Town not detected — skipping daemon watcher")
+	}
+
+	// Transcript watcher: watch ~/.claude/projects/** for session transcripts.
+	transcriptWatcher := transcriptadapter.New()
+	{
+		watchCtx, watchCancel := context.WithCancel(context.Background())
+		defer watchCancel()
+		logger.LogInfo("startup", "", fmt.Sprintf("TranscriptWatcher: watching %s", transcriptWatcher.Root()))
+		go func() {
+			if err := transcriptWatcher.Watch(watchCtx); err != nil && err != context.Canceled {
+				logger.LogError("transcript", "", fmt.Sprintf("watcher error: %v", err))
+			}
+		}()
 	}
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichtd %s listening on unix:%s and tcp:%s", Version, sockPath, tcpAddr))
