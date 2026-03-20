@@ -49,11 +49,6 @@ type MetricsCollector interface {
 	ComputeMetrics(transcriptPath string) (*session.SessionMetrics, error)
 }
 
-// PathValidator validates that a file-system path is safe to use.
-type PathValidator interface {
-	Validate(path string) error
-}
-
 // PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).
 type PushBroadcaster interface {
 	Broadcast(msg PushMessage)

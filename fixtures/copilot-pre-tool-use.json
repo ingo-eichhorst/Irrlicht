@@ -1,6 +1,0 @@
-{
-  "timestamp": 1741042320000,
-  "cwd": "/Users/ingo/projects/my-project",
-  "toolName": "edit",
-  "toolArgs": "{\"path\": \"src/module.go\", \"content\": \"...\"}"
-}

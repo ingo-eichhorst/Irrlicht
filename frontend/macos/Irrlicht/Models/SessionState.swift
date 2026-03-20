@@ -118,7 +118,7 @@ struct SessionState: Identifiable, Codable {
     let firstSeen: Date         // when session was first created
     let updatedAt: Date         // last modified timestamp
     let eventCount: Int?        // number of events processed (optional)
-    let lastEvent: String?      // last hook event type (optional)
+    let lastEvent: String?      // last event type (optional)
     let metrics: SessionMetrics? // performance metrics from transcript analysis (optional)
     let pid: Int?               // Claude Code process PID (optional for backwards compatibility)
     let parentSessionId: String? // parent session ID for subagent sessions (optional)
@@ -128,7 +128,7 @@ struct SessionState: Identifiable, Codable {
 
     private static let logger = Logger(subsystem: "com.anthropic.irrlicht", category: "SessionState")
 
-    // Custom coding keys to match JSON from irrlicht-hook
+    // Custom coding keys to match JSON from irrlichtd
     enum CodingKeys: String, CodingKey {
         case id = "session_id"
         case state, model, cwd, pid

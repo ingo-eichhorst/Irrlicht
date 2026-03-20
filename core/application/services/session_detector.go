@@ -1,6 +1,6 @@
 // SessionDetector orchestrates TranscriptWatcher + ProcessWatcher +
 // GracePeriodTimer to detect and manage Claude Code sessions from transcript
-// file activity, without relying on hook events.
+// file activity.
 //
 // It subscribes to TranscriptWatcher events and:
 //   - On new session: creates session state, discovers PID via lsof,
@@ -23,7 +23,7 @@ import (
 )
 
 // SessionDetector watches transcript files to detect sessions and orchestrate
-// ProcessWatcher + GracePeriodTimer without requiring hook events.
+// ProcessWatcher + GracePeriodTimer for lifecycle management.
 type SessionDetector struct {
 	tw          outbound.TranscriptWatcher
 	pw          outbound.ProcessWatcher // optional
@@ -112,7 +112,7 @@ func (d *SessionDetector) onNewSession(ev transcript.TranscriptEvent) {
 	d.projectSessions[ev.SessionID] = ev.ProjectDir
 	d.mu.Unlock()
 
-	// Check if session already exists (from hook events).
+	// Check if session already exists.
 	existing, _ := d.repo.Load(ev.SessionID)
 	isNew := existing == nil
 
@@ -127,7 +127,7 @@ func (d *SessionDetector) onNewSession(ev transcript.TranscriptEvent) {
 			TranscriptPath: ev.TranscriptPath,
 			FirstSeen:      now,
 			UpdatedAt:      now,
-			Confidence:     "medium", // file-based detection, not hook
+			Confidence:     "medium",
 			EventCount:     1,
 			LastEvent:      "transcript_new",
 		}
@@ -157,7 +157,7 @@ func (d *SessionDetector) onNewSession(ev transcript.TranscriptEvent) {
 
 		d.broadcast(outbound.PushTypeCreated, state)
 	} else {
-		// Session already exists (created by hook). Update transcript path if missing.
+		// Session already exists. Update transcript path if missing.
 		if existing.TranscriptPath == "" {
 			existing.TranscriptPath = ev.TranscriptPath
 			existing.UpdatedAt = now

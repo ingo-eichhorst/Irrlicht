@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# build-release.sh - Cross-platform build script for Irrlicht
+# build-release.sh - Build script for Irrlicht daemon
 set -e
 
 # Read version from version.json (single source of truth)
 VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['version'])")
 BUILD_DIR="build"
-SHIM_NAME="irrlicht-shim"
+DAEMON_NAME="irrlichtd"
 
 echo "Building Irrlicht v$VERSION"
 echo "============================================="
@@ -21,46 +21,19 @@ echo "Building for macOS..."
 # macOS Apple Silicon (arm64)
 echo "  Building macOS arm64..."
 cd core
-GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-darwin-arm64" ./cmd/irrlicht-shim/
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${DAEMON_NAME}-darwin-arm64" ./cmd/irrlichtd/
 
 # macOS Intel (amd64)
 echo "  Building macOS amd64..."
-GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-darwin-amd64" ./cmd/irrlicht-shim/
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${DAEMON_NAME}-darwin-amd64" ./cmd/irrlichtd/
 
 cd ..
 
 # Create universal macOS binary
 echo "  Creating universal macOS binary..."
-lipo -create -output "$BUILD_DIR/${SHIM_NAME}-darwin-universal" \
-    "$BUILD_DIR/${SHIM_NAME}-darwin-arm64" \
-    "$BUILD_DIR/${SHIM_NAME}-darwin-amd64"
-
-# Build installer tools (macOS only — these manage platform-specific config files)
-echo "  Building installer tools (macOS)..."
-cd tools/copilot-hooks-merger
-GOOS=darwin GOARCH=arm64 go build -o "../../$BUILD_DIR/copilot-hooks-merger-darwin-arm64" .
-GOOS=darwin GOARCH=amd64 go build -o "../../$BUILD_DIR/copilot-hooks-merger-darwin-amd64" .
-cd ../cursor-hooks-merger
-GOOS=darwin GOARCH=arm64 go build -o "../../$BUILD_DIR/cursor-hooks-merger-darwin-arm64" .
-GOOS=darwin GOARCH=amd64 go build -o "../../$BUILD_DIR/cursor-hooks-merger-darwin-amd64" .
-cd ../..
-lipo -create -output "$BUILD_DIR/copilot-hooks-merger-darwin-universal" \
-    "$BUILD_DIR/copilot-hooks-merger-darwin-arm64" \
-    "$BUILD_DIR/copilot-hooks-merger-darwin-amd64"
-lipo -create -output "$BUILD_DIR/cursor-hooks-merger-darwin-universal" \
-    "$BUILD_DIR/cursor-hooks-merger-darwin-arm64" \
-    "$BUILD_DIR/cursor-hooks-merger-darwin-amd64"
-
-# Build for other platforms (for future distribution)
-echo "Building for Linux..."
-cd core
-GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-linux-amd64" ./cmd/irrlicht-shim/
-cd ..
-
-echo "Building for Windows..."
-cd core
-GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o "../$BUILD_DIR/${SHIM_NAME}-windows-amd64.exe" ./cmd/irrlicht-shim/
-cd ..
+lipo -create -output "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" \
+    "$BUILD_DIR/${DAEMON_NAME}-darwin-arm64" \
+    "$BUILD_DIR/${DAEMON_NAME}-darwin-amd64"
 
 # Calculate checksums (files only — build dir may contain Irrlicht.app bundle directory)
 echo "Calculating checksums..."
@@ -77,7 +50,7 @@ ls -la $BUILD_DIR/
 
 echo ""
 echo "Binary info:"
-file $BUILD_DIR/${SHIM_NAME}-darwin-universal
+file $BUILD_DIR/${DAEMON_NAME}-darwin-universal
 echo ""
 
 echo "Checksums:"
@@ -85,15 +58,13 @@ cat $BUILD_DIR/checksums.sha256
 
 echo ""
 echo "Testing universal binaries..."
-if $BUILD_DIR/${SHIM_NAME}-darwin-universal --version; then
-    echo "irrlicht-shim universal binary works!"
+if $BUILD_DIR/${DAEMON_NAME}-darwin-universal --version; then
+    echo "irrlichtd universal binary works!"
 else
-    echo "irrlicht-shim universal binary test failed"
+    echo "irrlichtd universal binary test failed"
     exit 1
 fi
 
 echo ""
 echo "Release artifacts ready in $BUILD_DIR/"
-echo "   Shim binary:            ${SHIM_NAME}-darwin-universal"
-echo "   Copilot hooks merger:   copilot-hooks-merger-darwin-universal"
-echo "   Cursor hooks merger:    cursor-hooks-merger-darwin-universal"
+echo "   Daemon binary: ${DAEMON_NAME}-darwin-universal"

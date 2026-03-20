@@ -1,198 +1,81 @@
-# Claude Code Events and State Transitions
+# Irrlicht Session Detection — State Transitions
 
-This document lists all Claude Code events and their resulting state transitions, based on official documentation and research as of 2025.
+Irrlicht uses transcript file-watching (FSEvents) and process monitoring (kqueue) to
+detect Claude Code sessions without requiring hooks.
 
 ## Primary Session States
 
 - **`working`** - Claude actively processing/executing
-- **`waiting`** - Waiting for user input or permission
-- **`ready`** - No session started or task ready
-- **`cancelled_by_user`** - Session cancelled by ESC (prompt_input_exit); auto-expires after 30s
+- **`waiting`** - Waiting for user input or permission (idle + no open tool calls)
+- **`ready`** - Session ended (process exited) or no active session
+- **`cancelled_by_user`** - Session cancelled by ESC; auto-expires after 30s
 
-## Official Hook Events (9 Total)
+## Detection Mechanisms
 
-| Event | Trigger | State Transition | Hook Available | Can Block |
-|-------|---------|------------------|----------------|-----------|
-| **SessionStart** | New session starts or resumes | `idle` → `working` | ✅ Yes | ❌ No |
-| **UserPromptSubmit** | User submits prompt (before processing) | `waiting` → `working` | ✅ Yes | ✅ Yes |
-| **PreToolUse** | Before any tool execution | `working` → `working` | ✅ Yes | ✅ Yes |
-| **PostToolUse** | After successful tool completion | `working` → `working` | ✅ Yes | ❌ No |
-| **Notification** | Claude needs permission/input | `working` → `waiting` | ✅ Yes | ❌ No |
-| **PreCompact** | Before context compaction | `working` → `working` | ✅ Yes | ❌ No |
-| **Stop** | Main agent finishes responding | `working` → `ready` | ✅ Yes | ✅ Yes |
-| **SubagentStop** | Subagent task completes | `working` → `ready` | ✅ Yes | ✅ Yes |
-| **SessionEnd** | Session terminates | Any state → delete session file; `reason=prompt_input_exit` → `cancelled_by_user` | ✅ Yes | ❌ No |
+| Mechanism | Technology | Detects |
+|-----------|-----------|---------|
+| **TranscriptWatcher** | fsnotify (FSEvents on macOS) | New sessions, activity, removals |
+| **GracePeriodTimer** | Per-session 2s idle timer | working → waiting transition |
+| **ProcessWatcher** | kqueue EVFILT_PROC NOTE_EXIT | Process exit → ready (~1ms) |
+| **TailerPipeline** | JSONL transcript parsing | Model, tokens, open tool calls |
 
-## Detectable Non-Hook Events
+## Transcript Events
 
-| Event | Trigger | State Transition | Detection Method | Frequency |
-|-------|---------|------------------|------------------|-----------|
-| **Session Resume** | User returns to existing session | `idle` → `working` | File system monitoring | Per session |
-| **User Interrupt** | Ctrl+C or ESC pressed | `waiting` → `cancelled_by_user` (via SessionEnd with reason=prompt_input_exit) | SessionEnd hook | User action |
-| **Context Full** | Token limit approaching | `working` → `working` (triggers auto-compact) | Token counting | Automatic |
-| **Tool Timeout** | Tool execution exceeds limit | `working` → `error` | Process monitoring | Error condition |
-| **Tool Error** | Tool fails with exception | `working` → `working` (error reported) | Error log monitoring | Error condition |
-| **API Timeout** | Network request times out | `working` → `error` | HTTP monitoring | Network issue |
-| **API Rate Limit** | Too many requests | `working` → `waiting` (throttled) | HTTP response codes | Rate limiting |
-| **Network Disconnect** | Internet connection lost | `working` → `error` | Network monitoring | Connection issue |
-| **Transcript Write** | New log entry added | `waiting` → `working` | File monitoring | Every interaction |
-| **Config Change** | Settings file modified | No state change | File watching | Configuration |
-| **Process Start** | Claude Code launches | `ready` → `ready` (ready) | Process monitoring | Application launch |
-| **Process Exit** | Claude Code terminates | Any state → delete session | Process monitoring | Application exit |
+| Event | Trigger | Detection | State Transition |
+|-------|---------|-----------|------------------|
+| **New .jsonl file** | Session starts | FSEvents CREATE | → `working` |
+| **File write** | Claude processes | FSEvents WRITE | Reset grace timer, stay `working` |
+| **2s idle + no open tools** | Claude waiting | Grace timer fires | `working` → `waiting` |
+| **File write after idle** | Session resumes | FSEvents WRITE | `waiting` → `working` |
+| **Process exits** | Session ends | kqueue NOTE_EXIT | Any → `ready` |
+| **File removed** | Transcript deleted | FSEvents REMOVE | → `ready` or delete |
 
--> A claude code instance is killed: current=session stays forever. expected: detect the exit. Potential detection: PID monitoring of the claude instance.
-
-## Detailed State Flow
+## State Machine
 
 ```
-Application Launch
-    ↓
-  ready ←─────────────────────────────────┐
-    ↓ SessionStart                        │
- working ←─────────────┐                  │
-    ↓ Notification     │ UserPromptSubmit │ SessionEnd (non-ESC)
- waiting ──────────────┘                  │
-    ↓ Stop/SubagentStop                   │
-  ready ──────────────────────────────────┘
-    ↓ SessionEnd (reason=prompt_input_exit)
- cancelled_by_user → (auto-deleted after 30s)
-    ↓ Error conditions
-  error → (manual recovery) → ready
+working:
+  transcript write (FSEvents)           → stay working, cancel grace timer
+  file idle + hasOpenToolCall=true      → stay working (tool executing)
+  file idle + hasOpenToolCall=false     → start 2s grace timer
+  grace timer fires                     → waiting
+
+waiting:
+  transcript write (FSEvents)           → working
+  process exits (EVFILT_PROC)          → ready
+
+ready:
+  new .jsonl file (FSEvents)           → working (new session)
+  existing file grows (FSEvents)       → working (resumed)
 ```
 
-## Hook Event Details
+`hasOpenToolCall` = count of `tool_use` events without a matching `tool_result` in the
+transcript tail.
 
-### SessionStart
-- **Fires**: When starting new session or resuming existing
-- **Data**: `source` (startup/resume/clear/compact), `session_id`, `transcript_path`
-- **Blocking**: Cannot block, shows stderr only
-- **State**: `idle` → `working`
+## Subagent Detection
 
-### UserPromptSubmit  
-- **Fires**: Before Claude processes user input
-- **Data**: `prompt`, `session_id`, `transcript_path`  
-- **Blocking**: Can block with exit code 2
-- **State**: `waiting` → `working`
+Parent-child relationships are derived from:
+1. **File path**: `~/.claude/projects/<hash>/<parent-id>/subagents/agent-<id>.jsonl`
+2. **Heuristic**: New session appears in same project dir as a working session with open tool calls
 
-### PreToolUse
-- **Fires**: After tool parameters created, before execution
-- **Data**: `tool_name`, `tool_input`, `session_id`
-- **Blocking**: Can block with exit code 2 or JSON response
-- **State**: `working` → `working` (maintained)
-- **Speculative waiting**: For approval-prone tools (Bash, Write, Edit, MultiEdit), a detached background process is spawned. If no PostToolUse arrives within 2 seconds (tool was not auto-approved), the session is speculatively transitioned to `waiting`. When the real Notification fires ~6s later, the state is already correct — eliminating the visible delay.
+## Session Discovery Paths
 
-### PostToolUse
-- **Fires**: Immediately after successful tool completion
-- **Data**: `tool_name`, `tool_input`, `tool_response`
-- **Blocking**: Cannot block, informational only
-- **State**: `working` → `working` (continued)
+| Assistant | Transcript location |
+|-----------|-------------------|
+| Claude Code | `~/.claude/projects/**/*.jsonl` |
+| Others | Extensible registry (future) |
 
-### Notification
-- **Fires**: When Claude needs permission or user is idle (60s+)
-- **Data**: `message`, `notification_type`
-- **Blocking**: Cannot block, informational only
-- **State**: `working` → `waiting`
+## Process Exit Detection
 
-### PreCompact
-- **Fires**: Before manual `/compact` or automatic compaction
-- **Data**: `compact_type` (manual/auto)
-- **Blocking**: Cannot block, shows stderr only  
-- **State**: `working` → `working` (maintained during compaction)
-
-### Stop
-- **Fires**: When main Claude agent completes response
-- **Data**: `session_id`, response completion info
-- **Blocking**: Can block with exit code 2
-- **State**: `working` → `ready`
-
-### SubagentStop  
-- **Fires**: When subagent (Task tool) completes
-- **Data**: `subagent_id`, completion status
-- **Blocking**: Can block with exit code 2
-- **State**: `working` → `ready`
-
-### SessionEnd
-- **Fires**: When session terminates
-- **Data**: `exit_reason` (clear/logout/prompt_input_exit/other)
-- **Blocking**: Cannot block, shows stderr only
-- **State**:
-  - `reason: "prompt_input_exit"` → user pressed ESC on Notification prompt → state set to `cancelled_by_user` (gray); auto-deleted after 30s
-  - `reason: "clear"` → session cleared via `/clear` command → delete session file
-  - `reason: "logout"` → user logged out → delete session file
-  - Other/no reason → unknown termination → delete session file
-
-## Tool-Specific Events (via PreToolUse/PostToolUse)
-
-| Tool | PreToolUse Triggers | PostToolUse Triggers | Common State Flow |
-|------|-------------------|---------------------|-------------------|
-| **Bash** | Before command execution | After command completes | `working` → `working` |
-| **Read** | Before file read | After file read | `working` → `working` |
-| **Write/Edit** | Before file write | After file written | `working` → `working` |
-| **Task** | Before subagent spawn | After subagent completes | `working` → `working` → `ready` |
-| **WebFetch** | Before HTTP request | After response received | `working` → `working` |
-| **Grep/Glob** | Before search | After search results | `working` → `working` |
-
-## Hook Matchers and Filters
-
-### Session Source Matchers (SessionStart)
-- `startup` - Fresh application start → `ready`
-- `resume` - Resuming existing session → `ready`
-- `clear` - After session cleared → `ready`
-- `compact` - After context compaction → `ready`
-
-### Compact Type Matchers (PreCompact)
-- `manual` - User triggered `/compact` → `working`
-- `auto` - Automatic when context full → `working`
-
-### Tool Matchers (PreToolUse/PostToolUse)
-- `Task` - Subagent operations → `working`
-- `Bash` - Shell commands → `working`
-- `Read/Write/Edit` - File operations → `working`
-- `WebFetch/WebSearch` - Web requests → `working`
-- `Grep/Glob` - Search operations → `working`
+One-time `lsof -F p <transcript_path>` at session creation → PID → `EVFILT_PROC NOTE_EXIT`
+watcher. Fallback: session with no PID ages out via orphan cleanup (1hr TTL).
 
 ## State Persistence
 
-| State | Persisted Where | Duration | Recovery Method |
-|-------|----------------|----------|-----------------|
-| `working` | Session state files | Until completion | Resume or timeout |
-| `waiting` | Session state files | Until user input | User response |
-| `ready` | Session state files | Until new input | New prompt |
-| `error` | Error logs | Until resolved | Manual intervention |
-
-## Hook Configuration
-
-### Exit Codes
-- **0** - Continue normally
-- **1** - Show stderr, continue  
-- **2** - Block execution (where supported)
-
-### JSON Control (Advanced)
-```json
-{
-  "continue": true/false,
-  "stopReason": "message",
-  "suppressOutput": true/false,
-  "systemMessage": "warning"
-}
-```
-
-### Tool-Specific Control (PreToolUse)
-```json
-{
-  "permissionDecision": "allow/deny",
-  "feedback": "message to Claude"
-}
-```
+State files stored in `~/Library/Application Support/Irrlicht/instances/<sessionID>.json`
+with atomic writes. Real-time updates fan out via WebSocket to the SwiftUI menu bar app.
 
 ## Integration Notes
 
 - **File Locations**: State files in `~/Library/Application Support/Irrlicht/instances/`
-- **Environment**: `CLAUDE_PROJECT_DIR` available in all hooks
-- **Timeout**: 60 seconds default hook execution limit
-- **Parallel**: Multiple hooks run simultaneously
-- **Kill Switch**: `IRRLICHT_DISABLED=1` disables all hooks
-
----
-
-*Based on official Anthropic Claude Code documentation and research - September 2025*
+- **Kill Switch**: `IRRLICHT_DISABLED=1` disables the daemon
+- **Zero Configuration**: No hooks, no settings.json entries — install the app and it works

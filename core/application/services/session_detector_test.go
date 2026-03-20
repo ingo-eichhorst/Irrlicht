@@ -513,7 +513,7 @@ func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	// Session created by hook (no transcript path yet).
+	// Session already exists (no transcript path yet).
 	repo.states["hook1"] = &session.SessionState{
 		SessionID: "hook1",
 		State:     session.StateWorking,

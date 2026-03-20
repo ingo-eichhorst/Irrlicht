@@ -6,6 +6,10 @@ set -e
 echo "Running Irrlicht Test Suite"
 echo "================================"
 
+# Track test results
+failed_tests=0
+total_tests=0
+
 # Function to run tests and capture results
 run_test() {
     local test_name="$1"
@@ -24,33 +28,21 @@ run_test() {
     fi
 }
 
-# Track test results
-failed_tests=0
-total_tests=0
-
-# Test 1: Fixture validation
+# Test 1: Go unit tests
 ((total_tests++))
-if ! run_test "Fixture Validation" "./tools/irrlicht-replay --validate-only fixtures/session-start.json"; then
+if ! run_test "Go Unit Tests" "cd core && go test -v ./..."; then
     ((failed_tests++))
 fi
 
-# Test 2: Edge case validation
+# Test 2: Go build (daemon)
 ((total_tests++))
-if ! run_test "Edge Case Validation" "./tools/irrlicht-replay --validate-only fixtures/edge-cases/malformed-json.txt"; then
-    # This should fail, so invert the logic
-    echo "PASS: Edge Case Validation (correctly rejected malformed JSON)"
-else
-    echo "FAIL: Edge Case Validation (should have rejected malformed JSON)"
+if ! run_test "Go Build (irrlichtd)" "cd core && go build ./cmd/irrlichtd/"; then
     ((failed_tests++))
 fi
 
-# Test 3: Concurrency scenario validation
+# Test 3: SwiftUI tests
 ((total_tests++))
-if ! run_test "Concurrent Scenarios Validation" "
-    ./tools/irrlicht-replay --validate-only tests/scenarios/concurrent-2.json && \
-    ./tools/irrlicht-replay --validate-only tests/scenarios/concurrent-4.json && \
-    ./tools/irrlicht-replay --validate-only tests/scenarios/concurrent-8.json
-"; then
+if ! run_test "SwiftUI Tests" "cd frontend/macos && swift test"; then
     ((failed_tests++))
 fi
 

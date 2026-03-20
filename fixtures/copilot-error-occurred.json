@@ -1,8 +1,0 @@
-{
-  "timestamp": 1741042450000,
-  "cwd": "/Users/ingo/projects/my-project",
-  "error": {
-    "message": "Tool execution failed: permission denied",
-    "name": "ToolError"
-  }
-}

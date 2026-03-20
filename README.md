@@ -12,15 +12,15 @@
 
 ## Philosophy
 
-> By night, in old stories, an *Irrlicht* lures wanderers off the path.  
+> By night, in old stories, an *Irrlicht* lures wanderers off the path.
 > By day, in our terminals, the real danger is different: ten tasks, four Claude sessions, and no sense of where attention should go.
-> 
+>
 > **Irrlicht** flips the myth: it's the *tamed* will-o'-the-wisp—small, honest lights that appear exactly where you need them.
 
-Irrlicht listens to Claude Code's lifecycle signals, turns them into a deterministic state machine, and renders them as quiet, legible beacons. Local-first, atomic writes, zero blur.
+Irrlicht watches Claude Code's transcript files, turns activity into a deterministic state machine, and renders them as quiet, legible beacons. Local-first, atomic writes, zero configuration.
 
 ```
-Claude Code Hook Events → Irrlicht Hook Receiver → State Machine → Menu Bar
+Transcript Files → FSEvents/kqueue → SessionDetector → State Machine → Menu Bar
 ```
 
 ### The Light System
@@ -32,7 +32,7 @@ Each session appears as a simple icon that tells the truth:
 - **⚫** **cancelled_by_user** — session cancelled via ESC; auto-expires after 30s (gray)
 - **✦** **no sessions** — clean slate, ready for new work (white sparkle)
 
-No ghosts. **Hooks → State → Light.**
+No ghosts. **Files → State → Light.**
 
 ## Features
 
@@ -55,9 +55,8 @@ No ghosts. **Hooks → State → Light.**
 ### Prerequisites
 
 - **macOS**: Primary target platform
-- **Go 1.21+**: For building hook receiver and tools
+- **Go 1.21+**: For building the daemon
 - **Swift 5.9+**: For SwiftUI menu bar application
-- **Python 3.8+**: For testing and utility scripts
 - **Claude Code**: Run one of the latest versions of Claude Code
 
 ### Installation
@@ -68,54 +67,23 @@ No ghosts. **Hooks → State → Light.**
    cd Irrlicht
    ```
 
-2. **Build all components:**
+2. **Build the daemon:**
    ```bash
    ./tools/build-release.sh
    ```
 
-3. **Install the hook receiver:**
+3. **Run the daemon:**
    ```bash
-   sudo cp build/irrlicht-hook-darwin-universal /usr/local/bin/irrlicht-hook
-   sudo chmod +x /usr/local/bin/irrlicht-hook
+   ./build/irrlichtd-darwin-universal &
    ```
 
-4. **Configure Claude Code hooks:**
-   ```bash
-   ./tools/settings-merger/settings-merger --action merge
-   ```
-
-5. **Run Irrlicht UI:**
+4. **Run Irrlicht UI:**
    ```bash
    cd frontend/macos
    swift run &
    ```
 
-## Configuration
-
-### Claude Code Settings
-
-When running `./tools/settings-merger/settings-merger --action merge` the hook configuration is automatically added to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "irrlicht": {
-      "enabled": true,
-      "commands": {
-        "SessionStart": ["irrlicht-hook"],
-        "UserPromptSubmit": ["irrlicht-hook"],
-        "PreToolUse": ["irrlicht-hook"],
-        "PostToolUse": ["irrlicht-hook"],
-        "PreCompact": ["irrlicht-hook"],
-        "Notification": ["irrlicht-hook"],
-        "Stop": ["irrlicht-hook"],
-        "SubagentStop": ["irrlicht-hook"],
-        "SessionEnd": ["irrlicht-hook"]
-      }
-    }
-  }
-}
-```
+**That's it.** No hooks to configure, no settings to merge — Irrlicht watches transcript files automatically.
 
 ### State Files
 
@@ -130,8 +98,8 @@ Example state file:
   "session_id": "sess_abc123",
   "state": "working",
   "timestamp": "2024-09-05T14:30:00.000Z",
-  "last_event": "UserPromptSubmit",
-  "model": "claude-3.7-sonnet",
+  "last_event": "transcript_activity",
+  "model": "claude-sonnet-4-6",
   "cwd": "/Users/ingo/projects/my-project",
   "pid": 12345,
   "metrics": {
@@ -148,26 +116,23 @@ Example state file:
 ### Project Structure
 
 ```
-├── core/                      # Go hook receiver (single module, hexagonal architecture)
-│   ├── cmd/irrlicht-hook/     # Entry point
-│   ├── domain/                # SessionState, HookEvent, state machine
-│   ├── ports/                 # Inbound/outbound interfaces
-│   ├── adapters/              # stdin, filesystem, git, logging, metrics, security
-│   ├── application/services/  # EventService orchestration
+├── core/                      # Go daemon (single module, hexagonal architecture)
+│   ├── cmd/irrlichtd/         # Daemon entry point
+│   ├── domain/                # SessionState, TranscriptEvent, state types
+│   ├── ports/                 # Outbound interfaces
+│   ├── adapters/              # filesystem, transcript, process, graceperiod, git, logging, metrics
+│   ├── application/services/  # SessionDetector orchestration
 │   └── pkg/                   # tailer, capacity utilities
 ├── frontend/macos/            # SwiftUI menu bar application
 │   ├── Irrlicht/              # Main app code (IrrlichtApp, SessionManager, Views)
 │   ├── Tests/                 # SwiftUI app tests + concurrency scenarios
 │   └── Package.swift          # Swift package configuration
-├── fixtures/                  # Hook event samples and edge cases
+├── fixtures/                  # Sample transcript files and edge cases
 ├── specs/                     # Design docs and adapter specs
 └── tools/
-    ├── settings-merger/       # Go tool for managing Claude Code hook config
-    ├── irrlicht-replay        # Python tool for testing event replay
     ├── test-runner.sh         # Comprehensive test suite
-    ├── build-release.sh       # Cross-platform build script
+    ├── build-release.sh       # Build script
     ├── update-version.sh      # Version bump utility
-    ├── stress-test.py         # Performance and load testing
     └── model-capacity.json    # Token capacity data by model
 validate.sh                    # Single validation entry point (build + test + integration)
 ```
@@ -178,14 +143,11 @@ validate.sh                    # Single validation entry point (build + test + i
 # Build all components
 ./tools/build-release.sh
 
-# Build just the hook receiver
-cd core && go build -o irrlicht-hook ./cmd/irrlicht-hook/
+# Build daemon
+cd core && go build ./cmd/irrlichtd/
 
 # Build SwiftUI app
 cd frontend/macos && swift build
-
-# Build settings merger
-cd tools/settings-merger && go build -o settings-merger .
 ```
 
 ### Validation
@@ -205,49 +167,47 @@ Individual components:
 ./tools/test-runner.sh
 
 # Run specific component tests
-cd tools/settings-merger && go test -v
+cd core && go test -v ./...
 cd frontend/macos && swift test
-
-# Test hook receiver with sample events
-./tools/irrlicht-replay fixtures/session-start.json
-
-# Stress test with multiple concurrent sessions
-python3 tools/stress-test.py --test concurrent --duration 60
 ```
 
-### Hook Events Reference
+### Session Detection
 
-Irrlicht responds to these Claude Code hook events:
+Irrlicht detects Claude Code sessions via transcript file-watching:
 
-| Event | Description | State Transition |
-|-------|-------------|------------------|
-| `SessionStart` | New Claude Code session begins | → **working** |
-| `UserPromptSubmit` | User submits a prompt | → **working** |
-| `PreToolUse` | Before tool execution; also triggers speculative waiting (2s background timer) for approval-prone tools | → **working** |
-| `PostToolUse` | Tool execution completed | → **working** |
-| `PreCompact` | Context compaction starting | → **working** |
-| `Notification` | System needs user attention | → **waiting** |
-| `Stop` | Session stops (completed/cancelled) | → **ready** |
-| `SubagentStop` | Subagent completes task | → **ready** |
-| `SessionEnd` | Session terminates | → delete session file; `reason=prompt_input_exit` → **cancelled_by_user** |
+| Detection | Technology | Transition |
+|-----------|-----------|------------|
+| New `.jsonl` file | FSEvents | → **working** |
+| File write activity | FSEvents | Reset idle timer |
+| 2s idle + no open tools | Grace timer | → **waiting** |
+| Process exit | kqueue NOTE_EXIT | → **ready** |
+
+See [events.md](events.md) for the full state machine.
 
 ## Technical Details
 
 ### Architecture
 
-Irrlicht follows a clean separation of concerns:
-- **Hook Receiver** (Go): Processes Claude Code events with <1ms latency
+```
+irrlichtd
+  ├── TranscriptWatcher  (fsnotify → FSEvents on macOS)
+  ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking)
+  ├── GracePeriodTimer   (per-session 2s idle → waiting)
+  └── ProcessWatcher     (kqueue EVFILT_PROC NOTE_EXIT → ready)
+```
+
+- **Daemon** (Go): Watches transcript files, tracks state, serves HTTP API + WebSocket
 - **State Machine**: Maintains deterministic session states in JSON files
 - **UI Layer** (SwiftUI): Renders real-time visual indicators with 1-second refresh
 - **File System**: Atomic writes ensure consistency across concurrent sessions
 
 ### Performance Specifications
 
-- **Latency**: <1ms average event processing time; speculative wait timer fires after 2s on PreToolUse for approval-prone tools
+- **Latency**: ~50-200ms session detection via FSEvents; ~1ms process exit via kqueue
 - **Memory**: <5MB typical footprint
 - **Disk**: <100KB state files, <50MB logs (with rotation)
 - **Concurrency**: Tested up to 8 simultaneous sessions
-- **Context Accuracy**: Real-time tracking with 155K token auto-compact threshold
+- **Context Accuracy**: Real-time tracking with model-specific context windows
 
 ### Logging System
 
@@ -255,17 +215,15 @@ Structured JSON logs with automatic rotation:
 - **Location**: `~/Library/Application Support/Irrlicht/logs/`
 - **Format**: `irrlicht.log` (current), `irrlicht.log.1` (rotated)
 - **Max size**: 10MB per file, 5 files retained
-- **Content**: All hook events, state transitions, errors
+- **Content**: All session events, state transitions, errors
 
 ### Safety Guarantees
 
-✅ **Idempotent**: Multiple runs produce identical results  
-✅ **Reversible**: Settings changes can be fully rolled back  
-✅ **Non-destructive**: Never corrupts existing configurations  
-✅ **Atomic**: Either fully succeeds or fails cleanly  
-✅ **Validated**: All inputs validated before processing  
-✅ **Secure**: Path sanitization prevents directory traversal  
-✅ **Kill switch**: Immediate disable capability  
+✅ **Zero configuration**: No hooks, no settings — install and run
+✅ **Idempotent**: Multiple runs produce identical results
+✅ **Non-destructive**: Never corrupts existing configurations
+✅ **Atomic**: Either fully succeeds or fails cleanly
+✅ **Kill switch**: `IRRLICHT_DISABLED=1` disables the daemon
 
 ## Support
 
@@ -276,20 +234,15 @@ Structured JSON logs with automatic rotation:
 - Check state directory exists: `ls ~/Library/Application\ Support/Irrlicht/`
 - Look for error logs in `~/Library/Application\ Support/Irrlicht/logs/`
 
-**Hook events not working:**
-- Verify hook binary is in PATH: `which irrlicht-hook`
-- Check Claude Code settings: `cat ~/.claude/settings.json | jq .hooks.irrlicht`
-- Test with sample event: `./tools/irrlicht-replay fixtures/session-start.json`
-
 **Sessions not updating:**
-- Restart Claude Code to reload hook configuration
+- Check that irrlichtd is running: `curl http://127.0.0.1:7837/state`
 - Check IRRLICHT_DISABLED environment variable
 - Verify file permissions in state directory
 
 **Orphaned sessions (session stuck after Claude Code exits):**
 - Sessions include a `pid` field tracking the Claude Code process
-- The hook receiver and UI both run liveness checks; orphaned sessions are deleted automatically
-- Legacy sessions without a `pid` field are cleaned up after a 1-hour TTL
+- kqueue monitors process exit; orphaned sessions transition to ready automatically
+- Legacy sessions without a PID are cleaned up after a 1-hour TTL
 - To manually clear orphaned sessions: `rm ~/Library/Application\ Support/Irrlicht/instances/*.json`
 
 ### Contributing

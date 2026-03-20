@@ -31,7 +31,7 @@ type SessionState struct {
 	Version         int             `json:"version"`
 	SessionID       string          `json:"session_id"`
 	State           string          `json:"state"`
-	// Adapter identifies the hook adapter that produced this session (e.g. "copilot").
+	// Adapter identifies the source adapter (e.g. "copilot").
 	// Empty means the default Claude Code adapter.
 	Adapter string `json:"adapter,omitempty"`
 	CompactionState string          `json:"compaction_state,omitempty"`
@@ -52,7 +52,7 @@ type SessionState struct {
 	PID int `json:"pid,omitempty"`
 
 	// ParentSessionID links a subagent session to its spawning parent session.
-	// Set from parent_session_id on SubagentStop events.
+	// Derived from file path or heuristic matching in SessionDetector.
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 
 	// Transcript monitoring for waiting-state recovery.

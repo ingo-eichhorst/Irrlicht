@@ -17,10 +17,9 @@ Transcript Files → SessionDetector (file watcher) → In-Memory State → Swif
 ```
 
 **Key Components:**
-- **irrlichtd** (Go): Daemon that detects sessions via transcript file watching, serves HTTP API and WebSocket push
-- **irrlicht-shim** (Go): Lightweight hook binary that relays events to the daemon (fallback: inline processing)
+- **irrlichtd** (Go): Daemon that detects sessions via transcript file watching (FSEvents + kqueue), serves HTTP API and WebSocket push
 - **frontend/macos** (SwiftUI): Menu bar application that displays session states
-- **Supporting tools**: Build scripts, test runners, and replay utilities
+- **Supporting tools**: Build scripts, test runners
 
 **State Management:**
 - Session states stored as JSON files in `~/Library/Application Support/Irrlicht/instances/`
@@ -31,7 +30,7 @@ Transcript Files → SessionDetector (file watcher) → In-Memory State → Swif
 
 ### Building
 ```bash
-# Build all components (cross-platform)
+# Build all components
 ./tools/build-release.sh
 
 # Build Go core
@@ -58,7 +57,7 @@ cd frontend/macos && swift test
 
 ### Installation & Configuration
 ```bash
-# Disable hooks (kill switch)
+# Disable the daemon (kill switch)
 export IRRLICHT_DISABLED=1
 ```
 
@@ -66,9 +65,6 @@ export IRRLICHT_DISABLED=1
 ```bash
 # Run SwiftUI app for manual testing
 cd frontend/macos && swift run &
-
-# Replay sample events to test the hook receiver
-./tools/irrlicht-replay fixtures/session-start.json
 
 # Clean up test data
 rm -rf ~/Library/Application\ Support/Irrlicht/instances
@@ -79,20 +75,20 @@ killall swift
 
 **Go Components:**
 - `core/`: Hexagonal Architecture (Ports & Adapters); single Go module
-  - `domain/session/` — SessionState, SessionMetrics, pure state machine
-  - `domain/event/` — HookEvent struct and validation
-  - `ports/outbound/` — SessionRepository, Logger, GitResolver, MetricsCollector interfaces
+  - `domain/session/` — SessionState, SessionMetrics
+  - `domain/transcript/` — TranscriptEvent types for file watcher
+  - `ports/outbound/` — SessionRepository, Logger, GitResolver, MetricsCollector, TranscriptWatcher, ProcessWatcher, GracePeriodTimer interfaces
   - `adapters/outbound/filesystem/` — JSON session file repository
+  - `adapters/outbound/transcript/` — fsnotify-based transcript file watcher
+  - `adapters/outbound/process/` — kqueue EVFILT_PROC PID monitoring
+  - `adapters/outbound/graceperiod/` — per-session idle timer
   - `adapters/outbound/logging/` — rotating structured JSON logger
   - `adapters/outbound/git/` — git branch extraction
   - `adapters/outbound/metrics/` — transcript-tailer wrapper
-  - `adapters/outbound/security/` — path validation
-  - `application/services/` — SessionDetector, EventService, PushService
+  - `application/services/` — SessionDetector, PushService
   - `cmd/irrlichtd/` — daemon entry point (HTTP API, WebSocket, file-based detection)
-  - `cmd/irrlicht-shim/` — lightweight hook shim (relays to daemon or processes inline)
   - `pkg/tailer/` — real-time transcript analysis for performance metrics
   - `pkg/capacity/` — token capacity and context utilization tracking
-- `platform/macos/`: macOS installer package builder
 
 **SwiftUI App (`frontend/macos/`):**
 - `Irrlicht/IrrlichtApp.swift`: Main app entry point
@@ -105,16 +101,14 @@ killall swift
 - State files use atomic writes for consistency
 - SwiftUI app uses Combine for reactive state updates
 - File system changes trigger immediate UI updates
-- All tools support `--help` flag for usage information
 
-## Hook Event Flow
+## Session Detection
 
 see events.md
 
 ## Testing Approach
 
 - Unit tests for Go components using standard `go test`
-- Integration tests with sample hook events via `irrlicht-replay`
 - SwiftUI tests using `swift test`
 - Concurrency testing with multiple simultaneous sessions
 - Build verification across macOS architectures (Intel/Apple Silicon)
@@ -131,7 +125,7 @@ writes current state to `~/.irrlicht/debug-state.json`:
 
 ```bash
 IRRLICHT_DEBUG=1 swift run --package-path frontend/macos &
-# ... make changes, trigger hook events ...
+# ... wait for sessions to appear ...
 cat ~/.irrlicht/debug-state.json
 ```
 
