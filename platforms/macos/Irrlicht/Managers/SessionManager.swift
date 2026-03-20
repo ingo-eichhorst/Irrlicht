@@ -744,9 +744,36 @@ class SessionManager: ObservableObject {
                 )
             }
 
+            // Compute project groups (mirrors SessionListView.projectGroups logic)
+            let sessionIds = Set(sessions.map { $0.id })
+            let subagentIds: Set<String> = Set(sessions.compactMap { session in
+                guard let pid = session.parentSessionId, sessionIds.contains(pid) else { return nil }
+                return session.id
+            })
+            var grouped: [String: [String]] = [:]
+            for session in sessions where !subagentIds.contains(session.id) {
+                let cwd = session.cwd
+                let projectDir: String
+                if cwd.isEmpty {
+                    projectDir = "unknown"
+                } else {
+                    let last = URL(fileURLWithPath: cwd).lastPathComponent
+                    projectDir = last.isEmpty ? "unknown" : last
+                }
+                grouped[projectDir, default: []].append(session.id)
+            }
+            let projectGroups = grouped.map { key, sessionGroupIds in
+                DebugProjectGroup(
+                    projectDirectory: key,
+                    accessibilityIdentifier: "project-group-\(key)",
+                    sessionIds: sessionGroupIds.sorted()
+                )
+            }.sorted { $0.projectDirectory < $1.projectDirectory }
+
             let formatter = ISO8601DateFormatter()
             let debugState = DebugState(
                 sessions: entries,
+                projectGroups: projectGroups,
                 sessionCount: sessions.count,
                 workingCount: workingSessions,
                 waitingCount: waitingSessions,
@@ -775,8 +802,15 @@ private struct DebugSessionEntry: Codable {
     let totalTokens: Int64
 }
 
+private struct DebugProjectGroup: Codable {
+    let projectDirectory: String
+    let accessibilityIdentifier: String
+    let sessionIds: [String]
+}
+
 private struct DebugState: Codable {
     let sessions: [DebugSessionEntry]
+    let projectGroups: [DebugProjectGroup]
     let sessionCount: Int
     let workingCount: Int
     let waitingCount: Int
