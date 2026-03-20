@@ -31,8 +31,8 @@ type SessionState struct {
 	Version         int             `json:"version"`
 	SessionID       string          `json:"session_id"`
 	State           string          `json:"state"`
-	// Adapter identifies the source adapter (e.g. "copilot").
-	// Empty means the default Claude Code adapter.
+	// Adapter identifies the source agent (e.g. "claude-code", "codex").
+	// Empty means Claude Code (for backwards compatibility).
 	Adapter string `json:"adapter,omitempty"`
 	CompactionState string          `json:"compaction_state,omitempty"`
 	Model           string          `json:"model,omitempty"`

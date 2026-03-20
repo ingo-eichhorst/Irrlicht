@@ -221,7 +221,6 @@ func main() {
 		logger.LogInfo("startup", "", fmt.Sprintf("watching Claude Code (%s), Codex (%s)",
 			claudeCodeWatcher.Root(), codexWatcher.Root()))
 		for _, w := range watchers {
-			w := w
 			go func() {
 				if err := w.Watch(detectorCtx); err != nil && err != context.Canceled {
 					logger.LogError("agent-watcher", "", fmt.Sprintf("watcher error: %v", err))
