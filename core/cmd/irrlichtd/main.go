@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -15,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	inboundhttp "irrlicht/core/adapters/inbound/http"
 	"irrlicht/core/adapters/outbound/filesystem"
 	gastownadapter "irrlicht/core/adapters/outbound/gastown"
 	graceperiodadapter "irrlicht/core/adapters/outbound/graceperiod"
@@ -27,9 +27,9 @@ import (
 	"irrlicht/core/adapters/outbound/memory"
 	"irrlicht/core/adapters/outbound/metrics"
 	processadapter "irrlicht/core/adapters/outbound/process"
-	"irrlicht/core/adapters/outbound/security"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -84,20 +84,9 @@ func main() {
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
 
-	// Path validator.
-	pathValidator, err := security.New()
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to init path validator: %v", err))
-		os.Exit(1)
-	}
-
-	// Shared adapters for both EventService and SessionDetector.
+	// Shared adapters for SessionDetector.
 	gitResolver := git.New()
 	metricsCollector := metrics.New()
-
-	// Event service (handles HTTP hook events — legacy path).
-	svc := services.NewEventService(memRepo, logger, gitResolver, metricsCollector, pathValidator)
-	svc.SetBroadcaster(push)
 
 	// --- File-based SessionDetector (primary detection path) ---
 	// Forward-reference: detector is assigned before any callbacks can fire,
@@ -132,8 +121,7 @@ func main() {
 
 	// HTTP mux.
 	mux := http.NewServeMux()
-	handler := inboundhttp.NewHandler(svc, memRepo)
-	handler.RegisterRoutes(mux)
+	registerReadRoutes(mux, memRepo)
 
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
@@ -247,4 +235,99 @@ func socketPath() string {
 		return "/tmp/irrlichtd.sock"
 	}
 	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichtd.sock")
+}
+
+// registerReadRoutes registers the read-only HTTP endpoints on mux.
+func registerReadRoutes(mux *http.ServeMux, repo outbound.SessionRepository) {
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo))
+	mux.HandleFunc("GET /state", handleGetState(repo))
+}
+
+func handleGetSessions(repo outbound.SessionRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sessions, err := repo.ListAll()
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if len(sessions) == 0 {
+			w.Write([]byte("[]"))
+			return
+		}
+		json.NewEncoder(w).Encode(sessions)
+	}
+}
+
+func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
+	type sessionEntry struct {
+		ID                 string  `json:"id"`
+		ProjectName        string  `json:"projectName,omitempty"`
+		State              string  `json:"state"`
+		Model              string  `json:"model,omitempty"`
+		ContextUtilization float64 `json:"contextUtilization"`
+		TotalTokens        int64   `json:"totalTokens"`
+	}
+
+	type stateResponse struct {
+		Sessions     []sessionEntry `json:"sessions"`
+		SessionCount int            `json:"sessionCount"`
+		WorkingCount int            `json:"workingCount"`
+		WaitingCount int            `json:"waitingCount"`
+		ReadyCount   int            `json:"readyCount"`
+		LastUpdated  string         `json:"lastUpdated"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		sessions, err := repo.ListAll()
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		entries := make([]sessionEntry, 0, len(sessions))
+		var workingCount, waitingCount, readyCount int
+		for _, s := range sessions {
+			var ctxUtil float64
+			var totalTokens int64
+			if s.Metrics != nil {
+				ctxUtil = s.Metrics.ContextUtilization
+				totalTokens = s.Metrics.TotalTokens
+			}
+			model := s.Model
+			if s.Metrics != nil && s.Metrics.ModelName != "" && s.Metrics.ModelName != "unknown" {
+				model = s.Metrics.ModelName
+			}
+			entries = append(entries, sessionEntry{
+				ID:                 s.SessionID,
+				ProjectName:        s.ProjectName,
+				State:              s.State,
+				Model:              model,
+				ContextUtilization: ctxUtil,
+				TotalTokens:        totalTokens,
+			})
+			switch s.State {
+			case session.StateWorking:
+				workingCount++
+			case session.StateWaiting:
+				waitingCount++
+			case session.StateReady:
+				readyCount++
+			}
+		}
+
+		resp := stateResponse{
+			Sessions:     entries,
+			SessionCount: len(sessions),
+			WorkingCount: workingCount,
+			WaitingCount: waitingCount,
+			ReadyCount:   readyCount,
+			LastUpdated:  time.Now().UTC().Format(time.RFC3339),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.Encode(resp)
+	}
 }

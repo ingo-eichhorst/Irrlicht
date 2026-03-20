@@ -7,19 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Irrlicht is a macOS menu bar application that monitors Claude Code sessions, providing visual feedback on session states through a system of colored indicators. It consists of a Go-based hook receiver, a SwiftUI menu bar application, and several supporting tools.
+Irrlicht is a macOS menu bar application that monitors Claude Code sessions, providing visual feedback on session states through a system of colored indicators. It consists of a Go daemon (irrlichtd) with file-based session detection, a SwiftUI menu bar application, and supporting tools.
 
 ## Architecture
 
 The system follows this flow:
 ```
-Claude Code Hook Events → Go Hook Receiver → JSON State Files → SwiftUI Menu Bar App
+Transcript Files → SessionDetector (file watcher) → In-Memory State → SwiftUI Menu Bar App / Web UI
 ```
 
 **Key Components:**
-- **irrlicht-hook** (Go): Receives Claude Code hook events and maintains session state files
+- **irrlichtd** (Go): Daemon that detects sessions via transcript file watching, serves HTTP API and WebSocket push
+- **irrlicht-shim** (Go): Lightweight hook binary that relays events to the daemon (fallback: inline processing)
 - **frontend/macos** (SwiftUI): Menu bar application that displays session states
-- **Settings merger** (Go): Manages Claude Code hook configuration
 - **Supporting tools**: Build scripts, test runners, and replay utilities
 
 **State Management:**
@@ -34,8 +34,8 @@ Claude Code Hook Events → Go Hook Receiver → JSON State Files → SwiftUI Me
 # Build all components (cross-platform)
 ./tools/build-release.sh
 
-# Build just the hook receiver
-cd core && go build -o irrlicht-hook ./cmd/irrlicht-hook/
+# Build Go core
+cd core && go build ./...
 
 # Build SwiftUI app
 cd frontend/macos && swift build
@@ -49,11 +49,7 @@ cd frontend/macos && swift run
 # Run complete test suite
 ./tools/test-runner.sh
 
-# Test hook receiver with sample events
-./tools/irrlicht-replay fixtures/session-start.json
-
 # Run Go component tests
-cd tools/settings-merger && go test -v
 cd core && go test -v ./...
 
 # Test SwiftUI components
@@ -62,17 +58,8 @@ cd frontend/macos && swift test
 
 ### Installation & Configuration
 ```bash
-# Install hook receiver to PATH
-sudo cp build/irrlicht-hook-darwin-universal /usr/local/bin/irrlicht-hook
-sudo chmod +x /usr/local/bin/irrlicht-hook
-
-# Configure Claude Code hooks
-./tools/settings-merger/settings-merger --action merge
-
 # Disable hooks (kill switch)
 export IRRLICHT_DISABLED=1
-# or
-./tools/settings-merger/settings-merger --action merge-disable
 ```
 
 ### Development Workflow
@@ -91,22 +78,21 @@ killall swift
 ## Code Structure
 
 **Go Components:**
-- `core/`: Hook receiver using Hexagonal Architecture (Ports & Adapters); single Go module
+- `core/`: Hexagonal Architecture (Ports & Adapters); single Go module
   - `domain/session/` — SessionState, SessionMetrics, pure state machine
   - `domain/event/` — HookEvent struct and validation
-  - `ports/inbound/` — EventHandler interface
   - `ports/outbound/` — SessionRepository, Logger, GitResolver, MetricsCollector interfaces
-  - `adapters/inbound/stdin/` — reads events from stdin
   - `adapters/outbound/filesystem/` — JSON session file repository
   - `adapters/outbound/logging/` — rotating structured JSON logger
   - `adapters/outbound/git/` — git branch extraction
   - `adapters/outbound/metrics/` — transcript-tailer wrapper
   - `adapters/outbound/security/` — path validation
-  - `application/services/` — EventService orchestration (processEvent, cleanup, speculative wait)
-  - `cmd/irrlicht-hook/` — entry point, dependency injection wiring only
+  - `application/services/` — SessionDetector, EventService, PushService
+  - `cmd/irrlichtd/` — daemon entry point (HTTP API, WebSocket, file-based detection)
+  - `cmd/irrlicht-shim/` — lightweight hook shim (relays to daemon or processes inline)
   - `pkg/tailer/` — real-time transcript analysis for performance metrics
   - `pkg/capacity/` — token capacity and context utilization tracking
-- `tools/settings-merger/`: Manages `~/.claude/settings.json` hook configuration
+- `platform/macos/`: macOS installer package builder
 
 **SwiftUI App (`frontend/macos/`):**
 - `Irrlicht/IrrlichtApp.swift`: Main app entry point

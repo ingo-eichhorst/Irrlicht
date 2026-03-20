@@ -42,8 +42,6 @@ Temporary Items
 *.dll
 *.so
 *.dylib
-tools/irrlicht-hook/hook
-tools/settings-merger/settings-merger
 tools/copilot-hooks-merger/copilot-hooks-merger
 
 # Gas Town runtime directories

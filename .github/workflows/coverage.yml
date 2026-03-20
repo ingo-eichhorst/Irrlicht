@@ -27,7 +27,7 @@ jobs:
         run: |
           total=0
           count=0
-          for dir in core tools/settings-merger; do
+          for dir in core; do
             if [ -d "$dir" ] && [ -f "$dir/go.mod" ]; then
               pct=$(cd "$dir" && go test ./... -coverprofile=coverage.out >/dev/null 2>&1; go tool cover -func=coverage.out 2>/dev/null | grep "^total:" | awk '{print $3}' | tr -d '%')
               if [ -n "$pct" ] && [ "$pct" != "0" ]; then
