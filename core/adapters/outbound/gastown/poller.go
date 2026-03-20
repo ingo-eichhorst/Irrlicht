@@ -328,16 +328,15 @@ func (p *Poller) buildState(rigs []gastown.RigState, polecats []gastown.PolecatS
 
 	// Build work units from convoys.
 	workUnits := make([]gastown.WorkUnit, 0, len(convoys))
-	for i, c := range convoys {
+	for _, c := range convoys {
 		workUnits = append(workUnits, gastown.WorkUnit{
-			ID:     "convoy-" + c.Name,
+			ID:     c.ID,
 			Type:   gastown.WorkUnitConvoy,
-			Name:   c.Name,
+			Name:   c.Title,
 			Source: gastown.SourceGasTown,
 			Total:  c.Total,
-			Done:   c.Done,
+			Done:   c.Completed,
 		})
-		_ = i
 	}
 	state.WorkUnits = workUnits
 
@@ -362,11 +361,19 @@ func (p *Poller) broadcastState() {
 	})
 }
 
+// gtCommand creates an exec.Cmd that runs from GT_ROOT so the gt CLI
+// can find its workspace context.
+func (p *Poller) gtCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, p.gtBin, args...)
+	cmd.Dir = p.collector.Root()
+	return cmd
+}
+
 func (p *Poller) fetchRigs(ctx context.Context) []gastown.RigState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, p.gtBin, "rig", "list", "--json").Output()
+	out, err := p.gtCommand(ctx, "rig", "list", "--json").Output()
 	if err != nil {
 		// Fallback to collector's cached rigs from rigs.json.
 		return p.collector.Rigs()
@@ -382,7 +389,7 @@ func (p *Poller) fetchPolecats(ctx context.Context) []gastown.PolecatState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, p.gtBin, "polecat", "list", "--all", "--json").Output()
+	out, err := p.gtCommand(ctx, "polecat", "list", "--all", "--json").Output()
 	if err != nil {
 		return nil
 	}
@@ -397,7 +404,7 @@ func (p *Poller) fetchConvoys(ctx context.Context) []gastown.ConvoyState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, p.gtBin, "convoy", "list", "--json").Output()
+	out, err := p.gtCommand(ctx, "convoy", "list", "--json").Output()
 	if err != nil {
 		return nil
 	}

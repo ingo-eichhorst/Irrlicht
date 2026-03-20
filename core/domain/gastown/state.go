@@ -112,9 +112,11 @@ type WorkUnit struct {
 
 // ConvoyState represents a convoy as returned by `gt convoy list --json`.
 type ConvoyState struct {
-	Name   string `json:"name"`
-	Total  int    `json:"total"`
-	Done   int    `json:"done"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+	Total     int    `json:"total"`
+	Completed int    `json:"completed"`
 }
 
 // State is the enriched Gas Town state pushed via WebSocket.
