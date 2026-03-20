@@ -18,8 +18,8 @@ import (
 
 	"irrlicht/core/adapters/inbound/claudecode"
 	"irrlicht/core/adapters/inbound/codex"
+	gastownadapter "irrlicht/core/adapters/inbound/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
-	gastownadapter "irrlicht/core/adapters/outbound/gastown"
 	graceperiodadapter "irrlicht/core/adapters/outbound/graceperiod"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"

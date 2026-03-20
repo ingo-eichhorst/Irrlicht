@@ -15,7 +15,7 @@ import (
 )
 
 // Collector detects Gas Town, resolves GT_ROOT, and watches daemon/state.json.
-// It implements outbound.GasTownCollector.
+// It implements inbound.GasTownCollector.
 type Collector struct {
 	root     string // resolved GT_ROOT path ("" if not detected)
 	detected bool

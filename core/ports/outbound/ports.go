@@ -3,7 +3,6 @@ package outbound
 import (
 	"context"
 
-	"irrlicht/core/domain/gastown"
 	"irrlicht/core/domain/session"
 )
 
@@ -90,21 +89,3 @@ type GracePeriodTimer interface {
 	StopAll()
 }
 
-// GasTownCollector detects Gas Town presence, resolves GT_ROOT, and watches
-// the daemon state file for changes.
-type GasTownCollector interface {
-	// Detected returns true if a valid Gas Town installation was found.
-	Detected() bool
-	// Root returns the resolved GT_ROOT path, or "" if not detected.
-	Root() string
-	// DaemonState returns the latest parsed daemon state, or nil if unavailable.
-	DaemonState() *gastown.DaemonState
-	// Watch begins watching daemon/state.json for changes. It blocks until
-	// ctx is cancelled or an unrecoverable error occurs.
-	Watch(ctx context.Context) error
-	// Subscribe returns a channel that receives daemon state updates whenever
-	// the watched file changes on disk.
-	Subscribe() <-chan gastown.DaemonState
-	// Unsubscribe removes a previously subscribed channel.
-	Unsubscribe(ch <-chan gastown.DaemonState)
-}
