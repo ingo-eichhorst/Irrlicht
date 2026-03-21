@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"irrlicht/core/domain/gastown"
 )
 
 // helper: create a minimal Gas Town root with daemon/state.json.
@@ -26,7 +25,7 @@ func setupFakeRoot(t *testing.T) string {
 		t.Fatal(err)
 	}
 
-	state := gastown.DaemonState{
+	state := DaemonState{
 		Running:        true,
 		PID:            42,
 		StartedAt:      time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
@@ -127,7 +126,7 @@ func TestWatch_NotifiesOnFileChange(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Write updated state to trigger the watcher.
-	updated := gastown.DaemonState{
+	updated := DaemonState{
 		Running:        true,
 		PID:            99,
 		StartedAt:      time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC),

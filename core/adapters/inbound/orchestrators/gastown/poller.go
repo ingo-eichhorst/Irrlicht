@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"irrlicht/core/domain/gastown"
 	"irrlicht/core/domain/orchestrator"
 	"irrlicht/core/domain/session"
 )
@@ -60,9 +59,9 @@ func (p *Poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State
 
 	// Fetch rig list, polecat list, and convoy list in parallel.
 	var wg sync.WaitGroup
-	var rigs []gastown.RigState
-	var polecats []gastown.PolecatState
-	var convoys []gastown.ConvoyState
+	var rigs []RigState
+	var polecats []PolecatState
+	var convoys []ConvoyState
 
 	wg.Add(3)
 	go func() { defer wg.Done(); rigs = p.fetchRigs(ctx) }()
@@ -76,9 +75,9 @@ func (p *Poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State
 
 // mapToOrchestratorState maps raw Gas Town types to the standardised model.
 func (p *Poller) mapToOrchestratorState(
-	rigs []gastown.RigState,
-	polecats []gastown.PolecatState,
-	convoys []gastown.ConvoyState,
+	rigs []RigState,
+	polecats []PolecatState,
+	convoys []ConvoyState,
 	running bool,
 	now time.Time,
 ) *orchestrator.State {
@@ -135,32 +134,32 @@ func (p *Poller) mapToOrchestratorState(
 	globalAgents := []orchestrator.GlobalAgent{}
 	if mayorSID, mayorState := matchSession(filepath.Join(gtRoot, "mayor")); mayorSID != "" {
 		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:      gastown.RoleMayor,
+			Role:      RoleMayor,
 			SessionID: mayorSID,
 			State:     mayorState,
 		})
 	} else {
 		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:  gastown.RoleMayor,
+			Role:  RoleMayor,
 			State: "idle",
 		})
 	}
 	if deaconSID, deaconState := matchSession(filepath.Join(gtRoot, "deacon")); deaconSID != "" {
 		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:      gastown.RoleDeacon,
+			Role:      RoleDeacon,
 			SessionID: deaconSID,
 			State:     deaconState,
 		})
 	} else {
 		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:  gastown.RoleDeacon,
+			Role:  RoleDeacon,
 			State: "idle",
 		})
 	}
 	state.GlobalAgents = globalAgents
 
 	// Group polecats by rig.
-	polecatsByRig := make(map[string][]gastown.PolecatState)
+	polecatsByRig := make(map[string][]PolecatState)
 	for _, pc := range polecats {
 		polecatsByRig[pc.Rig] = append(polecatsByRig[pc.Rig], pc)
 	}
@@ -183,7 +182,7 @@ func (p *Poller) mapToOrchestratorState(
 
 		// Witness worker.
 		witnessWorker := orchestrator.Worker{
-			Role:  gastown.RoleWitness,
+			Role:  RoleWitness,
 			State: rig.Witness,
 		}
 		if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "witness")); sid != "" {
@@ -194,7 +193,7 @@ func (p *Poller) mapToOrchestratorState(
 
 		// Refinery worker.
 		refineryWorker := orchestrator.Worker{
-			Role:  gastown.RoleRefinery,
+			Role:  RoleRefinery,
 			State: rig.Refinery,
 		}
 		if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "refinery")); sid != "" {
@@ -208,12 +207,12 @@ func (p *Poller) mapToOrchestratorState(
 			if s.CWD == "" {
 				continue
 			}
-			ri := gastown.DeriveRole(s.CWD, gtRoot)
-			if ri == nil || ri.Role != gastown.RoleCrew || ri.Rig != rig.Name {
+			ri := DeriveRole(s.CWD, gtRoot)
+			if ri == nil || ri.Role != RoleCrew || ri.Rig != rig.Name {
 				continue
 			}
 			mainWorkers = append(mainWorkers, orchestrator.Worker{
-				Role:      gastown.RoleCrew,
+				Role:      RoleCrew,
 				Name:      ri.Name,
 				SessionID: s.SessionID,
 				State:     s.State,
@@ -232,7 +231,7 @@ func (p *Poller) mapToOrchestratorState(
 			}
 
 			pcWorker := orchestrator.Worker{
-				Role:  gastown.RolePolecat,
+				Role:  RolePolecat,
 				Name:  pc.Name,
 				ID:    pc.Issue,
 				State: pc.State,
@@ -261,9 +260,9 @@ func (p *Poller) mapToOrchestratorState(
 	for _, c := range convoys {
 		workUnits = append(workUnits, orchestrator.WorkUnit{
 			ID:     c.ID,
-			Type:   gastown.WorkUnitConvoy,
+			Type:   WorkUnitConvoy,
 			Name:   c.Title,
-			Source: gastown.SourceGasTown,
+			Source: SourceGasTown,
 			Total:  c.Total,
 			Done:   c.Completed,
 		})
@@ -283,7 +282,7 @@ func (p *Poller) gtCommand(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
-func (p *Poller) fetchRigs(ctx context.Context) []gastown.RigState {
+func (p *Poller) fetchRigs(ctx context.Context) []RigState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -292,14 +291,14 @@ func (p *Poller) fetchRigs(ctx context.Context) []gastown.RigState {
 		// Fallback to collector's cached rigs from rigs.json.
 		return p.collector.Rigs()
 	}
-	var rigs []gastown.RigState
+	var rigs []RigState
 	if err := json.Unmarshal(out, &rigs); err != nil {
 		return p.collector.Rigs()
 	}
 	return rigs
 }
 
-func (p *Poller) fetchPolecats(ctx context.Context) []gastown.PolecatState {
+func (p *Poller) fetchPolecats(ctx context.Context) []PolecatState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -307,14 +306,14 @@ func (p *Poller) fetchPolecats(ctx context.Context) []gastown.PolecatState {
 	if err != nil {
 		return nil
 	}
-	var polecats []gastown.PolecatState
+	var polecats []PolecatState
 	if err := json.Unmarshal(out, &polecats); err != nil {
 		return nil
 	}
 	return polecats
 }
 
-func (p *Poller) fetchConvoys(ctx context.Context) []gastown.ConvoyState {
+func (p *Poller) fetchConvoys(ctx context.Context) []ConvoyState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -322,7 +321,7 @@ func (p *Poller) fetchConvoys(ctx context.Context) []gastown.ConvoyState {
 	if err != nil {
 		return nil
 	}
-	var convoys []gastown.ConvoyState
+	var convoys []ConvoyState
 	if err := json.Unmarshal(out, &convoys); err != nil {
 		return nil
 	}
