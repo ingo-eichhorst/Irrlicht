@@ -1,5 +1,5 @@
-// Package transcript defines domain types for Claude Code transcript file events.
-package transcript
+// Package agent defines domain types for coding agent transcript file events.
+package agent
 
 // EventType classifies transcript file-system events.
 type EventType string
@@ -13,8 +13,8 @@ const (
 	EventRemoved EventType = "removed"
 )
 
-// TranscriptEvent carries information about a single transcript change.
-type TranscriptEvent struct {
+// Event carries information about a single agent transcript change.
+type Event struct {
 	Type           EventType
 	Adapter        string // Source adapter name (e.g. "claude-code", "codex")
 	SessionID      string // UUID portion of the filename (without .jsonl)

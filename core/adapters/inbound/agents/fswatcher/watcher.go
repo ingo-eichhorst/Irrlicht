@@ -9,38 +9,43 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 
-	"irrlicht/core/domain/transcript"
+	"irrlicht/core/domain/agent"
 )
 
 // Watcher watches a directory tree for .jsonl transcript file events.
 // It implements inbound.AgentWatcher.
 type Watcher struct {
-	root    string // resolved absolute path to the watched directory
-	adapter string // adapter name set on emitted events
+	root    string        // resolved absolute path to the watched directory
+	adapter string        // adapter name set on emitted events
+	maxAge  time.Duration // ignore files older than this (0 = no limit)
 
 	subMu sync.Mutex
-	subs  []chan transcript.TranscriptEvent
+	subs  []chan agent.Event
 }
 
 // New creates a Watcher for the given directory relative to $HOME.
 // adapter is the name set on all emitted TranscriptEvents (e.g. "claude-code").
-func New(relDir, adapter string) *Watcher {
+// maxAge controls the maximum file age — transcript files not modified within
+// this window are silently ignored. A zero value disables the filter.
+func New(relDir, adapter string, maxAge time.Duration) *Watcher {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return &Watcher{adapter: adapter}
+		return &Watcher{adapter: adapter, maxAge: maxAge}
 	}
 	return &Watcher{
 		root:    filepath.Join(home, relDir),
 		adapter: adapter,
+		maxAge:  maxAge,
 	}
 }
 
 // NewWithRoot creates a Watcher targeting a custom absolute root (for testing).
-func NewWithRoot(root, adapter string) *Watcher {
-	return &Watcher{root: root, adapter: adapter}
+func NewWithRoot(root, adapter string, maxAge time.Duration) *Watcher {
+	return &Watcher{root: root, adapter: adapter, maxAge: maxAge}
 }
 
 // Root returns the watched directory path.
@@ -101,8 +106,8 @@ func (w *Watcher) Watch(ctx context.Context) error {
 
 // Subscribe returns a channel that receives transcript events. The channel is
 // buffered (capacity 4) so a slow consumer doesn't block the watcher.
-func (w *Watcher) Subscribe() <-chan transcript.TranscriptEvent {
-	ch := make(chan transcript.TranscriptEvent, 4)
+func (w *Watcher) Subscribe() <-chan agent.Event {
+	ch := make(chan agent.Event, 4)
 	w.subMu.Lock()
 	w.subs = append(w.subs, ch)
 	w.subMu.Unlock()
@@ -110,7 +115,7 @@ func (w *Watcher) Subscribe() <-chan transcript.TranscriptEvent {
 }
 
 // Unsubscribe removes a previously subscribed channel and closes it.
-func (w *Watcher) Unsubscribe(ch <-chan transcript.TranscriptEvent) {
+func (w *Watcher) Unsubscribe(ch <-chan agent.Event) {
 	w.subMu.Lock()
 	defer w.subMu.Unlock()
 	for i, s := range w.subs {
@@ -151,9 +156,12 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 
 	switch {
 	case ev.Op&fsnotify.Create != 0:
-		size := fileSize(name)
-		w.broadcast(transcript.TranscriptEvent{
-			Type:           transcript.EventNewSession,
+		size, mtime := fileSizeAndMtime(name)
+		if w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge {
+			return
+		}
+		w.broadcast(agent.Event{
+			Type:           agent.EventNewSession,
 			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
@@ -162,9 +170,12 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		})
 
 	case ev.Op&fsnotify.Write != 0:
-		size := fileSize(name)
-		w.broadcast(transcript.TranscriptEvent{
-			Type:           transcript.EventActivity,
+		size, mtime := fileSizeAndMtime(name)
+		if w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge {
+			return
+		}
+		w.broadcast(agent.Event{
+			Type:           agent.EventActivity,
 			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
@@ -173,8 +184,8 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		})
 
 	case ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
-		w.broadcast(transcript.TranscriptEvent{
-			Type:           transcript.EventRemoved,
+		w.broadcast(agent.Event{
+			Type:           agent.EventRemoved,
 			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
@@ -186,7 +197,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 
 // broadcast sends an event to all subscribers. Non-blocking: drops if consumer
 // hasn't drained.
-func (w *Watcher) broadcast(ev transcript.TranscriptEvent) {
+func (w *Watcher) broadcast(ev agent.Event) {
 	w.subMu.Lock()
 	defer w.subMu.Unlock()
 	for _, ch := range w.subs {

@@ -2,7 +2,7 @@
 // transcript files under ~/.codex/*/*.jsonl.
 package codex
 
-import "irrlicht/core/adapters/inbound/fswatcher"
+import "irrlicht/core/adapters/inbound/agents/fswatcher"
 
 // AdapterName identifies sessions originating from OpenAI Codex.
 const AdapterName = "codex"

@@ -16,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
-	"irrlicht/core/adapters/inbound/claudecode"
-	"irrlicht/core/adapters/inbound/codex"
-	gastownadapter "irrlicht/core/adapters/inbound/gastown"
+	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/codex"
+	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
 	graceperiodadapter "irrlicht/core/adapters/outbound/graceperiod"
 	"irrlicht/core/adapters/outbound/git"
@@ -173,38 +173,38 @@ func main() {
 		logger.LogInfo("startup", "", "mDNS: advertising _irrlicht._tcp on the local network")
 	}
 
-	// Gas Town collector: detect GT_ROOT and watch daemon/state.json.
-	gtCollector := gastownadapter.New()
-	var gtPoller *gastownadapter.Poller
-	if gtCollector.Detected() {
-		logger.LogInfo("startup", "", fmt.Sprintf("Gas Town detected at %s", gtCollector.Root()))
-		watchCtx, watchCancel := context.WithCancel(context.Background())
-		defer watchCancel()
-		go func() {
-			if err := gtCollector.Watch(watchCtx); err != nil && err != context.Canceled {
-				logger.LogError("gastown", "", fmt.Sprintf("watcher error: %v", err))
-			}
-		}()
-
-		// Poller: periodically fetch rig + polecat + convoy state via gt CLI,
-		// enrich with session data, and broadcast gastown_state via WebSocket.
-		if gtBin := gtResolver.Path(); gtBin != "" {
-			gtPoller = gastownadapter.NewPoller(gtCollector, gtBin, 5*time.Second, memRepo, push)
-			pollerCtx, pollerCancel := context.WithCancel(context.Background())
-			defer pollerCancel()
-			go func() {
-				if err := gtPoller.Run(pollerCtx); err != nil && err != context.Canceled {
-					logger.LogError("gastown-poller", "", fmt.Sprintf("poller error: %v", err))
-				}
-			}()
-			logger.LogInfo("startup", "", "Gas Town poller started (5s interval, enriched mode)")
-		}
+	// Orchestrator adapters: detect and watch multi-agent orchestration systems.
+	gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, memRepo)
+	var orchWatchers []inbound.OrchestratorWatcher
+	if gtAdapter.Detected() {
+		logger.LogInfo("startup", "", fmt.Sprintf("Gas Town detected at %s", gtAdapter.Root()))
+		orchWatchers = append(orchWatchers, gtAdapter)
 	} else {
-		logger.LogInfo("startup", "", "Gas Town not detected — skipping daemon watcher")
+		logger.LogInfo("startup", "", "Gas Town not detected — skipping orchestrator watcher")
 	}
 
-	// Register Gas Town API endpoint.
-	mux.HandleFunc("GET /api/v1/gastown", handleGetGasTown(gtCollector, gtPoller))
+	orchMonitor := services.NewOrchestratorMonitor(orchWatchers, push, logger)
+	{
+		orchCtx, orchCancel := context.WithCancel(context.Background())
+		defer orchCancel()
+		// Start each orchestrator watcher.
+		for _, ow := range orchWatchers {
+			go func() {
+				if err := ow.Watch(orchCtx); err != nil && err != context.Canceled {
+					logger.LogError("orchestrator-watcher", "", fmt.Sprintf("watcher error: %v", err))
+				}
+			}()
+		}
+		go func() {
+			if err := orchMonitor.Run(orchCtx); err != nil && err != context.Canceled {
+				logger.LogError("orchestrator-monitor", "", fmt.Sprintf("monitor error: %v", err))
+			}
+		}()
+	}
+
+	// Register orchestrator API endpoints.
+	mux.HandleFunc("GET /api/v1/orchestrators/{name}", handleGetOrchestrator(orchMonitor))
+	mux.HandleFunc("GET /api/v1/gastown", handleGetOrchestrator(orchMonitor)) // backward compat
 
 	// Inbound adapters: watch agent transcript directories for session files.
 	claudeCodeWatcher := claudecode.New()
@@ -287,36 +287,27 @@ func handleGetSessions(repo outbound.SessionRepository) http.HandlerFunc {
 	}
 }
 
-func handleGetGasTown(collector *gastownadapter.Collector, poller *gastownadapter.Poller) http.HandlerFunc {
+func handleGetOrchestrator(monitor *services.OrchestratorMonitor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if poller == nil {
+		// Determine which orchestrator: from path param or default to "gastown".
+		name := r.PathValue("name")
+		if name == "" {
+			name = "gastown"
+		}
+
+		state := monitor.State(name)
+		if state == nil {
 			json.NewEncoder(w).Encode(struct {
 				Detected bool `json:"detected"`
-			}{Detected: collector.Detected()})
+			}{Detected: false})
 			return
 		}
 
-		// Return enriched gastown_state if available.
-		if state := poller.State(); state != nil {
-			enc := json.NewEncoder(w)
-			enc.SetIndent("", "  ")
-			enc.Encode(state)
-			return
-		}
-
-		// Fallback to legacy snapshot.
-		if snap := poller.Snapshot(); snap != nil {
-			enc := json.NewEncoder(w)
-			enc.SetIndent("", "  ")
-			enc.Encode(snap)
-			return
-		}
-
-		json.NewEncoder(w).Encode(struct {
-			Detected bool `json:"detected"`
-		}{Detected: collector.Detected()})
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.Encode(state)
 	}
 }
 

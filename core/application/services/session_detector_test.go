@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
-	"irrlicht/core/domain/transcript"
+	"irrlicht/core/domain/agent"
 )
 
 // --- tests -------------------------------------------------------------------
@@ -24,8 +24,8 @@ func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
 	go func() { done <- det.Run(ctx) }()
 
 	// Send a new session event.
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventNewSession,
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
 		SessionID:      "new1",
 		ProjectDir:     "-Users-test-project",
 		TranscriptPath: "/home/.claude/projects/-Users-test-project/new1.jsonl",
@@ -78,8 +78,8 @@ func TestSessionDetector_Activity_ResetsGraceTimer(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventActivity,
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
 		SessionID:      "act1",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/act1.jsonl",
@@ -124,8 +124,8 @@ func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventActivity,
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
 		SessionID:      "wake1",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/wake1.jsonl",
@@ -163,8 +163,8 @@ func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	tw.ch <- transcript.TranscriptEvent{
-		Type:      transcript.EventRemoved,
+	tw.ch <- agent.Event{
+		Type:      agent.EventRemoved,
 		SessionID: "rm1",
 	}
 
@@ -201,8 +201,8 @@ func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	tw.ch <- transcript.TranscriptEvent{
-		Type:      transcript.EventRemoved,
+	tw.ch <- agent.Event{
+		Type:      agent.EventRemoved,
 		SessionID: "rm2",
 	}
 
@@ -288,8 +288,8 @@ func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
 	go func() { done <- det.Run(ctx) }()
 
 	// First, register the parent in projectSessions by sending an activity event.
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventActivity,
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
 		SessionID:      "parent1",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/parent1.jsonl",
@@ -297,8 +297,8 @@ func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// Now a new session appears in the same project directory.
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventNewSession,
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
 		SessionID:      "child1",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/child1.jsonl",
@@ -339,8 +339,8 @@ func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
 	go func() { done <- det.Run(ctx) }()
 
 	// Register parent.
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventActivity,
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
 		SessionID:      "parent2",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/parent2.jsonl",
@@ -348,8 +348,8 @@ func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// New child session.
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventNewSession,
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
 		SessionID:      "child2",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/child2.jsonl",
@@ -388,8 +388,8 @@ func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
 	go func() { done <- det.Run(ctx) }()
 
 	// Register "other1" in a different project dir.
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventActivity,
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
 		SessionID:      "other1",
 		ProjectDir:     "-Users-other",
 		TranscriptPath: "/home/.claude/projects/-Users-other/other1.jsonl",
@@ -397,8 +397,8 @@ func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// New session in a different project dir.
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventNewSession,
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
 		SessionID:      "lone1",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/lone1.jsonl",
@@ -434,8 +434,8 @@ func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventNewSession,
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
 		SessionID:      "hook1",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/hook1.jsonl",
@@ -490,8 +490,8 @@ func TestSessionDetector_Activity_UnknownSession_TreatedAsNew(t *testing.T) {
 	go func() { done <- det.Run(ctx) }()
 
 	// Activity event for an unknown session → should create it.
-	tw.ch <- transcript.TranscriptEvent{
-		Type:           transcript.EventActivity,
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
 		SessionID:      "unknown1",
 		ProjectDir:     "-Users-test",
 		TranscriptPath: "/home/.claude/projects/-Users-test/unknown1.jsonl",

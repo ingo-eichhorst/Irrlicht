@@ -1,5 +1,6 @@
-// Package gastown — Poller periodically invokes gt CLI to collect rig and
-// polecat state, enriches it with session data, and builds the gastown_state model.
+// Package gastown — Poller invokes the gt CLI to collect rig, polecat, and
+// convoy state, enriches it with session data, and maps it to the standardised
+// orchestrator.State model.
 package gastown
 
 import (
@@ -12,8 +13,8 @@ import (
 	"time"
 
 	"irrlicht/core/domain/gastown"
+	"irrlicht/core/domain/orchestrator"
 	"irrlicht/core/domain/session"
-	"irrlicht/core/ports/outbound"
 )
 
 // SessionLister provides read access to active sessions for CWD matching.
@@ -21,95 +22,40 @@ type SessionLister interface {
 	ListAll() ([]*session.SessionState, error)
 }
 
-// Poller periodically queries gt CLI for rig, polecat, and convoy state,
-// and builds the enriched gastown_state by joining with active sessions.
+// Poller queries the gt CLI for rig, polecat, and convoy state and maps
+// the results to the standardised orchestrator.State model.
 type Poller struct {
-	collector   *Collector
-	gtBin       string // resolved path to gt binary
-	interval    time.Duration
-	sessions    SessionLister
-	broadcaster outbound.PushBroadcaster
-
-	mu       sync.RWMutex
-	snapshot *gastown.Snapshot // legacy flat snapshot
-	state    *gastown.State   // enriched gastown_state
+	collector *Collector
+	gtBin     string
+	interval  time.Duration
+	sessions  SessionLister
 }
 
 // NewPoller creates a Poller that reads from the given collector and
-// shells out to gtBin for rig/polecat state every interval.
-// sessions and broadcaster may be nil.
-func NewPoller(collector *Collector, gtBin string, interval time.Duration, sessions SessionLister, broadcaster outbound.PushBroadcaster) *Poller {
+// shells out to gtBin for rig/polecat state.
+func NewPoller(collector *Collector, gtBin string, interval time.Duration, sessions SessionLister) *Poller {
 	return &Poller{
-		collector:   collector,
-		gtBin:       gtBin,
-		interval:    interval,
-		sessions:    sessions,
-		broadcaster: broadcaster,
+		collector: collector,
+		gtBin:     gtBin,
+		interval:  interval,
+		sessions:  sessions,
 	}
 }
 
-// Snapshot returns the latest combined Gas Town snapshot (legacy format).
-func (p *Poller) Snapshot() *gastown.Snapshot {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.snapshot != nil {
-		cp := *p.snapshot
-		return &cp
-	}
-	return nil
-}
-
-// State returns the latest enriched Gas Town state.
-func (p *Poller) State() *gastown.State {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.state != nil {
-		cp := *p.state
-		return &cp
-	}
-	return nil
-}
-
-// Run starts the polling loop. It blocks until ctx is cancelled.
-func (p *Poller) Run(ctx context.Context) error {
-	// Initial poll immediately.
-	p.poll(ctx)
-
-	ticker := time.NewTicker(p.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			p.poll(ctx)
-		}
-	}
-}
-
-func (p *Poller) poll(ctx context.Context) {
+// BuildOrchestratorState fetches current gt state and returns the standardised
+// orchestrator.State model. Called by Adapter on each poll tick.
+func (p *Poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State {
 	daemon := p.collector.DaemonState()
 	now := time.Now().UTC()
+	gtRoot := p.collector.Root()
 
-	snap := gastown.Snapshot{
-		Detected:  p.collector.Detected(),
-		Daemon:    daemon,
-		UpdatedAt: now,
-	}
-
-	if !snap.Detected || p.gtBin == "" {
-		p.mu.Lock()
-		p.snapshot = &snap
-		p.state = &gastown.State{
-			Type:      outbound.PushTypeGasTownState,
+	if !p.collector.Detected() || p.gtBin == "" {
+		return &orchestrator.State{
+			Adapter:   "gastown",
 			Running:   false,
-			GTRoot:    p.collector.Root(),
+			Root:      gtRoot,
 			UpdatedAt: now,
 		}
-		p.mu.Unlock()
-		p.broadcastState()
-		return
 	}
 
 	// Fetch rig list, polecat list, and convoy list in parallel.
@@ -119,43 +65,29 @@ func (p *Poller) poll(ctx context.Context) {
 	var convoys []gastown.ConvoyState
 
 	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		rigs = p.fetchRigs(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		polecats = p.fetchPolecats(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		convoys = p.fetchConvoys(ctx)
-	}()
+	go func() { defer wg.Done(); rigs = p.fetchRigs(ctx) }()
+	go func() { defer wg.Done(); polecats = p.fetchPolecats(ctx) }()
+	go func() { defer wg.Done(); convoys = p.fetchConvoys(ctx) }()
 	wg.Wait()
 
-	snap.Rigs = rigs
-	snap.Polecats = polecats
-
-	// Build enriched state.
 	running := daemon != nil && daemon.Running
-	state := p.buildState(rigs, polecats, convoys, running, now)
-
-	p.mu.Lock()
-	p.snapshot = &snap
-	p.state = state
-	p.mu.Unlock()
-
-	p.broadcastState()
+	return p.mapToOrchestratorState(rigs, polecats, convoys, running, now)
 }
 
-// buildState constructs the enriched gastown_state from collected data and sessions.
-func (p *Poller) buildState(rigs []gastown.RigState, polecats []gastown.PolecatState, convoys []gastown.ConvoyState, running bool, now time.Time) *gastown.State {
+// mapToOrchestratorState maps raw Gas Town types to the standardised model.
+func (p *Poller) mapToOrchestratorState(
+	rigs []gastown.RigState,
+	polecats []gastown.PolecatState,
+	convoys []gastown.ConvoyState,
+	running bool,
+	now time.Time,
+) *orchestrator.State {
 	gtRoot := p.collector.Root()
 
-	state := &gastown.State{
-		Type:      outbound.PushTypeGasTownState,
+	state := &orchestrator.State{
+		Adapter:   "gastown",
 		Running:   running,
-		GTRoot:    gtRoot,
+		Root:      gtRoot,
 		UpdatedAt: now,
 	}
 
@@ -199,80 +131,79 @@ func (p *Poller) buildState(rigs []gastown.RigState, polecats []gastown.PolecatS
 		return "", ""
 	}
 
-	// Find global agents (mayor, deacon).
-	globalAgents := []gastown.GlobalAgent{}
+	// Global agents (mayor, deacon).
+	globalAgents := []orchestrator.GlobalAgent{}
 	if mayorSID, mayorState := matchSession(filepath.Join(gtRoot, "mayor")); mayorSID != "" {
-		globalAgents = append(globalAgents, gastown.GlobalAgent{
+		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
 			Role:      gastown.RoleMayor,
 			SessionID: mayorSID,
 			State:     mayorState,
 		})
 	} else {
-		// Mayor might exist but have no active session.
-		globalAgents = append(globalAgents, gastown.GlobalAgent{
+		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
 			Role:  gastown.RoleMayor,
 			State: "idle",
 		})
 	}
 	if deaconSID, deaconState := matchSession(filepath.Join(gtRoot, "deacon")); deaconSID != "" {
-		globalAgents = append(globalAgents, gastown.GlobalAgent{
+		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
 			Role:      gastown.RoleDeacon,
 			SessionID: deaconSID,
 			State:     deaconState,
 		})
 	} else {
-		globalAgents = append(globalAgents, gastown.GlobalAgent{
+		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
 			Role:  gastown.RoleDeacon,
 			State: "idle",
 		})
 	}
 	state.GlobalAgents = globalAgents
 
-	// Group polecats by rig for easy lookup.
+	// Group polecats by rig.
 	polecatsByRig := make(map[string][]gastown.PolecatState)
 	for _, pc := range polecats {
 		polecatsByRig[pc.Rig] = append(polecatsByRig[pc.Rig], pc)
 	}
 
 	// Build codebases from rigs.
-	codebases := make([]gastown.Codebase, 0, len(rigs))
+	codebases := make([]orchestrator.Codebase, 0, len(rigs))
 	for _, rig := range rigs {
-		cb := gastown.Codebase{
-			Rig:    rig.Name,
+		cb := orchestrator.Codebase{
+			Name:   rig.Name,
 			Status: rig.Status,
 		}
 
-		// Main worktree: witness + refinery + crew agents.
-		mainWorktree := gastown.Worktree{
+		// Main worktree: witness + refinery + crew workers.
+		mainWorktree := orchestrator.Worktree{
 			Path:   filepath.Join(gtRoot, rig.Name),
 			IsMain: true,
 		}
 
-		mainAgents := []gastown.Agent{}
+		mainWorkers := []orchestrator.Worker{}
 
-		// Witness agent.
-		witnessAgent := gastown.Agent{
+		// Witness worker.
+		witnessWorker := orchestrator.Worker{
 			Role:  gastown.RoleWitness,
 			State: rig.Witness,
 		}
 		if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "witness")); sid != "" {
-			witnessAgent.SessionID = sid
-			witnessAgent.State = sState
+			witnessWorker.SessionID = sid
+			witnessWorker.State = sState
 		}
-		mainAgents = append(mainAgents, witnessAgent)
+		mainWorkers = append(mainWorkers, witnessWorker)
 
-		// Refinery agent.
-		refineryAgent := gastown.Agent{
+		// Refinery worker.
+		refineryWorker := orchestrator.Worker{
 			Role:  gastown.RoleRefinery,
 			State: rig.Refinery,
 		}
 		if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "refinery")); sid != "" {
-			refineryAgent.SessionID = sid
-			refineryAgent.State = sState
+			refineryWorker.SessionID = sid
+			refineryWorker.State = sState
 		}
-		mainAgents = append(mainAgents, refineryAgent)
+		mainWorkers = append(mainWorkers, refineryWorker)
 
-		// Crew agents: scan sessions with CWD under $GT_ROOT/<rig>/crew/*.
+		// Crew workers.
 		for _, s := range sessions {
 			if s.CWD == "" {
 				continue
@@ -281,7 +212,7 @@ func (p *Poller) buildState(rigs []gastown.RigState, polecats []gastown.PolecatS
 			if ri == nil || ri.Role != gastown.RoleCrew || ri.Rig != rig.Name {
 				continue
 			}
-			mainAgents = append(mainAgents, gastown.Agent{
+			mainWorkers = append(mainWorkers, orchestrator.Worker{
 				Role:      gastown.RoleCrew,
 				Name:      ri.Name,
 				SessionID: s.SessionID,
@@ -289,30 +220,30 @@ func (p *Poller) buildState(rigs []gastown.RigState, polecats []gastown.PolecatS
 			})
 		}
 
-		mainWorktree.Agents = mainAgents
-		worktrees := []gastown.Worktree{mainWorktree}
+		mainWorktree.Workers = mainWorkers
+		worktrees := []orchestrator.Worktree{mainWorktree}
 
-		// Polecat worktrees: one per polecat.
+		// Polecat worktrees.
 		rigPolecats := polecatsByRig[rig.Name]
 		for _, pc := range rigPolecats {
-			pcWorktree := gastown.Worktree{
+			pcWorktree := orchestrator.Worktree{
 				Path:   filepath.Join(gtRoot, rig.Name, "polecats", pc.Name),
 				IsMain: false,
 			}
 
-			pcAgent := gastown.Agent{
-				Role:   gastown.RolePolecat,
-				Name:   pc.Name,
-				BeadID: pc.Issue,
-				State:  pc.State,
+			pcWorker := orchestrator.Worker{
+				Role:  gastown.RolePolecat,
+				Name:  pc.Name,
+				ID:    pc.Issue,
+				State: pc.State,
 			}
 
 			if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "polecats", pc.Name)); sid != "" {
-				pcAgent.SessionID = sid
-				pcAgent.State = sState
+				pcWorker.SessionID = sid
+				pcWorker.State = sState
 			}
 
-			pcWorktree.Agents = []gastown.Agent{pcAgent}
+			pcWorktree.Workers = []orchestrator.Worker{pcWorker}
 			worktrees = append(worktrees, pcWorktree)
 		}
 
@@ -320,16 +251,15 @@ func (p *Poller) buildState(rigs []gastown.RigState, polecats []gastown.PolecatS
 		codebases = append(codebases, cb)
 	}
 
-	// Sort codebases by rig name for stable ordering.
 	sort.Slice(codebases, func(i, j int) bool {
-		return codebases[i].Rig < codebases[j].Rig
+		return codebases[i].Name < codebases[j].Name
 	})
 	state.Codebases = codebases
 
-	// Build work units from convoys.
-	workUnits := make([]gastown.WorkUnit, 0, len(convoys))
+	// Work units from convoys.
+	workUnits := make([]orchestrator.WorkUnit, 0, len(convoys))
 	for _, c := range convoys {
-		workUnits = append(workUnits, gastown.WorkUnit{
+		workUnits = append(workUnits, orchestrator.WorkUnit{
 			ID:     c.ID,
 			Type:   gastown.WorkUnitConvoy,
 			Name:   c.Title,
@@ -343,23 +273,7 @@ func (p *Poller) buildState(rigs []gastown.RigState, polecats []gastown.PolecatS
 	return state
 }
 
-func (p *Poller) broadcastState() {
-	if p.broadcaster == nil {
-		return
-	}
-	p.mu.RLock()
-	state := p.state
-	p.mu.RUnlock()
-
-	if state == nil {
-		return
-	}
-
-	p.broadcaster.Broadcast(outbound.PushMessage{
-		Type:    outbound.PushTypeGasTownState,
-		GasTown: state,
-	})
-}
+// --- gt CLI helpers ----------------------------------------------------------
 
 // gtCommand creates an exec.Cmd that runs from GT_ROOT so the gt CLI
 // can find its workspace context.

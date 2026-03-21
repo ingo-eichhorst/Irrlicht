@@ -3,23 +3,23 @@ package outbound
 import (
 	"context"
 
-	"irrlicht/core/domain/gastown"
+	"irrlicht/core/domain/orchestrator"
 	"irrlicht/core/domain/session"
 )
 
-// PushMessage is a typed WebSocket envelope for session and gastown state fan-out.
+// PushMessage is a typed WebSocket envelope for session and orchestrator state fan-out.
 type PushMessage struct {
-	Type    string                `json:"type"`
-	Session *session.SessionState `json:"session,omitempty"`
-	GasTown *gastown.State        `json:"gastown,omitempty"`
+	Type         string                `json:"type"`
+	Session      *session.SessionState `json:"session,omitempty"`
+	Orchestrator *orchestrator.State   `json:"orchestrator,omitempty"`
 }
 
 // Valid PushMessage type constants.
 const (
-	PushTypeCreated       = "session_created"
-	PushTypeUpdated       = "session_updated"
-	PushTypeDeleted       = "session_deleted"
-	PushTypeGasTownState  = "gastown_state"
+	PushTypeCreated           = "session_created"
+	PushTypeUpdated           = "session_updated"
+	PushTypeDeleted           = "session_deleted"
+	PushTypeOrchestratorState = "orchestrator_state"
 )
 
 // SessionRepository loads, saves, and deletes session state files.

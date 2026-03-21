@@ -18,7 +18,7 @@ import (
 
 	processadapter "irrlicht/core/adapters/outbound/process"
 	"irrlicht/core/domain/session"
-	"irrlicht/core/domain/transcript"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
@@ -69,13 +69,13 @@ func NewSessionDetector(
 // channel, and processes events until ctx is cancelled. It blocks for the
 // lifetime of the detector.
 func (d *SessionDetector) Run(ctx context.Context) error {
-	merged := make(chan transcript.TranscriptEvent, 16)
+	merged := make(chan agent.Event, 16)
 	var wg sync.WaitGroup
 
 	for _, w := range d.watchers {
 		ch := w.Subscribe()
 		wg.Add(1)
-		go func(watcher inbound.AgentWatcher, ch <-chan transcript.TranscriptEvent) {
+		go func(watcher inbound.AgentWatcher, ch <-chan agent.Event) {
 			defer wg.Done()
 			defer watcher.Unsubscribe(ch)
 			for {
@@ -123,19 +123,19 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 }
 
 // handleTranscriptEvent dispatches a transcript event to the appropriate handler.
-func (d *SessionDetector) handleTranscriptEvent(ev transcript.TranscriptEvent) {
+func (d *SessionDetector) handleTranscriptEvent(ev agent.Event) {
 	switch ev.Type {
-	case transcript.EventNewSession:
+	case agent.EventNewSession:
 		d.onNewSession(ev)
-	case transcript.EventActivity:
+	case agent.EventActivity:
 		d.onActivity(ev)
-	case transcript.EventRemoved:
+	case agent.EventRemoved:
 		d.onRemoved(ev)
 	}
 }
 
 // onNewSession handles a new transcript file appearing.
-func (d *SessionDetector) onNewSession(ev transcript.TranscriptEvent) {
+func (d *SessionDetector) onNewSession(ev agent.Event) {
 	d.log.LogInfo("session-detector", ev.SessionID,
 		fmt.Sprintf("new session detected in %s (adapter=%s)", ev.ProjectDir, ev.Adapter))
 
@@ -223,7 +223,7 @@ func (d *SessionDetector) onNewSession(ev transcript.TranscriptEvent) {
 }
 
 // onActivity handles transcript file writes.
-func (d *SessionDetector) onActivity(ev transcript.TranscriptEvent) {
+func (d *SessionDetector) onActivity(ev agent.Event) {
 	// Reset the grace period timer — activity means the session is working.
 	d.gp.Reset(ev.SessionID, ev.TranscriptPath)
 
@@ -263,7 +263,7 @@ func (d *SessionDetector) onActivity(ev transcript.TranscriptEvent) {
 }
 
 // onRemoved handles transcript file deletion.
-func (d *SessionDetector) onRemoved(ev transcript.TranscriptEvent) {
+func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.log.LogInfo("session-detector", ev.SessionID, "transcript removed")
 
 	// Stop grace period timer.

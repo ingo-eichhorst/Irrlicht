@@ -7,7 +7,7 @@ import (
 
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
-	"irrlicht/core/domain/transcript"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/inbound"
 )
 
@@ -98,13 +98,13 @@ func (m *mockMetrics) ComputeMetrics(path string) (*session.SessionMetrics, erro
 
 // mockAgentWatcher implements inbound.AgentWatcher for tests.
 type mockAgentWatcher struct {
-	ch     chan transcript.TranscriptEvent
+	ch     chan agent.Event
 	unsubs int
 }
 
 func newMockAgentWatcher() *mockAgentWatcher {
 	return &mockAgentWatcher{
-		ch: make(chan transcript.TranscriptEvent, 16),
+		ch: make(chan agent.Event, 16),
 	}
 }
 
@@ -113,11 +113,11 @@ func (w *mockAgentWatcher) Watch(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (w *mockAgentWatcher) Subscribe() <-chan transcript.TranscriptEvent {
+func (w *mockAgentWatcher) Subscribe() <-chan agent.Event {
 	return w.ch
 }
 
-func (w *mockAgentWatcher) Unsubscribe(ch <-chan transcript.TranscriptEvent) {
+func (w *mockAgentWatcher) Unsubscribe(ch <-chan agent.Event) {
 	w.unsubs++
 }
 

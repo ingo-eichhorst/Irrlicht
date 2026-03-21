@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"irrlicht/core/domain/transcript"
+	"irrlicht/core/domain/agent"
 )
 
 const testAdapter = "test-agent"
@@ -78,8 +78,8 @@ func TestWatch_EmitsNewSession(t *testing.T) {
 
 	select {
 	case ev := <-ch:
-		if ev.Type != transcript.EventNewSession {
-			t.Errorf("event type = %q, want %q", ev.Type, transcript.EventNewSession)
+		if ev.Type != agent.EventNewSession {
+			t.Errorf("event type = %q, want %q", ev.Type, agent.EventNewSession)
 		}
 		if ev.Adapter != testAdapter {
 			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
@@ -133,8 +133,8 @@ func TestWatch_EmitsActivity(t *testing.T) {
 
 	select {
 	case ev := <-ch:
-		if ev.Type != transcript.EventActivity {
-			t.Errorf("event type = %q, want %q", ev.Type, transcript.EventActivity)
+		if ev.Type != agent.EventActivity {
+			t.Errorf("event type = %q, want %q", ev.Type, agent.EventActivity)
 		}
 		if ev.Adapter != testAdapter {
 			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
@@ -179,8 +179,8 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 
 	select {
 	case ev := <-ch:
-		if ev.Type != transcript.EventRemoved {
-			t.Errorf("event type = %q, want %q", ev.Type, transcript.EventRemoved)
+		if ev.Type != agent.EventRemoved {
+			t.Errorf("event type = %q, want %q", ev.Type, agent.EventRemoved)
 		}
 		if ev.Adapter != testAdapter {
 			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
@@ -230,8 +230,8 @@ func TestWatch_NewProjectDir(t *testing.T) {
 
 	select {
 	case ev := <-ch:
-		if ev.Type != transcript.EventNewSession {
-			t.Errorf("event type = %q, want %q", ev.Type, transcript.EventNewSession)
+		if ev.Type != agent.EventNewSession {
+			t.Errorf("event type = %q, want %q", ev.Type, agent.EventNewSession)
 		}
 		if ev.SessionID != "new-sess" {
 			t.Errorf("session ID = %q, want %q", ev.SessionID, "new-sess")
@@ -343,8 +343,8 @@ func TestWatch_WaitsForRoot(t *testing.T) {
 
 	select {
 	case ev := <-ch:
-		if ev.Type != transcript.EventNewSession {
-			t.Errorf("event type = %q, want %q", ev.Type, transcript.EventNewSession)
+		if ev.Type != agent.EventNewSession {
+			t.Errorf("event type = %q, want %q", ev.Type, agent.EventNewSession)
 		}
 		if ev.SessionID != "late-sess" {
 			t.Errorf("session ID = %q, want %q", ev.SessionID, "late-sess")

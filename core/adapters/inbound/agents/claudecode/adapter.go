@@ -2,7 +2,7 @@
 // transcript files under ~/.claude/projects/*/*.jsonl.
 package claudecode
 
-import "irrlicht/core/adapters/inbound/fswatcher"
+import "irrlicht/core/adapters/inbound/agents/fswatcher"
 
 // AdapterName identifies sessions originating from Claude Code.
 const AdapterName = "claude-code"

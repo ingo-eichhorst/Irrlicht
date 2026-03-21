@@ -6,8 +6,8 @@ package inbound
 import (
 	"context"
 
-	"irrlicht/core/domain/gastown"
-	"irrlicht/core/domain/transcript"
+	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/orchestrator"
 )
 
 // AgentWatcher watches a directory tree for agent transcript file changes,
@@ -17,27 +17,26 @@ type AgentWatcher interface {
 	// Watch begins watching for transcript changes. It blocks until ctx is
 	// cancelled or an unrecoverable error occurs.
 	Watch(ctx context.Context) error
-	// Subscribe returns a channel that receives transcript events.
-	Subscribe() <-chan transcript.TranscriptEvent
+	// Subscribe returns a channel that receives agent events.
+	Subscribe() <-chan agent.Event
 	// Unsubscribe removes a previously subscribed channel and closes it.
-	Unsubscribe(ch <-chan transcript.TranscriptEvent)
+	Unsubscribe(ch <-chan agent.Event)
 }
 
-// GasTownCollector detects Gas Town presence, resolves GT_ROOT, and watches
-// the daemon state file for changes.
-type GasTownCollector interface {
-	// Detected returns true if a valid Gas Town installation was found.
+// OrchestratorWatcher monitors a multi-agent orchestration system and
+// produces standardised state snapshots. Each implementation targets a
+// specific orchestrator (Gas Town, etc.).
+type OrchestratorWatcher interface {
+	// Name returns the orchestrator identifier (e.g. "gastown").
+	Name() string
+	// Detected returns true if the orchestrator is installed/available.
 	Detected() bool
-	// Root returns the resolved GT_ROOT path, or "" if not detected.
-	Root() string
-	// DaemonState returns the latest parsed daemon state, or nil if unavailable.
-	DaemonState() *gastown.DaemonState
-	// Watch begins watching daemon/state.json for changes. It blocks until
-	// ctx is cancelled or an unrecoverable error occurs.
+	// Watch begins monitoring and blocks until ctx is cancelled.
 	Watch(ctx context.Context) error
-	// Subscribe returns a channel that receives daemon state updates whenever
-	// the watched file changes on disk.
-	Subscribe() <-chan gastown.DaemonState
-	// Unsubscribe removes a previously subscribed channel.
-	Unsubscribe(ch <-chan gastown.DaemonState)
+	// Subscribe returns a channel of orchestrator state snapshots.
+	Subscribe() <-chan orchestrator.State
+	// Unsubscribe removes a subscriber channel.
+	Unsubscribe(ch <-chan orchestrator.State)
+	// State returns the latest state snapshot, or nil if unavailable.
+	State() *orchestrator.State
 }
