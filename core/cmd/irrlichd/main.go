@@ -30,6 +30,7 @@ import (
 	processadapter "irrlicht/core/adapters/outbound/process"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
@@ -61,6 +62,17 @@ func main() {
 	}
 	defer logger.Close()
 
+	// Configuration.
+	cfg := config.Default()
+	if v := os.Getenv("IRRLICHT_MAX_SESSION_AGE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.MaxSessionAge = d
+		} else {
+			logger.LogError("startup", "", fmt.Sprintf("invalid IRRLICHT_MAX_SESSION_AGE %q, using default %s", v, cfg.MaxSessionAge))
+		}
+	}
+	logger.LogInfo("startup", "", fmt.Sprintf("max session age: %s", cfg.MaxSessionAge))
+
 	// Resolve the gt binary path (GT_BIN env → common paths → which gt).
 	gtResolver := gtbin.New()
 	if p := gtResolver.Path(); p != "" {
@@ -79,10 +91,13 @@ func main() {
 	// Memory store wraps filesystem for fast in-process access.
 	memRepo := memory.New(fsRepo)
 
-	// Crash recovery: seed memory from existing session files.
-	if err := memRepo.SeedFromDisk(); err != nil {
+	// Crash recovery: seed memory from existing session files, pruning stale ones.
+	pruned, err := memRepo.SeedFromDisk(cfg.MaxSessionAge)
+	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to seed from disk: %v", err))
 		// Non-fatal: continue with empty in-memory state.
+	} else if pruned > 0 {
+		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d stale session files", pruned))
 	}
 
 	// Push broadcaster for WebSocket fan-out.
@@ -207,8 +222,8 @@ func main() {
 	mux.HandleFunc("GET /api/v1/gastown", handleGetOrchestrator(orchMonitor)) // backward compat
 
 	// Inbound adapters: watch agent transcript directories for session files.
-	claudeCodeWatcher := claudecode.New()
-	codexWatcher := codex.New()
+	claudeCodeWatcher := claudecode.New(cfg.MaxSessionAge)
+	codexWatcher := codex.New(cfg.MaxSessionAge)
 	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher}
 
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher + GracePeriodTimer.

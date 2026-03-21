@@ -2,6 +2,7 @@ package memory
 
 import (
 	"sync"
+	"time"
 
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
@@ -54,15 +55,22 @@ func (s *Store) ListAll() ([]*session.SessionState, error) {
 	return states, nil
 }
 
-// SeedFromDisk loads all sessions from the disk fallback into memory.
-// Call this on daemon startup for crash recovery.
-func (s *Store) SeedFromDisk() error {
+// SeedFromDisk loads sessions from the disk fallback into memory, filtering
+// out sessions older than maxAge. Stale instance files are deleted from disk.
+// Returns the number of pruned sessions. A zero maxAge disables filtering.
+func (s *Store) SeedFromDisk(maxAge time.Duration) (int, error) {
 	states, err := s.fallback.ListAll()
 	if err != nil {
-		return err
+		return 0, err
 	}
+	pruned := 0
 	for _, state := range states {
+		if state.IsStale(maxAge) {
+			_ = s.fallback.Delete(state.SessionID)
+			pruned++
+			continue
+		}
 		s.m.Store(state.SessionID, state)
 	}
-	return nil
+	return pruned, nil
 }

@@ -1,5 +1,7 @@
 package session
 
+import "time"
+
 // State constants
 const (
 	StateWorking         = "working"
@@ -58,6 +60,15 @@ type SessionState struct {
 	// Transcript monitoring for waiting-state recovery.
 	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`
 	WaitingStartTime   *int64 `json:"waiting_start_time,omitempty"`
+}
+
+// IsStale reports whether the session's last update is older than maxAge.
+// A zero or negative maxAge disables the check (always returns false).
+func (s *SessionState) IsStale(maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		return false
+	}
+	return time.Since(time.Unix(s.UpdatedAt, 0)) > maxAge
 }
 
 // StringState returns a display-friendly state string including compaction state.

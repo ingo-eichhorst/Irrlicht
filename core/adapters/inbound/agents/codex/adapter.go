@@ -2,7 +2,11 @@
 // transcript files under ~/.codex/*/*.jsonl.
 package codex
 
-import "irrlicht/core/adapters/inbound/agents/fswatcher"
+import (
+	"time"
+
+	"irrlicht/core/adapters/inbound/agents/fswatcher"
+)
 
 // AdapterName identifies sessions originating from OpenAI Codex.
 const AdapterName = "codex"
@@ -11,6 +15,7 @@ const AdapterName = "codex"
 const rootDir = ".codex"
 
 // New creates a file-system watcher for Codex transcripts.
-func New() *fswatcher.Watcher {
-	return fswatcher.New(rootDir, AdapterName)
+// maxAge controls the maximum transcript file age; older files are ignored.
+func New(maxAge time.Duration) *fswatcher.Watcher {
+	return fswatcher.New(rootDir, AdapterName, maxAge)
 }

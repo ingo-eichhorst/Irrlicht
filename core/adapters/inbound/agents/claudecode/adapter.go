@@ -2,7 +2,11 @@
 // transcript files under ~/.claude/projects/*/*.jsonl.
 package claudecode
 
-import "irrlicht/core/adapters/inbound/agents/fswatcher"
+import (
+	"time"
+
+	"irrlicht/core/adapters/inbound/agents/fswatcher"
+)
 
 // AdapterName identifies sessions originating from Claude Code.
 const AdapterName = "claude-code"
@@ -11,6 +15,7 @@ const AdapterName = "claude-code"
 const projectsDir = ".claude/projects"
 
 // New creates a file-system watcher for Claude Code transcripts.
-func New() *fswatcher.Watcher {
-	return fswatcher.New(projectsDir, AdapterName)
+// maxAge controls the maximum transcript file age; older files are ignored.
+func New(maxAge time.Duration) *fswatcher.Watcher {
+	return fswatcher.New(projectsDir, AdapterName, maxAge)
 }

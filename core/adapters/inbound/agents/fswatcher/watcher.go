@@ -298,11 +298,12 @@ func extractSessionID(path string) string {
 	return strings.TrimSuffix(base, ".jsonl")
 }
 
-// fileSize returns the size of a file, or 0 if stat fails.
-func fileSize(path string) int64 {
+// fileSizeAndMtime returns the size and modification time of a file.
+// On stat failure it returns (0, zero time).
+func fileSizeAndMtime(path string) (int64, time.Time) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return 0
+		return 0, time.Time{}
 	}
-	return info.Size()
+	return info.Size(), info.ModTime()
 }

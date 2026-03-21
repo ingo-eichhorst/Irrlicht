@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	"irrlicht/core/domain/agent"
 )
 
@@ -28,7 +30,7 @@ func setupFakeProjects(t *testing.T) string {
 }
 
 func TestNewWithRoot(t *testing.T) {
-	w := NewWithRoot("/tmp/fake", testAdapter)
+	w := NewWithRoot("/tmp/fake", testAdapter, 0)
 	if w.Root() != "/tmp/fake" {
 		t.Errorf("Root() = %q, want /tmp/fake", w.Root())
 	}
@@ -57,7 +59,7 @@ func TestExtractSessionID(t *testing.T) {
 
 func TestWatch_EmitsNewSession(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := NewWithRoot(root, testAdapter)
+	w := NewWithRoot(root, testAdapter, 0)
 
 	ch := w.Subscribe()
 
@@ -112,7 +114,7 @@ func TestWatch_EmitsActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWithRoot(root, testAdapter)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -161,7 +163,7 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWithRoot(root, testAdapter)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,7 +205,7 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 
 func TestWatch_NewProjectDir(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := NewWithRoot(root, testAdapter)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,7 +253,7 @@ func TestWatch_NewProjectDir(t *testing.T) {
 
 func TestWatch_IgnoresNonJSONL(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := NewWithRoot(root, testAdapter)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -293,7 +295,7 @@ func TestWatch_EmptyRoot_BlocksUntilCancel(t *testing.T) {
 }
 
 func TestSubscribeUnsubscribe(t *testing.T) {
-	w := NewWithRoot(t.TempDir(), testAdapter)
+	w := NewWithRoot(t.TempDir(), testAdapter, 0)
 	ch := w.Subscribe()
 
 	w.subMu.Lock()
@@ -316,7 +318,7 @@ func TestWatch_WaitsForRoot(t *testing.T) {
 	root := filepath.Join(tmp, "projects")
 	// root doesn't exist yet.
 
-	w := NewWithRoot(root, testAdapter)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -356,5 +358,78 @@ func TestWatch_WaitsForRoot(t *testing.T) {
 	cancel()
 	if err := <-watchErr; err != nil && err != context.Canceled {
 		t.Errorf("Watch returned unexpected error: %v", err)
+	}
+}
+
+func TestHandleEvent_MaxAge_SkipsStaleFile(t *testing.T) {
+	root := setupFakeProjects(t)
+	projDir := filepath.Join(root, "-Users-test-myproject")
+
+	w := NewWithRoot(root, testAdapter, 1*time.Hour)
+	ch := w.Subscribe()
+
+	// Create a transcript file and backdate its mtime to 2 hours ago.
+	stalePath := filepath.Join(projDir, "stale-sess.jsonl")
+	if err := os.WriteFile(stalePath, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stalePath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a fresh transcript file (mtime = now).
+	freshPath := filepath.Join(projDir, "fresh-sess.jsonl")
+	if err := os.WriteFile(freshPath, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate fsnotify Write events for both files via handleEvent directly.
+	w.handleEvent(nil, fsnotify.Event{Name: stalePath, Op: fsnotify.Write})
+	w.handleEvent(nil, fsnotify.Event{Name: freshPath, Op: fsnotify.Write})
+
+	// Only the fresh file should produce an event.
+	select {
+	case ev := <-ch:
+		if ev.SessionID != "fresh-sess" {
+			t.Errorf("expected fresh-sess, got %q", ev.SessionID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fresh event")
+	}
+
+	// No more events should be queued.
+	select {
+	case ev := <-ch:
+		t.Errorf("unexpected extra event: %+v", ev)
+	default:
+	}
+}
+
+func TestHandleEvent_MaxAge_Zero_DisablesFilter(t *testing.T) {
+	root := setupFakeProjects(t)
+	projDir := filepath.Join(root, "-Users-test-myproject")
+
+	w := NewWithRoot(root, testAdapter, 0) // maxAge=0 → no filtering
+	ch := w.Subscribe()
+
+	stalePath := filepath.Join(projDir, "old-sess.jsonl")
+	if err := os.WriteFile(stalePath, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-30 * 24 * time.Hour) // 30 days ago
+	if err := os.Chtimes(stalePath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+
+	w.handleEvent(nil, fsnotify.Event{Name: stalePath, Op: fsnotify.Write})
+
+	select {
+	case ev := <-ch:
+		if ev.SessionID != "old-sess" {
+			t.Errorf("expected old-sess, got %q", ev.SessionID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out — event should have been emitted with maxAge=0")
 	}
 }
