@@ -26,6 +26,27 @@ type SessionMetrics struct {
 	// Tool call tracking — count unmatched tool_use/tool_result pairs.
 	HasOpenToolCall   bool `json:"has_open_tool_call"`
 	OpenToolCallCount int  `json:"open_tool_call_count,omitempty"`
+
+	// LastEventType is the type of the most recent transcript event
+	// (e.g. "assistant", "user", "tool_use", "tool_result").
+	LastEventType string `json:"last_event_type,omitempty"`
+}
+
+// IsWaitingForInput returns true when the transcript indicates the agent
+// has finished its turn and is waiting for user input: the last event is
+// an assistant message and no tool calls are open.
+func (m *SessionMetrics) IsWaitingForInput() bool {
+	if m == nil {
+		return false
+	}
+	if m.HasOpenToolCall {
+		return false
+	}
+	switch m.LastEventType {
+	case "assistant", "assistant_message", "assistant_output":
+		return true
+	}
+	return false
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.
@@ -95,6 +116,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		PressureLevel:      newM.PressureLevel,
 		HasOpenToolCall:    newM.HasOpenToolCall,
 		OpenToolCallCount:  newM.OpenToolCallCount,
+		LastEventType:      newM.LastEventType,
 	}
 	if merged.ElapsedSeconds == 0 && oldM.ElapsedSeconds > 0 {
 		merged.ElapsedSeconds = oldM.ElapsedSeconds

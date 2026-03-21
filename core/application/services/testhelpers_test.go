@@ -148,44 +148,15 @@ func (w *mockProcessWatcher) Run(ctx context.Context) error {
 
 func (w *mockProcessWatcher) Close() error { return nil }
 
-// --- GracePeriodTimer mock ---------------------------------------------------
-
-// mockGraceTimer implements outbound.GracePeriodTimer for tests.
-type mockGraceTimer struct {
-	resets  map[string]string // sessionID → transcriptPath
-	stops   map[string]bool
-	stopAll int
-}
-
-func newMockGraceTimer() *mockGraceTimer {
-	return &mockGraceTimer{
-		resets: make(map[string]string),
-		stops:  make(map[string]bool),
-	}
-}
-
-func (t *mockGraceTimer) Reset(sessionID, transcriptPath string) {
-	t.resets[sessionID] = transcriptPath
-}
-
-func (t *mockGraceTimer) Stop(sessionID string) {
-	t.stops[sessionID] = true
-}
-
-func (t *mockGraceTimer) StopAll() {
-	t.stopAll++
-}
-
 // --- helper to build SessionDetector for tests --------------------------------
 
 func newDetector(
 	tw *mockAgentWatcher,
 	pw *mockProcessWatcher,
-	gp *mockGraceTimer,
 	repo *mockRepo,
 ) *services.SessionDetector {
 	return services.NewSessionDetector(
-		[]inbound.AgentWatcher{tw}, pw, gp, repo,
+		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
 	)
 }

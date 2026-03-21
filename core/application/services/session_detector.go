@@ -1,12 +1,12 @@
-// SessionDetector orchestrates AgentWatchers + ProcessWatcher +
-// GracePeriodTimer to detect and manage agent sessions from transcript
-// file activity.
+// SessionDetector orchestrates AgentWatchers + ProcessWatcher to detect
+// and manage agent sessions from transcript file activity.
 //
 // It subscribes to one or more AgentWatcher event streams and:
 //   - On new session: creates session state, discovers PID via lsof,
 //     registers with ProcessWatcher, derives parent_session_id
-//   - On activity: resets GracePeriodTimer, refreshes metrics
-//   - On removed: stops timer, cleans up session
+//   - On activity: refreshes metrics, uses content-based detection
+//     (LastEventType) to determine working/waiting state
+//   - On removed: cleans up session
 package services
 
 import (
@@ -24,11 +24,11 @@ import (
 )
 
 // SessionDetector watches transcript files to detect sessions and orchestrate
-// ProcessWatcher + GracePeriodTimer for lifecycle management.
+// ProcessWatcher for lifecycle management. Working/waiting state is determined
+// by content-based detection (LastEventType from transcript parsing).
 type SessionDetector struct {
 	watchers    []inbound.AgentWatcher
 	pw          outbound.ProcessWatcher // optional
-	gp          outbound.GracePeriodTimer
 	repo        outbound.SessionRepository
 	log         outbound.Logger
 	git         outbound.GitResolver
@@ -45,7 +45,6 @@ type SessionDetector struct {
 func NewSessionDetector(
 	watchers []inbound.AgentWatcher,
 	pw outbound.ProcessWatcher,
-	gp outbound.GracePeriodTimer,
 	repo outbound.SessionRepository,
 	log outbound.Logger,
 	git outbound.GitResolver,
@@ -55,7 +54,6 @@ func NewSessionDetector(
 	return &SessionDetector{
 		watchers:        watchers,
 		pw:              pw,
-		gp:              gp,
 		repo:            repo,
 		log:             log,
 		git:             git,
@@ -110,11 +108,9 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			d.gp.StopAll()
 			return ctx.Err()
 		case ev, ok := <-merged:
 			if !ok {
-				d.gp.StopAll()
 				return nil
 			}
 			d.handleTranscriptEvent(ev)
@@ -217,17 +213,12 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 
 	// One-time PID discovery via lsof.
 	d.discoverAndRegisterPID(ev.SessionID, ev.TranscriptPath)
-
-	// Start grace period timer.
-	d.gp.Reset(ev.SessionID, ev.TranscriptPath)
 }
 
-// onActivity handles transcript file writes.
+// onActivity handles transcript file writes. It uses content-based detection
+// to determine whether the agent is working or waiting for user input.
 func (d *SessionDetector) onActivity(ev agent.Event) {
-	// Reset the grace period timer — activity means the session is working.
-	d.gp.Reset(ev.SessionID, ev.TranscriptPath)
-
-	// Load session and refresh state.
+	// Load session state.
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
 		// Session not tracked yet — treat as new.
@@ -235,18 +226,31 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 		return
 	}
 
-	// If session was waiting, transition back to working on activity.
-	if state.State == session.StateWaiting {
-		d.log.LogInfo("session-detector", ev.SessionID,
-			"transcript activity while waiting → working")
-		state.State = session.StateWorking
-		state.LastTranscriptSize = 0
-		state.WaitingStartTime = nil
-	}
-
-	// Refresh metrics.
+	// Refresh metrics (includes LastEventType for content-based detection).
 	if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
 		state.Metrics = session.MergeMetrics(m, state.Metrics)
+	}
+
+	// Content-based state detection: the last event type in the transcript
+	// tells us whose turn it is. An assistant message with no open tool
+	// calls means Claude finished and is waiting for user input.
+	if state.Metrics.IsWaitingForInput() {
+		if state.State == session.StateWorking {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"last event is assistant, no open tool calls → waiting")
+			now := time.Now().Unix()
+			state.State = session.StateWaiting
+			state.UpdatedAt = now
+			state.WaitingStartTime = &now
+		}
+	} else {
+		if state.State == session.StateWaiting {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"transcript activity while waiting → working")
+			state.State = session.StateWorking
+			state.LastTranscriptSize = 0
+			state.WaitingStartTime = nil
+		}
 	}
 
 	state.UpdatedAt = time.Now().Unix()
@@ -265,9 +269,6 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 // onRemoved handles transcript file deletion.
 func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.log.LogInfo("session-detector", ev.SessionID, "transcript removed")
-
-	// Stop grace period timer.
-	d.gp.Stop(ev.SessionID)
 
 	// Remove from project tracking.
 	d.mu.Lock()
@@ -299,49 +300,8 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.broadcast(outbound.PushTypeUpdated, state)
 }
 
-// HandleGracePeriodExpiry is the callback for GracePeriodTimer. When a session
-// has been idle for the grace period and has no open tool calls, transition it
-// to waiting.
-func (d *SessionDetector) HandleGracePeriodExpiry(sessionID string) {
-	state, err := d.repo.Load(sessionID)
-	if err != nil || state == nil {
-		return
-	}
-
-	// Only transition working sessions.
-	if state.State != session.StateWorking {
-		return
-	}
-
-	d.log.LogInfo("session-detector", sessionID,
-		"grace period expired, no open tool calls → waiting")
-
-	now := time.Now().Unix()
-	state.State = session.StateWaiting
-	state.UpdatedAt = now
-	state.WaitingStartTime = &now
-
-	if state.TranscriptPath != "" {
-		if m, _ := d.metrics.ComputeMetrics(state.TranscriptPath); m != nil {
-			state.Metrics = session.MergeMetrics(m, state.Metrics)
-		}
-	}
-
-	if err := d.repo.Save(state); err != nil {
-		d.log.LogError("session-detector", sessionID,
-			fmt.Sprintf("failed to save waiting state: %v", err))
-		return
-	}
-
-	d.broadcast(outbound.PushTypeUpdated, state)
-}
-
 // HandleProcessExit transitions a session to "ready" when its process exits.
-// It stops the grace period timer and cleans up internal tracking.
 func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
-	// Stop grace period timer for this session.
-	d.gp.Stop(sessionID)
-
 	// Remove from project tracking.
 	d.mu.Lock()
 	delete(d.projectSessions, sessionID)

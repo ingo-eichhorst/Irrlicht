@@ -78,17 +78,3 @@ type ProcessWatcher interface {
 	Close() error
 }
 
-// GracePeriodTimer manages per-session idle timers. When a session has no
-// transcript activity for a grace period and no open tool calls, it fires
-// a callback to transition the session to waiting.
-type GracePeriodTimer interface {
-	// Reset restarts the grace period timer for a session. Called on
-	// each transcript activity event. transcriptPath is needed to
-	// compute metrics when the timer fires.
-	Reset(sessionID string, transcriptPath string)
-	// Stop cancels the timer for a session. Called when a session ends.
-	Stop(sessionID string)
-	// StopAll cancels all active timers.
-	StopAll()
-}
-

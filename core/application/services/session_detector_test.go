@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"irrlicht/core/domain/session"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/session"
 )
 
 // --- tests -------------------------------------------------------------------
@@ -14,16 +14,14 @@ import (
 func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	// Send a new session event.
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
 		SessionID:      "new1",
@@ -31,7 +29,6 @@ func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
 		TranscriptPath: "/home/.claude/projects/-Users-test-project/new1.jsonl",
 	}
 
-	// Wait for processing.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	<-done
@@ -49,20 +46,13 @@ func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
 	if state.Confidence != "medium" {
 		t.Errorf("confidence: got %q, want medium", state.Confidence)
 	}
-
-	// Grace period timer should have been reset.
-	if _, ok := gp.resets["new1"]; !ok {
-		t.Error("grace period timer should have been reset for new session")
-	}
 }
 
-func TestSessionDetector_Activity_ResetsGraceTimer(t *testing.T) {
+func TestSessionDetector_Activity_StaysWorking_WhenToolUse(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	// Pre-create a session.
 	repo.states["act1"] = &session.SessionState{
 		SessionID:      "act1",
 		State:          session.StateWorking,
@@ -70,9 +60,13 @@ func TestSessionDetector_Activity_ResetsGraceTimer(t *testing.T) {
 		FirstSeen:      time.Now().Unix(),
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     1,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "tool_use",
+			HasOpenToolCall: true,
+		},
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -89,36 +83,117 @@ func TestSessionDetector_Activity_ResetsGraceTimer(t *testing.T) {
 	cancel()
 	<-done
 
-	if path, ok := gp.resets["act1"]; !ok {
-		t.Error("grace period timer should have been reset")
-	} else if path != "/home/.claude/projects/-Users-test/act1.jsonl" {
-		t.Errorf("grace timer transcript path: got %q", path)
+	state, _ := repo.Load("act1")
+	if state.State != session.StateWorking {
+		t.Errorf("state: got %q, want working (tool_use is still working)", state.State)
+	}
+}
+
+func TestSessionDetector_Activity_TransitionsToWaiting_WhenAssistantDone(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	repo.states["wait1"] = &session.SessionState{
+		SessionID:      "wait1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/wait1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant",
+			HasOpenToolCall: false,
+		},
 	}
 
-	state, _ := repo.Load("act1")
-	if state.EventCount != 2 {
-		t.Errorf("event count: got %d, want 2", state.EventCount)
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "wait1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/wait1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("wait1")
+	if state.State != session.StateWaiting {
+		t.Errorf("state: got %q, want waiting (assistant done, no open tools)", state.State)
+	}
+	if state.WaitingStartTime == nil {
+		t.Error("WaitingStartTime should be set")
+	}
+}
+
+func TestSessionDetector_Activity_StaysWorking_WhenAssistantButOpenTools(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	repo.states["otc1"] = &session.SessionState{
+		SessionID:      "otc1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/otc1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant",
+			HasOpenToolCall: true,
+		},
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "otc1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/otc1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("otc1")
+	if state.State != session.StateWorking {
+		t.Errorf("state: got %q, want working (open tool call)", state.State)
 	}
 }
 
 func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
 	now := time.Now().Unix()
 	repo.states["wake1"] = &session.SessionState{
-		SessionID:      "wake1",
-		State:          session.StateWaiting,
-		TranscriptPath: "/home/.claude/projects/-Users-test/wake1.jsonl",
-		FirstSeen:      now,
-		UpdatedAt:      now,
+		SessionID:        "wake1",
+		State:            session.StateWaiting,
+		TranscriptPath:   "/home/.claude/projects/-Users-test/wake1.jsonl",
+		FirstSeen:        now,
+		UpdatedAt:        now,
 		WaitingStartTime: &now,
-		EventCount:     3,
+		EventCount:       3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "user",
+			HasOpenToolCall: false,
+		},
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -147,7 +222,6 @@ func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
 func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
 	repo.states["rm1"] = &session.SessionState{
@@ -157,7 +231,7 @@ func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
 		UpdatedAt: time.Now().Unix(),
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -176,26 +250,21 @@ func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
 	if state.State != session.StateReady {
 		t.Errorf("state: got %q, want ready", state.State)
 	}
-
-	if !gp.stops["rm1"] {
-		t.Error("grace period timer should have been stopped")
-	}
 }
 
 func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
 	repo.states["rm2"] = &session.SessionState{
 		SessionID: "rm2",
-		State:     session.StateReady, // already terminal
+		State:     session.StateReady,
 		FirstSeen: time.Now().Unix(),
 		UpdatedAt: time.Now().Unix(),
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -216,62 +285,11 @@ func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 	}
 }
 
-func TestSessionDetector_GracePeriodExpiry_TransitionsToWaiting(t *testing.T) {
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
-	repo := newMockRepo()
-
-	repo.states["gp1"] = &session.SessionState{
-		SessionID: "gp1",
-		State:     session.StateWorking,
-		FirstSeen: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
-	}
-
-	det := newDetector(tw, pw, gp, repo)
-
-	det.HandleGracePeriodExpiry("gp1")
-
-	state, _ := repo.Load("gp1")
-	if state.State != session.StateWaiting {
-		t.Errorf("state: got %q, want waiting", state.State)
-	}
-	if state.WaitingStartTime == nil {
-		t.Error("WaitingStartTime should be set")
-	}
-}
-
-func TestSessionDetector_GracePeriodExpiry_SkipsNonWorking(t *testing.T) {
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
-	repo := newMockRepo()
-
-	repo.states["gp2"] = &session.SessionState{
-		SessionID: "gp2",
-		State:     session.StateWaiting, // already waiting
-		FirstSeen: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
-	}
-
-	det := newDetector(tw, pw, gp, repo)
-
-	det.HandleGracePeriodExpiry("gp2")
-
-	state, _ := repo.Load("gp2")
-	if state.State != session.StateWaiting {
-		t.Errorf("state should remain waiting, got %q", state.State)
-	}
-}
-
 func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	// Pre-existing parent session with open tool call.
 	repo.states["parent1"] = &session.SessionState{
 		SessionID:      "parent1",
 		State:          session.StateWorking,
@@ -281,13 +299,12 @@ func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
 		Metrics:        &session.SessionMetrics{HasOpenToolCall: true},
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	// First, register the parent in projectSessions by sending an activity event.
 	tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
 		SessionID:      "parent1",
@@ -296,7 +313,6 @@ func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
 	}
 	time.Sleep(30 * time.Millisecond)
 
-	// Now a new session appears in the same project directory.
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
 		SessionID:      "child1",
@@ -320,10 +336,8 @@ func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
 func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	// Parent working session without metrics (no HasOpenToolCall info).
 	repo.states["parent2"] = &session.SessionState{
 		SessionID:      "parent2",
 		State:          session.StateWorking,
@@ -332,13 +346,12 @@ func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
 		UpdatedAt:      time.Now().Unix(),
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	// Register parent.
 	tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
 		SessionID:      "parent2",
@@ -347,7 +360,6 @@ func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
 	}
 	time.Sleep(30 * time.Millisecond)
 
-	// New child session.
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
 		SessionID:      "child2",
@@ -360,7 +372,6 @@ func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
 	<-done
 
 	state, _ := repo.Load("child2")
-	// Fallback: single working session in same project dir → parent.
 	if state.ParentSessionID != "parent2" {
 		t.Errorf("parent_session_id: got %q, want parent2", state.ParentSessionID)
 	}
@@ -369,7 +380,6 @@ func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
 func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
 	repo.states["other1"] = &session.SessionState{
@@ -381,13 +391,12 @@ func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
 		Metrics:        &session.SessionMetrics{HasOpenToolCall: true},
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	// Register "other1" in a different project dir.
 	tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
 		SessionID:      "other1",
@@ -396,7 +405,6 @@ func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
 	}
 	time.Sleep(30 * time.Millisecond)
 
-	// New session in a different project dir.
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
 		SessionID:      "lone1",
@@ -417,10 +425,8 @@ func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
 func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	// Session already exists (no transcript path yet).
 	repo.states["hook1"] = &session.SessionState{
 		SessionID: "hook1",
 		State:     session.StateWorking,
@@ -428,7 +434,7 @@ func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 		UpdatedAt: time.Now().Unix(),
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -454,10 +460,9 @@ func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 func TestSessionDetector_ContextCancel_StopsGracefully(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -469,27 +474,19 @@ func TestSessionDetector_ContextCancel_StopsGracefully(t *testing.T) {
 	if err != context.Canceled {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
-	if gp.stopAll != 1 {
-		t.Errorf("StopAll should have been called once, got %d", gp.stopAll)
-	}
-	if tw.unsubs != 1 {
-		t.Errorf("Unsubscribe should have been called once, got %d", tw.unsubs)
-	}
 }
 
 func TestSessionDetector_Activity_UnknownSession_TreatedAsNew(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	// Activity event for an unknown session → should create it.
 	tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
 		SessionID:      "unknown1",
@@ -513,7 +510,6 @@ func TestSessionDetector_Activity_UnknownSession_TreatedAsNew(t *testing.T) {
 func TestSessionDetector_HandleProcessExit_TransitionsToReady(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
 	repo.states["exit1"] = &session.SessionState{
@@ -524,7 +520,7 @@ func TestSessionDetector_HandleProcessExit_TransitionsToReady(t *testing.T) {
 		UpdatedAt: time.Now().Unix(),
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	det.HandleProcessExit(12345, "exit1")
 
@@ -538,28 +534,22 @@ func TestSessionDetector_HandleProcessExit_TransitionsToReady(t *testing.T) {
 	if state.LastEvent != "process_exit" {
 		t.Errorf("last_event: got %q, want process_exit", state.LastEvent)
 	}
-
-	// Grace period timer should have been stopped.
-	if !gp.stops["exit1"] {
-		t.Error("grace period timer should have been stopped")
-	}
 }
 
 func TestSessionDetector_HandleProcessExit_SkipsTerminalState(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
 	repo.states["exit2"] = &session.SessionState{
 		SessionID: "exit2",
-		State:     session.StateReady, // already terminal
+		State:     session.StateReady,
 		PID:       12345,
 		FirstSeen: time.Now().Unix(),
 		UpdatedAt: time.Now().Unix(),
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	det.HandleProcessExit(12345, "exit2")
 
@@ -572,24 +562,17 @@ func TestSessionDetector_HandleProcessExit_SkipsTerminalState(t *testing.T) {
 func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	// Should not panic for unknown session.
 	det.HandleProcessExit(99999, "nonexistent")
-
-	// Grace period timer should still be stopped (defensive).
-	if !gp.stops["nonexistent"] {
-		t.Error("grace period timer should have been stopped even for unknown session")
-	}
 }
 
 func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
-	gp := newMockGraceTimer()
 	repo := newMockRepo()
 
 	repo.states["seed1"] = &session.SessionState{
@@ -600,7 +583,6 @@ func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
 		FirstSeen:      time.Now().Unix(),
 		UpdatedAt:      time.Now().Unix(),
 	}
-	// Ready session should NOT be seeded.
 	repo.states["seed2"] = &session.SessionState{
 		SessionID: "seed2",
 		State:     session.StateReady,
@@ -609,7 +591,7 @@ func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
 		UpdatedAt: time.Now().Unix(),
 	}
 
-	det := newDetector(tw, pw, gp, repo)
+	det := newDetector(tw, pw, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -619,15 +601,39 @@ func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
 	cancel()
 	<-done
 
-	// Active session PID should be registered.
 	if sid, ok := pw.watched[42]; !ok {
 		t.Error("PID 42 should be watched")
 	} else if sid != "seed1" {
 		t.Errorf("PID 42 session: got %q, want seed1", sid)
 	}
 
-	// Ready session PID should NOT be registered.
 	if _, ok := pw.watched[99]; ok {
 		t.Error("PID 99 should not be watched (ready session)")
+	}
+}
+
+func TestIsWaitingForInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics *session.SessionMetrics
+		want    bool
+	}{
+		{"nil metrics", nil, false},
+		{"assistant, no open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
+		{"assistant_message, no open tools", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
+		{"assistant_output, no open tools", &session.SessionMetrics{LastEventType: "assistant_output", HasOpenToolCall: false}, true},
+		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},
+		{"tool_use", &session.SessionMetrics{LastEventType: "tool_use", HasOpenToolCall: true}, false},
+		{"tool_result", &session.SessionMetrics{LastEventType: "tool_result", HasOpenToolCall: false}, false},
+		{"user", &session.SessionMetrics{LastEventType: "user", HasOpenToolCall: false}, false},
+		{"empty", &session.SessionMetrics{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.metrics.IsWaitingForInput()
+			if got != tt.want {
+				t.Errorf("IsWaitingForInput() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

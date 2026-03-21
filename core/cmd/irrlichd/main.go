@@ -20,7 +20,6 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
-	graceperiodadapter "irrlicht/core/adapters/outbound/graceperiod"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
 	"irrlicht/core/adapters/outbound/logging"
@@ -109,8 +108,8 @@ func main() {
 
 	// --- File-based SessionDetector (primary detection path) ---
 	// Forward-reference: detector is assigned before any callbacks can fire,
-	// because ProcessWatcher and GracePeriodTimer only invoke callbacks after
-	// SessionDetector.Run() subscribes to TranscriptWatcher events.
+	// because ProcessWatcher only invokes callbacks after
+	// SessionDetector.Run() subscribes to AgentWatcher events.
 	var detector *services.SessionDetector
 
 	// ProcessWatcher: kqueue EVFILT_PROC NOTE_EXIT monitoring.
@@ -132,11 +131,6 @@ func main() {
 		}()
 		defer pw.Close()
 	}
-
-	// GracePeriodTimer: per-session 2s idle timer → waiting when no open tool calls.
-	gpTimer := graceperiodadapter.New(2*time.Second, func(sessionID string) {
-		detector.HandleGracePeriodExpiry(sessionID)
-	})
 
 	// HTTP mux.
 	mux := http.NewServeMux()
@@ -226,9 +220,9 @@ func main() {
 	codexWatcher := codex.New(cfg.MaxSessionAge)
 	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher}
 
-	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher + GracePeriodTimer.
+	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
-		watchers, pwPort, gpTimer,
+		watchers, pwPort,
 		memRepo, logger, gitResolver, metricsCollector, push,
 	)
 	{

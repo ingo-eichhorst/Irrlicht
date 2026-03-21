@@ -138,6 +138,11 @@ type SessionMetrics struct {
 	// Tool call tracking — count unmatched tool_use/tool_result pairs
 	HasOpenToolCall  bool `json:"has_open_tool_call"`            // True when OpenToolCallCount > 0
 	OpenToolCallCount int `json:"open_tool_call_count,omitempty"` // Number of tool_use events without matching tool_result
+
+	// LastEventType is the event type of the most recent message event in
+	// the transcript (e.g. "assistant", "user", "tool_use", "tool_result").
+	// Used for content-based working/waiting detection.
+	LastEventType string `json:"last_event_type,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -353,6 +358,7 @@ func (t *TranscriptTailer) isMessageEvent(eventType string) bool {
 func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
 	t.metrics.MessageHistory = append(t.metrics.MessageHistory, event)
 	t.metrics.LastMessageAt = event.Timestamp
+	t.metrics.LastEventType = event.EventType
 
 	// Update session start time if this is earlier
 	if t.metrics.SessionStartAt.IsZero() || event.Timestamp.Before(t.metrics.SessionStartAt) {
