@@ -694,26 +694,28 @@ class SessionManager: ObservableObject {
 
         let sessionFilePath = instancesPath.appendingPathComponent("\(sessionId).json")
 
-        do {
-            // Remove session file
-            try FileManager.default.removeItem(at: sessionFilePath)
-
-            // Remove from session order
-            sessionOrder.removeAll { $0 == sessionId }
-            saveSessionOrder()
-
-            // In WebSocket mode, optimistically update the in-memory map.
-            if !useFilePolling {
-                sessionMap.removeValue(forKey: sessionId)
-                rebuildSessionsFromMap()
+        // Remove session file if it exists on disk.
+        if FileManager.default.fileExists(atPath: sessionFilePath.path) {
+            do {
+                try FileManager.default.removeItem(at: sessionFilePath)
+            } catch {
+                print("❌ Failed to delete session file: \(error)")
+                lastError = "Failed to delete session: \(error.localizedDescription)"
+                return
             }
-
-            print("✅ Successfully deleted session \(sessionId)")
-
-        } catch {
-            print("❌ Failed to delete session: \(error)")
-            lastError = "Failed to delete session: \(error.localizedDescription)"
         }
+
+        // Remove from session order
+        sessionOrder.removeAll { $0 == sessionId }
+        saveSessionOrder()
+
+        // In WebSocket mode, optimistically update the in-memory map.
+        if !useFilePolling {
+            sessionMap.removeValue(forKey: sessionId)
+            rebuildSessionsFromMap()
+        }
+
+        print("✅ Successfully deleted session \(sessionId)")
     }
 
     // MARK: - Debug State Dump (IRRLICHT_DEBUG=1)
