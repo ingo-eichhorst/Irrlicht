@@ -1,183 +1,157 @@
-# Irrlicht Session Detection — State Machine
-
-Irrlicht uses transcript file-watching (FSEvents) and process monitoring (kqueue) to
-detect coding assistant sessions without requiring hooks.
+# Irrlicht Session State Machine
 
 ## States (3, MECE)
 
 | State | Definition |
 |-------|-----------|
 | **`working`** | Agent actively processing (tools, text generation, hooks, compaction, API retries) |
-| **`waiting`** | User-blocking tool open — agent needs user to respond (AskUserQuestion, ExitPlanMode) |
-| **`ready`** | Agent idle: finished turn at prompt, waiting for next user message |
+| **`waiting`** | User-blocking tool open -- agent needs user to respond (AskUserQuestion, ExitPlanMode) |
+| **`ready`** | Agent idle at prompt, waiting for next user message |
 
-### MECE Decision Tree
+### Decision Tree
 
-Three-level decision tree covers all possible states:
-1. Is there an open user-blocking tool? **Yes** → `waiting`
-2. Is the agent actively processing? **Yes** → `working`
-3. Otherwise → `ready`
+1. Is there an open user-blocking tool? **Yes** -> `waiting`
+2. Is the agent actively processing? **Yes** -> `working`
+3. Otherwise -> `ready`
 
-## Detection Mechanisms
+---
 
-| Mechanism | Technology | Detects |
-|-----------|-----------|---------|
-| **TranscriptWatcher** | fsnotify (FSEvents on macOS) | New sessions, activity, removals |
-| **ProcessWatcher** | kqueue EVFILT_PROC NOTE_EXIT | Process exit → session removed |
-| **TailerPipeline** | JSONL transcript parsing | Model, tokens, open tool calls, tool names |
+## Application Lifecycle Events
 
-## State Transitions
+These events manage the existence of sessions -- creation and deletion. They are independent of the working/waiting/ready state machine.
 
-| ID | From | To | Trigger | Detection |
-|----|------|----|---------|-----------|
-| T0 | — | `ready` | Agent started | FSEvents CREATE on .jsonl |
-| T1 | `ready` | `working` | New .jsonl file | FSEvents CREATE |
-| T2 | `working` | `ready` | Agent finished turn | `IsAgentDone()=true` |
-| T3 | `ready` | `working` | New activity | FSEvents WRITE on ready session |
-| T4 | `working` | **removed** | Process exited | kqueue NOTE_EXIT |
-| T5 | `waiting` | **removed** | Process exited | kqueue NOTE_EXIT |
-| T6 | `working` | **removed** | Transcript deleted | FSEvents REMOVE |
-| T7 | `working` | `waiting` | User-blocking tool open | `NeedsUserAttention()=true` |
-| T8 | `waiting` | `working` | User responded | `NeedsUserAttention()=false` |
-| T9 | any | **removed** | Process exit or transcript deletion | kqueue NOTE_EXIT / FSEvents REMOVE |
+| User Scenario | Before | After | Technical Trigger | Detection |
+|--------------|--------|-------|-------------------|-----------|
+| User opens Claude Code | no session | `ready` | `claude` process appears | Process scanner (`pgrep -x claude`, 1s poll) |
+| User types first message | pre-session exists | real session created | New `.jsonl` file created | fsnotify CREATE |
+| Real transcript appears for pre-session | pre-session + real session | real session only | `cleanupPreSessionsForProject` | Automatic on EventNewSession with transcript path |
+| User exits normally (`/quit`, Ctrl-D) | any state | **deleted** | Process exits | kqueue NOTE_EXIT |
+| User cancels (ESC) | any state | **deleted** | Process exits | kqueue NOTE_EXIT |
+| Process killed (SIGKILL, SIGTERM, crash) | any state | **deleted** | Process exits | kqueue NOTE_EXIT |
+| Transcript file deleted | any state | `ready` | File removed from disk | fsnotify REMOVE |
+| Daemon starts, finds dead PID on disk | session file exists | **deleted** | `syscall.Kill(pid, 0)` returns ESRCH | Synchronous check in `seedFromDisk` |
+| Dead PID detected during runtime | session exists | **deleted** | `syscall.Kill(pid, 0)` returns ESRCH | Periodic liveness sweep (5s) |
 
-**removed** = session is deleted from the display entirely. There is no `removed` state — the session ceases to exist. This applies to any process termination (SIGKILL, SIGTERM, crash, or normal exit via `/quit`) and to transcript deletion.
+**deleted** = session file removed from disk and memory, `session_deleted` broadcast via WebSocket. The session ceases to exist.
+
+### Pre-session Lifecycle
+
+Pre-sessions (`proc-<pid>`) are synthetic sessions created by the process scanner before any transcript exists. They allow the UI to show a session as soon as the user opens Claude Code.
+
+1. Process scanner detects `claude` process via `pgrep`
+2. Checks `hasActiveSession`: skips if a transcript was modified in the last 60s (file watcher handles those)
+3. Creates pre-session with `proc-<pid>` ID, state `ready`
+4. When real transcript arrives, pre-session is deleted and replaced by the real session
+
+### PID Discovery and Monitoring
+
+| Step | Mechanism | Details |
+|------|-----------|---------|
+| Discovery | `lsof -t <transcript>` | One-shot on session creation; retried async on activity if PID=0 |
+| Registration | `EVFILT_PROC NOTE_EXIT` | kqueue watches the PID for exit |
+| Liveness sweep | `syscall.Kill(pid, 0)` | Every 5s, checks all sessions; deletes dead ones |
+| Startup cleanup | `syscall.Kill(pid, 0)` | Synchronous in `seedFromDisk`; dead PIDs deleted before kqueue registration |
+
+---
+
+## Session State Transitions
+
+These transitions change the working/waiting/ready state of an existing session.
+
+| User Scenario | Before | After | Technical Trigger | Detection |
+|--------------|--------|-------|-------------------|-----------|
+| User sends message, assistant starts | `ready` | `working` | Transcript write | fsnotify WRITE, `NeedsUserAttention()=false`, `IsAgentDone()=false` |
+| Assistant calls tool (stop_reason=tool_use) | `working` | `working` | Transcript write | Open tool call count > 0 |
+| Tool result returned, assistant continues | `working` | `working` | Transcript write | Activity event, agent still processing |
+| Assistant finished turn (end_turn) | `working` | `ready` | `turn_duration` or `stop_hook_summary` system event | `IsAgentDone()=true` |
+| User cancelled mid-turn (ESC) | `working` | `ready` | `stop_hook_summary` system event | `IsAgentDone()=true` |
+| AskUserQuestion tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
+| ExitPlanMode tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
+| User answers question / approves plan | `waiting` | `working` | Tool result in transcript | `NeedsUserAttention()=false` |
 
 ### Impossible Transitions
 
-- `ready` → `waiting`: Cannot skip `working`; any activity goes through `working` first
-- `waiting` → `ready` (via content): Agent cannot finish while a blocking tool is open; only process exit clears it (as removal)
+- `ready` -> `waiting`: Cannot skip `working`; any activity goes through `working` first
+- `waiting` -> `ready` (via content): Agent cannot finish while a blocking tool is open; only process exit clears it (as deletion)
 
-## State Diagram
-
-```
-                  ┌──────────┐
-   T1             │          │◄──────────────────────────────┐
-  (new file)──────►  working │                               │
-                  │          ├───────T4,T6──────┐            │
-                  └──┬───▲───┘  (exit/remove)   │            │
-                     │   │                      │        T3  │
-                T7   │   │  T8                  │  (new      │
-          (user-     │   │ (user                │   activity)│
-           blocking  │   │  responded)          ▼            │
-           tool)     │   │               [session removed]   │
-                  ┌──▼───┴───┐                               │
-                  │          ├──T5─(exit)──[session removed] │
-                  │ waiting  │                               │
-                  │          │        ┌────────┐             │
-                  └──────────┘        │  ready │◄─── T2 ────┘
-                                      │        │  (agent done)
-                                      └────────┘
-```
+---
 
 ## Core Detection Logic
 
-**`NeedsUserAttention()`** → triggers `waiting`:
+### `NeedsUserAttention()` -> triggers `waiting`
+
 ```
-HasOpenToolCall=true AND any LastOpenToolName ∈ {AskUserQuestion, ExitPlanMode}
+HasOpenToolCall=true AND any LastOpenToolName in {AskUserQuestion, ExitPlanMode}
 ```
 
-**`IsAgentDone()`** → triggers `ready`:
+### `IsAgentDone()` -> triggers `ready`
+
 ```
-HasOpenToolCall=false AND LastEventType ∈ {assistant, assistant_message, assistant_output}
+Primary:  LastEventType == "turn_done"
+Fallback: HasOpenToolCall=false AND LastEventType in {assistant_message, assistant_output}
 ```
+
+### Turn Completion Signals
+
+The transcript tailer maps these system events to `LastEventType = "turn_done"`:
+
+| System Subtype | When Written |
+|---------------|-------------|
+| `turn_duration` | End of each agent turn (primary signal) |
+| `stop_hook_summary` | After stop hooks run (fallback when turn_duration is absent) |
+
+### Transcript Event Classification
+
+**Message events** (affect `LastEventType`):
+`user`, `assistant`, `tool_use`, `tool_call`, `tool_result`, `user_message`, `assistant_message`, `user_input`, `assistant_output`, `message`
+
+**System events** (do NOT affect `LastEventType`, except turn completion):
+`turn_duration`, `stop_hook_summary`, `local_command`, `compact_boundary`, `api_error`
+
+**Management events** (ignored):
+`permission-mode`, `attachment`, `file-history-snapshot`, `progress`, `last-prompt`
 
 ### User-Blocking Tools
-
-Tools that suspend the agent and wait for user interaction before returning:
 
 | Tool | Description |
 |------|-------------|
 | `AskUserQuestion` | Explicitly asks the user a question |
 | `ExitPlanMode` | Asks the user to approve the plan |
 
-### Message Events (affect `LastEventType`)
-
-```
-user, assistant, tool_use, tool_call, tool_result,
-user_message, assistant_message, user_input, assistant_output, message
-```
-
-### Non-Message Events (do NOT affect `LastEventType`)
-
-System: `stop_hook_summary`, `turn_duration`, `local_command`, `compact_boundary`, `api_error`  
-Management: `permission-mode`, `attachment`, `file-history-snapshot`, `progress`, `last-prompt`
-
-## Scenario Mapping
-
-| Scenario | State |
-|----------|-------|
-| New transcript file appears | `ready` |
-| User sent message, assistant generating | `working` |
-| Assistant called tool (stop_reason=tool_use) | `working` |
-| Tool executing | `working` |
-| Tool result returned, assistant continues | `working` |
-| Multiple parallel tools, some pending | `working` |
-| Subagent spawned (Agent tool) | `working` |
-| Background bash command running | `working` |
-| Context compaction | `working` |
-| API error, retrying | `working` |
-| Hooks running | `working` |
-| Slash command executing | `working` |
-| Session opened, no first message yet | `working` |
-| Permission prompt (open tool, idle) | `working` |
-| `AskUserQuestion` tool open | `waiting` |
-| `ExitPlanMode` tool open | `waiting` |
-| Assistant finished (end_turn, no tools) | `ready` |
-| User pressed ESC / cancelled | `ready` |
-| Process exited (SIGTERM, SIGKILL, crash, `/quit`) | **removed** |
-| Transcript deleted | **removed** |
-| Session never started | **removed** |
-| Stale orphaned session (no PID, no activity) | **removed** |
+---
 
 ## Subagent Detection
 
-Parent-child relationships derived from a working session with an open `Agent` tool call in the same project dir. Parent sessions carry a `SubagentSummary` with aggregate child state counts:
+Parent-child relationships derived from a working session with an open `Agent` tool call in the same project dir. Parent sessions carry a `SubagentSummary`:
 
 ```
-SubagentSummary {
-    total:   int
-    working: int
-    waiting: int
-    ready:   int
-}
+SubagentSummary { total, working, waiting, ready int }
 ```
 
 Subagent sessions run independent state machines with the same 3 states.
 
-## Process Exit Detection
-
-One-time `lsof -F p <transcript_path>` at session creation → PID → `EVFILT_PROC NOTE_EXIT`.
-
-When NOTE_EXIT fires for any reason (SIGKILL, SIGTERM, crash, clean exit), the session is removed immediately — it is not transitioned to `ready`. A session without a resolvable PID is treated as an orphan and cleaned up.
-
-## Session Discovery Paths
-
-| Assistant | Transcript location |
-|-----------|-------------------|
-| Claude Code | `~/.claude/projects/**/*.jsonl` |
-| OpenAI Codex | `~/.codex/**/*.jsonl` |
-
-## State Persistence
-
-State files stored in `~/Library/Application Support/Irrlicht/instances/<sessionID>.json`
-with atomic writes. Real-time updates fan out via WebSocket to the SwiftUI menu bar app.
-On session removal, the state file is deleted.
+---
 
 ## Orthogonal Axes (not states)
 
-These overlay on the state machine without adding new states:
-
 | Axis | Values |
 |------|--------|
-| **CompactionState** | `not_compacting` \| `compacting` \| `post_compact` — overlaid on `working` |
-| **Adapter** | `claude-code` \| `codex` \| future — identifies source agent |
-| **PressureLevel** | `safe` \| `caution` \| `warning` \| `critical` — context window utilization |
+| **CompactionState** | `not_compacting` / `compacting` / `post_compact` -- overlaid on `working` |
+| **Adapter** | `claude-code` / `codex` / future -- identifies source agent |
+| **PressureLevel** | `safe` / `caution` / `warning` / `critical` -- context window utilization |
 
-## Adding a New Agent Adapter
+---
 
-1. Create adapter in `core/adapters/inbound/agents/<name>/adapter.go`
-2. Point to the agent's transcript directory
-3. If JSONL format differs, implement custom `MetricsCollector` producing `SessionMetrics`
-4. Register watcher in `main.go`
-5. State machine logic is identical — no changes needed
+## State Persistence
+
+Session files: `~/Library/Application Support/Irrlicht/instances/<sessionID>.json`
+Atomic writes via temp file + rename. Real-time updates fan out via WebSocket (`session_created`, `session_updated`, `session_deleted`).
+
+Memory store merges disk on `ListAll` to pick up sessions created externally (e.g. by `irrlicht-hook`).
+
+## Session Discovery Paths
+
+| Assistant | Transcript Location |
+|-----------|-------------------|
+| Claude Code | `~/.claude/projects/**/*.jsonl` |
+| OpenAI Codex | `~/.codex/**/*.jsonl` |

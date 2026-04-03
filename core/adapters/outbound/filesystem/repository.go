@@ -109,6 +109,15 @@ func (r *SessionRepository) ListAll() ([]*session.SessionState, error) {
 		if err := json.Unmarshal(data, &state); err != nil {
 			continue
 		}
+		validStates := map[string]bool{
+			session.StateWorking: true,
+			session.StateWaiting: true,
+			session.StateReady:   true,
+		}
+		if !validStates[state.State] {
+			os.Remove(filepath.Join(r.instancesDir, name))
+			continue
+		}
 		states = append(states, &state)
 	}
 	return states, nil
