@@ -267,18 +267,12 @@ struct SessionListView: View {
     var projectGroups: [ProjectGroup] {
         let groups = sessionGroups
 
-        // Group session groups by project directory (lastPathComponent of cwd)
+        // Group session groups by project name (from git repo root).
+        // Sessions in different worktrees of the same repo share the same project name.
         var grouped: [String: [SessionGroup]] = [:]
         for group in groups {
-            let cwd = group.parent.cwd
-            let projectDir: String
-            if cwd.isEmpty {
-                projectDir = "unknown"
-            } else {
-                let lastComponent = URL(fileURLWithPath: cwd).lastPathComponent
-                projectDir = lastComponent.isEmpty ? "unknown" : lastComponent
-            }
-            grouped[projectDir, default: []].append(group)
+            let project = group.parent.projectName ?? "unknown"
+            grouped[project, default: []].append(group)
         }
 
         // Convert to ProjectGroup array, sorted by project name
@@ -342,178 +336,116 @@ struct SessionListView: View {
 
 // MARK: - Session Row View
 
-struct SessionRowView: View {
-    let session: SessionState
-    @State private var isHovered = false
-    
+struct ContextBar: View {
+    let utilization: Double
+    let pressureColor: String
+
     var body: some View {
-        HStack(spacing: 8) {
-            // State glyph
-            Image(systemName: session.state.glyph)
-                .font(.system(.body))
-                .foregroundColor(Color(hex: session.state.color))
-                .frame(width: 16)
-                .accessibilityIdentifier("session-state-icon-\(session.id)")
-                .accessibilityLabel("\(session.state.rawValue) state")
-            
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(session.projectName ?? "unknown")
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundColor(.primary)
-                    
-                    Text("·")
-                        .foregroundColor(.secondary)
-                    
-                    Text(session.state.rawValue)
-                        .font(.body)
-                        .foregroundColor(Color(hex: session.state.color))
-                    
-                    Spacer()
-                    
-                    // Show action buttons on hover
-                    if isHovered {
-                        SessionActionButtons(session: session)
-                    }
-                    
-                    TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
-                        let formatter = RelativeDateTimeFormatter()
-                        formatter.unitsStyle = .abbreviated
-                        return Text(formatter.localizedString(for: session.updatedAt, relativeTo: timeline.date))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                if let branch = session.gitBranch {
-                    HStack {
-                        Text("(\(branch))")
-                            .font(.caption2)
-                            .foregroundColor(.secondary.opacity(0.8))
-                        
-                        Spacer()
-                    }
-                }
-                
-                HStack {
-                    Text(session.effectiveModel)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .accessibilityIdentifier("session-model-label-\(session.id)")
-                        .accessibilityLabel("model \(session.effectiveModel)")
-
-                    Spacer()
-
-                    if session.safeEventCount > 0 {
-                        Text("\(session.safeEventCount) events")
-                            .font(.caption2)
-                            .foregroundColor(Color.secondary.opacity(0.7))
-                    }
-                }
-                
-                // Show metrics if available
-                if let metrics = session.metrics {
-                    let isActive = session.state == .working || session.state == .waiting
-                    TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
-                        let _ = timeline.date // Force refresh every second
-                        HStack(spacing: 0) {
-                            // Elapsed time (left-aligned)
-                            HStack {
-                                if isActive {
-                                    let elapsedSeconds = Int64(Date().timeIntervalSince(session.firstSeen))
-                                    if elapsedSeconds > 0 {
-                                        Label(metrics.formattedRealtimeElapsedTime(sessionFirstSeen: session.firstSeen), systemImage: "clock")
-                                            .font(.caption2)
-                                            .foregroundColor(.primary)
-                                    }
-                                } else {
-                                    // For ready sessions, use stored elapsed time
-                                    if metrics.elapsedSeconds > 0 {
-                                        Label(metrics.formattedElapsedTime, systemImage: "clock")
-                                            .font(.caption2)
-                                            .foregroundColor(.primary)
-                                    }
-                                }
-                                Spacer()
-                            }
-                            .frame(minWidth: 70, alignment: .leading)
-
-                            Spacer()
-
-                            // Context utilization (center)
-                            HStack(spacing: 2) {
-                                if metrics.hasContextData {
-                                    Text(metrics.contextPressureIcon)
-                                        .font(.caption2)
-                                    Text(metrics.formattedContextUtilization)
-                                        .font(.caption2)
-                                        .foregroundColor(Color(hex: metrics.contextPressureColor))
-                                }
-                            }
-                            .frame(minWidth: 50)
-
-                            Spacer()
-
-                            // Token count (right-aligned)
-                            HStack {
-                                Spacer()
-                                if metrics.totalTokens > 0 {
-                                    Label(metrics.formattedTokenCount, systemImage: "textformat.abc")
-                                        .font(.caption2)
-                                        .foregroundColor(.primary)
-                                }
-                            }
-                            .frame(minWidth: 60, alignment: .trailing)
-                        }
-                        .padding(.top, 1)
-                    }
-                    .accessibilityIdentifier("session-context-bar-\(session.id)")
-                    .accessibilityLabel(metrics.hasContextData ? "context \(metrics.formattedContextUtilization)" : "no context data")
-                }
-
-                // Context pressure alert banner (visible at 80%+ for active sessions)
-                if let metrics = session.metrics,
-                   session.state == .working || session.state == .waiting,
-                   metrics.contextUtilization >= 80 {
-                    let isCritical = metrics.contextUtilization >= 95
-                    HStack(spacing: 4) {
-                        Image(systemName: isCritical ? "exclamationmark.triangle.fill" : "exclamationmark.triangle")
-                            .font(.caption2)
-                            .foregroundColor(isCritical ? .red : .orange)
-                        Text("Switch to a fresh session soon")
-                            .font(.caption2)
-                            .foregroundColor(isCritical ? .red : .orange)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background((isCritical ? Color.red : Color.orange).opacity(0.08))
-                    .cornerRadius(4)
-                    .padding(.top, 2)
-                }
-
-                // Subagent summary (when parent has children)
-                if let subs = session.subagents, subs.total > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "person.2.fill")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        let parts = [
-                            subs.working > 0 ? "\(subs.working) working" : nil,
-                            subs.waiting > 0 ? "\(subs.waiting) waiting" : nil,
-                            subs.ready > 0 ? "\(subs.ready) ready" : nil,
-                        ].compactMap { $0 }.joined(separator: ", ")
-                        Text("\(subs.total) agents (\(parts))")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .padding(.top, 1)
-                }
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.secondary.opacity(0.15))
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color(hex: pressureColor))
+                    .frame(width: geo.size.width * min(CGFloat(utilization) / 100, 1.0))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+    }
+}
+
+struct SessionRowView: View {
+    let session: SessionState
+    let agentNumber: Int
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                // State dot
+                Circle()
+                    .fill(Color(hex: session.state.color))
+                    .frame(width: 8, height: 8)
+                    .accessibilityIdentifier("session-state-icon-\(session.id)")
+
+                // Agent number
+                Text("\(agentNumber)")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(width: 12, alignment: .trailing)
+
+                // Subagent count badge
+                if let subs = session.subagents, subs.total > 0 {
+                    Text("\(subs.total)")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .frame(width: 14, height: 14)
+                        .background(Color(hex: session.state.color))
+                        .clipShape(Circle())
+                }
+
+                // Branch name (project name is in the group header)
+                Text(session.gitBranch ?? "—")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+
+                // Context utilization bar
+                if let metrics = session.metrics, metrics.hasContextData {
+                    ContextBar(utilization: metrics.contextUtilization,
+                               pressureColor: metrics.contextPressureColor)
+                        .frame(maxWidth: 80, maxHeight: 8)
+                    Text(metrics.formattedContextUtilization)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(Color(hex: metrics.contextPressureColor))
+                }
+
+                Spacer()
+
+                // Short model name
+                Text(session.shortModelName)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("session-model-label-\(session.id)")
+
+                // Relative time
+                TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
+                    let formatter = RelativeDateTimeFormatter()
+                    let _ = { formatter.unitsStyle = .abbreviated }()
+                    Text(formatter.localizedString(for: session.updatedAt, relativeTo: timeline.date))
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary.opacity(0.6))
+                }
+
+                // Action buttons on hover
+                if isHovered {
+                    SessionActionButtons(session: session)
+                }
+            }
+
+            // Context pressure alert (80%+, active sessions only)
+            if let metrics = session.metrics,
+               (session.state == .working || session.state == .waiting),
+               metrics.contextUtilization >= 80 {
+                let isCritical = metrics.contextUtilization >= 95
+                HStack(spacing: 4) {
+                    Image(systemName: isCritical ? "exclamationmark.triangle.fill" : "exclamationmark.triangle")
+                        .font(.system(size: 9))
+                        .foregroundColor(isCritical ? .red : .orange)
+                    Text("Switch to a fresh session soon")
+                        .font(.system(size: 9))
+                        .foregroundColor(isCritical ? .red : .orange)
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background((isCritical ? Color.red : Color.orange).opacity(0.08))
+                .cornerRadius(4)
+                .padding(.top, 2)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
         .background(isHovered ? Color.accentColor.opacity(0.1) : Color.clear)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -521,7 +453,7 @@ struct SessionRowView: View {
             }
         }
         .accessibilityIdentifier("session-card-\(session.id)")
-        .accessibilityLabel("\(session.projectName ?? "unknown") \(session.state.rawValue) \(session.effectiveModel)")
+        .accessibilityLabel("\(session.projectName ?? "unknown") \(session.state.rawValue) \(session.shortModelName)")
     }
 }
 
@@ -921,7 +853,7 @@ struct ProjectGroupSectionView: View {
             // Session rows (indented under the project header)
             if isExpanded {
                 ForEach(Array(projectGroup.sessionGroups.enumerated()), id: \.element.id) { localIndex, group in
-                    SessionRowView(session: group.parent)
+                    SessionRowView(session: group.parent, agentNumber: localIndex + 1)
                         .padding(.leading, 8)
                         .contentShape(Rectangle())
                         .onTapGesture {

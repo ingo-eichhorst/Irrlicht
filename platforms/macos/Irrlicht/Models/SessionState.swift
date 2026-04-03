@@ -308,4 +308,13 @@ struct SessionState: Identifiable, Codable {
     var safeEventCount: Int {
         eventCount ?? 0
     }
+
+    var shortModelName: String {
+        var short = effectiveModel.replacingOccurrences(of: "claude-", with: "")
+        // "sonnet-4-6" → "sonnet-4.6"
+        if let range = short.range(of: #"-(\d+)$"#, options: .regularExpression) {
+            short = short.replacingCharacters(in: range, with: "." + short[range].dropFirst())
+        }
+        return short
+    }
 }

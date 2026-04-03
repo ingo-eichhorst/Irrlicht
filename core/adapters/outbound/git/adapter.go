@@ -35,11 +35,26 @@ func (a *Adapter) GetBranch(dir string) string {
 	return branch
 }
 
-// GetProjectName returns the last path component of dir as the project name.
+// GetProjectName returns the project name for the given directory.
+// It uses the git repo root directory name so that sessions in subdirectories
+// of the same repo share the same project name.
+// Falls back to filepath.Base(dir) if not inside a git repo.
 func (a *Adapter) GetProjectName(dir string) string {
 	if dir == "" {
 		return ""
 	}
+	// Try to resolve git repo root — sessions in the same repo share one project name.
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	if out, err := cmd.Output(); err == nil {
+		if root := strings.TrimSpace(string(out)); root != "" {
+			name := filepath.Base(root)
+			if name != "" && name != "." && name != "/" {
+				return name
+			}
+		}
+	}
+	// Fallback for non-git directories.
 	name := filepath.Base(dir)
 	if name == "." || name == "/" || name == "" {
 		return ""

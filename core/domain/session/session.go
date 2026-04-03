@@ -36,23 +36,45 @@ type SessionMetrics struct {
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 }
 
-// NeedsUserAttention returns true when any tool call is open (tool_use
-// without a matching tool_result). This covers permission prompts,
-// AskUserQuestion, ExitPlanMode, and any other blocking tool. For
-// fast-executing tools the "waiting" state is brief and harmless.
+// NeedsUserAttention returns true when a tool call is open and the agent
+// may be waiting for user input (permission prompt, question, plan approval).
+// The only exception is the Agent tool — open Agent calls mean sub-agents
+// are running in-process, so the session is working, not waiting.
 func (m *SessionMetrics) NeedsUserAttention() bool {
-	if m == nil {
+	if m == nil || !m.HasOpenToolCall {
 		return false
 	}
-	return m.HasOpenToolCall
+	// If all open tool names are "Agent", the session is working via sub-agents.
+	if len(m.LastOpenToolNames) > 0 {
+		allAgent := true
+		for _, name := range m.LastOpenToolNames {
+			if name != "Agent" {
+				allAgent = false
+				break
+			}
+		}
+		if allAgent {
+			return false
+		}
+	}
+	return true
 }
 
 // IsAgentDone returns true when the agent finished its turn. The primary
 // signal is Claude Code's "turn_duration" system event which fires exactly
 // once at the end of each turn. Legacy formats (Codex) fall back to the
 // heuristic of "last event is assistant and no open tool calls".
+//
+// Open tool calls (e.g. the Agent tool waiting for a sub-agent) override
+// turn_done: the turn isn't truly complete until all tool results arrive.
 func (m *SessionMetrics) IsAgentDone() bool {
 	if m == nil {
+		return false
+	}
+	// Open tool calls mean the agent is still processing — a sub-agent
+	// spawned via the Agent tool fires turn_done before the tool result
+	// comes back, but the session is NOT idle.
+	if m.HasOpenToolCall {
 		return false
 	}
 	// Primary: Claude Code writes a system/turn_duration event at end of turn.
@@ -60,9 +82,6 @@ func (m *SessionMetrics) IsAgentDone() bool {
 		return true
 	}
 	// Fallback for legacy/Codex transcripts.
-	if m.HasOpenToolCall {
-		return false
-	}
 	switch m.LastEventType {
 	case "assistant_message", "assistant_output":
 		return true

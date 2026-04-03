@@ -137,6 +137,9 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 			// Only watch direct children of the root.
 			if filepath.Dir(name) == w.root {
 				_ = watcher.Add(name)
+				// Scan for .jsonl files already created before the watch was set
+				// (race: sub-agent in a worktree creates dir + transcript together).
+				w.emitExistingFiles(name)
 			}
 			return
 		}
@@ -284,6 +287,38 @@ func (w *Watcher) addExistingDirs(watcher *fsnotify.Watcher) error {
 		}
 	}
 	return nil
+}
+
+// emitExistingFiles scans a newly-watched directory for .jsonl files that were
+// created before the watch was added and emits EventNewSession for each.
+func (w *Watcher) emitExistingFiles(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	projectDir := filepath.Base(dir)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		fullPath := filepath.Join(dir, e.Name())
+		sessionID := extractSessionID(fullPath)
+		if sessionID == "" {
+			continue
+		}
+		size, mtime := fileSizeAndMtime(fullPath)
+		if w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge {
+			continue
+		}
+		w.broadcast(agent.Event{
+			Type:           agent.EventNewSession,
+			Adapter:        w.adapter,
+			SessionID:      sessionID,
+			ProjectDir:     projectDir,
+			TranscriptPath: fullPath,
+			Size:           size,
+		})
+	}
 }
 
 // --- helpers ----------------------------------------------------------------

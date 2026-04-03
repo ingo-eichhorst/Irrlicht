@@ -186,13 +186,6 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			}
 		}
 
-		// Derive parent_session_id from co-located sessions.
-		if parentID := d.deriveParentSessionID(ev.SessionID, ev.ProjectDir); parentID != "" {
-			state.ParentSessionID = parentID
-			d.log.LogInfo("session-detector", ev.SessionID,
-				fmt.Sprintf("derived parent_session_id=%s from project dir %s", parentID, ev.ProjectDir))
-		}
-
 		// Compute initial metrics (no-op for pre-sessions with no transcript).
 		if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
 			state.Metrics = m
@@ -219,20 +212,6 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			if err := d.repo.Save(existing); err != nil {
 				d.log.LogError("session-detector", ev.SessionID,
 					fmt.Sprintf("failed to update transcript path: %v", err))
-			}
-		}
-		// Derive parent if not already set.
-		if existing.ParentSessionID == "" {
-			if parentID := d.deriveParentSessionID(ev.SessionID, ev.ProjectDir); parentID != "" {
-				existing.ParentSessionID = parentID
-				existing.UpdatedAt = now
-				if err := d.repo.Save(existing); err != nil {
-					d.log.LogError("session-detector", ev.SessionID,
-						fmt.Sprintf("failed to update parent_session_id: %v", err))
-				} else {
-					d.log.LogInfo("session-detector", ev.SessionID,
-						fmt.Sprintf("derived parent_session_id=%s from project dir %s", parentID, ev.ProjectDir))
-				}
 			}
 		}
 	}
@@ -267,6 +246,7 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	// Content-based state detection using three-way check:
 	// - NeedsUserAttention: user-blocking tool open → waiting
 	// - IsAgentDone: agent finished turn → ready
+	// - User event while working: ESC cancellation → ready
 	// - Otherwise: actively processing → working
 	now := time.Now().Unix()
 	if state.Metrics.NeedsUserAttention() {
@@ -283,6 +263,14 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 				"agent finished turn → ready")
 			state.State = session.StateReady
 		}
+	} else if state.State == session.StateWorking && !state.Metrics.HasOpenToolCall && state.Metrics.LastEventType == "user" {
+		// ESC cancellation: a user event arrives while working with no open
+		// tool calls. Claude Code writes tool_result rejections followed by
+		// "[Request interrupted by user for tool use]" — all typed as "user".
+		// No turn_done system event is emitted, so IsAgentDone misses it.
+		d.log.LogInfo("session-detector", ev.SessionID,
+			"user event while working, no open tools → ready (cancellation)")
+		state.State = session.StateReady
 	} else {
 		if state.State != session.StateWorking {
 			d.log.LogInfo("session-detector", ev.SessionID,
@@ -291,6 +279,26 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 			state.LastTranscriptSize = 0
 			state.WaitingStartTime = nil
 		}
+	}
+
+	// Infer in-process sub-agent activity from open Agent tool calls.
+	// Claude Code Explore/Plan agents run inside the parent process and
+	// don't create separate transcripts, so this is the only detection path.
+	if state.Metrics != nil && state.Metrics.HasOpenToolCall {
+		agentCount := 0
+		for _, name := range state.Metrics.LastOpenToolNames {
+			if name == "Agent" {
+				agentCount++
+			}
+		}
+		if agentCount > 0 {
+			state.Subagents = &session.SubagentSummary{
+				Total:   agentCount,
+				Working: agentCount,
+			}
+		}
+	} else if state.Subagents != nil {
+		state.Subagents = nil
 	}
 
 	state.UpdatedAt = time.Now().Unix()
@@ -304,8 +312,6 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	}
 
 	d.broadcast(outbound.PushTypeUpdated, state)
-
-	d.updateParentSubagentSummary(ev.SessionID)
 }
 
 // onRemoved handles transcript file deletion or pre-session expiry.
@@ -347,8 +353,6 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	}
 
 	d.broadcast(outbound.PushTypeUpdated, state)
-
-	d.updateParentSubagentSummary(ev.SessionID)
 }
 
 // HandleProcessExit deletes a session when its process exits.
@@ -375,8 +379,6 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 	}
 
 	d.broadcast(outbound.PushTypeDeleted, state)
-
-	d.updateParentSubagentSummary(sessionID)
 }
 
 // sweepDeadPIDs periodically checks all sessions for dead processes and deletes
@@ -407,56 +409,6 @@ func (d *SessionDetector) checkPIDLiveness() {
 			}
 		}
 	}
-}
-
-// deriveParentSessionID finds a likely parent session for a new session in the
-// same project directory. A parent is an existing working session with an open
-// tool call (typically the Agent tool that spawned the subagent).
-func (d *SessionDetector) deriveParentSessionID(childID, projectDir string) string {
-	d.mu.Lock()
-	candidates := make([]string, 0, 4)
-	for sid, pdir := range d.projectSessions {
-		if pdir == projectDir && sid != childID {
-			candidates = append(candidates, sid)
-		}
-	}
-	d.mu.Unlock()
-
-	if len(candidates) == 0 {
-		return ""
-	}
-
-	// Look for a candidate with an open tool call (working or waiting).
-	for _, sid := range candidates {
-		state, err := d.repo.Load(sid)
-		if err != nil || state == nil {
-			continue
-		}
-		if (state.State == session.StateWorking || state.State == session.StateWaiting) &&
-			state.Metrics != nil && state.Metrics.HasOpenToolCall {
-			return sid
-		}
-	}
-
-	// Fallback: if exactly one other working session exists in the same project
-	// dir, assume it's the parent (common case for first subagent).
-	var workingCandidate string
-	workingCount := 0
-	for _, sid := range candidates {
-		state, err := d.repo.Load(sid)
-		if err != nil || state == nil {
-			continue
-		}
-		if state.State == session.StateWorking {
-			workingCandidate = sid
-			workingCount++
-		}
-	}
-	if workingCount == 1 {
-		return workingCandidate
-	}
-
-	return ""
 }
 
 // discoverAndRegisterPID uses lsof to find the PID that has a transcript file
@@ -541,6 +493,11 @@ func (d *SessionDetector) seedFromDisk() {
 				state.State = session.StateReady
 				changed = true
 			}
+		} else if state.State == session.StateWorking && state.Metrics != nil && !state.Metrics.HasOpenToolCall && state.Metrics.LastEventType == "user" {
+			d.log.LogInfo("session-detector-seed", state.SessionID,
+				fmt.Sprintf("re-evaluated %s → ready on startup (user event, no open tools)", state.State))
+			state.State = session.StateReady
+			changed = true
 		}
 		if changed {
 			_ = d.repo.Save(state)
@@ -604,66 +561,6 @@ func (d *SessionDetector) seedFromDisk() {
 			}
 		}
 	}
-}
-
-// updateParentSubagentSummary recomputes the SubagentSummary on the parent
-// session when a child session changes state.
-func (d *SessionDetector) updateParentSubagentSummary(childSessionID string) {
-	child, _ := d.repo.Load(childSessionID)
-	if child == nil || child.ParentSessionID == "" {
-		return
-	}
-
-	parent, _ := d.repo.Load(child.ParentSessionID)
-	if parent == nil {
-		return
-	}
-
-	allSessions, err := d.repo.ListAll()
-	if err != nil {
-		return
-	}
-
-	summary := &session.SubagentSummary{}
-	for _, s := range allSessions {
-		if s.ParentSessionID == parent.SessionID {
-			summary.Total++
-			switch s.State {
-			case session.StateWorking:
-				summary.Working++
-			case session.StateWaiting:
-				summary.Waiting++
-			case session.StateReady:
-				summary.Ready++
-			}
-		}
-	}
-
-	parent.Subagents = summary
-	parent.UpdatedAt = time.Now().Unix()
-
-	// Adjust parent state based on sub-agent activity.
-	// A parent that wrote turn_done (→ waiting/ready) should appear as
-	// working while any sub-agent is still active, and revert once they
-	// are all done.
-	activeSubagents := summary.Working + summary.Waiting
-	if activeSubagents > 0 && parent.State == session.StateWaiting {
-		parent.State = session.StateWorking
-	} else if activeSubagents == 0 && parent.State == session.StateWorking {
-		// Re-derive from the parent's own metrics so we don't stay "working" forever.
-		if parent.Metrics.NeedsUserAttention() {
-			parent.State = session.StateWaiting
-		} else if parent.Metrics.IsAgentDone() {
-			parent.State = session.StateReady
-		}
-	}
-
-	if err := d.repo.Save(parent); err != nil {
-		d.log.LogError("session-detector", child.ParentSessionID,
-			fmt.Sprintf("failed to update subagent summary: %v", err))
-		return
-	}
-	d.broadcast(outbound.PushTypeUpdated, parent)
 }
 
 // broadcast sends a push notification if a broadcaster is configured.

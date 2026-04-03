@@ -170,6 +170,54 @@ func TestSessionDetector_Activity_TransitionsToWaiting_WhenAssistantButOpenTools
 	}
 }
 
+func TestSessionDetector_Activity_CancellationFromWorking_TransitionsToReady(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// Wait for seedFromDisk to complete, then inject the session.
+	// This avoids seedFromDisk re-evaluating the state before onActivity.
+	time.Sleep(20 * time.Millisecond)
+
+	// Simulate post-ESC state: session was working, user cancelled via ESC.
+	// Claude Code writes tool_result rejections + "[Request interrupted by
+	// user for tool use]" — all typed as "user" with no open tool calls.
+	repo.Save(&session.SessionState{
+		SessionID:      "esc1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/esc1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "user",
+			HasOpenToolCall: false,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "esc1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/esc1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("esc1")
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready (ESC cancellation: user event while working, no open tools)", state.State)
+	}
+}
+
 func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -281,143 +329,6 @@ func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 	state, _ := repo.Load("rm2")
 	if state.State != session.StateReady {
 		t.Errorf("state should remain ready, got %q", state.State)
-	}
-}
-
-func TestSessionDetector_DeriveParentSessionID_OpenToolCall(t *testing.T) {
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-
-	repo.states["parent1"] = &session.SessionState{
-		SessionID:      "parent1",
-		State:          session.StateWorking,
-		TranscriptPath: "/home/.claude/projects/-Users-test/parent1.jsonl",
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-		Metrics:        &session.SessionMetrics{HasOpenToolCall: true},
-	}
-
-	det := newDetector(tw, pw, repo)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventActivity,
-		SessionID:      "parent1",
-		ProjectDir:     "-Users-test",
-		TranscriptPath: "/home/.claude/projects/-Users-test/parent1.jsonl",
-	}
-	time.Sleep(30 * time.Millisecond)
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventNewSession,
-		SessionID:      "child1",
-		ProjectDir:     "-Users-test",
-		TranscriptPath: "/home/.claude/projects/-Users-test/child1.jsonl",
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	<-done
-
-	state, err := repo.Load("child1")
-	if err != nil {
-		t.Fatalf("child session not found: %v", err)
-	}
-	if state.ParentSessionID != "parent1" {
-		t.Errorf("parent_session_id: got %q, want parent1", state.ParentSessionID)
-	}
-}
-
-func TestSessionDetector_DeriveParentSessionID_SingleWorking(t *testing.T) {
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-
-	repo.states["parent2"] = &session.SessionState{
-		SessionID:      "parent2",
-		State:          session.StateWorking,
-		TranscriptPath: "/home/.claude/projects/-Users-test/parent2.jsonl",
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-	}
-
-	det := newDetector(tw, pw, repo)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventActivity,
-		SessionID:      "parent2",
-		ProjectDir:     "-Users-test",
-		TranscriptPath: "/home/.claude/projects/-Users-test/parent2.jsonl",
-	}
-	time.Sleep(30 * time.Millisecond)
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventNewSession,
-		SessionID:      "child2",
-		ProjectDir:     "-Users-test",
-		TranscriptPath: "/home/.claude/projects/-Users-test/child2.jsonl",
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	<-done
-
-	state, _ := repo.Load("child2")
-	if state.ParentSessionID != "parent2" {
-		t.Errorf("parent_session_id: got %q, want parent2", state.ParentSessionID)
-	}
-}
-
-func TestSessionDetector_NoParent_DifferentProjectDir(t *testing.T) {
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-
-	repo.states["other1"] = &session.SessionState{
-		SessionID:      "other1",
-		State:          session.StateWorking,
-		TranscriptPath: "/home/.claude/projects/-Users-other/other1.jsonl",
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-		Metrics:        &session.SessionMetrics{HasOpenToolCall: true},
-	}
-
-	det := newDetector(tw, pw, repo)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventActivity,
-		SessionID:      "other1",
-		ProjectDir:     "-Users-other",
-		TranscriptPath: "/home/.claude/projects/-Users-other/other1.jsonl",
-	}
-	time.Sleep(30 * time.Millisecond)
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventNewSession,
-		SessionID:      "lone1",
-		ProjectDir:     "-Users-test",
-		TranscriptPath: "/home/.claude/projects/-Users-test/lone1.jsonl",
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	<-done
-
-	state, _ := repo.Load("lone1")
-	if state.ParentSessionID != "" {
-		t.Errorf("should have no parent (different dir), got %q", state.ParentSessionID)
 	}
 }
 
@@ -644,7 +555,7 @@ func TestIsAgentDone(t *testing.T) {
 	}{
 		{"nil metrics", nil, false},
 		{"turn_done", &session.SessionMetrics{LastEventType: "turn_done"}, true},
-		{"turn_done, open tools (still done)", &session.SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}, true},
+		{"turn_done, open tools (subagent running)", &session.SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}, false},
 		{"assistant_message, no open tools (legacy)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
 		{"assistant, no open tools (intermediate — NOT done)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
 		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},
