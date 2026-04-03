@@ -37,8 +37,8 @@ func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session not created: %v", err)
 	}
-	if state.State != session.StateWorking {
-		t.Errorf("state: got %q, want working", state.State)
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready", state.State)
 	}
 	if state.TranscriptPath != "/home/.claude/projects/-Users-test-project/new1.jsonl" {
 		t.Errorf("transcript_path: got %q", state.TranscriptPath)
@@ -501,12 +501,12 @@ func TestSessionDetector_Activity_UnknownSession_TreatedAsNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session should have been created: %v", err)
 	}
-	if state.State != session.StateWorking {
-		t.Errorf("state: got %q, want working", state.State)
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready", state.State)
 	}
 }
 
-func TestSessionDetector_HandleProcessExit_TransitionsToReady(t *testing.T) {
+func TestSessionDetector_HandleProcessExit_DeletesSession(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -524,18 +524,12 @@ func TestSessionDetector_HandleProcessExit_TransitionsToReady(t *testing.T) {
 	det.HandleProcessExit(12345, "exit1")
 
 	state, _ := repo.Load("exit1")
-	if state.State != session.StateReady {
-		t.Errorf("state: got %q, want ready", state.State)
-	}
-	if state.Confidence != "high" {
-		t.Errorf("confidence: got %q, want high", state.Confidence)
-	}
-	if state.LastEvent != "process_exit" {
-		t.Errorf("last_event: got %q, want process_exit", state.LastEvent)
+	if state != nil {
+		t.Errorf("session should be deleted, but still exists with state %q", state.State)
 	}
 }
 
-func TestSessionDetector_HandleProcessExit_SkipsTerminalState(t *testing.T) {
+func TestSessionDetector_HandleProcessExit_DeletesReadySession(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -553,8 +547,8 @@ func TestSessionDetector_HandleProcessExit_SkipsTerminalState(t *testing.T) {
 	det.HandleProcessExit(12345, "exit2")
 
 	state, _ := repo.Load("exit2")
-	if state.State != session.StateReady {
-		t.Errorf("state should remain ready, got %q", state.State)
+	if state != nil {
+		t.Errorf("ready session should be deleted on process exit, but still exists")
 	}
 }
 
@@ -606,8 +600,10 @@ func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
 		t.Errorf("PID 42 session: got %q, want seed1", sid)
 	}
 
-	if _, ok := pw.watched[99]; ok {
-		t.Error("PID 99 should not be watched (ready session)")
+	if sid, ok := pw.watched[99]; !ok {
+		t.Error("PID 99 should be watched (all PIDs watched regardless of state)")
+	} else if sid != "seed2" {
+		t.Errorf("PID 99 session: got %q, want seed2", sid)
 	}
 }
 

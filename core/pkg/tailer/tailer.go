@@ -333,13 +333,15 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 	// Extract token information
 	t.extractTokenInfo(raw)
 
-	// Claude Code writes a system event with subtype "turn_duration" at the
-	// end of each agent turn. This is the authoritative "agent is done" signal
-	// — much more reliable than checking for a trailing assistant message,
-	// because Claude Code writes multiple assistant messages per turn
-	// (thinking → text → tool_use) that would trigger false positives.
+	// Claude Code writes system events at the end of each agent turn:
+	// "turn_duration" (primary) and "stop_hook_summary" (after stop hooks).
+	// Either is an authoritative "agent is done" signal — much more reliable
+	// than checking for a trailing assistant message, because Claude Code
+	// writes multiple assistant messages per turn that would trigger false
+	// positives. Some transcript versions omit turn_duration but still emit
+	// stop_hook_summary.
 	if eventType == "system" {
-		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" {
+		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
 			t.metrics.LastEventType = "turn_done"
 		}
 		return nil, nil

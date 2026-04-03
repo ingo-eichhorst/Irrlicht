@@ -148,12 +148,9 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 	now := time.Now().Unix()
 
 	if isNew {
-		// Pre-sessions (emitted by the process scanner before any transcript
-		// exists) start as ready; real transcript sessions start as working.
-		initialState := session.StateWorking
-		if ev.TranscriptPath == "" {
-			initialState = session.StateReady
-		}
+		// All new sessions start as ready. Content-based detection on
+		// subsequent activity events will transition to working/waiting.
+		initialState := session.StateReady
 
 		state := &session.SessionState{
 			Version:        1,
@@ -336,7 +333,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.updateParentSubagentSummary(ev.SessionID)
 }
 
-// HandleProcessExit transitions a session to "ready" when its process exits.
+// HandleProcessExit deletes a session when its process exits.
 func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 	// Remove from project tracking.
 	d.mu.Lock()
@@ -350,26 +347,16 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 		return
 	}
 
-	// Already in a terminal state — nothing to do.
-	if state.State == session.StateReady {
-		return
-	}
-
 	d.log.LogInfo("process-exit", sessionID,
-		fmt.Sprintf("pid %d exited, transitioning %s → ready", pid, state.State))
+		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
 
-	state.State = session.StateReady
-	state.UpdatedAt = time.Now().Unix()
-	state.Confidence = "high"
-	state.LastEvent = "process_exit"
-
-	if err := d.repo.Save(state); err != nil {
+	if err := d.repo.Delete(sessionID); err != nil {
 		d.log.LogError("process-exit", sessionID,
-			fmt.Sprintf("failed to save ready state: %v", err))
+			fmt.Sprintf("failed to delete session: %v", err))
 		return
 	}
 
-	d.broadcast(outbound.PushTypeUpdated, state)
+	d.broadcast(outbound.PushTypeDeleted, state)
 
 	d.updateParentSubagentSummary(sessionID)
 }
@@ -512,12 +499,11 @@ func (d *SessionDetector) seedFromDisk() {
 		}
 	}
 
-	// Register known PIDs with ProcessWatcher.
+	// Register ALL known PIDs with ProcessWatcher, regardless of state.
+	// When a process exits, the session is deleted — so we must watch even
+	// ready sessions to clean them up when the user kills the process.
 	if d.pw != nil {
 		for _, state := range states {
-			if state.State == session.StateReady {
-				continue
-			}
 			if state.PID > 0 {
 				if err := d.pw.Watch(state.PID, state.SessionID); err != nil {
 					d.log.LogError("session-detector-seed", state.SessionID,
