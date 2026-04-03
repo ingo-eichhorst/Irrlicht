@@ -30,7 +30,8 @@ Three-level decision tree covers all possible states:
 
 | ID | From | To | Trigger | Detection |
 |----|------|----|---------|-----------|
-| T1 | — | `working` | New .jsonl file | FSEvents CREATE |
+| T0 | — | `ready` | Agent started | FSEvents CREATE on .jsonl |
+| T1 | `ready` | `working` | New .jsonl file | FSEvents CREATE |
 | T2 | `working` | `ready` | Agent finished turn | `IsAgentDone()=true` |
 | T3 | `ready` | `working` | New activity | FSEvents WRITE on ready session |
 | T4 | `working` | **removed** | Process exited | kqueue NOTE_EXIT |
@@ -38,6 +39,7 @@ Three-level decision tree covers all possible states:
 | T6 | `working` | **removed** | Transcript deleted | FSEvents REMOVE |
 | T7 | `working` | `waiting` | User-blocking tool open | `NeedsUserAttention()=true` |
 | T8 | `waiting` | `working` | User responded | `NeedsUserAttention()=false` |
+| T9 | any | **removed** | Process exit or transcript deletion | kqueue NOTE_EXIT / FSEvents REMOVE |
 
 **removed** = session is deleted from the display entirely. There is no `removed` state — the session ceases to exist. This applies to any process termination (SIGKILL, SIGTERM, crash, or normal exit via `/quit`) and to transcript deletion.
 

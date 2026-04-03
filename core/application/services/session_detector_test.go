@@ -102,7 +102,7 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T)
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     3,
 		Metrics: &session.SessionMetrics{
-			LastEventType:   "assistant",
+			LastEventType:   "turn_done",
 			HasOpenToolCall: false,
 		},
 	}
@@ -126,7 +126,7 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T)
 
 	state, _ := repo.Load("wait1")
 	if state.State != session.StateReady {
-		t.Errorf("state: got %q, want ready (agent finished turn, no open tools)", state.State)
+		t.Errorf("state: got %q, want ready (turn_done signal, no open tools)", state.State)
 	}
 }
 
@@ -642,8 +642,10 @@ func TestIsAgentDone(t *testing.T) {
 		want    bool
 	}{
 		{"nil metrics", nil, false},
-		{"assistant, no open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
-		{"assistant_message, no open tools", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
+		{"turn_done", &session.SessionMetrics{LastEventType: "turn_done"}, true},
+		{"turn_done, open tools (still done)", &session.SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}, true},
+		{"assistant_message, no open tools (legacy)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
+		{"assistant, no open tools (intermediate — NOT done)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
 		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},
 		{"user, no open tools", &session.SessionMetrics{LastEventType: "user", HasOpenToolCall: false}, false},
 		{"empty", &session.SessionMetrics{}, false},

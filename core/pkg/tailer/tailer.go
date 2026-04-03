@@ -333,6 +333,18 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 	// Extract token information
 	t.extractTokenInfo(raw)
 
+	// Claude Code writes a system event with subtype "turn_duration" at the
+	// end of each agent turn. This is the authoritative "agent is done" signal
+	// — much more reliable than checking for a trailing assistant message,
+	// because Claude Code writes multiple assistant messages per turn
+	// (thinking → text → tool_use) that would trigger false positives.
+	if eventType == "system" {
+		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" {
+			t.metrics.LastEventType = "turn_done"
+		}
+		return nil, nil
+	}
+
 	// Only track message-related events
 	if !t.isMessageEvent(eventType) {
 		return nil, nil

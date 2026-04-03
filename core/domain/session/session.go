@@ -56,17 +56,24 @@ func (m *SessionMetrics) NeedsUserAttention() bool {
 	return false
 }
 
-// IsAgentDone returns true when the agent finished its turn: the last event
-// is an assistant message and no tool calls are open.
+// IsAgentDone returns true when the agent finished its turn. The primary
+// signal is Claude Code's "turn_duration" system event which fires exactly
+// once at the end of each turn. Legacy formats (Codex) fall back to the
+// heuristic of "last event is assistant and no open tool calls".
 func (m *SessionMetrics) IsAgentDone() bool {
 	if m == nil {
 		return false
 	}
+	// Primary: Claude Code writes a system/turn_duration event at end of turn.
+	if m.LastEventType == "turn_done" {
+		return true
+	}
+	// Fallback for legacy/Codex transcripts.
 	if m.HasOpenToolCall {
 		return false
 	}
 	switch m.LastEventType {
-	case "assistant", "assistant_message", "assistant_output":
+	case "assistant_message", "assistant_output":
 		return true
 	}
 	return false
