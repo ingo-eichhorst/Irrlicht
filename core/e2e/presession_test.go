@@ -333,9 +333,10 @@ func (l *nopLogger) Close() error                                       { return
 
 type stubGit struct{}
 
-func (g *stubGit) GetBranch(_ string) string                { return "main" }
-func (g *stubGit) GetProjectName(dir string) string         { return filepath.Base(dir) }
-func (g *stubGit) GetBranchFromTranscript(_ string) string  { return "" }
+func (g *stubGit) GetBranch(_ string) string               { return "main" }
+func (g *stubGit) GetProjectName(dir string) string        { return filepath.Base(dir) }
+func (g *stubGit) GetBranchFromTranscript(_ string) string { return "" }
+func (g *stubGit) GetCWDFromTranscript(_ string) string    { return "" }
 
 type stubMetrics struct{}
 

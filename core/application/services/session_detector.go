@@ -173,10 +173,17 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		// Resolve git metadata: prefer CWD (set by process scanner), fall
 		// back to transcript inspection for file-based sessions.
 		if ev.CWD != "" {
+			state.CWD = ev.CWD
 			state.GitBranch = d.git.GetBranch(ev.CWD)
 			state.ProjectName = d.git.GetProjectName(ev.CWD)
-		} else if b := d.git.GetBranchFromTranscript(ev.TranscriptPath); b != "" {
-			state.GitBranch = b
+		} else if ev.TranscriptPath != "" {
+			if cwd := d.git.GetCWDFromTranscript(ev.TranscriptPath); cwd != "" {
+				state.CWD = cwd
+				state.GitBranch = d.git.GetBranch(cwd)
+				state.ProjectName = d.git.GetProjectName(cwd)
+			} else if b := d.git.GetBranchFromTranscript(ev.TranscriptPath); b != "" {
+				state.GitBranch = b
+			}
 		}
 
 		// Derive parent_session_id from co-located sessions.
@@ -419,13 +426,13 @@ func (d *SessionDetector) deriveParentSessionID(childID, projectDir string) stri
 		return ""
 	}
 
-	// Look for a candidate that is working with an open tool call.
+	// Look for a candidate with an open tool call (working or waiting).
 	for _, sid := range candidates {
 		state, err := d.repo.Load(sid)
 		if err != nil || state == nil {
 			continue
 		}
-		if state.State == session.StateWorking &&
+		if (state.State == session.StateWorking || state.State == session.StateWaiting) &&
 			state.Metrics != nil && state.Metrics.HasOpenToolCall {
 			return sid
 		}
@@ -537,6 +544,43 @@ func (d *SessionDetector) seedFromDisk() {
 		}
 		if changed {
 			_ = d.repo.Save(state)
+		}
+	}
+
+	// Backfill ProjectName / CWD / GitBranch for sessions that were saved
+	// before these fields were populated. Derive CWD from the transcript when
+	// it is missing, then fill the remaining fields from CWD.
+	for _, state := range states {
+		if state.ProjectName != "" {
+			continue
+		}
+		changed := false
+		if state.CWD == "" && state.TranscriptPath != "" {
+			if cwd := d.git.GetCWDFromTranscript(state.TranscriptPath); cwd != "" {
+				state.CWD = cwd
+				changed = true
+			}
+		}
+		if state.CWD != "" {
+			if state.ProjectName == "" {
+				state.ProjectName = d.git.GetProjectName(state.CWD)
+				changed = true
+			}
+			if state.GitBranch == "" {
+				state.GitBranch = d.git.GetBranch(state.CWD)
+				changed = true
+			}
+		}
+		if changed {
+			state.UpdatedAt = time.Now().Unix()
+			if err := d.repo.Save(state); err != nil {
+				d.log.LogError("session-detector-seed", state.SessionID,
+					fmt.Sprintf("failed to backfill metadata: %v", err))
+			} else {
+				d.log.LogInfo("session-detector-seed", state.SessionID,
+					fmt.Sprintf("backfilled project=%s cwd=%s", state.ProjectName, state.CWD))
+				d.broadcast(outbound.PushTypeUpdated, state)
+			}
 		}
 	}
 

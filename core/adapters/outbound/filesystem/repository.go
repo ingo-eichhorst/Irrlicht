@@ -123,6 +123,26 @@ func (r *SessionRepository) ListAll() ([]*session.SessionState, error) {
 	return states, nil
 }
 
+// PruneStale deletes session files older than maxAge and returns the count.
+// A zero or negative maxAge disables pruning (returns 0, nil).
+func (r *SessionRepository) PruneStale(maxAge time.Duration) (int, error) {
+	if maxAge <= 0 {
+		return 0, nil
+	}
+	states, err := r.ListAll()
+	if err != nil {
+		return 0, err
+	}
+	pruned := 0
+	for _, s := range states {
+		if s.IsStale(maxAge) {
+			_ = r.Delete(s.SessionID)
+			pruned++
+		}
+	}
+	return pruned, nil
+}
+
 func (r *SessionRepository) statePath(sessionID string) string {
 	return filepath.Join(r.instancesDir, sessionID+".json")
 }

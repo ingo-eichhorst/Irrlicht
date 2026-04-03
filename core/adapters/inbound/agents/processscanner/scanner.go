@@ -32,6 +32,7 @@ const DefaultInterval = 1 * time.Second
 type trackedProc struct {
 	sessionID  string
 	projectDir string
+	superseded bool // real transcript exists; keep tracking to prevent re-creation
 }
 
 // Scanner polls for agent processes and emits synthetic EventNewSession /
@@ -42,6 +43,13 @@ type Scanner struct {
 	adapter      string        // adapter label placed on emitted events
 	projectsRoot string        // absolute path to ~/.claude/projects (or equivalent)
 	interval     time.Duration
+
+	// sessionChecker is an optional function that reports whether any
+	// non-proc session already exists for the given encoded projectDir.
+	// When set, it is consulted before the file-modification-time fallback
+	// in hasActiveSession so that idle (but alive) sessions suppress ghost
+	// proc creation.
+	sessionChecker func(projectDir string) bool
 
 	mu      sync.Mutex
 	tracked map[int]trackedProc // pid → pre-session
@@ -64,6 +72,15 @@ func New(processName, adapter, projectsRoot string, interval time.Duration) *Sca
 		interval:     interval,
 		tracked:      make(map[int]trackedProc),
 	}
+}
+
+// WithSessionChecker sets a function that reports whether any non-proc session
+// exists for the given encoded projectDir (e.g. "-Users-ingo-projects-foo").
+// When set, hasActiveSession consults it before the file-modification fallback,
+// preventing ghost proc sessions for directories with idle real sessions.
+func (s *Scanner) WithSessionChecker(fn func(projectDir string) bool) *Scanner {
+	s.sessionChecker = fn
+	return s
 }
 
 // Watch begins polling. It runs an immediate scan then continues on the
@@ -133,22 +150,29 @@ func (s *Scanner) poll() {
 		projectDir := cwdToProjectDir(cwd)
 
 		if alreadyTracked {
+			s.mu.Lock()
+			proc := s.tracked[pid]
+			s.mu.Unlock()
+
+			// Already superseded — real transcript took over; nothing to do.
+			if proc.superseded {
+				continue
+			}
+
 			// Check whether a real transcript has appeared since we last looked.
 			if s.hasActiveSession(projectDir) {
+				// Mark as superseded and emit removal. Keep in tracked map
+				// so we don't recreate the pre-session on the next poll.
 				s.mu.Lock()
-				proc, ok := s.tracked[pid]
-				if ok {
-					delete(s.tracked, pid)
-				}
+				proc.superseded = true
+				s.tracked[pid] = proc
 				s.mu.Unlock()
-				if ok {
-					s.broadcast(agent.Event{
-						Type:       agent.EventRemoved,
-						Adapter:    s.adapter,
-						SessionID:  proc.sessionID,
-						ProjectDir: projectDir,
-					})
-				}
+				s.broadcast(agent.Event{
+					Type:       agent.EventRemoved,
+					Adapter:    s.adapter,
+					SessionID:  proc.sessionID,
+					ProjectDir: projectDir,
+				})
 			}
 			continue
 		}
@@ -206,12 +230,18 @@ func (s *Scanner) poll() {
 	}
 }
 
-// hasActiveSession returns true if a recently-modified .jsonl transcript exists
-// in the project directory. "Recent" means modified within the last 60 seconds.
-// This distinguishes active sessions (where the file watcher will handle
-// detection) from stale transcripts left by previous sessions.
+// hasActiveSession returns true if the project directory has an active session.
+// It first consults the injected sessionChecker (if set) to catch idle sessions
+// whose transcripts haven't been written recently, then falls back to checking
+// for a recently-modified .jsonl file (within 60 seconds).
 func (s *Scanner) hasActiveSession(projectDir string) bool {
-	if projectDir == "" || s.projectsRoot == "" {
+	if projectDir == "" {
+		return false
+	}
+	if s.sessionChecker != nil && s.sessionChecker(projectDir) {
+		return true
+	}
+	if s.projectsRoot == "" {
 		return false
 	}
 	dir := filepath.Join(s.projectsRoot, projectDir)

@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"strings"
+
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/processscanner"
@@ -25,7 +27,6 @@ import (
 	"irrlicht/core/adapters/outbound/gtbin"
 	"irrlicht/core/adapters/outbound/logging"
 	"irrlicht/core/adapters/outbound/mdns"
-	"irrlicht/core/adapters/outbound/memory"
 	"irrlicht/core/adapters/outbound/metrics"
 	processadapter "irrlicht/core/adapters/outbound/process"
 	wshub "irrlicht/core/adapters/outbound/websocket"
@@ -88,16 +89,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Memory store wraps filesystem for fast in-process access.
-	memRepo := memory.New(fsRepo)
-
-	// Crash recovery: seed memory from existing session files, pruning stale ones.
-	pruned, err := memRepo.SeedFromDisk(cfg.MaxSessionAge)
+	// Startup: prune stale session files from disk.
+	pruned, err := fsRepo.PruneStale(cfg.MaxSessionAge)
 	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to seed from disk: %v", err))
-		// Non-fatal: continue with empty in-memory state.
+		logger.LogError("startup", "", fmt.Sprintf("failed to prune stale sessions: %v", err))
 	} else if pruned > 0 {
 		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d stale session files", pruned))
+	}
+
+	// Prune proc-<pid> sessions whose process is no longer alive.
+	// These can survive a daemon restart because the in-memory tracked map
+	// is lost, leaving orphaned proc session files on disk.
+	if allSessions, err := fsRepo.ListAll(); err == nil {
+		for _, s := range allSessions {
+			var pid int
+			if _, err := fmt.Sscanf(s.SessionID, "proc-%d", &pid); err != nil || pid <= 0 {
+				continue
+			}
+			if err := syscall.Kill(pid, 0); err != nil {
+				_ = fsRepo.Delete(s.SessionID)
+				logger.LogInfo("startup", s.SessionID, "pruned dead proc session")
+			}
+		}
 	}
 
 	// Push broadcaster for WebSocket fan-out.
@@ -135,7 +148,7 @@ func main() {
 
 	// HTTP mux.
 	mux := http.NewServeMux()
-	registerReadRoutes(mux, memRepo)
+	registerReadRoutes(mux, fsRepo)
 	// Gas Town endpoint registered after poller is available (see below).
 
 	hub := wshub.NewHub(push)
@@ -184,7 +197,7 @@ func main() {
 	}
 
 	// Orchestrator adapters: detect and watch multi-agent orchestration systems.
-	gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, memRepo)
+	gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, fsRepo)
 	var orchWatchers []inbound.OrchestratorWatcher
 	if gtAdapter.Detected() {
 		logger.LogInfo("startup", "", fmt.Sprintf("Gas Town detected at %s", gtAdapter.Root()))
@@ -228,13 +241,33 @@ func main() {
 		claudeCodeWatcher.Root(),
 		0, // use default interval
 	)
+	// Suppress ghost proc sessions for directories that already have a real
+	// (transcript-backed) session, even if the transcript hasn't been written
+	// recently. Without this, idle sessions allow short-lived helper processes
+	// to create spurious proc-<pid> entries in the UI.
+	procScanner.WithSessionChecker(func(projectDir string) bool {
+		sessions, err := fsRepo.ListAll()
+		if err != nil {
+			return false
+		}
+		for _, s := range sessions {
+			if strings.HasPrefix(s.SessionID, "proc-") {
+				continue
+			}
+			if s.TranscriptPath != "" &&
+				filepath.Base(filepath.Dir(s.TranscriptPath)) == projectDir {
+				return true
+			}
+		}
+		return false
+	})
 
 	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher, procScanner}
 
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
 		watchers, pwPort,
-		memRepo, logger, gitResolver, metricsCollector, push,
+		fsRepo, logger, gitResolver, metricsCollector, push,
 	)
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())

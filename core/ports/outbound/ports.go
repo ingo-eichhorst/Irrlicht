@@ -43,6 +43,9 @@ type GitResolver interface {
 	GetBranch(dir string) string
 	GetProjectName(dir string) string
 	GetBranchFromTranscript(transcriptPath string) string
+	// GetCWDFromTranscript extracts the working directory from a transcript
+	// file by scanning the first few lines for a "cwd" field.
+	GetCWDFromTranscript(transcriptPath string) string
 }
 
 // MetricsCollector computes session metrics from a transcript file.

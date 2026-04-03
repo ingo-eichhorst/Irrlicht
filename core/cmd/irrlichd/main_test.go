@@ -11,40 +11,31 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"irrlicht/core/adapters/outbound/memory"
+	"irrlicht/core/adapters/outbound/filesystem"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
 )
 
-// nullRepo is a no-op SessionRepository for tests.
-type nullRepo struct{}
-
-func (r *nullRepo) Load(id string) (*session.SessionState, error) { return nil, nil }
-func (r *nullRepo) Save(s *session.SessionState) error           { return nil }
-func (r *nullRepo) Delete(id string) error                        { return nil }
-func (r *nullRepo) ListAll() ([]*session.SessionState, error)     { return nil, nil }
-
-func newTestStack(t *testing.T) (*httptest.Server, *memory.Store) {
+func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository) {
 	t.Helper()
 
-	fsRepo := &nullRepo{}
-	memRepo := memory.New(fsRepo)
+	repo := filesystem.NewWithDir(t.TempDir())
 	push := services.NewPushService()
 
 	mux := http.NewServeMux()
-	registerReadRoutes(mux, memRepo)
+	registerReadRoutes(mux, repo)
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 
 	uiSub, _ := fs.Sub(uiFS, "ui")
 	mux.Handle("/", http.FileServer(http.FS(uiSub)))
 
-	return httptest.NewServer(mux), memRepo
+	return httptest.NewServer(mux), repo
 }
 
-// seedSession saves a test session into the memory store.
-func seedSession(t *testing.T, repo *memory.Store, id, state string) {
+// seedSession saves a test session to the filesystem repo.
+func seedSession(t *testing.T, repo *filesystem.SessionRepository, id, state string) {
 	t.Helper()
 	s := &session.SessionState{
 		SessionID: id,
@@ -58,10 +49,10 @@ func seedSession(t *testing.T, repo *memory.Store, id, state string) {
 
 // TestGate_GetSessions verifies that GET /api/v1/sessions returns seeded sessions.
 func TestGate_GetSessions(t *testing.T) {
-	srv, memRepo := newTestStack(t)
+	srv, repo := newTestStack(t)
 	defer srv.Close()
 
-	seedSession(t, memRepo, "gate-1", session.StateReady)
+	seedSession(t, repo, "gate-1", session.StateReady)
 
 	resp, err := http.Get(srv.URL + "/api/v1/sessions")
 	if err != nil {
@@ -106,10 +97,10 @@ func TestGate_WebSocketConnect(t *testing.T) {
 
 // TestGate_GetState verifies that GET /state returns the compact debug-state format.
 func TestGate_GetState(t *testing.T) {
-	srv, memRepo := newTestStack(t)
+	srv, repo := newTestStack(t)
 	defer srv.Close()
 
-	seedSession(t, memRepo, "state-gate-1", session.StateWorking)
+	seedSession(t, repo, "state-gate-1", session.StateWorking)
 
 	resp, err := http.Get(srv.URL + "/state")
 	if err != nil {

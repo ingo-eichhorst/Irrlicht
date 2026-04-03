@@ -48,7 +48,7 @@ func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
 	}
 }
 
-func TestSessionDetector_Activity_StaysWorking_WhenToolUse(t *testing.T) {
+func TestSessionDetector_Activity_TransitionsToWaiting_WhenToolUseOpen(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -84,8 +84,8 @@ func TestSessionDetector_Activity_StaysWorking_WhenToolUse(t *testing.T) {
 	<-done
 
 	state, _ := repo.Load("act1")
-	if state.State != session.StateWorking {
-		t.Errorf("state: got %q, want working (tool_use is still working)", state.State)
+	if state.State != session.StateWaiting {
+		t.Errorf("state: got %q, want waiting (open tool call blocks on user)", state.State)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T)
 	}
 }
 
-func TestSessionDetector_Activity_StaysWorking_WhenAssistantButOpenTools(t *testing.T) {
+func TestSessionDetector_Activity_TransitionsToWaiting_WhenAssistantButOpenTools(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -165,8 +165,8 @@ func TestSessionDetector_Activity_StaysWorking_WhenAssistantButOpenTools(t *test
 	<-done
 
 	state, _ := repo.Load("otc1")
-	if state.State != session.StateWorking {
-		t.Errorf("state: got %q, want working (open tool call)", state.State)
+	if state.State != session.StateWaiting {
+		t.Errorf("state: got %q, want waiting (open tool call blocks on user)", state.State)
 	}
 }
 
@@ -620,12 +620,11 @@ func TestNeedsUserAttention(t *testing.T) {
 		want    bool
 	}{
 		{"nil metrics", nil, false},
-		{"assistant, no open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
-		{"open tools, no user-blocking", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, false},
-		{"AskUserQuestion open", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"AskUserQuestion"}}, true},
-		{"ExitPlanMode open", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"ExitPlanMode"}}, true},
-		{"mixed tools with AskUserQuestion", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash", "AskUserQuestion"}}, true},
-		{"open tools, no names", &session.SessionMetrics{HasOpenToolCall: true}, false},
+		{"no open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
+		{"open tool call (Bash)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, true},
+		{"open tool call (Write)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Write"}}, true},
+		{"open tool call (AskUserQuestion)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"AskUserQuestion"}}, true},
+		{"open tool call, no names", &session.SessionMetrics{HasOpenToolCall: true}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

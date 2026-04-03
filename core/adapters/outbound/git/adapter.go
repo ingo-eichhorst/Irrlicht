@@ -47,6 +47,33 @@ func (a *Adapter) GetProjectName(dir string) string {
 	return name
 }
 
+// GetCWDFromTranscript extracts the working directory from the first few lines
+// of a Claude Code transcript file by looking for a "cwd" field in JSON entries.
+func (a *Adapter) GetCWDFromTranscript(transcriptPath string) string {
+	if transcriptPath == "" {
+		return ""
+	}
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanned := 0
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() && scanned < 10 {
+		scanned++
+		var data map[string]interface{}
+		if err := json.Unmarshal(scanner.Bytes(), &data); err != nil {
+			continue
+		}
+		if cwd, ok := data["cwd"].(string); ok && cwd != "" {
+			return cwd
+		}
+	}
+	return ""
+}
+
 // GetBranchFromTranscript tries to extract the gitBranch field from the last
 // few lines of a Claude Code transcript file.
 func (a *Adapter) GetBranchFromTranscript(transcriptPath string) string {

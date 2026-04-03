@@ -36,25 +36,15 @@ type SessionMetrics struct {
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 }
 
-// userBlockingTools are tools that wait for user interaction before returning.
-var userBlockingTools = map[string]bool{
-	"AskUserQuestion": true,
-	"ExitPlanMode":    true,
-}
-
-// NeedsUserAttention returns true when a user-blocking tool is open and
-// the agent is waiting for the user to respond (answer a question, approve
-// a plan, grant permission).
+// NeedsUserAttention returns true when any tool call is open (tool_use
+// without a matching tool_result). This covers permission prompts,
+// AskUserQuestion, ExitPlanMode, and any other blocking tool. For
+// fast-executing tools the "waiting" state is brief and harmless.
 func (m *SessionMetrics) NeedsUserAttention() bool {
-	if m == nil || !m.HasOpenToolCall {
+	if m == nil {
 		return false
 	}
-	for _, name := range m.LastOpenToolNames {
-		if userBlockingTools[name] {
-			return true
-		}
-	}
-	return false
+	return m.HasOpenToolCall
 }
 
 // IsAgentDone returns true when the agent finished its turn. The primary
