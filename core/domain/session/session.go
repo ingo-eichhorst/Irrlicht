@@ -39,6 +39,10 @@ type SessionMetrics struct {
 	// is_error=true (user rejection via ESC). Distinguishes cancellation
 	// from normal tool completion.
 	LastToolResultWasError bool `json:"last_tool_result_was_error"`
+
+	// EstimatedCostUSD is the estimated session cost in USD, computed from
+	// token breakdown and per-model pricing.
+	EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
 }
 
 // NeedsUserAttention returns true when a tool call is open and the agent
@@ -181,6 +185,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		LastEventType:          newM.LastEventType,
 		LastOpenToolNames:      newM.LastOpenToolNames,
 		LastToolResultWasError: newM.LastToolResultWasError,
+		EstimatedCostUSD:       newM.EstimatedCostUSD,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
@@ -199,6 +204,9 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	}
 	if (merged.PressureLevel == "" || merged.PressureLevel == "unknown") && oldM.PressureLevel != "" && oldM.PressureLevel != "unknown" {
 		merged.PressureLevel = oldM.PressureLevel
+	}
+	if merged.EstimatedCostUSD == 0 && oldM.EstimatedCostUSD > 0 {
+		merged.EstimatedCostUSD = oldM.EstimatedCostUSD
 	}
 	return merged
 }

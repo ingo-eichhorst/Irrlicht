@@ -34,6 +34,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics
 		LastEventType:          m.LastEventType,
 		LastOpenToolNames:      m.LastOpenToolNames,
 		LastToolResultWasError: m.LastToolResultWasError,
+		EstimatedCostUSD:       m.EstimatedCostUSD,
 	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"

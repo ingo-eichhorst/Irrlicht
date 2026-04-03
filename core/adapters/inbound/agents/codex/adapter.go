@@ -11,8 +11,9 @@ import (
 // AdapterName identifies sessions originating from OpenAI Codex.
 const AdapterName = "codex"
 
-// rootDir is the path relative to $HOME where Codex stores transcripts.
-const rootDir = ".codex"
+// rootDir is the path relative to $HOME where Codex stores session transcripts.
+// Sessions live under sessions/YYYY/MM/DD/*.jsonl (deep nesting).
+const rootDir = ".codex/sessions"
 
 // New creates a file-system watcher for Codex transcripts.
 // maxAge controls the maximum transcript file age; older files are ignored.

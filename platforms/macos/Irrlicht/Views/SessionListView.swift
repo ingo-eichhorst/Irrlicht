@@ -399,6 +399,13 @@ struct SessionRowView: View {
                         .foregroundColor(Color(hex: metrics.contextPressureColor))
                 }
 
+                // Estimated cost
+                if let cost = session.metrics?.formattedCost {
+                    Text(cost)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+
                 Spacer()
 
                 // Short model name + adapter icon
@@ -813,6 +820,36 @@ struct ProjectGroupSectionView: View {
     @EnvironmentObject var sessionManager: SessionManager
     @State private var isExpanded = true
 
+    /// Combined cost of all sessions in the group
+    private var totalCost: Double {
+        projectGroup.sessionGroups.reduce(0) { sum, group in
+            sum + (group.parent.metrics?.estimatedCostUSD ?? 0)
+                + group.subagents.reduce(0) { $0 + ($1.metrics?.estimatedCostUSD ?? 0) }
+        }
+    }
+
+    /// Maximum context utilization across all sessions in the group
+    private var maxContextUtilization: Double {
+        projectGroup.sessionGroups.flatMap { [$0.parent] + $0.subagents }
+            .compactMap { $0.metrics?.contextUtilization }
+            .max() ?? 0
+    }
+
+    /// Color for the project name based on max context utilization
+    private var projectNameColor: Color {
+        if maxContextUtilization > 90 { return Color(hex: "#FF3B30") }   // red
+        if maxContextUtilization > 75 { return Color(hex: "#FF9500") }   // orange
+        if maxContextUtilization > 50 { return Color(hex: "#FFCC00") }   // yellow
+        return Color(hex: "#34C759")                                      // green
+    }
+
+    private var formattedTotalCost: String? {
+        guard totalCost > 0 else { return nil }
+        if totalCost < 0.01 { return "<$0.01" }
+        if totalCost < 10 { return String(format: "$%.2f", totalCost) }
+        return String(format: "$%.0f", totalCost)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Collapsible project header
@@ -830,7 +867,13 @@ struct ProjectGroupSectionView: View {
                     Text(projectGroup.projectDirectory)
                         .font(.system(.caption, design: .monospaced))
                         .fontWeight(.semibold)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(projectNameColor)
+
+                    if let cost = formattedTotalCost {
+                        Text(cost)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
 
                     Spacer()
 
@@ -957,7 +1000,8 @@ struct SessionListView_Previews: PreviewProvider {
                             totalTokens: 15000,
                             modelName: "claude-sonnet-4-6",
                             contextUtilization: 7.5,
-                            pressureLevel: "safe"
+                            pressureLevel: "safe",
+                            estimatedCostUSD: nil
                         )
                     )
                 ]

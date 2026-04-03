@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+// ModelPricing holds per-token pricing in USD per million tokens.
+type ModelPricing struct {
+	InputPerMTok         float64 `json:"input_per_mtok"`
+	OutputPerMTok        float64 `json:"output_per_mtok"`
+	CacheReadPerMTok     float64 `json:"cache_read_per_mtok"`
+	CacheCreationPerMTok float64 `json:"cache_creation_per_mtok"`
+}
+
 // ModelCapacity represents the capacity configuration for a specific model
 type ModelCapacity struct {
 	ContextWindow    int64             `json:"context_window"`
@@ -19,6 +27,7 @@ type ModelCapacity struct {
 	DisplayName      string            `json:"display_name"`
 	Notes            string            `json:"notes,omitempty"`
 	BetaFeatures     map[string]int64  `json:"beta_features,omitempty"`
+	Pricing          *ModelPricing     `json:"pricing,omitempty"`
 }
 
 // CapacityConfig represents the entire model capacity configuration
@@ -219,6 +228,21 @@ func (cm *CapacityManager) CalculateContextUtilization(tokensUsed int64, modelNa
 		LastTokenCount:          tokensUsed,
 		PressureLevel:           pressureLevel,
 	}
+}
+
+// EstimateCostUSD calculates the estimated cost in USD from token breakdowns.
+// Returns 0 when pricing data is unavailable for the model.
+func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) float64 {
+	cap := cm.GetModelCapacity(modelName)
+	if cap.Pricing == nil {
+		return 0
+	}
+	p := cap.Pricing
+	cost := float64(inputTokens)*p.InputPerMTok +
+		float64(outputTokens)*p.OutputPerMTok +
+		float64(cacheReadTokens)*p.CacheReadPerMTok +
+		float64(cacheCreationTokens)*p.CacheCreationPerMTok
+	return cost / 1_000_000
 }
 
 // FormatTokenCount returns human-readable token count

@@ -17,8 +17,8 @@ func assertPressure(t *testing.T, m *SessionMetrics, wantPressure string, wantUt
 }
 
 func TestContextUtilization_KnownModel_Sonnet45(t *testing.T) {
-	// claude-sonnet-4-5 has 200K context window
-	// 120K tokens / 200K = 60% → "caution"
+	// claude-sonnet-4-5 has beta_features.context_1m → 1M effective window
+	// 600K tokens / 1M = 60% → "caution"
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{
 			"type":      "assistant",
@@ -26,8 +26,8 @@ func TestContextUtilization_KnownModel_Sonnet45(t *testing.T) {
 			"message": map[string]interface{}{
 				"model": "claude-sonnet-4-5-20250514",
 				"usage": map[string]interface{}{
-					"input_tokens":  float64(110000),
-					"output_tokens": float64(10000),
+					"input_tokens":  float64(550000),
+					"output_tokens": float64(50000),
 				},
 			},
 		},
@@ -43,8 +43,8 @@ func TestContextUtilization_KnownModel_Sonnet45(t *testing.T) {
 }
 
 func TestContextUtilization_KnownModel_Opus46(t *testing.T) {
-	// claude-opus-4-6 has 200K context window
-	// 180K tokens / 200K = 90% → "critical"
+	// claude-opus-4-6 has beta_features.context_1m → 1M effective window
+	// 900K tokens / 1M = 90% → "critical"
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{
 			"type":      "assistant",
@@ -52,8 +52,8 @@ func TestContextUtilization_KnownModel_Opus46(t *testing.T) {
 			"message": map[string]interface{}{
 				"model": "claude-opus-4-6-20250715",
 				"usage": map[string]interface{}{
-					"input_tokens":  float64(170000),
-					"output_tokens": float64(10000),
+					"input_tokens":  float64(850000),
+					"output_tokens": float64(50000),
 				},
 			},
 		},
@@ -153,15 +153,16 @@ func TestContextUtilization_TranscriptContextWindow(t *testing.T) {
 }
 
 func TestContextUtilization_PressureLevels(t *testing.T) {
+	// claude-sonnet-4-5 has beta_features.context_1m → 1M effective window
 	tests := []struct {
 		name         string
 		inputTokens  float64
 		wantPressure string
 	}{
-		{"safe", 50000, "safe"},           // 25% of 200K
-		{"caution", 130000, "caution"},    // 65% of 200K
-		{"warning", 165000, "warning"},    // 82.5% of 200K
-		{"critical", 185000, "critical"},  // 92.5% of 200K
+		{"safe", 250000, "safe"},           // 25% of 1M
+		{"caution", 650000, "caution"},     // 65% of 1M
+		{"warning", 825000, "warning"},     // 82.5% of 1M
+		{"critical", 925000, "critical"},   // 92.5% of 1M
 	}
 
 	for _, tt := range tests {

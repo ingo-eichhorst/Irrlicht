@@ -86,28 +86,54 @@ func normalizeModelName(rawModel string) string {
 	return normalized
 }
 
-// getDefaultModelFromSettings reads the default model from Claude settings.json
-func getDefaultModelFromSettings() string {
+// getDefaultModelFromConfig reads the default model from the appropriate config
+// based on detected transcript format.
+func getDefaultModelFromConfig(isCodex bool) string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	
-	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
-	data, err := os.ReadFile(settingsPath)
+
+	if isCodex {
+		return getCodexModel(homeDir)
+	}
+	return getClaudeModel(homeDir)
+}
+
+// getClaudeModel reads the model from ~/.claude/settings.json.
+func getClaudeModel(homeDir string) string {
+	data, err := os.ReadFile(filepath.Join(homeDir, ".claude", "settings.json"))
 	if err != nil {
 		return ""
 	}
-	
 	var settings map[string]interface{}
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return ""
 	}
-	
 	if model, ok := settings["model"].(string); ok {
 		return normalizeModelName(model)
 	}
-	
+	return ""
+}
+
+// getCodexModel reads the model from ~/.codex/config.toml.
+func getCodexModel(homeDir string) string {
+	data, err := os.ReadFile(filepath.Join(homeDir, ".codex", "config.toml"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "model") && strings.Contains(line, "=") {
+			parts := strings.SplitN(line, "=", 2)
+			if strings.TrimSpace(parts[0]) == "model" {
+				model := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+				if model != "" {
+					return model
+				}
+			}
+		}
+	}
 	return ""
 }
 
@@ -126,6 +152,11 @@ type SessionMetrics struct {
 	MessageHistory    []MessageEvent `json:"-"` // Sliding window, not serialized
 	SessionStartAt    time.Time    `json:"session_start_at"`
 	TotalTokens        int64        `json:"total_tokens,omitempty"`
+	InputTokens        int64        `json:"input_tokens,omitempty"`
+	OutputTokens       int64        `json:"output_tokens,omitempty"`
+	CacheReadTokens    int64        `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int64      `json:"cache_creation_tokens,omitempty"`
+	EstimatedCostUSD   float64      `json:"estimated_cost_usd,omitempty"`
 	ModelName          string       `json:"model_name,omitempty"`
 	ContextWindow      int64        `json:"context_window,omitempty"`
 	ContextUtilization float64      `json:"context_utilization_percentage,omitempty"`
@@ -174,6 +205,19 @@ type TranscriptTailer struct {
 	// lastOpenToolNames holds tool names from the most recent assistant
 	// message with tool_use blocks. Cleared on user messages.
 	lastOpenToolNames []string
+
+	// isCodex is set when Codex-specific event types are found in the transcript.
+	isCodex bool
+
+	// contentChars accumulates character count from message content for
+	// token estimation when explicit token counts aren't available.
+	contentChars int64
+
+	// Token breakdown accumulators (latest snapshot, not cumulative).
+	inputTokens        int64
+	outputTokens       int64
+	cacheReadTokens    int64
+	cacheCreationTokens int64
 
 	// lastToolResultWasError tracks is_error on the most recent tool_result.
 	lastToolResultWasError bool
@@ -264,13 +308,37 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// Compute current metrics
 	t.computeMetrics()
 	
-	// Use settings fallback if no model was found in transcript
+	// Use settings fallback if no model was found in transcript.
+	// Pick the right config based on detected transcript format.
 	if t.metrics.ModelName == "" {
-		if defaultModel := getDefaultModelFromSettings(); defaultModel != "" {
+		if defaultModel := getDefaultModelFromConfig(t.isCodex); defaultModel != "" {
 			t.metrics.ModelName = defaultModel
 		}
 	}
 	
+	// Estimate tokens from content chars when no explicit token data exists.
+	if t.metrics.TotalTokens == 0 && t.contentChars > 0 && t.capacityMgr != nil && t.metrics.ModelName != "" {
+		cap := t.capacityMgr.GetModelCapacity(t.metrics.ModelName)
+		ratio := cap.CharToTokenRatio
+		if ratio <= 0 {
+			ratio = 4.0
+		}
+		t.metrics.TotalTokens = int64(float64(t.contentChars) / ratio)
+		// Heuristic split for cost estimation: ~90% input, ~10% output.
+		if t.inputTokens == 0 && t.outputTokens == 0 {
+			t.inputTokens = t.metrics.TotalTokens * 9 / 10
+			t.outputTokens = t.metrics.TotalTokens - t.inputTokens
+		}
+	}
+
+	// Recompute cost if token estimation filled in the breakdown after computeMetrics.
+	if t.metrics.EstimatedCostUSD == 0 && t.inputTokens > 0 && t.capacityMgr != nil && t.metrics.ModelName != "" {
+		t.metrics.InputTokens = t.inputTokens
+		t.metrics.OutputTokens = t.outputTokens
+		t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
+			t.metrics.ModelName, t.inputTokens, t.outputTokens, t.cacheReadTokens, t.cacheCreationTokens)
+	}
+
 	// Compute context utilization if we have capacity manager and model info
 	t.computeContextUtilization()
 	
@@ -335,11 +403,81 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		eventType = "tool_call"
 	}
 
+	// Codex uses generic "message" type with role to distinguish user/assistant.
+	// Map to specific types so IsAgentDone recognizes assistant end-of-turn.
+	if eventType == "message" {
+		if role, ok := raw["role"].(string); ok {
+			switch role {
+			case "assistant":
+				eventType = "assistant_message"
+			case "user", "developer":
+				eventType = "user_message"
+			}
+		}
+	}
+	// Codex "response_item" wraps messages in a payload with role.
+	if eventType == "response_item" {
+		if payload, ok := raw["payload"].(map[string]interface{}); ok {
+			if role, ok := payload["role"].(string); ok {
+				switch role {
+				case "assistant":
+					eventType = "assistant_message"
+				case "user", "developer":
+					eventType = "user_message"
+				}
+			}
+		}
+	}
+
 	// Extract model information
 	t.extractModelInfo(raw)
 
 	// Extract token information
 	t.extractTokenInfo(raw)
+
+	// Codex: extract model and token info from payload-wrapped events.
+	// Detect Codex transcript format from characteristic event types.
+	// Older format: session_meta, event_msg, response_item, turn_context.
+	// Newer format: uses record_type="state" and function_call events.
+	if eventType == "session_meta" || eventType == "event_msg" || eventType == "response_item" || eventType == "turn_context" {
+		t.isCodex = true
+	}
+	if _, ok := raw["record_type"]; ok {
+		t.isCodex = true
+	}
+	if eventType == "function_call" || eventType == "function_call_output" || eventType == "reasoning" {
+		t.isCodex = true
+	}
+	if payload, ok := raw["payload"].(map[string]interface{}); ok {
+		t.extractModelInfo(payload)
+		t.extractTokenInfo(payload)
+		// Codex event_msg with token_count has info.total_token_usage and
+		// info.model_context_window.
+		if info, ok := payload["info"].(map[string]interface{}); ok {
+			if usage, ok := info["total_token_usage"].(map[string]interface{}); ok {
+				if total, ok := usage["total_tokens"].(float64); ok && total > 0 {
+					t.metrics.TotalTokens = int64(total)
+				}
+				// Extract breakdown for cost calculation.
+				if v, ok := usage["input_tokens"].(float64); ok {
+					t.inputTokens = int64(v)
+				}
+				if v, ok := usage["output_tokens"].(float64); ok {
+					t.outputTokens = int64(v)
+				}
+				if v, ok := usage["cached_input_tokens"].(float64); ok {
+					t.cacheReadTokens = int64(v)
+				}
+			}
+			if cw, ok := info["model_context_window"].(float64); ok && cw > 0 {
+				t.contextWindowOverride = int64(cw)
+			}
+		}
+		// Codex task_started has model_context_window directly.
+		if cw, ok := payload["model_context_window"].(float64); ok && cw > 0 {
+			t.contextWindowOverride = int64(cw)
+		}
+	}
 
 	// Claude Code writes system events at the end of each agent turn:
 	// "turn_duration" (primary) and "stop_hook_summary" (after stop hooks).
@@ -392,11 +530,53 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		}
 	}
 
+	// Accumulate content character count for token estimation.
+	// Works across formats: Claude Code (message.content[].text),
+	// Codex (content[].text), and function_call (arguments).
+	t.contentChars += extractContentChars(raw)
+
 	return &MessageEvent{
 		Timestamp: timestamp,
 		EventType: eventType,
 		Content:   line,
 	}, nil
+}
+
+// extractContentChars returns the total character count of text content in
+// a transcript event, checking common content locations across formats.
+func extractContentChars(raw map[string]interface{}) int64 {
+	var chars int64
+	// Top-level content array (Codex newer format)
+	if arr, ok := raw["content"].([]interface{}); ok {
+		for _, item := range arr {
+			if block, ok := item.(map[string]interface{}); ok {
+				if text, ok := block["text"].(string); ok {
+					chars += int64(len(text))
+				}
+			}
+		}
+	}
+	// Nested message.content array (Claude Code format)
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if arr, ok := msg["content"].([]interface{}); ok {
+			for _, item := range arr {
+				if block, ok := item.(map[string]interface{}); ok {
+					if text, ok := block["text"].(string); ok {
+						chars += int64(len(text))
+					}
+				}
+			}
+		}
+	}
+	// Codex function_call arguments
+	if args, ok := raw["arguments"].(string); ok {
+		chars += int64(len(args))
+	}
+	// Codex function_call_output
+	if output, ok := raw["output"].(string); ok {
+		chars += int64(len(output))
+	}
+	return chars
 }
 
 // isMessageEvent determines if an event type should be counted as a message
@@ -408,11 +588,15 @@ func (t *TranscriptTailer) isMessageEvent(eventType string) bool {
 		"tool_result":       true,
 		"user_input":        true,
 		"assistant_output":  true,
-		// Add support for Claude Code transcript event types
+		// Claude Code transcript event types
 		"user":              true,
 		"assistant":         true,
 		"tool_use":          true,
 		"message":           true,
+		// Codex transcript event types
+		"response_item":      true,
+		"function_call":      true,
+		"function_call_output": true,
 	}
 	return messageEvents[eventType]
 }
@@ -432,9 +616,9 @@ func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
 	// are top-level event types (e.g. Codex). Claude Code counting happens in
 	// parseTranscriptLine via message.content[] inspection.
 	switch event.EventType {
-	case "tool_use", "tool_call":
+	case "tool_use", "tool_call", "function_call":
 		t.toolUseCount++
-	case "tool_result":
+	case "tool_result", "function_call_output":
 		t.toolResultCount++
 	}
 }
@@ -495,6 +679,16 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.HasOpenToolCall = openCalls > 0
 	t.metrics.LastOpenToolNames = t.lastOpenToolNames
 	t.metrics.LastToolResultWasError = t.lastToolResultWasError
+
+	// Token breakdown + estimated cost
+	t.metrics.InputTokens = t.inputTokens
+	t.metrics.OutputTokens = t.outputTokens
+	t.metrics.CacheReadTokens = t.cacheReadTokens
+	t.metrics.CacheCreationTokens = t.cacheCreationTokens
+	if t.capacityMgr != nil && t.metrics.ModelName != "" {
+		t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
+			t.metrics.ModelName, t.inputTokens, t.outputTokens, t.cacheReadTokens, t.cacheCreationTokens)
+	}
 
 	// Legacy calculation: For messages per minute, use a sliding window from the latest timestamp
 	legacyWindowStart := latestTime.Add(-t.windowSize)
@@ -597,53 +791,48 @@ func (t *TranscriptTailer) extractModelInfo(raw map[string]interface{}) {
 	}
 }
 
-// extractTokenInfo extracts token count information from transcript entry
+// extractTokenInfo extracts token count information from transcript entry.
+// Token counts are context-window snapshots (latest values, not cumulative).
 func (t *TranscriptTailer) extractTokenInfo(raw map[string]interface{}) {
-	// Look for token usage in various possible fields
-	var totalTokens int64 = 0
-	
-	// Check usage field (Claude API format)
-	if usage, ok := raw["usage"].(map[string]interface{}); ok {
-		if inputTokens, ok := usage["input_tokens"].(float64); ok {
-			totalTokens += int64(inputTokens)
+	var totalTokens int64
+	var inTok, outTok, cacheRead, cacheCreate int64
+	hasBreakdown := false
+
+	// extractUsage pulls breakdown fields from a usage map.
+	extractUsage := func(usage map[string]interface{}) {
+		if v, ok := usage["input_tokens"].(float64); ok {
+			inTok = int64(v)
+			hasBreakdown = true
 		}
-		if outputTokens, ok := usage["output_tokens"].(float64); ok {
-			totalTokens += int64(outputTokens)
+		if v, ok := usage["output_tokens"].(float64); ok {
+			outTok = int64(v)
+			hasBreakdown = true
 		}
-		if cacheReadTokens, ok := usage["cache_read_input_tokens"].(float64); ok {
-			totalTokens += int64(cacheReadTokens)
+		if v, ok := usage["cache_read_input_tokens"].(float64); ok {
+			cacheRead = int64(v)
 		}
-		if cacheCreationTokens, ok := usage["cache_creation_input_tokens"].(float64); ok {
-			totalTokens += int64(cacheCreationTokens)
+		if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
+			cacheCreate = int64(v)
 		}
-		// Also check for total_tokens directly
+		totalTokens = inTok + outTok + cacheRead + cacheCreate
+		// total_tokens override (replaces computed sum, breakdown stays)
 		if total, ok := usage["total_tokens"].(float64); ok {
 			totalTokens = int64(total)
 		}
 	}
-	
+
+	// Check usage field (Claude API format)
+	if usage, ok := raw["usage"].(map[string]interface{}); ok {
+		extractUsage(usage)
+	}
+
 	// Check message.usage field (Claude Code format)
 	if message, ok := raw["message"].(map[string]interface{}); ok {
 		if usage, ok := message["usage"].(map[string]interface{}); ok {
-			if inputTokens, ok := usage["input_tokens"].(float64); ok {
-				totalTokens += int64(inputTokens)
-			}
-			if outputTokens, ok := usage["output_tokens"].(float64); ok {
-				totalTokens += int64(outputTokens)
-			}
-			if cacheReadTokens, ok := usage["cache_read_input_tokens"].(float64); ok {
-				totalTokens += int64(cacheReadTokens)
-			}
-			if cacheCreationTokens, ok := usage["cache_creation_input_tokens"].(float64); ok {
-				totalTokens += int64(cacheCreationTokens)
-			}
-			// Also check for total_tokens directly
-			if total, ok := usage["total_tokens"].(float64); ok {
-				totalTokens = int64(total)
-			}
+			extractUsage(usage)
 		}
 	}
-	
+
 	// Check for token count in response metadata
 	if response, ok := raw["response"].(map[string]interface{}); ok {
 		if usage, ok := response["usage"].(map[string]interface{}); ok {
@@ -652,7 +841,7 @@ func (t *TranscriptTailer) extractTokenInfo(raw map[string]interface{}) {
 			}
 		}
 	}
-	
+
 	// Check for token count string fields
 	if tokenStr, ok := raw["token_count"].(string); ok {
 		if tokens, err := strconv.ParseInt(tokenStr, 10, 64); err == nil {
@@ -661,10 +850,16 @@ func (t *TranscriptTailer) extractTokenInfo(raw map[string]interface{}) {
 	} else if tokenFloat, ok := raw["token_count"].(float64); ok {
 		totalTokens = int64(tokenFloat)
 	}
-	
+
 	// Update to latest token count (current context window, not cumulative)
 	if totalTokens > 0 {
 		t.metrics.TotalTokens = totalTokens
+	}
+	if hasBreakdown {
+		t.inputTokens = inTok
+		t.outputTokens = outTok
+		t.cacheReadTokens = cacheRead
+		t.cacheCreationTokens = cacheCreate
 	}
 }
 

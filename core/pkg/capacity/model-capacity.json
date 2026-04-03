@@ -1,6 +1,6 @@
 {
-  "version": "2.0.0",
-  "last_updated": "2026-03-20",
+  "version": "2.1.0",
+  "last_updated": "2026-04-03",
   "models": {
     "claude-3.5-sonnet": {
       "context_window": 200000,
@@ -8,7 +8,13 @@
       "char_to_token_ratio": 3.5,
       "family": "claude-3.5",
       "display_name": "Claude 3.5 Sonnet",
-      "notes": "Standard Claude 3.5 model with 8K output"
+      "notes": "Standard Claude 3.5 model with 8K output",
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
+      }
     },
     "claude-3.5-haiku": {
       "context_window": 200000,
@@ -16,7 +22,13 @@
       "char_to_token_ratio": 3.8,
       "family": "claude-3.5",
       "display_name": "Claude 3.5 Haiku",
-      "notes": "Fast and efficient Claude 3.5 model"
+      "notes": "Fast and efficient Claude 3.5 model",
+      "pricing": {
+        "input_per_mtok": 0.80,
+        "output_per_mtok": 4.0,
+        "cache_read_per_mtok": 0.08,
+        "cache_creation_per_mtok": 1.0
+      }
     },
     "claude-3-opus": {
       "context_window": 200000,
@@ -24,7 +36,13 @@
       "char_to_token_ratio": 3.2,
       "family": "claude-3",
       "display_name": "Claude 3 Opus",
-      "notes": "Most capable Claude 3 model"
+      "notes": "Most capable Claude 3 model",
+      "pricing": {
+        "input_per_mtok": 15.0,
+        "output_per_mtok": 75.0,
+        "cache_read_per_mtok": 1.875,
+        "cache_creation_per_mtok": 18.75
+      }
     },
     "claude-3-sonnet": {
       "context_window": 200000,
@@ -32,7 +50,13 @@
       "char_to_token_ratio": 3.4,
       "family": "claude-3",
       "display_name": "Claude 3 Sonnet",
-      "notes": "Balanced Claude 3 model"
+      "notes": "Balanced Claude 3 model",
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
+      }
     },
     "claude-3-haiku": {
       "context_window": 200000,
@@ -40,7 +64,13 @@
       "char_to_token_ratio": 3.7,
       "family": "claude-3",
       "display_name": "Claude 3 Haiku",
-      "notes": "Fast Claude 3 model"
+      "notes": "Fast Claude 3 model",
+      "pricing": {
+        "input_per_mtok": 0.25,
+        "output_per_mtok": 1.25,
+        "cache_read_per_mtok": 0.03,
+        "cache_creation_per_mtok": 0.30
+      }
     },
     "claude-3.7-sonnet": {
       "context_window": 200000,
@@ -51,6 +81,12 @@
       "notes": "Enhanced Claude 3.5 with improved capabilities",
       "beta_features": {
         "output_128k": 128000
+      },
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
       }
     },
     "claude-4-sonnet": {
@@ -62,6 +98,12 @@
       "notes": "Advanced Claude 4 with large output capacity",
       "beta_features": {
         "context_1m": 1000000
+      },
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
       }
     },
     "claude-4.1-opus": {
@@ -70,7 +112,13 @@
       "char_to_token_ratio": 3.2,
       "family": "claude-4",
       "display_name": "Claude 4.1 Opus",
-      "notes": "High-capability model"
+      "notes": "High-capability model",
+      "pricing": {
+        "input_per_mtok": 15.0,
+        "output_per_mtok": 75.0,
+        "cache_read_per_mtok": 1.875,
+        "cache_creation_per_mtok": 18.75
+      }
     },
     "claude-opus-4-1": {
       "context_window": 200000,
@@ -78,7 +126,13 @@
       "char_to_token_ratio": 3.2,
       "family": "claude-4",
       "display_name": "Claude Opus 4.1",
-      "notes": "Alias for claude-4.1-opus"
+      "notes": "Alias for claude-4.1-opus",
+      "pricing": {
+        "input_per_mtok": 15.0,
+        "output_per_mtok": 75.0,
+        "cache_read_per_mtok": 1.875,
+        "cache_creation_per_mtok": 18.75
+      }
     },
     "claude-sonnet-4-5": {
       "context_window": 200000,
@@ -89,6 +143,12 @@
       "notes": "High-capability Claude 4.5 model",
       "beta_features": {
         "context_1m": 1000000
+      },
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
       }
     },
     "claude-haiku-4-5": {
@@ -97,7 +157,13 @@
       "char_to_token_ratio": 3.8,
       "family": "claude-4",
       "display_name": "Claude Haiku 4.5",
-      "notes": "Fast, efficient Claude 4.5 model"
+      "notes": "Fast, efficient Claude 4.5 model",
+      "pricing": {
+        "input_per_mtok": 0.80,
+        "output_per_mtok": 4.0,
+        "cache_read_per_mtok": 0.08,
+        "cache_creation_per_mtok": 1.0
+      }
     },
     "claude-opus-4-6": {
       "context_window": 200000,
@@ -108,6 +174,12 @@
       "notes": "Latest high-capability model, 1M context available",
       "beta_features": {
         "context_1m": 1000000
+      },
+      "pricing": {
+        "input_per_mtok": 15.0,
+        "output_per_mtok": 75.0,
+        "cache_read_per_mtok": 1.875,
+        "cache_creation_per_mtok": 18.75
       }
     },
     "claude-sonnet-4-6": {
@@ -116,40 +188,91 @@
       "char_to_token_ratio": 3.5,
       "family": "claude-4",
       "display_name": "Claude Sonnet 4.6",
-      "notes": "Fast, capable Claude 4.6 model"
+      "notes": "Fast, capable Claude 4.6 model",
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
+      }
+    },
+    "gpt-5.4": {
+      "context_window": 258400,
+      "max_output": 32768,
+      "char_to_token_ratio": 3.5,
+      "family": "gpt-5",
+      "display_name": "GPT-5.4",
+      "notes": "OpenAI Codex default model",
+      "pricing": {
+        "input_per_mtok": 2.0,
+        "output_per_mtok": 8.0,
+        "cache_read_per_mtok": 0,
+        "cache_creation_per_mtok": 0
+      }
     }
   },
   "family_defaults": {
     "claude-3": {
       "context_window": 200000,
       "max_output": 4096,
-      "char_to_token_ratio": 3.4
+      "char_to_token_ratio": 3.4,
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
+      }
     },
     "claude-3.5": {
       "context_window": 200000,
       "max_output": 8192,
-      "char_to_token_ratio": 3.6
+      "char_to_token_ratio": 3.6,
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
+      }
     },
     "claude-3.7": {
       "context_window": 200000,
       "max_output": 8192,
-      "char_to_token_ratio": 3.5
+      "char_to_token_ratio": 3.5,
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
+      }
     },
     "claude-4": {
       "context_window": 200000,
       "max_output": 64000,
-      "char_to_token_ratio": 3.3
+      "char_to_token_ratio": 3.3,
+      "pricing": {
+        "input_per_mtok": 3.0,
+        "output_per_mtok": 15.0,
+        "cache_read_per_mtok": 0.30,
+        "cache_creation_per_mtok": 3.75
+      }
     }
   },
   "fallback": {
     "context_window": 200000,
     "max_output": 4096,
     "char_to_token_ratio": 4.0,
-    "display_name": "Unknown Model"
+    "display_name": "Unknown Model",
+    "pricing": {
+      "input_per_mtok": 3.0,
+      "output_per_mtok": 15.0,
+      "cache_read_per_mtok": 0.30,
+      "cache_creation_per_mtok": 3.75
+    }
   },
   "estimation_notes": {
     "char_to_token_ratio": "Average characters per token, varies by language and content type",
     "accuracy": "Ratios are estimates and may vary ±15% from actual tokenization",
-    "update_frequency": "Model capacities updated as new models are released"
+    "update_frequency": "Model capacities updated as new models are released",
+    "pricing": "USD per million tokens, based on Anthropic/OpenAI published pricing as of 2026-04-03"
   }
 }

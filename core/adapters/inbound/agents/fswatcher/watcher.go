@@ -76,12 +76,12 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	}
 	defer watcher.Close()
 
-	// Add existing project subdirectories.
+	// Recursively add existing subdirectories.
 	if err := w.addExistingDirs(watcher); err != nil {
 		return err
 	}
 
-	// Also watch the root itself to catch new project directories.
+	// Also watch the root itself to catch new directories.
 	if err := watcher.Add(w.root); err != nil {
 		return err
 	}
@@ -131,14 +131,13 @@ func (w *Watcher) Unsubscribe(ch <-chan agent.Event) {
 func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	name := ev.Name
 
-	// If a new directory was created under root, start watching it.
+	// If a new directory was created anywhere under root, start watching it
+	// recursively. This supports both flat (Claude Code) and deep (Codex
+	// sessions/YYYY/MM/DD/) directory structures.
 	if ev.Op&fsnotify.Create != 0 {
 		if info, err := os.Stat(name); err == nil && info.IsDir() {
-			// Only watch direct children of the root.
-			if filepath.Dir(name) == w.root {
+			if strings.HasPrefix(name, w.root) {
 				_ = watcher.Add(name)
-				// Scan for .jsonl files already created before the watch was set
-				// (race: sub-agent in a worktree creates dir + transcript together).
 				w.emitExistingFiles(name)
 			}
 			return
@@ -275,18 +274,17 @@ func (w *Watcher) waitForDir(ctx context.Context, watchDir, targetDir string) er
 	}
 }
 
-// addExistingDirs adds fsnotify watches for all existing subdirectories under root.
+// addExistingDirs recursively adds fsnotify watches for all subdirectories under root.
 func (w *Watcher) addExistingDirs(watcher *fsnotify.Watcher) error {
-	entries, err := os.ReadDir(w.root)
-	if err != nil {
-		return nil // root may be empty — not an error
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			_ = watcher.Add(filepath.Join(w.root, e.Name()))
+	return filepath.WalkDir(w.root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable dirs
 		}
-	}
-	return nil
+		if d.IsDir() && path != w.root {
+			_ = watcher.Add(path)
+		}
+		return nil
+	})
 }
 
 // emitExistingFiles scans a newly-watched directory for .jsonl files that were

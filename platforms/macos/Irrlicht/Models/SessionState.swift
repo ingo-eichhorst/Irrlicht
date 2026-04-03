@@ -9,13 +9,15 @@ struct SessionMetrics: Codable {
     let modelName: String           // model name extracted from transcript ("" if not available) 
     let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
-    
+    let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
+
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
         case totalTokens = "total_tokens"
         case modelName = "model_name"
         case contextUtilization = "context_utilization_percentage"
         case pressureLevel = "pressure_level"
+        case estimatedCostUSD = "estimated_cost_usd"
     }
     
     // Computed properties for UI display
@@ -88,6 +90,13 @@ struct SessionMetrics: Codable {
     // Check if context utilization data is available
     var hasContextData: Bool {
         return totalTokens > 0 && !modelName.isEmpty && pressureLevel != "unknown" && !pressureLevel.isEmpty
+    }
+
+    var formattedCost: String? {
+        guard let cost = estimatedCostUSD, cost > 0 else { return nil }
+        if cost < 0.01 { return "<$0.01" }
+        if cost < 10 { return String(format: "$%.2f", cost) }
+        return String(format: "$%.0f", cost)
     }
     
     // Real-time elapsed time for active sessions
@@ -329,12 +338,13 @@ struct SessionState: Identifiable, Codable {
 
     /// SVG icon for the adapter (claude-code, codex, etc.)
     var adapterIcon: NSImage? {
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let svg: String
         switch adapter ?? "claude-code" {
         case "claude-code":
             svg = SessionState.claudeCodeSVG
         case "codex":
-            svg = SessionState.codexSVG
+            svg = SessionState.codexSVG(dark: isDark)
         default:
             svg = SessionState.claudeCodeSVG
         }
@@ -360,12 +370,15 @@ struct SessionState: Identifiable, Codable {
     </svg>
     """
 
-    // Codex — circle with >_ terminal prompt.
-    private static let codexSVG = """
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r="44" fill="none" stroke="#1A1A1A" stroke-width="8"/>
-      <path d="M28 38 L42 50 L28 62" fill="none" stroke="#1A1A1A" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-      <line x1="48" y1="62" x2="68" y2="62" stroke="#1A1A1A" stroke-width="7" stroke-linecap="round"/>
-    </svg>
-    """
+    // Codex — circle with >_ terminal prompt. Color adapts to appearance.
+    private static func codexSVG(dark: Bool) -> String {
+        let c = dark ? "#E0E0E0" : "#1A1A1A"
+        return """
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="44" fill="none" stroke="\(c)" stroke-width="8"/>
+          <path d="M28 38 L42 50 L28 62" fill="none" stroke="\(c)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="48" y1="62" x2="68" y2="62" stroke="\(c)" stroke-width="7" stroke-linecap="round"/>
+        </svg>
+        """
+    }
 }
