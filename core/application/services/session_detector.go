@@ -242,6 +242,16 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 		go d.discoverAndRegisterPID(sid, tp)
 	}
 
+	// Backfill CWD/ProjectName if still missing (transcript may not have had
+	// a cwd field when onNewSession ran — it appears on the first user message).
+	if state.CWD == "" && ev.TranscriptPath != "" {
+		if cwd := d.git.GetCWDFromTranscript(ev.TranscriptPath); cwd != "" {
+			state.CWD = cwd
+			state.GitBranch = d.git.GetBranch(cwd)
+			state.ProjectName = d.git.GetProjectName(cwd)
+		}
+	}
+
 	// Refresh metrics (includes LastEventType for content-based detection).
 	if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
 		state.Metrics = session.MergeMetrics(m, state.Metrics)

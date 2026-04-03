@@ -401,20 +401,15 @@ struct SessionRowView: View {
 
                 Spacer()
 
-                // Short model name
+                // Short model name + adapter icon
                 Text(session.shortModelName)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .accessibilityIdentifier("session-model-label-\(session.id)")
-
-                // Relative time
-                TimelineView(.periodic(from: .now, by: 1.0)) { timeline in
-                    let formatter = RelativeDateTimeFormatter()
-                    let _ = { formatter.unitsStyle = .abbreviated }()
-                    Text(formatter.localizedString(for: session.updatedAt, relativeTo: timeline.date))
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary.opacity(0.6))
+                if let icon = session.adapterIcon {
+                    Image(nsImage: icon)
+                        .frame(width: 12, height: 12)
                 }
 
                 // Action buttons on hover

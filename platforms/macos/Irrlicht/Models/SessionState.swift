@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os
 
@@ -131,6 +132,7 @@ struct SessionState: Identifiable, Codable {
     let pid: Int?               // Claude Code process PID (optional for backwards compatibility)
     let parentSessionId: String? // parent session ID for subagent sessions (optional)
     let subagents: SubagentSummary? // aggregate state of child sessions (optional)
+    let adapter: String?        // source agent: "claude-code", "codex" (optional)
     let daemonVersion: String?  // irrlichd version that created this session (optional)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
@@ -152,6 +154,7 @@ struct SessionState: Identifiable, Codable {
         case metrics
         case parentSessionId = "parent_session_id"
         case subagents
+        case adapter
         case daemonVersion = "daemon_version"
     }
     
@@ -178,6 +181,7 @@ struct SessionState: Identifiable, Codable {
         pid = try container.decodeIfPresent(Int.self, forKey: .pid)
         parentSessionId = try container.decodeIfPresent(String.self, forKey: .parentSessionId)
         subagents = try container.decodeIfPresent(SubagentSummary.self, forKey: .subagents)
+        adapter = try container.decodeIfPresent(String.self, forKey: .adapter)
         daemonVersion = try container.decodeIfPresent(String.self, forKey: .daemonVersion)
 
         // Handle firstSeen date (unix timestamp format)
@@ -226,7 +230,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, daemonVersion: String? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -242,6 +246,7 @@ struct SessionState: Identifiable, Codable {
         self.pid = pid
         self.parentSessionId = parentSessionId
         self.subagents = subagents
+        self.adapter = adapter
         self.daemonVersion = daemonVersion
     }
     
@@ -321,4 +326,46 @@ struct SessionState: Identifiable, Codable {
         }
         return short
     }
+
+    /// SVG icon for the adapter (claude-code, codex, etc.)
+    var adapterIcon: NSImage? {
+        let svg: String
+        switch adapter ?? "claude-code" {
+        case "claude-code":
+            svg = SessionState.claudeCodeSVG
+        case "codex":
+            svg = SessionState.codexSVG
+        default:
+            svg = SessionState.claudeCodeSVG
+        }
+        guard let data = svg.data(using: .utf8),
+              let img = NSImage(data: data) else { return nil }
+        img.isTemplate = false
+        img.size = NSSize(width: 14, height: 14)
+        return img
+    }
+
+    // Claude Code mascot — pixel-art rectangular creature with eyes and legs.
+    private static let claudeCodeSVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 56 56">
+      <rect x="8" y="4" width="40" height="32" rx="4" fill="#D97757"/>
+      <rect x="4" y="16" width="8" height="12" rx="2" fill="#D97757"/>
+      <rect x="44" y="16" width="8" height="12" rx="2" fill="#D97757"/>
+      <rect x="18" y="12" width="8" height="8" rx="1" fill="#4A2820"/>
+      <rect x="30" y="12" width="8" height="8" rx="1" fill="#4A2820"/>
+      <rect x="12" y="36" width="6" height="14" rx="1" fill="#D97757"/>
+      <rect x="22" y="36" width="6" height="10" rx="1" fill="#D97757"/>
+      <rect x="32" y="36" width="6" height="10" rx="1" fill="#D97757"/>
+      <rect x="42" y="36" width="6" height="14" rx="1" fill="#D97757"/>
+    </svg>
+    """
+
+    // Codex — circle with >_ terminal prompt.
+    private static let codexSVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="44" fill="none" stroke="#1A1A1A" stroke-width="8"/>
+      <path d="M28 38 L42 50 L28 62" fill="none" stroke="#1A1A1A" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="48" y1="62" x2="68" y2="62" stroke="#1A1A1A" stroke-width="7" stroke-linecap="round"/>
+    </svg>
+    """
 }
