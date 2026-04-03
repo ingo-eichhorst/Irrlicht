@@ -548,89 +548,96 @@ section {
 .pipeline-code span { color: var(--text-bright); }
 .pipeline-code .arrow { color: var(--accent); opacity: 0.5; }
 
-/* ─── Architecture ─── */
-.architecture {
+/* ─── Supported ─── */
+.supported {
   padding: 8rem 0;
 }
 
-.arch-diagram {
+.supported-columns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
   margin-top: 4rem;
-  padding: 3rem;
+}
+
+.supported-col {
+  padding: 2.5rem 2rem;
+  border-radius: 16px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 20px;
   backdrop-filter: blur(12px);
   position: relative;
   overflow: hidden;
 }
 
-.arch-diagram::after {
+.supported-col::before {
   content: '';
   position: absolute;
-  bottom: 0;
+  top: 0;
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.15), transparent);
+  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.2), transparent);
 }
 
-.arch-layers {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
+.supported-col h3 {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 1.5rem;
 }
 
-.arch-layer {
+.col-purple h3 { color: var(--working); }
+.col-orange h3 { color: var(--waiting); }
+.col-green  h3 { color: var(--ready); }
+
+.supported-item {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid rgba(200,205,216,0.04);
 }
 
-.arch-label {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.6rem;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  width: 100px;
-  text-align: right;
+.supported-item:last-child { border-bottom: none; }
+
+.supported-item .si-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
   flex-shrink: 0;
 }
 
-.arch-boxes {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  flex: 1;
+.col-purple .si-dot { background: var(--working); box-shadow: 0 0 6px var(--working); }
+.col-orange .si-dot { background: var(--waiting); box-shadow: 0 0 6px var(--waiting); }
+.col-green  .si-dot { background: var(--ready); box-shadow: 0 0 6px var(--ready); }
+
+.supported-item .si-name {
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--text-bright);
 }
 
-.arch-box {
-  padding: 0.6rem 1rem;
-  border-radius: 8px;
+.supported-item .si-tag {
+  margin-left: auto;
   font-family: 'DM Mono', monospace;
-  font-size: 0.72rem;
-  font-weight: 400;
-  border: 1px solid;
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
   white-space: nowrap;
 }
 
-.ab-purple { border-color: rgba(139,92,246,0.2); color: var(--working); background: rgba(139,92,246,0.05); }
-.ab-orange { border-color: rgba(255,149,0,0.2); color: var(--waiting); background: rgba(255,149,0,0.05); }
-.ab-green  { border-color: rgba(52,199,89,0.2); color: var(--ready); background: rgba(52,199,89,0.05); }
-.ab-dim    { border-color: rgba(200,205,216,0.08); color: var(--text-dim); background: rgba(200,205,216,0.02); }
-
-.arch-connector {
-  width: 100px;
-  display: flex;
-  justify-content: flex-end;
-  flex-shrink: 0;
+.tag-live {
+  background: rgba(52,199,89,0.1);
+  color: var(--ready);
 }
 
-.arch-connector .line {
-  width: 1px;
-  height: 1.5rem;
-  background: linear-gradient(to bottom, rgba(139,92,246,0.2), rgba(139,92,246,0.05));
-  margin-right: 50%;
+.tag-planned {
+  background: rgba(200,205,216,0.06);
+  color: var(--text-dim);
 }
 
 /* ─── The Light System ─── */
@@ -876,9 +883,7 @@ footer {
   .pipeline-step:not(:last-child)::after { display: none; }
   .lights-row { flex-direction: column; }
   .install-options { grid-template-columns: 1fr; }
-  .arch-layer { flex-direction: column; align-items: flex-start; }
-  .arch-label { text-align: left; width: auto; }
-  .arch-connector { display: none; }
+  .supported-columns { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 600px) {
@@ -906,7 +911,7 @@ footer {
   <ul class="nav-links">
     <li><a href="#features">Features</a></li>
     <li><a href="#how-it-works">How It Works</a></li>
-    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#supported">Supported</a></li>
     <li><a href="docs/">Docs</a></li>
     <li><a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-nav">GitHub</a></li>
   </ul>
@@ -1084,62 +1089,93 @@ footer {
   </div>
 </section>
 
-<!-- ─── Architecture ─── -->
-<section class="architecture" id="architecture">
+<!-- ─── Supported ─── -->
+<section class="supported" id="supported">
   <div class="container">
     <div class="reveal">
-      <p class="section-label">Architecture</p>
-      <h2 class="section-title">Hexagonal, by design</h2>
-      <p class="section-desc">Clean ports and adapters. Every external dependency is behind an interface. Every component is testable in isolation.</p>
+      <p class="section-label">Compatibility</p>
+      <h2 class="section-title">What Irrlicht works with</h2>
+      <p class="section-desc">Monitors the agents you already use, integrates with orchestrators, and runs where you need it.</p>
     </div>
-    <div class="arch-diagram reveal">
-      <div class="arch-layers">
-        <div class="arch-layer">
-          <div class="arch-label">Inbound</div>
-          <div class="arch-boxes">
-            <div class="arch-box ab-purple">Claude Code</div>
-            <div class="arch-box ab-purple">Codex</div>
-            <div class="arch-box ab-purple">Process Scanner</div>
-            <div class="arch-box ab-orange">Gas Town</div>
-          </div>
+    <div class="supported-columns reveal">
+
+      <div class="supported-col col-purple">
+        <h3>Coding Agents &amp; Assistants</h3>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Claude Code</span>
+          <span class="si-tag tag-live">live</span>
         </div>
-        <div class="arch-layer">
-          <div class="arch-connector"><div class="line"></div></div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">OpenAI Codex</span>
+          <span class="si-tag tag-live">live</span>
         </div>
-        <div class="arch-layer">
-          <div class="arch-label">Domain</div>
-          <div class="arch-boxes">
-            <div class="arch-box ab-dim">SessionDetector</div>
-            <div class="arch-box ab-dim">State Machine</div>
-            <div class="arch-box ab-dim">Transcript Tailer</div>
-            <div class="arch-box ab-dim">Cost Estimator</div>
-          </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Gemini CLI</span>
+          <span class="si-tag tag-planned">planned</span>
         </div>
-        <div class="arch-layer">
-          <div class="arch-connector"><div class="line"></div></div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Cursor Agent</span>
+          <span class="si-tag tag-planned">planned</span>
         </div>
-        <div class="arch-layer">
-          <div class="arch-label">Outbound</div>
-          <div class="arch-boxes">
-            <div class="arch-box ab-green">Filesystem</div>
-            <div class="arch-box ab-green">WebSocket Hub</div>
-            <div class="arch-box ab-green">kqueue</div>
-            <div class="arch-box ab-green">mDNS</div>
-            <div class="arch-box ab-green">Git Resolver</div>
-          </div>
-        </div>
-        <div class="arch-layer">
-          <div class="arch-connector"><div class="line"></div></div>
-        </div>
-        <div class="arch-layer">
-          <div class="arch-label">Clients</div>
-          <div class="arch-boxes">
-            <div class="arch-box ab-dim">SwiftUI Menu Bar</div>
-            <div class="arch-box ab-dim">Web Dashboard</div>
-            <div class="arch-box ab-dim">irrlicht-ls CLI</div>
-          </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Amp</span>
+          <span class="si-tag tag-planned">planned</span>
         </div>
       </div>
+
+      <div class="supported-col col-orange">
+        <h3>Agent Orchestrators</h3>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Gas Town</span>
+          <span class="si-tag tag-live">live</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Claude Squad</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Custom orchestrators</span>
+          <span class="si-tag tag-planned">plugin api</span>
+        </div>
+      </div>
+
+      <div class="supported-col col-green">
+        <h3>Platforms</h3>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">macOS (menu bar app)</span>
+          <span class="si-tag tag-live">live</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Web dashboard</span>
+          <span class="si-tag tag-live">live</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">CLI (irrlicht-ls)</span>
+          <span class="si-tag tag-live">live</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Linux (daemon only)</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">iOS / iPadOS</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+      </div>
+
     </div>
   </div>
 </section>
