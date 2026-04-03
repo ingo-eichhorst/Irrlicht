@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Documentation — Irrlicht</title>
+<meta name="description" content="Irrlicht documentation hub. Learn how to install, configure, and use the macOS menu bar app for monitoring AI coding agent sessions.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+
+<style>
+/* ─── Card Grid ─── */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.card-grid-section-title {
+  grid-column: 1 / -1;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-top: 1rem;
+  margin-bottom: -0.25rem;
+}
+
+.card-grid-section-title:first-child {
+  margin-top: 0;
+}
+
+.doc-card {
+  display: block;
+  padding: 1.5rem;
+  border-radius: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  text-decoration: none;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.doc-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.2), transparent);
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+
+.doc-card:hover {
+  border-color: rgba(139,92,246,0.15);
+  transform: translateY(-4px);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3), 0 0 40px rgba(139,92,246,0.15);
+}
+
+.doc-card:hover::before {
+  opacity: 1;
+}
+
+.doc-card-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+  font-size: 1rem;
+}
+
+.doc-card-icon.purple { background: rgba(139,92,246,0.1); color: var(--working); }
+.doc-card-icon.orange { background: rgba(255,149,0,0.1); color: var(--waiting); }
+.doc-card-icon.green  { background: rgba(52,199,89,0.1); color: var(--ready); }
+
+.doc-card h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-bright);
+  margin-bottom: 0.4rem;
+}
+
+.doc-card p {
+  font-size: 0.82rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.55;
+  margin: 0;
+}
+
+@media (max-width: 800px) {
+  .card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+</head>
+<body>
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html" class="active">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main Content ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+      <h1>Documentation</h1>
+      <p class="page-subtitle">Irrlicht is a macOS menu bar app that monitors AI coding agent sessions in real time. These docs cover everything from installation to architecture, so you can get the most out of every light in your menu bar.</p>
+
+      <div class="card-grid">
+
+        <!-- Getting Started -->
+        <div class="card-grid-section-title">Getting Started</div>
+
+        <a href="installation.html" class="doc-card">
+          <div class="doc-card-icon purple">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2v12m0 0l-4-4m4 4l4-4M4 18h12"/></svg>
+          </div>
+          <h3>Installation</h3>
+          <p>Install the menu bar app and the daemon via Homebrew. One tap, two formulae, zero config.</p>
+        </a>
+
+        <a href="quickstart.html" class="doc-card">
+          <div class="doc-card-icon purple">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h7l-1 6 10-12h-7l1-6z"/></svg>
+          </div>
+          <h3>Quick Start</h3>
+          <p>From install to first session in under two minutes. Launch an agent and watch the light change.</p>
+        </a>
+
+        <!-- Core Concepts -->
+        <div class="card-grid-section-title">Core Concepts</div>
+
+        <a href="light-system.html" class="doc-card">
+          <div class="doc-card-icon orange">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M10 2v3m0 10v3M2 10h3m10 0h3M4.22 4.22l2.12 2.12m7.32 7.32l2.12 2.12M4.22 15.78l2.12-2.12m7.32-7.32l2.12-2.12"/></svg>
+          </div>
+          <h3>The Light System</h3>
+          <p>How purple, amber, and green map to working, waiting, and ready. The core visual language of Irrlicht.</p>
+        </a>
+
+        <a href="state-machine.html" class="doc-card">
+          <div class="doc-card-icon orange">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="10" r="3"/><circle cx="14" cy="10" r="3"/><path d="M9 10h2"/></svg>
+          </div>
+          <h3>State Machine</h3>
+          <p>The three states, their transitions, and how filesystem events drive the session lifecycle.</p>
+        </a>
+
+        <a href="session-detection.html" class="doc-card">
+          <div class="doc-card-icon orange">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h12v12H4z"/><path d="M4 8h12M8 4v12"/></svg>
+          </div>
+          <h3>Session Detection</h3>
+          <p>How Irrlicht discovers agent sessions through filesystem watching, JSONL parsing, and lock files.</p>
+        </a>
+
+        <!-- Usage -->
+        <div class="card-grid-section-title">Usage</div>
+
+        <a href="configuration.html" class="doc-card">
+          <div class="doc-card-icon green">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2a8 8 0 110 16 8 8 0 010-16z"/><path d="M10 6v4l3 2"/></svg>
+          </div>
+          <h3>Configuration</h3>
+          <p>Notification thresholds, polling intervals, and display preferences. Most users need zero changes.</p>
+        </a>
+
+        <a href="cli-tools.html" class="doc-card">
+          <div class="doc-card-icon green">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4-4 4M10 16h6"/></svg>
+          </div>
+          <h3>CLI Tools</h3>
+          <p>The <code style="font-size:0.78rem;background:rgba(139,92,246,0.06);padding:0.1rem 0.3rem;border-radius:3px;color:var(--text-bright)">irrlichtctl</code> command for querying sessions, debugging adapters, and inspecting state.</p>
+        </a>
+
+        <a href="api-reference.html" class="doc-card">
+          <div class="doc-card-icon green">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4v12M14 4v12M6 8h8M6 12h8"/></svg>
+          </div>
+          <h3>API Reference</h3>
+          <p>IPC messages, session data structures, and event types for building integrations and custom adapters.</p>
+        </a>
+
+        <!-- Architecture -->
+        <div class="card-grid-section-title">Architecture</div>
+
+        <a href="architecture.html" class="doc-card">
+          <div class="doc-card-icon purple">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2L3 7v6l7 5 7-5V7l-7-5z"/><path d="M10 12V7m0 0L7 9m3-2l3 2"/></svg>
+          </div>
+          <h3>System Design</h3>
+          <p>Daemon and app architecture, IPC protocol, and how the monitoring pipeline flows from filesystem to menu bar.</p>
+        </a>
+
+        <a href="adapters.html" class="doc-card">
+          <div class="doc-card-icon purple">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="10" r="4"/><circle cx="13" cy="10" r="4"/></svg>
+          </div>
+          <h3>Adapters</h3>
+          <p>Per-agent adapters for Claude Code, Codex, and others. How to write a custom adapter for any agent.</p>
+        </a>
+
+        <!-- Community -->
+        <div class="card-grid-section-title">Community</div>
+
+        <a href="contributing.html" class="doc-card">
+          <div class="doc-card-icon green">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3v14M5 7h8a2 2 0 010 4H5"/></svg>
+          </div>
+          <h3>Contributing</h3>
+          <p>How to report bugs, suggest features, submit pull requests, and set up the development environment.</p>
+        </a>
+
+        <a href="code-of-conduct.html" class="doc-card">
+          <div class="doc-card-icon green">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3C6 3 3 7 3 7s3 7 7 7 7-7 7-7-3-4-7-4z"/><circle cx="10" cy="9" r="2.5"/></svg>
+          </div>
+          <h3>Code of Conduct</h3>
+          <p>Community standards and expectations for respectful, inclusive participation in the project.</p>
+        </a>
+
+        <a href="changelog.html" class="doc-card">
+          <div class="doc-card-icon green">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5h12M4 10h12M4 15h8"/></svg>
+          </div>
+          <h3>Changelog</h3>
+          <p>Version history, release notes, breaking changes, and migration guides for every release.</p>
+        </a>
+
+      </div>
+
+      <!-- ─── Bottom Nav ─── -->
+      <nav class="docs-nav-bottom">
+        <div></div>
+        <a href="installation.html">
+          <span class="label">Next</span>
+          Installation &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

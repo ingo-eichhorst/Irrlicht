@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configuration — Irrlicht Docs</title>
+<meta name="description" content="Configure Irrlicht with environment variables, filesystem paths, app settings, and logging. Zero configuration by default.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <div class="dot"></div>
+      <span>Irrlicht</span>
+      <small>DOCS</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html" class="active">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Configuration</h1>
+      <p class="page-subtitle">Zero configuration by default. Environment variables for power users.</p>
+
+      <!-- ── Philosophy ── -->
+      <h2>Philosophy</h2>
+
+      <p>Irrlicht is designed to work with zero configuration. Install and run &mdash; sessions are discovered automatically. These options exist for power users who need to customize behavior.</p>
+
+      <!-- ── Environment Variables ── -->
+      <h2>Environment Variables</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Variable</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>IRRLICHT_MAX_SESSION_AGE</code></td>
+            <td>Duration</td>
+            <td><code>120h</code> (5 days)</td>
+            <td>Maximum age for transcript sessions before pruning</td>
+          </tr>
+          <tr>
+            <td><code>GT_BIN</code></td>
+            <td>Path</td>
+            <td><code>$PATH</code> lookup</td>
+            <td>Override path to Gas Town <code>gt</code> CLI binary</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_USE_FILES</code></td>
+            <td>Boolean (1/0)</td>
+            <td>unset</td>
+            <td>Enable file polling mode in macOS app (legacy, not recommended)</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_DISABLED</code></td>
+            <td>Boolean (1/0)</td>
+            <td>unset</td>
+            <td>Disable the daemon entirely (kill switch)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ── Filesystem Paths ── -->
+      <h2>Filesystem Paths</h2>
+
+      <h3>Daemon</h3>
+
+      <ul>
+        <li><strong>Session instances:</strong> <code>~/Library/Application Support/Irrlicht/instances/</code></li>
+        <li><strong>Logs:</strong> <code>~/Library/Application Support/Irrlicht/logs/</code></li>
+        <li><strong>Unix socket:</strong> <code>~/.local/share/irrlicht/irrlichd.sock</code></li>
+      </ul>
+
+      <h3>macOS App</h3>
+
+      <ul>
+        <li><strong>Session order:</strong> <code>~/Library/Application Support/Irrlicht/session-order.json</code></li>
+      </ul>
+
+      <h3>Transcript Locations</h3>
+
+      <ul>
+        <li><strong>Claude Code:</strong> <code>~/.claude/projects/&lt;project&gt;/&lt;session-id&gt;.jsonl</code></li>
+        <li><strong>Codex:</strong> <code>~/.codex/sessions/YYYY/MM/DD/&lt;session-id&gt;.jsonl</code></li>
+      </ul>
+
+      <!-- ── App Settings ── -->
+      <h2>App Settings</h2>
+
+      <p>The macOS app has a Settings panel accessible via the gear icon:</p>
+
+      <h3>Session TTL</h3>
+
+      <ul>
+        <li>Controls auto-deletion of idle ready sessions</li>
+        <li>Options: Never, 15 minutes, 30 minutes (default), 1 hour, 4 hours</li>
+        <li>Stored in <code>@AppStorage("sessionTTLMinutes")</code></li>
+      </ul>
+
+      <h3>Notifications</h3>
+
+      <ul>
+        <li>Context pressure notifications at 80% and 95%</li>
+        <li>Requires macOS notification permission (requested on launch)</li>
+      </ul>
+
+      <!-- ── Logging ── -->
+      <h2>Logging</h2>
+
+      <ul>
+        <li><strong>Format:</strong> Structured JSON</li>
+        <li><strong>Location:</strong> <code>~/Library/Application Support/Irrlicht/logs/</code></li>
+        <li><strong>Files:</strong> <code>irrlicht.log</code> (current), <code>irrlicht.log.1</code> through <code>.5</code> (rotated)</li>
+        <li><strong>Max size:</strong> 10MB per file, 5 files retained</li>
+        <li><strong>Log event types:</strong> <code>startup</code>, <code>shutdown</code>, <code>session-detector</code>, <code>process-watcher</code>, <code>process-exit</code></li>
+      </ul>
+
+      <!-- ── Network ── -->
+      <h2>Network</h2>
+
+      <ul>
+        <li><strong>TCP:</strong> <code>localhost:7837</code> (HTTP API + WebSocket + Web UI)</li>
+        <li><strong>Unix socket:</strong> <code>~/.local/share/irrlicht/irrlichd.sock</code></li>
+        <li><strong>mDNS:</strong> <code>_irrlicht._tcp</code> (Bonjour/Zeroconf discovery)</li>
+      </ul>
+
+      <!-- ── LaunchAgent ── -->
+      <h2>LaunchAgent</h2>
+
+      <p>The <code>.pkg</code> installer creates <code>~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist</code> which auto-starts <code>irrlichd</code> on login. To manage:</p>
+
+      <pre><code># Stop the daemon
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist
+
+# Start the daemon
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist</code></pre>
+
+      <!-- ── Bottom nav ── -->
+      <nav class="docs-nav-bottom">
+        <a href="session-detection.html">
+          <span class="label">Previous</span>
+          Session Detection
+        </a>
+        <a href="cli-tools.html">
+          <span class="label">Next</span>
+          CLI Tools &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>

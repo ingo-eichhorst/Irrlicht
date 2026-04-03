@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Changelog — Irrlicht Docs</title>
+<meta name="description" content="All notable changes to Irrlicht, following Keep a Changelog conventions.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html" class="active">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Changelog</h1>
+      <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
+
+      <h2>v0.2.0 <small>(2026-04-03)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li>OpenAI Codex adapter with recursive directory watching for <code>sessions/YYYY/MM/DD/</code> structure</li>
+        <li>Per-model pricing data and <code>EstimateCostUSD</code> for cost tracking</li>
+        <li>Cost display in menu bar UI per session and per project group</li>
+        <li>Token breakdown tracking (input, output, cache read, cache creation)</li>
+        <li>Codex transcript event parsing (<code>message</code>, <code>response_item</code>, <code>function_call</code>, <code>turn_context</code>)</li>
+        <li>Codex model detection from <code>~/.codex/config.toml</code></li>
+        <li>Content character counting for token estimation when explicit counts unavailable</li>
+        <li>GPT-5.4 model capacity entry</li>
+        <li>Dark mode adaptive Codex SVG icon</li>
+        <li>Project name coloring by max context utilization (green/yellow/orange/red)</li>
+        <li>macOS <code>.pkg</code> installer bundling daemon + app + LaunchAgent</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li>Filesystem watcher now recursively watches all subdirectories (supports deep nesting)</li>
+        <li>Git adapter resolves main repo root via <code>--git-common-dir</code> (worktree-aware)</li>
+        <li>Git adapter strips <code>worktree-</code> prefix from branch names</li>
+        <li><code>GetCWDFromTranscript</code> now tail-reads last 32KB for latest CWD (supports mid-session worktree switches)</li>
+        <li>CWD/branch/project refreshed on every activity (not just on first detection)</li>
+        <li>Context utilization tests updated for 1M context windows</li>
+        <li>Token extraction refactored with shared <code>extractUsage</code> helper</li>
+        <li>Model config updated to v2.1.0 with pricing data for all models</li>
+        <li><code>build-release.sh</code> now builds both daemon and Swift app, creates <code>.pkg</code> installer</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li>ESC cancellation detection using <code>is_error</code> flag on tool results</li>
+        <li>Parent session state adjustment based on sub-agent activity</li>
+        <li>Permission prompt detection as waiting state</li>
+        <li>Filesystem watcher race condition on directory creation</li>
+      </ul>
+
+      <h2>v0.1.0 <small>(2026-03-20)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li>Initial release</li>
+        <li>Claude Code session monitoring via filesystem watching</li>
+        <li>Three-state model: working, waiting, ready</li>
+        <li>macOS SwiftUI menu bar application</li>
+        <li>Go daemon (<code>irrlichd</code>) with HTTP API and WebSocket streaming</li>
+        <li>Context utilization tracking with pressure levels</li>
+        <li>Process exit detection via kqueue</li>
+        <li>Pre-session detection via process scanning</li>
+        <li>Git branch and project name resolution</li>
+        <li>mDNS/Bonjour service advertisement</li>
+        <li>Embedded web dashboard</li>
+        <li><code>irrlicht-ls</code> CLI listing tool</li>
+        <li>Structured JSON logging with rotation</li>
+        <li>Gas Town orchestrator integration</li>
+        <li>Subagent detection and parent-child relationships</li>
+      </ul>
+
+      <h2>Format</h2>
+
+      <p>This changelog follows the <a href="https://keepachangelog.com/" target="_blank" rel="noopener">Keep a Changelog</a> conventions. Versions use <a href="https://semver.org/" target="_blank" rel="noopener">Semantic Versioning</a>.</p>
+
+      <p>Types of changes:</p>
+
+      <ul>
+        <li><strong>Added</strong> &mdash; new features</li>
+        <li><strong>Changed</strong> &mdash; changes in existing functionality</li>
+        <li><strong>Deprecated</strong> &mdash; soon-to-be removed features</li>
+        <li><strong>Removed</strong> &mdash; now removed features</li>
+        <li><strong>Fixed</strong> &mdash; bug fixes</li>
+        <li><strong>Security</strong> &mdash; vulnerability fixes</li>
+      </ul>
+
+      <!-- Bottom nav -->
+      <nav class="docs-nav-bottom">
+        <a href="code-of-conduct.html">
+          <span class="label">Previous</span>
+          Code of Conduct
+        </a>
+        <span></span>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>

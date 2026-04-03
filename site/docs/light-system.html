@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Light System — Irrlicht Docs</title>
+<meta name="description" content="Irrlicht's three-state light system: working, waiting, and ready. No ambiguity — each session is a single light whose color tells the truth.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html" class="active">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>The Light System</h1>
+      <p class="page-subtitle">Three states. No ambiguity. Each session is a single light whose color tells the truth.</p>
+
+      <!-- Philosophy -->
+      <h2>Philosophy</h2>
+
+      <p>The name <em>Irrlicht</em> comes from German folklore. An Irrlicht is a will-o'-the-wisp &mdash; a ghostly light that appears over marshes at night and lures wanderers off the safe path. In old stories, you follow the light and you get lost.</p>
+
+      <p>Irrlicht flips the myth. Instead of a deceptive light that leads you astray, it is the <strong>tamed will-o'-the-wisp</strong> &mdash; small, honest lights that appear exactly where your attention should go. You run four Claude sessions across three projects. Without Irrlicht, you tab between terminals, guess which agent is stuck, and interrupt work that was humming along fine. With Irrlicht, a glance at the menu bar tells you everything: which sessions are thinking, which need you, and which are done.</p>
+
+      <div class="callout callout-info">
+        <strong>The core promise</strong>
+        No ghosts. Files &rarr; State &rarr; Light. The light system is deterministic &mdash; given the same transcript, every run produces the same state.
+      </div>
+
+      <!-- The Three States -->
+      <h2>The Three States</h2>
+
+      <p>Irrlicht's state model is <strong>MECE</strong> &mdash; mutually exclusive, collectively exhaustive. Every session is in exactly one state at any given moment. There is no fourth state, no "unknown", no "cancelled". Three states, three colors, three meanings.</p>
+
+      <h3><span class="badge badge-working">working</span></h3>
+
+      <p>The agent is actively processing. This includes text generation, tool calls, shell commands, hooks, compaction, and API retries. The session is busy and does not need your attention.</p>
+
+      <ul>
+        <li>Text is being streamed to the terminal</li>
+        <li>A tool call is executing (file writes, grep, bash)</li>
+        <li>The context window is being compacted</li>
+        <li>An API request is in flight or being retried</li>
+      </ul>
+
+      <div class="callout callout-tip">
+        <strong>Leave it alone</strong>
+        A purple light means the agent is doing its job. Switching to this terminal and typing will only interrupt its flow.
+      </div>
+
+      <h3><span class="badge badge-waiting">waiting</span></h3>
+
+      <p>A user-blocking tool is open &mdash; the agent has stopped and needs your judgment before it can continue. The story pauses until you respond.</p>
+
+      <p>Only two tools trigger the waiting state:</p>
+      <ul>
+        <li><code>AskUserQuestion</code> &mdash; the agent is asking you a clarifying question</li>
+        <li><code>ExitPlanMode</code> &mdash; the agent wants to leave plan mode and start executing</li>
+      </ul>
+
+      <div class="callout callout-warning">
+        <strong>This one needs you</strong>
+        An orange light is the only state that demands your attention. Switch to this terminal and answer the question.
+      </div>
+
+      <h3><span class="badge badge-ready">ready</span></h3>
+
+      <p>The agent is idle at the prompt, waiting for your next instruction. The turn is complete &mdash; either the agent finished its work, the process exited, or a task was cancelled. The session is available for new work.</p>
+
+      <ul>
+        <li>The agent completed its response and is showing the prompt</li>
+        <li>The agent process exited (gracefully or otherwise)</li>
+        <li>You cancelled a running task with ESC &mdash; the agent is back at the prompt</li>
+        <li>The session has been idle beyond the grace period</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <strong>No "cancelled" state</strong>
+        Cancellation is not a separate state. When you press ESC, the agent returns to the prompt &mdash; that is <span class="badge badge-ready">ready</span>. Three states only: working, waiting, ready.
+      </div>
+
+      <!-- Decision Tree -->
+      <h2>Decision Tree</h2>
+
+      <p>The state machine evaluates each transcript update with a simple three-step decision:</p>
+
+      <ol class="steps">
+        <li>
+          <strong>Is there an open user-blocking tool?</strong><br>
+          If the last tool result is pending and the tool is <code>AskUserQuestion</code> or <code>ExitPlanMode</code>, the state is <span class="badge badge-waiting">waiting</span>.
+        </li>
+        <li>
+          <strong>Is the agent actively processing?</strong><br>
+          If there are recent transcript events indicating generation, tool execution, or API activity, the state is <span class="badge badge-working">working</span>.
+        </li>
+        <li>
+          <strong>Otherwise</strong><br>
+          The state is <span class="badge badge-ready">ready</span>. The agent is idle and the session is available.
+        </li>
+      </ol>
+
+      <div class="diagram">  transcript update
+        |
+        v
+  +---------------------+
+  | user-blocking tool?  |--yes--> waiting (orange)
+  +---------------------+
+        | no
+        v
+  +---------------------+
+  | active processing?   |--yes--> working (purple)
+  +---------------------+
+        | no
+        v
+      ready (green)</div>
+
+      <!-- Context Pressure -->
+      <h2>Context Pressure</h2>
+
+      <p>Context pressure is <strong>orthogonal</strong> to the three states. It measures how full the agent's context window is and overlays a second dimension onto whatever state the session is in. A session can be <span class="badge badge-working">working</span> at any pressure level.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Level</th>
+            <th>Utilization</th>
+            <th>Color</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>safe</code></td>
+            <td>0 &ndash; 70%</td>
+            <td style="color: var(--ready);">green</td>
+            <td>Plenty of room. No action needed.</td>
+          </tr>
+          <tr>
+            <td><code>caution</code></td>
+            <td>70 &ndash; 85%</td>
+            <td style="color: #EAB308;">yellow</td>
+            <td>Context is filling up. Be aware.</td>
+          </tr>
+          <tr>
+            <td><code>warning</code></td>
+            <td>85% &ndash; 155K tokens</td>
+            <td style="color: #EF4444;">red</td>
+            <td>Running low. Consider wrapping up or starting a new session.</td>
+          </tr>
+          <tr>
+            <td><code>critical</code></td>
+            <td>155K+ tokens</td>
+            <td style="color: #DC2626;">crimson</td>
+            <td>Auto-compaction imminent. Finish the current task.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Irrlicht sends macOS notifications at two thresholds:</p>
+      <ul>
+        <li><strong>80% utilization</strong> &mdash; a heads-up that context is getting heavy</li>
+        <li><strong>95% utilization</strong> &mdash; urgent warning before auto-compaction kicks in</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <strong>Pressure is not state</strong>
+        A session at <code>critical</code> pressure can still be <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, or <span class="badge badge-ready">ready</span>. The two dimensions are independent.
+      </div>
+
+      <!-- Cost Estimation -->
+      <h2>Cost Estimation</h2>
+
+      <p>Irrlicht estimates per-session cost by combining model pricing with the token breakdown from each transcript. Input tokens, output tokens, and cache reads are tracked separately and priced according to the model being used (e.g., Opus, Sonnet, Haiku).</p>
+
+      <ul>
+        <li><strong>Per-session cost</strong> &mdash; computed from the cumulative token counts and the model's pricing tiers, displayed in the session detail view</li>
+        <li><strong>Per-project aggregation</strong> &mdash; all sessions belonging to the same project are summed in the UI, giving you a running total for the project's spend</li>
+      </ul>
+
+      <p>Costs are estimates based on published API pricing. Actual billing may differ due to caching, batching, or pricing changes.</p>
+
+      <!-- Menu Bar Rendering -->
+      <h2>Menu Bar Rendering</h2>
+
+      <p>Sessions appear in the macOS menu bar as a row of colored dots. Each dot is one session, its color reflecting the current state. Projects are grouped together so related sessions sit side by side.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Sessions</th>
+            <th>Display</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>0</td>
+            <td>A single white sparkle &mdash; clean slate, no active sessions</td>
+          </tr>
+          <tr>
+            <td>1 &ndash; 5</td>
+            <td>One colored dot per session, grouped by project</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td>All six dots shown, menu bar getting full</td>
+          </tr>
+          <tr>
+            <td>7+</td>
+            <td>First 5 dots shown, then an ellipsis indicating overflow</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The menu bar is designed to be glanceable. You should never need to open the dropdown to answer the question "does anything need me right now?" &mdash; if you see an orange dot, the answer is yes.</p>
+
+      <!-- Bottom nav -->
+      <div class="docs-nav-bottom">
+        <a href="quickstart.html">
+          <span class="label">Previous</span>
+          Quick Start
+        </a>
+        <a href="state-machine.html">
+          <span class="label">Next</span>
+          State Machine
+        </a>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

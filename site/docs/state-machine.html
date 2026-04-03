@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>State Machine — Irrlicht Documentation</title>
+<meta name="description" content="Deterministic session state transitions in Irrlicht. How files become state and state becomes light.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html" class="active">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main content ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>State Machine</h1>
+      <p class="page-subtitle">Deterministic session state transitions. Files &rarr; State &rarr; Light.</p>
+
+      <!-- ─── Session Lifecycle ─── -->
+      <h2>Session Lifecycle</h2>
+      <p>Every session follows a deterministic lifecycle from process discovery through transcript creation to eventual cleanup. The state machine never guesses &mdash; it reacts to concrete filesystem and process events.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Event</th>
+            <th>From</th>
+            <th>To</th>
+            <th>Mechanism</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>User opens Claude Code</td>
+            <td>no session</td>
+            <td><span class="badge badge-ready">ready</span></td>
+            <td><code>pgrep -x claude</code> process scanner</td>
+          </tr>
+          <tr>
+            <td>User types first message</td>
+            <td>pre-session</td>
+            <td>real session</td>
+            <td>fsnotify <code>CREATE</code> on <code>.jsonl</code></td>
+          </tr>
+          <tr>
+            <td>Real transcript appears</td>
+            <td>pre-session</td>
+            <td>real session takes over</td>
+            <td>Pre-session deleted, real session registered</td>
+          </tr>
+          <tr>
+            <td>User exits</td>
+            <td>any</td>
+            <td>deleted</td>
+            <td>kqueue <code>NOTE_EXIT</code></td>
+          </tr>
+          <tr>
+            <td>Process killed</td>
+            <td>any</td>
+            <td>deleted</td>
+            <td>kqueue <code>NOTE_EXIT</code></td>
+          </tr>
+          <tr>
+            <td>Transcript deleted</td>
+            <td>any</td>
+            <td><span class="badge badge-ready">ready</span></td>
+            <td>fsnotify <code>REMOVE</code></td>
+          </tr>
+          <tr>
+            <td>Daemon starts with dead PID</td>
+            <td>session file</td>
+            <td>deleted</td>
+            <td><code>syscall.Kill</code> check</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <strong>Deterministic, not heuristic</strong>
+        Every transition is triggered by a concrete event &mdash; a file appearing, a process exiting, a transcript line written. The state machine never polls for ambiguous signals or applies timeouts.
+      </div>
+
+      <!-- ─── State Transitions ─── -->
+      <h2>State Transitions</h2>
+      <p>Once a session is active, it moves between exactly three states: <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, and <span class="badge badge-ready">ready</span>. These map directly to the three light colors in the menu bar.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Trigger</th>
+            <th>From</th>
+            <th>To</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>User sends message</td>
+            <td><span class="badge badge-ready">ready</span></td>
+            <td><span class="badge badge-working">working</span></td>
+          </tr>
+          <tr>
+            <td>Tool called (<code>stop_reason=tool_use</code>)</td>
+            <td><span class="badge badge-working">working</span></td>
+            <td><span class="badge badge-working">working</span></td>
+          </tr>
+          <tr>
+            <td>Tool result returned</td>
+            <td><span class="badge badge-working">working</span></td>
+            <td><span class="badge badge-working">working</span></td>
+          </tr>
+          <tr>
+            <td>Turn finished (<code>end_turn</code>)</td>
+            <td><span class="badge badge-working">working</span></td>
+            <td><span class="badge badge-ready">ready</span></td>
+          </tr>
+          <tr>
+            <td>User cancelled (ESC)</td>
+            <td><span class="badge badge-working">working</span></td>
+            <td><span class="badge badge-ready">ready</span></td>
+          </tr>
+          <tr>
+            <td><code>AskUserQuestion</code> opened</td>
+            <td><span class="badge badge-working">working</span></td>
+            <td><span class="badge badge-waiting">waiting</span></td>
+          </tr>
+          <tr>
+            <td><code>ExitPlanMode</code> opened</td>
+            <td><span class="badge badge-working">working</span></td>
+            <td><span class="badge badge-waiting">waiting</span></td>
+          </tr>
+          <tr>
+            <td>User answers / approves</td>
+            <td><span class="badge badge-waiting">waiting</span></td>
+            <td><span class="badge badge-working">working</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">                  +-----------+
+  user sends  |           |  end_turn / ESC
+  message     |  working  |----------------+
+ +----------->|           |                |
+ |            +-----+-----+                |
+ |                  |                      v
+ |      AskUser /   |                +---------+
+ |      ExitPlan    |                |  ready  |
+ |                  v                +---------+
+ |            +-----------+                ^
+ |            |           |                |
+ +------------|  waiting  |  (process exit |
+  user        |           |   only)        |
+  answers     +-----------+----------------+</div>
+
+      <!-- ─── Impossible Transitions ─── -->
+      <h2>Impossible Transitions</h2>
+      <p>Two transitions are structurally impossible and the state machine enforces this:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Transition</th>
+            <th>Why Impossible</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge badge-ready">ready</span> &rarr; <span class="badge badge-waiting">waiting</span></td>
+            <td>Cannot skip <span class="badge badge-working">working</span>. A blocking tool call can only appear while the agent is actively running.</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-waiting">waiting</span> &rarr; <span class="badge badge-ready">ready</span> via content</td>
+            <td>The agent cannot finish a turn while a blocking tool call is open. The only path from waiting to ready is process exit.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-warning">
+        <strong>No cancelled state</strong>
+        There is no fourth "cancelled" state. Cancellation (ESC) maps directly to <span class="badge badge-ready">ready</span>. The system maintains exactly three states: working, waiting, and ready.
+      </div>
+
+      <!-- ─── Detection Logic ─── -->
+      <h2>Detection Logic</h2>
+      <p>The state machine reads raw transcript events and applies two key predicates to determine transitions.</p>
+
+      <h3>NeedsUserAttention() &mdash; triggers waiting</h3>
+      <p>Evaluates to <code>true</code> when all of the following hold:</p>
+      <ul>
+        <li><code>HasOpenToolCall = true</code></li>
+        <li><code>LastOpenToolName</code> is one of <code>{AskUserQuestion, ExitPlanMode}</code></li>
+      </ul>
+      <p>When this predicate fires, the session transitions to <span class="badge badge-waiting">waiting</span>. The light turns orange.</p>
+
+      <h3>IsAgentDone() &mdash; triggers ready</h3>
+      <p>Two detection paths, checked in order:</p>
+      <ul>
+        <li><strong>Primary:</strong> <code>LastEventType == "turn_done"</code></li>
+        <li><strong>Fallback:</strong> <code>HasOpenToolCall = false</code> AND <code>LastEventType</code> is one of <code>{assistant_message, assistant_output}</code></li>
+      </ul>
+      <p>When either path matches, the session transitions to <span class="badge badge-ready">ready</span>. The light turns green.</p>
+
+      <h3>Turn Completion Signals</h3>
+      <p>Two transcript event types signal the end of an agent turn:</p>
+      <ul>
+        <li><code>turn_duration</code> &mdash; emitted at the end of each agent turn. This is the primary signal.</li>
+        <li><code>stop_hook_summary</code> &mdash; emitted after stop hooks run. Used as a fallback when <code>turn_duration</code> is not present.</li>
+      </ul>
+
+      <!-- ─── Pre-Sessions ─── -->
+      <h2>Pre-Sessions</h2>
+      <p>When the daemon's process scanner (<code>pgrep -x claude</code>) discovers a new Claude Code process, it creates a synthetic <strong>pre-session</strong> with the ID <code>proc-&lt;pid&gt;</code>. This pre-session exists because the user has opened Claude Code but has not yet sent a message &mdash; no transcript file exists yet.</p>
+
+      <p>The pre-session lifecycle:</p>
+      <ol class="steps">
+        <li>Process scanner detects a new <code>claude</code> PID not already tracked.</li>
+        <li>A synthetic session <code>proc-&lt;pid&gt;</code> is created in <span class="badge badge-ready">ready</span> state.</li>
+        <li>The daemon watches for a <code>.jsonl</code> transcript file to appear via fsnotify.</li>
+        <li>When the real transcript appears, the pre-session is deleted and replaced by a real session keyed to the transcript path.</li>
+        <li>If the process exits before any transcript appears, the pre-session is simply cleaned up.</li>
+      </ol>
+
+      <div class="callout callout-tip">
+        <strong>Why pre-sessions matter</strong>
+        Without pre-sessions, there would be a gap between opening Claude Code and the first message where Irrlicht would show no session at all. Pre-sessions ensure the menu bar light appears immediately.
+      </div>
+
+      <!-- ─── Subagent Detection ─── -->
+      <h2>Subagent Detection</h2>
+      <p>Claude Code can spawn sub-agents (child tasks). Irrlicht detects parent-child relationships between sessions and exposes this through the <code>SubagentSummary</code> structure.</p>
+
+      <p>The summary tracks subagent counts by state:</p>
+<pre><code>type SubagentSummary struct {
+    Working  int  // subagents currently executing
+    Waiting  int  // subagents blocked on user input
+    Ready    int  // subagents that have finished their turn
+}</code></pre>
+
+      <p>The parent session's state display incorporates subagent status. If the parent is <span class="badge badge-ready">ready</span> but a child subagent is <span class="badge badge-working">working</span>, the parent's effective state adjusts accordingly &mdash; the light reflects the most "active" state across the tree.</p>
+
+      <!-- ─── Orthogonal Axes ─── -->
+      <h2>Orthogonal Axes</h2>
+      <p>Beyond the three core states, the state machine tracks several orthogonal dimensions that do not affect the primary state transition logic but provide additional context.</p>
+
+      <h3>CompactionState</h3>
+      <p>Tracks whether the agent is compacting its context window:</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Value</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>not_compacting</code></td>
+            <td>Normal operation. No compaction in progress.</td>
+          </tr>
+          <tr>
+            <td><code>compacting</code></td>
+            <td>Agent is actively summarizing context to fit within the window.</td>
+          </tr>
+          <tr>
+            <td><code>post_compact</code></td>
+            <td>Compaction just completed. Transient state before reverting to <code>not_compacting</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Adapter</h3>
+      <p>Identifies which AI coding agent is running:</p>
+      <ul>
+        <li><code>claude-code</code> &mdash; Anthropic's Claude Code CLI</li>
+        <li><code>codex</code> &mdash; OpenAI's Codex CLI</li>
+      </ul>
+      <p>The adapter determines which transcript format is parsed and which process signatures are scanned.</p>
+
+      <h3>PressureLevel</h3>
+      <p>Tracks context window utilization as a pressure indicator:</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Level</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>safe</code></td>
+            <td>Plenty of context remaining.</td>
+          </tr>
+          <tr>
+            <td><code>caution</code></td>
+            <td>Context usage is notable but not urgent.</td>
+          </tr>
+          <tr>
+            <td><code>warning</code></td>
+            <td>Context window is filling up. Compaction may occur soon.</td>
+          </tr>
+          <tr>
+            <td><code>critical</code></td>
+            <td>Context window nearly full. Compaction is imminent or underway.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ─── Cancellation ─── -->
+      <h2>Cancellation</h2>
+      <p>When the user presses ESC during an agent turn, Claude Code cancels the current operation. Irrlicht detects this through the transcript: the last tool result will have <code>is_error</code> set to <code>true</code>.</p>
+
+      <p>Cancellation maps directly to <span class="badge badge-ready">ready</span>. There is no intermediate "cancelled" state. The detection logic:</p>
+      <ul>
+        <li><code>LastToolResultWasError = true</code> signals the cancellation occurred.</li>
+        <li>The agent stops executing, so <code>IsAgentDone()</code> fires.</li>
+        <li>The session transitions to <span class="badge badge-ready">ready</span>.</li>
+      </ul>
+      <p>This is a deliberate design choice. From the user's perspective, a cancelled turn is equivalent to a completed turn &mdash; the agent is idle and waiting for the next message. The three-state model (<span class="badge badge-working">working</span> / <span class="badge badge-waiting">waiting</span> / <span class="badge badge-ready">ready</span>) remains clean and unambiguous.</p>
+
+      <!-- ─── Bottom nav ─── -->
+      <div class="docs-nav-bottom">
+        <a href="light-system.html">
+          <span class="label">Previous</span>
+          The Light System
+        </a>
+        <a href="session-detection.html" style="text-align: right;">
+          <span class="label">Next</span>
+          Session Detection
+        </a>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

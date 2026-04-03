@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Contributing — Irrlicht Docs</title>
+<meta name="description" content="How to contribute to Irrlicht: report bugs, suggest features, submit pull requests, and set up the development environment.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html" class="active">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Contributing</h1>
+      <p class="page-subtitle">Thank you for considering contributing to Irrlicht. Every contribution matters.</p>
+
+      <!-- ─── Welcome ─── -->
+      <h2>Welcome</h2>
+
+      <p>Irrlicht is open source under the MIT license. Contributions of all kinds are welcome: bug reports, feature requests, documentation improvements, code contributions, and community support.</p>
+
+      <p>Whether this is your first open-source contribution or your thousandth, we appreciate you taking the time to make Irrlicht better.</p>
+
+      <!-- ─── Ways to Contribute ─── -->
+      <h2>Ways to Contribute</h2>
+
+      <ul>
+        <li><strong>Report bugs</strong> via GitHub Issues -- help us find and fix problems</li>
+        <li><strong>Suggest features</strong> via GitHub Discussions -- share your ideas for improvement</li>
+        <li><strong>Improve documentation</strong> -- fix typos, clarify explanations, add examples</li>
+        <li><strong>Submit pull requests</strong> -- fix bugs, add features, refactor code</li>
+        <li><strong>Help others</strong> in Discussions -- answer questions, share your experience</li>
+      </ul>
+
+      <div class="callout callout-tip">
+        <strong>First-time contributors</strong>
+        Look for issues labeled <code>good first issue</code> -- these are specifically chosen to be approachable for newcomers to the codebase.
+      </div>
+
+      <!-- ─── Development Setup ─── -->
+      <h2>Development Setup</h2>
+
+      <h3>Prerequisites</h3>
+
+      <ul>
+        <li>macOS 13 (Ventura) or later</li>
+        <li>Go 1.21+</li>
+        <li>Swift 5.9+</li>
+        <li>Xcode Command Line Tools</li>
+        <li>git</li>
+      </ul>
+
+      <h3>Getting Started</h3>
+
+      <ol class="steps">
+        <li>
+          <strong>Fork the repository on GitHub</strong><br>
+          Click the "Fork" button on the Irrlicht repository page to create your own copy.
+        </li>
+        <li>
+          <strong>Clone your fork</strong>
+          <pre><code>git clone https://github.com/YOUR_USERNAME/Irrlicht.git</code></pre>
+        </li>
+        <li>
+          <strong>Enter the project directory</strong>
+          <pre><code>cd Irrlicht</code></pre>
+        </li>
+        <li>
+          <strong>Build everything</strong>
+          <pre><code>./platforms/build-release.sh</code></pre>
+          <p>This compiles the Go daemon (universal binary) and the Swift macOS app.</p>
+        </li>
+        <li>
+          <strong>Run the test suite</strong>
+          <pre><code>./validate.sh</code></pre>
+          <p>All tests must pass before you start making changes. If they don't, you've found a bug -- please report it.</p>
+        </li>
+      </ol>
+
+      <h3>Project Structure</h3>
+
+      <p>Irrlicht is a two-process architecture: a Go daemon that monitors agent sessions, and a Swift macOS app that renders the menu bar UI.</p>
+
+      <pre><code>Irrlicht/
+  core/             # Go daemon -- session detection, state machine, IPC
+  platforms/macos/  # Swift macOS app -- menu bar UI, popover, notifications
+  validate.sh       # Single entry point for all validation</code></pre>
+
+      <p>For a full breakdown of how the pieces fit together, see <a href="architecture.html">System Design</a>.</p>
+
+      <!-- ─── Development Workflow ─── -->
+      <h2>Development Workflow</h2>
+
+      <h3>Branching</h3>
+
+      <p>Create a feature branch from <code>main</code>:</p>
+
+      <pre><code>git checkout -b feature/my-feature</code></pre>
+
+      <p>Use descriptive branch names with a prefix that reflects the type of change:</p>
+
+      <ul>
+        <li><code>feature/</code> -- new functionality</li>
+        <li><code>fix/</code> -- bug fix</li>
+        <li><code>docs/</code> -- documentation changes</li>
+      </ul>
+
+      <h3>Making Changes</h3>
+
+      <ul>
+        <li>Keep changes focused -- one feature or fix per PR</li>
+        <li>Follow existing code style and conventions</li>
+        <li>Add tests for new functionality</li>
+        <li>Update documentation if behavior changes</li>
+      </ul>
+
+      <h3>Testing</h3>
+
+      <p>The single entry point for all validation is:</p>
+
+      <pre><code>./validate.sh</code></pre>
+
+      <p>This runs the full pipeline in order:</p>
+
+      <ol>
+        <li>Go build</li>
+        <li>Swift build</li>
+        <li>Go tests</li>
+        <li>Swift tests</li>
+        <li>Integration tests</li>
+      </ol>
+
+      <div class="callout callout-warning">
+        <strong>Important</strong>
+        A change is only done when <code>validate.sh</code> exits 0. No exceptions.
+      </div>
+
+      <p>To run tests for individual components during development:</p>
+
+      <pre><code># Go tests only
+cd core && go test -v ./...
+
+# Swift tests only
+cd platforms/macos && swift test</code></pre>
+
+      <h3>Commit Messages</h3>
+
+      <p>Use <a href="https://www.conventionalcommits.org/">conventional commits</a>:</p>
+
+      <pre><code>feat: add WebSocket reconnection with backoff
+fix: correct state transition on ESC cancellation
+docs: clarify adapter configuration options
+refactor: extract session parser into standalone module
+test: add table-driven tests for state machine</code></pre>
+
+      <ul>
+        <li>Keep the first line under 72 characters</li>
+        <li>Explain <em>why</em>, not just what</li>
+        <li>Reference related issues when applicable: <code>Fixes #42</code></li>
+      </ul>
+
+      <h3>Pull Requests</h3>
+
+      <ol class="steps">
+        <li>
+          <strong>Ensure validation passes</strong>
+          <pre><code>./validate.sh</code></pre>
+        </li>
+        <li>
+          <strong>Push your branch</strong>
+          <pre><code>git push origin feature/my-feature</code></pre>
+        </li>
+        <li>
+          <strong>Open a PR against <code>main</code></strong><br>
+          Go to the repository on GitHub and open a new pull request.
+        </li>
+        <li>
+          <strong>Fill in the PR template</strong><br>
+          Include:
+          <ul>
+            <li>Summary of changes</li>
+            <li>Test plan</li>
+            <li>Screenshots (for UI changes)</li>
+          </ul>
+        </li>
+        <li>
+          <strong>Request review</strong><br>
+          Tag a maintainer and address feedback promptly.
+        </li>
+      </ol>
+
+      <!-- ─── Code Guidelines ─── -->
+      <h2>Code Guidelines</h2>
+
+      <h3>Go (Daemon)</h3>
+
+      <ul>
+        <li>Follow standard Go conventions (<code>gofmt</code>, <code>go vet</code>)</li>
+        <li>Use interfaces for external dependencies (ports-and-adapters pattern)</li>
+        <li>Prefer table-driven tests</li>
+        <li>Handle errors explicitly -- no <code>panic</code> in library code</li>
+        <li>Keep functions focused and testable</li>
+      </ul>
+
+      <h3>Swift (macOS App)</h3>
+
+      <ul>
+        <li>Follow <a href="https://www.swift.org/documentation/api-design-guidelines/">Swift API Design Guidelines</a></li>
+        <li>Use SwiftUI idioms (<code>@State</code>, <code>@Binding</code>, <code>@EnvironmentObject</code>)</li>
+        <li>Keep views small and composable</li>
+        <li>Test with SwiftUI previews where possible</li>
+      </ul>
+
+      <h3>General</h3>
+
+      <ul>
+        <li>No unnecessary abstractions -- three similar lines beat a premature abstraction</li>
+        <li>Delete unused code -- don't comment it out</li>
+        <li>Only add comments where the logic isn't self-evident</li>
+        <li>Prefer editing existing files over creating new ones</li>
+      </ul>
+
+      <!-- ─── Reporting Bugs ─── -->
+      <h2>Reporting Bugs</h2>
+
+      <h3>Before Filing</h3>
+
+      <ul>
+        <li>Check existing issues for duplicates</li>
+        <li>Try the latest version</li>
+        <li>Check logs: <code>~/Library/Application Support/Irrlicht/logs/</code></li>
+      </ul>
+
+      <h3>Bug Report Should Include</h3>
+
+      <ul>
+        <li>macOS version</li>
+        <li>Irrlicht version (<code>irrlichd --version</code>)</li>
+        <li>Steps to reproduce</li>
+        <li>Expected vs actual behavior</li>
+        <li>Relevant log output</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <strong>Logs location</strong>
+        Irrlicht stores daemon logs at <code>~/Library/Application Support/Irrlicht/logs/</code>. Including relevant excerpts in your bug report helps us diagnose the issue much faster.
+      </div>
+
+      <!-- ─── Feature Requests ─── -->
+      <h2>Feature Requests</h2>
+
+      <ul>
+        <li>Open a Discussion first to gauge interest before writing code</li>
+        <li>Describe the <em>problem</em> you're solving, not just the solution</li>
+        <li>Consider how it fits the project philosophy: zero-config, deterministic, honest signals</li>
+      </ul>
+
+      <!-- ─── AI Agent Contributors ─── -->
+      <h2>AI Agent Contributors</h2>
+
+      <p>Irrlicht is designed to be agent-verifiable. If you're an AI coding agent contributing to this project:</p>
+
+      <ul>
+        <li>Run <code>./validate.sh</code> after every change</li>
+        <li>A task is only complete when exit code is 0</li>
+        <li>Never mark a task done based only on compilation</li>
+        <li>If validation fails, inspect the failing test and fix the root cause</li>
+        <li>Do not skip or comment out failing assertions</li>
+      </ul>
+
+      <div class="callout callout-warning">
+        <strong>Non-negotiable</strong>
+        <code>./validate.sh</code> is the single source of truth. If it fails, the work is not done -- regardless of whether the code compiles or individual tests pass in isolation.
+      </div>
+
+      <!-- ─── Code Review ─── -->
+      <h2>Code Review</h2>
+
+      <ul>
+        <li>All PRs require at least one review</li>
+        <li>Be kind and constructive</li>
+        <li>Explain the <em>why</em> behind requested changes</li>
+        <li>Small PRs are reviewed faster</li>
+      </ul>
+
+      <!-- ─── License ─── -->
+      <h2>License</h2>
+
+      <p>By contributing, you agree that your contributions will be licensed under the <a href="https://opensource.org/licenses/MIT">MIT License</a>.</p>
+
+      <!-- ─── Recognition ─── -->
+      <h2>Recognition</h2>
+
+      <p>All contributors are recognized in the project. Thank you for helping make Irrlicht better.</p>
+
+      <!-- Bottom nav -->
+      <nav class="docs-nav-bottom">
+        <a href="adapters.html">
+          <span class="label">Previous</span>
+          Adapters
+        </a>
+        <a href="code-of-conduct.html" style="text-align:right">
+          <span class="label">Next</span>
+          Code of Conduct
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>

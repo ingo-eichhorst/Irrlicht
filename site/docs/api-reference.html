@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>API Reference — Irrlicht Docs</title>
+<meta name="description" content="HTTP and WebSocket API reference for irrlichd. Endpoints, schemas, and examples for building integrations.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html" class="active">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>API Reference</h1>
+      <p class="page-subtitle">HTTP and WebSocket API served by irrlichd on localhost:7837.</p>
+
+      <h2>Base URL</h2>
+
+      <ul>
+        <li><strong>HTTP:</strong> <code>http://127.0.0.1:7837</code></li>
+        <li><strong>Unix socket:</strong> <code>~/.local/share/irrlicht/irrlichd.sock</code></li>
+      </ul>
+
+      <h2>Endpoints</h2>
+
+      <h3>GET /api/v1/sessions</h3>
+
+      <p>List all active sessions with full state and metrics.</p>
+
+      <p>Response: JSON array of <code>SessionState</code> objects.</p>
+
+      <pre><code>[
+  {
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "state": "working",
+    "adapter": "claude-code",
+    "cwd": "/Users/ingo/projects/irrlicht",
+    "project_name": "irrlicht",
+    "git_branch": "main",
+    "pid": 12345,
+    "metrics": {
+      "elapsed_seconds": 180,
+      "total_tokens": 15000,
+      "model_name": "claude-sonnet-4-6",
+      "context_utilization_percentage": 7.5,
+      "pressure_level": "safe",
+      "estimated_cost_usd": 0.045
+    }
+  }
+]</code></pre>
+
+      <h3>GET /state</h3>
+
+      <p>Human-readable state summary. Shows count of working, waiting, and ready sessions, plus the total session count.</p>
+
+      <h3>GET /api/v1/sessions/stream</h3>
+
+      <p>WebSocket upgrade endpoint for real-time session state updates.</p>
+
+      <h4>Message Types</h4>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>session_created</code></td>
+            <td>New session detected</td>
+          </tr>
+          <tr>
+            <td><code>session_updated</code></td>
+            <td>Session state or metrics changed</td>
+          </tr>
+          <tr>
+            <td><code>session_deleted</code></td>
+            <td>Session removed</td>
+          </tr>
+          <tr>
+            <td><code>orchestrator_state</code></td>
+            <td>Orchestrator state snapshot</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4>Message Format</h4>
+
+      <pre><code>{
+  "type": "session_updated",
+  "session": { ... SessionState ... }
+}</code></pre>
+
+      <h3>GET /api/v1/orchestrators/{name}</h3>
+
+      <p>Get orchestrator state by name (e.g. <code>"gastown"</code>).</p>
+
+      <h3>GET /api/v1/gastown</h3>
+
+      <p>Backward-compatible endpoint for the Gas Town orchestrator state.</p>
+
+      <h3>GET /</h3>
+
+      <p>Serves the embedded web dashboard UI.</p>
+
+      <h2>SessionState Schema</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>session_id</code></td>
+            <td>string</td>
+            <td>Unique session identifier (UUID or <code>proc-&lt;pid&gt;</code>)</td>
+          </tr>
+          <tr>
+            <td><code>state</code></td>
+            <td>string</td>
+            <td><code>working</code>, <code>waiting</code>, or <code>ready</code></td>
+          </tr>
+          <tr>
+            <td><code>adapter</code></td>
+            <td>string</td>
+            <td><code>claude-code</code> or <code>codex</code></td>
+          </tr>
+          <tr>
+            <td><code>compaction_state</code></td>
+            <td>string</td>
+            <td>Current compaction state, if any</td>
+          </tr>
+          <tr>
+            <td><code>cwd</code></td>
+            <td>string</td>
+            <td>Working directory of the session</td>
+          </tr>
+          <tr>
+            <td><code>transcript_path</code></td>
+            <td>string</td>
+            <td>Absolute path to the JSONL transcript file</td>
+          </tr>
+          <tr>
+            <td><code>git_branch</code></td>
+            <td>string</td>
+            <td>Current git branch name</td>
+          </tr>
+          <tr>
+            <td><code>project_name</code></td>
+            <td>string</td>
+            <td>Project name derived from git root</td>
+          </tr>
+          <tr>
+            <td><code>pid</code></td>
+            <td>int</td>
+            <td>Process ID of the agent</td>
+          </tr>
+          <tr>
+            <td><code>first_seen</code></td>
+            <td>int64</td>
+            <td>Unix timestamp when the session was first detected</td>
+          </tr>
+          <tr>
+            <td><code>updated_at</code></td>
+            <td>int64</td>
+            <td>Unix timestamp of the last state update</td>
+          </tr>
+          <tr>
+            <td><code>metrics</code></td>
+            <td>object</td>
+            <td><code>SessionMetrics</code> object (see below)</td>
+          </tr>
+          <tr>
+            <td><code>parent_session_id</code></td>
+            <td>string</td>
+            <td>ID of the parent session, if this is a sub-agent</td>
+          </tr>
+          <tr>
+            <td><code>daemon_version</code></td>
+            <td>string</td>
+            <td>Version of the running daemon</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>SessionMetrics Schema</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>elapsed_seconds</code></td>
+            <td>int</td>
+            <td>Seconds since session started</td>
+          </tr>
+          <tr>
+            <td><code>total_tokens</code></td>
+            <td>int64</td>
+            <td>Total tokens consumed (input + output)</td>
+          </tr>
+          <tr>
+            <td><code>model_name</code></td>
+            <td>string</td>
+            <td>Normalized model name</td>
+          </tr>
+          <tr>
+            <td><code>context_window</code></td>
+            <td>int64</td>
+            <td>Total context window size for the model</td>
+          </tr>
+          <tr>
+            <td><code>context_utilization_percentage</code></td>
+            <td>float64</td>
+            <td>Percentage of context window used</td>
+          </tr>
+          <tr>
+            <td><code>pressure_level</code></td>
+            <td>string</td>
+            <td>Context pressure level (<code>safe</code>, <code>moderate</code>, <code>high</code>, <code>critical</code>)</td>
+          </tr>
+          <tr>
+            <td><code>has_open_tool_call</code></td>
+            <td>bool</td>
+            <td>Whether the agent has an open tool call</td>
+          </tr>
+          <tr>
+            <td><code>open_tool_call_count</code></td>
+            <td>int</td>
+            <td>Number of currently open tool calls</td>
+          </tr>
+          <tr>
+            <td><code>last_event_type</code></td>
+            <td>string</td>
+            <td>Type of the most recent transcript event</td>
+          </tr>
+          <tr>
+            <td><code>last_open_tool_names</code></td>
+            <td>[]string</td>
+            <td>Names of currently open tools</td>
+          </tr>
+          <tr>
+            <td><code>last_tool_result_was_error</code></td>
+            <td>bool</td>
+            <td>Whether the last tool result was an error</td>
+          </tr>
+          <tr>
+            <td><code>estimated_cost_usd</code></td>
+            <td>float64</td>
+            <td>Estimated session cost in USD</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>WebSocket Client Example</h2>
+
+      <pre><code>const ws = new WebSocket('ws://127.0.0.1:7837/api/v1/sessions/stream');
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  console.log(msg.type, msg.session?.session_id);
+};</code></pre>
+
+      <h2>curl Examples</h2>
+
+      <pre><code># List sessions
+curl http://127.0.0.1:7837/api/v1/sessions | jq
+
+# Quick status
+curl http://127.0.0.1:7837/state
+
+# Via unix socket
+curl --unix-socket ~/.local/share/irrlicht/irrlichd.sock \
+  http://localhost/api/v1/sessions</code></pre>
+
+      <!-- Bottom nav -->
+      <nav class="docs-nav-bottom">
+        <a href="cli-tools.html">
+          <span class="label">Previous</span>
+          CLI Tools
+        </a>
+        <a href="architecture.html" style="text-align:right">
+          <span class="label">Next</span>
+          System Design &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>

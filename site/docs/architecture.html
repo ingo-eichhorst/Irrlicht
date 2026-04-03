@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Design — Irrlicht Docs</title>
+<meta name="description" content="Hexagonal architecture with clean ports and adapters. System design and architecture overview for Irrlicht.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <div class="dot"></div>
+      <span>Irrlicht</span>
+      <small>DOCS</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html" class="active">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>System Design</h1>
+      <p class="page-subtitle">Hexagonal architecture with clean ports and adapters.</p>
+
+      <!-- ── Overview ── -->
+      <h2>Overview</h2>
+
+      <p>Irrlicht follows hexagonal (ports-and-adapters) architecture. Every external dependency is behind an interface. Every component is testable in isolation.</p>
+
+      <div class="diagram">
+&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;     HTTP/WebSocket Interface            &#x2502;
+&#x2502;  GET /api/v1/sessions, /stream, /state  &#x2502;
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;
+                     &#x2502;
+&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;       Application Layer (Services)       &#x2502;
+&#x2502;  SessionDetector &#x00B7; PushService          &#x2502;
+&#x2502;  OrchestratorMonitor                    &#x2502;
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;
+                     &#x2502;
+&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;         Domain Model                     &#x2502;
+&#x2502;  SessionState &#x00B7; SessionMetrics          &#x2502;
+&#x2502;  agent.Event &#x00B7; orchestrator.State       &#x2502;
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;
+                     &#x2502;
+&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;  Inbound Adapters    &#x2502;  Outbound Adapters&#x2502;
+&#x2502;  Claude Code         &#x2502;  Filesystem       &#x2502;
+&#x2502;  Codex               &#x2502;  WebSocket Hub    &#x2502;
+&#x2502;  Process Scanner     &#x2502;  kqueue Process   &#x2502;
+&#x2502;  Gas Town            &#x2502;  mDNS &#x00B7; Git &#x00B7; Log &#x2502;
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;</div>
+
+      <!-- ── Project Structure ── -->
+      <h2>Project Structure</h2>
+
+      <pre><code>core/
+&#x251C;&#x2500;&#x2500; cmd/
+&#x2502;   &#x251C;&#x2500;&#x2500; irrlichd/          # Daemon entry point
+&#x2502;   &#x2514;&#x2500;&#x2500; irrlicht-ls/       # CLI listing tool
+&#x251C;&#x2500;&#x2500; domain/                # Pure domain types
+&#x2502;   &#x251C;&#x2500;&#x2500; session/           # SessionState, SessionMetrics
+&#x2502;   &#x251C;&#x2500;&#x2500; agent/             # Agent event types
+&#x2502;   &#x251C;&#x2500;&#x2500; orchestrator/      # Orchestrator state
+&#x2502;   &#x2514;&#x2500;&#x2500; config/            # Configuration
+&#x251C;&#x2500;&#x2500; ports/
+&#x2502;   &#x251C;&#x2500;&#x2500; inbound/           # AgentWatcher, OrchestratorWatcher
+&#x2502;   &#x2514;&#x2500;&#x2500; outbound/          # Repository, Logger, ProcessWatcher, etc.
+&#x251C;&#x2500;&#x2500; adapters/
+&#x2502;   &#x251C;&#x2500;&#x2500; inbound/           # Event sources
+&#x2502;   &#x2514;&#x2500;&#x2500; outbound/          # System integrations
+&#x251C;&#x2500;&#x2500; application/services/  # Orchestration logic
+&#x2514;&#x2500;&#x2500; pkg/                   # Shared utilities (tailer, capacity)</code></pre>
+
+      <!-- ── Port Interfaces ── -->
+      <h2>Port Interfaces</h2>
+
+      <h3>Inbound Ports</h3>
+
+      <pre><code>type AgentWatcher interface {
+    Watch(ctx context.Context) error
+    Subscribe() &lt;-chan agent.Event
+    Unsubscribe(ch &lt;-chan agent.Event)
+}</code></pre>
+
+      <h3>Outbound Ports</h3>
+
+      <p>Key interfaces that define outbound boundaries:</p>
+
+      <ul>
+        <li><code>SessionRepository</code> &mdash; Persist and retrieve session state</li>
+        <li><code>ProcessWatcher</code> &mdash; Monitor process lifecycle (kqueue)</li>
+        <li><code>MetricsCollector</code> &mdash; Compute session metrics from transcripts</li>
+        <li><code>GitResolver</code> &mdash; Resolve project names from git repositories</li>
+        <li><code>PushBroadcaster</code> &mdash; Fan-out state changes to connected clients</li>
+        <li><code>Logger</code> &mdash; Structured logging abstraction</li>
+      </ul>
+
+      <!-- ── Component Wiring ── -->
+      <h2>Component Wiring</h2>
+
+      <p>The <code>main.go</code> entry point wires all components together following dependency injection:</p>
+
+      <ol>
+        <li><strong>Logger</strong> &mdash; structured JSON output</li>
+        <li><strong>Config</strong> &mdash; loaded from environment variables</li>
+        <li><strong>SessionRepository</strong> &mdash; filesystem adapter for state persistence</li>
+        <li><strong>GitResolver</strong> &mdash; resolves project names via git commands</li>
+        <li><strong>MetricsCollector</strong> &mdash; transcript tailer for session metrics</li>
+        <li><strong>ProcessWatcher</strong> &mdash; kqueue adapter for process exit detection</li>
+        <li><strong>AgentWatchers</strong> &mdash; Claude Code + Codex + Process Scanner</li>
+        <li><strong>SessionDetector</strong> &mdash; orchestrates detection and state management</li>
+        <li><strong>PushService</strong> &mdash; WebSocket fan-out to connected clients</li>
+        <li><strong>HTTP Server</strong> &mdash; API endpoints + embedded web UI</li>
+      </ol>
+
+      <!-- ── Data Flow ── -->
+      <h2>Data Flow</h2>
+
+      <ol>
+        <li>Inbound adapter emits <code>agent.Event</code></li>
+        <li>SessionDetector receives event, creates or updates session</li>
+        <li>MetricsCollector computes metrics from transcript</li>
+        <li>State machine determines <span class="badge badge-working">working</span> / <span class="badge badge-waiting">waiting</span> / <span class="badge badge-ready">ready</span></li>
+        <li>PushService broadcasts change via WebSocket</li>
+        <li>SessionRepository persists to filesystem</li>
+      </ol>
+
+      <!-- ── Performance ── -->
+      <h2>Performance</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Memory</td>
+            <td>&lt;5 MB typical footprint</td>
+          </tr>
+          <tr>
+            <td>Detection latency</td>
+            <td>~50&ndash;200 ms via FSEvents</td>
+          </tr>
+          <tr>
+            <td>Process exit</td>
+            <td>~1 ms via kqueue</td>
+          </tr>
+          <tr>
+            <td>Concurrency</td>
+            <td>Tested up to 8 simultaneous sessions</td>
+          </tr>
+          <tr>
+            <td>Disk (state files)</td>
+            <td>&lt;100 KB</td>
+          </tr>
+          <tr>
+            <td>Disk (logs)</td>
+            <td>&lt;50 MB</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ── Safety Guarantees ── -->
+      <h2>Safety Guarantees</h2>
+
+      <ul>
+        <li><strong>Zero configuration</strong> &mdash; works out of the box with no setup required</li>
+        <li><strong>Idempotent operations</strong> &mdash; safe to restart at any time</li>
+        <li><strong>Non-destructive</strong> &mdash; never corrupts existing configs or data</li>
+        <li><strong>Atomic writes</strong> &mdash; temp file + rename pattern prevents partial writes</li>
+        <li><strong>Kill switch</strong> &mdash; set <code>IRRLICHT_DISABLED=1</code> to disable entirely</li>
+      </ul>
+
+      <!-- ── Bottom nav ── -->
+      <div class="docs-nav-bottom">
+        <a href="api-reference.html">
+          <span class="label">Previous</span>
+          API Reference
+        </a>
+        <a href="adapters.html">
+          <span class="label">Next</span>
+          Adapters
+        </a>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

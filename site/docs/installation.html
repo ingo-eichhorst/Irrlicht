@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Installation — Irrlicht Docs</title>
+<meta name="description" content="Install Irrlicht via package installer or build from source. macOS menu bar telemetry for AI coding agents.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <div class="dot"></div>
+      <span>Irrlicht</span>
+      <small>DOCS</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html" class="active">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Installation</h1>
+      <p class="page-subtitle">Get Irrlicht running on your Mac in under two minutes via the package installer, or build everything from source.</p>
+
+      <!-- ── Prerequisites ── -->
+      <h2>Prerequisites</h2>
+
+      <ul>
+        <li><strong>macOS 13 (Ventura) or later</strong> &mdash; Irrlicht uses SwiftUI APIs and LaunchAgent features that require Ventura as a minimum.</li>
+        <li><strong>At least one supported AI coding agent</strong> installed and working:
+          <ul>
+            <li><a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></li>
+            <li><a href="https://github.com/openai/codex">OpenAI Codex CLI</a></li>
+          </ul>
+        </li>
+      </ul>
+
+      <p>If you plan to <a href="#build-from-source">build from source</a>, you will also need:</p>
+      <ul>
+        <li><strong>Go 1.21+</strong> &mdash; the daemon is written in Go</li>
+        <li><strong>Swift 5.9+</strong> &mdash; the menu-bar app is a native SwiftUI application</li>
+        <li><strong>Xcode Command Line Tools</strong> &mdash; install with <code>xcode-select --install</code></li>
+      </ul>
+
+      <!-- ── Package Installer ── -->
+      <h2>Install via Package Installer (Recommended)</h2>
+
+      <p>The fastest path. A signed <code>.pkg</code> installer handles everything for you.</p>
+
+      <ol class="steps">
+        <li>
+          <strong>Download the installer</strong>
+          <p>Grab <code>Irrlicht-0.2.0-mac-installer.pkg</code> from the <a href="https://github.com/anthropics/irrlicht/releases/latest">GitHub Releases</a> page.</p>
+        </li>
+        <li>
+          <strong>Run the installer</strong>
+          <p>Double-click the <code>.pkg</code> file and follow the on-screen prompts. You may need to approve the installer in <em>System Settings &rarr; Privacy &amp; Security</em> if Gatekeeper blocks it.</p>
+        </li>
+        <li>
+          <strong>What gets installed</strong>
+          <table>
+            <thead>
+              <tr><th>Component</th><th>Location</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>irrlichd</code> (daemon)</td><td><code>/usr/local/bin/irrlichd</code></td></tr>
+              <tr><td>Irrlicht.app (menu-bar app)</td><td><code>/Applications/Irrlicht.app</code></td></tr>
+              <tr><td>LaunchAgent plist</td><td><code>~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist</code></td></tr>
+            </tbody>
+          </table>
+          <p>The LaunchAgent ensures the daemon starts automatically every time you log in.</p>
+        </li>
+        <li>
+          <strong>Verify the installation</strong>
+          <pre><code>irrlichd --version</code></pre>
+          <p>You should see the version string printed to stdout (e.g. <code>irrlicht 0.2.0</code>).</p>
+        </li>
+      </ol>
+
+      <!-- ── Build from Source ── -->
+      <h2 id="build-from-source">Build from Source</h2>
+
+      <p>Building from source gives you the full installer package, identical to the release download.</p>
+
+      <h3>One-command build</h3>
+
+      <pre><code>git clone https://github.com/anthropics/irrlicht.git
+cd irrlicht
+./platforms/build-release.sh</code></pre>
+
+      <p>The script produces a <code>.pkg</code> installer in the project root that you can double-click to install, exactly like the release download.</p>
+
+      <h3>What the build script does</h3>
+
+      <p>Under the hood, <code>build-release.sh</code> performs these steps in order:</p>
+
+      <ol>
+        <li><strong>Syncs the web frontend</strong> &mdash; embeds the latest HTML/CSS/JS assets into the daemon binary.</li>
+        <li><strong>Cross-compiles the daemon</strong> &mdash; builds <code>irrlichd</code> for both <code>arm64</code> (Apple Silicon) and <code>amd64</code> (Intel).</li>
+        <li><strong>Creates a universal binary</strong> &mdash; merges both architectures with <code>lipo</code> so one binary runs natively on any Mac.</li>
+        <li><strong>Builds the Swift menu-bar app</strong> &mdash; compiles <code>Irrlicht.app</code> from the SwiftUI source.</li>
+        <li><strong>Packages everything into a <code>.pkg</code> installer</strong> &mdash; assembles the daemon, app, and LaunchAgent plist into a macOS installer package.</li>
+      </ol>
+
+      <h3>Manual build (individual components)</h3>
+
+      <p>If you prefer to build each component separately:</p>
+
+      <h4>Daemon only</h4>
+      <pre><code># Build for the current architecture
+go build -o irrlichd ./cmd/irrlichd
+
+# Or cross-compile a universal binary manually
+GOOS=darwin GOARCH=arm64 go build -o irrlichd-arm64 ./cmd/irrlichd
+GOOS=darwin GOARCH=amd64 go build -o irrlichd-amd64 ./cmd/irrlichd
+lipo -create -output irrlichd irrlichd-arm64 irrlichd-amd64</code></pre>
+
+      <h4>Menu-bar app only</h4>
+      <pre><code>cd platforms/macos/Irrlicht
+xcodebuild -scheme Irrlicht -configuration Release build</code></pre>
+
+      <div class="callout callout-tip">
+        <strong>Tip</strong>
+        After a manual build you will need to copy <code>irrlichd</code> to <code>/usr/local/bin/</code> and <code>Irrlicht.app</code> to <code>/Applications/</code> yourself. You will also need to install the LaunchAgent plist manually &mdash; see the <a href="#uninstalling">Uninstalling</a> section for its expected path.
+      </div>
+
+      <!-- ── Post-Installation ── -->
+      <h2>Post-Installation</h2>
+
+      <p>Once installed (via either method), Irrlicht is ready to go.</p>
+
+      <ul>
+        <li><strong>The daemon starts automatically on login</strong> via the LaunchAgent. No manual launch required.</li>
+        <li><strong>The menu-bar app</strong> appears in your menu bar as a sparkle icon. Click it to see the current state of all detected AI agent sessions.</li>
+      </ul>
+
+      <h3>Verify the daemon is running</h3>
+
+      <pre><code>curl http://127.0.0.1:7837/state</code></pre>
+
+      <p>A successful response returns a JSON object with the current global state. If the daemon is not running, you will get a connection-refused error.</p>
+
+      <h3>Check logs</h3>
+
+      <p>Daemon logs are written to:</p>
+      <pre><code>~/Library/Application Support/Irrlicht/logs/</code></pre>
+
+      <p>Inspect these if the daemon fails to start or you encounter unexpected behaviour.</p>
+
+      <div class="callout callout-info">
+        <strong>Note</strong>
+        The daemon listens on <code>127.0.0.1:7837</code> by default. This port is not exposed to the network. See the <a href="configuration.html">Configuration</a> page to change the bind address or port.
+      </div>
+
+      <!-- ── Uninstalling ── -->
+      <h2 id="uninstalling">Uninstalling</h2>
+
+      <p>To remove Irrlicht completely, delete the following files and directories:</p>
+
+      <pre><code># Stop the daemon first
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist
+
+# Remove installed files
+rm /usr/local/bin/irrlichd
+rm -rf /Applications/Irrlicht.app
+rm ~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist
+
+# Remove application data and logs
+rm -rf ~/Library/Application\ Support/Irrlicht/</code></pre>
+
+      <div class="callout callout-warning">
+        <strong>Warning</strong>
+        Removing the <code>Application Support/Irrlicht/</code> directory deletes all local session history and configuration. Back up anything you want to keep before running the command above.
+      </div>
+
+      <!-- ── Bottom nav ── -->
+      <div class="docs-nav-bottom">
+        <a href="index.html">
+          <span class="label">Previous</span>
+          Overview
+        </a>
+        <a href="quickstart.html">
+          <span class="label">Next</span>
+          Quick Start
+        </a>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

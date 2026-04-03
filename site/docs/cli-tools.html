@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CLI Tools — Irrlicht Docs</title>
+<meta name="description" content="Command-line utilities for interacting with Irrlicht: the irrlichd daemon and irrlicht-ls session listing tool.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <div class="dot"></div>
+      <span>Irrlicht</span>
+      <small>DOCS</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html" class="active">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>CLI Tools</h1>
+      <p class="page-subtitle">Command-line utilities for interacting with Irrlicht.</p>
+
+      <!-- ── irrlichd ── -->
+      <h2>irrlichd</h2>
+
+      <p>The background daemon that powers Irrlicht.</p>
+
+      <h3>Usage</h3>
+
+      <pre><code>irrlichd [flags]</code></pre>
+
+      <h3>Flags</h3>
+
+      <ul>
+        <li><code>--version</code> &mdash; Print version and exit</li>
+      </ul>
+
+      <h3>What It Does</h3>
+
+      <ul>
+        <li>Watches Claude Code and Codex transcript directories</li>
+        <li>Tracks session state via deterministic state machine</li>
+        <li>Serves HTTP API on <code>localhost:7837</code></li>
+        <li>Serves WebSocket stream for real-time updates</li>
+        <li>Advertises via mDNS (<code>_irrlicht._tcp</code>)</li>
+        <li>Listens on Unix socket at <code>~/.local/share/irrlicht/irrlichd.sock</code></li>
+      </ul>
+
+      <h3>Health Check</h3>
+
+      <pre><code>curl http://127.0.0.1:7837/state</code></pre>
+
+      <h3>Logs</h3>
+
+      <pre><code>tail -f ~/Library/Application\ Support/Irrlicht/logs/irrlicht.log</code></pre>
+
+      <!-- ── irrlicht-ls ── -->
+      <h2>irrlicht-ls</h2>
+
+      <p>A terminal session listing tool.</p>
+
+      <h3>Usage</h3>
+
+      <pre><code>irrlicht-ls [flags]</code></pre>
+
+      <h3>Flags</h3>
+
+      <ul>
+        <li><code>-w</code>, <code>--watch</code> &mdash; Watch mode &mdash; updates every second (clears screen between refreshes)</li>
+      </ul>
+
+      <h3>Output Format</h3>
+
+      <p>Columns: state, project name, session ID (8 chars), model, context window, age</p>
+
+      <p>Example output:</p>
+
+      <pre><code>working  irrlicht     a1b2c3d4  claude-sonnet-4-6  200k  (3s ago)
+ready    api-server   e5f6g7h8  claude-opus-4-6    1m    (1m ago)
+waiting  docs         i9j0k1l2                           (15s ago)</code></pre>
+
+      <h3>Data Source</h3>
+
+      <p>Reads session JSON files from <code>~/Library/Application Support/Irrlicht/instances/</code>. Works independently of the daemon.</p>
+
+      <!-- ── Building CLI Tools ── -->
+      <h2>Building CLI Tools</h2>
+
+      <pre><code>cd core
+go build ./cmd/irrlichd/     # daemon
+go build ./cmd/irrlicht-ls/  # listing tool</code></pre>
+
+      <p>Or use the release build script:</p>
+
+      <pre><code>./platforms/build-release.sh</code></pre>
+
+      <!-- ── Bottom nav ── -->
+      <div class="docs-nav-bottom">
+        <a href="configuration.html">
+          <span class="label">Previous</span>
+          Configuration
+        </a>
+        <a href="api-reference.html">
+          <span class="label">Next</span>
+          API Reference
+        </a>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

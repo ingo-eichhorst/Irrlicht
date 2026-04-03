@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Session Detection — Irrlicht Docs</title>
+<meta name="description" content="How Irrlicht discovers and tracks AI coding agent sessions through filesystem watching, process scanning, and exit monitoring.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html" class="active">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Session Detection</h1>
+      <p class="page-subtitle">How Irrlicht discovers and tracks AI coding agent sessions.</p>
+
+      <h2>Detection Methods</h2>
+
+      <p>Irrlicht uses three complementary methods to detect and track sessions. Together they provide fast, reliable discovery from the moment a process starts until the session ends.</p>
+
+      <h3>Filesystem Watching</h3>
+
+      <ul>
+        <li><strong>Technology:</strong> fsnotify (kqueue on macOS)</li>
+        <li>Recursively watches transcript directories for changes</li>
+        <li><strong>Events:</strong> <code>CREATE</code> -- new session, <code>WRITE</code> -- activity, <code>REMOVE</code> -- session ended</li>
+        <li><strong>Filters:</strong> only <code>.jsonl</code> files, ignores files older than max age (5 days default)</li>
+      </ul>
+
+      <h3>Process Scanning</h3>
+
+      <ul>
+        <li>Polls <code>pgrep -x claude</code> every 1 second</li>
+        <li>Creates pre-sessions (<code>proc-&lt;pid&gt;</code>) before transcripts exist</li>
+        <li>Discovers CWD via <code>lsof -a -p &lt;pid&gt; -d cwd</code></li>
+        <li>Pre-sessions are replaced by real sessions when the transcript arrives</li>
+      </ul>
+
+      <h3>Process Exit Monitoring</h3>
+
+      <ul>
+        <li>kqueue <code>EVFILT_PROC</code> <code>NOTE_EXIT</code> for instant (~1ms) exit detection</li>
+        <li><strong>Fallback:</strong> periodic liveness sweep via <code>syscall.Kill(pid, 0)</code> every 5s</li>
+        <li><strong>Startup cleanup:</strong> synchronous dead PID check in <code>seedFromDisk()</code></li>
+      </ul>
+
+      <h2>Supported Agents</h2>
+
+      <h3>Claude Code</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>~/.claude/projects/&lt;project&gt;/&lt;session-id&gt;.jsonl</code></li>
+        <li>Flat directory structure (one level under <code>projects/</code>)</li>
+        <li><strong>Adapter name:</strong> <code>claude-code</code></li>
+      </ul>
+
+      <h3>OpenAI Codex</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>~/.codex/sessions/YYYY/MM/DD/&lt;session-id&gt;.jsonl</code></li>
+        <li>Deep directory structure (recursive watching)</li>
+        <li><strong>Adapter name:</strong> <code>codex</code></li>
+        <li>Model detection from <code>~/.codex/config.toml</code></li>
+      </ul>
+
+      <h2>PID Discovery</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>Mechanism</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Discovery</td>
+            <td><code>lsof -t &lt;transcript&gt;</code> (one-shot on creation, retried async)</td>
+          </tr>
+          <tr>
+            <td>Registration</td>
+            <td>kqueue <code>EVFILT_PROC</code> <code>NOTE_EXIT</code></td>
+          </tr>
+          <tr>
+            <td>Liveness sweep</td>
+            <td><code>syscall.Kill(pid, 0)</code> every 5s</td>
+          </tr>
+          <tr>
+            <td>Startup cleanup</td>
+            <td>Synchronous in <code>seedFromDisk()</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Session ID</h2>
+
+      <ul>
+        <li><strong>File-based:</strong> UUID extracted from the filename (<code>&lt;uuid&gt;.jsonl</code>)</li>
+        <li><strong>Process-based:</strong> <code>proc-&lt;pid&gt;</code> format, used for pre-sessions before a transcript file is found</li>
+      </ul>
+
+      <h2>Git Metadata</h2>
+
+      <ul>
+        <li><strong>Branch:</strong> <code>git rev-parse --abbrev-ref HEAD</code> (strips <code>worktree-</code> prefix)</li>
+        <li><strong>Project name:</strong> derived from <code>git-common-dir</code> (works correctly with worktrees)</li>
+        <li><strong>CWD:</strong> tail-reads the last 32KB of the transcript to find the latest working directory</li>
+      </ul>
+
+      <h2>Transcript Parsing</h2>
+
+      <p>The tailer reads JSONL transcripts line by line and extracts:</p>
+
+      <ul>
+        <li><strong>Model name</strong> -- normalized from various format variations</li>
+        <li><strong>Token counts</strong> -- input, output, cache read, cache creation</li>
+        <li><strong>Tool call state</strong> -- open/closed tracking with tool names</li>
+        <li><strong>Context window size</strong> -- used for utilization pressure calculation</li>
+        <li><strong>Cost estimation</strong> -- computed from token breakdown and model pricing tables</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <strong>Note</strong>
+        Transcript parsing is incremental. The tailer remembers its read offset and only processes new bytes when the file grows, keeping CPU usage minimal even with large transcripts.
+      </div>
+
+      <!-- Bottom nav -->
+      <nav class="docs-nav-bottom">
+        <a href="state-machine.html">
+          <span class="label">Previous</span>
+          State Machine
+        </a>
+        <a href="configuration.html" style="text-align:right">
+          <span class="label">Next</span>
+          Configuration
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>

@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Irrlicht — Menu-Bar Telemetry for AI Coding Agents</title>
+<meta name="description" content="A macOS menu bar app that monitors Claude Code, OpenAI Codex, and other AI coding agents in real time. Follow the right light.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+:root {
+  --bg: #050a14;
+  --bg-card: rgba(12, 18, 35, 0.65);
+  --working: #8B5CF6;
+  --waiting: #FF9500;
+  --ready: #34C759;
+  --text: #c8cdd8;
+  --text-dim: #5a6378;
+  --text-bright: #e8ecf4;
+  --accent: #8B5CF6;
+  --border: rgba(138, 92, 246, 0.08);
+  --glow-purple: rgba(139, 92, 246, 0.15);
+  --glow-orange: rgba(255, 149, 0, 0.12);
+  --glow-green: rgba(52, 199, 89, 0.12);
+}
+
+html {
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(138,92,246,0.2) transparent;
+}
+
+body {
+  font-family: 'Outfit', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Noise overlay ─── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 256px;
+}
+
+/* ─── Global canvas for floating wisps ─── */
+#wisp-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ─── Navigation ─── */
+nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 1.25rem 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  backdrop-filter: blur(20px) saturate(1.2);
+  background: rgba(5, 10, 20, 0.7);
+  border-bottom: 1px solid var(--border);
+  transition: background 0.4s;
+}
+
+.nav-logo {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.4rem;
+  font-weight: 300;
+  letter-spacing: 0.15em;
+  color: var(--text-bright);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.nav-logo .sparkle {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--working);
+  box-shadow: 0 0 12px var(--working), 0 0 30px rgba(139,92,246,0.3);
+  animation: breathe 3s ease-in-out infinite;
+}
+
+.nav-links {
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+  list-style: none;
+}
+
+.nav-links a {
+  font-size: 0.85rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  text-decoration: none;
+  letter-spacing: 0.05em;
+  transition: color 0.3s;
+}
+
+.nav-links a:hover { color: var(--text-bright); }
+
+.nav-links .btn-nav {
+  padding: 0.45rem 1.2rem;
+  border: 1px solid rgba(139,92,246,0.3);
+  border-radius: 6px;
+  color: var(--accent);
+  font-weight: 400;
+  transition: all 0.3s;
+}
+
+.nav-links .btn-nav:hover {
+  background: rgba(139,92,246,0.1);
+  border-color: rgba(139,92,246,0.5);
+  color: #b794f6;
+}
+
+/* ─── Sections ─── */
+section {
+  position: relative;
+  z-index: 1;
+}
+
+.container {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+/* ─── Hero ─── */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 8rem 2rem 6rem;
+  position: relative;
+}
+
+.hero-glow {
+  position: absolute;
+  width: 600px;
+  height: 600px;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -55%);
+  background: radial-gradient(circle, rgba(139,92,246,0.06) 0%, rgba(139,92,246,0.02) 40%, transparent 70%);
+  pointer-events: none;
+  animation: hero-pulse 8s ease-in-out infinite;
+}
+
+@keyframes hero-pulse {
+  0%,100% { transform: translate(-50%,-55%) scale(1); opacity: 1; }
+  50% { transform: translate(-50%,-55%) scale(1.15); opacity: 0.7; }
+}
+
+.hero-subtitle-top {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.7rem;
+  font-weight: 300;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 2rem;
+  opacity: 0;
+  animation: fade-up 0.8s ease forwards 0.2s;
+}
+
+.hero h1 {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(3.5rem, 9vw, 7.5rem);
+  font-weight: 300;
+  letter-spacing: 0.08em;
+  color: var(--text-bright);
+  line-height: 1;
+  margin-bottom: 0.5rem;
+  opacity: 0;
+  animation: fade-up 1s ease forwards 0.4s;
+}
+
+.hero h1 span {
+  background: linear-gradient(135deg, var(--working) 0%, #c084fc 50%, var(--waiting) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.hero-meaning {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 1.1rem;
+  color: var(--text-dim);
+  margin-bottom: 2.5rem;
+  opacity: 0;
+  animation: fade-up 0.8s ease forwards 0.6s;
+}
+
+.hero p.tagline {
+  font-size: 1.15rem;
+  font-weight: 300;
+  color: var(--text);
+  max-width: 520px;
+  margin: 0 auto 3rem;
+  line-height: 1.7;
+  opacity: 0;
+  animation: fade-up 0.8s ease forwards 0.8s;
+}
+
+/* ─── Session visualization (hero) ─── */
+.session-viz {
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 3.5rem;
+  opacity: 0;
+  animation: fade-up 1s ease forwards 1s;
+}
+
+.session-group {
+  display: flex;
+  gap: 0;
+  align-items: center;
+}
+
+.session-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  margin-left: -4px;
+  position: relative;
+  z-index: 1;
+}
+
+.session-dot:first-child { margin-left: 0; }
+
+.dot-working {
+  background: var(--working);
+  box-shadow: 0 0 10px var(--working), 0 0 25px rgba(139,92,246,0.3);
+  animation: breathe 2.5s ease-in-out infinite;
+}
+.dot-waiting {
+  background: var(--waiting);
+  box-shadow: 0 0 10px var(--waiting), 0 0 25px rgba(255,149,0,0.3);
+  animation: breathe 3s ease-in-out infinite 0.5s;
+}
+.dot-ready {
+  background: var(--ready);
+  box-shadow: 0 0 10px var(--ready), 0 0 25px rgba(52,199,89,0.3);
+  animation: breathe 3.5s ease-in-out infinite 1s;
+}
+
+.group-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  margin-top: 0.6rem;
+  text-align: center;
+  letter-spacing: 0.05em;
+}
+
+@keyframes breathe {
+  0%,100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.7; }
+}
+
+.hero-cta {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  opacity: 0;
+  animation: fade-up 0.8s ease forwards 1.2s;
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 2rem;
+  background: linear-gradient(135deg, var(--working), #7c3aed);
+  color: #fff;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  border: none;
+  border-radius: 8px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 4px 20px rgba(139,92,246,0.25);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(139,92,246,0.35);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 2rem;
+  background: transparent;
+  color: var(--text);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 300;
+  border: 1px solid rgba(200,205,216,0.15);
+  border-radius: 8px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.btn-secondary:hover {
+  border-color: rgba(200,205,216,0.3);
+  background: rgba(200,205,216,0.03);
+  transform: translateY(-2px);
+}
+
+/* ─── Section headings ─── */
+.section-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 400;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 1rem;
+  opacity: 0.7;
+}
+
+.section-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  font-weight: 300;
+  color: var(--text-bright);
+  line-height: 1.2;
+  margin-bottom: 1rem;
+}
+
+.section-desc {
+  font-size: 1rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  max-width: 560px;
+  line-height: 1.7;
+}
+
+/* ─── Features ─── */
+.features {
+  padding: 8rem 0;
+  position: relative;
+}
+
+.features::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1px;
+  height: 80px;
+  background: linear-gradient(to bottom, transparent, var(--border), transparent);
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-top: 4rem;
+}
+
+.feature-card {
+  padding: 2rem;
+  border-radius: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.feature-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.2), transparent);
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+
+.feature-card:hover {
+  border-color: rgba(139,92,246,0.15);
+  transform: translateY(-4px);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3), 0 0 40px var(--glow-purple);
+}
+
+.feature-card:hover::before { opacity: 1; }
+
+.feature-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.25rem;
+  font-size: 1.1rem;
+}
+
+.fi-purple { background: rgba(139,92,246,0.1); color: var(--working); }
+.fi-orange { background: rgba(255,149,0,0.1); color: var(--waiting); }
+.fi-green  { background: rgba(52,199,89,0.1); color: var(--ready); }
+
+.feature-card h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-bright);
+  margin-bottom: 0.6rem;
+}
+
+.feature-card p {
+  font-size: 0.88rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+/* ─── How It Works ─── */
+.how-it-works {
+  padding: 8rem 0;
+}
+
+.pipeline {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 4rem;
+  position: relative;
+}
+
+.pipeline-step {
+  flex: 1;
+  padding: 2rem 1.5rem;
+  text-align: center;
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  backdrop-filter: blur(8px);
+}
+
+.pipeline-step:first-child {
+  border-radius: 16px 0 0 16px;
+}
+
+.pipeline-step:last-child {
+  border-radius: 0 16px 16px 0;
+}
+
+.pipeline-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-left: 10px solid rgba(139,92,246,0.2);
+  z-index: 2;
+}
+
+.step-num {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  opacity: 0.6;
+  margin-bottom: 0.75rem;
+}
+
+.step-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.pipeline-step h4 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-bright);
+  margin-bottom: 0.5rem;
+}
+
+.pipeline-step p {
+  font-size: 0.78rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.pipeline-code {
+  margin-top: 3rem;
+  padding: 1.25rem 2rem;
+  background: rgba(12,18,35,0.8);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  text-align: center;
+  letter-spacing: 0.02em;
+  overflow-x: auto;
+}
+
+.pipeline-code span { color: var(--text-bright); }
+.pipeline-code .arrow { color: var(--accent); opacity: 0.5; }
+
+/* ─── Architecture ─── */
+.architecture {
+  padding: 8rem 0;
+}
+
+.arch-diagram {
+  margin-top: 4rem;
+  padding: 3rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  backdrop-filter: blur(12px);
+  position: relative;
+  overflow: hidden;
+}
+
+.arch-diagram::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.15), transparent);
+}
+
+.arch-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.arch-layer {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.arch-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  width: 100px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.arch-boxes {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.arch-box {
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 400;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.ab-purple { border-color: rgba(139,92,246,0.2); color: var(--working); background: rgba(139,92,246,0.05); }
+.ab-orange { border-color: rgba(255,149,0,0.2); color: var(--waiting); background: rgba(255,149,0,0.05); }
+.ab-green  { border-color: rgba(52,199,89,0.2); color: var(--ready); background: rgba(52,199,89,0.05); }
+.ab-dim    { border-color: rgba(200,205,216,0.08); color: var(--text-dim); background: rgba(200,205,216,0.02); }
+
+.arch-connector {
+  width: 100px;
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.arch-connector .line {
+  width: 1px;
+  height: 1.5rem;
+  background: linear-gradient(to bottom, rgba(139,92,246,0.2), rgba(139,92,246,0.05));
+  margin-right: 50%;
+}
+
+/* ─── The Light System ─── */
+.light-system {
+  padding: 8rem 0;
+}
+
+.lights-row {
+  display: flex;
+  gap: 2rem;
+  margin-top: 4rem;
+}
+
+.light-card {
+  flex: 1;
+  padding: 2.5rem 2rem;
+  border-radius: 16px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  backdrop-filter: blur(8px);
+}
+
+.light-orb {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  margin: 0 auto 1.5rem;
+  position: relative;
+}
+
+.light-orb::after {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border-radius: 50%;
+  opacity: 0.3;
+}
+
+.orb-working {
+  background: var(--working);
+  box-shadow: 0 0 20px var(--working), 0 0 60px rgba(139,92,246,0.3);
+  animation: breathe 2.5s ease-in-out infinite;
+}
+.orb-working::after { background: radial-gradient(circle, var(--working), transparent); }
+
+.orb-waiting {
+  background: var(--waiting);
+  box-shadow: 0 0 20px var(--waiting), 0 0 60px rgba(255,149,0,0.3);
+  animation: breathe 3s ease-in-out infinite 0.3s;
+}
+.orb-waiting::after { background: radial-gradient(circle, var(--waiting), transparent); }
+
+.orb-ready {
+  background: var(--ready);
+  box-shadow: 0 0 20px var(--ready), 0 0 60px rgba(52,199,89,0.3);
+  animation: breathe 3.5s ease-in-out infinite 0.6s;
+}
+.orb-ready::after { background: radial-gradient(circle, var(--ready), transparent); }
+
+.light-card h3 {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-bright);
+  margin-bottom: 0.6rem;
+  letter-spacing: 0.05em;
+}
+
+.light-card p {
+  font-size: 0.85rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+/* ─── Installation ─── */
+.installation {
+  padding: 8rem 0;
+}
+
+.install-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-top: 4rem;
+}
+
+.install-card {
+  padding: 2.5rem;
+  border-radius: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+}
+
+.install-card h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-bright);
+  margin-bottom: 0.5rem;
+}
+
+.install-card .subtitle {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-bottom: 1.5rem;
+}
+
+.code-block {
+  background: rgba(5, 10, 20, 0.8);
+  border: 1px solid rgba(139,92,246,0.08);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+  overflow-x: auto;
+  position: relative;
+}
+
+.code-block .prompt { color: var(--accent); opacity: 0.5; }
+.code-block .cmd { color: var(--text-bright); }
+.code-block .comment { color: var(--text-dim); font-style: italic; }
+
+.code-block + .code-block { margin-top: 0.75rem; }
+
+.install-note {
+  margin-top: 1.25rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-weight: 300;
+}
+
+/* ─── Open Source CTA ─── */
+.open-source {
+  padding: 8rem 0 10rem;
+  text-align: center;
+}
+
+.oss-card {
+  padding: 5rem 3rem;
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(139,92,246,0.05) 0%, rgba(12,18,35,0.8) 50%, rgba(52,199,89,0.03) 100%);
+  border: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+}
+
+.oss-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.3), rgba(255,149,0,0.2), rgba(52,199,89,0.2), transparent);
+}
+
+.oss-card .section-title {
+  margin-bottom: 1.5rem;
+}
+
+.oss-card p {
+  max-width: 480px;
+  margin: 0 auto 2.5rem;
+  font-size: 1rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+
+.oss-links {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* ─── Footer ─── */
+footer {
+  padding: 3rem 2rem;
+  border-top: 1px solid var(--border);
+  position: relative;
+  z-index: 1;
+}
+
+.footer-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.footer-left {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  letter-spacing: 0.05em;
+}
+
+.footer-right {
+  display: flex;
+  gap: 2rem;
+}
+
+.footer-right a {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 0.3s;
+}
+
+.footer-right a:hover { color: var(--text-bright); }
+
+/* ─── Scroll reveal ─── */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 900px) {
+  .features-grid { grid-template-columns: 1fr 1fr; }
+  .pipeline { flex-direction: column; }
+  .pipeline-step { border-radius: 12px !important; }
+  .pipeline-step:not(:last-child)::after { display: none; }
+  .lights-row { flex-direction: column; }
+  .install-options { grid-template-columns: 1fr; }
+  .arch-layer { flex-direction: column; align-items: flex-start; }
+  .arch-label { text-align: left; width: auto; }
+  .arch-connector { display: none; }
+}
+
+@media (max-width: 600px) {
+  .features-grid { grid-template-columns: 1fr; }
+  nav { padding: 1rem 1.25rem; }
+  .nav-links { gap: 1rem; }
+  .hero h1 { font-size: 3rem; }
+  .session-viz { gap: 1rem; }
+  .hero-cta { flex-direction: column; }
+  .footer-inner { flex-direction: column; gap: 1.5rem; text-align: center; }
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="wisp-canvas"></canvas>
+
+<!-- ─── Navigation ─── -->
+<nav>
+  <a href="/" class="nav-logo">
+    <span class="sparkle"></span>
+    IRRLICHT
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#how-it-works">How It Works</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="docs/">Docs</a></li>
+    <li><a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-nav">GitHub</a></li>
+  </ul>
+</nav>
+
+<!-- ─── Hero ─── -->
+<section class="hero">
+  <div class="hero-glow"></div>
+  <p class="hero-subtitle-top">Menu-bar telemetry for AI coding agents</p>
+  <h1><span>Irrlicht</span></h1>
+  <p class="hero-meaning">/ eer-likht / &mdash; will-o'-the-wisp. Small, honest lights that appear where you need them.</p>
+  <p class="tagline">A macOS menu bar app that watches your AI coding sessions and tells you the truth &mdash; who's working, who's waiting, and who's ready.</p>
+
+  <div class="session-viz">
+    <div>
+      <div class="session-group">
+        <div class="session-dot dot-working"></div>
+        <div class="session-dot dot-working"></div>
+        <div class="session-dot dot-waiting"></div>
+      </div>
+      <div class="group-label">irrlicht</div>
+    </div>
+    <div>
+      <div class="session-group">
+        <div class="session-dot dot-working"></div>
+        <div class="session-dot dot-ready"></div>
+      </div>
+      <div class="group-label">api-server</div>
+    </div>
+    <div>
+      <div class="session-group">
+        <div class="session-dot dot-ready"></div>
+      </div>
+      <div class="group-label">docs</div>
+    </div>
+  </div>
+
+  <div class="hero-cta">
+    <a href="https://github.com/ingo-eichhorst/Irrlicht/releases/latest" class="btn-primary">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 13h10"/></svg>
+      Download v0.2.0
+    </a>
+    <a href="docs/" class="btn-secondary">Read the Docs</a>
+  </div>
+</section>
+
+<!-- ─── The Light System ─── -->
+<section class="light-system" id="lights">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-label">The Light System</p>
+      <h2 class="section-title">Three states. No ambiguity.</h2>
+      <p class="section-desc">Each session is a single light. Its color tells you the truth about where your attention should go.</p>
+    </div>
+    <div class="lights-row reveal">
+      <div class="light-card">
+        <div class="light-orb orb-working"></div>
+        <h3>working</h3>
+        <p>The agent is thinking, building, calling tools. It doesn't need you yet.</p>
+      </div>
+      <div class="light-card">
+        <div class="light-orb orb-waiting"></div>
+        <h3>waiting</h3>
+        <p>The agent needs your judgment. A question, a permission prompt, a plan to approve.</p>
+      </div>
+      <div class="light-card">
+        <div class="light-orb orb-ready"></div>
+        <h3>ready</h3>
+        <p>The path ahead is clear. The session is idle, ready for your next instruction.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Features ─── -->
+<section class="features" id="features">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-label">Capabilities</p>
+      <h2 class="section-title">Everything you need,<br>nothing you don't</h2>
+      <p class="section-desc">Zero configuration. Install, run, and Irrlicht discovers your sessions automatically.</p>
+    </div>
+    <div class="features-grid reveal">
+      <div class="feature-card">
+        <div class="feature-icon fi-purple">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M10 2v3m0 10v3M2 10h3m10 0h3M4.22 4.22l2.12 2.12m7.32 7.32l2.12 2.12M4.22 15.78l2.12-2.12m7.32-7.32l2.12-2.12"/></svg>
+        </div>
+        <h3>Real-Time Monitoring</h3>
+        <p>Sub-second state detection via FSEvents and kqueue. See working, waiting, and ready the moment they change.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon fi-orange">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="6" width="14" height="10" rx="2"/><path d="M6 10h2m2 0h4M6 13h8"/></svg>
+        </div>
+        <h3>Context Pressure</h3>
+        <p>Track context window utilization across models. Get notified at 80% and 95% before auto-compaction hits.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon fi-green">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2L3 7v6l7 5 7-5V7l-7-5z"/><path d="M10 12V7m0 0L7 9m3-2l3 2"/></svg>
+        </div>
+        <h3>Cost Estimation</h3>
+        <p>Per-session and per-project cost tracking based on model pricing and token breakdown. Know what you're spending.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon fi-purple">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="10" r="4"/><circle cx="13" cy="10" r="4"/></svg>
+        </div>
+        <h3>Multi-Agent Support</h3>
+        <p>Claude Code, OpenAI Codex, and more. Monitors all your AI coding agents from one unified interface.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon fi-orange">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3v14M5 7h8a2 2 0 010 4H5"/></svg>
+        </div>
+        <h3>Git-Aware</h3>
+        <p>Detects branch, project name, and worktree context. Sessions grouped by project in the menu bar.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon fi-green">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2a8 8 0 110 16 8 8 0 010-16z"/><path d="M10 6v4l3 2"/></svg>
+        </div>
+        <h3>Zero Configuration</h3>
+        <p>No hooks. No settings. Install the daemon and the app, and it discovers sessions via filesystem watching.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── How It Works ─── -->
+<section class="how-it-works" id="how-it-works">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-label">Under the hood</p>
+      <h2 class="section-title">Files &rarr; State &rarr; Light</h2>
+      <p class="section-desc">Irrlicht is a deterministic pipeline. Transcript files go in, session states come out. No magic.</p>
+    </div>
+    <div class="pipeline reveal">
+      <div class="pipeline-step">
+        <div class="step-num">01</div>
+        <div class="step-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="var(--working)" stroke-width="1.5"><path d="M6 4h10l6 6v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2z"/><path d="M16 4v6h6"/><path d="M10 15h8m-8 3h5"/></svg>
+        </div>
+        <h4>Watch Transcripts</h4>
+        <p>Daemon watches <code>.jsonl</code> transcript files via kqueue/FSEvents</p>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">02</div>
+        <div class="step-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="var(--waiting)" stroke-width="1.5"><rect x="4" y="8" width="20" height="12" rx="3"/><path d="M9 14h2m2 0h2m2 0h2"/></svg>
+        </div>
+        <h4>Compute Metrics</h4>
+        <p>Tailer extracts model, tokens, tool state, cost from each event</p>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">03</div>
+        <div class="step-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="var(--ready)" stroke-width="1.5"><path d="M4 14h4m2 0l4-6v12l4-6m2 0h4"/></svg>
+        </div>
+        <h4>Stream Updates</h4>
+        <p>WebSocket pushes state changes to all connected clients in real time</p>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">04</div>
+        <div class="step-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="var(--accent)" stroke-width="1.5"><rect x="6" y="3" width="16" height="22" rx="3"/><circle cx="14" cy="19" r="2"/><path d="M10 8h8"/></svg>
+        </div>
+        <h4>Display</h4>
+        <p>Menu bar app renders colored session indicators, grouped by project</p>
+      </div>
+    </div>
+    <div class="pipeline-code reveal">
+      <span>Transcript Files</span> <span class="arrow">&rarr;</span> FSEvents/kqueue <span class="arrow">&rarr;</span> <span>SessionDetector</span> <span class="arrow">&rarr;</span> State Machine <span class="arrow">&rarr;</span> WebSocket <span class="arrow">&rarr;</span> <span>Menu Bar</span>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Architecture ─── -->
+<section class="architecture" id="architecture">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-label">Architecture</p>
+      <h2 class="section-title">Hexagonal, by design</h2>
+      <p class="section-desc">Clean ports and adapters. Every external dependency is behind an interface. Every component is testable in isolation.</p>
+    </div>
+    <div class="arch-diagram reveal">
+      <div class="arch-layers">
+        <div class="arch-layer">
+          <div class="arch-label">Inbound</div>
+          <div class="arch-boxes">
+            <div class="arch-box ab-purple">Claude Code</div>
+            <div class="arch-box ab-purple">Codex</div>
+            <div class="arch-box ab-purple">Process Scanner</div>
+            <div class="arch-box ab-orange">Gas Town</div>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-connector"><div class="line"></div></div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-label">Domain</div>
+          <div class="arch-boxes">
+            <div class="arch-box ab-dim">SessionDetector</div>
+            <div class="arch-box ab-dim">State Machine</div>
+            <div class="arch-box ab-dim">Transcript Tailer</div>
+            <div class="arch-box ab-dim">Cost Estimator</div>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-connector"><div class="line"></div></div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-label">Outbound</div>
+          <div class="arch-boxes">
+            <div class="arch-box ab-green">Filesystem</div>
+            <div class="arch-box ab-green">WebSocket Hub</div>
+            <div class="arch-box ab-green">kqueue</div>
+            <div class="arch-box ab-green">mDNS</div>
+            <div class="arch-box ab-green">Git Resolver</div>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-connector"><div class="line"></div></div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-label">Clients</div>
+          <div class="arch-boxes">
+            <div class="arch-box ab-dim">SwiftUI Menu Bar</div>
+            <div class="arch-box ab-dim">Web Dashboard</div>
+            <div class="arch-box ab-dim">irrlicht-ls CLI</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Installation ─── -->
+<section class="installation" id="install">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-label">Get Started</p>
+      <h2 class="section-title">Up and running in sixty seconds</h2>
+    </div>
+    <div class="install-options reveal">
+      <div class="install-card">
+        <h3>Installer Package</h3>
+        <p class="subtitle">Recommended &mdash; bundles daemon + app + LaunchAgent</p>
+        <div class="code-block">
+          <span class="comment"># Download from GitHub Releases</span><br>
+          <span class="prompt">$ </span><span class="cmd">open Irrlicht-0.2.0-mac-installer.pkg</span>
+        </div>
+        <p class="install-note">Installs irrlichd to /usr/local/bin, Irrlicht.app to /Applications, and auto-starts the daemon via LaunchAgent.</p>
+      </div>
+      <div class="install-card">
+        <h3>Build from Source</h3>
+        <p class="subtitle">For contributors and custom builds</p>
+        <div class="code-block">
+          <span class="prompt">$ </span><span class="cmd">git clone https://github.com/ingo-eichhorst/Irrlicht.git</span><br>
+          <span class="prompt">$ </span><span class="cmd">cd Irrlicht</span><br>
+          <span class="prompt">$ </span><span class="cmd">./platforms/build-release.sh</span>
+        </div>
+        <div class="code-block">
+          <span class="comment"># Run daemon + app</span><br>
+          <span class="prompt">$ </span><span class="cmd">./.build/irrlichd-darwin-universal &</span><br>
+          <span class="prompt">$ </span><span class="cmd">cd platforms/macos && swift run &</span>
+        </div>
+        <p class="install-note">Requires Go 1.21+ and Swift 5.9+. macOS 13 (Ventura) or later.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Open Source CTA ─── -->
+<section class="open-source">
+  <div class="container">
+    <div class="oss-card reveal">
+      <p class="section-label">Open Source</p>
+      <h2 class="section-title">Built in the open</h2>
+      <p>MIT licensed. Contributions welcome. Read the docs, file an issue, or submit a pull request.</p>
+      <div class="oss-links">
+        <a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-primary">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+        <a href="docs/" class="btn-secondary">Documentation</a>
+        <a href="docs/contributing.html" class="btn-secondary">Contributing Guide</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Footer ─── -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">MIT License &middot; Irrlicht v0.2.0 &middot; Follow the right light.</div>
+    <div class="footer-right">
+      <a href="docs/">Docs</a>
+      <a href="https://github.com/ingo-eichhorst/Irrlicht">GitHub</a>
+      <a href="https://github.com/ingo-eichhorst/Irrlicht/issues">Issues</a>
+      <a href="https://github.com/ingo-eichhorst/Irrlicht/discussions">Discussions</a>
+    </div>
+  </div>
+</footer>
+
+<!-- ─── Floating wisps (canvas animation) ─── -->
+<script>
+(function() {
+  const canvas = document.getElementById('wisp-canvas');
+  const ctx = canvas.getContext('2d');
+  let W, H;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = document.documentElement.scrollHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const colors = [
+    { r: 139, g: 92,  b: 246 },
+    { r: 255, g: 149, b: 0   },
+    { r: 52,  g: 199, b: 89  },
+  ];
+
+  class Wisp {
+    constructor() { this.reset(); }
+    reset() {
+      this.x = Math.random() * W;
+      this.y = Math.random() * H;
+      this.r = 1.5 + Math.random() * 2.5;
+      this.vx = (Math.random() - 0.5) * 0.15;
+      this.vy = (Math.random() - 0.5) * 0.1;
+      this.color = colors[Math.floor(Math.random() * colors.length)];
+      this.phase = Math.random() * Math.PI * 2;
+      this.freq = 0.005 + Math.random() * 0.01;
+      this.maxAlpha = 0.08 + Math.random() * 0.12;
+    }
+    update(t) {
+      this.x += this.vx + Math.sin(t * this.freq + this.phase) * 0.3;
+      this.y += this.vy + Math.cos(t * this.freq * 0.7 + this.phase) * 0.2;
+      if (this.x < -50 || this.x > W + 50 || this.y < -50 || this.y > H + 50) this.reset();
+    }
+    draw(t) {
+      const alpha = this.maxAlpha * (0.5 + 0.5 * Math.sin(t * this.freq * 2 + this.phase));
+      const { r, g, b } = this.color;
+      const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.r * 12);
+      grad.addColorStop(0, `rgba(${r},${g},${b},${alpha})`);
+      grad.addColorStop(0.4, `rgba(${r},${g},${b},${alpha * 0.3})`);
+      grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.r * 12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const wisps = Array.from({ length: 30 }, () => new Wisp());
+  let t = 0;
+
+  function animate() {
+    ctx.clearRect(0, 0, W, H);
+    t++;
+    for (const w of wisps) {
+      w.update(t);
+      w.draw(t);
+    }
+    requestAnimationFrame(animate);
+  }
+  animate();
+
+  // Resize canvas height on scroll (for full-page coverage)
+  const ro = new ResizeObserver(() => {
+    H = canvas.height = document.documentElement.scrollHeight;
+  });
+  ro.observe(document.body);
+})();
+</script>
+
+<!-- ─── Scroll reveal ─── -->
+<script>
+(function() {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        // Stagger children
+        const children = entry.target.querySelectorAll('.feature-card, .light-card, .pipeline-step, .install-card');
+        children.forEach((child, i) => {
+          child.style.transitionDelay = `${i * 0.08}s`;
+          child.style.opacity = '0';
+          child.style.transform = 'translateY(20px)';
+          child.style.transition = 'opacity 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1)';
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              child.style.opacity = '1';
+              child.style.transform = 'translateY(0)';
+            }, i * 80);
+          });
+        });
+      }
+    });
+  }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
+
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+})();
+</script>
+
+</body>
+</html>

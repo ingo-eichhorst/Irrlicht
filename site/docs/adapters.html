@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adapters — Irrlicht Docs</title>
+<meta name="description" content="Inbound and outbound adapters that connect Irrlicht to the outside world. Agent watchers, file system integration, WebSocket hub, and more.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html" class="active">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Adapters</h1>
+      <p class="page-subtitle">Inbound and outbound adapters that connect Irrlicht to the outside world.</p>
+
+      <h2>Inbound Adapters (Event Sources)</h2>
+
+      <p>Inbound adapters drive events into the application. Each watches a specific agent's transcript files or process activity and emits session lifecycle events that the core state machine consumes.</p>
+
+      <h3>Claude Code Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/claudecode/</code></li>
+        <li><strong>Watches:</strong> <code>~/.claude/projects/**/*.jsonl</code></li>
+        <li>Uses the shared fswatcher with a flat directory structure</li>
+        <li><strong>Adapter name in session state:</strong> <code>"claude-code"</code></li>
+      </ul>
+
+      <h3>Codex Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/codex/</code></li>
+        <li><strong>Watches:</strong> <code>~/.codex/sessions/</code> (deep nesting: <code>YYYY/MM/DD/*.jsonl</code>)</li>
+        <li>Uses the shared fswatcher with recursive directory watching</li>
+        <li><strong>Adapter name:</strong> <code>"codex"</code></li>
+        <li>Model detection from <code>~/.codex/config.toml</code></li>
+      </ul>
+
+      <h3>Process Scanner</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/processscanner/</code></li>
+        <li>Polls <code>pgrep -x claude</code> every 1 second</li>
+        <li>Creates pre-sessions (<code>proc-&lt;pid&gt;</code>) before transcripts exist</li>
+        <li>CWD discovery via <code>lsof</code></li>
+        <li>Suppresses ghost pre-sessions when a real transcript exists</li>
+      </ul>
+
+      <h3>Shared File System Watcher</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/fswatcher/</code></li>
+        <li>Built on fsnotify (kqueue on macOS)</li>
+        <li>Recursive directory watching</li>
+        <li><strong>Event types:</strong> <code>EventNewSession</code>, <code>EventActivity</code>, <code>EventRemoved</code></li>
+        <li>Max age filtering</li>
+        <li>Race condition handling for new directories</li>
+      </ul>
+
+      <h3>Gas Town Orchestrator</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/orchestrators/gastown/</code></li>
+        <li>Watches daemon state file + polls <code>gt</code> CLI</li>
+        <li>Role detection from session CWD paths</li>
+        <li><strong>State model:</strong> global agents, codebases, worktrees, workers, work units</li>
+      </ul>
+
+      <h2>Outbound Adapters (System Integration)</h2>
+
+      <p>Outbound adapters handle persistence, process monitoring, real-time communication, and other side effects that flow out of the core.</p>
+
+      <h3>Filesystem Repository</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/outbound/filesystem/</code></li>
+        <li>Persists session state as JSON files</li>
+        <li>Atomic writes via temp file + rename</li>
+        <li><strong>Location:</strong> <code>~/Library/Application Support/Irrlicht/instances/</code></li>
+      </ul>
+
+      <h3>Process Watcher</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/outbound/process/</code></li>
+        <li>kqueue <code>EVFILT_PROC</code> <code>NOTE_EXIT</code> monitoring</li>
+        <li>~1ms exit detection latency</li>
+        <li>Periodic liveness sweep as fallback</li>
+      </ul>
+
+      <h3>WebSocket Hub</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/outbound/websocket/</code></li>
+        <li>Fan-out to all connected clients</li>
+        <li>Non-blocking sends (drops slow subscribers)</li>
+        <li><strong>Message types:</strong> <code>session_created</code> / <code>session_updated</code> / <code>session_deleted</code>, <code>orchestrator_state</code></li>
+      </ul>
+
+      <h3>Git Resolver</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/outbound/git/</code></li>
+        <li>Branch detection (strips <code>worktree-</code> prefix)</li>
+        <li>Project name from <code>git-common-dir</code> (worktree-aware)</li>
+        <li>CWD extraction from transcript tail (last 32KB)</li>
+      </ul>
+
+      <h3>Metrics Collector</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/outbound/metrics/</code></li>
+        <li>Wraps <code>TranscriptTailer</code></li>
+        <li>Extracts model, tokens, tool state, cost</li>
+      </ul>
+
+      <h3>mDNS Advertiser</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/outbound/mdns/</code></li>
+        <li>Bonjour/Zeroconf service advertisement</li>
+        <li><strong>Service type:</strong> <code>_irrlicht._tcp</code></li>
+        <li>Includes hostname and IPv4 in TXT records</li>
+      </ul>
+
+      <h3>Logger</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/outbound/logging/</code></li>
+        <li>Structured JSON logging</li>
+        <li>Auto-rotation at 10MB, 5 files retained</li>
+      </ul>
+
+      <h2>Writing a New Adapter</h2>
+
+      <p>To add support for a new agent, follow these steps:</p>
+
+      <ol>
+        <li>Create a new package under <code>core/adapters/inbound/agents/</code></li>
+        <li>Implement the <code>AgentWatcher</code> interface</li>
+        <li>Use the shared fswatcher for file-based agents</li>
+        <li>Register the adapter in <code>main.go</code></li>
+      </ol>
+
+      <!-- Bottom nav -->
+      <nav class="docs-nav-bottom">
+        <a href="architecture.html">
+          <span class="label">Previous</span>
+          System Design
+        </a>
+        <a href="contributing.html" style="text-align:right">
+          <span class="label">Next</span>
+          Contributing &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>

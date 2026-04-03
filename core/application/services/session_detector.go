@@ -160,18 +160,19 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		initialState := session.StateReady
 
 		state := &session.SessionState{
-			Version:        1,
-			SessionID:      ev.SessionID,
-			State:          initialState,
-			Adapter:        ev.Adapter,
-			TranscriptPath: ev.TranscriptPath,
-			CWD:            ev.CWD,
-			DaemonVersion:  d.version,
-			FirstSeen:      now,
-			UpdatedAt:      now,
-			Confidence:     "medium",
-			EventCount:     1,
-			LastEvent:      "transcript_new",
+			Version:         1,
+			SessionID:       ev.SessionID,
+			State:           initialState,
+			Adapter:         ev.Adapter,
+			TranscriptPath:  ev.TranscriptPath,
+			CWD:             ev.CWD,
+			DaemonVersion:   d.version,
+			ParentSessionID: deriveParentSessionID(ev.TranscriptPath),
+			FirstSeen:       now,
+			UpdatedAt:       now,
+			Confidence:      "medium",
+			EventCount:      1,
+			LastEvent:       "transcript_new",
 		}
 
 		// Resolve git metadata: prefer CWD (set by process scanner), fall
@@ -606,6 +607,17 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir string) {
 		d.log.LogInfo("session-detector", sid,
 			fmt.Sprintf("removed pre-session — real session arrived in %s", projectDir))
 	}
+}
+
+// deriveParentSessionID extracts a parent session ID from a subagent transcript path.
+// Claude Code subagent transcripts live at .../<parent-session-id>/subagents/<agent-id>.jsonl.
+// Returns "" if the path doesn't match the subagent pattern.
+func deriveParentSessionID(transcriptPath string) string {
+	dir := filepath.Dir(transcriptPath) // .../subagents
+	if filepath.Base(dir) != "subagents" {
+		return ""
+	}
+	return filepath.Base(filepath.Dir(dir)) // parent session ID
 }
 
 // extractProjectDir extracts the project directory name from a transcript path.

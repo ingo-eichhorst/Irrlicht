@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quick Start — Irrlicht Docs</title>
+<meta name="description" content="Get up and running with Irrlicht in minutes. Step-by-step guide to monitoring your first AI coding session.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html" class="active">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Quick Start</h1>
+      <p class="page-subtitle">Get up and running with Irrlicht in minutes. Follow these steps to monitor your first AI coding session.</p>
+
+      <h2>Your First Session</h2>
+
+      <ol class="steps">
+        <li>
+          <strong>Install Irrlicht</strong><br>
+          Follow the <a href="installation.html">installation guide</a> to get the daemon and menu bar app on your system.
+        </li>
+        <li>
+          <strong>Start the daemon</strong><br>
+          <pre><code>.build/irrlichd-darwin-universal &</code></pre>
+          <p>If you installed via the <code>.pkg</code> installer, the daemon auto-starts via LaunchAgent -- no manual step needed.</p>
+        </li>
+        <li>
+          <strong>Start the menu bar app</strong><br>
+          <pre><code>open /Applications/Irrlicht.app</code></pre>
+          <p>Or build and run from source:</p>
+          <pre><code>cd platforms/macos && swift run &</code></pre>
+        </li>
+        <li>
+          <strong>Look for the sparkle icon</strong><br>
+          A small sparkle icon appears in your macOS menu bar, confirming Irrlicht is running.
+        </li>
+        <li>
+          <strong>Start an AI coding session</strong><br>
+          Open a terminal and launch a Claude Code or Codex session as you normally would.
+        </li>
+        <li>
+          <strong>Watch the menu bar</strong><br>
+          A purple dot appears as the agent starts working. The light changes color to reflect the agent's state in real time.
+        </li>
+        <li>
+          <strong>Click the menu bar icon</strong><br>
+          The popover shows full session details including model, tokens, cost, and context pressure.
+        </li>
+      </ol>
+
+      <h2>What You'll See</h2>
+
+      <ul>
+        <li>Project name, git branch, model, elapsed time, and token count</li>
+        <li>Context utilization percentage with pressure-level colors</li>
+        <li>Estimated cost per session</li>
+        <li>Sessions grouped by project</li>
+      </ul>
+
+      <h2>Understanding the States</h2>
+
+      <ul>
+        <li><span class="badge badge-working">working</span> -- the agent is processing</li>
+        <li><span class="badge badge-waiting">waiting</span> -- the agent needs your input</li>
+        <li><span class="badge badge-ready">ready</span> -- the agent is idle</li>
+      </ul>
+
+      <div class="callout callout-tip">
+        <strong>Tip</strong>
+        These three states map directly to the menu bar light color. Learn more in <a href="light-system.html">The Light System</a>.
+      </div>
+
+      <h2>Web Dashboard</h2>
+
+      <p>Open <code>http://127.0.0.1:7837</code> in your browser for the web UI. It provides the same session data as the menu bar app, with real-time updates via WebSocket.</p>
+
+      <h2>CLI Listing</h2>
+
+      <p>For a terminal-based view of all active sessions:</p>
+
+      <pre><code>irrlicht-ls</code></pre>
+
+      <p>Use watch mode for a live-updating display that refreshes every second:</p>
+
+      <pre><code>irrlicht-ls -w</code></pre>
+
+      <h2>Next Steps</h2>
+
+      <ul>
+        <li>Learn how the state system works: <a href="light-system.html">The Light System</a></li>
+        <li>Customize behavior and ports: <a href="configuration.html">Configuration</a></li>
+        <li>Explore the HTTP and WebSocket API: <a href="api-reference.html">API Reference</a></li>
+      </ul>
+
+      <!-- Bottom nav -->
+      <nav class="docs-nav-bottom">
+        <a href="installation.html">
+          <span class="label">Previous</span>
+          Installation
+        </a>
+        <a href="light-system.html" style="text-align:right">
+          <span class="label">Next</span>
+          The Light System
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+</body>
+</html>
