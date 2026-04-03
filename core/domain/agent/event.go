@@ -21,4 +21,5 @@ type Event struct {
 	ProjectDir     string // Leaf directory name under the watched root
 	TranscriptPath string // Absolute path to the .jsonl file
 	Size           int64  // Current file size in bytes (0 for removals)
+	CWD            string // Working directory of the agent process (set by process scanner)
 }

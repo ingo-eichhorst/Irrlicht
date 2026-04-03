@@ -13,12 +13,13 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	processadapter "irrlicht/core/adapters/outbound/process"
-	"irrlicht/core/domain/session"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
@@ -147,18 +148,34 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 	now := time.Now().Unix()
 
 	if isNew {
-		// Create a new session state from transcript discovery.
+		// Pre-sessions (emitted by the process scanner before any transcript
+		// exists) start as ready; real transcript sessions start as working.
+		initialState := session.StateWorking
+		if ev.TranscriptPath == "" {
+			initialState = session.StateReady
+		}
+
 		state := &session.SessionState{
 			Version:        1,
 			SessionID:      ev.SessionID,
-			State:          session.StateWorking,
+			State:          initialState,
 			Adapter:        ev.Adapter,
 			TranscriptPath: ev.TranscriptPath,
+			CWD:            ev.CWD,
 			FirstSeen:      now,
 			UpdatedAt:      now,
 			Confidence:     "medium",
 			EventCount:     1,
 			LastEvent:      "transcript_new",
+		}
+
+		// Resolve git metadata: prefer CWD (set by process scanner), fall
+		// back to transcript inspection for file-based sessions.
+		if ev.CWD != "" {
+			state.GitBranch = d.git.GetBranch(ev.CWD)
+			state.ProjectName = d.git.GetProjectName(ev.CWD)
+		} else if b := d.git.GetBranchFromTranscript(ev.TranscriptPath); b != "" {
+			state.GitBranch = b
 		}
 
 		// Derive parent_session_id from co-located sessions.
@@ -168,12 +185,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 				fmt.Sprintf("derived parent_session_id=%s from project dir %s", parentID, ev.ProjectDir))
 		}
 
-		// Resolve git metadata from transcript path.
-		if b := d.git.GetBranchFromTranscript(ev.TranscriptPath); b != "" {
-			state.GitBranch = b
-		}
-
-		// Compute initial metrics.
+		// Compute initial metrics (no-op for pre-sessions with no transcript).
 		if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
 			state.Metrics = m
 		}
@@ -185,6 +197,12 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		}
 
 		d.broadcast(outbound.PushTypeCreated, state)
+
+		// When a real transcript session arrives, remove any pre-sessions for
+		// the same project directory (they are now superseded).
+		if ev.TranscriptPath != "" {
+			d.cleanupPreSessionsForProject(ev.ProjectDir)
+		}
 	} else {
 		// Session already exists. Update transcript path if missing.
 		if existing.TranscriptPath == "" {
@@ -549,6 +567,31 @@ func (d *SessionDetector) updateParentSubagentSummary(childSessionID string) {
 func (d *SessionDetector) broadcast(msgType string, state *session.SessionState) {
 	if d.broadcaster != nil {
 		d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
+	}
+}
+
+// cleanupPreSessionsForProject removes all synthetic pre-sessions (proc-*)
+// in the given project directory. Called when a real transcript session arrives
+// so the pre-session doesn't linger alongside the real one.
+func (d *SessionDetector) cleanupPreSessionsForProject(projectDir string) {
+	d.mu.Lock()
+	var ids []string
+	for sid, pdir := range d.projectSessions {
+		if pdir == projectDir && strings.HasPrefix(sid, "proc-") {
+			ids = append(ids, sid)
+			delete(d.projectSessions, sid)
+		}
+	}
+	d.mu.Unlock()
+
+	for _, sid := range ids {
+		state, _ := d.repo.Load(sid)
+		_ = d.repo.Delete(sid)
+		if state != nil {
+			d.broadcast(outbound.PushTypeDeleted, state)
+		}
+		d.log.LogInfo("session-detector", sid,
+			fmt.Sprintf("removed pre-session — real session arrived in %s", projectDir))
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/processscanner"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
@@ -218,7 +219,17 @@ func main() {
 	// Inbound adapters: watch agent transcript directories for session files.
 	claudeCodeWatcher := claudecode.New(cfg.MaxSessionAge)
 	codexWatcher := codex.New(cfg.MaxSessionAge)
-	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher}
+
+	// Process scanner: detects Claude Code processes before they create a
+	// transcript, so the session appears as ready from the moment the app opens.
+	procScanner := processscanner.New(
+		"claude",
+		claudecode.AdapterName,
+		claudeCodeWatcher.Root(),
+		0, // use default interval
+	)
+
+	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher, procScanner}
 
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
