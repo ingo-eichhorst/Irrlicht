@@ -45,13 +45,36 @@ func (s *Store) Delete(sessionID string) error {
 	return s.fallback.Delete(sessionID)
 }
 
-// ListAll returns all sessions currently in memory.
+// ListAll returns all sessions from both memory and disk. Disk sessions not
+// yet in memory are loaded (this catches files created externally, e.g. by
+// the irrlicht-hook CLI).
 func (s *Store) ListAll() ([]*session.SessionState, error) {
+	// Start with disk as the authoritative source.
+	diskStates, err := s.fallback.ListAll()
+	if err != nil {
+		// Fall back to memory-only if disk read fails.
+		var states []*session.SessionState
+		s.m.Range(func(_, v any) bool {
+			states = append(states, v.(*session.SessionState))
+			return true
+		})
+		return states, nil
+	}
+
+	// Merge: prefer memory version (more recent), add disk-only sessions.
+	memIDs := make(map[string]bool)
 	var states []*session.SessionState
-	s.m.Range(func(_, v any) bool {
+	s.m.Range(func(k, v any) bool {
+		memIDs[k.(string)] = true
 		states = append(states, v.(*session.SessionState))
 		return true
 	})
+	for _, ds := range diskStates {
+		if !memIDs[ds.SessionID] {
+			s.m.Store(ds.SessionID, ds)
+			states = append(states, ds)
+		}
+	}
 	return states, nil
 }
 

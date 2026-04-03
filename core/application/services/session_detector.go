@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	processadapter "irrlicht/core/adapters/outbound/process"
@@ -103,6 +104,9 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 
 	// Seed project sessions map from existing sessions on disk.
 	d.seedFromDisk()
+
+	// Periodic liveness sweep: detect dead PIDs that kqueue missed.
+	go d.sweepDeadPIDs(ctx)
 
 	d.log.LogInfo("session-detector", "", "started — listening for transcript events")
 
@@ -241,6 +245,13 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 		return
 	}
 
+	// Retry PID discovery if not yet known (async to avoid blocking the
+	// event loop on lsof I/O).
+	if state.PID == 0 && ev.TranscriptPath != "" {
+		sid, tp := ev.SessionID, ev.TranscriptPath
+		go d.discoverAndRegisterPID(sid, tp)
+	}
+
 	// Refresh metrics (includes LastEventType for content-based detection).
 	if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
 		state.Metrics = session.MergeMetrics(m, state.Metrics)
@@ -359,6 +370,36 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 	d.broadcast(outbound.PushTypeDeleted, state)
 
 	d.updateParentSubagentSummary(sessionID)
+}
+
+// sweepDeadPIDs periodically checks all sessions for dead processes and deletes
+// them. This is a safety net for cases where kqueue misses an exit (PID not
+// registered, daemon restart window, race conditions).
+func (d *SessionDetector) sweepDeadPIDs(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.checkPIDLiveness()
+		}
+	}
+}
+
+func (d *SessionDetector) checkPIDLiveness() {
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+	for _, state := range states {
+		if state.PID > 0 {
+			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
+				d.HandleProcessExit(state.PID, state.SessionID)
+			}
+		}
+	}
 }
 
 // deriveParentSessionID finds a likely parent session for a new session in the
@@ -499,16 +540,23 @@ func (d *SessionDetector) seedFromDisk() {
 		}
 	}
 
-	// Register ALL known PIDs with ProcessWatcher, regardless of state.
-	// When a process exits, the session is deleted — so we must watch even
-	// ready sessions to clean them up when the user kills the process.
-	if d.pw != nil {
-		for _, state := range states {
-			if state.PID > 0 {
-				if err := d.pw.Watch(state.PID, state.SessionID); err != nil {
-					d.log.LogError("session-detector-seed", state.SessionID,
-						fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
-				}
+	// Check PID liveness and register alive PIDs with ProcessWatcher.
+	// Dead processes are cleaned up synchronously (no async ESRCH race).
+	for _, state := range states {
+		if state.PID <= 0 {
+			continue
+		}
+		if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
+			d.log.LogInfo("session-detector-seed", state.SessionID,
+				fmt.Sprintf("pid %d already dead, deleting session", state.PID))
+			_ = d.repo.Delete(state.SessionID)
+			d.broadcast(outbound.PushTypeDeleted, state)
+			continue
+		}
+		if d.pw != nil {
+			if err := d.pw.Watch(state.PID, state.SessionID); err != nil {
+				d.log.LogError("session-detector-seed", state.SessionID,
+					fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
 			}
 		}
 	}

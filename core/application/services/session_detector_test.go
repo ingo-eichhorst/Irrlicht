@@ -563,11 +563,13 @@ func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
 	det.HandleProcessExit(99999, "nonexistent")
 }
 
-func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
+func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
+	// PIDs 42 and 99 don't exist as real processes, so syscall.Kill(pid, 0)
+	// returns ESRCH. seedFromDisk should delete these sessions synchronously.
 	repo.states["seed1"] = &session.SessionState{
 		SessionID:      "seed1",
 		State:          session.StateWorking,
@@ -594,16 +596,20 @@ func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
 	cancel()
 	<-done
 
-	if sid, ok := pw.watched[42]; !ok {
-		t.Error("PID 42 should be watched")
-	} else if sid != "seed1" {
-		t.Errorf("PID 42 session: got %q, want seed1", sid)
+	// Both sessions should be deleted (PIDs 42 and 99 are dead).
+	if state, _ := repo.Load("seed1"); state != nil {
+		t.Error("seed1 should be deleted (PID 42 is dead)")
+	}
+	if state, _ := repo.Load("seed2"); state != nil {
+		t.Error("seed2 should be deleted (PID 99 is dead)")
 	}
 
-	if sid, ok := pw.watched[99]; !ok {
-		t.Error("PID 99 should be watched (all PIDs watched regardless of state)")
-	} else if sid != "seed2" {
-		t.Errorf("PID 99 session: got %q, want seed2", sid)
+	// Dead PIDs should NOT be registered with ProcessWatcher.
+	if _, ok := pw.watched[42]; ok {
+		t.Error("PID 42 should not be watched (dead process)")
+	}
+	if _, ok := pw.watched[99]; ok {
+		t.Error("PID 99 should not be watched (dead process)")
 	}
 }
 

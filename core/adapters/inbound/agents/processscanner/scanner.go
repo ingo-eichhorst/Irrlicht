@@ -134,7 +134,7 @@ func (s *Scanner) poll() {
 
 		if alreadyTracked {
 			// Check whether a real transcript has appeared since we last looked.
-			if s.hasRealSession(projectDir) {
+			if s.hasActiveSession(projectDir) {
 				s.mu.Lock()
 				proc, ok := s.tracked[pid]
 				if ok {
@@ -153,8 +153,10 @@ func (s *Scanner) poll() {
 			continue
 		}
 
-		// New PID. Skip if a real session already exists for this project dir.
-		if s.hasRealSession(projectDir) {
+		// Skip if an active transcript was recently modified in this project
+		// dir (the file watcher handles those). Old transcripts from previous
+		// sessions are ignored so new processes are still detected.
+		if s.hasActiveSession(projectDir) {
 			continue
 		}
 
@@ -204,9 +206,11 @@ func (s *Scanner) poll() {
 	}
 }
 
-// hasRealSession returns true if any .jsonl transcript file exists in the
-// project directory, meaning the real session has already been created.
-func (s *Scanner) hasRealSession(projectDir string) bool {
+// hasActiveSession returns true if a recently-modified .jsonl transcript exists
+// in the project directory. "Recent" means modified within the last 60 seconds.
+// This distinguishes active sessions (where the file watcher will handle
+// detection) from stale transcripts left by previous sessions.
+func (s *Scanner) hasActiveSession(projectDir string) bool {
 	if projectDir == "" || s.projectsRoot == "" {
 		return false
 	}
@@ -215,8 +219,16 @@ func (s *Scanner) hasRealSession(projectDir string) bool {
 	if err != nil {
 		return false
 	}
+	cutoff := time.Now().Add(-60 * time.Second)
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
 			return true
 		}
 	}

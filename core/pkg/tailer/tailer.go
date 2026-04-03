@@ -125,9 +125,10 @@ type SessionMetrics struct {
 	LastMessageAt     time.Time    `json:"last_message_at"`
 	MessageHistory    []MessageEvent `json:"-"` // Sliding window, not serialized
 	SessionStartAt    time.Time    `json:"session_start_at"`
-	TotalTokens       int64        `json:"total_tokens,omitempty"`
-	ModelName         string       `json:"model_name,omitempty"`
-	ContextUtilization float64     `json:"context_utilization_percentage,omitempty"`
+	TotalTokens        int64        `json:"total_tokens,omitempty"`
+	ModelName          string       `json:"model_name,omitempty"`
+	ContextWindow      int64        `json:"context_window,omitempty"`
+	ContextUtilization float64      `json:"context_utilization_percentage,omitempty"`
 	PressureLevel     string       `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
 	
 	// Raw event data for real-time client-side calculations
@@ -679,10 +680,13 @@ func (t *TranscriptTailer) computeContextUtilization() {
 		effectiveContextWindow = t.contextWindowOverride
 	}
 
-	// 2. CapacityManager per-model lookup
+	// 2. CapacityManager per-model lookup (prefer context_1m beta feature
+	//    since Claude Code uses extended context by default when available)
 	if effectiveContextWindow <= 0 && t.capacityMgr != nil {
 		cap := t.capacityMgr.GetModelCapacity(t.metrics.ModelName)
-		if cap.ContextWindow > 0 {
+		if ctx1m, ok := cap.BetaFeatures["context_1m"]; ok && ctx1m > 0 {
+			effectiveContextWindow = ctx1m
+		} else if cap.ContextWindow > 0 {
 			effectiveContextWindow = cap.ContextWindow
 		}
 	}
@@ -703,6 +707,7 @@ func (t *TranscriptTailer) computeContextUtilization() {
 		pressureLevel = "caution"
 	}
 
+	t.metrics.ContextWindow = effectiveContextWindow
 	t.metrics.ContextUtilization = utilizationPercentage
 	t.metrics.PressureLevel = pressureLevel
 }
