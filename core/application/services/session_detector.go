@@ -641,6 +641,23 @@ func (d *SessionDetector) updateParentSubagentSummary(childSessionID string) {
 
 	parent.Subagents = summary
 	parent.UpdatedAt = time.Now().Unix()
+
+	// Adjust parent state based on sub-agent activity.
+	// A parent that wrote turn_done (→ waiting/ready) should appear as
+	// working while any sub-agent is still active, and revert once they
+	// are all done.
+	activeSubagents := summary.Working + summary.Waiting
+	if activeSubagents > 0 && parent.State == session.StateWaiting {
+		parent.State = session.StateWorking
+	} else if activeSubagents == 0 && parent.State == session.StateWorking {
+		// Re-derive from the parent's own metrics so we don't stay "working" forever.
+		if parent.Metrics.NeedsUserAttention() {
+			parent.State = session.StateWaiting
+		} else if parent.Metrics.IsAgentDone() {
+			parent.State = session.StateReady
+		}
+	}
+
 	if err := d.repo.Save(parent); err != nil {
 		d.log.LogError("session-detector", child.ParentSessionID,
 			fmt.Sprintf("failed to update subagent summary: %v", err))
