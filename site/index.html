@@ -56,11 +56,11 @@ body::before {
   background-size: 256px;
 }
 
-/* ─── Global canvas for floating wisps ─── */
+/* ─── Wisp canvas (hero only) ─── */
 #wisp-canvas {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: 1;
   pointer-events: none;
 }
 
@@ -150,14 +150,28 @@ section {
 
 /* ─── Hero ─── */
 .hero {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 8rem 2rem 6rem;
+  padding: 5rem 2rem 4rem;
   position: relative;
+  overflow: hidden;
+  background: url('assets/bg_no_lights.png') center center / cover no-repeat;
+}
+
+.hero::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40%;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+  pointer-events: none;
+  z-index: 0;
 }
 
 .hero-glow {
@@ -176,6 +190,11 @@ section {
 @keyframes hero-pulse {
   0%,100% { transform: translate(-50%,-55%) scale(1); opacity: 1; }
   50% { transform: translate(-50%,-55%) scale(1.15); opacity: 0.7; }
+}
+
+.hero > *:not(canvas) {
+  position: relative;
+  z-index: 2;
 }
 
 .hero-subtitle-top {
@@ -900,8 +919,6 @@ footer {
 
 <body>
 
-<canvas id="wisp-canvas"></canvas>
-
 <!-- ─── Navigation ─── -->
 <nav>
   <a href="/" class="nav-logo">
@@ -919,6 +936,7 @@ footer {
 
 <!-- ─── Hero ─── -->
 <section class="hero">
+  <canvas id="wisp-canvas"></canvas>
   <div class="hero-glow"></div>
   <p class="hero-subtitle-top">Menu-bar telemetry for AI coding agents</p>
   <h1><span>Irrlicht</span></h1>
@@ -1253,72 +1271,89 @@ footer {
 (function() {
   const canvas = document.getElementById('wisp-canvas');
   const ctx = canvas.getContext('2d');
+  const hero = canvas.parentElement;
   let W, H;
 
   function resize() {
-    W = canvas.width = window.innerWidth;
-    H = canvas.height = document.documentElement.scrollHeight;
+    W = canvas.width = hero.offsetWidth;
+    H = canvas.height = hero.offsetHeight;
   }
   resize();
   window.addEventListener('resize', resize);
 
   const colors = [
-    { r: 139, g: 92,  b: 246 },
-    { r: 255, g: 149, b: 0   },
-    { r: 52,  g: 199, b: 89  },
+    { r: 139, g: 92,  b: 246 },  // purple
+    { r: 255, g: 149, b: 0   },  // orange
+    { r: 52,  g: 199, b: 89  },  // green
   ];
 
-  class Wisp {
-    constructor() { this.reset(); }
-    reset() {
-      this.x = Math.random() * W;
-      this.y = Math.random() * H;
-      this.r = 1.5 + Math.random() * 2.5;
-      this.vx = (Math.random() - 0.5) * 0.15;
-      this.vy = (Math.random() - 0.5) * 0.1;
-      this.color = colors[Math.floor(Math.random() * colors.length)];
-      this.phase = Math.random() * Math.PI * 2;
-      this.freq = 0.005 + Math.random() * 0.01;
-      this.maxAlpha = 0.08 + Math.random() * 0.12;
-    }
-    update(t) {
-      this.x += this.vx + Math.sin(t * this.freq + this.phase) * 0.3;
-      this.y += this.vy + Math.cos(t * this.freq * 0.7 + this.phase) * 0.2;
-      if (this.x < -50 || this.x > W + 50 || this.y < -50 || this.y > H + 50) this.reset();
-    }
-    draw(t) {
-      const alpha = this.maxAlpha * (0.5 + 0.5 * Math.sin(t * this.freq * 2 + this.phase));
-      const { r, g, b } = this.color;
-      const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.r * 12);
-      grad.addColorStop(0, `rgba(${r},${g},${b},${alpha})`);
-      grad.addColorStop(0.4, `rgba(${r},${g},${b},${alpha * 0.3})`);
-      grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, this.r * 12, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  // Single wisp state
+  let wisp = null;
+  let colorIdx = 0;
+
+  function spawnWisp() {
+    const c = colors[colorIdx];
+    colorIdx = (colorIdx + 1) % colors.length;
+    wisp = {
+      x: 0.2 * W + Math.random() * 0.6 * W,
+      y: 0.2 * H + Math.random() * 0.6 * H,
+      r: 3 + Math.random() * 3,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: (Math.random() - 0.5) * 0.2,
+      color: c,
+      phase: Math.random() * Math.PI * 2,
+      life: 0,
+      maxLife: 180 + Math.random() * 200,  // ~3-6 seconds at 60fps
+    };
   }
 
-  const wisps = Array.from({ length: 30 }, () => new Wisp());
-  let t = 0;
+  spawnWisp();
 
   function animate() {
     ctx.clearRect(0, 0, W, H);
-    t++;
-    for (const w of wisps) {
-      w.update(t);
-      w.draw(t);
+
+    if (!wisp) { spawnWisp(); }
+
+    wisp.life++;
+    const progress = wisp.life / wisp.maxLife;
+
+    // Fade in first 20%, full middle, fade out last 20%
+    let alpha;
+    if (progress < 0.2) alpha = progress / 0.2;
+    else if (progress > 0.8) alpha = (1 - progress) / 0.2;
+    else alpha = 1;
+    alpha *= 0.25;
+
+    // Gentle drift
+    wisp.x += wisp.vx + Math.sin(wisp.life * 0.008 + wisp.phase) * 0.4;
+    wisp.y += wisp.vy + Math.cos(wisp.life * 0.006 + wisp.phase) * 0.3;
+
+    // Breathing size
+    const breathe = 1 + 0.15 * Math.sin(wisp.life * 0.03 + wisp.phase);
+    const radius = wisp.r * 18 * breathe;
+
+    const { r, g, b } = wisp.color;
+    const grad = ctx.createRadialGradient(wisp.x, wisp.y, 0, wisp.x, wisp.y, radius);
+    grad.addColorStop(0, `rgba(${r},${g},${b},${alpha})`);
+    grad.addColorStop(0.3, `rgba(${r},${g},${b},${alpha * 0.4})`);
+    grad.addColorStop(0.6, `rgba(${r},${g},${b},${alpha * 0.1})`);
+    grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(wisp.x, wisp.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Spawn next wisp when current one dies
+    if (wisp.life >= wisp.maxLife) {
+      wisp = null;
     }
+
     requestAnimationFrame(animate);
   }
   animate();
 
-  // Resize canvas height on scroll (for full-page coverage)
-  const ro = new ResizeObserver(() => {
-    H = canvas.height = document.documentElement.scrollHeight;
-  });
-  ro.observe(document.body);
+  const ro = new ResizeObserver(() => resize());
+  ro.observe(hero);
 })();
 </script>
 
