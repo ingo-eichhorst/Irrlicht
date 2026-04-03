@@ -356,6 +356,7 @@ struct ContextBar: View {
 struct SessionRowView: View {
     let session: SessionState
     let agentNumber: Int
+    var activeSubagentCount: Int = 0
     @State private var isHovered = false
 
     var body: some View {
@@ -374,13 +375,13 @@ struct SessionRowView: View {
                     .foregroundColor(.secondary)
                     .frame(width: 12, alignment: .trailing)
 
-                // Subagent count badge
-                if let subs = session.subagents, subs.total > 0 {
-                    Text("\(subs.total)")
+                // Active subagent count badge
+                if activeSubagentCount > 0 {
+                    Text("\(activeSubagentCount)")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
                         .frame(width: 14, height: 14)
-                        .background(Color(hex: session.state.color))
+                        .background(Color.purple)
                         .clipShape(Circle())
                 }
 
@@ -892,7 +893,8 @@ struct ProjectGroupSectionView: View {
             // Session rows (indented under the project header)
             if isExpanded {
                 ForEach(Array(projectGroup.sessionGroups.enumerated()), id: \.element.id) { localIndex, group in
-                    SessionRowView(session: group.parent, agentNumber: localIndex + 1)
+                    let activeCount = group.subagents.filter { $0.state != .ready }.count
+                    SessionRowView(session: group.parent, agentNumber: localIndex + 1, activeSubagentCount: activeCount)
                         .padding(.leading, 8)
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -905,11 +907,6 @@ struct ProjectGroupSectionView: View {
                             sessionManager: sessionManager,
                             targetGroupIndex: startingGroupIndex + localIndex
                         ))
-
-                    ForEach(group.subagents) { subagent in
-                        SubagentRowView(session: subagent)
-                            .padding(.leading, 8)
-                    }
                 }
             }
         }

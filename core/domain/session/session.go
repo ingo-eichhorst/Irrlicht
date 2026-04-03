@@ -1,6 +1,9 @@
 package session
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // State constants — three MECE states for session lifecycle.
 // See STATES.md for the formal state machine specification.
@@ -47,26 +50,31 @@ type SessionMetrics struct {
 
 // NeedsUserAttention returns true when a tool call is open and the agent
 // may be waiting for user input (permission prompt, question, plan approval).
-// The only exception is the Agent tool — open Agent calls mean sub-agents
-// are running in-process, so the session is working, not waiting.
+// Tools that auto-execute (Agent, MCP tools) don't need user attention.
 func (m *SessionMetrics) NeedsUserAttention() bool {
 	if m == nil || !m.HasOpenToolCall {
 		return false
 	}
-	// If all open tool names are "Agent", the session is working via sub-agents.
+	// If all open tools are auto-executing, the session is working, not waiting.
 	if len(m.LastOpenToolNames) > 0 {
-		allAgent := true
+		allAuto := true
 		for _, name := range m.LastOpenToolNames {
-			if name != "Agent" {
-				allAgent = false
+			if !isAutoExecutingTool(name) {
+				allAuto = false
 				break
 			}
 		}
-		if allAgent {
+		if allAuto {
 			return false
 		}
 	}
 	return true
+}
+
+// isAutoExecutingTool returns true for tools that execute without user interaction.
+// Agent tools run sub-agents in-process; MCP tools (mcp__*) are server-side.
+func isAutoExecutingTool(name string) bool {
+	return name == "Agent" || strings.HasPrefix(name, "mcp__")
 }
 
 // IsAgentDone returns true when the agent finished its turn. The primary

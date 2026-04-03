@@ -369,7 +369,8 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.broadcast(outbound.PushTypeUpdated, state)
 }
 
-// HandleProcessExit deletes a session when its process exits.
+// HandleProcessExit handles a session whose process has exited.
+// Sessions with transcripts are kept as ready; pre-sessions are deleted.
 func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 	// Remove from project tracking.
 	d.mu.Lock()
@@ -383,8 +384,24 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 		return
 	}
 
+	if state.TranscriptPath != "" {
+		// Real session — keep as ready so history is preserved.
+		d.log.LogInfo("process-exit", sessionID,
+			fmt.Sprintf("pid %d exited, transitioning to ready (was %s)", pid, state.State))
+		state.State = session.StateReady
+		state.PID = 0
+		state.UpdatedAt = time.Now().Unix()
+		if err := d.repo.Save(state); err != nil {
+			d.log.LogError("process-exit", sessionID,
+				fmt.Sprintf("failed to save session: %v", err))
+		}
+		d.broadcast(outbound.PushTypeUpdated, state)
+		return
+	}
+
+	// Pre-session (no transcript) — delete entirely.
 	d.log.LogInfo("process-exit", sessionID,
-		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
+		fmt.Sprintf("pid %d exited, deleting pre-session", pid))
 
 	if err := d.repo.Delete(sessionID); err != nil {
 		d.log.LogError("process-exit", sessionID,
@@ -562,10 +579,22 @@ func (d *SessionDetector) seedFromDisk() {
 			continue
 		}
 		if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-			d.log.LogInfo("session-detector-seed", state.SessionID,
-				fmt.Sprintf("pid %d already dead, deleting session", state.PID))
-			_ = d.repo.Delete(state.SessionID)
-			d.broadcast(outbound.PushTypeDeleted, state)
+			if state.TranscriptPath == "" {
+				// Pre-sessions (no transcript) are deleted — no useful state to keep.
+				d.log.LogInfo("session-detector-seed", state.SessionID,
+					fmt.Sprintf("pid %d dead, deleting pre-session", state.PID))
+				_ = d.repo.Delete(state.SessionID)
+				d.broadcast(outbound.PushTypeDeleted, state)
+			} else {
+				// Real sessions with transcripts are kept as ready.
+				d.log.LogInfo("session-detector-seed", state.SessionID,
+					fmt.Sprintf("pid %d dead, transitioning to ready", state.PID))
+				state.State = session.StateReady
+				state.PID = 0
+				state.UpdatedAt = time.Now().Unix()
+				_ = d.repo.Save(state)
+				d.broadcast(outbound.PushTypeUpdated, state)
+			}
 			continue
 		}
 		if d.pw != nil {

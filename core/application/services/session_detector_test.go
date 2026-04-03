@@ -528,7 +528,8 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	repo := newMockRepo()
 
 	// PIDs 42 and 99 don't exist as real processes, so syscall.Kill(pid, 0)
-	// returns ESRCH. seedFromDisk should delete these sessions synchronously.
+	// returns ESRCH. Sessions with transcripts should be kept as ready;
+	// pre-sessions (no transcript) should be deleted.
 	repo.states["seed1"] = &session.SessionState{
 		SessionID:      "seed1",
 		State:          session.StateWorking,
@@ -555,12 +556,20 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	cancel()
 	<-done
 
-	// Both sessions should be deleted (PIDs 42 and 99 are dead).
-	if state, _ := repo.Load("seed1"); state != nil {
-		t.Error("seed1 should be deleted (PID 42 is dead)")
+	// seed1 has a transcript — should be kept as ready with PID cleared.
+	if state, _ := repo.Load("seed1"); state == nil {
+		t.Error("seed1 should be kept (has transcript)")
+	} else {
+		if state.State != session.StateReady {
+			t.Errorf("seed1 state: got %q, want ready", state.State)
+		}
+		if state.PID != 0 {
+			t.Errorf("seed1 PID: got %d, want 0 (cleared)", state.PID)
+		}
 	}
+	// seed2 has no transcript (pre-session) — should be deleted.
 	if state, _ := repo.Load("seed2"); state != nil {
-		t.Error("seed2 should be deleted (PID 99 is dead)")
+		t.Error("seed2 should be deleted (pre-session, PID 99 is dead)")
 	}
 
 	// Dead PIDs should NOT be registered with ProcessWatcher.
