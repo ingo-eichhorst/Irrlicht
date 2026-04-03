@@ -900,6 +900,10 @@ footer {
 }
 
 /* ─── Responsive ─── */
+@media (max-width: 720px) {
+  .nav-hide-sm { display: none; }
+}
+
 @media (max-width: 900px) {
   .features-grid { grid-template-columns: 1fr 1fr; }
   .pipeline { flex-direction: column; }
@@ -931,10 +935,10 @@ footer {
     IRRLICHT
   </a>
   <ul class="nav-links">
-    <li><a href="#features">Features</a></li>
-    <li><a href="#how-it-works">How It Works</a></li>
-    <li><a href="#supported">Supported</a></li>
-    <li><a href="docs/">Docs</a></li>
+    <li class="nav-hide-sm"><a href="#features">Features</a></li>
+    <li class="nav-hide-sm"><a href="#how-it-works">How It Works</a></li>
+    <li class="nav-hide-sm"><a href="#supported">Supported</a></li>
+    <li class="nav-hide-sm"><a href="docs/">Docs</a></li>
     <li><a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-nav">GitHub</a></li>
   </ul>
 </nav>
