@@ -231,31 +231,29 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 		state.Metrics = session.MergeMetrics(m, state.Metrics)
 	}
 
-	// Explicit ready → working transition (T8).
-	if state.State == session.StateReady {
-		d.log.LogInfo("session-detector", ev.SessionID,
-			"transcript activity on ready session → working")
-		state.State = session.StateWorking
-		state.LastTranscriptSize = 0
-		state.WaitingStartTime = nil
-	}
-
-	// Content-based state detection: the last event type in the transcript
-	// tells us whose turn it is. An assistant message with no open tool
-	// calls means Claude finished and is waiting for user input.
-	if state.Metrics.IsWaitingForInput() {
-		if state.State == session.StateWorking {
+	// Content-based state detection using three-way check:
+	// - NeedsUserAttention: user-blocking tool open → waiting
+	// - IsAgentDone: agent finished turn → ready
+	// - Otherwise: actively processing → working
+	now := time.Now().Unix()
+	if state.Metrics.NeedsUserAttention() {
+		if state.State != session.StateWaiting {
 			d.log.LogInfo("session-detector", ev.SessionID,
-				"last event is assistant, no open tool calls → waiting")
-			now := time.Now().Unix()
+				"user-blocking tool open → waiting")
 			state.State = session.StateWaiting
 			state.UpdatedAt = now
 			state.WaitingStartTime = &now
 		}
-	} else {
-		if state.State == session.StateWaiting {
+	} else if state.Metrics.IsAgentDone() {
+		if state.State == session.StateWorking || state.State == session.StateWaiting {
 			d.log.LogInfo("session-detector", ev.SessionID,
-				"transcript activity while waiting → working")
+				"agent finished turn → ready")
+			state.State = session.StateReady
+		}
+	} else {
+		if state.State != session.StateWorking {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				fmt.Sprintf("transcript activity (%s → working)", state.State))
 			state.State = session.StateWorking
 			state.LastTranscriptSize = 0
 			state.WaitingStartTime = nil
@@ -455,9 +453,40 @@ func (d *SessionDetector) seedFromDisk() {
 	}
 	d.mu.Unlock()
 
-	// Register known PIDs with ProcessWatcher. PID discovery via lsof for
-	// sessions without PIDs is deferred to onNewSession/onActivity events
-	// to avoid blocking the event loop at startup.
+	// Re-evaluate state for all non-ready sessions: recompute metrics from
+	// transcript and apply the current detection logic. This ensures sessions
+	// persisted with stale states (e.g. from a previous logic version) are
+	// corrected on startup.
+	for _, state := range states {
+		if state.State == session.StateReady {
+			continue
+		}
+		if state.TranscriptPath == "" {
+			continue
+		}
+		if m, _ := d.metrics.ComputeMetrics(state.TranscriptPath); m != nil {
+			state.Metrics = session.MergeMetrics(m, state.Metrics)
+		}
+		changed := false
+		if state.Metrics.NeedsUserAttention() {
+			if state.State != session.StateWaiting {
+				state.State = session.StateWaiting
+				changed = true
+			}
+		} else if state.Metrics.IsAgentDone() {
+			if state.State != session.StateReady {
+				d.log.LogInfo("session-detector-seed", state.SessionID,
+					fmt.Sprintf("re-evaluated %s → ready on startup", state.State))
+				state.State = session.StateReady
+				changed = true
+			}
+		}
+		if changed {
+			_ = d.repo.Save(state)
+		}
+	}
+
+	// Register known PIDs with ProcessWatcher.
 	if d.pw != nil {
 		for _, state := range states {
 			if state.State == session.StateReady {

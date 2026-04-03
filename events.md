@@ -7,11 +7,9 @@ detect coding assistant sessions without requiring hooks.
 
 | State | Definition |
 |-------|-----------|
-| **`working`** | Agent process alive, actively processing (tools, text generation, hooks, compaction, API retries) |
-| **`waiting`** | Agent process alive, turn finished — user must provide input |
-| **`ready`** | Session inactive (process exited, transcript removed, cancelled, or never started) |
-
-MECE proof: (1) Is the process alive? No → `ready`. (2) Does the agent need user input? Yes → `waiting`, No → `working`.
+| **`working`** | Agent actively processing (tools, text generation, hooks, compaction, API retries) |
+| **`waiting`** | User-blocking tool open — agent needs user to respond (AskUserQuestion, ExitPlanMode) |
+| **`ready`** | Agent idle: finished turn at prompt, process exited, transcript removed, or cancelled |
 
 See `core/domain/session/STATES.md` for the full reference including scenario mapping.
 
@@ -21,20 +19,20 @@ See `core/domain/session/STATES.md` for the full reference including scenario ma
 |-----------|-----------|---------|
 | **TranscriptWatcher** | fsnotify (FSEvents on macOS) | New sessions, activity, removals |
 | **ProcessWatcher** | kqueue EVFILT_PROC NOTE_EXIT | Process exit → ready (~1ms) |
-| **TailerPipeline** | JSONL transcript parsing | Model, tokens, open tool calls, LastEventType |
+| **TailerPipeline** | JSONL transcript parsing | Model, tokens, open tool calls, tool names |
 
 ## State Transitions (8)
 
 | ID | From | To | Trigger | Detection |
 |----|------|----|---------|-----------|
 | T1 | — | working | New .jsonl file | FSEvents CREATE |
-| T2 | working | waiting | Agent finished turn | `IsWaitingForInput()=true` |
-| T3 | waiting | working | User sent message | `IsWaitingForInput()=false` |
+| T2 | working | ready | Agent finished turn | `IsAgentDone()=true` |
+| T3 | ready | working | New activity | FSEvents WRITE on ready session |
 | T4 | working | ready | Process exited | kqueue NOTE_EXIT |
 | T5 | waiting | ready | Process exited | kqueue NOTE_EXIT |
 | T6 | working | ready | Transcript deleted | FSEvents REMOVE |
-| T7 | waiting | ready | Transcript deleted | FSEvents REMOVE |
-| T8 | ready | working | Transcript grows | FSEvents WRITE on ready session |
+| T7 | working | waiting | User-blocking tool open | `NeedsUserAttention()=true` |
+| T8 | waiting | working | User responded | `NeedsUserAttention()=false` |
 
 ## State Diagram
 
@@ -44,43 +42,39 @@ See `core/domain/session/STATES.md` for the full reference including scenario ma
   (new file)──────►  working │                               │
                   │          ├───────T4,T6──────┐            │
                   └──┬───▲───┘  (exit/remove)   │            │
-                     │   │                      │        T8  │
-                T2   │   │  T3                  │  (file     │
-           (end_turn,│   │ (user msg            │   grows)   │
-            no open  │   │  or new              │            │
-            tools)   │   │  activity)           │            │
-                     │   │                      ▼            │
+                     │   │                      │        T3  │
+                T7   │   │  T8                  │  (new      │
+          (user-     │   │ (user                │   activity)│
+           blocking  │   │  responded)          │            │
+           tool)     │   │                      ▼            │
                   ┌──▼───┴───┐             ┌────────┐        │
-                  │          ├──T5,T7──────►         ├────────┘
-                  │ waiting  │ (exit/remove)│  ready  │
+                  │          ├──T5─────────►         ├────────┘
+                  │ waiting  │ (exit)       │  ready  │◄─── T2 (agent done)
                   │          │             │         │
                   └──────────┘             └────────┘
 ```
 
 ## Core Detection Logic
 
+**`NeedsUserAttention()`** → triggers `waiting`:
 ```
-IsWaitingForInput() = (LastEventType ∈ {assistant, assistant_message, assistant_output})
-                      AND (HasOpenToolCall = false)
+HasOpenToolCall=true AND any LastOpenToolName ∈ {AskUserQuestion, ExitPlanMode}
 ```
 
-`HasOpenToolCall` = `count(tool_use) - count(tool_result) > 0` in the parsed transcript tail.
-
-Only **message events** affect `LastEventType`: `user`, `assistant`, `tool_use`, `tool_call`, `tool_result`.
-System events and management events are ignored.
+**`IsAgentDone()`** → triggers `ready`:
+```
+HasOpenToolCall=false AND LastEventType ∈ {assistant, assistant_message, assistant_output}
+```
 
 ## Subagent Detection
 
-Parent-child relationships are derived from:
-1. **Heuristic**: Working session with open tool call in same project dir
-2. **Fallback**: Single working session in same project dir
-
+Parent-child relationships derived from working session with open tool call in same project dir.
 Parent sessions carry a `SubagentSummary` with aggregate child state counts.
 
 ## Process Exit Detection
 
-One-time `lsof -F p <transcript_path>` at session creation → PID → `EVFILT_PROC NOTE_EXIT`
-watcher. Fallback: session with no PID ages out via orphan cleanup.
+One-time `lsof -F p <transcript_path>` at session creation → PID → `EVFILT_PROC NOTE_EXIT`.
+Fallback: session with no PID ages out via orphan cleanup.
 
 ## Session Discovery Paths
 

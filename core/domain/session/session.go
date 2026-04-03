@@ -29,12 +29,36 @@ type SessionMetrics struct {
 	// LastEventType is the type of the most recent transcript event
 	// (e.g. "assistant", "user", "tool_use", "tool_result").
 	LastEventType string `json:"last_event_type,omitempty"`
+
+	// LastOpenToolNames holds tool names from the most recent assistant
+	// message that called tools. Used to detect user-blocking tools.
+	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 }
 
-// IsWaitingForInput returns true when the transcript indicates the agent
-// has finished its turn and is waiting for user input: the last event is
-// an assistant message and no tool calls are open.
-func (m *SessionMetrics) IsWaitingForInput() bool {
+// userBlockingTools are tools that wait for user interaction before returning.
+var userBlockingTools = map[string]bool{
+	"AskUserQuestion": true,
+	"ExitPlanMode":    true,
+}
+
+// NeedsUserAttention returns true when a user-blocking tool is open and
+// the agent is waiting for the user to respond (answer a question, approve
+// a plan, grant permission).
+func (m *SessionMetrics) NeedsUserAttention() bool {
+	if m == nil || !m.HasOpenToolCall {
+		return false
+	}
+	for _, name := range m.LastOpenToolNames {
+		if userBlockingTools[name] {
+			return true
+		}
+	}
+	return false
+}
+
+// IsAgentDone returns true when the agent finished its turn: the last event
+// is an assistant message and no tool calls are open.
+func (m *SessionMetrics) IsAgentDone() bool {
 	if m == nil {
 		return false
 	}
@@ -128,6 +152,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		HasOpenToolCall:    newM.HasOpenToolCall,
 		OpenToolCallCount:  newM.OpenToolCallCount,
 		LastEventType:      newM.LastEventType,
+		LastOpenToolNames:  newM.LastOpenToolNames,
 	}
 	if merged.ElapsedSeconds == 0 && oldM.ElapsedSeconds > 0 {
 		merged.ElapsedSeconds = oldM.ElapsedSeconds

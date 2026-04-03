@@ -7,15 +7,16 @@ It is agent-agnostic and applies to all adapters (Claude Code, Codex, future age
 
 | State | Definition |
 |-------|-----------|
-| **working** | Agent process is alive AND actively processing: generating text, executing tools, waiting for tool results, running hooks, compacting context, retrying API errors, or any internal operation that does NOT require user input. |
-| **waiting** | Agent process is alive AND has completed its turn — user must type a response, approve a permission prompt, or otherwise provide input before the agent can continue. |
-| **ready** | Session is inactive: process exited (graceful, crash, or ESC/cancel), transcript removed, or session was never started. |
+| **working** | Agent actively processing: generating text, executing tools, waiting for tool results, running hooks, compacting context, retrying API errors, or any operation that does NOT require user input. |
+| **waiting** | Agent explicitly needs user action: a user-blocking tool is open (AskUserQuestion, ExitPlanMode) and the agent cannot continue until the user responds. |
+| **ready** | Agent is idle: finished its turn and sitting at prompt, process exited, transcript removed, or session was never started. |
 
 ### MECE Proof
 
-Two-level decision tree covers all possible states:
-1. Is the process alive? **No** → `ready`
-2. Does the agent need user input? **Yes** → `waiting`, **No** → `working`
+Three-level decision tree covers all possible states:
+1. Is there an open user-blocking tool? **Yes** → `waiting`
+2. Is the agent actively processing? **Yes** → `working`
+3. Otherwise → `ready`
 
 ## State Transitions (8)
 
@@ -23,20 +24,19 @@ Two-level decision tree covers all possible states:
 ID   From        → To          Trigger                        Detection
 ───  ──────────  ──────────    ─────────────────────────────  ──────────────────────────────
 T1   [none]      → working     New transcript file appears     FSEvents CREATE
-T2   working     → waiting     Agent finished turn             IsWaitingForInput()=true
-T3   waiting     → working     User sent message/new input     IsWaitingForInput()=false
+T2   working     → ready       Agent finished turn             IsAgentDone()=true
+T3   ready       → working     New transcript activity         FSEvents WRITE on ready session
 T4   working     → ready       Process exited                  kqueue EVFILT_PROC NOTE_EXIT
 T5   waiting     → ready       Process exited                  kqueue EVFILT_PROC NOTE_EXIT
 T6   working     → ready       Transcript file deleted         FSEvents REMOVE
-T7   waiting     → ready       Transcript file deleted         FSEvents REMOVE
-T8   ready       → working     Transcript file grows           FSEvents WRITE on ready session
+T7   working     → waiting     User-blocking tool open         NeedsUserAttention()=true
+T8   waiting     → working     User responded (tool result)    NeedsUserAttention()=false
 ```
 
 ### Impossible Transitions
 
 - ready → waiting: Cannot skip working; any activity goes through working first
-- waiting → waiting: No-op
-- working → working: Implicit (stays in state)
+- waiting → ready (via content): Agent can't finish while a tool is open; only process exit clears
 
 ## State Diagram
 
@@ -46,32 +46,37 @@ T8   ready       → working     Transcript file grows           FSEvents WRITE 
   (new file)──────►  working │                               │
                   │          ├───────T4,T6──────┐            │
                   └──┬───▲───┘  (exit/remove)   │            │
-                     │   │                      │        T8  │
-                T2   │   │  T3                  │  (file     │
-           (end_turn,│   │ (user msg            │   grows)   │
-            no open  │   │  or new              │            │
-            tools)   │   │  activity)           │            │
-                     │   │                      ▼            │
+                     │   │                      │        T3  │
+                T7   │   │  T8                  │  (new      │
+          (user-     │   │ (user                │   activity)│
+           blocking  │   │  responded)          │            │
+           tool)     │   │                      ▼            │
                   ┌──▼───┴───┐             ┌────────┐        │
-                  │          ├──T5,T7──────►         ├────────┘
-                  │ waiting  │ (exit/remove)│  ready  │
+                  │          ├──T5─────────►         ├────────┘
+                  │ waiting  │ (exit)       │  ready  │◄─── T2 (agent done)
                   │          │             │         │
                   └──────────┘             └────────┘
 ```
 
 ## Detection Logic
 
-### Core: `IsWaitingForInput()`
+### `NeedsUserAttention()` → triggers `waiting`
 
 ```
-IsWaitingForInput() = (LastEventType ∈ {assistant, assistant_message, assistant_output})
-                      AND (HasOpenToolCall = false)
+HasOpenToolCall=true AND any LastOpenToolName ∈ {AskUserQuestion, ExitPlanMode}
 ```
 
-### Inputs (deterministic, from JSONL parsing)
+### `IsAgentDone()` → triggers `ready`
 
-- **LastEventType**: `type` field of the most recent message event
-- **HasOpenToolCall**: `count(tool_use) - count(tool_result) > 0`
+```
+HasOpenToolCall=false AND LastEventType ∈ {assistant, assistant_message, assistant_output}
+```
+
+### User-Blocking Tools
+
+Tools that wait for user interaction before returning:
+- `AskUserQuestion` — explicitly asks user a question
+- `ExitPlanMode` — asks user to approve plan
 
 ### Message Events (affect LastEventType)
 
@@ -102,13 +107,15 @@ Management: `permission-mode`, `attachment`, `file-history-snapshot`, `progress`
 | Hooks running | working |
 | Slash command executing | working |
 | Session opened, no first message yet | working |
-| Assistant finished (end_turn, no tools) | waiting |
-| AskUserQuestion tool completed | waiting |
-| Process exited | ready |
-| User pressed ESC / cancelled | ready |
-| Transcript deleted | ready |
-| Session never started | ready |
-| Stale orphaned session | ready |
+| Permission prompt (open tool, idle) | working |
+| AskUserQuestion tool open | **waiting** |
+| ExitPlanMode tool open | **waiting** |
+| Assistant finished (end_turn, no tools) | **ready** |
+| Process exited | **ready** |
+| User pressed ESC / cancelled | **ready** |
+| Transcript deleted | **ready** |
+| Session never started | **ready** |
+| Stale orphaned session | **ready** |
 
 ## Subagent State Tracking
 
@@ -117,14 +124,12 @@ Parent sessions carry a `SubagentSummary` with aggregate counts:
 
 ```
 SubagentSummary {
-    total:   int  // Total subagent count
-    working: int  // Subagents in working state
-    waiting: int  // Subagents in waiting state
-    ready:   int  // Subagents in ready state
+    total:   int
+    working: int
+    waiting: int
+    ready:   int
 }
 ```
-
-Updated whenever a child session transitions state.
 
 ## Orthogonal Axes (not states)
 

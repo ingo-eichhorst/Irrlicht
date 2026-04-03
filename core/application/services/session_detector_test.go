@@ -89,7 +89,7 @@ func TestSessionDetector_Activity_StaysWorking_WhenToolUse(t *testing.T) {
 	}
 }
 
-func TestSessionDetector_Activity_TransitionsToWaiting_WhenAssistantDone(t *testing.T) {
+func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -125,11 +125,8 @@ func TestSessionDetector_Activity_TransitionsToWaiting_WhenAssistantDone(t *test
 	<-done
 
 	state, _ := repo.Load("wait1")
-	if state.State != session.StateWaiting {
-		t.Errorf("state: got %q, want waiting (assistant done, no open tools)", state.State)
-	}
-	if state.WaitingStartTime == nil {
-		t.Error("WaitingStartTime should be set")
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready (agent finished turn, no open tools)", state.State)
 	}
 }
 
@@ -612,7 +609,31 @@ func TestSessionDetector_SeedFromDisk_RegistersKnownPIDs(t *testing.T) {
 	}
 }
 
-func TestIsWaitingForInput(t *testing.T) {
+func TestNeedsUserAttention(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics *session.SessionMetrics
+		want    bool
+	}{
+		{"nil metrics", nil, false},
+		{"assistant, no open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
+		{"open tools, no user-blocking", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, false},
+		{"AskUserQuestion open", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"AskUserQuestion"}}, true},
+		{"ExitPlanMode open", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"ExitPlanMode"}}, true},
+		{"mixed tools with AskUserQuestion", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash", "AskUserQuestion"}}, true},
+		{"open tools, no names", &session.SessionMetrics{HasOpenToolCall: true}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.metrics.NeedsUserAttention()
+			if got != tt.want {
+				t.Errorf("NeedsUserAttention() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsAgentDone(t *testing.T) {
 	tests := []struct {
 		name    string
 		metrics *session.SessionMetrics
@@ -621,18 +642,15 @@ func TestIsWaitingForInput(t *testing.T) {
 		{"nil metrics", nil, false},
 		{"assistant, no open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
 		{"assistant_message, no open tools", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
-		{"assistant_output, no open tools", &session.SessionMetrics{LastEventType: "assistant_output", HasOpenToolCall: false}, true},
 		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},
-		{"tool_use", &session.SessionMetrics{LastEventType: "tool_use", HasOpenToolCall: true}, false},
-		{"tool_result", &session.SessionMetrics{LastEventType: "tool_result", HasOpenToolCall: false}, false},
-		{"user", &session.SessionMetrics{LastEventType: "user", HasOpenToolCall: false}, false},
+		{"user, no open tools", &session.SessionMetrics{LastEventType: "user", HasOpenToolCall: false}, false},
 		{"empty", &session.SessionMetrics{}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.metrics.IsWaitingForInput()
+			got := tt.metrics.IsAgentDone()
 			if got != tt.want {
-				t.Errorf("IsWaitingForInput() = %v, want %v", got, tt.want)
+				t.Errorf("IsAgentDone() = %v, want %v", got, tt.want)
 			}
 		})
 	}

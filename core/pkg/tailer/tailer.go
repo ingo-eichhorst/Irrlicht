@@ -143,6 +143,11 @@ type SessionMetrics struct {
 	// the transcript (e.g. "assistant", "user", "tool_use", "tool_result").
 	// Used for content-based working/waiting detection.
 	LastEventType string `json:"last_event_type,omitempty"`
+
+	// LastOpenToolNames holds the tool names from the most recent assistant
+	// message that called tools. Cleared when a user message appears.
+	// Used to detect user-blocking tools (AskUserQuestion, ExitPlanMode).
+	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -160,6 +165,10 @@ type TranscriptTailer struct {
 	// Tool call pairing counters — accumulated across parsed lines.
 	toolUseCount    int // tool_use / tool_call events seen
 	toolResultCount int // tool_result events seen
+
+	// lastOpenToolNames holds tool names from the most recent assistant
+	// message with tool_use blocks. Cleared on user messages.
+	lastOpenToolNames []string
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path
@@ -320,13 +329,45 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 
 	// Extract model information
 	t.extractModelInfo(raw)
-	
+
 	// Extract token information
 	t.extractTokenInfo(raw)
 
 	// Only track message-related events
 	if !t.isMessageEvent(eventType) {
 		return nil, nil
+	}
+
+	// Claude Code embeds tool_use inside assistant messages and tool_result
+	// inside user messages. Count them from message.content[] so open tool
+	// call tracking works correctly. Also track tool names for user-blocking
+	// tool detection (AskUserQuestion, ExitPlanMode).
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if contentArr, ok := msg["content"].([]interface{}); ok {
+			var toolNames []string
+			for _, item := range contentArr {
+				if block, ok := item.(map[string]interface{}); ok {
+					switch block["type"] {
+					case "tool_use":
+						t.toolUseCount++
+						if name, ok := block["name"].(string); ok {
+							toolNames = append(toolNames, name)
+						}
+					case "tool_result":
+						t.toolResultCount++
+					}
+				}
+			}
+			// Assistant message with tools: store the tool names
+			if eventType == "assistant" && len(toolNames) > 0 {
+				t.lastOpenToolNames = toolNames
+			}
+		}
+	}
+
+	// User message (including tool results) clears open tool names
+	if eventType == "user" {
+		t.lastOpenToolNames = nil
 	}
 
 	return &MessageEvent{
@@ -365,7 +406,9 @@ func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
 		t.metrics.SessionStartAt = event.Timestamp
 	}
 
-	// Track tool call pairing
+	// Tool call pairing for non-Claude-Code formats where tool_use/tool_result
+	// are top-level event types (e.g. Codex). Claude Code counting happens in
+	// parseTranscriptLine via message.content[] inspection.
 	switch event.EventType {
 	case "tool_use", "tool_call":
 		t.toolUseCount++
@@ -428,6 +471,7 @@ func (t *TranscriptTailer) computeMetrics() {
 	}
 	t.metrics.OpenToolCallCount = openCalls
 	t.metrics.HasOpenToolCall = openCalls > 0
+	t.metrics.LastOpenToolNames = t.lastOpenToolNames
 
 	// Legacy calculation: For messages per minute, use a sliding window from the latest timestamp
 	legacyWindowStart := latestTime.Add(-t.windowSize)
