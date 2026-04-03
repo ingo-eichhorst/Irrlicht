@@ -36,8 +36,9 @@ type SessionDetector struct {
 	git         outbound.GitResolver
 	metrics     outbound.MetricsCollector
 	broadcaster outbound.PushBroadcaster // optional
+	version     string                   // daemon version stamped on new sessions
 
-	// projectSessions tracks sessionID → projectDir for parent derivation.
+	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
 	projectSessions map[string]string // sessionID → projectDir
 }
@@ -52,6 +53,7 @@ func NewSessionDetector(
 	git outbound.GitResolver,
 	metrics outbound.MetricsCollector,
 	broadcaster outbound.PushBroadcaster,
+	version string,
 ) *SessionDetector {
 	return &SessionDetector{
 		watchers:        watchers,
@@ -61,6 +63,7 @@ func NewSessionDetector(
 		git:             git,
 		metrics:         metrics,
 		broadcaster:     broadcaster,
+		version:         version,
 		projectSessions: make(map[string]string),
 	}
 }
@@ -163,6 +166,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			Adapter:        ev.Adapter,
 			TranscriptPath: ev.TranscriptPath,
 			CWD:            ev.CWD,
+			DaemonVersion:  d.version,
 			FirstSeen:      now,
 			UpdatedAt:      now,
 			Confidence:     "medium",
@@ -263,13 +267,12 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 				"agent finished turn → ready")
 			state.State = session.StateReady
 		}
-	} else if state.State == session.StateWorking && !state.Metrics.HasOpenToolCall && state.Metrics.LastEventType == "user" {
-		// ESC cancellation: a user event arrives while working with no open
-		// tool calls. Claude Code writes tool_result rejections followed by
-		// "[Request interrupted by user for tool use]" — all typed as "user".
-		// No turn_done system event is emitted, so IsAgentDone misses it.
+	} else if (state.State == session.StateWorking || state.State == session.StateWaiting) && !state.Metrics.HasOpenToolCall && state.Metrics.LastEventType == "user" && state.Metrics.LastToolResultWasError {
+		// ESC cancellation: a user event with is_error=true tool_result arrives
+		// while working/waiting with no open tool calls. Normal tool completions
+		// have is_error=false and don't match this check.
 		d.log.LogInfo("session-detector", ev.SessionID,
-			"user event while working, no open tools → ready (cancellation)")
+			fmt.Sprintf("rejected tool result while %s → ready (cancellation)", state.State))
 		state.State = session.StateReady
 	} else {
 		if state.State != session.StateWorking {
@@ -493,7 +496,7 @@ func (d *SessionDetector) seedFromDisk() {
 				state.State = session.StateReady
 				changed = true
 			}
-		} else if state.State == session.StateWorking && state.Metrics != nil && !state.Metrics.HasOpenToolCall && state.Metrics.LastEventType == "user" {
+		} else if (state.State == session.StateWorking || state.State == session.StateWaiting) && state.Metrics != nil && !state.Metrics.HasOpenToolCall && state.Metrics.LastEventType == "user" && state.Metrics.LastToolResultWasError {
 			d.log.LogInfo("session-detector-seed", state.SessionID,
 				fmt.Sprintf("re-evaluated %s → ready on startup (user event, no open tools)", state.State))
 			state.State = session.StateReady

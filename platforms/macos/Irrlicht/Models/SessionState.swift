@@ -131,6 +131,7 @@ struct SessionState: Identifiable, Codable {
     let pid: Int?               // Claude Code process PID (optional for backwards compatibility)
     let parentSessionId: String? // parent session ID for subagent sessions (optional)
     let subagents: SubagentSummary? // aggregate state of child sessions (optional)
+    let daemonVersion: String?  // irrlichd version that created this session (optional)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
@@ -151,6 +152,7 @@ struct SessionState: Identifiable, Codable {
         case metrics
         case parentSessionId = "parent_session_id"
         case subagents
+        case daemonVersion = "daemon_version"
     }
     
     // Custom decoder to handle multiple date formats and missing fields
@@ -176,6 +178,7 @@ struct SessionState: Identifiable, Codable {
         pid = try container.decodeIfPresent(Int.self, forKey: .pid)
         parentSessionId = try container.decodeIfPresent(String.self, forKey: .parentSessionId)
         subagents = try container.decodeIfPresent(SubagentSummary.self, forKey: .subagents)
+        daemonVersion = try container.decodeIfPresent(String.self, forKey: .daemonVersion)
 
         // Handle firstSeen date (unix timestamp format)
         if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
@@ -223,7 +226,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, daemonVersion: String? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -239,6 +242,7 @@ struct SessionState: Identifiable, Codable {
         self.pid = pid
         self.parentSessionId = parentSessionId
         self.subagents = subagents
+        self.daemonVersion = daemonVersion
     }
     
     enum State: String, CaseIterable, Codable {

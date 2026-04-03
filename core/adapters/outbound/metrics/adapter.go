@@ -31,8 +31,9 @@ func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics
 		PressureLevel:      m.PressureLevel,
 		HasOpenToolCall:    m.HasOpenToolCall,
 		OpenToolCallCount:  m.OpenToolCallCount,
-		LastEventType:      m.LastEventType,
-		LastOpenToolNames:  m.LastOpenToolNames,
+		LastEventType:          m.LastEventType,
+		LastOpenToolNames:      m.LastOpenToolNames,
+		LastToolResultWasError: m.LastToolResultWasError,
 	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"

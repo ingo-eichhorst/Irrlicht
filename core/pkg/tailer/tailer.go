@@ -149,6 +149,10 @@ type SessionMetrics struct {
 	// message that called tools. Cleared when a user message appears.
 	// Used to detect user-blocking tools (AskUserQuestion, ExitPlanMode).
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
+
+	// LastToolResultWasError is true when the most recently processed
+	// tool_result content block had is_error=true (user rejection / ESC).
+	LastToolResultWasError bool `json:"last_tool_result_was_error"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -170,6 +174,9 @@ type TranscriptTailer struct {
 	// lastOpenToolNames holds tool names from the most recent assistant
 	// message with tool_use blocks. Cleared on user messages.
 	lastOpenToolNames []string
+
+	// lastToolResultWasError tracks is_error on the most recent tool_result.
+	lastToolResultWasError bool
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path
@@ -355,34 +362,34 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 
 	// Claude Code embeds tool_use inside assistant messages and tool_result
 	// inside user messages. Count them from message.content[] so open tool
-	// call tracking works correctly. Also track tool names for user-blocking
-	// tool detection (AskUserQuestion, ExitPlanMode).
+	// call tracking works correctly. Also track tool names — accumulate on
+	// tool_use, pop on tool_result — so the list reflects all currently open calls.
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if contentArr, ok := msg["content"].([]interface{}); ok {
-			var toolNames []string
 			for _, item := range contentArr {
 				if block, ok := item.(map[string]interface{}); ok {
 					switch block["type"] {
 					case "tool_use":
 						t.toolUseCount++
 						if name, ok := block["name"].(string); ok {
-							toolNames = append(toolNames, name)
+							t.lastOpenToolNames = append(t.lastOpenToolNames, name)
 						}
 					case "tool_result":
 						t.toolResultCount++
+						// Track is_error for cancellation detection.
+						if isErr, ok := block["is_error"].(bool); ok {
+							t.lastToolResultWasError = isErr
+						} else {
+							t.lastToolResultWasError = false
+						}
+						// Pop the oldest open tool name (FIFO).
+						if len(t.lastOpenToolNames) > 0 {
+							t.lastOpenToolNames = t.lastOpenToolNames[1:]
+						}
 					}
 				}
 			}
-			// Assistant message with tools: store the tool names
-			if eventType == "assistant" && len(toolNames) > 0 {
-				t.lastOpenToolNames = toolNames
-			}
 		}
-	}
-
-	// User message (including tool results) clears open tool names
-	if eventType == "user" {
-		t.lastOpenToolNames = nil
 	}
 
 	return &MessageEvent{
@@ -487,6 +494,7 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.OpenToolCallCount = openCalls
 	t.metrics.HasOpenToolCall = openCalls > 0
 	t.metrics.LastOpenToolNames = t.lastOpenToolNames
+	t.metrics.LastToolResultWasError = t.lastToolResultWasError
 
 	// Legacy calculation: For messages per minute, use a sliding window from the latest timestamp
 	legacyWindowStart := latestTime.Add(-t.windowSize)

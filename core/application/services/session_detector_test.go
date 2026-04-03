@@ -186,8 +186,8 @@ func TestSessionDetector_Activity_CancellationFromWorking_TransitionsToReady(t *
 	time.Sleep(20 * time.Millisecond)
 
 	// Simulate post-ESC state: session was working, user cancelled via ESC.
-	// Claude Code writes tool_result rejections + "[Request interrupted by
-	// user for tool use]" — all typed as "user" with no open tool calls.
+	// Claude Code writes tool_result rejections (is_error=true) followed by
+	// "[Request interrupted by user for tool use]".
 	repo.Save(&session.SessionState{
 		SessionID:      "esc1",
 		State:          session.StateWorking,
@@ -196,8 +196,9 @@ func TestSessionDetector_Activity_CancellationFromWorking_TransitionsToReady(t *
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     5,
 		Metrics: &session.SessionMetrics{
-			LastEventType:   "user",
-			HasOpenToolCall: false,
+			LastEventType:          "user",
+			HasOpenToolCall:        false,
+			LastToolResultWasError: true,
 		},
 	})
 
@@ -218,13 +219,22 @@ func TestSessionDetector_Activity_CancellationFromWorking_TransitionsToReady(t *
 	}
 }
 
-func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
+func TestSessionDetector_Activity_CancellationFromWaiting_TransitionsToReady(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// Wait for seedFromDisk to complete, then inject the session.
+	time.Sleep(20 * time.Millisecond)
+
 	now := time.Now().Unix()
-	repo.states["wake1"] = &session.SessionState{
+	repo.Save(&session.SessionState{
 		SessionID:        "wake1",
 		State:            session.StateWaiting,
 		TranscriptPath:   "/home/.claude/projects/-Users-test/wake1.jsonl",
@@ -233,16 +243,11 @@ func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
 		WaitingStartTime: &now,
 		EventCount:       3,
 		Metrics: &session.SessionMetrics{
-			LastEventType:   "user",
-			HasOpenToolCall: false,
+			LastEventType:          "user",
+			HasOpenToolCall:        false,
+			LastToolResultWasError: true,
 		},
-	}
-
-	det := newDetector(tw, pw, repo)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
+	})
 
 	tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
@@ -256,11 +261,54 @@ func TestSessionDetector_Activity_WakesFromWaiting(t *testing.T) {
 	<-done
 
 	state, _ := repo.Load("wake1")
-	if state.State != session.StateWorking {
-		t.Errorf("state: got %q, want working", state.State)
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready (ESC from permission prompt)", state.State)
 	}
-	if state.WaitingStartTime != nil {
-		t.Error("WaitingStartTime should be cleared")
+}
+
+func TestSessionDetector_Activity_NormalToolCompletion_StaysWorking(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Simulate mid-turn state: last tool_result completed normally
+	// (is_error=false). Agent is still working between tool calls.
+	repo.Save(&session.SessionState{
+		SessionID:      "fp1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/fp1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:          "user",
+			HasOpenToolCall:        false,
+			LastToolResultWasError: false,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "fp1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/fp1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("fp1")
+	if state.State != session.StateWorking {
+		t.Errorf("state: got %q, want working (normal tool completion should not transition to ready)", state.State)
 	}
 }
 

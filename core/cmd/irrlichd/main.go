@@ -268,6 +268,7 @@ func main() {
 	detector = services.NewSessionDetector(
 		watchers, pwPort,
 		fsRepo, logger, gitResolver, metricsCollector, push,
+		Version,
 	)
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())

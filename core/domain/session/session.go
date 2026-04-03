@@ -34,6 +34,11 @@ type SessionMetrics struct {
 	// LastOpenToolNames holds tool names from the most recent assistant
 	// message that called tools. Used to detect user-blocking tools.
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
+
+	// LastToolResultWasError is true when the most recent tool_result had
+	// is_error=true (user rejection via ESC). Distinguishes cancellation
+	// from normal tool completion.
+	LastToolResultWasError bool `json:"last_tool_result_was_error"`
 }
 
 // NeedsUserAttention returns true when a tool call is open and the agent
@@ -130,6 +135,10 @@ type SessionState struct {
 	// Nil when this session has no children.
 	Subagents *SubagentSummary `json:"subagents,omitempty"`
 
+	// DaemonVersion records which irrlichd version created this session,
+	// enabling future data migrations when the schema evolves.
+	DaemonVersion string `json:"daemon_version,omitempty"`
+
 	// Transcript monitoring for waiting-state recovery.
 	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`
 	WaitingStartTime   *int64 `json:"waiting_start_time,omitempty"`
@@ -169,8 +178,9 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		PressureLevel:      newM.PressureLevel,
 		HasOpenToolCall:    newM.HasOpenToolCall,
 		OpenToolCallCount:  newM.OpenToolCallCount,
-		LastEventType:      newM.LastEventType,
-		LastOpenToolNames:  newM.LastOpenToolNames,
+		LastEventType:          newM.LastEventType,
+		LastOpenToolNames:      newM.LastOpenToolNames,
+		LastToolResultWasError: newM.LastToolResultWasError,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow

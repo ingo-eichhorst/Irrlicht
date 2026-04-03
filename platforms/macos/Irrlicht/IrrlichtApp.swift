@@ -8,18 +8,19 @@ struct StatusIndicatorLabel: View {
             Image(systemName: "sparkle")
                 .font(.system(size: 14))
                 .foregroundColor(.white)
+        } else if let img = buildStatusImage() {
+            Image(nsImage: img)
         } else {
-            // Menu bar labels only reliably render Text/Image.
-            // Group emojis by project: tight within group, space between groups.
-            Text(groupedDisplayString)
-                .font(.system(size: fontSizeForCount))
+            Image(systemName: "sparkle")
+                .font(.system(size: 14))
         }
     }
 
-    private var groupedDisplayString: String {
+    private func buildStatusImage() -> NSImage? {
+        // Group sessions by project
         var groups: [(String, [SessionState])] = []
         var seen: [String: Int] = [:]
-        let capped = Array(sessions.prefix(maxDisplayCount))
+        let capped = Array(sessions.prefix(8))
         for s in capped {
             let key = s.projectName ?? s.cwd
             if let idx = seen[key] {
@@ -29,31 +30,45 @@ struct StatusIndicatorLabel: View {
                 groups.append((key, [s]))
             }
         }
-        // Within a group: no separator. Between groups: space.
-        let parts = groups.map { _, group in
-            group.map { $0.state.emoji }.joined()
-        }
-        var result = parts.joined(separator: " ")
-        if sessions.count > maxDisplayCount {
-            result += "…"
-        }
-        return result
-    }
 
-    private var maxDisplayCount: Int {
-        switch sessions.count {
-        case 0...6: return sessions.count
-        default: return 5
-        }
-    }
+        let r: CGFloat = 5          // circle radius
+        let overlap: CGFloat = 4    // overlap within group
+        let groupGap: CGFloat = 6   // gap between groups
+        let height: CGFloat = 18
+        let cy = height / 2
 
-    private var fontSizeForCount: CGFloat {
-        switch sessions.count {
-        case 0...2: return 14
-        case 3...4: return 12
-        case 5...6: return 10
-        default: return 8
+        // Calculate total width
+        var totalWidth: CGFloat = 0
+        for (i, (_, group)) in groups.enumerated() {
+            if i > 0 { totalWidth += groupGap }
+            totalWidth += CGFloat(group.count) * (r * 2 - overlap) + overlap
         }
+
+        // Build SVG
+        var svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="\(Int(totalWidth))" height="\(Int(height))">
+        """
+
+        var x: CGFloat = r
+        for (i, (_, group)) in groups.enumerated() {
+            if i > 0 { x += groupGap }
+            for s in group {
+                let hex = s.state.color.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+                svg += """
+                <circle cx="\(Int(x))" cy="\(Int(cy))" r="\(Int(r))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
+                """
+                x += r * 2 - overlap
+            }
+        }
+
+        svg += "</svg>"
+
+        guard let data = svg.data(using: .utf8),
+              let nsImage = NSImage(data: data) else { return nil }
+
+        nsImage.isTemplate = false
+        nsImage.size = NSSize(width: totalWidth, height: height)
+        return nsImage
     }
 }
 

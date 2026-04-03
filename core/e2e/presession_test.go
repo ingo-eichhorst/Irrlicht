@@ -60,6 +60,7 @@ func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 		&stubGit{},
 		&stubMetrics{},
 		nil, // no broadcaster
+		"test",
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -130,6 +131,7 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 	detector := services.NewSessionDetector(
 		[]inbound.AgentWatcher{scanner, transcriptWatcher},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
+		"test",
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -209,6 +211,7 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 	detector := services.NewSessionDetector(
 		[]inbound.AgentWatcher{scanner},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
+		"test",
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
