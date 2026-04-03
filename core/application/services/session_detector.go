@@ -293,21 +293,29 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	d.updateParentSubagentSummary(ev.SessionID)
 }
 
-// onRemoved handles transcript file deletion.
+// onRemoved handles transcript file deletion or pre-session expiry.
 func (d *SessionDetector) onRemoved(ev agent.Event) {
-	d.log.LogInfo("session-detector", ev.SessionID, "transcript removed")
+	d.log.LogInfo("session-detector", ev.SessionID, "session removed")
 
 	// Remove from project tracking.
 	d.mu.Lock()
 	delete(d.projectSessions, ev.SessionID)
 	d.mu.Unlock()
 
-	// Transition to ready if the session still exists.
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
 		return
 	}
 
+	// Pre-sessions (no transcript) are deleted entirely — the user never
+	// sent a message, so there is no useful state to keep.
+	if state.TranscriptPath == "" {
+		_ = d.repo.Delete(ev.SessionID)
+		d.broadcast(outbound.PushTypeDeleted, state)
+		return
+	}
+
+	// Real sessions: transition to ready.
 	if state.State == session.StateReady {
 		return
 	}

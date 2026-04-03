@@ -222,10 +222,11 @@ func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
 	repo := newMockRepo()
 
 	repo.states["rm1"] = &session.SessionState{
-		SessionID: "rm1",
-		State:     session.StateWorking,
-		FirstSeen: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
+		SessionID:      "rm1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/rm1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
 	}
 
 	det := newDetector(tw, pw, repo)
@@ -255,10 +256,11 @@ func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 	repo := newMockRepo()
 
 	repo.states["rm2"] = &session.SessionState{
-		SessionID: "rm2",
-		State:     session.StateReady,
-		FirstSeen: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
+		SessionID:      "rm2",
+		State:          session.StateReady,
+		TranscriptPath: "/home/.claude/projects/-Users-test/rm2.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
 	}
 
 	det := newDetector(tw, pw, repo)
