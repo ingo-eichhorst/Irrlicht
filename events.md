@@ -107,7 +107,7 @@ Management: `permission-mode`, `attachment`, `file-history-snapshot`, `progress`
 
 | Scenario | State |
 |----------|-------|
-| New transcript file appears | `working` |
+| New transcript file appears | `ready` |
 | User sent message, assistant generating | `working` |
 | Assistant called tool (stop_reason=tool_use) | `working` |
 | Tool executing | `working` |

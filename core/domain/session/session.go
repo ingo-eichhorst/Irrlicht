@@ -19,6 +19,7 @@ type SessionMetrics struct {
 	ElapsedSeconds     int64   `json:"elapsed_seconds"`
 	TotalTokens        int64   `json:"total_tokens"`
 	ModelName          string  `json:"model_name"`
+	ContextWindow      int64   `json:"context_window,omitempty"`
 	ContextUtilization float64 `json:"context_utilization_percentage"`
 	PressureLevel      string  `json:"pressure_level"`
 
@@ -154,12 +155,16 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		ElapsedSeconds:     newM.ElapsedSeconds,
 		TotalTokens:        newM.TotalTokens,
 		ModelName:          newM.ModelName,
+		ContextWindow:      newM.ContextWindow,
 		ContextUtilization: newM.ContextUtilization,
 		PressureLevel:      newM.PressureLevel,
 		HasOpenToolCall:    newM.HasOpenToolCall,
 		OpenToolCallCount:  newM.OpenToolCallCount,
 		LastEventType:      newM.LastEventType,
 		LastOpenToolNames:  newM.LastOpenToolNames,
+	}
+	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
+		merged.ContextWindow = oldM.ContextWindow
 	}
 	if merged.ElapsedSeconds == 0 && oldM.ElapsedSeconds > 0 {
 		merged.ElapsedSeconds = oldM.ElapsedSeconds

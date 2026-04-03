@@ -170,10 +170,10 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 		t.Fatalf("timeout: real session %s never appeared", realID)
 	}
 
-	// The real session should be working.
+	// The real session should be ready (initial state before activity).
 	realState, _ := repo.Load(realID)
-	if realState.State != session.StateWorking {
-		t.Errorf("real session state: got %q, want %q", realState.State, session.StateWorking)
+	if realState.State != session.StateReady {
+		t.Errorf("real session state: got %q, want %q", realState.State, session.StateReady)
 	}
 
 	// The pre-session should be gone (cleaned up by cleanupPreSessionsForProject).

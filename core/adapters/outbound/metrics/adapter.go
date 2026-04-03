@@ -26,6 +26,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics
 		ElapsedSeconds:     m.ElapsedSeconds,
 		TotalTokens:        m.TotalTokens,
 		ModelName:          m.ModelName,
+		ContextWindow:      m.ContextWindow,
 		ContextUtilization: m.ContextUtilization,
 		PressureLevel:      m.PressureLevel,
 		HasOpenToolCall:    m.HasOpenToolCall,
