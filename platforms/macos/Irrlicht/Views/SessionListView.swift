@@ -361,10 +361,11 @@ struct SessionRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                // State dot
-                Circle()
-                    .fill(Color(hex: session.state.color))
-                    .frame(width: 8, height: 8)
+                // State icon
+                Image(systemName: session.state.glyph)
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(hex: session.state.color))
+                    .frame(width: 12)
                     .accessibilityIdentifier("session-state-icon-\(session.id)")
 
                 // Agent number
