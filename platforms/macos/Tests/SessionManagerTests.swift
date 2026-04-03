@@ -92,20 +92,18 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(SessionState.State.working.glyph, "hammer.fill")
         XCTAssertEqual(SessionState.State.waiting.glyph, "hourglass")
         XCTAssertEqual(SessionState.State.ready.glyph, "checkmark.circle.fill")
-        XCTAssertEqual(SessionState.State.cancelledByUser.glyph, "xmark.circle.fill")
     }
 
     func testStateColors() {
         XCTAssertEqual(SessionState.State.working.color, "#8B5CF6")
         XCTAssertEqual(SessionState.State.waiting.color, "#FF9500")
         XCTAssertEqual(SessionState.State.ready.color, "#34C759")
-        XCTAssertEqual(SessionState.State.cancelledByUser.color, "#8E8E93")
     }
 
-    func testCancelledByUserStateParsing() throws {
+    func testUnknownStateFallsBackToReady() throws {
         let jsonData = """
         {
-            "session_id": "sess_cancelled123",
+            "session_id": "sess_unknown123",
             "state": "cancelled_by_user",
             "model": "claude-3.7-sonnet",
             "cwd": "/Users/test/projects/app",
@@ -118,9 +116,8 @@ final class SessionManagerTests: XCTestCase {
 
         let session = try JSONDecoder().decode(SessionState.self, from: jsonData)
 
-        XCTAssertEqual(session.id, "sess_cancelled123")
-        XCTAssertEqual(session.state, .cancelledByUser)
-        XCTAssertEqual(session.state.emoji, "⚫")
+        XCTAssertEqual(session.id, "sess_unknown123")
+        XCTAssertEqual(session.state, .ready)
     }
     
     // MARK: - Display Formatting Tests

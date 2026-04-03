@@ -107,6 +107,14 @@ struct SessionMetrics: Codable {
     }
 }
 
+/// Aggregate state of all child sessions for a parent session.
+struct SubagentSummary: Codable {
+    let total: Int
+    let working: Int
+    let waiting: Int
+    let ready: Int
+}
+
 struct SessionState: Identifiable, Codable {
     let id: String              // session_id
     let state: State            // working, waiting, ready
@@ -122,6 +130,7 @@ struct SessionState: Identifiable, Codable {
     let metrics: SessionMetrics? // performance metrics from transcript analysis (optional)
     let pid: Int?               // Claude Code process PID (optional for backwards compatibility)
     let parentSessionId: String? // parent session ID for subagent sessions (optional)
+    let subagents: SubagentSummary? // aggregate state of child sessions (optional)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
@@ -141,6 +150,7 @@ struct SessionState: Identifiable, Codable {
         case lastEvent = "last_event"
         case metrics
         case parentSessionId = "parent_session_id"
+        case subagents
     }
     
     // Custom decoder to handle multiple date formats and missing fields
@@ -165,6 +175,7 @@ struct SessionState: Identifiable, Codable {
         metrics = try container.decodeIfPresent(SessionMetrics.self, forKey: .metrics)
         pid = try container.decodeIfPresent(Int.self, forKey: .pid)
         parentSessionId = try container.decodeIfPresent(String.self, forKey: .parentSessionId)
+        subagents = try container.decodeIfPresent(SubagentSummary.self, forKey: .subagents)
 
         // Handle firstSeen date (unix timestamp format)
         if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
@@ -212,7 +223,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -227,18 +238,17 @@ struct SessionState: Identifiable, Codable {
         self.metrics = metrics
         self.pid = pid
         self.parentSessionId = parentSessionId
+        self.subagents = subagents
     }
     
     enum State: String, CaseIterable, Codable {
         case working, waiting, ready
-        case cancelledByUser = "cancelled_by_user"
 
         var glyph: String {
             switch self {
             case .working: return "hammer.fill"
             case .waiting: return "hourglass"
             case .ready: return "checkmark.circle.fill"
-            case .cancelledByUser: return "xmark.circle.fill"
             }
         }
 
@@ -247,7 +257,6 @@ struct SessionState: Identifiable, Codable {
             case .working: return "#8B5CF6"   // purple to match 🟣
             case .waiting: return "#FF9500"   // system orange
             case .ready: return "#34C759"  // system green
-            case .cancelledByUser: return "#8E8E93"  // system gray
             }
         }
 
@@ -256,7 +265,6 @@ struct SessionState: Identifiable, Codable {
             case .working: return "🟣"   // purple circle
             case .waiting: return "🟠"   // orange circle
             case .ready: return "🟢"  // green circle
-            case .cancelledByUser: return "⚫"  // black circle (cancelled/ended)
             }
         }
     }

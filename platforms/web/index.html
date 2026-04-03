@@ -257,10 +257,6 @@
       box-shadow: inset 3px 0 0 var(--ready), 0 0 16px var(--ready-dim);
     }
 
-    .session-card[data-state="cancelled_by_user"] {
-      border-left-color: var(--cancelled);
-      opacity: 0.6;
-    }
 
     /* Subagent card */
     .subagent-card {
@@ -337,7 +333,6 @@
     .state-label.working  { color: var(--working); }
     .state-label.waiting  { color: var(--waiting); }
     .state-label.ready    { color: var(--ready); }
-    .state-label.cancelled_by_user { color: var(--cancelled); }
 
     .adapter-badge {
       font-family: var(--font-mono);
@@ -753,7 +748,6 @@
     };
 
     function stateIcon(state) {
-      if (state === 'cancelled_by_user') return svgIcons.cancelled;
       return svgIcons[state] || svgIcons.ready;
     }
 
@@ -1001,8 +995,7 @@
       container.innerHTML = html;
 
       // Show "Other Sessions" label if there are sessions too
-      const active = [...sessions.values()].filter(s => s.state !== 'delete_session');
-      label.style.display = active.length > 0 ? 'block' : 'none';
+      label.style.display = sessions.size > 0 ? 'block' : 'none';
     }
 
     function renderRigAgent(a) {
@@ -1021,10 +1014,10 @@
       renderGasTown();
       const grid = document.getElementById('session-grid');
       const empty = document.getElementById('empty-state');
-      const active = [...sessions.values()].filter(s => s.state !== 'delete_session');
+      const active = [...sessions.values()];
 
-      // Sort: working > waiting > ready > cancelled > others, then by updated_at desc
-      const order = ['working', 'waiting', 'ready', 'cancelled_by_user'];
+      // Sort: working > waiting > ready, then by updated_at desc
+      const order = ['working', 'waiting', 'ready'];
       active.sort((a, b) => {
         const ai = order.indexOf(a.state);
         const bi = order.indexOf(b.state);
@@ -1132,7 +1125,7 @@
         }
         if (!msg.session) return;
         var s = msg.session;
-        if (msg.type === 'session_deleted' || s.state === 'delete_session') {
+        if (msg.type === 'session_deleted') {
           sessions.delete(s.session_id);
         } else {
           sessions.set(s.session_id, s);

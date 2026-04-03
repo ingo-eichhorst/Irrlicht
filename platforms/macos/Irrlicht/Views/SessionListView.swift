@@ -491,6 +491,25 @@ struct SessionRowView: View {
                     .cornerRadius(4)
                     .padding(.top, 2)
                 }
+
+                // Subagent summary (when parent has children)
+                if let subs = session.subagents, subs.total > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "person.2.fill")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        let parts = [
+                            subs.working > 0 ? "\(subs.working) working" : nil,
+                            subs.waiting > 0 ? "\(subs.waiting) waiting" : nil,
+                            subs.ready > 0 ? "\(subs.ready) ready" : nil,
+                        ].compactMap { $0 }.joined(separator: ", ")
+                        Text("\(subs.total) agents (\(parts))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .padding(.top, 1)
+                }
             }
         }
         .padding(.horizontal, 12)

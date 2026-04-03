@@ -231,6 +231,15 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 		state.Metrics = session.MergeMetrics(m, state.Metrics)
 	}
 
+	// Explicit ready → working transition (T8).
+	if state.State == session.StateReady {
+		d.log.LogInfo("session-detector", ev.SessionID,
+			"transcript activity on ready session → working")
+		state.State = session.StateWorking
+		state.LastTranscriptSize = 0
+		state.WaitingStartTime = nil
+	}
+
 	// Content-based state detection: the last event type in the transcript
 	// tells us whose turn it is. An assistant message with no open tool
 	// calls means Claude finished and is waiting for user input.
@@ -264,6 +273,8 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	}
 
 	d.broadcast(outbound.PushTypeUpdated, state)
+
+	d.updateParentSubagentSummary(ev.SessionID)
 }
 
 // onRemoved handles transcript file deletion.
@@ -281,8 +292,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 		return
 	}
 
-	if state.State == session.StateReady || state.State == session.StateDeleteSession ||
-		state.State == session.StateCancelledByUser {
+	if state.State == session.StateReady {
 		return
 	}
 
@@ -298,6 +308,8 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	}
 
 	d.broadcast(outbound.PushTypeUpdated, state)
+
+	d.updateParentSubagentSummary(ev.SessionID)
 }
 
 // HandleProcessExit transitions a session to "ready" when its process exits.
@@ -315,8 +327,7 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 	}
 
 	// Already in a terminal state — nothing to do.
-	if state.State == session.StateReady || state.State == session.StateDeleteSession ||
-		state.State == session.StateCancelledByUser {
+	if state.State == session.StateReady {
 		return
 	}
 
@@ -335,6 +346,8 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 	}
 
 	d.broadcast(outbound.PushTypeUpdated, state)
+
+	d.updateParentSubagentSummary(sessionID)
 }
 
 // deriveParentSessionID finds a likely parent session for a new session in the
@@ -447,8 +460,7 @@ func (d *SessionDetector) seedFromDisk() {
 	// to avoid blocking the event loop at startup.
 	if d.pw != nil {
 		for _, state := range states {
-			if state.State == session.StateReady || state.State == session.StateCancelledByUser ||
-				state.State == session.StateDeleteSession {
+			if state.State == session.StateReady {
 				continue
 			}
 			if state.PID > 0 {
@@ -459,6 +471,49 @@ func (d *SessionDetector) seedFromDisk() {
 			}
 		}
 	}
+}
+
+// updateParentSubagentSummary recomputes the SubagentSummary on the parent
+// session when a child session changes state.
+func (d *SessionDetector) updateParentSubagentSummary(childSessionID string) {
+	child, _ := d.repo.Load(childSessionID)
+	if child == nil || child.ParentSessionID == "" {
+		return
+	}
+
+	parent, _ := d.repo.Load(child.ParentSessionID)
+	if parent == nil {
+		return
+	}
+
+	allSessions, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+
+	summary := &session.SubagentSummary{}
+	for _, s := range allSessions {
+		if s.ParentSessionID == parent.SessionID {
+			summary.Total++
+			switch s.State {
+			case session.StateWorking:
+				summary.Working++
+			case session.StateWaiting:
+				summary.Waiting++
+			case session.StateReady:
+				summary.Ready++
+			}
+		}
+	}
+
+	parent.Subagents = summary
+	parent.UpdatedAt = time.Now().Unix()
+	if err := d.repo.Save(parent); err != nil {
+		d.log.LogError("session-detector", child.ParentSessionID,
+			fmt.Sprintf("failed to update subagent summary: %v", err))
+		return
+	}
+	d.broadcast(outbound.PushTypeUpdated, parent)
 }
 
 // broadcast sends a push notification if a broadcaster is configured.

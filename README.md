@@ -29,7 +29,6 @@ Each session appears as a simple icon that tells the truth:
 - **🟣** **working** — the agent is thinking, building, streaming (purple)
 - **🟠** **waiting** — it needs you; the story pauses for your judgment (orange)
 - **🟢** **ready** — the path ahead is clear, ready for new work (green)
-- **⚫** **cancelled_by_user** — session cancelled via ESC; auto-expires after 30s (gray)
 - **✦** **no sessions** — clean slate, ready for new work (white sparkle)
 
 No ghosts. **Files → State → Light.**

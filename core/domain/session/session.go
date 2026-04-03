@@ -2,13 +2,12 @@ package session
 
 import "time"
 
-// State constants
+// State constants — three MECE states for session lifecycle.
+// See STATES.md for the formal state machine specification.
 const (
-	StateWorking         = "working"
-	StateWaiting         = "waiting"
-	StateReady           = "ready"
-	StateCancelledByUser = "cancelled_by_user"
-	StateDeleteSession   = "delete_session"
+	StateWorking = "working" // Agent actively processing (tools, text generation, hooks, compaction)
+	StateWaiting = "waiting" // Agent finished turn, waiting for user input
+	StateReady   = "ready"   // Session inactive (process exited, transcript removed, cancelled)
 
 	CompactionStateNotCompacting = "not_compacting"
 	CompactionStateCompacting    = "compacting"
@@ -49,6 +48,14 @@ func (m *SessionMetrics) IsWaitingForInput() bool {
 	return false
 }
 
+// SubagentSummary tracks the aggregate state of all child sessions.
+type SubagentSummary struct {
+	Total   int `json:"total"`
+	Working int `json:"working"`
+	Waiting int `json:"waiting"`
+	Ready   int `json:"ready"`
+}
+
 // SessionState represents the current state of a Claude Code or Copilot session.
 type SessionState struct {
 	Version         int             `json:"version"`
@@ -77,6 +84,10 @@ type SessionState struct {
 	// ParentSessionID links a subagent session to its spawning parent session.
 	// Derived from file path or heuristic matching in SessionDetector.
 	ParentSessionID string `json:"parent_session_id,omitempty"`
+
+	// Subagents holds the aggregate state of all child sessions.
+	// Nil when this session has no children.
+	Subagents *SubagentSummary `json:"subagents,omitempty"`
 
 	// Transcript monitoring for waiting-state recovery.
 	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`

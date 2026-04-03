@@ -290,22 +290,6 @@ class SessionManager: ObservableObject {
                 }
             }
 
-            // Auto-cleanup cancelled_by_user sessions older than 30 seconds.
-            // These are terminal (no more events will fire) so they self-expire.
-            let cutoff = Date().addingTimeInterval(-30)
-            var cancelledIds: [String] = []
-            for session in newSessions where session.state == .cancelledByUser {
-                if session.updatedAt < cutoff {
-                    let filePath = instancesPath.appendingPathComponent("\(session.id).json")
-                    try? FileManager.default.removeItem(at: filePath)
-                    cancelledIds.append(session.id)
-                    print("🧹 Auto-deleted cancelled_by_user session \(session.shortId)")
-                }
-            }
-            if !cancelledIds.isEmpty {
-                newSessions.removeAll { cancelledIds.contains($0.id) }
-            }
-
             // TTL-based auto-cleanup for ready sessions
             let storedTTL = UserDefaults.standard.object(forKey: "sessionTTLMinutes") as? Int ?? 30
             if storedTTL > 0 {
