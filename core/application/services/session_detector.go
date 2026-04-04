@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	processadapter "irrlicht/core/adapters/outbound/process"
+	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
@@ -76,7 +76,7 @@ func NewSessionDetector(
 		broadcaster:     broadcaster,
 		version:         version,
 		readyTTL:        readyTTL,
-		discoverPID:     processadapter.DiscoverPID,
+		discoverPID:     processlifecycle.DiscoverPID,
 		projectSessions: make(map[string]string),
 	}
 }

@@ -1,23 +1,10 @@
-// Package processscanner detects running agent processes before they create a
-// transcript file, so the session appears in the UI as soon as the agent
-// starts — not only after the first message is sent.
-//
-// It polls for matching processes on a fixed interval, checks whether a real
-// transcript (.jsonl) already exists for the process's working directory, and
-// emits EventNewSession / EventRemoved agent events that flow into the normal
-// SessionDetector pipeline.
-//
-// Session IDs for these synthetic pre-sessions use the form "proc-<pid>" to
-// distinguish them from UUID-based transcript sessions.
-package processscanner
+package processlifecycle
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,12 +43,12 @@ type Scanner struct {
 	subs    []chan agent.Event
 }
 
-// New creates a Scanner for the given agent process.
+// NewScanner creates a Scanner for the given agent process.
 //   - processName: exact binary name, e.g. "claude"
 //   - adapter:     adapter label, e.g. "claude-code"
 //   - projectsRoot: absolute path to the projects directory, e.g. ~/.claude/projects
 //   - interval:    how often to poll; pass 0 to use DefaultInterval
-func New(processName, adapter, projectsRoot string, interval time.Duration) *Scanner {
+func NewScanner(processName, adapter, projectsRoot string, interval time.Duration) *Scanner {
 	if interval <= 0 {
 		interval = DefaultInterval
 	}
@@ -127,7 +114,7 @@ func (s *Scanner) Unsubscribe(ch <-chan agent.Event) {
 // for newcomers without transcripts, and removes pre-sessions that have exited
 // or whose real transcript has appeared.
 func (s *Scanner) poll() {
-	pids, err := findProcesses(s.processName)
+	pids, err := FindProcesses(s.processName)
 	if err != nil {
 		return
 	}
@@ -143,11 +130,11 @@ func (s *Scanner) poll() {
 		_, alreadyTracked := s.tracked[pid]
 		s.mu.Unlock()
 
-		cwd, err := processCWD(pid)
+		cwd, err := ProcessCWD(pid)
 		if err != nil || cwd == "" {
 			continue
 		}
-		projectDir := cwdToProjectDir(cwd)
+		projectDir := CWDToProjectDir(cwd)
 
 		if alreadyTracked {
 			s.mu.Lock()
@@ -275,57 +262,4 @@ func (s *Scanner) broadcast(ev agent.Event) {
 		default:
 		}
 	}
-}
-
-// --- helpers ----------------------------------------------------------------
-
-// findProcesses returns PIDs of processes whose name exactly matches name.
-func findProcesses(name string) ([]int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "pgrep", "-x", name).Output()
-	if err != nil {
-		// pgrep exits 1 when there are no matches — not an error.
-		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var pids []int
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		pid, err := strconv.Atoi(line)
-		if err == nil && pid > 0 {
-			pids = append(pids, pid)
-		}
-	}
-	return pids, nil
-}
-
-// processCWD returns the working directory of pid using lsof.
-func processCWD(pid int) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
-	if err != nil {
-		return "", fmt.Errorf("lsof cwd pid %d: %w", pid, err)
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "n") {
-			return strings.TrimPrefix(line, "n"), nil
-		}
-	}
-	return "", fmt.Errorf("cwd not found for pid %d", pid)
-}
-
-// cwdToProjectDir converts a working directory path to the directory name used
-// by Claude Code under ~/.claude/projects/. Claude Code replaces both "/" and
-// "." with "-", so "/Users/ingo/projects/foo" becomes "-Users-ingo-projects-foo"
-// and "/path/.hidden/sub" becomes "-path--hidden-sub".
-func cwdToProjectDir(cwd string) string {
-	s := strings.ReplaceAll(cwd, "/", "-")
-	return strings.ReplaceAll(s, ".", "-")
 }
