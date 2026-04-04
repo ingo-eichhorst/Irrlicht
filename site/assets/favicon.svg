@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <radialGradient id="g" cx="50%" cy="60%" r="50%">
+      <stop offset="0%" stop-color="#c4b5fd"/>
+      <stop offset="40%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#4c1d95" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- outer glow -->
+  <circle cx="16" cy="17" r="10" fill="url(#g)" opacity="0.5"/>
+  <!-- wisp flame -->
+  <path d="M16 4 C13 10, 9 14, 10 19 C10.5 22, 12 25, 16 26 C20 25, 21.5 22, 22 19 C23 14, 19 10, 16 4Z"
+        fill="#8B5CF6" filter="url(#glow)" opacity="0.9"/>
+  <!-- bright core -->
+  <path d="M16 10 C14.5 14, 12.5 16, 13 19 C13.3 21, 14.5 23, 16 23.5 C17.5 23, 18.7 21, 19 19 C19.5 16, 17.5 14, 16 10Z"
+        fill="#c4b5fd"/>
+  <!-- white hot center -->
+  <ellipse cx="16" cy="18" rx="2" ry="3.5" fill="#ede9fe" opacity="0.7"/>
+</svg>
