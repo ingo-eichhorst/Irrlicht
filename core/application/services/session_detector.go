@@ -12,6 +12,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +25,11 @@ import (
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
+
+// orphanTranscriptAge is the maximum age of a transcript file for it to be
+// considered active. Files older than this during initial scan are treated as
+// orphans left by exited processes and skipped.
+const orphanTranscriptAge = 2 * time.Minute
 
 // SessionDetector watches transcript files to detect sessions and orchestrate
 // ProcessWatcher for lifecycle management. Working/waiting state is determined
@@ -38,6 +44,8 @@ type SessionDetector struct {
 	broadcaster outbound.PushBroadcaster // optional
 	version     string                   // daemon version stamped on new sessions
 	readyTTL    time.Duration            // max idle time for ready sessions before deletion
+
+	discoverPID func(string) (int, error) // defaults to processadapter.DiscoverPID
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
@@ -67,6 +75,7 @@ func NewSessionDetector(
 		broadcaster:     broadcaster,
 		version:         version,
 		readyTTL:        readyTTL,
+		discoverPID:     processadapter.DiscoverPID,
 		projectSessions: make(map[string]string),
 	}
 }
@@ -158,6 +167,13 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 	now := time.Now().Unix()
 
 	if isNew {
+		// Skip orphan transcripts left by exited Claude Code processes.
+		if isStaleTranscript(ev.TranscriptPath) {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"skipping orphan transcript")
+			return
+		}
+
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
 		initialState := session.StateReady
@@ -460,7 +476,7 @@ func (d *SessionDetector) discoverAndRegisterPID(sessionID, transcriptPath strin
 		return
 	}
 
-	pid, err := processadapter.DiscoverPID(transcriptPath)
+	pid, err := d.discoverPID(transcriptPath)
 	if err != nil || pid <= 0 {
 		return
 	}
@@ -624,26 +640,47 @@ func (d *SessionDetector) seedFromDisk() {
 		}
 	}
 
-	// Check PID liveness and register alive PIDs with ProcessWatcher.
-	// Dead processes are cleaned up synchronously (no async ESRCH race).
+	// Clean up dead sessions and register alive PIDs with ProcessWatcher.
 	for _, state := range states {
-		if state.PID <= 0 {
-			continue
-		}
-		if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
+		switch {
+		case state.PID > 0:
+			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
+				d.log.LogInfo("session-detector-seed", state.SessionID,
+					fmt.Sprintf("pid %d dead, deleting session", state.PID))
+				_ = d.repo.Delete(state.SessionID)
+				d.broadcast(outbound.PushTypeDeleted, state)
+				continue
+			}
+			if d.pw != nil {
+				if err := d.pw.Watch(state.PID, state.SessionID); err != nil {
+					d.log.LogError("session-detector-seed", state.SessionID,
+						fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
+				}
+			}
+
+		case state.PID == 0 && isStaleTranscript(state.TranscriptPath):
+			// Orphan from exited Claude Code process (never assigned a PID
+			// because Claude Code doesn't keep transcript files open).
 			d.log.LogInfo("session-detector-seed", state.SessionID,
-				fmt.Sprintf("pid %d dead, deleting session", state.PID))
+				"deleting orphan session")
 			_ = d.repo.Delete(state.SessionID)
 			d.broadcast(outbound.PushTypeDeleted, state)
-			continue
-		}
-		if d.pw != nil {
-			if err := d.pw.Watch(state.PID, state.SessionID); err != nil {
-				d.log.LogError("session-detector-seed", state.SessionID,
-					fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
-			}
 		}
 	}
+}
+
+// isStaleTranscript reports whether the transcript file at path has not been
+// modified within orphanTranscriptAge. Returns false for empty paths or
+// stat errors (file missing → not stale, will be caught elsewhere).
+func isStaleTranscript(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) > orphanTranscriptAge
 }
 
 // broadcast sends a push notification if a broadcaster is configured.
