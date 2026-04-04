@@ -250,8 +250,9 @@ Structured JSON logs with automatic rotation:
 
 **Orphaned sessions (session stuck after agent exits):**
 - Sessions include a `pid` field tracking the agent process
-- kqueue monitors process exit; orphaned sessions transition to ready automatically
-- Legacy sessions without a PID are cleaned up after a 1-hour TTL
+- kqueue monitors process exit; sessions are deleted immediately when their process exits
+- Ready sessions without activity are automatically cleaned up after 30 minutes (configurable via Session TTL in app settings)
+- Orphan transcript files from previous runs are skipped during startup
 - To manually clear orphaned sessions: `rm ~/Library/Application\ Support/Irrlicht/instances/*.json`
 
 ### Contributing
