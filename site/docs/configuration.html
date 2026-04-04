@@ -174,16 +174,12 @@
         <li><strong>mDNS:</strong> <code>_irrlicht._tcp</code> (Bonjour/Zeroconf discovery)</li>
       </ul>
 
-      <!-- ── LaunchAgent ── -->
-      <h2>LaunchAgent</h2>
+      <!-- ── Daemon Lifecycle ── -->
+      <h2>Daemon Lifecycle</h2>
 
-      <p>The <code>.pkg</code> installer creates <code>~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist</code> which auto-starts <code>irrlichd</code> on login. To manage:</p>
+      <p>The daemon (<code>irrlichd</code>) is embedded inside <code>Irrlicht.app</code> and managed automatically. When you launch the app, the daemon starts; when you quit, it stops. If the daemon crashes, the app restarts it with exponential backoff.</p>
 
-      <pre><code># Stop the daemon
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist
-
-# Start the daemon
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist</code></pre>
+      <p>If an external daemon is already running (e.g. from a development build), the app detects it and uses the existing instance instead of spawning a new one.</p>
 
       <!-- ── Bottom nav ── -->
       <nav class="docs-nav-bottom">

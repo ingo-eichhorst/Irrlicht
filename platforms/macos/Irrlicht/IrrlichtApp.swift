@@ -20,7 +20,7 @@ struct StatusIndicatorLabel: View {
         // Group sessions by project
         var groups: [(String, [SessionState])] = []
         var seen: [String: Int] = [:]
-        let capped = Array(sessions.prefix(8))
+        let capped = Array(sessions.filter { $0.parentSessionId == nil }.prefix(8))
         for s in capped {
             let key = s.projectName ?? s.cwd
             if let idx = seen[key] {

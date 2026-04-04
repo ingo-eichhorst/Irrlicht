@@ -70,18 +70,12 @@
       <ol class="steps">
         <li>
           <strong>Install Irrlicht</strong><br>
-          Follow the <a href="installation.html">installation guide</a> to get the daemon and menu bar app on your system.
+          Follow the <a href="installation.html">installation guide</a> to get Irrlicht.app on your system.
         </li>
         <li>
-          <strong>Start the daemon</strong><br>
-          <pre><code>.build/irrlichd-darwin-universal &</code></pre>
-          <p>If you installed via the <code>.pkg</code> installer, the daemon auto-starts via LaunchAgent -- no manual step needed.</p>
-        </li>
-        <li>
-          <strong>Start the menu bar app</strong><br>
+          <strong>Launch the app</strong><br>
           <pre><code>open /Applications/Irrlicht.app</code></pre>
-          <p>Or build and run from source:</p>
-          <pre><code>cd platforms/macos && swift run &</code></pre>
+          <p>The embedded daemon starts automatically &mdash; no separate services to manage.</p>
         </li>
         <li>
           <strong>Look for the sparkle icon</strong><br>

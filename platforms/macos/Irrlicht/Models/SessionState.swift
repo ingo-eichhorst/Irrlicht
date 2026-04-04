@@ -285,6 +285,14 @@ struct SessionState: Identifiable, Codable {
             case .ready: return "🟢"  // green circle
             }
         }
+
+        var label: String {
+            switch self {
+            case .working: return "Working"
+            case .waiting: return "Waiting for input"
+            case .ready: return "Ready"
+            }
+        }
     }
     
     // Computed properties for UI display
@@ -334,6 +342,13 @@ struct SessionState: Identifiable, Codable {
             short = short.replacingCharacters(in: range, with: "." + short[range].dropFirst())
         }
         return short
+    }
+
+    var adapterName: String {
+        switch adapter ?? "claude-code" {
+        case "codex": return "Codex"
+        default: return "Claude Code"
+        }
     }
 
     /// SVG icon for the adapter (claude-code, codex, etc.)

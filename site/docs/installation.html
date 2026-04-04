@@ -68,7 +68,7 @@
       <h2>Prerequisites</h2>
 
       <ul>
-        <li><strong>macOS 13 (Ventura) or later</strong> &mdash; Irrlicht uses SwiftUI APIs and LaunchAgent features that require Ventura as a minimum.</li>
+        <li><strong>macOS 13 (Ventura) or later</strong> &mdash; Irrlicht uses SwiftUI APIs that require Ventura as a minimum.</li>
         <li><strong>At least one supported AI coding agent</strong> installed and working:
           <ul>
             <li><a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></li>
@@ -84,19 +84,19 @@
         <li><strong>Xcode Command Line Tools</strong> &mdash; install with <code>xcode-select --install</code></li>
       </ul>
 
-      <!-- ── Package Installer ── -->
-      <h2>Install via Package Installer (Recommended)</h2>
+      <!-- ── DMG Install ── -->
+      <h2>Install via DMG (Recommended)</h2>
 
-      <p>The fastest path. A signed <code>.pkg</code> installer handles everything for you.</p>
+      <p>The fastest path. A single app bundle with everything included.</p>
 
       <ol class="steps">
         <li>
-          <strong>Download the installer</strong>
-          <p>Grab <code>Irrlicht-0.2.0-mac-installer.pkg</code> from the <a href="https://github.com/anthropics/irrlicht/releases/latest">GitHub Releases</a> page.</p>
+          <strong>Download the DMG</strong>
+          <p>Grab <code>Irrlicht-&lt;version&gt;.dmg</code> from the <a href="https://github.com/ingo-eichhorst/Irrlicht/releases/latest">GitHub Releases</a> page.</p>
         </li>
         <li>
-          <strong>Run the installer</strong>
-          <p>Double-click the <code>.pkg</code> file and follow the on-screen prompts. You may need to approve the installer in <em>System Settings &rarr; Privacy &amp; Security</em> if Gatekeeper blocks it.</p>
+          <strong>Install the app</strong>
+          <p>Open the DMG and drag <strong>Irrlicht.app</strong> to <strong>Applications</strong>. You may need to approve the app in <em>System Settings &rarr; Privacy &amp; Security</em> if Gatekeeper blocks it.</p>
         </li>
         <li>
           <strong>What gets installed</strong>
@@ -105,17 +105,14 @@
               <tr><th>Component</th><th>Location</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>irrlichd</code> (daemon)</td><td><code>/usr/local/bin/irrlichd</code></td></tr>
-              <tr><td>Irrlicht.app (menu-bar app)</td><td><code>/Applications/Irrlicht.app</code></td></tr>
-              <tr><td>LaunchAgent plist</td><td><code>~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist</code></td></tr>
+              <tr><td>Irrlicht.app (menu-bar app + embedded daemon)</td><td><code>/Applications/Irrlicht.app</code></td></tr>
             </tbody>
           </table>
-          <p>The LaunchAgent ensures the daemon starts automatically every time you log in.</p>
+          <p>The daemon (<code>irrlichd</code>) is embedded inside the app bundle and managed automatically. No separate services or LaunchAgents needed.</p>
         </li>
         <li>
-          <strong>Verify the installation</strong>
-          <pre><code>irrlichd --version</code></pre>
-          <p>You should see the version string printed to stdout (e.g. <code>irrlicht 0.2.0</code>).</p>
+          <strong>Launch the app</strong>
+          <p>Open <strong>Irrlicht</strong> from Applications. A sparkle icon appears in the menu bar, and the daemon starts automatically in the background.</p>
         </li>
       </ol>
 
@@ -130,7 +127,7 @@
 cd irrlicht
 ./platforms/build-release.sh</code></pre>
 
-      <p>The script produces a <code>.pkg</code> installer in the project root that you can double-click to install, exactly like the release download.</p>
+      <p>The script produces a <code>.dmg</code> (and optionally a <code>.pkg</code>) in the build directory.</p>
 
       <h3>What the build script does</h3>
 
@@ -141,29 +138,23 @@ cd irrlicht
         <li><strong>Cross-compiles the daemon</strong> &mdash; builds <code>irrlichd</code> for both <code>arm64</code> (Apple Silicon) and <code>amd64</code> (Intel).</li>
         <li><strong>Creates a universal binary</strong> &mdash; merges both architectures with <code>lipo</code> so one binary runs natively on any Mac.</li>
         <li><strong>Builds the Swift menu-bar app</strong> &mdash; compiles <code>Irrlicht.app</code> from the SwiftUI source.</li>
-        <li><strong>Packages everything into a <code>.pkg</code> installer</strong> &mdash; assembles the daemon, app, and LaunchAgent plist into a macOS installer package.</li>
+        <li><strong>Embeds the daemon</strong> &mdash; places the universal <code>irrlichd</code> binary inside <code>Irrlicht.app/Contents/MacOS/</code>.</li>
+        <li><strong>Packages into DMG and installer</strong> &mdash; creates a <code>.dmg</code> for drag-and-drop install and a <code>.pkg</code> installer.</li>
       </ol>
 
       <h3>Manual build (individual components)</h3>
 
-      <p>If you prefer to build each component separately:</p>
+      <p>If you prefer to build each component separately for development:</p>
 
       <h4>Daemon only</h4>
-      <pre><code># Build for the current architecture
-go build -o irrlichd ./cmd/irrlichd
-
-# Or cross-compile a universal binary manually
-GOOS=darwin GOARCH=arm64 go build -o irrlichd-arm64 ./cmd/irrlichd
-GOOS=darwin GOARCH=amd64 go build -o irrlichd-amd64 ./cmd/irrlichd
-lipo -create -output irrlichd irrlichd-arm64 irrlichd-amd64</code></pre>
+      <pre><code>cd core && go build ./cmd/irrlichd/</code></pre>
 
       <h4>Menu-bar app only</h4>
-      <pre><code>cd platforms/macos/Irrlicht
-xcodebuild -scheme Irrlicht -configuration Release build</code></pre>
+      <pre><code>cd platforms/macos && swift build</code></pre>
 
       <div class="callout callout-tip">
         <strong>Tip</strong>
-        After a manual build you will need to copy <code>irrlichd</code> to <code>/usr/local/bin/</code> and <code>Irrlicht.app</code> to <code>/Applications/</code> yourself. You will also need to install the LaunchAgent plist manually &mdash; see the <a href="#uninstalling">Uninstalling</a> section for its expected path.
+        For distribution, always use <code>build-release.sh</code> which embeds the daemon into the app bundle. Manual builds are useful for development but require running the daemon separately.
       </div>
 
       <!-- ── Post-Installation ── -->
@@ -172,7 +163,7 @@ xcodebuild -scheme Irrlicht -configuration Release build</code></pre>
       <p>Once installed (via either method), Irrlicht is ready to go.</p>
 
       <ul>
-        <li><strong>The daemon starts automatically on login</strong> via the LaunchAgent. No manual launch required.</li>
+        <li><strong>The app manages everything</strong> &mdash; the embedded daemon starts automatically when the app launches. No separate services or LaunchAgents needed.</li>
         <li><strong>The menu-bar app</strong> appears in your menu bar as a sparkle icon. Click it to see the current state of all detected AI agent sessions.</li>
       </ul>
 
@@ -180,7 +171,7 @@ xcodebuild -scheme Irrlicht -configuration Release build</code></pre>
 
       <pre><code>curl http://127.0.0.1:7837/state</code></pre>
 
-      <p>A successful response returns a JSON object with the current global state. If the daemon is not running, you will get a connection-refused error.</p>
+      <p>A successful response returns a JSON object with the current global state. If the daemon is not running, verify the app is launched and check logs.</p>
 
       <h3>Check logs</h3>
 
@@ -197,15 +188,10 @@ xcodebuild -scheme Irrlicht -configuration Release build</code></pre>
       <!-- ── Uninstalling ── -->
       <h2 id="uninstalling">Uninstalling</h2>
 
-      <p>To remove Irrlicht completely, delete the following files and directories:</p>
+      <p>To remove Irrlicht completely, quit the app and delete the following:</p>
 
-      <pre><code># Stop the daemon first
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist
-
-# Remove installed files
-rm /usr/local/bin/irrlichd
+      <pre><code># Remove the app
 rm -rf /Applications/Irrlicht.app
-rm ~/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist
 
 # Remove application data and logs
 rm -rf ~/Library/Application\ Support/Irrlicht/</code></pre>

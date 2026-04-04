@@ -1227,13 +1227,13 @@ footer {
     </div>
     <div class="install-options reveal">
       <div class="install-card">
-        <h3>Installer Package</h3>
-        <p class="subtitle">Recommended &mdash; bundles daemon + app + LaunchAgent</p>
+        <h3>DMG / Installer</h3>
+        <p class="subtitle">Recommended &mdash; single app, everything included</p>
         <div class="code-block">
           <span class="comment"># Download from GitHub Releases</span><br>
-          <span class="prompt">$ </span><span class="cmd">open Irrlicht-0.2.1-mac-installer.pkg</span>
+          <span class="prompt">$ </span><span class="cmd">open Irrlicht-0.2.1.dmg</span>
         </div>
-        <p class="install-note">Installs irrlichd to /usr/local/bin, Irrlicht.app to /Applications, and auto-starts the daemon via LaunchAgent.</p>
+        <p class="install-note">Drag Irrlicht.app to /Applications and launch. The daemon is embedded &mdash; no separate services to manage.</p>
       </div>
       <div class="install-card">
         <h3>Build from Source</h3>
@@ -1241,12 +1241,8 @@ footer {
         <div class="code-block">
           <span class="prompt">$ </span><span class="cmd">git clone https://github.com/ingo-eichhorst/Irrlicht.git</span><br>
           <span class="prompt">$ </span><span class="cmd">cd Irrlicht</span><br>
-          <span class="prompt">$ </span><span class="cmd">./platforms/build-release.sh</span>
-        </div>
-        <div class="code-block">
-          <span class="comment"># Run daemon + app</span><br>
-          <span class="prompt">$ </span><span class="cmd">./.build/irrlichd-darwin-universal &</span><br>
-          <span class="prompt">$ </span><span class="cmd">cd platforms/macos && swift run &</span>
+          <span class="prompt">$ </span><span class="cmd">./platforms/build-release.sh</span><br>
+          <span class="prompt">$ </span><span class="cmd">open .build/Irrlicht-*.dmg</span>
         </div>
         <p class="install-note">Requires Go 1.21+ and Swift 5.9+. macOS 13 (Ventura) or later.</p>
       </div>

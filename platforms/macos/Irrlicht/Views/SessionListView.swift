@@ -1,4 +1,27 @@
+import AppKit
 import SwiftUI
+
+// MARK: - Tooltip support for MenuBarExtra
+
+/// Forces a native NSView tooltip on any SwiftUI view.
+/// `.help()` doesn't work inside MenuBarExtra panels, so we bridge to AppKit.
+private struct TooltipView: NSViewRepresentable {
+    let text: String
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.toolTip = text
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.toolTip = text
+    }
+}
+
+extension View {
+    func tooltip(_ text: String) -> some View {
+        overlay(TooltipView(text: text))
+    }
+}
 
 struct SessionListView: View {
     @EnvironmentObject var sessionManager: SessionManager
@@ -354,6 +377,7 @@ struct SessionRowView: View {
                     .font(.system(size: 10))
                     .foregroundColor(Color(hex: session.state.color))
                     .frame(width: 12)
+                    .tooltip(session.state.label)
                     .accessibilityIdentifier("session-state-icon-\(session.id)")
 
                 // Agent number
@@ -377,6 +401,7 @@ struct SessionRowView: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.primary)
                     .lineLimit(1)
+                    .tooltip(session.gitBranch ?? "—")
 
                 // Context utilization bar
                 if let metrics = session.metrics, metrics.hasContextData {
@@ -402,10 +427,12 @@ struct SessionRowView: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
+                    .tooltip(session.effectiveModel)
                     .accessibilityIdentifier("session-model-label-\(session.id)")
                 if let icon = session.adapterIcon {
                     Image(nsImage: icon)
                         .frame(width: 12, height: 12)
+                        .tooltip(session.adapterName)
                 }
 
                 // Action buttons on hover
@@ -498,6 +525,7 @@ struct SubagentRowView: View {
                 .font(.system(size: 9))
                 .foregroundColor(Color(hex: session.state.color))
                 .frame(width: 12)
+                .tooltip(session.state.label)
 
             // Context utilization
             if let metrics = session.metrics, metrics.hasContextData {
