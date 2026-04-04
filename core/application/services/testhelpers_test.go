@@ -163,3 +163,20 @@ func newDetector(
 		"test", 0,
 	)
 }
+
+// newDetectorWithCWDDiscovery builds a SessionDetector with a mock CWD-based
+// PID discovery function wired up via WithCWDDiscovery.
+func newDetectorWithCWDDiscovery(
+	tw *mockAgentWatcher,
+	pw *mockProcessWatcher,
+	repo *mockRepo,
+	cwdFn func(string, func([]int) int) (int, error),
+) *services.SessionDetector {
+	det := services.NewSessionDetector(
+		[]inbound.AgentWatcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
+		"test", 0,
+	)
+	det.WithCWDDiscovery(cwdFn)
+	return det
+}

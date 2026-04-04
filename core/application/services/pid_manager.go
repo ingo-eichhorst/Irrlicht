@@ -91,6 +91,14 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 // This handles the /clear scenario: the CLI process stays alive (same PID) but
 // starts a new transcript, making the old session obsolete.
 func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
+	pm.handlePIDAssignedInternal(pid, sessionID, true)
+}
+
+// handlePIDAssignedInternal is the core of HandlePIDAssigned. When authoritative
+// is true (lsof-based discovery), old sessions sharing the same PID are cleaned
+// up (/clear scenario). When false (CWD-based fallback), cleanup is skipped
+// because CWD discovery is ambiguous for multiple instances in the same repo.
+func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, authoritative bool) {
 	if pid <= 0 {
 		return
 	}
@@ -113,6 +121,13 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	}
 
 	// Clean up old sessions that had the same PID (e.g. /clear).
+	// Only do this for authoritative (lsof) discoveries — CWD-based
+	// fallback is unreliable when multiple instances share a directory
+	// and could incorrectly delete a still-active session.
+	if !authoritative {
+		return
+	}
+
 	// Subagent sessions share the parent's PID, so skip cleanup when
 	// either side is a subagent.
 	if state.ParentSessionID != "" {
@@ -144,6 +159,23 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	}
 }
 
+// claimedPIDs returns the set of PIDs already assigned to sessions other than
+// excludeSessionID. Used to prevent CWD-based discovery from assigning a PID
+// that is already tracked by another session.
+func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return nil
+	}
+	claimed := make(map[int]bool)
+	for _, s := range states {
+		if s.PID > 0 && s.SessionID != excludeSessionID {
+			claimed[s.PID] = true
+		}
+	}
+	return claimed
+}
+
 // TryDiscoverPID attempts lsof-on-transcript (primary), then CWD-based
 // discovery (fallback). Returns true if a PID was found and assigned.
 func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool {
@@ -156,21 +188,27 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool
 		return true
 	}
 
-	// Primary: lsof on transcript file.
+	// Primary: lsof on transcript file (authoritative).
 	if transcriptPath != "" {
 		if pid, err := pm.discoverPID(transcriptPath); err == nil && pid > 0 {
 			pm.log.LogInfo("session-detector", sessionID,
 				fmt.Sprintf("lsof discovered pid %d", pid))
-			pm.HandlePIDAssigned(pid, sessionID)
+			pm.handlePIDAssignedInternal(pid, sessionID, true)
 			return true
 		}
 	}
 
-	// Fallback: CWD-based discovery.
+	// Fallback: CWD-based discovery (not authoritative).
+	// Filter out PIDs already claimed by other sessions to prevent
+	// assigning the same PID to multiple sessions in the same directory.
 	if pm.discoverPIDByCWD != nil && cwd != "" {
+		claimed := pm.claimedPIDs(sessionID)
 		disambiguate := func(pids []int) int {
 			best := 0
 			for _, p := range pids {
+				if claimed[p] {
+					continue
+				}
 				if p > best {
 					best = p
 				}
@@ -180,7 +218,7 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool
 		if pid, err := pm.discoverPIDByCWD(cwd, disambiguate); err == nil && pid > 0 {
 			pm.log.LogInfo("session-detector", sessionID,
 				fmt.Sprintf("cwd fallback discovered pid %d", pid))
-			pm.HandlePIDAssigned(pid, sessionID)
+			pm.handlePIDAssignedInternal(pid, sessionID, false)
 			return true
 		}
 	}
