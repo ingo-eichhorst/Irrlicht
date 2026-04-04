@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"irrlicht/core/adapters/inbound/agents/processscanner"
+	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
@@ -49,7 +49,7 @@ func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 	projectsRoot := realTempDir(t)
 
 	// Wire up: Scanner → SessionDetector (with in-memory stubs).
-	scanner := processscanner.New(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	detector := services.NewSessionDetector(
@@ -122,7 +122,7 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 
 	projectsRoot := realTempDir(t)
-	scanner := processscanner.New(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	// Also wire a mock transcript watcher so we can inject a real session event.
@@ -148,7 +148,7 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 
 	// Simulate Claude Code creating a transcript: create the project dir
 	// and .jsonl file, then inject an EventNewSession from the transcript watcher.
-	projectDir := cwdToProjectDir(fakeCWD)
+	projectDir := processlifecycle.CWDToProjectDir(fakeCWD)
 	projPath := filepath.Join(projectsRoot, projectDir)
 	if err := os.MkdirAll(projPath, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -205,7 +205,7 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 	}
 
 	projectsRoot := realTempDir(t)
-	scanner := processscanner.New(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	detector := services.NewSessionDetector(
@@ -273,18 +273,6 @@ func waitForSession(repo *memRepo, id string, timeout time.Duration) bool {
 	}
 }
 
-// cwdToProjectDir mirrors processscanner.cwdToProjectDir (unexported).
-func cwdToProjectDir(cwd string) string {
-	s := make([]byte, len(cwd))
-	for i, c := range []byte(cwd) {
-		if c == '/' || c == '.' {
-			s[i] = '-'
-		} else {
-			s[i] = c
-		}
-	}
-	return string(s)
-}
 
 // --- stubs -------------------------------------------------------------------
 

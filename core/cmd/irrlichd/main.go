@@ -20,7 +20,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
-	"irrlicht/core/adapters/inbound/agents/processscanner"
+	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
@@ -28,7 +28,6 @@ import (
 	"irrlicht/core/adapters/outbound/logging"
 	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/metrics"
-	processadapter "irrlicht/core/adapters/outbound/process"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/config"
@@ -129,7 +128,7 @@ func main() {
 	// ProcessWatcher: kqueue EVFILT_PROC NOTE_EXIT monitoring.
 	// Exit callback routes to SessionDetector for lifecycle management.
 	var pwPort outbound.ProcessWatcher
-	pw, err := processadapter.New(func(pid int, sessionID string) {
+	pw, err := processlifecycle.NewMonitor(func(pid int, sessionID string) {
 		detector.HandleProcessExit(pid, sessionID)
 	})
 	if err != nil {
@@ -236,7 +235,7 @@ func main() {
 
 	// Process scanner: detects Claude Code processes before they create a
 	// transcript, so the session appears as ready from the moment the app opens.
-	procScanner := processscanner.New(
+	procScanner := processlifecycle.NewScanner(
 		"claude",
 		claudecode.AdapterName,
 		claudeCodeWatcher.Root(),
@@ -271,7 +270,7 @@ func main() {
 		fsRepo, logger, gitResolver, metricsCollector, push,
 		Version, cfg.ReadySessionTTL,
 	)
-	detector.WithCWDDiscovery(processadapter.DiscoverPIDByCWD)
+	detector.WithCWDDiscovery(processlifecycle.DiscoverPIDByCWD)
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()
