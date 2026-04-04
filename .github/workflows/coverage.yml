@@ -61,9 +61,11 @@ jobs:
           GIST_SECRET: ${{ secrets.GIST_SECRET }}
           COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
         run: |
-          curl -s -X PATCH \
+          BADGE_JSON="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"${COLOR}\"}"
+          jq -n --arg content "$BADGE_JSON" '{"files":{"coverage.json":{"content":$content}}}' > /tmp/gist-payload.json
+          curl -sf -X PATCH \
             -H "Authorization: token $GIST_SECRET" \
             -H "Content-Type: application/json" \
-            -d "{\"files\":{\"coverage.json\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"label\\\":\\\"coverage\\\",\\\"message\\\":\\\"${COVERAGE}%\\\",\\\"color\\\":\\\"${COLOR}\\\"}\"}}}}" \
-            "https://api.github.com/gists/$COVERAGE_GIST_ID"
+            -d @/tmp/gist-payload.json \
+            "https://api.github.com/gists/$COVERAGE_GIST_ID" > /dev/null
 
