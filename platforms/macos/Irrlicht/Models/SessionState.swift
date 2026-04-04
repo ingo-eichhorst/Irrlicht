@@ -143,6 +143,9 @@ struct SessionState: Identifiable, Codable {
     let subagents: SubagentSummary? // aggregate state of child sessions (optional)
     let adapter: String?        // source agent: "claude-code", "codex" (optional)
     let daemonVersion: String?  // irrlichd version that created this session (optional)
+    let role: String?           // orchestrator role: "witness", "polecat", etc. (optional)
+    let workerName: String?     // orchestrator worker name (optional)
+    let workerID: String?       // orchestrator worker/bead ID (optional)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
@@ -165,6 +168,9 @@ struct SessionState: Identifiable, Codable {
         case subagents
         case adapter
         case daemonVersion = "daemon_version"
+        case role
+        case workerName = "worker_name"
+        case workerID = "worker_id"
     }
     
     // Custom decoder to handle multiple date formats and missing fields
@@ -192,6 +198,9 @@ struct SessionState: Identifiable, Codable {
         subagents = try container.decodeIfPresent(SubagentSummary.self, forKey: .subagents)
         adapter = try container.decodeIfPresent(String.self, forKey: .adapter)
         daemonVersion = try container.decodeIfPresent(String.self, forKey: .daemonVersion)
+        role = try container.decodeIfPresent(String.self, forKey: .role)
+        workerName = try container.decodeIfPresent(String.self, forKey: .workerName)
+        workerID = try container.decodeIfPresent(String.self, forKey: .workerID)
 
         // Handle firstSeen date (unix timestamp format)
         if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
@@ -239,7 +248,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, workerName: String? = nil, workerID: String? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -257,6 +266,9 @@ struct SessionState: Identifiable, Codable {
         self.subagents = subagents
         self.adapter = adapter
         self.daemonVersion = daemonVersion
+        self.role = role
+        self.workerName = workerName
+        self.workerID = workerID
     }
     
     enum State: String, CaseIterable, Codable {
