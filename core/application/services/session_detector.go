@@ -45,7 +45,8 @@ type SessionDetector struct {
 	version     string                   // daemon version stamped on new sessions
 	readyTTL    time.Duration            // max idle time for ready sessions before deletion
 
-	discoverPID func(string) (int, error) // defaults to processadapter.DiscoverPID
+	discoverPID      func(string) (int, error)                    // defaults to processadapter.DiscoverPID
+	discoverPIDByCWD func(string, func([]int) int) (int, error) // optional CWD fallback
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
@@ -78,6 +79,13 @@ func NewSessionDetector(
 		discoverPID:     processadapter.DiscoverPID,
 		projectSessions: make(map[string]string),
 	}
+}
+
+// WithCWDDiscovery sets an optional fallback PID discovery function that finds
+// a process by matching its working directory. Called when lsof on the
+// transcript file fails to find a PID.
+func (d *SessionDetector) WithCWDDiscovery(fn func(string, func([]int) int) (int, error)) {
+	d.discoverPIDByCWD = fn
 }
 
 // Run subscribes to all AgentWatcher event streams, fans them into a single
@@ -240,8 +248,12 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		}
 	}
 
-	// One-time PID discovery via lsof.
-	d.discoverAndRegisterPID(ev.SessionID, ev.TranscriptPath)
+	// PID discovery with retry and CWD fallback (async).
+	cwd := ev.CWD
+	if !isNew {
+		cwd = existing.CWD
+	}
+	go d.discoverPIDWithRetry(ev.SessionID, ev.TranscriptPath, cwd)
 }
 
 // onActivity handles transcript file writes. It uses content-based detection
@@ -256,10 +268,10 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	}
 
 	// Retry PID discovery if not yet known (async to avoid blocking the
-	// event loop on lsof I/O).
+	// event loop on lsof I/O). Includes CWD fallback.
 	if state.PID == 0 && ev.TranscriptPath != "" {
-		sid, tp := ev.SessionID, ev.TranscriptPath
-		go d.discoverAndRegisterPID(sid, tp)
+		sid, tp, cwd := ev.SessionID, ev.TranscriptPath, state.CWD
+		go d.tryDiscoverPID(sid, tp, cwd)
 	}
 
 	// Refresh CWD/branch/project from transcript. GetCWDFromTranscript returns
@@ -468,28 +480,66 @@ func (d *SessionDetector) checkPIDLiveness() {
 	}
 }
 
-// discoverAndRegisterPID uses lsof to find the PID that has a transcript file
-// open, then registers it with the ProcessWatcher for exit monitoring.
-func (d *SessionDetector) discoverAndRegisterPID(sessionID, transcriptPath string) {
-	if d.pw == nil || transcriptPath == "" {
-		return
+// tryDiscoverPID attempts lsof-on-transcript (primary), then CWD-based
+// discovery (fallback). Returns true if a PID was found and assigned.
+func (d *SessionDetector) tryDiscoverPID(sessionID, transcriptPath, cwd string) bool {
+	if d.pw == nil {
+		return false
 	}
-
 	// Check if session already has a PID.
 	state, _ := d.repo.Load(sessionID)
 	if state != nil && state.PID > 0 {
-		return
+		return true
 	}
 
-	pid, err := d.discoverPID(transcriptPath)
-	if err != nil || pid <= 0 {
-		return
+	// Primary: lsof on transcript file.
+	if transcriptPath != "" {
+		if pid, err := d.discoverPID(transcriptPath); err == nil && pid > 0 {
+			d.log.LogInfo("session-detector", sessionID,
+				fmt.Sprintf("lsof discovered pid %d", pid))
+			d.HandlePIDAssigned(pid, sessionID)
+			return true
+		}
 	}
 
-	d.log.LogInfo("session-detector", sessionID,
-		fmt.Sprintf("lsof discovered pid %d", pid))
+	// Fallback: CWD-based discovery.
+	if d.discoverPIDByCWD != nil && cwd != "" {
+		disambiguate := func(pids []int) int {
+			best := 0
+			for _, p := range pids {
+				if p > best {
+					best = p
+				}
+			}
+			return best
+		}
+		if pid, err := d.discoverPIDByCWD(cwd, disambiguate); err == nil && pid > 0 {
+			d.log.LogInfo("session-detector", sessionID,
+				fmt.Sprintf("cwd fallback discovered pid %d", pid))
+			d.HandlePIDAssigned(pid, sessionID)
+			return true
+		}
+	}
+	return false
+}
 
-	d.HandlePIDAssigned(pid, sessionID)
+// discoverPIDWithRetry tries to discover a PID immediately, then retries at
+// 500ms, 1s, 2s intervals. This covers the common timing issue where the CLI
+// hasn't opened the transcript file yet at session creation time.
+func (d *SessionDetector) discoverPIDWithRetry(sessionID, transcriptPath, cwd string) {
+	if d.tryDiscoverPID(sessionID, transcriptPath, cwd) {
+		return
+	}
+	for _, delay := range []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second} {
+		time.Sleep(delay)
+		state, _ := d.repo.Load(sessionID)
+		if state == nil || state.PID > 0 {
+			return
+		}
+		if d.tryDiscoverPID(sessionID, transcriptPath, cwd) {
+			return
+		}
+	}
 }
 
 // HandlePIDAssigned records a newly-discovered PID for a session, registers it

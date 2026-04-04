@@ -132,6 +132,94 @@ func (w *Watcher) Close() error {
 	return syscall.Close(w.kqfd)
 }
 
+// findClaudeProcesses returns PIDs of running "claude" processes via pgrep.
+func findClaudeProcesses() ([]int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "pgrep", "-x", "claude").Output()
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+			return nil, nil // no matches
+		}
+		return nil, err
+	}
+	var pids []int
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(line)
+		if err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
+}
+
+// processCWD returns the working directory of pid using lsof.
+func processCWD(pid int) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+	if err != nil {
+		return "", fmt.Errorf("lsof cwd pid %d: %w", pid, err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "n") {
+			return strings.TrimPrefix(line, "n"), nil
+		}
+	}
+	return "", fmt.Errorf("cwd not found for pid %d", pid)
+}
+
+// DiscoverPIDByCWD finds a "claude" process whose CWD matches the given
+// directory. When multiple processes match, disambiguate selects one.
+// Returns 0, nil when no matching process is found.
+func DiscoverPIDByCWD(cwd string, disambiguate func([]int) int) (int, error) {
+	if cwd == "" {
+		return 0, nil
+	}
+	pids, err := findClaudeProcesses()
+	if err != nil {
+		return 0, fmt.Errorf("find claude processes: %w", err)
+	}
+
+	myPID := os.Getpid()
+	var matches []int
+	for _, pid := range pids {
+		if pid == myPID {
+			continue
+		}
+		dir, err := processCWD(pid)
+		if err != nil {
+			continue
+		}
+		if dir == cwd {
+			matches = append(matches, pid)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return 0, nil
+	case 1:
+		return matches[0], nil
+	default:
+		if disambiguate != nil {
+			return disambiguate(matches), nil
+		}
+		// Default: highest PID (most recently started on macOS).
+		best := 0
+		for _, p := range matches {
+			if p > best {
+				best = p
+			}
+		}
+		return best, nil
+	}
+}
+
 // DiscoverPID uses lsof to find the PID that has filePath open.
 // Returns 0, nil when no process has the file open.
 func DiscoverPID(filePath string) (int, error) {

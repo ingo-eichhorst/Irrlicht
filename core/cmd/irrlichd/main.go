@@ -271,6 +271,7 @@ func main() {
 		fsRepo, logger, gitResolver, metricsCollector, push,
 		Version, cfg.ReadySessionTTL,
 	)
+	detector.WithCWDDiscovery(processadapter.DiscoverPIDByCWD)
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()
