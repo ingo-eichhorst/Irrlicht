@@ -3,10 +3,17 @@ import Combine
 import Darwin
 import UserNotifications
 
+enum ConnectionState {
+    case disconnected   // not started or explicitly stopped
+    case connecting     // initial connection attempt
+    case connected      // WebSocket active and receiving
+    case reconnecting   // transient disconnect, auto-recovering
+}
+
 @MainActor
 class SessionManager: ObservableObject {
     @Published var sessions: [SessionState] = []
-    @Published var isWatching: Bool = false
+    @Published var connectionState: ConnectionState = .disconnected
     @Published var lastError: String?
 
     private let instancesPath: URL
@@ -77,8 +84,8 @@ class SessionManager: ObservableObject {
     // MARK: - WebSocket
 
     func startWebSocket() {
-        guard !isWatching else { return }
-        isWatching = true
+        guard connectionState == .disconnected else { return }
+        connectionState = .connecting
         reconnectDelay = 1.0
         scheduleConnect(after: 0)
     }
@@ -88,7 +95,7 @@ class SessionManager: ObservableObject {
         connectTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
-        isWatching = false
+        connectionState = .disconnected
     }
 
     private func scheduleConnect(after delay: TimeInterval) {
@@ -111,7 +118,7 @@ class SessionManager: ObservableObject {
         task.resume()
 
         reconnectDelay = 1.0
-        lastError = nil
+        connectionState = .connected
         print("🔌 WebSocket connected to irrlichd")
 
         do {
@@ -132,11 +139,11 @@ class SessionManager: ObservableObject {
             print("🔌 WebSocket disconnected: \(error.localizedDescription)")
         }
 
-        guard isWatching && !Task.isCancelled else { return }
+        guard connectionState != .disconnected && !Task.isCancelled else { return }
 
         let jitter = Double.random(in: 0...(reconnectDelay * 0.2))
         let delay = reconnectDelay + jitter
-        lastError = "Connection lost, reconnecting in \(Int(delay))s…"
+        connectionState = .reconnecting
         print("🔌 Reconnecting in \(String(format: "%.1f", delay))s")
 
         reconnectDelay = min(reconnectDelay * 2, maxReconnectDelay)
@@ -244,7 +251,6 @@ class SessionManager: ObservableObject {
         updateSessionOrder(with: newSessions)
         assignDuplicateIndexes(&newSessions)
         sessions = newSessions
-        lastError = nil
         checkContextPressureAlerts(sessions: newSessions)
         writeDebugState()
     }
@@ -252,7 +258,7 @@ class SessionManager: ObservableObject {
     // MARK: - File System Watching (legacy)
 
     func startWatching() {
-        guard !isWatching else { return }
+        guard connectionState == .disconnected else { return }
 
         // Create directory if it doesn't exist
         createInstancesDirectoryIfNeeded()
@@ -287,7 +293,7 @@ class SessionManager: ObservableObject {
             }
         }
 
-        isWatching = true
+        connectionState = .connected
     }
 
     func stopWatching() {
@@ -297,7 +303,7 @@ class SessionManager: ObservableObject {
         debounceTimer = nil
         periodicUpdateTimer?.invalidate()
         periodicUpdateTimer = nil
-        isWatching = false
+        connectionState = .disconnected
     }
 
     private func debouncedReload() {
@@ -413,7 +419,6 @@ class SessionManager: ObservableObject {
             assignDuplicateIndexes(&newSessions)
 
             sessions = newSessions
-            lastError = nil
             checkContextPressureAlerts(sessions: newSessions)
             writeDebugState()
 

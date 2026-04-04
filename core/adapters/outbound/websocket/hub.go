@@ -3,10 +3,17 @@ package websocket
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 
 	"irrlicht/core/ports/outbound"
+)
+
+const (
+	pingInterval = 30 * time.Second
+	pongTimeout  = 45 * time.Second
+	writeTimeout = 10 * time.Second
 )
 
 var upgrader = websocket.Upgrader{
@@ -36,6 +43,13 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	ch := h.push.Subscribe()
 	defer h.push.Unsubscribe(ch)
 
+	// Set initial read deadline; reset on each pong.
+	conn.SetReadDeadline(time.Now().Add(pongTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongTimeout))
+		return nil
+	})
+
 	// Detect client disconnect via a read pump running concurrently.
 	done := make(chan struct{})
 	go func() {
@@ -47,6 +61,10 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Ping ticker to keep the connection alive.
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case msg, ok := <-ch:
@@ -57,7 +75,13 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
+			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+		case <-ticker.C:
+			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 		case <-done:

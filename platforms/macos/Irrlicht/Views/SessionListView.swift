@@ -235,21 +235,29 @@ struct SessionListView: View {
     
     private var statusIndicator: some View {
         HStack(spacing: 4) {
-            if sessionManager.isWatching {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 6, height: 6)
-                Text("watching")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            } else {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 6, height: 6)
-                Text("not watching")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
+            Circle()
+                .fill(statusColor)
+                .frame(width: 6, height: 6)
+            Text(statusLabel)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var statusColor: Color {
+        switch sessionManager.connectionState {
+        case .connected: return .green
+        case .connecting, .reconnecting: return .yellow
+        case .disconnected: return .red
+        }
+    }
+
+    private var statusLabel: String {
+        switch sessionManager.connectionState {
+        case .connected: return "watching"
+        case .connecting: return "connecting"
+        case .reconnecting: return "reconnecting"
+        case .disconnected: return "disconnected"
         }
     }
     
