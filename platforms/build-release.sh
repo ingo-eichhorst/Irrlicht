@@ -14,6 +14,7 @@ DAEMON_NAME="irrlichd"
 APP_NAME="Irrlicht"
 BUNDLE_ID="com.anthropic.irrlicht"
 PKG_NAME="Irrlicht-${VERSION}-mac-installer.pkg"
+DMG_NAME="Irrlicht-${VERSION}.dmg"
 
 echo "Building Irrlicht v$VERSION"
 echo "============================================="
@@ -78,6 +79,11 @@ mkdir -p "$APP_CONTENTS/Resources"
 
 cp "$SWIFT_BIN" "$APP_CONTENTS/MacOS/${APP_NAME}"
 
+# Embed daemon inside the app bundle (single-artifact distribution)
+cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
+chmod 755 "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
+echo "  Embedded daemon in app bundle"
+
 # Generate Info.plist with resolved variables
 cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -118,9 +124,28 @@ PLIST
 
 echo "  Created $APP_BUNDLE"
 
-# ── 4. Create LaunchDaemon plist ───────────────────────────────────────
+# ── 4. Create DMG (primary distribution) ──────────────────────────────
 echo ""
-echo "Creating LaunchAgent plist..."
+echo "Creating DMG..."
+
+DMG_STAGING="$BUILD_DIR/dmg-staging"
+rm -rf "$DMG_STAGING"
+mkdir -p "$DMG_STAGING"
+
+cp -R "$APP_BUNDLE" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
+
+hdiutil create -volname "Irrlicht $VERSION" \
+    -srcfolder "$DMG_STAGING" \
+    -ov -format UDZO \
+    "$BUILD_DIR/$DMG_NAME"
+
+rm -rf "$DMG_STAGING"
+echo "  Created $BUILD_DIR/$DMG_NAME"
+
+# ── 5. Create LaunchAgent plist (optional, for power users) ──────────
+echo ""
+echo "Creating LaunchAgent plist (optional — for running daemon without menu bar app)..."
 
 LAUNCHAGENT_PLIST="$BUILD_DIR/${BUNDLE_ID}.daemon.plist"
 cat > "$LAUNCHAGENT_PLIST" <<PLIST
@@ -132,7 +157,7 @@ cat > "$LAUNCHAGENT_PLIST" <<PLIST
     <string>${BUNDLE_ID}.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/${DAEMON_NAME}</string>
+        <string>/Applications/${APP_NAME}.app/Contents/MacOS/${DAEMON_NAME}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -146,7 +171,7 @@ cat > "$LAUNCHAGENT_PLIST" <<PLIST
 </plist>
 PLIST
 
-# ── 5. Build installer .pkg ────────────────────────────────────────────
+# ── 6. Build installer .pkg (alternative distribution) ────────────────
 echo ""
 echo "Building installer package..."
 
@@ -154,34 +179,18 @@ PKG_ROOT="$BUILD_DIR/pkg-root"
 PKG_SCRIPTS="$BUILD_DIR/pkg-scripts"
 rm -rf "$PKG_ROOT" "$PKG_SCRIPTS"
 
-# Lay out installed file hierarchy
-mkdir -p "$PKG_ROOT/usr/local/bin"
+# Lay out installed file hierarchy — only the app bundle, daemon lives inside it
 mkdir -p "$PKG_ROOT/Applications"
-mkdir -p "$PKG_ROOT/Library/LaunchAgents"
-
-cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$PKG_ROOT/usr/local/bin/${DAEMON_NAME}"
-chmod 755 "$PKG_ROOT/usr/local/bin/${DAEMON_NAME}"
 cp -R "$APP_BUNDLE" "$PKG_ROOT/Applications/${APP_NAME}.app"
-cp "$LAUNCHAGENT_PLIST" "$PKG_ROOT/Library/LaunchAgents/${BUNDLE_ID}.daemon.plist"
 
-# Post-install script: load LaunchAgent for the installing user
+# Post-install script: add to Login Items (optional, lightweight)
 mkdir -p "$PKG_SCRIPTS"
 cat > "$PKG_SCRIPTS/postinstall" <<'SCRIPT'
 #!/bin/bash
-PLIST="/Library/LaunchAgents/com.anthropic.irrlicht.daemon.plist"
-AGENT_LABEL="com.anthropic.irrlicht.daemon"
-
-# Copy to user LaunchAgents and load
+# The app manages its own daemon lifecycle — no LaunchAgent needed.
+# Just open the app so the user sees it in the menu bar immediately.
 CURRENT_USER=$(stat -f "%Su" /dev/console)
-USER_LA_DIR="/Users/$CURRENT_USER/Library/LaunchAgents"
-mkdir -p "$USER_LA_DIR"
-cp "$PLIST" "$USER_LA_DIR/"
-chown "$CURRENT_USER" "$USER_LA_DIR/$(basename $PLIST)"
-
-# Unload if already running, then load
-su "$CURRENT_USER" -c "launchctl bootout gui/$(id -u $CURRENT_USER) $USER_LA_DIR/$(basename $PLIST)" 2>/dev/null || true
-su "$CURRENT_USER" -c "launchctl bootstrap gui/$(id -u $CURRENT_USER) $USER_LA_DIR/$(basename $PLIST)" 2>/dev/null || true
-
+su "$CURRENT_USER" -c "open /Applications/Irrlicht.app" 2>/dev/null || true
 exit 0
 SCRIPT
 chmod 755 "$PKG_SCRIPTS/postinstall"
@@ -202,12 +211,9 @@ cat > "$BUILD_DIR/distribution.xml" <<DIST
     <title>Irrlicht v${VERSION}</title>
     <welcome language="en"><![CDATA[
         <h2>Irrlicht v${VERSION}</h2>
-        <p>This installer will set up:</p>
-        <ul>
-            <li><strong>irrlichd</strong> — background daemon for monitoring AI coding sessions</li>
-            <li><strong>Irrlicht.app</strong> — macOS menu bar UI</li>
-        </ul>
-        <p>The daemon starts automatically on login via LaunchAgent.</p>
+        <p>This installer will set up <strong>Irrlicht.app</strong> in your Applications folder.</p>
+        <p>The app includes the monitoring daemon — everything runs from a single application.
+        Just drag to Applications or use this installer, then launch from your menu bar.</p>
     ]]></welcome>
     <options customize="never" require-scripts="false"/>
     <choices-outline>
@@ -227,26 +233,33 @@ productbuild \
 
 echo "  Created $BUILD_DIR/$PKG_NAME"
 
-# ── 6. Checksums ───────────────────────────────────────────────────────
+# ── 7. Checksums ───────────────────────────────────────────────────────
 echo ""
 echo "Calculating checksums..."
 cd "$BUILD_DIR"
-shasum -a 256 "$PKG_NAME" ${DAEMON_NAME}-darwin-universal > checksums.sha256
+shasum -a 256 "$DMG_NAME" "$PKG_NAME" ${DAEMON_NAME}-darwin-universal > checksums.sha256
 cd ..
 
-# ── 7. Summary ─────────────────────────────────────────────────────────
+# ── 8. Summary ─────────────────────────────────────────────────────────
 echo ""
 echo "============================================="
 echo "Release v$VERSION build complete!"
 echo ""
-echo "Installer:  $BUILD_DIR/$PKG_NAME"
-echo "Daemon:     $BUILD_DIR/${DAEMON_NAME}-darwin-universal"
-echo "App:        $BUILD_DIR/${APP_NAME}.app"
+echo "Distribution (pick one):"
+echo "  DMG:        $BUILD_DIR/$DMG_NAME  (drag to Applications)"
+echo "  Installer:  $BUILD_DIR/$PKG_NAME  (double-click to install)"
+echo ""
+echo "App bundle:   $BUILD_DIR/${APP_NAME}.app"
+echo "  Contains:   ${APP_NAME} (menu bar UI) + ${DAEMON_NAME} (embedded daemon)"
+echo ""
+echo "Optional:"
+echo "  LaunchAgent: $BUILD_DIR/${BUNDLE_ID}.daemon.plist"
+echo "               (for running daemon without the menu bar app)"
 echo ""
 echo "Checksums:"
 cat "$BUILD_DIR/checksums.sha256"
 echo ""
-echo "Installs:"
-echo "  /usr/local/bin/irrlichd"
-echo "  /Applications/Irrlicht.app"
-echo "  ~/Library/LaunchAgents/${BUNDLE_ID}.daemon.plist"
+echo "Install:"
+echo "  1. Open $BUILD_DIR/$DMG_NAME"
+echo "  2. Drag Irrlicht.app to Applications"
+echo "  3. Launch Irrlicht from Applications — daemon starts automatically"

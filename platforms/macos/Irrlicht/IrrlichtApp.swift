@@ -74,17 +74,21 @@ struct StatusIndicatorLabel: View {
 
 @main
 struct IrrlichtApp: App {
+    @StateObject private var daemonManager = DaemonManager()
     @StateObject private var sessionManager = SessionManager()
     @StateObject private var gasTownProvider = GasTownProvider()
 
     var body: some Scene {
         MenuBarExtra {
             SessionListView()
+                .environmentObject(daemonManager)
                 .environmentObject(sessionManager)
                 .environmentObject(gasTownProvider)
                 .onAppear {
                     // Wire gasTownProvider to sessionManager for WebSocket forwarding.
                     sessionManager.gasTownProvider = gasTownProvider
+                    // Start the embedded daemon (or detect an external one).
+                    daemonManager.start()
                 }
         } label: {
             StatusIndicatorLabel(sessions: sessionManager.sessions)

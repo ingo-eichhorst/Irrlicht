@@ -129,6 +129,7 @@ final class SessionManagerTests: XCTestCase {
             model: "claude-3.7-sonnet",
             cwd: "/test",
             transcriptPath: "/test/transcript.jsonl",
+            firstSeen: Date(),
             updatedAt: Date(),
             eventCount: 1,
             lastEvent: "SessionStart"
@@ -145,6 +146,7 @@ final class SessionManagerTests: XCTestCase {
             model: "claude-3.7-sonnet",
             cwd: "/test",
             transcriptPath: "/test/transcript.jsonl",
+            firstSeen: oneMinuteAgo,
             updatedAt: oneMinuteAgo,
             eventCount: 1,
             lastEvent: "SessionStart"
@@ -216,6 +218,7 @@ final class SessionManagerTests: XCTestCase {
             model: "claude-3.7-sonnet",
             cwd: "/Users/test/projects/test",
             transcriptPath: "/Users/test/.claude/projects/test/transcript.jsonl",
+            firstSeen: Date(),
             updatedAt: Date(),
             eventCount: 1,
             lastEvent: "SessionStart"

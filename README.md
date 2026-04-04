@@ -60,27 +60,22 @@ No ghosts. **Files → State → Light.**
 
 ### Installation
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/ingo-eichhorst/Irrlicht.git
-   cd Irrlicht
-   ```
+**Option A — DMG (recommended):**
 
-2. **Build the daemon:**
-   ```bash
-   ./platforms/build-release.sh
-   ```
+1. Download `Irrlicht-<version>.dmg` from [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases)
+2. Open the DMG and drag **Irrlicht.app** to **Applications**
+3. Launch Irrlicht from Applications
 
-3. **Run the daemon:**
-   ```bash
-   ./.build/irrlichd-darwin-universal &
-   ```
+The app embeds the monitoring daemon — everything runs from a single application. No separate services to manage.
 
-4. **Run Irrlicht UI:**
-   ```bash
-   cd platforms/macos
-   swift run &
-   ```
+**Option B — Build from source:**
+
+```bash
+git clone https://github.com/ingo-eichhorst/Irrlicht.git
+cd Irrlicht
+./platforms/build-release.sh
+open .build/Irrlicht-*.dmg
+```
 
 **That's it.** No hooks to configure, no settings to merge — Irrlicht watches transcript files automatically.
 
@@ -138,9 +133,9 @@ Example state file:
 │   ├── application/services/  # SessionDetector orchestration
 │   └── pkg/                   # tailer, capacity utilities
 ├── platforms/
-│   ├── macos/                 # SwiftUI menu bar application
+│   ├── macos/                 # SwiftUI menu bar application + DaemonManager
 │   ├── web/                   # Web frontend (embedded into daemon)
-│   └── build-release.sh       # Release build script
+│   └── build-release.sh       # Release build → .app bundle with embedded daemon + DMG
 ├── fixtures/                  # Sample transcript files and edge cases
 ```
 
@@ -193,19 +188,23 @@ See [events.md](events.md) for the full state machine.
 ### Architecture
 
 ```
-irrlichd
-  ├── Inbound Adapters
-  │   ├── Claude Code    (~/.claude/projects/**/*.jsonl via fsnotify)
-  │   ├── Codex          (~/.codex/**/*.jsonl via fsnotify)
-  │   └── Gas Town       (daemon/state.json watcher + gt CLI poller)
-  ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking)
-  ├── GracePeriodTimer   (per-session 2s idle → waiting)
-  └── ProcessWatcher     (kqueue EVFILT_PROC NOTE_EXIT → ready)
+Irrlicht.app (single artifact)
+  ├── Irrlicht (SwiftUI menu bar UI)
+  │   └── DaemonManager   (spawns/monitors/restarts irrlichd)
+  └── irrlichd (Go daemon, embedded in app bundle)
+      ├── Inbound Adapters
+      │   ├── Claude Code    (~/.claude/projects/**/*.jsonl via fsnotify)
+      │   ├── Codex          (~/.codex/**/*.jsonl via fsnotify)
+      │   └── Gas Town       (daemon/state.json watcher + gt CLI poller)
+      ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking)
+      ├── GracePeriodTimer   (per-session 2s idle → waiting)
+      └── ProcessWatcher     (kqueue EVFILT_PROC NOTE_EXIT → ready)
 ```
 
-- **Daemon** (Go): Watches agent transcript files, tracks state, serves HTTP API + WebSocket
+- **Single-artifact packaging**: The `.app` bundle contains both the SwiftUI UI and the Go daemon — no separate installs, no version drift
+- **Daemon lifecycle**: The app automatically spawns `irrlichd` on launch. If an external daemon is already running (e.g. via LaunchAgent), it uses that instead. If the daemon crashes, the app restarts it with exponential backoff
 - **State Machine**: Maintains deterministic session states in JSON files
-- **UI Layer** (SwiftUI): Renders real-time visual indicators with 1-second refresh
+- **Communication**: HTTP API + WebSocket on port 7837 for real-time UI updates
 - **File System**: Atomic writes ensure consistency across concurrent sessions
 
 ### Performance Specifications
@@ -237,14 +236,15 @@ Structured JSON logs with automatic rotation:
 ### Troubleshooting
 
 **Irrlicht not showing in menu bar:**
-- Verify Swift app is running: `ps aux | grep Irrlicht`
+- Verify the app is running: `ps aux | grep Irrlicht`
 - Check state directory exists: `ls ~/Library/Application\ Support/Irrlicht/`
 - Look for error logs in `~/Library/Application\ Support/Irrlicht/logs/`
 
 **Sessions not updating:**
-- Check that irrlichd is running: `curl http://127.0.0.1:7837/state`
+- The app manages the daemon automatically — check that both processes are running: `ps aux | grep -E 'Irrlicht|irrlichd'`
+- Test daemon health: `curl http://127.0.0.1:7837/state`
 - Check IRRLICHT_DISABLED environment variable
-- Verify file permissions in state directory
+- If the daemon isn't starting, check Console.app for logs from `com.anthropic.irrlicht`
 
 **Orphaned sessions (session stuck after agent exits):**
 - Sessions include a `pid` field tracking the agent process
