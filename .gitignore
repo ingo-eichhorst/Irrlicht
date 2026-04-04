@@ -3,6 +3,11 @@
 .build/
 build/
 
+# Go build artifacts (use `go build -o /tmp/...` or `.build/` instead)
+bin/
+core/bin/
+core/irrlicht-ls
+
 # Xcode
 *.xcodeproj
 *.xcworkspace
