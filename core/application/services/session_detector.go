@@ -372,8 +372,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.broadcast(outbound.PushTypeUpdated, state)
 }
 
-// HandleProcessExit handles a session whose process has exited.
-// Sessions with transcripts are kept as ready; pre-sessions are deleted.
+// HandleProcessExit deletes a session when its process exits.
 func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 	// Remove from project tracking.
 	d.mu.Lock()
@@ -387,24 +386,8 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 		return
 	}
 
-	if state.TranscriptPath != "" {
-		// Real session — keep as ready so history is preserved.
-		d.log.LogInfo("process-exit", sessionID,
-			fmt.Sprintf("pid %d exited, transitioning to ready (was %s)", pid, state.State))
-		state.State = session.StateReady
-		state.PID = 0
-		state.UpdatedAt = time.Now().Unix()
-		if err := d.repo.Save(state); err != nil {
-			d.log.LogError("process-exit", sessionID,
-				fmt.Sprintf("failed to save session: %v", err))
-		}
-		d.broadcast(outbound.PushTypeUpdated, state)
-		return
-	}
-
-	// Pre-session (no transcript) — delete entirely.
 	d.log.LogInfo("process-exit", sessionID,
-		fmt.Sprintf("pid %d exited, deleting pre-session", pid))
+		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
 
 	if err := d.repo.Delete(sessionID); err != nil {
 		d.log.LogError("process-exit", sessionID,
@@ -444,14 +427,19 @@ func (d *SessionDetector) checkPIDLiveness() {
 		}
 	}
 
-	// Sweep stale ready sessions — primary cleanup when PID-based liveness
-	// can't distinguish per-session state (e.g. daemon-managed sessions
-	// where DiscoverPID returns 0 because only the daemon has the file open).
+	// Sweep stale sessions that can't be cleaned up via PID liveness:
+	// - Ready sessions (idle beyond TTL)
+	// - Working/waiting sessions with PID=0 (zombies where PID discovery
+	//   failed and no kqueue/sweep cleanup path can fire)
 	if d.readyTTL > 0 {
 		for _, state := range states {
-			if state.State == session.StateReady && state.IsStale(d.readyTTL) {
+			if !state.IsStale(d.readyTTL) {
+				continue
+			}
+			if state.State == session.StateReady || state.PID == 0 {
 				d.log.LogInfo("session-detector", state.SessionID,
-					fmt.Sprintf("ready session idle for >%v, deleting", d.readyTTL))
+					fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
+						state.State, state.PID, d.readyTTL))
 				_ = d.repo.Delete(state.SessionID)
 				d.broadcast(outbound.PushTypeDeleted, state)
 			}
@@ -643,27 +631,10 @@ func (d *SessionDetector) seedFromDisk() {
 			continue
 		}
 		if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-			if state.TranscriptPath == "" {
-				// Pre-sessions (no transcript) are deleted — no useful state to keep.
-				d.log.LogInfo("session-detector-seed", state.SessionID,
-					fmt.Sprintf("pid %d dead, deleting pre-session", state.PID))
-				_ = d.repo.Delete(state.SessionID)
-				d.broadcast(outbound.PushTypeDeleted, state)
-			} else {
-				// Real sessions with transcripts are kept as ready.
-				// Only update the timestamp if the state actually changed,
-				// so the ready-session TTL isn't reset on every daemon restart.
-				wasReady := state.State == session.StateReady
-				d.log.LogInfo("session-detector-seed", state.SessionID,
-					fmt.Sprintf("pid %d dead, transitioning to ready (was %s)", state.PID, state.State))
-				state.State = session.StateReady
-				state.PID = 0
-				if !wasReady {
-					state.UpdatedAt = time.Now().Unix()
-				}
-				_ = d.repo.Save(state)
-				d.broadcast(outbound.PushTypeUpdated, state)
-			}
+			d.log.LogInfo("session-detector-seed", state.SessionID,
+				fmt.Sprintf("pid %d dead, deleting session", state.PID))
+			_ = d.repo.Delete(state.SessionID)
+			d.broadcast(outbound.PushTypeDeleted, state)
 			continue
 		}
 		if d.pw != nil {
