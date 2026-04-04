@@ -13,6 +13,7 @@ enum ConnectionState {
 @MainActor
 class SessionManager: ObservableObject {
     @Published var sessions: [SessionState] = []
+    @Published var allSessions: [SessionState] = [] // includes child sessions for badge counting
     @Published var connectionState: ConnectionState = .disconnected
     @Published var lastError: String?
 
@@ -195,6 +196,9 @@ class SessionManager: ObservableObject {
             for group in dashboard.groups ?? [] {
                 for agent in group.agents ?? [] {
                     states.append(agent)
+                    for child in agent.children ?? [] {
+                        states.append(child)
+                    }
                 }
             }
             sessionMap = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
@@ -246,12 +250,21 @@ class SessionManager: ObservableObject {
     }
 
     private func rebuildSessionsFromMap() {
-        var newSessions = Array(sessionMap.values)
-        newSessions = sortSessionsByOrder(newSessions)
-        updateSessionOrder(with: newSessions)
-        assignDuplicateIndexes(&newSessions)
-        sessions = newSessions
-        checkContextPressureAlerts(sessions: newSessions)
+        let all = Array(sessionMap.values)
+        let ids = Set(all.map { $0.id })
+
+        // Exclude child sessions (subagents) from the main session list
+        // so they don't appear in the cycle or as separate rows.
+        var topLevel = all.filter { session in
+            guard let pid = session.parentSessionId else { return true }
+            return !ids.contains(pid)
+        }
+        topLevel = sortSessionsByOrder(topLevel)
+        updateSessionOrder(with: topLevel)
+        assignDuplicateIndexes(&topLevel)
+        sessions = topLevel
+        allSessions = all // includes children for badge counting
+        checkContextPressureAlerts(sessions: topLevel)
         writeDebugState()
     }
 

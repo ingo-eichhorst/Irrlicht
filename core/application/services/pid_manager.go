@@ -77,13 +77,35 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 	pm.log.LogInfo("process-exit", sessionID,
 		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
 
-	if err := pm.repo.Delete(sessionID); err != nil {
-		pm.log.LogError("process-exit", sessionID,
-			fmt.Sprintf("failed to delete session: %v", err))
+	pm.deleteWithChildren(state)
+}
+
+// deleteWithChildren removes a session and all its child sessions (subagents).
+func (pm *PIDManager) deleteWithChildren(state *session.SessionState) {
+	if states, err := pm.repo.ListAll(); err == nil {
+		for _, s := range states {
+			if s.ParentSessionID == state.SessionID {
+				_ = pm.repo.Delete(s.SessionID)
+				pm.broadcast(outbound.PushTypeDeleted, s)
+			}
+		}
+	}
+	_ = pm.repo.Delete(state.SessionID)
+	pm.broadcast(outbound.PushTypeDeleted, state)
+}
+
+// cleanupChildren removes all child sessions of the given parent.
+func (pm *PIDManager) cleanupChildren(parentID string) {
+	states, err := pm.repo.ListAll()
+	if err != nil {
 		return
 	}
-
-	pm.broadcast(outbound.PushTypeDeleted, state)
+	for _, s := range states {
+		if s.ParentSessionID == parentID {
+			_ = pm.repo.Delete(s.SessionID)
+			pm.broadcast(outbound.PushTypeDeleted, s)
+		}
+	}
 }
 
 // HandlePIDAssigned records a newly-discovered PID for a session, registers it
@@ -279,8 +301,18 @@ func (pm *PIDManager) CheckPIDLiveness() {
 	// - Ready sessions (idle beyond TTL)
 	// - Working/waiting sessions with PID=0 (zombies where PID discovery
 	//   failed and no kqueue/sweep cleanup path can fire)
+	// - Child sessions: ready or stale transcript (finished/zombie subagents)
 	if pm.readyTTL > 0 {
 		for _, state := range states {
+			// Child sessions: clean up immediately when ready, or when stale
+			// (transcript stopped updating — zombie from a previous run).
+			if state.ParentSessionID != "" {
+				if state.State == session.StateReady || isStaleTranscript(state.TranscriptPath) {
+					_ = pm.repo.Delete(state.SessionID)
+					pm.broadcast(outbound.PushTypeDeleted, state)
+				}
+				continue
+			}
 			if !state.IsStale(pm.readyTTL) {
 				continue
 			}
@@ -288,8 +320,7 @@ func (pm *PIDManager) CheckPIDLiveness() {
 				pm.log.LogInfo("session-detector", state.SessionID,
 					fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
 						state.State, state.PID, pm.readyTTL))
-				_ = pm.repo.Delete(state.SessionID)
-				pm.broadcast(outbound.PushTypeDeleted, state)
+				pm.deleteWithChildren(state)
 			}
 		}
 	}
@@ -304,8 +335,7 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
 				pm.log.LogInfo("session-detector-seed", state.SessionID,
 					fmt.Sprintf("pid %d dead, deleting session", state.PID))
-				_ = pm.repo.Delete(state.SessionID)
-				pm.broadcast(outbound.PushTypeDeleted, state)
+				pm.deleteWithChildren(state)
 				continue
 			}
 			if pm.pw != nil {
@@ -315,13 +345,14 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 				}
 			}
 
-		case state.PID == 0 && isStaleTranscript(state.TranscriptPath):
+		case state.PID == 0 && state.ParentSessionID == "" && isStaleTranscript(state.TranscriptPath):
 			// Orphan from exited Claude Code process (never assigned a PID
 			// because Claude Code doesn't keep transcript files open).
+			// Child sessions (ParentSessionID set) are exempt — they run
+			// inside the parent process and never get their own PID.
 			pm.log.LogInfo("session-detector-seed", state.SessionID,
 				"deleting orphan session")
-			_ = pm.repo.Delete(state.SessionID)
-			pm.broadcast(outbound.PushTypeDeleted, state)
+			pm.deleteWithChildren(state)
 		}
 	}
 }

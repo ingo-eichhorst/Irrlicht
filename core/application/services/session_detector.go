@@ -284,6 +284,11 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	}
 
 	d.broadcast(outbound.PushTypeUpdated, state)
+
+	// When a parent session finishes, clean up all its child sessions.
+	if state.State == session.StateReady && state.ParentSessionID == "" {
+		d.pidMgr.cleanupChildren(state.SessionID)
+	}
 }
 
 // onRemoved handles transcript file deletion or pre-session expiry.

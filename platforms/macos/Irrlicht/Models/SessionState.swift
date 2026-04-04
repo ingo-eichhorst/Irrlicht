@@ -146,6 +146,7 @@ struct SessionState: Identifiable, Codable {
     let role: String?           // orchestrator role: "witness", "polecat", etc. (optional)
     let workerName: String?     // orchestrator worker name (optional)
     let workerID: String?       // orchestrator worker/bead ID (optional)
+    let children: [SessionState]? // nested child sessions from API (optional)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
@@ -171,6 +172,7 @@ struct SessionState: Identifiable, Codable {
         case role
         case workerName = "worker_name"
         case workerID = "worker_id"
+        case children
     }
     
     // Custom decoder to handle multiple date formats and missing fields
@@ -201,6 +203,7 @@ struct SessionState: Identifiable, Codable {
         role = try container.decodeIfPresent(String.self, forKey: .role)
         workerName = try container.decodeIfPresent(String.self, forKey: .workerName)
         workerID = try container.decodeIfPresent(String.self, forKey: .workerID)
+        children = try container.decodeIfPresent([SessionState].self, forKey: .children)
 
         // Handle firstSeen date (unix timestamp format)
         if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
@@ -248,7 +251,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, workerName: String? = nil, workerID: String? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, workerName: String? = nil, workerID: String? = nil, children: [SessionState]? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -269,6 +272,7 @@ struct SessionState: Identifiable, Codable {
         self.role = role
         self.workerName = workerName
         self.workerID = workerID
+        self.children = children
     }
     
     enum State: String, CaseIterable, Codable {

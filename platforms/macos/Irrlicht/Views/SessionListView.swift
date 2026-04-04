@@ -264,22 +264,15 @@ struct SessionListView: View {
     // MARK: - Session List
 
     private var sessionGroups: [SessionGroup] {
-        let allSessions = sessionManager.sessions
-        let sessionIds = Set(allSessions.map { $0.id })
+        // sessions = top-level only (no children in cycle)
+        // allSessions = includes children for badge counting
+        let topLevel = sessionManager.sessions
+        let all = sessionManager.allSessions
 
-        // Identify subagent sessions (have a parentSessionId that exists in current sessions)
-        let subagentIds: Set<String> = Set(allSessions.compactMap { session in
-            guard let pid = session.parentSessionId, sessionIds.contains(pid) else { return nil }
-            return session.id
-        })
-
-        // Build groups in order of top-level sessions
-        return allSessions
-            .filter { !subagentIds.contains($0.id) }
-            .map { parent in
-                let subagents = allSessions.filter { $0.parentSessionId == parent.id }
-                return SessionGroup(parent: parent, subagents: subagents)
-            }
+        return topLevel.map { parent in
+            let subagents = all.filter { $0.parentSessionId == parent.id }
+            return SessionGroup(parent: parent, subagents: subagents)
+        }
     }
 
     var projectGroups: [ProjectGroup] {
