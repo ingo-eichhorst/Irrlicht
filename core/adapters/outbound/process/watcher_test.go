@@ -166,8 +166,10 @@ func TestUnwatch(t *testing.T) {
 	}
 }
 
-func TestDiscoverPID(t *testing.T) {
-	// Create a temp file and keep it open.
+func TestDiscoverPID_FiltersSelf(t *testing.T) {
+	// Create a temp file and keep it open — only our own process has it open.
+	// DiscoverPID should filter out the caller's own PID (the daemon in prod)
+	// and return 0 since no external process has the file open.
 	f, err := os.CreateTemp("", "processwatcher-test-*")
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
@@ -179,8 +181,8 @@ func TestDiscoverPID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverPID: %v", err)
 	}
-	if pid != os.Getpid() {
-		t.Errorf("DiscoverPID got pid %d, want %d (self)", pid, os.Getpid())
+	if pid != 0 {
+		t.Errorf("DiscoverPID got pid %d, want 0 (self-PID should be filtered)", pid)
 	}
 }
 

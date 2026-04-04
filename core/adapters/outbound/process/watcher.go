@@ -5,6 +5,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -146,14 +147,21 @@ func DiscoverPID(filePath string) (int, error) {
 		return 0, fmt.Errorf("lsof %s: %w", filePath, err)
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) == 0 || lines[0] == "" {
-		return 0, nil
+	// Skip our own PID — the daemon reads transcript files for metrics,
+	// so lsof often returns the daemon itself. We want the external
+	// process (e.g. Claude Code CLI) that owns the session.
+	myPID := os.Getpid()
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil {
+			continue
+		}
+		if pid != myPID {
+			return pid, nil
+		}
 	}
-
-	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
-	if err != nil {
-		return 0, fmt.Errorf("parse lsof output %q: %w", lines[0], err)
-	}
-	return pid, nil
+	return 0, nil
 }

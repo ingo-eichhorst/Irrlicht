@@ -37,6 +37,7 @@ type SessionDetector struct {
 	metrics     outbound.MetricsCollector
 	broadcaster outbound.PushBroadcaster // optional
 	version     string                   // daemon version stamped on new sessions
+	readyTTL    time.Duration            // max idle time for ready sessions before deletion
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
@@ -54,6 +55,7 @@ func NewSessionDetector(
 	metrics outbound.MetricsCollector,
 	broadcaster outbound.PushBroadcaster,
 	version string,
+	readyTTL time.Duration,
 ) *SessionDetector {
 	return &SessionDetector{
 		watchers:        watchers,
@@ -64,6 +66,7 @@ func NewSessionDetector(
 		metrics:         metrics,
 		broadcaster:     broadcaster,
 		version:         version,
+		readyTTL:        readyTTL,
 		projectSessions: make(map[string]string),
 	}
 }
@@ -440,6 +443,20 @@ func (d *SessionDetector) checkPIDLiveness() {
 			}
 		}
 	}
+
+	// Sweep stale ready sessions — primary cleanup when PID-based liveness
+	// can't distinguish per-session state (e.g. daemon-managed sessions
+	// where DiscoverPID returns 0 because only the daemon has the file open).
+	if d.readyTTL > 0 {
+		for _, state := range states {
+			if state.State == session.StateReady && state.IsStale(d.readyTTL) {
+				d.log.LogInfo("session-detector", state.SessionID,
+					fmt.Sprintf("ready session idle for >%v, deleting", d.readyTTL))
+				_ = d.repo.Delete(state.SessionID)
+				d.broadcast(outbound.PushTypeDeleted, state)
+			}
+		}
+	}
 }
 
 // discoverAndRegisterPID uses lsof to find the PID that has a transcript file
@@ -587,11 +604,16 @@ func (d *SessionDetector) seedFromDisk() {
 				d.broadcast(outbound.PushTypeDeleted, state)
 			} else {
 				// Real sessions with transcripts are kept as ready.
+				// Only update the timestamp if the state actually changed,
+				// so the ready-session TTL isn't reset on every daemon restart.
+				wasReady := state.State == session.StateReady
 				d.log.LogInfo("session-detector-seed", state.SessionID,
-					fmt.Sprintf("pid %d dead, transitioning to ready", state.PID))
+					fmt.Sprintf("pid %d dead, transitioning to ready (was %s)", state.PID, state.State))
 				state.State = session.StateReady
 				state.PID = 0
-				state.UpdatedAt = time.Now().Unix()
+				if !wasReady {
+					state.UpdatedAt = time.Now().Unix()
+				}
 				_ = d.repo.Save(state)
 				d.broadcast(outbound.PushTypeUpdated, state)
 			}

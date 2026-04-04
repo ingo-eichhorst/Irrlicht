@@ -159,6 +159,6 @@ func newDetector(
 	return services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test",
+		"test", 0,
 	)
 }

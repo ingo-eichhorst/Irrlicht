@@ -3,9 +3,9 @@ import os
 
 /// Manages the lifecycle of the embedded `irrlichd` daemon binary.
 ///
-/// On launch the manager checks whether a daemon is already reachable (e.g.
-/// started via LaunchAgent). If not, it spawns the copy bundled inside the
-/// app and restarts it automatically if it crashes.
+/// On launch the manager kills any stale daemon processes from previous runs
+/// or LaunchAgent, then spawns a fresh copy from the app bundle. If the
+/// daemon crashes, it restarts automatically with exponential backoff.
 @MainActor
 final class DaemonManager: ObservableObject {
     @Published private(set) var daemonRunning = false
@@ -21,15 +21,10 @@ final class DaemonManager: ObservableObject {
     // MARK: - Public
 
     func start() {
+        killStaleDaemons()
         healthTask = Task { [weak self] in
             guard let self else { return }
-            if await self.isDaemonReachable() {
-                self.logger.info("External daemon already running — skipping embedded launch")
-                self.daemonRunning = true
-                await self.monitorExternalDaemon()
-            } else {
-                self.spawnDaemon()
-            }
+            self.spawnDaemon()
         }
     }
 
@@ -37,6 +32,26 @@ final class DaemonManager: ObservableObject {
         healthTask?.cancel()
         healthTask = nil
         terminateProcess()
+    }
+
+    // MARK: - Stale process cleanup
+
+    /// Kill any `irrlichd` processes left over from a previous app launch,
+    /// LaunchAgent, or manual invocation so we start with a clean slate.
+    private func killStaleDaemons() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-x", "irrlichd"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+
+        if task.terminationStatus == 0 {
+            logger.info("Killed stale irrlichd process(es)")
+            // Give the port a moment to free up
+            Thread.sleep(forTimeInterval: 0.5)
+        }
     }
 
     // MARK: - Health check
@@ -109,24 +124,6 @@ final class DaemonManager: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, !Task.isCancelled else { return }
             self.spawnDaemon()
-        }
-    }
-
-    /// When an external daemon was detected at startup, keep watching so the UI
-    /// indicator stays accurate if the external daemon goes away.
-    private func monitorExternalDaemon() async {
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 s
-            guard !Task.isCancelled else { return }
-            let reachable = await isDaemonReachable()
-            if reachable {
-                daemonRunning = true
-            } else {
-                logger.warning("External daemon went away — spawning embedded daemon")
-                daemonRunning = false
-                spawnDaemon()
-                return
-            }
         }
     }
 
