@@ -22,9 +22,11 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 
 	repo := filesystem.NewWithDir(t.TempDir())
 	push := services.NewPushService()
+	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
 
 	mux := http.NewServeMux()
-	registerReadRoutes(mux, repo)
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor))
+	mux.HandleFunc("GET /state", handleGetState(repo))
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 
@@ -63,18 +65,20 @@ func TestGate_GetSessions(t *testing.T) {
 		t.Fatalf("GET status: got %d, want 200", resp.StatusCode)
 	}
 
-	var sessions []*session.SessionState
-	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
+	var dashboard session.DashboardResponse
+	if err := json.NewDecoder(resp.Body).Decode(&dashboard); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(sessions) == 0 {
-		t.Fatal("expected at least one session")
+	if len(dashboard.Groups) == 0 {
+		t.Fatal("expected at least one group")
 	}
 	found := false
-	for _, s := range sessions {
-		if s.SessionID == "gate-1" {
-			found = true
-			break
+	for _, g := range dashboard.Groups {
+		for _, a := range g.Agents {
+			if a.SessionID == "gate-1" {
+				found = true
+				break
+			}
 		}
 	}
 	if !found {
