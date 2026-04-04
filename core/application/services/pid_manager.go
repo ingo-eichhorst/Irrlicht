@@ -316,6 +316,12 @@ func (pm *PIDManager) CheckPIDLiveness() {
 			if !state.IsStale(pm.readyTTL) {
 				continue
 			}
+			// Don't delete sessions whose process is still alive.
+			if state.PID > 0 {
+				if err := syscall.Kill(state.PID, 0); err == nil {
+					continue
+				}
+			}
 			if state.State == session.StateReady || state.PID == 0 {
 				pm.log.LogInfo("session-detector", state.SessionID,
 					fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
