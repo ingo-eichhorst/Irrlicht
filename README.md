@@ -16,11 +16,16 @@
 
 ---
 
-**Irrlicht** is a macOS menu bar application that monitors AI coding agent sessions (Claude Code, OpenAI Codex), providing instant visual feedback on session states. The name comes from German folklore—where an *Irrlicht* (will-o'-the-wisp) traditionally leads wanderers astray, this version does the opposite: it guides you with honest signals about where your attention is needed.
+**Irrlicht** is a macOS menu bar application that monitors AI coding agent sessions (Claude Code, OpenAI Codex), providing instant visual feedback on session states. The name comes from German folklore—*Irrlicht* is the German word for will-o'-the-wisp, the ghostly lights that drift over the moors and marshes of the Harz mountains. In Goethe's *Faust*, an Irrlicht guides Faust and Mephistopheles up the Brocken on Walpurgis Night, a treacherous companion on a treacherous path. Harzer miners told of phantom lights in the tunnels near Clausthal-Zellerfeld—sometimes a warning, sometimes a promise of ore ahead.
+
+This Irrlicht flips the old myth: instead of luring you astray, it guides you with honest signals about where your attention is needed.
 
 ## Philosophy
 
-> By night, in old stories, an *Irrlicht* lures wanderers off the path.
+> *"In die Traum- und Zaubersphäre / sind wir, scheint es, eingegangen."*
+> — Goethe, *Faust I* (Walpurgisnacht), the Irrlicht speaking as it leads Faust up the Brocken
+>
+> By night, in the mist-hollows of the Harz, an *Irrlicht* lures wanderers off the path and into the bog.
 > By day, in our terminals, the real danger is different: ten tasks, four Claude sessions, and no sense of where attention should go.
 >
 > **Irrlicht** flips the myth: it's the *tamed* will-o'-the-wisp—small, honest lights that appear exactly where you need them.
@@ -330,4 +335,4 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-*Follow the right light.*
+*"Führ uns gut und mach dir Ehre" — Follow the right light.*
