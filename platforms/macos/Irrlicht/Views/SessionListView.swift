@@ -195,7 +195,7 @@ struct SessionListView: View {
     private var sessionHeaderView: some View {
         HStack {
             HStack(spacing: 4) {
-                Text("Irrlicht")
+                Text("Irrlicht \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")")
                     .font(.headline)
                     .foregroundColor(.primary)
                 

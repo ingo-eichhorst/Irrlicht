@@ -38,30 +38,43 @@ func (a *Adapter) GetBranch(dir string) string {
 	return branch
 }
 
+// GetGitRoot returns the absolute path of the git repo root for the given
+// directory, or "" if the directory is not inside a git repository.
+// For worktrees it returns the main repo root (not the worktree path).
+func (a *Adapter) GetGitRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	gitDir := strings.TrimSpace(string(out))
+	if gitDir == "" {
+		return ""
+	}
+	// gitDir is e.g. "/Users/x/projects/irrlicht/.git"
+	root := filepath.Dir(gitDir)
+	if root == "" || root == "." || root == "/" {
+		return ""
+	}
+	return root
+}
+
 // GetProjectName returns the project name for the given directory.
 // It uses the git repo root directory name so that sessions in subdirectories
 // of the same repo share the same project name.
 // Falls back to filepath.Base(dir) if not inside a git repo.
 func (a *Adapter) GetProjectName(dir string) string {
+	if root := a.GetGitRoot(dir); root != "" {
+		return filepath.Base(root)
+	}
+	// Fallback for non-git directories.
 	if dir == "" {
 		return ""
 	}
-	// Resolve the main repo root. For worktrees, --show-toplevel returns the
-	// worktree path, not the main repo. Use --git-common-dir to find the
-	// shared .git directory, whose parent is the real repo root.
-	cmd := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
-	cmd.Dir = dir
-	if out, err := cmd.Output(); err == nil {
-		if gitDir := strings.TrimSpace(string(out)); gitDir != "" {
-			// gitDir is e.g. "/Users/x/projects/irrlicht/.git"
-			root := filepath.Dir(gitDir)
-			name := filepath.Base(root)
-			if name != "" && name != "." && name != "/" {
-				return name
-			}
-		}
-	}
-	// Fallback for non-git directories.
 	name := filepath.Base(dir)
 	if name == "." || name == "/" || name == "" {
 		return ""

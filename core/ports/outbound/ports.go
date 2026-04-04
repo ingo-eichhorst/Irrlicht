@@ -42,6 +42,9 @@ type Logger interface {
 type GitResolver interface {
 	GetBranch(dir string) string
 	GetProjectName(dir string) string
+	// GetGitRoot returns the absolute path of the git repo root for the given
+	// directory, or "" if the directory is not inside a git repository.
+	GetGitRoot(dir string) string
 	GetBranchFromTranscript(transcriptPath string) string
 	// GetCWDFromTranscript extracts the working directory from a transcript
 	// file by scanning the first few lines for a "cwd" field.

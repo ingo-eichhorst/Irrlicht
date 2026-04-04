@@ -338,6 +338,7 @@ type stubGit struct{}
 
 func (g *stubGit) GetBranch(_ string) string               { return "main" }
 func (g *stubGit) GetProjectName(dir string) string        { return filepath.Base(dir) }
+func (g *stubGit) GetGitRoot(_ string) string              { return "" }
 func (g *stubGit) GetBranchFromTranscript(_ string) string { return "" }
 func (g *stubGit) GetCWDFromTranscript(_ string) string    { return "" }
 

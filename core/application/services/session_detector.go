@@ -268,7 +268,12 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 		if cwd := d.git.GetCWDFromTranscript(ev.TranscriptPath); cwd != "" && cwd != state.CWD {
 			state.CWD = cwd
 			state.GitBranch = d.git.GetBranch(cwd)
-			state.ProjectName = d.git.GetProjectName(cwd)
+			// Only update ProjectName when the new CWD is inside a git repo.
+			// For non-git directories, keep the original project name set at
+			// session creation to avoid subdirectory names overriding it.
+			if gitRoot := d.git.GetGitRoot(cwd); gitRoot != "" {
+				state.ProjectName = filepath.Base(gitRoot)
+			}
 		}
 	}
 

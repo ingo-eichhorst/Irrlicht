@@ -289,12 +289,10 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			continue
 		}
 
-		// Parse JSONL entry defensively
+		// Parse JSONL entry defensively. Partial JSON lines from concurrent
+		// transcript writes are expected and benign — silently skip them.
 		event, err := t.parseTranscriptLine(line)
 		if err != nil {
-			// Log error but continue processing
-			fmt.Printf("Warning: failed to parse line: %v\n", err)
-			fmt.Printf("Problematic line: %s\n", line)
 			continue
 		}
 
