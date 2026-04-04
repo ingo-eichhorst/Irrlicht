@@ -41,48 +41,35 @@ struct SessionListView: View {
 
                 // Settings and Quit buttons at bottom
                 Divider()
-                Button("Settings…") {
-                    showSettings = true
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 6)
-                .onHover { hovering in
-                    isSettingsButtonHovered = hovering
-                    if hovering {
-                        NSCursor.pointingHand.push()
-                    } else {
-                        NSCursor.pop()
+                HStack(spacing: 0) {
+                    Button("Settings…") {
+                        showSettings = true
                     }
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isSettingsButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
-                        .animation(.easeInOut(duration: 0.2), value: isSettingsButtonHovered)
-                )
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(isSettingsButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                    .onHover { hovering in
+                        isSettingsButtonHovered = hovering
+                        if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                    }
 
-                Divider()
-                Button("Quit Irrlicht") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 8)
-                .onHover { hovering in
-                    isQuitButtonHovered = hovering
-                    if hovering {
-                        NSCursor.pointingHand.push()
-                    } else {
-                        NSCursor.pop()
+                    Divider().frame(height: 20)
+
+                    Button("Quit") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(isQuitButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                    .onHover { hovering in
+                        isQuitButtonHovered = hovering
+                        if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
                     }
                 }
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isQuitButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
-                        .animation(.easeInOut(duration: 0.2), value: isQuitButtonHovered)
-                )
             }
             .frame(width: 350)
             .background(Color(NSColor.windowBackgroundColor))
