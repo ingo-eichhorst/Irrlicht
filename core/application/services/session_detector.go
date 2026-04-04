@@ -480,17 +480,64 @@ func (d *SessionDetector) discoverAndRegisterPID(sessionID, transcriptPath strin
 	d.log.LogInfo("session-detector", sessionID,
 		fmt.Sprintf("lsof discovered pid %d", pid))
 
-	// Store PID in session state.
-	if state != nil {
-		state.PID = pid
-		state.UpdatedAt = time.Now().Unix()
-		_ = d.repo.Save(state)
+	d.HandlePIDAssigned(pid, sessionID)
+}
+
+// HandlePIDAssigned records a newly-discovered PID for a session, registers it
+// with the ProcessWatcher, and cleans up old sessions that shared the same PID.
+// This handles the /clear scenario: the CLI process stays alive (same PID) but
+// starts a new transcript, making the old session obsolete.
+func (d *SessionDetector) HandlePIDAssigned(pid int, sessionID string) {
+	if pid <= 0 {
+		return
 	}
 
-	// Register with ProcessWatcher.
-	if err := d.pw.Watch(pid, sessionID); err != nil {
-		d.log.LogError("session-detector", sessionID,
-			fmt.Sprintf("failed to watch pid %d: %v", pid, err))
+	state, _ := d.repo.Load(sessionID)
+	if state == nil || state.PID == pid {
+		return
+	}
+
+	state.PID = pid
+	state.UpdatedAt = time.Now().Unix()
+	_ = d.repo.Save(state)
+
+	// Register with ProcessWatcher for exit monitoring.
+	if d.pw != nil {
+		if err := d.pw.Watch(pid, sessionID); err != nil {
+			d.log.LogError("session-detector", sessionID,
+				fmt.Sprintf("failed to watch pid %d: %v", pid, err))
+		}
+	}
+
+	// Clean up old sessions that had the same PID (e.g. /clear).
+	// Subagent sessions share the parent's PID, so skip cleanup when
+	// either side is a subagent.
+	if state.ParentSessionID != "" {
+		return
+	}
+
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+
+	for _, old := range states {
+		if old.SessionID == sessionID || old.PID != pid {
+			continue
+		}
+		if old.ParentSessionID != "" || strings.HasPrefix(old.SessionID, "proc-") {
+			continue
+		}
+
+		d.log.LogInfo("session-detector", old.SessionID,
+			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
+
+		d.mu.Lock()
+		delete(d.projectSessions, old.SessionID)
+		d.mu.Unlock()
+
+		_ = d.repo.Delete(old.SessionID)
+		d.broadcast(outbound.PushTypeDeleted, old)
 	}
 }
 

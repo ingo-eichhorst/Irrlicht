@@ -604,6 +604,94 @@ func TestNeedsUserAttention(t *testing.T) {
 	}
 }
 
+func TestSessionDetector_PIDAssigned_CleansUpOldSession(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	now := time.Now().Unix()
+
+	// Old session: real transcript session with known PID (previous /clear victim).
+	repo.states["old-session"] = &session.SessionState{
+		SessionID:      "old-session",
+		State:          session.StateReady,
+		PID:            42,
+		TranscriptPath: "/home/.claude/projects/-Users-test/old-session.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	// New session: just created after /clear, PID not yet discovered.
+	repo.states["new-session"] = &session.SessionState{
+		SessionID:      "new-session",
+		State:          session.StateReady,
+		TranscriptPath: "/home/.claude/projects/-Users-test/new-session.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	// Simulate PID discovery for the new session — same PID as old session.
+	det.HandlePIDAssigned(42, "new-session")
+
+	// Old session should be deleted (replaced by /clear).
+	if state, _ := repo.Load("old-session"); state != nil {
+		t.Errorf("old session should be deleted, but still exists with state %q", state.State)
+	}
+
+	// New session should have PID assigned.
+	newState, _ := repo.Load("new-session")
+	if newState == nil {
+		t.Fatal("new session should exist")
+	}
+	if newState.PID != 42 {
+		t.Errorf("new session PID: got %d, want 42", newState.PID)
+	}
+
+	// ProcessWatcher should track the PID for the new session.
+	if pw.watched[42] != "new-session" {
+		t.Errorf("ProcessWatcher: got %q for PID 42, want new-session", pw.watched[42])
+	}
+}
+
+func TestSessionDetector_PIDAssigned_SkipsSubagents(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	now := time.Now().Unix()
+
+	// Parent session with known PID.
+	repo.states["parent"] = &session.SessionState{
+		SessionID:      "parent",
+		State:          session.StateWorking,
+		PID:            42,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	// Subagent session — shares parent's PID but has ParentSessionID set.
+	repo.states["subagent"] = &session.SessionState{
+		SessionID:       "subagent",
+		State:           session.StateWorking,
+		ParentSessionID: "parent",
+		TranscriptPath:  "/home/.claude/projects/-Users-test/parent/subagents/subagent.jsonl",
+		FirstSeen:       now,
+		UpdatedAt:       now,
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	// Assign same PID to subagent — should NOT delete parent.
+	det.HandlePIDAssigned(42, "subagent")
+
+	if state, _ := repo.Load("parent"); state == nil {
+		t.Error("parent session should NOT be deleted when subagent gets same PID")
+	}
+}
+
 func TestIsAgentDone(t *testing.T) {
 	tests := []struct {
 		name    string
