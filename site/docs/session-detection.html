@@ -126,7 +126,11 @@
         <tbody>
           <tr>
             <td>Discovery</td>
-            <td><code>lsof -t &lt;transcript&gt;</code> (one-shot on creation, retried async)</td>
+            <td><code>lsof -t &lt;transcript&gt;</code> with retry at 500ms, 1s, 2s intervals</td>
+          </tr>
+          <tr>
+            <td>CWD fallback</td>
+            <td>If lsof fails, matches <code>claude</code> processes by working directory</td>
           </tr>
           <tr>
             <td>Registration</td>
@@ -142,6 +146,34 @@
           </tr>
         </tbody>
       </table>
+
+      <h2>Subagent Detection</h2>
+
+      <p>When Claude Code spawns subagents (via the <code>Agent</code> tool), each subagent creates its own transcript file at:</p>
+
+      <pre><code>~/.claude/projects/&lt;project&gt;/&lt;parent-session-id&gt;/subagents/&lt;agent-id&gt;.jsonl</code></pre>
+
+      <p>The daemon detects these files through the same filesystem watcher and derives the parent-child relationship from the path structure. Each subagent becomes an independent session with its own state machine, linked to the parent via <code>parent_session_id</code>.</p>
+
+      <h3>Lifecycle</h3>
+
+      <ul>
+        <li><strong>Detection:</strong> Filesystem watcher sees the new <code>.jsonl</code> file in the <code>subagents/</code> directory</li>
+        <li><strong>Tracking:</strong> Session created with <code>parent_session_id</code> set; exempt from orphan cleanup (no PID of its own)</li>
+        <li><strong>Display:</strong> Parent session shows a purple badge with the count of active subagents</li>
+        <li><strong>Cleanup:</strong> Child sessions are deleted when they finish (ready state), when their transcript becomes stale (&gt;2min), or when the parent session is deleted (cascade)</li>
+      </ul>
+
+      <h3>In-Process vs File-Based</h3>
+
+      <p>Claude Code runs two types of subagents:</p>
+
+      <ul>
+        <li><strong>In-process</strong> (Explore, Plan) &mdash; detected via open <code>Agent</code> tool calls in the parent transcript; no separate file</li>
+        <li><strong>File-based</strong> (background agents, worktree agents) &mdash; create their own transcript in the <code>subagents/</code> directory</li>
+      </ul>
+
+      <p>The API's <code>SubagentSummary</code> merges both types into a single count.</p>
 
       <h2>Session ID</h2>
 

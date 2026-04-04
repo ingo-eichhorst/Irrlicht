@@ -152,8 +152,14 @@
         <li><strong>GitResolver</strong> &mdash; resolves project names via git commands</li>
         <li><strong>MetricsCollector</strong> &mdash; transcript tailer for session metrics</li>
         <li><strong>ProcessWatcher</strong> &mdash; kqueue adapter for process exit detection</li>
-        <li><strong>AgentWatchers</strong> &mdash; Claude Code + Codex + Process Scanner</li>
-        <li><strong>SessionDetector</strong> &mdash; orchestrates detection and state management</li>
+        <li><strong>AgentWatchers</strong> &mdash; Claude Code + Codex + Process Lifecycle</li>
+        <li><strong>SessionDetector</strong> &mdash; thin coordinator that delegates to:
+          <ul>
+            <li><strong>StateClassifier</strong> &mdash; pure functions for working/waiting/ready transitions</li>
+            <li><strong>MetadataEnricher</strong> &mdash; git metadata, CWD, model, and metrics resolution</li>
+            <li><strong>PIDManager</strong> &mdash; PID discovery with retry/backoff, process exit handling, liveness sweeps, subagent cleanup</li>
+          </ul>
+        </li>
         <li><strong>PushService</strong> &mdash; WebSocket fan-out to connected clients</li>
         <li><strong>HTTP Server</strong> &mdash; API endpoints + embedded web UI</li>
       </ol>

@@ -111,21 +111,25 @@
 
       <ul>
         <li><code>-w</code>, <code>--watch</code> &mdash; Watch mode &mdash; updates every second (clears screen between refreshes)</li>
+        <li><code>--format json</code> &mdash; Output the full <code>DashboardResponse</code> as JSON</li>
+        <li><code>--id &lt;prefix&gt;</code> &mdash; Filter sessions by ID prefix</li>
       </ul>
 
       <h3>Output Format</h3>
 
-      <p>Columns: state, project name, session ID (8 chars), model, context window, age</p>
+      <p>Columns: state, project name, session ID (8 chars), model, context window, subagent badge, age. Child sessions are indented below their parent.</p>
 
       <p>Example output:</p>
 
-      <pre><code>working  irrlicht     a1b2c3d4  claude-sonnet-4-6  200k  (3s ago)
-ready    api-server   e5f6g7h8  claude-opus-4-6    1m    (1m ago)
-waiting  docs         i9j0k1l2                           (15s ago)</code></pre>
+      <pre><code>working  irrlicht     52d087d1 claude-opus-4-6 1000k [3 agents: 3w/0r]  (2s ago)
+  working  irrlicht     agent-a1 claude-haiku-4-5 200k  (5s ago)
+  working  irrlicht     agent-a4 claude-haiku-4-5 200k  (8s ago)
+  working  irrlicht     agent-ab claude-haiku-4-5 200k  (6s ago)
+ready    api-server   e5f6g7h8 claude-opus-4-6 1000k  (1m ago)</code></pre>
 
       <h3>Data Source</h3>
 
-      <p>Reads session JSON files from <code>~/Library/Application Support/Irrlicht/instances/</code>. Works independently of the daemon.</p>
+      <p>Reads session JSON files from <code>~/Library/Application Support/Irrlicht/instances/</code> and builds the same hierarchical dashboard as the API. Works independently of the daemon.</p>
 
       <!-- ── Building CLI Tools ── -->
       <h2>Building CLI Tools</h2>

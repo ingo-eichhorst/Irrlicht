@@ -65,6 +65,58 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.2.3 <small>(2026-04-04)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Subagent session lifecycle</strong> &mdash; Background and foreground subagents are detected as child sessions linked to their parent, with real-time state tracking and automatic cleanup when finished</li>
+        <li><strong>Purple badge</strong> &mdash; Parent sessions display a live count of active subagents in a purple circle badge in the menu bar</li>
+        <li><strong>Hierarchical dashboard API</strong> &mdash; <code>GET /api/v1/sessions</code> returns a <code>DashboardResponse</code> with Orchestrator &rarr; Group &rarr; Agent &rarr; Children hierarchy</li>
+        <li><strong>PID discovery retry with backoff</strong> &mdash; Retries at 500ms, 1s, 2s intervals with CWD-based fallback when lsof fails</li>
+        <li><strong>macOS app improvements</strong> &mdash; Debug mode (<code>IRRLICHT_DEBUG=1</code>), dev daemon support, clean shutdown, version display in UI, WebSocket keepalive with auto-reconnect</li>
+        <li><strong>irrlicht-ls enhancements</strong> &mdash; <code>--format json</code> output, <code>--id</code> prefix filter, hierarchical display with indented child sessions and agent count badges</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>Modular SessionDetector</strong> &mdash; Refactored into focused collaborators: <code>StateClassifier</code> (pure state transitions), <code>MetadataEnricher</code> (git/metrics), <code>PIDManager</code> (process lifecycle)</li>
+        <li><strong>Unified processlifecycle package</strong> &mdash; Process scanner and process watcher merged into a single adapter</li>
+        <li>Cascade delete removes all child sessions when a parent session is deleted</li>
+        <li>Stale child sessions (transcript &gt;2min old) cleaned up automatically in periodic sweep</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>No false &ldquo;waiting&rdquo; state during tool execution</strong> &mdash; Only user-blocking tools (AskUserQuestion, ExitPlanMode) trigger waiting; Agent, Bash, Read etc. correctly show as working</li>
+        <li><strong>Multi-instance session assignment</strong> &mdash; Running two Claude Code sessions in the same repo no longer causes PID conflicts; disambiguator ensures unique assignment</li>
+        <li>Subagent badge no longer persists after agent finishes</li>
+        <li>WebSocket connection state replaced <code>isWatching</code> flag with proper <code>ConnectionState</code> enum</li>
+      </ul>
+
+      <h2>v0.2.2 <small>(2026-04-03)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Embedded daemon in app bundle</strong> &mdash; Irrlicht.app bundles both SwiftUI UI and Go daemon; no separate services needed</li>
+        <li><strong>DaemonManager</strong> &mdash; Auto-spawns, monitors, and restarts embedded daemon with exponential backoff</li>
+        <li>Session tooltips on hover in menu bar popover</li>
+        <li>DMG and PKG distribution artifacts</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li>Delete sessions immediately on process exit</li>
+        <li>Skip orphan transcript files on startup</li>
+        <li>Delete old session when <code>/clear</code> reuses same PID</li>
+        <li>Filter daemon self-PID from lsof</li>
+        <li>Ready-session TTL cleanup (30min default)</li>
+      </ul>
+
       <h2>v0.2.0 <small>(2026-04-03)</small></h2>
 
       <h3>Added</h3>

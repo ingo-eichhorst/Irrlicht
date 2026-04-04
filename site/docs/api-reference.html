@@ -76,29 +76,39 @@
 
       <h3>GET /api/v1/sessions</h3>
 
-      <p>List all active sessions with full state and metrics.</p>
+      <p>Returns a hierarchical <code>DashboardResponse</code> with sessions grouped by project and nested parent-child relationships.</p>
 
-      <p>Response: JSON array of <code>SessionState</code> objects.</p>
-
-      <pre><code>[
-  {
-    "session_id": "550e8400-e29b-41d4-a716-446655440000",
-    "state": "working",
-    "adapter": "claude-code",
-    "cwd": "/Users/ingo/projects/irrlicht",
-    "project_name": "irrlicht",
-    "git_branch": "main",
-    "pid": 12345,
-    "metrics": {
-      "elapsed_seconds": 180,
-      "total_tokens": 15000,
-      "model_name": "claude-sonnet-4-6",
-      "context_utilization_percentage": 7.5,
-      "pressure_level": "safe",
-      "estimated_cost_usd": 0.045
+      <pre><code>{
+  "groups": [
+    {
+      "name": "irrlicht",
+      "agents": [
+        {
+          "session_id": "52d087d1-...",
+          "state": "working",
+          "adapter": "claude-code",
+          "project_name": "irrlicht",
+          "pid": 12345,
+          "subagents": { "total": 3, "working": 2, "waiting": 0, "ready": 1 },
+          "children": [
+            {
+              "session_id": "agent-a1cad...",
+              "state": "working",
+              "parent_session_id": "52d087d1-...",
+              "metrics": { "model_name": "claude-haiku-4-5", ... }
+            }
+          ],
+          "metrics": {
+            "model_name": "claude-opus-4-6",
+            "context_utilization_percentage": 12.5,
+            "pressure_level": "safe",
+            "estimated_cost_usd": 0.18
+          }
+        }
+      ]
     }
-  }
-]</code></pre>
+  ]
+}</code></pre>
 
       <h3>GET /state</h3>
 
@@ -233,9 +243,50 @@
             <td>ID of the parent session, if this is a sub-agent</td>
           </tr>
           <tr>
+            <td><code>subagents</code></td>
+            <td>object</td>
+            <td><code>SubagentSummary</code> &mdash; aggregate state of all child sessions (see below)</td>
+          </tr>
+          <tr>
             <td><code>daemon_version</code></td>
             <td>string</td>
             <td>Version of the running daemon</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>SubagentSummary Schema</h2>
+
+      <p>Present on parent sessions that have active or recently-active child sessions (subagents). Computed by <code>BuildDashboard</code> by merging in-process agents (open Agent tool calls) with file-based child sessions.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>total</code></td>
+            <td>int</td>
+            <td>Total number of child sessions (in-process + file-based)</td>
+          </tr>
+          <tr>
+            <td><code>working</code></td>
+            <td>int</td>
+            <td>Count of children in <code>working</code> state</td>
+          </tr>
+          <tr>
+            <td><code>waiting</code></td>
+            <td>int</td>
+            <td>Count of children in <code>waiting</code> state</td>
+          </tr>
+          <tr>
+            <td><code>ready</code></td>
+            <td>int</td>
+            <td>Count of children in <code>ready</code> state</td>
           </tr>
         </tbody>
       </table>
