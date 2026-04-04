@@ -1,4 +1,4 @@
-package process
+package processlifecycle
 
 import (
 	"os"
@@ -22,20 +22,20 @@ func TestWatch_ProcessExits(t *testing.T) {
 		gotSession string
 	)
 
-	w, err := New(func(p int, s string) {
+	m, err := NewMonitor(func(p int, s string) {
 		mu.Lock()
 		gotPID = p
 		gotSession = s
 		mu.Unlock()
 	})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewMonitor: %v", err)
 	}
-	defer w.Close()
+	defer m.Close()
 
-	go w.Run(t.Context())
+	go m.Run(t.Context())
 
-	if err := w.Watch(pid, "test-session-1"); err != nil {
+	if err := m.Watch(pid, "test-session-1"); err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
 
@@ -84,21 +84,21 @@ func TestWatch_AlreadyDead(t *testing.T) {
 		gotSession string
 	)
 
-	w, err := New(func(p int, s string) {
+	m, err := NewMonitor(func(p int, s string) {
 		mu.Lock()
 		gotPID = p
 		gotSession = s
 		mu.Unlock()
 	})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewMonitor: %v", err)
 	}
-	defer w.Close()
+	defer m.Close()
 
-	go w.Run(t.Context())
+	go m.Run(t.Context())
 
 	// Watching a dead PID should fire the handler immediately.
-	if err := w.Watch(pid, "dead-session"); err != nil {
+	if err := m.Watch(pid, "dead-session"); err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
 
@@ -139,20 +139,20 @@ func TestUnwatch(t *testing.T) {
 	}()
 
 	called := make(chan struct{}, 1)
-	w, err := New(func(int, string) {
+	m, err := NewMonitor(func(int, string) {
 		called <- struct{}{}
 	})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewMonitor: %v", err)
 	}
-	defer w.Close()
+	defer m.Close()
 
-	go w.Run(t.Context())
+	go m.Run(t.Context())
 
-	if err := w.Watch(pid, "s1"); err != nil {
+	if err := m.Watch(pid, "s1"); err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	w.Unwatch(pid)
+	m.Unwatch(pid)
 
 	// Kill and verify handler is NOT called.
 	cmd.Process.Kill()
@@ -170,7 +170,7 @@ func TestDiscoverPID_FiltersSelf(t *testing.T) {
 	// Create a temp file and keep it open — only our own process has it open.
 	// DiscoverPID should filter out the caller's own PID (the daemon in prod)
 	// and return 0 since no external process has the file open.
-	f, err := os.CreateTemp("", "processwatcher-test-*")
+	f, err := os.CreateTemp("", "processlifecycle-test-*")
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestDiscoverPID_FiltersSelf(t *testing.T) {
 
 func TestDiscoverPID_NoMatch(t *testing.T) {
 	// File that no one has open.
-	f, err := os.CreateTemp("", "processwatcher-noop-*")
+	f, err := os.CreateTemp("", "processlifecycle-noop-*")
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}

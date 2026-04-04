@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	processadapter "irrlicht/core/adapters/outbound/process"
+	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
@@ -70,7 +70,7 @@ func NewSessionDetector(
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
-		processadapter.DiscoverPID, det.removeFromProjectSessions,
+		processlifecycle.DiscoverPID, det.removeFromProjectSessions,
 	)
 	return det
 }
