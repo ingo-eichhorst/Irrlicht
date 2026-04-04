@@ -81,7 +81,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 20px 28px;
+      padding: 12px 20px;
       border-bottom: 1px solid var(--border-subtle);
       background: rgba(8, 12, 22, 0.85);
       backdrop-filter: blur(12px);
@@ -92,7 +92,7 @@
 
     .logo {
       font-family: var(--font-mono);
-      font-size: 15px;
+      font-size: 13px;
       font-weight: 700;
       letter-spacing: 0.25em;
       text-transform: uppercase;
@@ -106,7 +106,7 @@
       align-items: center;
       gap: 14px;
       font-family: var(--font-mono);
-      font-size: 12px;
+      font-size: 11px;
       letter-spacing: 0.04em;
     }
 
@@ -118,8 +118,8 @@
     }
 
     .summary-dot {
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       flex-shrink: 0;
     }
@@ -135,14 +135,14 @@
       align-items: center;
       gap: 7px;
       font-family: var(--font-mono);
-      font-size: 11px;
+      font-size: 10px;
       letter-spacing: 0.03em;
       color: var(--muted);
     }
 
     .ws-ring {
-      width: 10px;
-      height: 10px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       border: 2px solid var(--ws-disconnected);
       transition: border-color 0.4s, background 0.4s;
@@ -166,8 +166,8 @@
     main {
       position: relative;
       z-index: 1;
-      padding: 28px;
-      max-width: 1400px;
+      padding: 12px 20px;
+      max-width: 1200px;
       margin: 0 auto;
     }
 
@@ -182,13 +182,13 @@
     }
 
     .empty-dot {
-      width: 12px;
-      height: 12px;
+      width: 10px;
+      height: 10px;
       border-radius: 50%;
       background: var(--muted);
       opacity: 0.4;
       animation: empty-breathe 3s ease-in-out infinite;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
 
     @keyframes empty-breathe {
@@ -198,270 +198,246 @@
 
     #empty-state p {
       font-family: var(--font-mono);
-      font-size: 13px;
+      font-size: 12px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }
 
-    /* Session grid */
-    .session-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-      gap: 16px;
-    }
-
-    /* Session group (parent + subagents) */
-    .session-group { display: contents; }
-
-    /* Card base */
-    .session-card {
+    /* --- Timeline heatmap --- */
+    #timeline-wrap {
+      display: none;
+      margin-bottom: 12px;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 18px;
-      border-left: 3px solid var(--border);
-      transition: transform 0.2s ease, border-color 0.3s, box-shadow 0.3s;
-      opacity: 0;
-      animation: card-reveal 0.4s ease forwards;
+      border-radius: 6px;
+      padding: 8px 10px;
+      overflow: hidden;
     }
 
-    .session-card:hover {
-      transform: translateY(-2px);
-      background: var(--surface-hover);
+    #timeline-wrap canvas {
+      display: block;
+      width: 100%;
     }
 
-    @keyframes card-reveal {
-      from { opacity: 0; transform: translateY(12px); }
-      to { opacity: 1; transform: translateY(0); }
+    /* --- Session list --- */
+    .session-list {
+      display: flex;
+      flex-direction: column;
     }
 
-    /* State-specific card styles */
-    .session-card[data-state="working"] {
-      border-left-color: var(--working);
-      box-shadow: inset 3px 0 0 var(--working), 0 0 24px var(--working-dim);
-      animation: card-reveal 0.4s ease forwards, card-breathe 4s ease-in-out infinite 0.4s;
+    /* Group header */
+    .group-hdr {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px 4px;
+      cursor: pointer;
+      user-select: none;
     }
 
-    @keyframes card-breathe {
-      0%, 100% { box-shadow: inset 3px 0 0 var(--working), 0 0 20px var(--working-dim); }
-      50% { box-shadow: inset 3px 0 0 var(--working), 0 0 32px var(--working-glow); }
+    .group-hdr:hover { background: var(--surface-hover); border-radius: 4px; }
+
+    .group-chevron {
+      font-size: 8px;
+      color: var(--muted);
+      width: 10px;
+      text-align: center;
+      transition: transform 0.15s;
     }
 
-    .session-card[data-state="waiting"] {
-      border-left-color: var(--waiting);
-      box-shadow: inset 3px 0 0 var(--waiting), 0 0 16px var(--waiting-dim);
+    .group-chevron.collapsed { transform: rotate(-90deg); }
+
+    .group-name {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-bright);
+      letter-spacing: 0.03em;
     }
 
-    .session-card[data-state="ready"] {
-      border-left-color: var(--ready);
-      box-shadow: inset 3px 0 0 var(--ready), 0 0 16px var(--ready-dim);
-    }
-
-
-    /* Subagent card */
-    .subagent-card {
-      background: rgba(15, 22, 40, 0.6);
-      border: 1px solid var(--border-subtle);
-      border-radius: 8px;
-      padding: 10px 14px;
-      margin-left: 20px;
-      margin-top: -8px;
-      border-left: 2px solid var(--border);
-      opacity: 0;
-      animation: card-reveal 0.4s ease forwards;
-    }
-
-    .subagent-card[data-state="working"] { border-left-color: var(--working); }
-    .subagent-card[data-state="waiting"]  { border-left-color: var(--waiting); }
-    .subagent-card[data-state="ready"]    { border-left-color: var(--ready); }
-
-    .subagent-label {
+    .group-cost {
       font-family: var(--font-mono);
       font-size: 9px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
       color: var(--muted);
-      margin-bottom: 4px;
+      margin-left: 4px;
     }
 
-    .subagent-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
+    .group-count {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--muted);
+      margin-left: auto;
     }
 
-    .subagent-row .row-value { font-size: 12px; }
-
-    /* Card header */
-    .card-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-
-    .state-indicator {
-      display: flex;
-      align-items: center;
-      gap: 7px;
+    .group-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
       flex-shrink: 0;
     }
 
-    .state-svg {
-      width: 16px;
-      height: 16px;
+    /* Session row */
+    .session-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text);
+      border-radius: 3px;
+      transition: background 0.12s;
+      opacity: 0;
+      animation: row-reveal 0.2s ease forwards;
+    }
+
+    .session-row:hover { background: var(--surface-hover); }
+
+    @keyframes row-reveal {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .session-row.child { padding-left: 30px; }
+
+    .row-state-icon {
+      width: 12px;
+      height: 12px;
       flex-shrink: 0;
     }
 
-    .state-svg.working { animation: spin 2.5s linear infinite; }
+    .row-state-icon svg {
+      width: 12px;
+      height: 12px;
+      display: block;
+    }
+
+    .row-state-icon svg.working { animation: spin 2.5s linear infinite; }
 
     @keyframes spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
 
-    .state-label {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-
-    .state-label.working  { color: var(--working); }
-    .state-label.waiting  { color: var(--waiting); }
-    .state-label.ready    { color: var(--ready); }
-
-    .adapter-badge {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 600;
-      padding: 2px 8px;
-      border-radius: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      white-space: nowrap;
-      background: rgba(255,255,255,0.04);
+    .row-num {
+      width: 12px;
+      font-size: 9px;
+      font-weight: 500;
       color: var(--muted);
-    }
-
-    .adapter-badge.claude  { color: #a78bfa; background: rgba(167,139,250,0.1); }
-    .adapter-badge.copilot { color: #60a5fa; background: rgba(96,165,250,0.1); }
-    .adapter-badge.cursor  { color: #34d399; background: rgba(52,211,153,0.1); }
-    .adapter-badge.aider   { color: #fbbf24; background: rgba(251,191,36,0.1); }
-    .adapter-badge.role    { color: #f97316; background: rgba(249,115,22,0.1); }
-
-    /* Card body rows */
-    .card-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 6px;
-      font-size: 13px;
-      min-width: 0;
-    }
-
-    .card-row:last-child { margin-bottom: 0; }
-
-    .row-icon {
+      text-align: right;
       flex-shrink: 0;
-      width: 16px;
-      text-align: center;
-      color: var(--muted);
     }
 
-    .row-icon svg {
+    .row-sub-badge {
       width: 14px;
       height: 14px;
-      vertical-align: middle;
+      border-radius: 50%;
+      background: var(--working);
+      color: #fff;
+      font-size: 9px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      line-height: 1;
     }
 
-    .row-value {
+    .row-branch {
       color: var(--text);
+      font-size: 10px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      flex: 1;
-      font-variant-numeric: tabular-nums;
+      max-width: 140px;
     }
 
-    .row-value.muted { color: var(--muted); }
-    .row-value.mono { font-family: var(--font-mono); font-size: 12px; }
-
-    /* Context bar */
-    .context-bar-wrap {
-      height: 4px;
+    .row-ctx-bar {
+      width: 80px;
+      height: 6px;
       background: rgba(255,255,255,0.06);
       border-radius: 2px;
       overflow: hidden;
-      flex: 1;
-      min-width: 60px;
+      flex-shrink: 0;
     }
 
-    .context-bar {
+    .row-ctx-fill {
       height: 100%;
       border-radius: 2px;
       background: var(--pressure-low);
-      transition: width 0.5s ease, background 0.4s;
+      transition: width 0.4s ease, background 0.3s;
     }
 
-    .context-bar.medium  { background: var(--pressure-medium); }
-    .context-bar.high    { background: var(--pressure-high); }
-    .context-bar.critical { background: var(--pressure-critical); }
+    .row-ctx-fill.medium  { background: var(--pressure-medium); }
+    .row-ctx-fill.high    { background: var(--pressure-high); }
+    .row-ctx-fill.critical { background: var(--pressure-critical); }
 
-    .context-pct {
-      font-family: var(--font-mono);
-      font-size: 11px;
+    .row-ctx-pct {
+      font-size: 9px;
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .row-cost {
+      font-size: 9px;
+      font-weight: 500;
       color: var(--muted);
       flex-shrink: 0;
-      width: 36px;
-      text-align: right;
-      font-variant-numeric: tabular-nums;
     }
 
-    /* Pressure alert */
-    .pressure-alert {
-      margin-top: 8px;
-      padding: 5px 10px;
-      border-radius: 5px;
-      font-family: var(--font-mono);
+    .row-spacer { flex: 1; }
+
+    .row-model {
       font-size: 10px;
-      letter-spacing: 0.04em;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 120px;
     }
 
-    .pressure-alert.high {
+    .row-elapsed {
+      font-size: 9px;
+      color: var(--muted);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+      min-width: 36px;
+      text-align: right;
+    }
+
+    .row-id {
+      font-size: 9px;
+      color: var(--muted);
+      opacity: 0.5;
+      flex-shrink: 0;
+    }
+
+    /* Pressure alert row */
+    .pressure-alert-row {
+      padding: 2px 10px 2px 30px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+    }
+    .pressure-alert-row span {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+    }
+    .pressure-alert-row .alert-high {
       background: rgba(255, 59, 48, 0.1);
       color: var(--pressure-high);
-      border: 1px solid rgba(255, 59, 48, 0.2);
     }
-
-    .pressure-alert.critical {
+    .pressure-alert-row .alert-critical {
       background: rgba(215, 0, 21, 0.12);
       color: var(--pressure-critical);
-      border: 1px solid rgba(215, 0, 21, 0.25);
-    }
-
-    /* Card footer */
-    .card-footer {
-      margin-top: 12px;
-      padding-top: 10px;
-      border-top: 1px solid var(--border-subtle);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--muted);
-      display: flex;
-      justify-content: space-between;
-      font-variant-numeric: tabular-nums;
     }
 
     /* Gas Town section */
     .gt-section {
-      margin-bottom: 24px;
+      margin-bottom: 12px;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 6px;
       overflow: hidden;
     }
 
@@ -469,85 +445,49 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 14px 18px;
+      padding: 8px 12px;
       border-bottom: 1px solid var(--border-subtle);
     }
 
     .gt-title {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       font-family: var(--font-mono);
-      font-size: 14px;
+      font-size: 11px;
       font-weight: 700;
       color: var(--text-bright);
       letter-spacing: 0.04em;
     }
 
-    .gt-title .gt-emoji { font-size: 16px; }
-    .gt-title .gt-count {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-    }
+    .gt-title .gt-emoji { font-size: 12px; }
 
     .gt-status-dot {
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       display: inline-block;
     }
 
     .gt-status-label {
       font-family: var(--font-mono);
-      font-size: 11px;
+      font-size: 10px;
       color: var(--muted);
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 5px;
     }
 
     .gt-body { padding: 0; }
 
-    /* Global agent row */
-    .gt-agent-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 18px;
-      border-bottom: 1px solid var(--border-subtle);
-      transition: background 0.15s;
-    }
-
-    .gt-agent-row:last-child { border-bottom: none; }
-    .gt-agent-row:hover { background: var(--surface-hover); }
-
-    .gt-agent-emoji { font-size: 14px; flex-shrink: 0; }
-
-    .gt-agent-role {
-      font-family: var(--font-mono);
-      font-size: 13px;
-      color: var(--text);
-      flex: 1;
-    }
-
-    .gt-agent-state {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-
-    /* Convoy section */
     .gt-convoy-header {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 18px;
+      gap: 6px;
+      padding: 6px 12px;
       border-bottom: 1px solid var(--border-subtle);
       font-family: var(--font-mono);
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 600;
       color: var(--muted);
       letter-spacing: 0.06em;
@@ -557,11 +497,11 @@
     .gt-convoy-row {
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 7px 18px 7px 32px;
+      gap: 8px;
+      padding: 4px 12px 4px 24px;
       border-bottom: 1px solid var(--border-subtle);
       font-family: var(--font-mono);
-      font-size: 12px;
+      font-size: 10px;
     }
 
     .gt-convoy-row:last-child { border-bottom: none; }
@@ -578,130 +518,39 @@
 
     .gt-dotbar {
       letter-spacing: 2px;
-      font-size: 11px;
+      font-size: 10px;
       flex-shrink: 0;
     }
 
     .gt-convoy-fraction {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--muted);
       flex-shrink: 0;
-      min-width: 40px;
+      min-width: 36px;
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
 
     .gt-convoy-check {
       color: var(--ready);
-      font-size: 11px;
-      flex-shrink: 0;
-    }
-
-    /* Codebase (rig) section */
-    .gt-codebase-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 18px;
-      border-bottom: 1px solid var(--border-subtle);
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-
-    .gt-codebase-header:hover { background: var(--surface-hover); }
-
-    .gt-rig-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-
-    .gt-rig-name {
-      font-family: var(--font-mono);
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text);
-      flex: 1;
-    }
-
-    .gt-rig-count {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--muted);
-    }
-
-    .gt-rig-agents { padding-left: 14px; }
-
-    .gt-rig-agent-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 18px 6px 32px;
-      border-bottom: 1px solid var(--border-subtle);
-      font-size: 12px;
-      transition: background 0.15s;
-    }
-
-    .gt-rig-agent-row:last-child { border-bottom: none; }
-    .gt-rig-agent-row:hover { background: var(--surface-hover); }
-
-    .gt-rig-agent-emoji { font-size: 12px; flex-shrink: 0; }
-
-    .gt-rig-agent-name {
-      font-family: var(--font-mono);
-      font-size: 12px;
-      color: var(--text);
-      flex: 1;
-    }
-
-    .gt-bead-id {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--working);
-    }
-
-    .gt-rig-agent-state {
-      font-family: var(--font-mono);
       font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-
-    .gt-section-label {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--muted);
-      padding: 10px 0 8px 0;
-    }
-    .group-header {
-      grid-column: 1 / -1;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .group-header .gt-rig-count {
-      color: var(--muted);
-      font-weight: 400;
+      flex-shrink: 0;
     }
 
     /* Responsive */
     @media (max-width: 768px) {
-      header { padding: 16px 20px; }
-      main { padding: 20px; }
-      .session-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-      .summary { gap: 10px; }
+      header { padding: 10px 14px; }
+      main { padding: 10px 14px; }
+      .row-branch { max-width: 80px; }
+      .row-ctx-bar { width: 50px; }
+      .row-model { max-width: 80px; }
     }
 
     @media (max-width: 480px) {
-      header { flex-direction: column; align-items: flex-start; gap: 10px; }
-      main { padding: 16px; }
-      .session-grid { grid-template-columns: 1fr; }
-      .subagent-card { margin-left: 12px; }
+      header { flex-direction: column; align-items: flex-start; gap: 8px; }
+      main { padding: 8px 10px; }
+      .row-ctx-bar { display: none; }
+      .row-ctx-pct { display: none; }
     }
   </style>
 </head>
@@ -732,89 +581,78 @@
 
   <main>
     <div id="gt-container" style="display:none" aria-label="Gas Town"></div>
+    <div id="timeline-wrap"><canvas id="timeline"></canvas></div>
     <div id="empty-state">
       <div class="empty-dot"></div>
       <p>awaiting sessions</p>
     </div>
-    <div class="session-grid" id="session-grid" aria-live="polite"></div>
+    <div class="session-list" id="session-list" aria-live="polite"></div>
   </main>
 
   <script>
-    // Hierarchical dashboard state: Orchestrator -> Groups -> Agents -> Children.
-    let dashboardGroups = [];   // AgentGroup[] from API
-    let orchestrator = null;    // OrchestratorSummary from API
-    let sessionIndex = new Map(); // session_id -> {group, agent} for fast WS updates
+    // --- State ---
+    let dashboardGroups = [];
+    let orchestrator = null;
+    let sessionIndex = new Map();
+    let collapsedGroups = new Set();
 
-    // --- SVG Icons ---
+    // --- Timeline history ---
+    const TIMELINE_MAX_TICKS = 150;
+    const TIMELINE_TICK_MS = 2000;
+    const timelineHistory = new Map(); // session_id -> {label, states: string[]}
+
+    // --- SVG Icons (compact 12px) ---
     const svgIcons = {
-      working: '<svg class="state-svg working" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8B5CF6" stroke-width="1.5" stroke-dasharray="4 3"/></svg>',
-      waiting: '<svg class="state-svg" viewBox="0 0 16 16" fill="none"><rect x="4" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/><rect x="9.5" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/></svg>',
-      ready: '<svg class="state-svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#34C759" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="#34C759" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-      cancelled: '<svg class="state-svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8E8E93" stroke-width="1.5"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/></svg>',
-      folder: '<svg viewBox="0 0 14 14" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h2.38a1 1 0 01.72.3L7.7 3.5h3.8A1.5 1.5 0 0113 5v5.5a1.5 1.5 0 01-1.5 1.5h-8A1.5 1.5 0 012 10.5V3.5z" stroke="currentColor" stroke-width="1.2"/></svg>',
-      model: '<svg viewBox="0 0 14 14" fill="none"><rect x="2" y="4" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M5 4V2.5a1 1 0 012 0V4M9 7h0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
-      branch: '<svg viewBox="0 0 14 14" fill="none"><circle cx="5" cy="3.5" r="1.5" stroke="currentColor" stroke-width="1.1"/><circle cx="9" cy="3.5" r="1.5" stroke="currentColor" stroke-width="1.1"/><circle cx="5" cy="10.5" r="1.5" stroke="currentColor" stroke-width="1.1"/><path d="M5 5v4M9 5c0 2-4 2-4 4" stroke="currentColor" stroke-width="1.1"/></svg>',
-      token: '<svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.2"/><path d="M7 4.5v5M5.5 6h3" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>',
-      clock: '<svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.2"/><path d="M7 4.5V7l2 1.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-      chart: '<svg viewBox="0 0 14 14" fill="none"><rect x="2" y="8" width="2" height="4" rx="0.5" fill="currentColor" opacity="0.4"/><rect x="6" y="5" width="2" height="7" rx="0.5" fill="currentColor" opacity="0.6"/><rect x="10" y="2" width="2" height="10" rx="0.5" fill="currentColor" opacity="0.8"/></svg>',
+      working: '<svg class="working" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8B5CF6" stroke-width="1.5" stroke-dasharray="4 3"/></svg>',
+      waiting: '<svg viewBox="0 0 16 16" fill="none"><rect x="4" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/><rect x="9.5" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/></svg>',
+      ready: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#34C759" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="#34C759" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      cancelled: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8E8E93" stroke-width="1.5"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/></svg>',
     };
 
-    function stateIcon(state) {
-      return svgIcons[state] || svgIcons.ready;
-    }
+    function stateIcon(state) { return svgIcons[state] || svgIcons.ready; }
 
-    function adapterLabel(adapter) {
-      if (!adapter || adapter === '') return 'claude';
-      return adapter.toLowerCase();
-    }
-
-    function formatTokens(n) {
-      if (!n) return '';
-      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-      if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
-      return String(n);
-    }
-
-    function formatModel(m) {
+    // --- Helpers ---
+    function shortModel(m) {
       if (!m || m === 'unknown') return '';
-      return m;
+      return m.replace(/^claude-/, '').replace(/-(\d)/, '.$1');
     }
 
-    function formatElapsed(firstSeen, elapsedStored, isActive) {
-      if (isActive && firstSeen) {
-        const secs = Math.max(0, Math.floor(Date.now() / 1000 - firstSeen));
-        return fmtDuration(secs);
-      }
-      if (elapsedStored && elapsedStored > 0) return fmtDuration(elapsedStored);
-      return '';
+    function formatCost(usd) {
+      if (!usd || usd <= 0) return '';
+      return '$' + usd.toFixed(2);
     }
 
     function fmtDuration(secs) {
       const h = Math.floor(secs / 3600);
       const m = Math.floor((secs % 3600) / 60);
       const s = secs % 60;
-      if (h > 0) return h + 'h ' + m + 'm';
-      if (m > 0) return m + 'm ' + s + 's';
+      if (h > 0) return h + 'h' + m + 'm';
+      if (m > 0) return m + 'm' + s + 's';
       return s + 's';
     }
 
-    function formatAge(ts) {
-      if (!ts) return '';
-      const secs = Math.floor(Date.now() / 1000 - ts);
-      if (secs < 60) return secs + 's ago';
-      if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
-      return Math.floor(secs / 3600) + 'h ago';
+    function formatElapsed(firstSeen, elapsedStored, isActive) {
+      if (isActive && firstSeen) {
+        return fmtDuration(Math.max(0, Math.floor(Date.now() / 1000 - firstSeen)));
+      }
+      if (elapsedStored && elapsedStored > 0) return fmtDuration(elapsedStored);
+      return '';
     }
 
-    function shortID(id) {
-      return id ? id.slice(0, 8) : '';
-    }
+    function shortID(id) { return id ? id.slice(0, 6) : ''; }
 
     function pressureClass(level) {
       if (level === 'critical') return 'critical';
-      if (level === 'high') return 'high';
-      if (level === 'medium') return 'medium';
+      if (level === 'warning' || level === 'high') return 'high';
+      if (level === 'caution' || level === 'medium') return 'medium';
       return '';
+    }
+
+    function pressureColor(level) {
+      if (level === 'critical') return 'var(--pressure-critical)';
+      if (level === 'warning' || level === 'high') return 'var(--pressure-high)';
+      if (level === 'caution' || level === 'medium') return 'var(--pressure-medium)';
+      return 'var(--pressure-low)';
     }
 
     function esc(s) {
@@ -822,11 +660,36 @@
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // --- Session index helpers ---
+    function groupMaxPressure(g) {
+      let worst = 0;
+      for (const a of g.agents) {
+        const ctx = a.metrics ? a.metrics.context_utilization_percentage || 0 : 0;
+        if (ctx > worst) worst = ctx;
+      }
+      return worst;
+    }
+
+    function groupTotalCost(g) {
+      let total = 0;
+      for (const a of g.agents) {
+        if (a.metrics && a.metrics.estimated_cost_usd) total += a.metrics.estimated_cost_usd;
+        for (const c of (a.children || [])) {
+          if (c.metrics && c.metrics.estimated_cost_usd) total += c.metrics.estimated_cost_usd;
+        }
+      }
+      return total;
+    }
+
+    function activeSubagentCount(a) {
+      if (!a.children) return 0;
+      return a.children.filter(c => c.state === 'working' || c.state === 'waiting').length;
+    }
+
+    // --- Session index ---
     function rebuildIndex() {
       sessionIndex.clear();
-      for (var g of dashboardGroups) {
-        for (var a of g.agents) {
+      for (const g of dashboardGroups) {
+        for (const a of g.agents) {
           sessionIndex.set(a.session_id, {group: g, agent: a, parent: null});
           indexChildren(g, a);
         }
@@ -834,17 +697,15 @@
     }
     function indexChildren(group, parent) {
       if (!parent.children) return;
-      for (var c of parent.children) {
+      for (const c of parent.children) {
         sessionIndex.set(c.session_id, {group: group, agent: c, parent: parent});
         indexChildren(group, c);
       }
     }
 
-    // Apply a session update/create from WS.
     function applySessionUpdate(s) {
       var entry = sessionIndex.get(s.session_id);
       if (entry) {
-        // Update in-place, preserving role and children.
         var a = entry.agent;
         var role = a.role, wn = a.worker_name, wid = a.worker_id, ch = a.children;
         Object.assign(a, s);
@@ -854,7 +715,6 @@
         a.children = ch;
         return;
       }
-      // New session — find or create group by project_name.
       var groupName = s.project_name || 'unknown';
       var group = dashboardGroups.find(g => g.name === groupName);
       if (!group) {
@@ -862,7 +722,6 @@
         dashboardGroups.push(group);
       }
       if (s.parent_session_id) {
-        // Try to attach as child of parent agent.
         var parentEntry = sessionIndex.get(s.parent_session_id);
         if (parentEntry) {
           if (!parentEntry.agent.children) parentEntry.agent.children = [];
@@ -875,7 +734,6 @@
       sessionIndex.set(s.session_id, {group: group, agent: s, parent: null});
     }
 
-    // Remove a session from WS delete.
     function applySessionDelete(sessionId) {
       var entry = sessionIndex.get(sessionId);
       if (!entry) return;
@@ -887,82 +745,15 @@
         var ai = entry.group.agents.findIndex(a => a.session_id === sessionId);
         if (ai >= 0) entry.group.agents.splice(ai, 1);
       }
-      // Remove empty groups.
       if (entry.group.agents.length === 0) {
         var gi = dashboardGroups.indexOf(entry.group);
         if (gi >= 0) dashboardGroups.splice(gi, 1);
       }
     }
 
-    // --- Render ---
+    // --- Orchestrator rendering (innerHTML is fine — updates rarely) ---
     const roleEmoji = { mayor: '\u{1F3A9}', deacon: '\u{1F4CB}', witness: '\u{1F989}', refinery: '\u{1F3ED}', polecat: '\u{1F477}', crew: '\u{1F9D1}\u200D\u{1F4BB}' };
 
-    function renderCard(s, idx) {
-      const state = s.state || 'ready';
-      const adapter = adapterLabel(s.adapter);
-      const metrics = s.metrics || {};
-      const model = metrics.model_name || s.model || '';
-      const tokens = metrics.total_tokens || 0;
-      const ctxPct = metrics.context_utilization_percentage || 0;
-      const pressure = metrics.pressure_level || '';
-      const branch = s.git_branch || '';
-      const project = s.project_name || '';
-      const isActive = state === 'working' || state === 'waiting';
-      const elapsed = formatElapsed(s.first_seen, metrics.elapsed_seconds, isActive);
-      const ctxBarClass = pressureClass(pressure);
-      const ctxWidth = Math.min(100, ctxPct).toFixed(1);
-      const delay = Math.min(idx * 60, 400);
-
-      let pressureAlert = '';
-      if (isActive && (pressure === 'high' || pressure === 'critical')) {
-        const cls = pressure === 'critical' ? 'critical' : 'high';
-        pressureAlert = '<div class="pressure-alert ' + cls + '">Context pressure: ' + esc(pressure) + '</div>';
-      }
-
-      return '<div class="session-card" data-state="' + esc(state) + '" data-id="' + esc(s.session_id) + '" style="animation-delay:' + delay + 'ms">' +
-        '<div class="card-header">' +
-          '<div class="state-indicator">' +
-            stateIcon(state) +
-            '<span class="state-label ' + esc(state) + '">' + esc(state.replace('_', ' ')) + '</span>' +
-          '</div>' +
-          (s.role ? '<span class="adapter-badge role">' + (roleEmoji[s.role] || '') + ' ' + esc(s.worker_name || s.role) + '</span>' : '<span class="adapter-badge ' + esc(adapter) + '">' + esc(adapter) + '</span>') +
-        '</div>' +
-        (project ? '<div class="card-row"><span class="row-icon">' + svgIcons.folder + '</span><span class="row-value">' + esc(project) + '</span></div>' : '') +
-        '<div class="card-row"><span class="row-icon">' + svgIcons.model + '</span><span class="row-value ' + (model ? 'mono' : 'muted') + '">' + esc(model || '\u2014') + '</span></div>' +
-        (branch ? '<div class="card-row"><span class="row-icon">' + svgIcons.branch + '</span><span class="row-value mono">' + esc(branch) + '</span></div>' : '') +
-        (elapsed ? '<div class="card-row"><span class="row-icon">' + svgIcons.clock + '</span><span class="row-value mono elapsed" data-first-seen="' + (isActive ? (s.first_seen || '') : '') + '" data-elapsed-stored="' + (metrics.elapsed_seconds || '') + '" data-active="' + (isActive ? '1' : '0') + '">' + esc(elapsed) + '</span></div>' : '') +
-        (tokens > 0 ? '<div class="card-row"><span class="row-icon">' + svgIcons.token + '</span><span class="row-value mono">' + esc(formatTokens(tokens)) + '</span></div>' : '') +
-        (ctxPct > 0 ? '<div class="card-row"><span class="row-icon">' + svgIcons.chart + '</span><div class="context-bar-wrap"><div class="context-bar ' + esc(ctxBarClass) + '" style="width:' + ctxWidth + '%"></div></div><span class="context-pct">' + ctxPct.toFixed(0) + '%</span></div>' : '') +
-        pressureAlert +
-        '<div class="card-footer">' +
-          '<span>' + esc(shortID(s.session_id)) + '</span>' +
-          '<span class="age-label" data-updated="' + (s.updated_at || '') + '">' + formatAge(s.updated_at) + '</span>' +
-        '</div>' +
-      '</div>';
-    }
-
-    function renderSubagentCard(s, idx) {
-      const state = s.state || 'ready';
-      const metrics = s.metrics || {};
-      const model = metrics.model_name || s.model || '';
-      const ctxPct = metrics.context_utilization_percentage || 0;
-      const pressure = metrics.pressure_level || '';
-      const isActive = state === 'working' || state === 'waiting';
-      const elapsed = formatElapsed(s.first_seen, metrics.elapsed_seconds, isActive);
-      const delay = Math.min(idx * 60 + 100, 500);
-
-      return '<div class="subagent-card" data-state="' + esc(state) + '" data-id="' + esc(s.session_id) + '" style="animation-delay:' + delay + 'ms">' +
-        '<div class="subagent-label">subagent</div>' +
-        '<div class="subagent-row">' +
-          stateIcon(state) +
-          '<span class="row-value mono">' + esc(model || '\u2014') + '</span>' +
-          (elapsed ? '<span class="row-value mono elapsed" data-first-seen="' + (isActive ? (s.first_seen || '') : '') + '" data-elapsed-stored="' + (metrics.elapsed_seconds || '') + '" data-active="' + (isActive ? '1' : '0') + '" style="flex:0;white-space:nowrap">' + esc(elapsed) + '</span>' : '') +
-          (ctxPct > 0 ? '<span class="context-pct">' + ctxPct.toFixed(0) + '%</span>' : '') +
-        '</div>' +
-      '</div>';
-    }
-
-    // --- Orchestrator structural rendering ---
     function dotBar(total, done) {
       const maxDots = 7;
       const totalDots = Math.min(total, maxDots);
@@ -1006,21 +797,187 @@
       container.innerHTML = html;
     }
 
-    function renderGroupHeader(group) {
-      const statusDot = group.status ? '<div class="gt-rig-dot" style="background:' +
-        (group.status === 'operational' ? 'var(--ready)' : 'var(--pressure-high)') + '"></div>' : '';
-      return '<div class="gt-section-label group-header">' + statusDot +
-        '<span>' + esc(group.name) + '</span>' +
-        '<span class="gt-rig-count">' + group.agents.length + ' agent' + (group.agents.length === 1 ? '' : 's') + '</span>' +
-        '</div>';
+    // --- DOM Reconciliation ---
+    // Keyed reconcile: patches children of `parent` to match `items`.
+    function reconcile(parent, items, keyFn, createFn, updateFn) {
+      const existingByKey = new Map();
+      for (const child of parent.children) {
+        const k = child.dataset.key;
+        if (k) existingByKey.set(k, child);
+      }
+
+      const desiredKeys = new Set();
+      let prevNode = null;
+
+      for (const item of items) {
+        const key = keyFn(item);
+        desiredKeys.add(key);
+        let el = existingByKey.get(key);
+
+        if (el) {
+          updateFn(el, item);
+          // Move to correct position if needed
+          const expected = prevNode ? prevNode.nextSibling : parent.firstChild;
+          if (el !== expected) {
+            parent.insertBefore(el, expected);
+          }
+        } else {
+          el = createFn(item);
+          el.dataset.key = key;
+          const ref = prevNode ? prevNode.nextSibling : parent.firstChild;
+          parent.insertBefore(el, ref);
+        }
+        prevNode = el;
+      }
+
+      // Remove orphans
+      for (const [key, el] of existingByKey) {
+        if (!desiredKeys.has(key)) {
+          parent.removeChild(el);
+        }
+      }
     }
 
+    // --- Create/Update functions for session rows ---
+    function createGroupHeader(group) {
+      const el = document.createElement('div');
+      el.className = 'group-hdr';
+      el.innerHTML = '<span class="group-chevron">\u25BE</span>' +
+        '<span class="group-dot"></span>' +
+        '<span class="group-name"></span>' +
+        '<span class="group-cost"></span>' +
+        '<span class="group-count"></span>';
+      el.addEventListener('click', () => {
+        if (collapsedGroups.has(group.name)) {
+          collapsedGroups.delete(group.name);
+        } else {
+          collapsedGroups.add(group.name);
+        }
+        render();
+      });
+      updateGroupHeader(el, group);
+      return el;
+    }
+
+    function updateGroupHeader(el, group) {
+      el.querySelector('.group-name').textContent = group.name;
+      const cost = groupTotalCost(group);
+      el.querySelector('.group-cost').textContent = cost > 0 ? formatCost(cost) : '';
+      const totalAgents = group.agents.length + group.agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
+      el.querySelector('.group-count').textContent = totalAgents + (totalAgents === 1 ? ' agent' : ' agents');
+
+      const isCollapsed = collapsedGroups.has(group.name);
+      const chevron = el.querySelector('.group-chevron');
+      chevron.classList.toggle('collapsed', isCollapsed);
+
+      // Dot color based on max context utilization
+      const maxCtx = groupMaxPressure(group);
+      const dot = el.querySelector('.group-dot');
+      let dotColor = 'var(--ready)';
+      if (maxCtx > 90) dotColor = 'var(--pressure-high)';
+      else if (maxCtx > 75) dotColor = 'var(--pressure-medium)';
+      else if (maxCtx > 50) dotColor = 'var(--waiting)';
+      dot.style.background = dotColor;
+
+      // Update the click handler's group reference
+      el._group = group;
+    }
+
+    function createSessionRow(agent, isChild) {
+      const el = document.createElement('div');
+      el.className = 'session-row' + (isChild ? ' child' : '');
+      // Build inner structure
+      el.innerHTML =
+        '<span class="row-state-icon"></span>' +
+        '<span class="row-num"></span>' +
+        '<span class="row-sub-badge" style="display:none"></span>' +
+        '<span class="row-branch"></span>' +
+        '<span class="row-ctx-bar"><span class="row-ctx-fill"></span></span>' +
+        '<span class="row-ctx-pct"></span>' +
+        '<span class="row-cost"></span>' +
+        '<span class="row-spacer"></span>' +
+        '<span class="row-model"></span>' +
+        '<span class="row-elapsed"></span>' +
+        '<span class="row-id"></span>';
+      updateSessionRow(el, agent, isChild);
+      return el;
+    }
+
+    function updateSessionRow(el, agent, isChild) {
+      const state = agent.state || 'ready';
+      const metrics = agent.metrics || {};
+      const model = shortModel(metrics.model_name || agent.model || '');
+      const ctxPct = metrics.context_utilization_percentage || 0;
+      const pressure = metrics.pressure_level || '';
+      const branch = agent.git_branch || '';
+      const cost = formatCost(metrics.estimated_cost_usd);
+      const isActive = state === 'working' || state === 'waiting';
+      const elapsed = formatElapsed(agent.first_seen, metrics.elapsed_seconds, isActive);
+
+      // State icon — only update if state changed
+      if (el.dataset.state !== state) {
+        el.dataset.state = state;
+        el.querySelector('.row-state-icon').innerHTML = stateIcon(state);
+      }
+
+      // Agent number — set from outside via data attribute
+      // (set by render loop)
+
+      // Subagent badge
+      const subCount = activeSubagentCount(agent);
+      const badge = el.querySelector('.row-sub-badge');
+      if (subCount > 0) {
+        badge.style.display = '';
+        badge.textContent = subCount;
+      } else {
+        badge.style.display = 'none';
+      }
+
+      // Branch
+      const branchEl = el.querySelector('.row-branch');
+      if (branchEl.textContent !== branch) branchEl.textContent = branch || '\u2014';
+
+      // Context bar
+      const fill = el.querySelector('.row-ctx-fill');
+      const ctxWidth = Math.min(100, ctxPct).toFixed(1) + '%';
+      if (fill.style.width !== ctxWidth) fill.style.width = ctxWidth;
+      fill.className = 'row-ctx-fill ' + pressureClass(pressure);
+
+      // Context %
+      const pctEl = el.querySelector('.row-ctx-pct');
+      const pctText = ctxPct > 0 ? ctxPct.toFixed(0) + '%' : '';
+      if (pctEl.textContent !== pctText) pctEl.textContent = pctText;
+      pctEl.style.color = ctxPct > 0 ? pressureColor(pressure) : '';
+
+      // Cost
+      const costEl = el.querySelector('.row-cost');
+      if (costEl.textContent !== cost) costEl.textContent = cost;
+
+      // Model
+      const modelEl = el.querySelector('.row-model');
+      if (modelEl.textContent !== model) modelEl.textContent = model;
+
+      // Elapsed
+      const elapsedEl = el.querySelector('.row-elapsed');
+      elapsedEl.textContent = elapsed;
+      elapsedEl.dataset.firstSeen = isActive ? (agent.first_seen || '') : '';
+      elapsedEl.dataset.elapsedStored = metrics.elapsed_seconds || '';
+      elapsedEl.dataset.active = isActive ? '1' : '0';
+
+      // Short ID
+      const idEl = el.querySelector('.row-id');
+      const sid = shortID(agent.session_id);
+      if (idEl.textContent !== sid) idEl.textContent = sid;
+    }
+
+    // --- Render ---
     function render() {
       renderOrchestrator();
-      const grid = document.getElementById('session-grid');
+
+      const list = document.getElementById('session-list');
       const empty = document.getElementById('empty-state');
 
-      // Sort agents within each group: working > waiting > ready, then by updated_at desc.
+      // Sort
       const stateOrder = ['working', 'waiting', 'ready'];
       function agentSort(a, b) {
         const ai = stateOrder.indexOf(a.state);
@@ -1028,8 +985,6 @@
         if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
         return (b.updated_at || 0) - (a.updated_at || 0);
       }
-
-      // Sort groups by most active agent state, then by name.
       function groupPriority(g) {
         let best = 99;
         for (const a of g.agents) {
@@ -1046,25 +1001,58 @@
 
       if (dashboardGroups.length === 0) {
         empty.style.display = 'flex';
-        grid.innerHTML = '';
+        list.innerHTML = '';
       } else {
         empty.style.display = 'none';
-        let html = '';
-        let idx = 0;
+
+        // Build flat list of render items: [{type, key, data}]
+        const items = [];
         const showHeaders = dashboardGroups.length > 1;
+        let agentNum = 0;
+
         for (const g of dashboardGroups) {
-          if (showHeaders) html += renderGroupHeader(g);
-          g.agents.sort(agentSort);
-          for (const a of g.agents) {
-            html += renderCard(a, idx++);
-            for (const sub of (a.children || [])) {
-              html += renderSubagentCard(sub, idx++);
+          if (showHeaders) {
+            items.push({type: 'group', key: 'g:' + g.name, group: g});
+          }
+          if (!collapsedGroups.has(g.name)) {
+            g.agents.sort(agentSort);
+            for (const a of g.agents) {
+              agentNum++;
+              items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false});
+              // Pressure alert
+              const isActive = a.state === 'working' || a.state === 'waiting';
+              const pressure = a.metrics ? a.metrics.pressure_level : '';
+              if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
+                items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
+              }
+              for (const sub of (a.children || [])) {
+                items.push({type: 'agent', key: 'a:' + sub.session_id, agent: sub, num: '', isChild: true});
+              }
             }
           }
         }
-        grid.innerHTML = html;
+
+        // Reconcile
+        reconcile(list, items,
+          item => item.key,
+          item => {
+            if (item.type === 'group') return createGroupHeader(item.group);
+            if (item.type === 'alert') return createAlertRow(item.pressure);
+            const el = createSessionRow(item.agent, item.isChild);
+            el.querySelector('.row-num').textContent = item.num;
+            return el;
+          },
+          (el, item) => {
+            if (item.type === 'group') { updateGroupHeader(el, item.group); return; }
+            if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
+            updateSessionRow(el, item.agent, item.isChild);
+            el.querySelector('.row-num').textContent = item.num;
+            el.className = 'session-row' + (item.isChild ? ' child' : '');
+          }
+        );
       }
-      // Build flat list for summary counts.
+
+      // Summary counts
       const all = [];
       function collectAll(agents) {
         for (const a of agents) {
@@ -1074,6 +1062,18 @@
       }
       for (const g of dashboardGroups) collectAll(g.agents);
       updateSummary(all);
+    }
+
+    function createAlertRow(pressure) {
+      const el = document.createElement('div');
+      el.className = 'pressure-alert-row';
+      updateAlertRow(el, pressure);
+      return el;
+    }
+
+    function updateAlertRow(el, pressure) {
+      const cls = pressure === 'critical' ? 'alert-critical' : 'alert-high';
+      el.innerHTML = '<span class="' + cls + '">\u26A0 Switch to a fresh session soon</span>';
     }
 
     function updateSummary(list) {
@@ -1088,28 +1088,114 @@
       document.getElementById('cnt-ready').textContent = r;
     }
 
-    // --- Selective elapsed time tick (1s) ---
+    // --- Elapsed time tick (1s) ---
     function tickElapsed() {
-      const els = document.querySelectorAll('.elapsed');
       const now = Date.now() / 1000;
-      for (const el of els) {
-        const active = el.getAttribute('data-active') === '1';
-        if (active) {
-          const fs = parseFloat(el.getAttribute('data-first-seen'));
-          if (fs) {
-            el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
-          }
+      for (const el of document.querySelectorAll('.row-elapsed')) {
+        if (el.dataset.active === '1') {
+          const fs = parseFloat(el.dataset.firstSeen);
+          if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
         }
       }
-      // Also update age labels
-      const ages = document.querySelectorAll('.age-label');
-      for (const el of ages) {
-        const ts = parseFloat(el.getAttribute('data-updated'));
-        if (ts) el.textContent = formatAge(ts);
+    }
+    setInterval(tickElapsed, 1000);
+
+    // --- Timeline heatmap ---
+    const TIMELINE_COL_W = 4;
+    const TIMELINE_ROW_H = 6;
+    const TIMELINE_GAP = 1;
+    const TIMELINE_LABEL_W = 100;
+    const stateColors = {
+      working: '#8B5CF6',
+      waiting: '#FF9500',
+      ready: '#34C759',
+    };
+
+    function timelineTick() {
+      // Record current state of all sessions
+      const seen = new Set();
+      for (const [sid, entry] of sessionIndex) {
+        seen.add(sid);
+        let rec = timelineHistory.get(sid);
+        if (!rec) {
+          const label = (entry.agent.project_name || '').slice(0, 10) + ' ' + shortID(sid);
+          rec = {label, states: []};
+          timelineHistory.set(sid, rec);
+        }
+        rec.states.push(entry.agent.state || 'ready');
+        if (rec.states.length > TIMELINE_MAX_TICKS) rec.states.shift();
+      }
+      // Mark unseen sessions with null
+      for (const [sid, rec] of timelineHistory) {
+        if (!seen.has(sid)) {
+          rec.states.push(null);
+          if (rec.states.length > TIMELINE_MAX_TICKS) rec.states.shift();
+        }
+      }
+      // Prune fully-null rows
+      for (const [sid, rec] of timelineHistory) {
+        if (rec.states.every(s => s === null)) timelineHistory.delete(sid);
+      }
+
+      renderTimeline();
+    }
+
+    function renderTimeline() {
+      const wrap = document.getElementById('timeline-wrap');
+      const canvas = document.getElementById('timeline');
+
+      if (timelineHistory.size === 0) {
+        wrap.style.display = 'none';
+        return;
+      }
+      wrap.style.display = 'block';
+
+      const dpr = window.devicePixelRatio || 1;
+      const rows = Array.from(timelineHistory.values());
+      const maxTicks = rows.reduce((m, r) => Math.max(m, r.states.length), 0);
+      const canvasW = TIMELINE_LABEL_W + maxTicks * TIMELINE_COL_W;
+      const canvasH = rows.length * (TIMELINE_ROW_H + TIMELINE_GAP);
+
+      canvas.width = canvasW * dpr;
+      canvas.height = canvasH * dpr;
+      canvas.style.width = canvasW + 'px';
+      canvas.style.height = canvasH + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, canvasW, canvasH);
+
+      // Sort rows: working first, then waiting, then ready (by most recent state)
+      rows.sort((a, b) => {
+        const aState = a.states[a.states.length - 1] || 'ready';
+        const bState = b.states[b.states.length - 1] || 'ready';
+        const order = ['working', 'waiting', 'ready'];
+        return order.indexOf(aState) - order.indexOf(bState);
+      });
+
+      for (let r = 0; r < rows.length; r++) {
+        const rec = rows[r];
+        const y = r * (TIMELINE_ROW_H + TIMELINE_GAP);
+
+        // Label
+        ctx.fillStyle = '#5a6480';
+        ctx.font = '9px ui-monospace, "SF Mono", Menlo, monospace';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(rec.label, 2, y + TIMELINE_ROW_H / 2);
+
+        // State columns — right-aligned so newest is at right
+        const startCol = maxTicks - rec.states.length;
+        for (let t = 0; t < rec.states.length; t++) {
+          const state = rec.states[t];
+          if (!state) continue;
+          const x = TIMELINE_LABEL_W + (startCol + t) * TIMELINE_COL_W;
+          ctx.fillStyle = stateColors[state] || '#1a2340';
+          ctx.fillRect(x, y, TIMELINE_COL_W - 1, TIMELINE_ROW_H);
+        }
       }
     }
 
-    setInterval(tickElapsed, 1000);
+    setInterval(timelineTick, TIMELINE_TICK_MS);
 
     // --- Initial load ---
     fetch('/api/v1/sessions').then(r => r.json()).catch(() => ({})).then(resp => {
@@ -1117,9 +1203,10 @@
       orchestrator = resp.orchestrator || null;
       rebuildIndex();
       render();
+      timelineTick(); // First tick immediately
     });
 
-    // --- WebSocket with exponential backoff ---
+    // --- WebSocket ---
     let ws = null;
     let reconnectDelay = 1000;
 
