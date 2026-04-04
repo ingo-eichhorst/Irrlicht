@@ -1,7 +1,6 @@
 package session
 
 import (
-	"strings"
 	"time"
 )
 
@@ -48,33 +47,27 @@ type SessionMetrics struct {
 	EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
 }
 
-// NeedsUserAttention returns true when a tool call is open and the agent
-// may be waiting for user input (permission prompt, question, plan approval).
-// Tools that auto-execute (Agent, MCP tools) don't need user attention.
+// NeedsUserAttention returns true when a user-blocking tool is open — one
+// that always requires user input regardless of permission settings.
+// Most tools auto-execute (Bash, Read, Write, Agent, MCP, etc.) and should
+// NOT trigger a waiting state; only explicit user-interaction tools do.
 func (m *SessionMetrics) NeedsUserAttention() bool {
 	if m == nil || !m.HasOpenToolCall {
 		return false
 	}
-	// If all open tools are auto-executing, the session is working, not waiting.
-	if len(m.LastOpenToolNames) > 0 {
-		allAuto := true
-		for _, name := range m.LastOpenToolNames {
-			if !isAutoExecutingTool(name) {
-				allAuto = false
-				break
-			}
-		}
-		if allAuto {
-			return false
+	for _, name := range m.LastOpenToolNames {
+		if isUserBlockingTool(name) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
-// isAutoExecutingTool returns true for tools that execute without user interaction.
-// Agent tools run sub-agents in-process; MCP tools (mcp__*) are server-side.
-func isAutoExecutingTool(name string) bool {
-	return name == "Agent" || strings.HasPrefix(name, "mcp__")
+// isUserBlockingTool returns true for tools that always block for user input,
+// regardless of permission settings. These are the only tools that should
+// trigger the "waiting" state.
+func isUserBlockingTool(name string) bool {
+	return name == "AskUserQuestion" || name == "ExitPlanMode"
 }
 
 // IsAgentDone returns true when the agent finished its turn. The primary
