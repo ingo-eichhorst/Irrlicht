@@ -143,13 +143,53 @@ class SessionManager: ObservableObject {
         scheduleConnect(after: delay)
     }
 
+    /// Dashboard response from the unified API endpoint.
+    private struct DashboardResponse: Decodable {
+        let orchestrator: OrchestratorSummary?
+        let groups: [AgentGroup]?
+    }
+
+    private struct OrchestratorSummary: Decodable {
+        let adapter: String?
+        let running: Bool?
+        let workUnits: [DashboardWorkUnit]?
+
+        enum CodingKeys: String, CodingKey {
+            case adapter, running
+            case workUnits = "work_units"
+        }
+    }
+
+    private struct DashboardWorkUnit: Decodable {
+        let id: String
+        let type: String
+        let name: String
+        let source: String
+        let total: Int
+        let done: Int
+    }
+
+    private struct AgentGroup: Decodable {
+        let name: String
+        let status: String?
+        let agents: [SessionState]?
+    }
+
     private func hydrateSessions() async {
         guard let url = URL(string: "http://localhost:7837/api/v1/sessions") else { return }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             let decoder = JSONDecoder()
-            let states = try decoder.decode([SessionState].self, from: data)
+            let dashboard = try decoder.decode(DashboardResponse.self, from: data)
+
+            // Flatten groups → agents → sessions (including children).
+            var states: [SessionState] = []
+            for group in dashboard.groups ?? [] {
+                for agent in group.agents ?? [] {
+                    states.append(agent)
+                }
+            }
             sessionMap = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
             rebuildSessionsFromMap()
             print("💧 Hydrated \(states.count) sessions from REST API")
@@ -162,6 +202,7 @@ class SessionManager: ObservableObject {
         let type: String
         let session: SessionState?
         let gastown: GasTownState?
+        let orchestrator: GasTownState?
     }
 
     private func handleWsMessage(_ text: String) {
@@ -180,7 +221,12 @@ class SessionManager: ObservableObject {
                     sessionOrder.removeAll { $0 == session.id }
                     rebuildSessionsFromMap()
                 }
+            case "orchestrator_state":
+                if let orchState = envelope.orchestrator {
+                    gasTownProvider?.handleWebSocketUpdate(orchState)
+                }
             case "gastown_state":
+                // Legacy: keep for backward compat during transition.
                 if let gtState = envelope.gastown {
                     gasTownProvider?.handleWebSocketUpdate(gtState)
                 }

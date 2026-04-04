@@ -148,8 +148,8 @@ func main() {
 
 	// HTTP mux.
 	mux := http.NewServeMux()
-	registerReadRoutes(mux, fsRepo)
-	// Gas Town endpoint registered after poller is available (see below).
+	// Sessions endpoint registered after orchMonitor is available (see below).
+	mux.HandleFunc("GET /state", handleGetState(fsRepo))
 
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
@@ -225,7 +225,8 @@ func main() {
 		}()
 	}
 
-	// Register orchestrator API endpoints.
+	// Register API endpoints (after orchMonitor is available).
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(fsRepo, orchMonitor))
 	mux.HandleFunc("GET /api/v1/orchestrators/{name}", handleGetOrchestrator(orchMonitor))
 	mux.HandleFunc("GET /api/v1/gastown", handleGetOrchestrator(orchMonitor)) // backward compat
 
@@ -319,13 +320,7 @@ func socketPath() string {
 	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichd.sock")
 }
 
-// registerReadRoutes registers the read-only HTTP endpoints on mux.
-func registerReadRoutes(mux *http.ServeMux, repo outbound.SessionRepository) {
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo))
-	mux.HandleFunc("GET /state", handleGetState(repo))
-}
-
-func handleGetSessions(repo outbound.SessionRepository) http.HandlerFunc {
+func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
@@ -333,11 +328,8 @@ func handleGetSessions(repo outbound.SessionRepository) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if len(sessions) == 0 {
-			w.Write([]byte("[]"))
-			return
-		}
-		json.NewEncoder(w).Encode(sessions)
+		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
+		json.NewEncoder(w).Encode(resp)
 	}
 }
 
