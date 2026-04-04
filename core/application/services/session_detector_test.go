@@ -103,8 +103,9 @@ func TestSessionDetector_Activity_TransitionsToWaiting_WhenToolUseOpen(t *testin
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     1,
 		Metrics: &session.SessionMetrics{
-			LastEventType:   "tool_use",
-			HasOpenToolCall: true,
+			LastEventType:     "tool_use",
+			HasOpenToolCall:   true,
+			LastOpenToolNames: []string{"AskUserQuestion"},
 		},
 	}
 
@@ -184,8 +185,9 @@ func TestSessionDetector_Activity_TransitionsToWaiting_WhenAssistantButOpenTools
 		FirstSeen:      time.Now().Unix(),
 		UpdatedAt:      time.Now().Unix(),
 		Metrics: &session.SessionMetrics{
-			LastEventType:   "assistant",
-			HasOpenToolCall: true,
+			LastEventType:     "assistant",
+			HasOpenToolCall:   true,
+			LastOpenToolNames: []string{"ExitPlanMode"},
 		},
 	}
 
@@ -623,10 +625,14 @@ func TestNeedsUserAttention(t *testing.T) {
 	}{
 		{"nil metrics", nil, false},
 		{"no open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
-		{"open tool call (Bash)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, true},
-		{"open tool call (Write)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Write"}}, true},
+		{"open tool call (Bash)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, false},
+		{"open tool call (Write)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Write"}}, false},
+		{"open tool call (Agent)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Agent"}}, false},
+		{"open tool call (mcp__tool)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"mcp__claude-in-chrome__navigate"}}, false},
 		{"open tool call (AskUserQuestion)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"AskUserQuestion"}}, true},
-		{"open tool call, no names", &session.SessionMetrics{HasOpenToolCall: true}, true},
+		{"open tool call (ExitPlanMode)", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"ExitPlanMode"}}, true},
+		{"mixed tools with AskUserQuestion", &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash", "AskUserQuestion"}}, true},
+		{"open tool call, no names", &session.SessionMetrics{HasOpenToolCall: true}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
