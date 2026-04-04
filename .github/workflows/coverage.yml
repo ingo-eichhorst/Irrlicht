@@ -67,21 +67,3 @@ jobs:
             -d "{\"files\":{\"coverage.json\":{\"content\":\"{\\\"schemaVersion\\\":1,\\\"label\\\":\\\"coverage\\\",\\\"message\\\":\\\"${COVERAGE}%\\\",\\\"color\\\":\\\"${COLOR}\\\"}\"}}}}" \
             "https://api.github.com/gists/$COVERAGE_GIST_ID"
 
-      - name: Update README badge URL
-        env:
-          COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
-        run: |
-          sed -i "s|/ingo-eichhorst/COVERAGE_GIST_ID/|/ingo-eichhorst/${COVERAGE_GIST_ID}/|g" README.md
-          echo "README badge URL updated"
-
-      - name: Commit badge update
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          if git diff --staged --quiet; then
-            echo "No badge URL changes to commit"
-          else
-            git commit -m "chore: update coverage badge URL [skip ci]"
-            git push
-          fi

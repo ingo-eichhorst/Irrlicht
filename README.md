@@ -2,13 +2,13 @@
 
 ![Banner](assets/banner.png)
 
-[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ingo-eichhorst//raw/coverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ingo-eichhorst/9f14c8e5f25c1ccf5d6500c1685fd9fb/raw/coverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/ingo-eichhorst/Irrlicht/main/version.json&query=$.version&label=version&color=%2334C759)](version.json)
 [![License](https://img.shields.io/badge/license-MIT-orange?color=%23FF9500)](LICENSE)
 
 [![ARS](https://img.shields.io/badge/ARS-Agent--Assisted%207.2%2F10-yellow)](https://github.com/ingo-eichhorst/agent-readyness)
 
-🌐 [Landing Page](https://ingo-eichhorst.github.io/Irrlicht/) · 📖 [Documentation](https://ingo-eichhorst.github.io/Irrlicht/docs/quickstart.html)
+🌐 [Landing Page](https://ingo-eichhorst.github.io/Irrlicht/) · 📖 [Documentation](https://ingo-eichhorst.github.io/Irrlicht/docs/quickstart.html) · 📦 [Latest Release](https://github.com/ingo-eichhorst/Irrlicht/releases/latest)
 
 **Irrlicht** is a macOS menu bar application that monitors AI coding agent sessions (Claude Code, OpenAI Codex), providing instant visual feedback on session states. The name comes from German folklore—where an *Irrlicht* (will-o'-the-wisp) traditionally leads wanderers astray, this version does the opposite: it guides you with honest signals about where your attention is needed.
 
