@@ -195,7 +195,7 @@ struct SessionListView: View {
     private var sessionHeaderView: some View {
         HStack {
             HStack(spacing: 4) {
-                Text("Irrlicht \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")")
+                Text("Irrlicht v\(appVersion)")
                     .font(.headline)
                     .foregroundColor(.primary)
                 
@@ -375,6 +375,7 @@ struct SessionRowView: View {
     let session: SessionState
     let agentNumber: Int
     var activeSubagentCount: Int = 0
+    @AppStorage("debugMode") private var debugMode: Bool = false
     @State private var isHovered = false
 
     var body: some View {
@@ -469,6 +470,26 @@ struct SessionRowView: View {
                 .cornerRadius(4)
                 .padding(.top, 2)
             }
+
+            // Debug info
+            if debugMode {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    HStack(spacing: 8) {
+                        Text(session.shortId)
+                            .onTapGesture {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(session.id, forType: .string)
+                            }
+                            .help("Click to copy full ID")
+                        Text("updated: \(elapsedString(from: session.updatedAt, now: context.date))")
+                        Text("created: \(elapsedString(from: session.firstSeen, now: context.date))")
+                        Spacer()
+                    }
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .padding(.top, 2)
+                }
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
@@ -480,6 +501,17 @@ struct SessionRowView: View {
         }
         .accessibilityIdentifier("session-card-\(session.id)")
         .accessibilityLabel("\(session.projectName ?? "unknown") \(session.state.rawValue) \(session.shortModelName)")
+    }
+
+    private func elapsedString(from date: Date, now: Date) -> String {
+        let total = max(0, Int(now.timeIntervalSince(date)))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
     }
 }
 

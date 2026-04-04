@@ -21,9 +21,15 @@ final class DaemonManager: ObservableObject {
     // MARK: - Public
 
     func start() {
-        killStaleDaemons()
+        guard healthTask == nil else { return }
         healthTask = Task { [weak self] in
             guard let self else { return }
+            if await self.isDaemonReachable() {
+                self.daemonRunning = true
+                self.logger.info("External daemon already reachable — skipping spawn")
+                return
+            }
+            self.killStaleDaemons()
             self.spawnDaemon()
         }
     }
@@ -71,9 +77,20 @@ final class DaemonManager: ObservableObject {
 
     // MARK: - Embedded daemon
 
-    /// Path to the `irrlichd` binary inside the app bundle.
+    /// Path to the `irrlichd` binary inside the app bundle, with a dev-mode fallback.
     private var bundledDaemonURL: URL? {
-        Bundle.main.url(forAuxiliaryExecutable: "irrlichd")
+        if let url = Bundle.main.url(forAuxiliaryExecutable: "irrlichd") {
+            return url
+        }
+        // Dev fallback: look relative to the Swift source tree (core/bin/irrlichd)
+        let devURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // Managers/
+            .deletingLastPathComponent() // Irrlicht/
+            .deletingLastPathComponent() // macos/
+            .deletingLastPathComponent() // platforms/
+            .deletingLastPathComponent() // repo root
+            .appendingPathComponent("bin/irrlichd")
+        return FileManager.default.fileExists(atPath: devURL.path) ? devURL : nil
     }
 
     private func spawnDaemon() {

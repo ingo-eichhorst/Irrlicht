@@ -1,5 +1,20 @@
 import SwiftUI
 
+let appVersion: String = {
+    if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String { return v }
+    // Fallback: read version.json from repo root (useful for debug builds)
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent() // Irrlicht/
+        .deletingLastPathComponent() // macos/
+        .deletingLastPathComponent() // platforms/
+        .deletingLastPathComponent() // repo root
+        .appendingPathComponent("version.json")
+    if let data = try? Data(contentsOf: url),
+       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+       let v = json["version"] as? String { return v }
+    return "dev"
+}()
+
 struct StatusIndicatorLabel: View {
     let sessions: [SessionState]
 
@@ -72,8 +87,17 @@ struct StatusIndicatorLabel: View {
     }
 }
 
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var daemonManager: DaemonManager?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        daemonManager?.stop()
+    }
+}
+
 @main
 struct IrrlichtApp: App {
+    @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @StateObject private var daemonManager = DaemonManager()
     @StateObject private var sessionManager = SessionManager()
     @StateObject private var gasTownProvider = GasTownProvider()
@@ -87,11 +111,14 @@ struct IrrlichtApp: App {
                 .onAppear {
                     // Wire gasTownProvider to sessionManager for WebSocket forwarding.
                     sessionManager.gasTownProvider = gasTownProvider
-                    // Start the embedded daemon (or detect an external one).
-                    daemonManager.start()
                 }
         } label: {
             StatusIndicatorLabel(sessions: sessionManager.sessions)
+                .task {
+                    // Start daemon on app launch (label renders immediately, unlike popover content).
+                    appDelegate.daemonManager = daemonManager
+                    daemonManager.start()
+                }
         }
         .menuBarExtraStyle(.window)
     }

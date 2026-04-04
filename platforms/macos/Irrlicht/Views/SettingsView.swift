@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Binding var isPresented: Bool
     @AppStorage("sessionTTLMinutes") private var sessionTTLMinutes: Int = 30
+    @AppStorage("debugMode") private var debugMode: Bool = false
 
     private let ttlOptions: [(label: String, value: Int)] = [
         ("Never", 0),
@@ -37,6 +38,16 @@ struct SettingsView: View {
                 .frame(maxWidth: 200)
             }
 
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Debug Mode", isOn: $debugMode)
+
+                Text("Show session IDs, creation time, and time since last update.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Spacer()
 
             HStack {
@@ -46,6 +57,6 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 320, height: 180)
+        .frame(width: 320, height: 260)
     }
 }
