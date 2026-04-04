@@ -2,6 +2,8 @@ package services_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -45,6 +47,46 @@ func TestSessionDetector_NewSession_CreatesState(t *testing.T) {
 	}
 	if state.Confidence != "medium" {
 		t.Errorf("confidence: got %q, want medium", state.Confidence)
+	}
+}
+
+func TestSessionDetector_NewSession_SkipsOrphanTranscript(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	// Create a transcript file with an old mtime (orphan).
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "orphan1.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Set mtime to 10 minutes ago to exceed orphanTranscriptAge.
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(transcriptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "orphan1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("orphan1")
+	if state != nil {
+		t.Errorf("orphan session should not be created, but found state %q", state.State)
 	}
 }
 
