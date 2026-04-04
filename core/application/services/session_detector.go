@@ -1,22 +1,18 @@
 // SessionDetector orchestrates AgentWatchers + ProcessWatcher to detect
 // and manage agent sessions from transcript file activity.
 //
-// It subscribes to one or more AgentWatcher event streams and:
-//   - On new session: creates session state, discovers PID via lsof,
-//     registers with ProcessWatcher, derives parent_session_id
-//   - On activity: refreshes metrics, uses content-based detection
-//     (LastEventType) to determine working/waiting state
-//   - On removed: cleans up session
+// It subscribes to one or more AgentWatcher event streams and delegates to
+// three focused collaborators:
+//   - StateClassifier: pure functions for state transition logic
+//   - MetadataEnricher: git metadata resolution and metrics computation
+//   - PIDManager: process lifecycle (discovery, exit, liveness sweeps)
 package services
 
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	processadapter "irrlicht/core/adapters/outbound/process"
@@ -32,21 +28,18 @@ import (
 const orphanTranscriptAge = 2 * time.Minute
 
 // SessionDetector watches transcript files to detect sessions and orchestrate
-// ProcessWatcher for lifecycle management. Working/waiting state is determined
-// by content-based detection (LastEventType from transcript parsing).
+// lifecycle management. It is a thin coordinator that delegates state
+// classification, metadata enrichment, and PID management to focused
+// collaborators.
 type SessionDetector struct {
 	watchers    []inbound.AgentWatcher
-	pw          outbound.ProcessWatcher // optional
 	repo        outbound.SessionRepository
 	log         outbound.Logger
-	git         outbound.GitResolver
-	metrics     outbound.MetricsCollector
 	broadcaster outbound.PushBroadcaster // optional
 	version     string                   // daemon version stamped on new sessions
-	readyTTL    time.Duration            // max idle time for ready sessions before deletion
 
-	discoverPID      func(string) (int, error)                    // defaults to processadapter.DiscoverPID
-	discoverPIDByCWD func(string, func([]int) int) (int, error) // optional CWD fallback
+	enricher *MetadataEnricher
+	pidMgr   *PIDManager
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
@@ -66,26 +59,27 @@ func NewSessionDetector(
 	version string,
 	readyTTL time.Duration,
 ) *SessionDetector {
-	return &SessionDetector{
+	det := &SessionDetector{
 		watchers:        watchers,
-		pw:              pw,
 		repo:            repo,
 		log:             log,
-		git:             git,
-		metrics:         metrics,
 		broadcaster:     broadcaster,
 		version:         version,
-		readyTTL:        readyTTL,
-		discoverPID:     processadapter.DiscoverPID,
+		enricher:        NewMetadataEnricher(git, metrics),
 		projectSessions: make(map[string]string),
 	}
+	det.pidMgr = NewPIDManager(
+		pw, repo, log, broadcaster, readyTTL,
+		processadapter.DiscoverPID, det.removeFromProjectSessions,
+	)
+	return det
 }
 
 // WithCWDDiscovery sets an optional fallback PID discovery function that finds
 // a process by matching its working directory. Called when lsof on the
 // transcript file fails to find a PID.
 func (d *SessionDetector) WithCWDDiscovery(fn func(string, func([]int) int) (int, error)) {
-	d.discoverPIDByCWD = fn
+	d.pidMgr.SetCWDDiscovery(fn)
 }
 
 // Run subscribes to all AgentWatcher event streams, fans them into a single
@@ -129,7 +123,7 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 	d.seedFromDisk()
 
 	// Periodic liveness sweep: detect dead PIDs that kqueue missed.
-	go d.sweepDeadPIDs(ctx)
+	go d.pidMgr.SweepDeadPIDs(ctx)
 
 	d.log.LogInfo("session-detector", "", "started — listening for transcript events")
 
@@ -184,12 +178,10 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
-		initialState := session.StateReady
-
 		state := &session.SessionState{
 			Version:         1,
 			SessionID:       ev.SessionID,
-			State:           initialState,
+			State:           session.StateReady,
 			Adapter:         ev.Adapter,
 			TranscriptPath:  ev.TranscriptPath,
 			CWD:             ev.CWD,
@@ -202,26 +194,8 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			LastEvent:       "transcript_new",
 		}
 
-		// Resolve git metadata: prefer CWD (set by process scanner), fall
-		// back to transcript inspection for file-based sessions.
-		if ev.CWD != "" {
-			state.CWD = ev.CWD
-			state.GitBranch = d.git.GetBranch(ev.CWD)
-			state.ProjectName = d.git.GetProjectName(ev.CWD)
-		} else if ev.TranscriptPath != "" {
-			if cwd := d.git.GetCWDFromTranscript(ev.TranscriptPath); cwd != "" {
-				state.CWD = cwd
-				state.GitBranch = d.git.GetBranch(cwd)
-				state.ProjectName = d.git.GetProjectName(cwd)
-			} else if b := d.git.GetBranchFromTranscript(ev.TranscriptPath); b != "" {
-				state.GitBranch = b
-			}
-		}
-
-		// Compute initial metrics (no-op for pre-sessions with no transcript).
-		if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
-			state.Metrics = m
-		}
+		// Resolve git metadata and compute initial metrics.
+		d.enricher.EnrichNewSession(state, ev)
 
 		if err := d.repo.Save(state); err != nil {
 			d.log.LogError("session-detector", ev.SessionID,
@@ -253,7 +227,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 	if !isNew {
 		cwd = existing.CWD
 	}
-	go d.discoverPIDWithRetry(ev.SessionID, ev.TranscriptPath, cwd)
+	go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, ev.TranscriptPath, cwd)
 }
 
 // onActivity handles transcript file writes. It uses content-based detection
@@ -271,85 +245,33 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	// event loop on lsof I/O). Includes CWD fallback.
 	if state.PID == 0 && ev.TranscriptPath != "" {
 		sid, tp, cwd := ev.SessionID, ev.TranscriptPath, state.CWD
-		go d.tryDiscoverPID(sid, tp, cwd)
+		go d.pidMgr.TryDiscoverPID(sid, tp, cwd)
 	}
 
-	// Refresh CWD/branch/project from transcript. GetCWDFromTranscript returns
-	// the LATEST cwd, which may change mid-session (e.g. worktree switch).
-	if ev.TranscriptPath != "" {
-		if cwd := d.git.GetCWDFromTranscript(ev.TranscriptPath); cwd != "" && cwd != state.CWD {
-			state.CWD = cwd
-			state.GitBranch = d.git.GetBranch(cwd)
-			// Only update ProjectName when the new CWD is inside a git repo.
-			// For non-git directories, keep the original project name set at
-			// session creation to avoid subdirectory names overriding it.
-			if gitRoot := d.git.GetGitRoot(cwd); gitRoot != "" {
-				state.ProjectName = filepath.Base(gitRoot)
-			}
-		}
-	}
+	// Refresh CWD/branch/project and metrics from transcript.
+	d.enricher.RefreshOnActivity(state, ev.TranscriptPath)
 
-	// Refresh metrics (includes LastEventType for content-based detection).
-	if m, _ := d.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
-		state.Metrics = session.MergeMetrics(m, state.Metrics)
-	}
-
-	// Content-based state detection using three-way check:
-	// - NeedsUserAttention: user-blocking tool open → waiting
-	// - IsAgentDone: agent finished turn → ready
-	// - User event while working: ESC cancellation → ready
-	// - Otherwise: actively processing → working
+	// Content-based state detection.
 	now := time.Now().Unix()
-	if state.Metrics.NeedsUserAttention() {
-		if state.State != session.StateWaiting {
-			d.log.LogInfo("session-detector", ev.SessionID,
-				"user-blocking tool open → waiting")
-			state.State = session.StateWaiting
-			state.UpdatedAt = now
+	newState, reason := ClassifyState(state.State, state.Metrics)
+	if newState != state.State {
+		if reason != "" {
+			d.log.LogInfo("session-detector", ev.SessionID, reason)
+		}
+		state.State = newState
+		state.UpdatedAt = now
+
+		// Side effects for specific transitions.
+		if newState == session.StateWaiting {
 			state.WaitingStartTime = &now
-		}
-	} else if state.Metrics.IsAgentDone() {
-		if state.State == session.StateWorking || state.State == session.StateWaiting {
-			d.log.LogInfo("session-detector", ev.SessionID,
-				"agent finished turn → ready")
-			state.State = session.StateReady
-		}
-	} else if (state.State == session.StateWorking || state.State == session.StateWaiting) && !state.Metrics.HasOpenToolCall && state.Metrics.LastEventType == "user" && state.Metrics.LastToolResultWasError {
-		// ESC cancellation: a user event with is_error=true tool_result arrives
-		// while working/waiting with no open tool calls. Normal tool completions
-		// have is_error=false and don't match this check.
-		d.log.LogInfo("session-detector", ev.SessionID,
-			fmt.Sprintf("rejected tool result while %s → ready (cancellation)", state.State))
-		state.State = session.StateReady
-	} else {
-		if state.State != session.StateWorking {
-			d.log.LogInfo("session-detector", ev.SessionID,
-				fmt.Sprintf("transcript activity (%s → working)", state.State))
-			state.State = session.StateWorking
+		} else if newState == session.StateWorking {
 			state.LastTranscriptSize = 0
 			state.WaitingStartTime = nil
 		}
 	}
 
 	// Infer in-process sub-agent activity from open Agent tool calls.
-	// Claude Code Explore/Plan agents run inside the parent process and
-	// don't create separate transcripts, so this is the only detection path.
-	if state.Metrics != nil && state.Metrics.HasOpenToolCall {
-		agentCount := 0
-		for _, name := range state.Metrics.LastOpenToolNames {
-			if name == "Agent" {
-				agentCount++
-			}
-		}
-		if agentCount > 0 {
-			state.Subagents = &session.SubagentSummary{
-				Total:   agentCount,
-				Working: agentCount,
-			}
-		}
-	} else if state.Subagents != nil {
-		state.Subagents = nil
-	}
+	state.Subagents = InferSubagents(state.Metrics)
 
 	state.UpdatedAt = time.Now().Unix()
 	state.EventCount++
@@ -407,212 +329,26 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 
 // HandleProcessExit deletes a session when its process exits.
 func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
-	// Remove from project tracking.
-	d.mu.Lock()
-	delete(d.projectSessions, sessionID)
-	d.mu.Unlock()
-
-	state, err := d.repo.Load(sessionID)
-	if err != nil || state == nil {
-		d.log.LogInfo("process-exit", sessionID,
-			fmt.Sprintf("pid %d exited but session not found (already cleaned up)", pid))
-		return
-	}
-
-	d.log.LogInfo("process-exit", sessionID,
-		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
-
-	if err := d.repo.Delete(sessionID); err != nil {
-		d.log.LogError("process-exit", sessionID,
-			fmt.Sprintf("failed to delete session: %v", err))
-		return
-	}
-
-	d.broadcast(outbound.PushTypeDeleted, state)
+	d.pidMgr.HandleProcessExit(pid, sessionID)
 }
 
-// sweepDeadPIDs periodically checks all sessions for dead processes and deletes
-// them. This is a safety net for cases where kqueue misses an exit (PID not
-// registered, daemon restart window, race conditions).
-func (d *SessionDetector) sweepDeadPIDs(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			d.checkPIDLiveness()
-		}
-	}
-}
-
-func (d *SessionDetector) checkPIDLiveness() {
-	states, err := d.repo.ListAll()
-	if err != nil {
-		return
-	}
-	for _, state := range states {
-		if state.PID > 0 {
-			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-				d.HandleProcessExit(state.PID, state.SessionID)
-			}
-		}
-	}
-
-	// Sweep stale sessions that can't be cleaned up via PID liveness:
-	// - Ready sessions (idle beyond TTL)
-	// - Working/waiting sessions with PID=0 (zombies where PID discovery
-	//   failed and no kqueue/sweep cleanup path can fire)
-	if d.readyTTL > 0 {
-		for _, state := range states {
-			if !state.IsStale(d.readyTTL) {
-				continue
-			}
-			if state.State == session.StateReady || state.PID == 0 {
-				d.log.LogInfo("session-detector", state.SessionID,
-					fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
-						state.State, state.PID, d.readyTTL))
-				_ = d.repo.Delete(state.SessionID)
-				d.broadcast(outbound.PushTypeDeleted, state)
-			}
-		}
-	}
-}
-
-// tryDiscoverPID attempts lsof-on-transcript (primary), then CWD-based
-// discovery (fallback). Returns true if a PID was found and assigned.
-func (d *SessionDetector) tryDiscoverPID(sessionID, transcriptPath, cwd string) bool {
-	if d.pw == nil {
-		return false
-	}
-	// Check if session already has a PID.
-	state, _ := d.repo.Load(sessionID)
-	if state != nil && state.PID > 0 {
-		return true
-	}
-
-	// Primary: lsof on transcript file.
-	if transcriptPath != "" {
-		if pid, err := d.discoverPID(transcriptPath); err == nil && pid > 0 {
-			d.log.LogInfo("session-detector", sessionID,
-				fmt.Sprintf("lsof discovered pid %d", pid))
-			d.HandlePIDAssigned(pid, sessionID)
-			return true
-		}
-	}
-
-	// Fallback: CWD-based discovery.
-	if d.discoverPIDByCWD != nil && cwd != "" {
-		disambiguate := func(pids []int) int {
-			best := 0
-			for _, p := range pids {
-				if p > best {
-					best = p
-				}
-			}
-			return best
-		}
-		if pid, err := d.discoverPIDByCWD(cwd, disambiguate); err == nil && pid > 0 {
-			d.log.LogInfo("session-detector", sessionID,
-				fmt.Sprintf("cwd fallback discovered pid %d", pid))
-			d.HandlePIDAssigned(pid, sessionID)
-			return true
-		}
-	}
-	return false
-}
-
-// discoverPIDWithRetry tries to discover a PID immediately, then retries at
-// 500ms, 1s, 2s intervals. This covers the common timing issue where the CLI
-// hasn't opened the transcript file yet at session creation time.
-func (d *SessionDetector) discoverPIDWithRetry(sessionID, transcriptPath, cwd string) {
-	if d.tryDiscoverPID(sessionID, transcriptPath, cwd) {
-		return
-	}
-	for _, delay := range []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second} {
-		time.Sleep(delay)
-		state, _ := d.repo.Load(sessionID)
-		if state == nil || state.PID > 0 {
-			return
-		}
-		if d.tryDiscoverPID(sessionID, transcriptPath, cwd) {
-			return
-		}
-	}
-}
-
-// HandlePIDAssigned records a newly-discovered PID for a session, registers it
-// with the ProcessWatcher, and cleans up old sessions that shared the same PID.
-// This handles the /clear scenario: the CLI process stays alive (same PID) but
-// starts a new transcript, making the old session obsolete.
+// HandlePIDAssigned records a newly-discovered PID for a session.
 func (d *SessionDetector) HandlePIDAssigned(pid int, sessionID string) {
-	if pid <= 0 {
-		return
-	}
-
-	state, _ := d.repo.Load(sessionID)
-	if state == nil || state.PID == pid {
-		return
-	}
-
-	state.PID = pid
-	state.UpdatedAt = time.Now().Unix()
-	_ = d.repo.Save(state)
-
-	// Register with ProcessWatcher for exit monitoring.
-	if d.pw != nil {
-		if err := d.pw.Watch(pid, sessionID); err != nil {
-			d.log.LogError("session-detector", sessionID,
-				fmt.Sprintf("failed to watch pid %d: %v", pid, err))
-		}
-	}
-
-	// Clean up old sessions that had the same PID (e.g. /clear).
-	// Subagent sessions share the parent's PID, so skip cleanup when
-	// either side is a subagent.
-	if state.ParentSessionID != "" {
-		return
-	}
-
-	states, err := d.repo.ListAll()
-	if err != nil {
-		return
-	}
-
-	for _, old := range states {
-		if old.SessionID == sessionID || old.PID != pid {
-			continue
-		}
-		if old.ParentSessionID != "" || strings.HasPrefix(old.SessionID, "proc-") {
-			continue
-		}
-
-		d.log.LogInfo("session-detector", old.SessionID,
-			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
-
-		d.mu.Lock()
-		delete(d.projectSessions, old.SessionID)
-		d.mu.Unlock()
-
-		_ = d.repo.Delete(old.SessionID)
-		d.broadcast(outbound.PushTypeDeleted, old)
-	}
+	d.pidMgr.HandlePIDAssigned(pid, sessionID)
 }
 
-// seedFromDisk populates the projectSessions map from existing sessions and
-// registers PIDs of active sessions with the ProcessWatcher.
+// seedFromDisk populates the projectSessions map from existing sessions,
+// re-evaluates stale states, backfills metadata, and cleans up dead PIDs.
 func (d *SessionDetector) seedFromDisk() {
 	states, err := d.repo.ListAll()
 	if err != nil {
 		return
 	}
 
+	// Populate projectSessions map.
 	d.mu.Lock()
 	for _, state := range states {
 		if state.TranscriptPath != "" {
-			// Extract project dir from transcript path.
-			// Path format: ~/<agent-root>/<project-dir>/<session-id>.jsonl
 			if pdir := extractProjectDir(state.TranscriptPath); pdir != "" {
 				d.projectSessions[state.SessionID] = pdir
 			}
@@ -622,120 +358,51 @@ func (d *SessionDetector) seedFromDisk() {
 
 	// Re-evaluate state for all non-ready sessions: recompute metrics from
 	// transcript and apply the current detection logic. This ensures sessions
-	// persisted with stale states (e.g. from a previous logic version) are
-	// corrected on startup.
+	// persisted with stale states are corrected on startup.
 	for _, state := range states {
-		if state.State == session.StateReady {
+		if state.State == session.StateReady || state.TranscriptPath == "" {
 			continue
 		}
-		if state.TranscriptPath == "" {
-			continue
-		}
-		if m, _ := d.metrics.ComputeMetrics(state.TranscriptPath); m != nil {
-			state.Metrics = session.MergeMetrics(m, state.Metrics)
-		}
-		changed := false
-		if state.Metrics.NeedsUserAttention() {
-			if state.State != session.StateWaiting {
-				state.State = session.StateWaiting
-				changed = true
-			}
-		} else if state.Metrics.IsAgentDone() {
-			if state.State != session.StateReady {
+		d.enricher.RefreshMetrics(state)
+
+		newState, reason := ClassifyState(state.State, state.Metrics)
+		// Only apply transitions to waiting or ready (not working promotion)
+		// because seed is re-evaluating persisted state, not responding to
+		// new activity.
+		if newState != state.State && newState != session.StateWorking {
+			if reason != "" {
 				d.log.LogInfo("session-detector-seed", state.SessionID,
-					fmt.Sprintf("re-evaluated %s → ready on startup", state.State))
-				state.State = session.StateReady
-				changed = true
+					fmt.Sprintf("re-evaluated %s on startup", reason))
 			}
-		} else if (state.State == session.StateWorking || state.State == session.StateWaiting) && state.Metrics != nil && !state.Metrics.HasOpenToolCall && state.Metrics.LastEventType == "user" && state.Metrics.LastToolResultWasError {
-			d.log.LogInfo("session-detector-seed", state.SessionID,
-				fmt.Sprintf("re-evaluated %s → ready on startup (user event, no open tools)", state.State))
-			state.State = session.StateReady
-			changed = true
-		}
-		if changed {
+			state.State = newState
 			_ = d.repo.Save(state)
 		}
 	}
 
 	// Backfill ProjectName / CWD / GitBranch for sessions that were saved
-	// before these fields were populated. Derive CWD from the transcript when
-	// it is missing, then fill the remaining fields from CWD.
-	for _, state := range states {
-		if state.ProjectName != "" {
-			continue
-		}
-		changed := false
-		if state.CWD == "" && state.TranscriptPath != "" {
-			if cwd := d.git.GetCWDFromTranscript(state.TranscriptPath); cwd != "" {
-				state.CWD = cwd
-				changed = true
-			}
-		}
-		if state.CWD != "" {
-			if state.ProjectName == "" {
-				state.ProjectName = d.git.GetProjectName(state.CWD)
-				changed = true
-			}
-			if state.GitBranch == "" {
-				state.GitBranch = d.git.GetBranch(state.CWD)
-				changed = true
-			}
-		}
-		if changed {
-			state.UpdatedAt = time.Now().Unix()
-			if err := d.repo.Save(state); err != nil {
-				d.log.LogError("session-detector-seed", state.SessionID,
-					fmt.Sprintf("failed to backfill metadata: %v", err))
-			} else {
-				d.log.LogInfo("session-detector-seed", state.SessionID,
-					fmt.Sprintf("backfilled project=%s cwd=%s", state.ProjectName, state.CWD))
-				d.broadcast(outbound.PushTypeUpdated, state)
-			}
+	// before these fields were populated.
+	for _, state := range d.enricher.BackfillMetadata(states) {
+		state.UpdatedAt = time.Now().Unix()
+		if err := d.repo.Save(state); err != nil {
+			d.log.LogError("session-detector-seed", state.SessionID,
+				fmt.Sprintf("failed to backfill metadata: %v", err))
+		} else {
+			d.log.LogInfo("session-detector-seed", state.SessionID,
+				fmt.Sprintf("backfilled project=%s cwd=%s", state.ProjectName, state.CWD))
+			d.broadcast(outbound.PushTypeUpdated, state)
 		}
 	}
 
 	// Clean up dead sessions and register alive PIDs with ProcessWatcher.
-	for _, state := range states {
-		switch {
-		case state.PID > 0:
-			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-				d.log.LogInfo("session-detector-seed", state.SessionID,
-					fmt.Sprintf("pid %d dead, deleting session", state.PID))
-				_ = d.repo.Delete(state.SessionID)
-				d.broadcast(outbound.PushTypeDeleted, state)
-				continue
-			}
-			if d.pw != nil {
-				if err := d.pw.Watch(state.PID, state.SessionID); err != nil {
-					d.log.LogError("session-detector-seed", state.SessionID,
-						fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
-				}
-			}
-
-		case state.PID == 0 && isStaleTranscript(state.TranscriptPath):
-			// Orphan from exited Claude Code process (never assigned a PID
-			// because Claude Code doesn't keep transcript files open).
-			d.log.LogInfo("session-detector-seed", state.SessionID,
-				"deleting orphan session")
-			_ = d.repo.Delete(state.SessionID)
-			d.broadcast(outbound.PushTypeDeleted, state)
-		}
-	}
+	d.pidMgr.SeedPIDs(states)
 }
 
-// isStaleTranscript reports whether the transcript file at path has not been
-// modified within orphanTranscriptAge. Returns false for empty paths or
-// stat errors (file missing → not stale, will be caught elsewhere).
-func isStaleTranscript(path string) bool {
-	if path == "" {
-		return false
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return time.Since(info.ModTime()) > orphanTranscriptAge
+// removeFromProjectSessions removes a session from the projectSessions map.
+// Used as a callback by PIDManager when sessions are deleted.
+func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
+	d.mu.Lock()
+	delete(d.projectSessions, sessionID)
+	d.mu.Unlock()
 }
 
 // broadcast sends a push notification if a broadcaster is configured.
@@ -768,30 +435,4 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir string) {
 		d.log.LogInfo("session-detector", sid,
 			fmt.Sprintf("removed pre-session — real session arrived in %s", projectDir))
 	}
-}
-
-// deriveParentSessionID extracts a parent session ID from a subagent transcript path.
-// Claude Code subagent transcripts live at .../<parent-session-id>/subagents/<agent-id>.jsonl.
-// Returns "" if the path doesn't match the subagent pattern.
-func deriveParentSessionID(transcriptPath string) string {
-	dir := filepath.Dir(transcriptPath) // .../subagents
-	if filepath.Base(dir) != "subagents" {
-		return ""
-	}
-	return filepath.Base(filepath.Dir(dir)) // parent session ID
-}
-
-// extractProjectDir extracts the project directory name from a transcript path.
-// Expected format: .../<project-dir>/<session-id>.jsonl
-func extractProjectDir(transcriptPath string) string {
-	if transcriptPath == "" {
-		return ""
-	}
-	// filepath.Dir gives us the directory containing the file,
-	// filepath.Base of that gives us the project directory name.
-	dir := filepath.Dir(transcriptPath)
-	if dir == "." || dir == "/" {
-		return ""
-	}
-	return filepath.Base(dir)
 }
