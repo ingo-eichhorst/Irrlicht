@@ -184,6 +184,10 @@ type SessionMetrics struct {
 	// LastToolResultWasError is true when the most recently processed
 	// tool_result content block had is_error=true (user rejection / ESC).
 	LastToolResultWasError bool `json:"last_tool_result_was_error"`
+
+	// LastCWD is the most recent working directory seen in the transcript.
+	// Extracted during parsing so callers don't need a separate file read.
+	LastCWD string `json:"last_cwd,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -221,6 +225,9 @@ type TranscriptTailer struct {
 
 	// lastToolResultWasError tracks is_error on the most recent tool_result.
 	lastToolResultWasError bool
+
+	// lastCWD tracks the most recent working directory seen in transcript lines.
+	lastCWD string
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path
@@ -369,6 +376,26 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
 		return nil, fmt.Errorf("JSON unmarshal error: %w", err)
+	}
+
+	// Extract CWD — mirrors all paths from git adapter's GetCWDFromTranscript.
+	if cwd, ok := raw["cwd"].(string); ok && cwd != "" {
+		t.lastCWD = cwd
+	}
+	// Codex: <cwd> XML tag inside environment_context content blocks.
+	if cwd := extractCWDFromContentBlocks(raw); cwd != "" {
+		t.lastCWD = cwd
+	}
+	// Codex: workdir inside function_call arguments.
+	if raw["type"] == "function_call" {
+		if args, ok := raw["arguments"].(string); ok {
+			var parsed map[string]interface{}
+			if json.Unmarshal([]byte(args), &parsed) == nil {
+				if wd, ok := parsed["workdir"].(string); ok && wd != "" {
+					t.lastCWD = wd
+				}
+			}
+		}
 	}
 
 	// Extract timestamp
@@ -542,6 +569,32 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 
 // extractContentChars returns the total character count of text content in
 // a transcript event, checking common content locations across formats.
+// cwdTagRe matches <cwd>/path</cwd> in Codex environment_context blocks.
+var cwdTagRe = regexp.MustCompile(`<cwd>([^<]+)</cwd>`)
+
+// extractCWDFromContentBlocks scans content[] blocks for a <cwd> XML tag
+// (Codex environment_context format).
+func extractCWDFromContentBlocks(raw map[string]interface{}) string {
+	content, ok := raw["content"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, item := range content {
+		block, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		text, ok := block["text"].(string)
+		if !ok {
+			continue
+		}
+		if m := cwdTagRe.FindStringSubmatch(text); len(m) > 1 {
+			return strings.TrimSpace(m[1])
+		}
+	}
+	return ""
+}
+
 func extractContentChars(raw map[string]interface{}) int64 {
 	var chars int64
 	// Top-level content array (Codex newer format)
@@ -677,6 +730,7 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.HasOpenToolCall = openCalls > 0
 	t.metrics.LastOpenToolNames = t.lastOpenToolNames
 	t.metrics.LastToolResultWasError = t.lastToolResultWasError
+	t.metrics.LastCWD = t.lastCWD
 
 	// Token breakdown + estimated cost
 	t.metrics.InputTokens = t.inputTokens

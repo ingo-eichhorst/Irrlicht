@@ -45,6 +45,10 @@ type SessionMetrics struct {
 	// EstimatedCostUSD is the estimated session cost in USD, computed from
 	// token breakdown and per-model pricing.
 	EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
+
+	// LastCWD is the most recent working directory extracted from the
+	// transcript during metrics parsing. Used to avoid a separate file read.
+	LastCWD string `json:"-"` // transient — not persisted in session JSON
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one
