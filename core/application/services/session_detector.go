@@ -186,7 +186,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			TranscriptPath:  ev.TranscriptPath,
 			CWD:             ev.CWD,
 			DaemonVersion:   d.version,
-			ParentSessionID: deriveParentSessionID(ev.TranscriptPath),
+			ParentSessionID: deriveParentSession(ev.TranscriptPath),
 			FirstSeen:       now,
 			UpdatedAt:       now,
 			Confidence:      "medium",

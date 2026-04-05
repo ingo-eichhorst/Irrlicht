@@ -363,6 +363,7 @@ struct SessionState: Identifiable, Codable {
     var adapterName: String {
         switch adapter ?? "claude-code" {
         case "codex": return "Codex"
+        case "pi": return "Pi"
         default: return "Claude Code"
         }
     }
@@ -376,6 +377,8 @@ struct SessionState: Identifiable, Codable {
             svg = SessionState.claudeCodeSVG
         case "codex":
             svg = SessionState.codexSVG(dark: isDark)
+        case "pi":
+            svg = SessionState.piSVG(dark: isDark)
         default:
             svg = SessionState.claudeCodeSVG
         }
@@ -409,6 +412,19 @@ struct SessionState: Identifiable, Codable {
           <circle cx="50" cy="50" r="44" fill="none" stroke="\(c)" stroke-width="8"/>
           <path d="M28 38 L42 50 L28 62" fill="none" stroke="\(c)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
           <line x1="48" y1="62" x2="68" y2="62" stroke="\(c)" stroke-width="7" stroke-linecap="round"/>
+        </svg>
+        """
+    }
+
+    // Pi coding agent — Greek letter pi in a circle. Color adapts to appearance.
+    private static func piSVG(dark: Bool) -> String {
+        let c = dark ? "#E0E0E0" : "#1A1A1A"
+        return """
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="44" fill="none" stroke="\(c)" stroke-width="8"/>
+          <line x1="28" y1="30" x2="72" y2="30" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
+          <line x1="40" y1="30" x2="40" y2="74" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
+          <line x1="60" y1="30" x2="64" y2="74" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
         </svg>
         """
     }
