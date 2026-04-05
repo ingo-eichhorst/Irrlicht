@@ -488,12 +488,15 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 			case "user":
 				eventType = "user_message"
 				t.lastOpenToolNames = nil
-			case "toolResult", "bashExecution":
+			case "toolResult":
 				eventType = "tool_result"
 				t.toolResultCount++
 				if len(t.lastOpenToolNames) > 0 {
 					t.lastOpenToolNames = t.lastOpenToolNames[1:]
 				}
+			case "bashExecution":
+				// User-side shell escape (! command) — skip like Claude Code local commands.
+				return nil, nil
 			}
 		}
 	}
@@ -502,13 +505,17 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 	// where the session header was not included in the read window).
 	if eventType == "message" && !t.isPi && hasPiMsg {
 		if role, ok := piMsg["role"].(string); ok {
-			if role == "toolResult" || role == "bashExecution" {
+			if role == "toolResult" {
 				t.isPi = true
 				eventType = "tool_result"
 				t.toolResultCount++
 				if len(t.lastOpenToolNames) > 0 {
 					t.lastOpenToolNames = t.lastOpenToolNames[1:]
 				}
+			}
+			if role == "bashExecution" {
+				t.isPi = true
+				return nil, nil // User-side shell escape — skip.
 			}
 		}
 		// Also detect from message.stopReason field presence (Pi-specific).
@@ -619,6 +626,25 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 			t.metrics.LastEventType = "turn_done"
 		}
 		return nil, nil
+	}
+
+	// Claude Code local commands (shell escapes via "!" prefix, /context, etc.)
+	// write user events to the transcript but don't trigger agent turns.
+	// Skip them so they don't affect LastEventType or state classification.
+	if eventType == "user" {
+		if isMeta, ok := raw["isMeta"].(bool); ok && isMeta {
+			return nil, nil
+		}
+		if msg, ok := raw["message"].(map[string]interface{}); ok {
+			if content, ok := msg["content"].(string); ok {
+				if strings.HasPrefix(content, "<local-command") ||
+					strings.HasPrefix(content, "<command-name>") ||
+					strings.HasPrefix(content, "<bash-input>") ||
+					strings.HasPrefix(content, "<bash-stdout>") {
+					return nil, nil
+				}
+			}
+		}
 	}
 
 	// Only track message-related events
