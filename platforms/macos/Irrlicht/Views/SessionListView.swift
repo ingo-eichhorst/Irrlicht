@@ -278,19 +278,20 @@ struct SessionListView: View {
     var projectGroups: [ProjectGroup] {
         let groups = sessionGroups
 
-        // Group session groups by project name (from git repo root).
+        // Group session groups by project name (from git repo root) or full cwd path.
         // Sessions in different worktrees of the same repo share the same project name.
         var grouped: [String: [SessionGroup]] = [:]
         for group in groups {
-            let project = group.parent.projectName
-                ?? URL(fileURLWithPath: group.parent.cwd).lastPathComponent
-            grouped[project, default: []].append(group)
+            let key = group.parent.projectName ?? group.parent.cwd
+            grouped[key, default: []].append(group)
         }
 
-        // Convert to ProjectGroup array, sorted by project name
+        // Convert to ProjectGroup array, sorted by display name
         return grouped.map { key, value in
-            ProjectGroup(projectDirectory: key, sessionGroups: value)
-        }.sorted { $0.projectDirectory < $1.projectDirectory }
+            let display = value.first?.parent.projectName
+                ?? URL(fileURLWithPath: key).lastPathComponent
+            return ProjectGroup(projectDirectory: key, displayName: display, sessionGroups: value)
+        }.sorted { $0.displayName < $1.displayName }
     }
 
     private var sessionListContent: some View {
@@ -859,7 +860,8 @@ struct SessionGroup: Identifiable {
 }
 
 struct ProjectGroup: Identifiable {
-    let projectDirectory: String
+    let projectDirectory: String   // full path or project name (grouping key)
+    let displayName: String        // short name shown in UI
     let sessionGroups: [SessionGroup]
 
     var id: String { projectDirectory }
@@ -1038,7 +1040,7 @@ struct ProjectGroupSectionView: View {
                         .foregroundColor(.secondary)
                         .frame(width: 10)
 
-                    Text(projectGroup.projectDirectory)
+                    Text(projectGroup.displayName)
                         .font(.system(.caption, design: .monospaced))
                         .fontWeight(.semibold)
                         .foregroundColor(projectNameColor)

@@ -58,7 +58,7 @@ struct StatusIndicatorLabel: View {
         }
 
         var renders: [GroupRender] = []
-        for (_, groupSessions) in groups {
+        for (_, groupSessions) in groups.prefix(8) {
             if groupSessions.count <= 3 {
                 // ≤3: individual overlapping filled circles
                 var el = ""
