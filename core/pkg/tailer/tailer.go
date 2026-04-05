@@ -88,12 +88,15 @@ func normalizeModelName(rawModel string) string {
 
 // getDefaultModelFromConfig reads the default model from the appropriate config
 // based on detected transcript format.
-func getDefaultModelFromConfig(isCodex bool) string {
+func getDefaultModelFromConfig(isCodex, isPi bool) string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
 
+	if isPi {
+		return getPiModel(homeDir)
+	}
 	if isCodex {
 		return getCodexModel(homeDir)
 	}
@@ -133,6 +136,22 @@ func getCodexModel(homeDir string) string {
 				}
 			}
 		}
+	}
+	return ""
+}
+
+// getPiModel reads the default model from ~/.pi/agent/settings.json.
+func getPiModel(homeDir string) string {
+	data, err := os.ReadFile(filepath.Join(homeDir, ".pi", "agent", "settings.json"))
+	if err != nil {
+		return ""
+	}
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return ""
+	}
+	if model, ok := settings["defaultModel"].(string); ok {
+		return normalizeModelName(model)
 	}
 	return ""
 }
@@ -208,6 +227,9 @@ type TranscriptTailer struct {
 
 	// isCodex is set when Codex-specific event types are found in the transcript.
 	isCodex bool
+
+	// isPi is set when Pi coding agent event types are found in the transcript.
+	isPi bool
 
 	// contentChars accumulates character count from message content for
 	// token estimation when explicit token counts aren't available.
@@ -309,7 +331,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// Use settings fallback if no model was found in transcript.
 	// Pick the right config based on detected transcript format.
 	if t.metrics.ModelName == "" {
-		if defaultModel := getDefaultModelFromConfig(t.isCodex); defaultModel != "" {
+		if defaultModel := getDefaultModelFromConfig(t.isCodex, t.isPi); defaultModel != "" {
 			t.metrics.ModelName = defaultModel
 		}
 	}
@@ -380,6 +402,9 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 			} else if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", tsStr); err == nil {
 				timestamp = parsed
 			}
+		} else if tsNum, ok := ts.(float64); ok && tsNum > 0 {
+			// Pi uses numeric Unix timestamps (seconds since epoch).
+			timestamp = time.Unix(int64(tsNum), 0)
 		}
 	}
 	
@@ -401,9 +426,93 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		eventType = "tool_call"
 	}
 
+	// Pi v3 session header: {"type": "session", "version": 3, "cwd": "...", ...}
+	// Definitive Pi detection signal. Not a message event — return nil.
+	if eventType == "session" {
+		if v, ok := raw["version"].(float64); ok && v >= 3 {
+			t.isPi = true
+		}
+		return nil, nil
+	}
+
+	// Pi-specific non-message entry types. Set isPi flag and skip.
+	if eventType == "model_change" {
+		t.isPi = true
+		t.extractModelInfo(raw)
+		return nil, nil
+	}
+	if eventType == "thinking_level_change" || eventType == "compaction" || eventType == "branch_summary" || eventType == "custom" {
+		t.isPi = true
+		return nil, nil
+	}
+
+	// Pi nests role, stopReason, content, and usage inside a "message" object:
+	//   {"type": "message", "message": {"role": "assistant", "stopReason": "stop", ...}}
+	// Extract the inner message for Pi-specific field access.
+	piMsg, hasPiMsg := raw["message"].(map[string]interface{})
+
+	// Pi uses "message" type with message.role. Must be checked before the
+	// Codex fallback below since both formats use type: "message".
+	if eventType == "message" && t.isPi && hasPiMsg {
+		if role, ok := piMsg["role"].(string); ok {
+			switch role {
+			case "assistant":
+				// Distinguish mid-turn (toolUse) from end-of-turn (stop).
+				stopReason, _ := piMsg["stopReason"].(string)
+				if stopReason == "stop" {
+					eventType = "assistant_message"
+				} else {
+					eventType = "assistant"
+				}
+			case "user":
+				eventType = "user_message"
+				t.lastOpenToolNames = nil
+			case "toolResult", "bashExecution":
+				eventType = "tool_result"
+				t.toolResultCount++
+				if len(t.lastOpenToolNames) > 0 {
+					t.lastOpenToolNames = t.lastOpenToolNames[1:]
+				}
+			}
+		}
+	}
+
+	// Pi secondary detection: role values unique to Pi (for 64KB-tail scenarios
+	// where the session header was not included in the read window).
+	if eventType == "message" && !t.isPi && hasPiMsg {
+		if role, ok := piMsg["role"].(string); ok {
+			if role == "toolResult" || role == "bashExecution" {
+				t.isPi = true
+				eventType = "tool_result"
+				t.toolResultCount++
+				if len(t.lastOpenToolNames) > 0 {
+					t.lastOpenToolNames = t.lastOpenToolNames[1:]
+				}
+			}
+		}
+		// Also detect from message.stopReason field presence (Pi-specific).
+		if _, ok := piMsg["stopReason"].(string); ok && !t.isCodex {
+			t.isPi = true
+			if role, ok := piMsg["role"].(string); ok {
+				switch role {
+				case "assistant":
+					stopReason, _ := piMsg["stopReason"].(string)
+					if stopReason == "stop" {
+						eventType = "assistant_message"
+					} else {
+						eventType = "assistant"
+					}
+				case "user":
+					eventType = "user_message"
+					t.lastOpenToolNames = nil
+				}
+			}
+		}
+	}
+
 	// Codex uses generic "message" type with role to distinguish user/assistant.
 	// Map to specific types so IsAgentDone recognizes assistant end-of-turn.
-	if eventType == "message" {
+	if eventType == "message" && !t.isPi {
 		if role, ok := raw["role"].(string); ok {
 			switch role {
 			case "assistant":
@@ -543,9 +652,27 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		}
 	}
 
+	// Pi embeds toolCall in message.content[] array.
+	if t.isPi {
+		if piMsg, ok := raw["message"].(map[string]interface{}); ok {
+			if contentArr, ok := piMsg["content"].([]interface{}); ok {
+				for _, item := range contentArr {
+					if block, ok := item.(map[string]interface{}); ok {
+						if block["type"] == "toolCall" {
+							t.toolUseCount++
+							if name, ok := block["name"].(string); ok {
+								t.lastOpenToolNames = append(t.lastOpenToolNames, name)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Accumulate content character count for token estimation.
 	// Works across formats: Claude Code (message.content[].text),
-	// Codex (content[].text), and function_call (arguments).
+	// Codex (content[].text), Pi (content[].text), and function_call (arguments).
 	t.contentChars += extractContentChars(raw)
 
 	return &MessageEvent{
@@ -829,6 +956,7 @@ func (t *TranscriptTailer) extractTokenInfo(raw map[string]interface{}) {
 	hasBreakdown := false
 
 	// extractUsage pulls breakdown fields from a usage map.
+	// Handles both standard (Claude/Codex) and Pi field naming conventions.
 	extractUsage := func(usage map[string]interface{}) {
 		if v, ok := usage["input_tokens"].(float64); ok {
 			inTok = int64(v)
@@ -838,15 +966,38 @@ func (t *TranscriptTailer) extractTokenInfo(raw map[string]interface{}) {
 			outTok = int64(v)
 			hasBreakdown = true
 		}
+		// Pi uses shorter field names as fallback.
+		if !hasBreakdown {
+			if v, ok := usage["input"].(float64); ok {
+				inTok = int64(v)
+				hasBreakdown = true
+			}
+			if v, ok := usage["output"].(float64); ok {
+				outTok = int64(v)
+				hasBreakdown = true
+			}
+		}
+		// Standard cache field names.
 		if v, ok := usage["cache_read_input_tokens"].(float64); ok {
 			cacheRead = int64(v)
 		}
 		if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
 			cacheCreate = int64(v)
 		}
+		// Pi cache field names.
+		if v, ok := usage["cacheRead"].(float64); ok {
+			cacheRead = int64(v)
+		}
+		if v, ok := usage["cacheWrite"].(float64); ok {
+			cacheCreate = int64(v)
+		}
 		totalTokens = inTok + outTok + cacheRead + cacheCreate
 		// total_tokens override (replaces computed sum, breakdown stays)
 		if total, ok := usage["total_tokens"].(float64); ok {
+			totalTokens = int64(total)
+		}
+		// Pi totalTokens field.
+		if total, ok := usage["totalTokens"].(float64); ok {
 			totalTokens = int64(total)
 		}
 	}

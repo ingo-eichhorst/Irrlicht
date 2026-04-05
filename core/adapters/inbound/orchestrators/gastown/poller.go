@@ -132,28 +132,38 @@ func (p *Poller) mapToOrchestratorState(
 
 	// Global agents (mayor, deacon).
 	globalAgents := []orchestrator.GlobalAgent{}
+	mayorMeta := roleMeta[RoleMayor]
 	if mayorSID, mayorState := matchSession(filepath.Join(gtRoot, "mayor")); mayorSID != "" {
 		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:      RoleMayor,
-			SessionID: mayorSID,
-			State:     mayorState,
+			Role:        RoleMayor,
+			Icon:        mayorMeta.Icon,
+			Description: mayorMeta.Desc,
+			SessionID:   mayorSID,
+			State:       mayorState,
 		})
 	} else {
 		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:  RoleMayor,
-			State: "idle",
+			Role:        RoleMayor,
+			Icon:        mayorMeta.Icon,
+			Description: mayorMeta.Desc,
+			State:       "idle",
 		})
 	}
+	deaconMeta := roleMeta[RoleDeacon]
 	if deaconSID, deaconState := matchSession(filepath.Join(gtRoot, "deacon")); deaconSID != "" {
 		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:      RoleDeacon,
-			SessionID: deaconSID,
-			State:     deaconState,
+			Role:        RoleDeacon,
+			Icon:        deaconMeta.Icon,
+			Description: deaconMeta.Desc,
+			SessionID:   deaconSID,
+			State:       deaconState,
 		})
 	} else {
 		globalAgents = append(globalAgents, orchestrator.GlobalAgent{
-			Role:  RoleDeacon,
-			State: "idle",
+			Role:        RoleDeacon,
+			Icon:        deaconMeta.Icon,
+			Description: deaconMeta.Desc,
+			State:       "idle",
 		})
 	}
 	state.GlobalAgents = globalAgents
@@ -181,9 +191,12 @@ func (p *Poller) mapToOrchestratorState(
 		mainWorkers := []orchestrator.Worker{}
 
 		// Witness worker.
+		witnessMeta := roleMeta[RoleWitness]
 		witnessWorker := orchestrator.Worker{
-			Role:  RoleWitness,
-			State: rig.Witness,
+			Role:        RoleWitness,
+			Icon:        witnessMeta.Icon,
+			Description: witnessMeta.Desc,
+			State:       rig.Witness,
 		}
 		if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "witness")); sid != "" {
 			witnessWorker.SessionID = sid
@@ -192,9 +205,12 @@ func (p *Poller) mapToOrchestratorState(
 		mainWorkers = append(mainWorkers, witnessWorker)
 
 		// Refinery worker.
+		refineryMeta := roleMeta[RoleRefinery]
 		refineryWorker := orchestrator.Worker{
-			Role:  RoleRefinery,
-			State: rig.Refinery,
+			Role:        RoleRefinery,
+			Icon:        refineryMeta.Icon,
+			Description: refineryMeta.Desc,
+			State:       rig.Refinery,
 		}
 		if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "refinery")); sid != "" {
 			refineryWorker.SessionID = sid
@@ -203,6 +219,7 @@ func (p *Poller) mapToOrchestratorState(
 		mainWorkers = append(mainWorkers, refineryWorker)
 
 		// Crew workers.
+		crewMeta := roleMeta[RoleCrew]
 		for _, s := range sessions {
 			if s.CWD == "" {
 				continue
@@ -212,10 +229,12 @@ func (p *Poller) mapToOrchestratorState(
 				continue
 			}
 			mainWorkers = append(mainWorkers, orchestrator.Worker{
-				Role:      RoleCrew,
-				Name:      ri.Name,
-				SessionID: s.SessionID,
-				State:     s.State,
+				Role:        RoleCrew,
+				Icon:        crewMeta.Icon,
+				Description: crewMeta.Desc,
+				Name:        ri.Name,
+				SessionID:   s.SessionID,
+				State:       s.State,
 			})
 		}
 
@@ -230,11 +249,14 @@ func (p *Poller) mapToOrchestratorState(
 				IsMain: false,
 			}
 
+			polecatMeta := roleMeta[RolePolecat]
 			pcWorker := orchestrator.Worker{
-				Role:  RolePolecat,
-				Name:  pc.Name,
-				ID:    pc.Issue,
-				State: pc.State,
+				Role:        RolePolecat,
+				Icon:        polecatMeta.Icon,
+				Description: polecatMeta.Desc,
+				Name:        pc.Name,
+				ID:          pc.Issue,
+				State:       pc.State,
 			}
 
 			if sid, sState := matchSession(filepath.Join(gtRoot, rig.Name, "polecats", pc.Name)); sid != "" {

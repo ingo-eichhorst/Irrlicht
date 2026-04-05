@@ -12,6 +12,18 @@ const (
 	RoleCrew     = "crew"
 )
 
+// roleMeta provides display metadata for each Gas Town role.
+// Keeping this in the adapter (not the domain model) ensures the domain
+// stays orchestrator-agnostic; any future orchestrator defines its own metadata.
+var roleMeta = map[string]struct{ Icon, Desc string }{
+	RoleMayor:    {"\U0001F3A9", "Coordinates all rigs and global state"},
+	RoleDeacon:   {"\U0001F4CB", "Assigns tasks to polecats, manages the queue"},
+	RoleWitness:  {"\U0001F989", "Reviews polecat work before merging"},
+	RoleRefinery: {"\U0001F3ED", "Merges accepted work into the main branch"},
+	RolePolecat:  {"\U0001F477", "Executes a single task in an isolated worktree"},
+	RoleCrew:     {"\U0001F9D1\u200D\U0001F4BB", "Supports a polecat with research or sub-tasks"},
+}
+
 // WorkUnit type discriminators.
 const (
 	WorkUnitConvoy   = "convoy"

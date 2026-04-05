@@ -37,18 +37,22 @@ type AgentGroup struct {
 // Agent is a session with optional orchestrator role and nested children.
 type Agent struct {
 	*SessionState
-	Role       string   `json:"role,omitempty"`
-	WorkerName string   `json:"worker_name,omitempty"`
-	WorkerID   string   `json:"worker_id,omitempty"`
-	Children   []*Agent `json:"children,omitempty"`
+	Role        string   `json:"role,omitempty"`
+	Icon        string   `json:"icon,omitempty"`
+	Description string   `json:"description,omitempty"`
+	WorkerName  string   `json:"worker_name,omitempty"`
+	WorkerID    string   `json:"worker_id,omitempty"`
+	Children    []*Agent `json:"children,omitempty"`
 }
 
 // workerInfo holds orchestrator metadata for a matched session.
 type workerInfo struct {
-	Role string
-	Rig  string
-	Name string
-	ID   string
+	Role        string
+	Icon        string
+	Description string
+	Rig         string
+	Name        string
+	ID          string
 }
 
 // BuildDashboard creates a hierarchical DashboardResponse from a flat list
@@ -135,6 +139,8 @@ func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildre
 	// Annotate with orchestrator role.
 	if wi, ok := workerMap[s.SessionID]; ok {
 		agent.Role = wi.Role
+		agent.Icon = wi.Icon
+		agent.Description = wi.Description
 		agent.WorkerName = wi.Name
 		agent.WorkerID = wi.ID
 	}
@@ -211,7 +217,11 @@ func buildWorkerMap(orch *orchestrator.State) map[string]*workerInfo {
 
 	for _, ga := range orch.GlobalAgents {
 		if ga.SessionID != "" {
-			m[ga.SessionID] = &workerInfo{Role: ga.Role}
+			m[ga.SessionID] = &workerInfo{
+				Role:        ga.Role,
+				Icon:        ga.Icon,
+				Description: ga.Description,
+			}
 		}
 	}
 
@@ -220,10 +230,12 @@ func buildWorkerMap(orch *orchestrator.State) map[string]*workerInfo {
 			for _, w := range wt.Workers {
 				if w.SessionID != "" {
 					m[w.SessionID] = &workerInfo{
-						Role: w.Role,
-						Rig:  cb.Name,
-						Name: w.Name,
-						ID:   w.ID,
+						Role:        w.Role,
+						Icon:        w.Icon,
+						Description: w.Description,
+						Rig:         cb.Name,
+						Name:        w.Name,
+						ID:          w.ID,
 					}
 				}
 			}

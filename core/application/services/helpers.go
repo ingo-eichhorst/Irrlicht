@@ -23,6 +23,16 @@ func isStaleTranscript(path string) bool {
 	return time.Since(info.ModTime()) > orphanTranscriptAge
 }
 
+// deriveParentSession tries all known methods to extract a parent session ID.
+// 1. Claude Code path pattern: .../<parent-session-id>/subagents/<agent-id>.jsonl
+// 2. Pi transcript header: {"type": "session", "parentSession": "..."}
+func deriveParentSession(transcriptPath string) string {
+	if id := deriveParentSessionID(transcriptPath); id != "" {
+		return id
+	}
+	return deriveParentSessionFromTranscript(transcriptPath)
+}
+
 // deriveParentSessionID extracts a parent session ID from a subagent transcript path.
 // Claude Code subagent transcripts live at .../<parent-session-id>/subagents/<agent-id>.jsonl.
 // Returns "" if the path doesn't match the subagent pattern.
@@ -32,6 +42,36 @@ func deriveParentSessionID(transcriptPath string) string {
 		return ""
 	}
 	return filepath.Base(filepath.Dir(dir)) // parent session ID
+}
+
+// deriveParentSessionFromTranscript reads the first line of a Pi transcript
+// and extracts the parentSession field from the session header.
+// Returns "" if the transcript is not Pi format or has no parent session.
+func deriveParentSessionFromTranscript(transcriptPath string) string {
+	if transcriptPath == "" {
+		return ""
+	}
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		return ""
+	}
+	var header map[string]interface{}
+	if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
+		return ""
+	}
+	if header["type"] != "session" {
+		return ""
+	}
+	if parent, ok := header["parentSession"].(string); ok && parent != "" {
+		return parent
+	}
+	return ""
 }
 
 // startsWithLocalCommand checks whether a transcript file begins with a /clear
