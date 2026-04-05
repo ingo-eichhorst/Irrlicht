@@ -70,8 +70,15 @@ func (e *MetadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 	if cwd != "" && cwd != state.CWD {
 		state.CWD = cwd
 		state.GitBranch = e.git.GetBranch(cwd)
+		// Only update ProjectName when the new CWD is inside a git repo.
+		// For non-git directories, keep the original project name set at
+		// session creation to avoid subdirectory names overriding it.
+		// However, if ProjectName was never set (initial enrichment failed
+		// because the transcript was too new), use the full fallback chain.
 		if gitRoot := e.git.GetGitRoot(cwd); gitRoot != "" {
 			state.ProjectName = filepath.Base(gitRoot)
+		} else if state.ProjectName == "" {
+			state.ProjectName = e.git.GetProjectName(cwd)
 		}
 	}
 }
