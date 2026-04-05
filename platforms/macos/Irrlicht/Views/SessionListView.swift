@@ -275,7 +275,7 @@ struct SessionListView: View {
         }
     }
 
-    var projectGroups: [ProjectGroup] {
+    private var projectGroups: [ProjectGroup] {
         let groups = sessionGroups
 
         // Group session groups by project name (from git repo root) or full cwd path.
@@ -873,17 +873,25 @@ struct ProjectGroup: Identifiable {
 
     /// Highest-priority state across all sessions (waiting > working > ready).
     var dominantState: SessionState.State {
-        if sessionStates.contains(.waiting) { return .waiting }
-        if sessionStates.contains(.working) { return .working }
-        return .ready
+        .dominant(in: sessionStates)
     }
 }
-
-// MARK: - Session State Dots
 
 struct SessionStateDots: View {
     let projectGroup: ProjectGroup
     let isCompact: Bool
+
+    private var stateCounts: (waiting: Int, working: Int, ready: Int) {
+        var w = 0, k = 0, r = 0
+        for s in projectGroup.sessionStates {
+            switch s {
+            case .waiting: w += 1
+            case .working: k += 1
+            case .ready:   r += 1
+            }
+        }
+        return (w, k, r)
+    }
 
     var body: some View {
         if isCompact {
@@ -903,7 +911,7 @@ struct SessionStateDots: View {
                 dotForState(state)
             }
         }
-        .tooltip(stateBreakdownTooltip)
+        .tooltip(tooltipText)
     }
 
     @ViewBuilder
@@ -933,23 +941,19 @@ struct SessionStateDots: View {
     // MARK: Overflow mode (>4 sessions): state counts
 
     private var overflowCounts: some View {
-        let states = projectGroup.sessionStates
-        let waitingCount = states.filter { $0 == .waiting }.count
-        let workingCount = states.filter { $0 == .working }.count
-        let readyCount = states.filter { $0 == .ready }.count
-
+        let c = stateCounts
         return HStack(spacing: 4) {
-            if waitingCount > 0 {
-                stateCountLabel("◉", count: waitingCount, color: Color(hex: SessionState.State.waiting.color))
+            if c.waiting > 0 {
+                stateCountLabel("◉", count: c.waiting, color: Color(hex: SessionState.State.waiting.color))
             }
-            if workingCount > 0 {
-                stateCountLabel("●", count: workingCount, color: Color(hex: SessionState.State.working.color))
+            if c.working > 0 {
+                stateCountLabel("●", count: c.working, color: Color(hex: SessionState.State.working.color))
             }
-            if readyCount > 0 {
-                stateCountLabel("○", count: readyCount, color: Color(hex: SessionState.State.ready.color))
+            if c.ready > 0 {
+                stateCountLabel("○", count: c.ready, color: Color(hex: SessionState.State.ready.color))
             }
         }
-        .tooltip(stateBreakdownTooltip)
+        .tooltip(tooltipText)
     }
 
     private func stateCountLabel(_ symbol: String, count: Int, color: Color) -> some View {
@@ -969,20 +973,15 @@ struct SessionStateDots: View {
         Circle()
             .fill(Color(hex: projectGroup.dominantState.color))
             .frame(width: 6, height: 6)
-            .tooltip(stateBreakdownTooltip)
+            .tooltip(tooltipText)
     }
 
-    // MARK: Tooltip
-
-    private var stateBreakdownTooltip: String {
-        let states = projectGroup.sessionStates
-        let w = states.filter { $0 == .waiting }.count
-        let k = states.filter { $0 == .working }.count
-        let r = states.filter { $0 == .ready }.count
+    private var tooltipText: String {
+        let c = stateCounts
         var parts: [String] = []
-        if w > 0 { parts.append("\(w) waiting") }
-        if k > 0 { parts.append("\(k) working") }
-        if r > 0 { parts.append("\(r) ready") }
+        if c.waiting > 0 { parts.append("\(c.waiting) waiting") }
+        if c.working > 0 { parts.append("\(c.working) working") }
+        if c.ready > 0 { parts.append("\(c.ready) ready") }
         return parts.joined(separator: ", ")
     }
 }

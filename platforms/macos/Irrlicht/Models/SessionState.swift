@@ -294,6 +294,18 @@ struct SessionState: Identifiable, Codable {
             }
         }
 
+        /// Hex color without leading `#`, for SVG markup.
+        var hexColor: String {
+            String(color.dropFirst())
+        }
+
+        /// Highest-priority state in a collection (waiting > working > ready).
+        static func dominant<C: Collection>(in states: C) -> State where C.Element == State {
+            if states.contains(.waiting) { return .waiting }
+            if states.contains(.working) { return .working }
+            return .ready
+        }
+
         var emoji: String {
             switch self {
             case .working: return "🟣"   // purple circle

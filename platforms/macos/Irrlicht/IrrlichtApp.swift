@@ -64,7 +64,7 @@ struct StatusIndicatorLabel: View {
                 var el = ""
                 var lx: CGFloat = r
                 for s in groupSessions {
-                    let hex = s.state.color.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+                    let hex = s.state.hexColor
                     el += """
                     <circle cx="\(Int(lx))" cy="\(Int(cy))" r="\(Int(r))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
                     """
@@ -74,7 +74,7 @@ struct StatusIndicatorLabel: View {
                 renders.append(GroupRender(elements: el, width: w))
             } else {
                 // >3: single filled circle (dominant state) + total count
-                let hex = dominantColor(groupSessions).trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+                let hex = SessionState.State.dominant(in: groupSessions.map(\.state)).hexColor
                 let count = groupSessions.count
                 let fontSize: CGFloat = 10
                 let textX = Int(r * 2 + 2)
@@ -115,17 +115,6 @@ struct StatusIndicatorLabel: View {
         nsImage.isTemplate = false
         nsImage.size = NSSize(width: totalWidth, height: height)
         return nsImage
-    }
-
-    /// Returns the hex color of the highest-priority state (waiting > working > ready).
-    private func dominantColor(_ sessions: [SessionState]) -> String {
-        if sessions.contains(where: { $0.state == .waiting }) {
-            return SessionState.State.waiting.color
-        }
-        if sessions.contains(where: { $0.state == .working }) {
-            return SessionState.State.working.color
-        }
-        return SessionState.State.ready.color
     }
 }
 
