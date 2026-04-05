@@ -208,6 +208,10 @@ type SessionMetrics struct {
 	// LastCWD is the most recent working directory seen in the transcript.
 	// Extracted during parsing so callers don't need a separate file read.
 	LastCWD string `json:"last_cwd,omitempty"`
+
+	// LastAssistantText is the text content of the most recent assistant
+	// message, truncated to ~200 characters.
+	LastAssistantText string `json:"last_assistant_text,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -251,6 +255,10 @@ type TranscriptTailer struct {
 
 	// lastCWD tracks the most recent working directory seen in transcript lines.
 	lastCWD string
+
+	// lastAssistantText holds the text content of the most recent assistant
+	// message, truncated to ~200 characters. Updated on each assistant event.
+	lastAssistantText string
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path
@@ -668,6 +676,17 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		}
 	}
 
+	// Track assistant text for waiting-state display.
+	// Clear on user messages so stale text from a previous turn doesn't linger.
+	switch eventType {
+	case "assistant", "assistant_message", "assistant_output":
+		if text := extractAssistantText(raw); text != "" {
+			t.lastAssistantText = text
+		}
+	case "user", "user_message", "user_input":
+		t.lastAssistantText = ""
+	}
+
 	// Accumulate content character count for token estimation.
 	// Works across formats: Claude Code (message.content[].text),
 	// Codex (content[].text), Pi (content[].text), and function_call (arguments).
@@ -678,6 +697,56 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		EventType: eventType,
 		Content:   line,
 	}, nil
+}
+
+// extractAssistantText extracts and concatenates text blocks from an assistant
+// message, returning at most 200 characters. Checks both Claude Code
+// (message.content[].text) and Codex (content[].text) formats.
+func extractAssistantText(raw map[string]interface{}) string {
+	var parts []string
+
+	collectText := func(arr []interface{}) {
+		for _, item := range arr {
+			if block, ok := item.(map[string]interface{}); ok {
+				bt := block["type"]
+				// Claude Code uses "text", Codex uses "output_text".
+				if bt == "text" || bt == "output_text" {
+					if text, ok := block["text"].(string); ok && text != "" {
+						parts = append(parts, text)
+					}
+				}
+			}
+		}
+	}
+
+	// Claude Code: message.content[]
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if arr, ok := msg["content"].([]interface{}); ok {
+			collectText(arr)
+		}
+	}
+	// Codex: top-level content[]
+	if arr, ok := raw["content"].([]interface{}); ok {
+		collectText(arr)
+	}
+
+	// Fast path: single text block (common case) avoids Join allocation.
+	var text string
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		text = strings.TrimSpace(parts[0])
+	default:
+		text = strings.TrimSpace(strings.Join(parts, " "))
+	}
+
+	// Single rune decode for both length check and truncation.
+	runes := []rune(text)
+	if len(runes) > 200 {
+		return string(runes[:200])
+	}
+	return text
 }
 
 // extractContentChars returns the total character count of text content in
@@ -818,6 +887,7 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.LastOpenToolNames = t.lastOpenToolNames
 	t.metrics.LastToolResultWasError = t.lastToolResultWasError
 	t.metrics.LastCWD = t.lastCWD
+	t.metrics.LastAssistantText = t.lastAssistantText
 
 	// Token breakdown + estimated cost
 	t.metrics.InputTokens = t.inputTokens

@@ -426,11 +426,12 @@ func (d *SessionDetector) seedFromDisk() {
 	}
 	d.mu.Unlock()
 
-	// Re-evaluate state for all non-ready sessions: recompute metrics from
-	// transcript and apply the current detection logic. This ensures sessions
-	// persisted with stale states are corrected on startup.
+	// Re-evaluate state for sessions with transcripts: recompute metrics
+	// and apply the current detection logic. This ensures sessions persisted
+	// with stale states are corrected on startup (e.g. ready sessions whose
+	// last assistant message ends with a question should be waiting).
 	for _, state := range states {
-		if state.State == session.StateReady || state.TranscriptPath == "" {
+		if state.TranscriptPath == "" {
 			continue
 		}
 		d.enricher.RefreshMetrics(state)

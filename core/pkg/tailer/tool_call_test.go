@@ -179,3 +179,77 @@ func TestHasOpenToolCall_MultipleRoundsAllClosed(t *testing.T) {
 		t.Errorf("expected OpenToolCallCount=0, got %d", m.OpenToolCallCount)
 	}
 }
+
+// --- LastAssistantText extraction tests ---
+
+func TestLastAssistantText_ClaudeCode(t *testing.T) {
+	// Claude Code format: type="assistant", message.content[].type="text"
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Should I proceed with the migration?"},
+			},
+		}},
+		{"type": "system", "subtype": "stop_hook_summary", "timestamp": ts(2)},
+	})
+	m, err := NewTranscriptTailer(path).TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastAssistantText != "Should I proceed with the migration?" {
+		t.Errorf("LastAssistantText = %q, want question text", m.LastAssistantText)
+	}
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
+	}
+}
+
+func TestLastAssistantText_Codex(t *testing.T) {
+	// Codex format: type="message" role="assistant", content[].type="output_text"
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "message", "role": "user", "timestamp": ts(0),
+			"content": []interface{}{
+				map[string]interface{}{"type": "input_text", "text": "hello"},
+			}},
+		{"type": "message", "role": "assistant", "timestamp": ts(1),
+			"content": []interface{}{
+				map[string]interface{}{"type": "output_text", "text": "What would you like to do with these files?"},
+			}},
+	})
+	m, err := NewTranscriptTailer(path).TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastAssistantText != "What would you like to do with these files?" {
+		t.Errorf("LastAssistantText = %q, want question text", m.LastAssistantText)
+	}
+}
+
+func TestLastAssistantText_ClearedOnUserMessage(t *testing.T) {
+	// Assistant text should be cleared when a new user message arrives.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "assistant", "timestamp": ts(0), "message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Should I continue?"},
+			},
+		}},
+		{"type": "user", "timestamp": ts(1)},
+		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Done."},
+			},
+		}},
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(3)},
+	})
+	m, err := NewTranscriptTailer(path).TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastAssistantText != "Done." {
+		t.Errorf("LastAssistantText = %q, want 'Done.' (previous question should be cleared)", m.LastAssistantText)
+	}
+}

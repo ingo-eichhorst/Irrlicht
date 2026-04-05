@@ -32,8 +32,16 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 		return currentState, ""
 	}
 
-	// 2. Agent finished turn → ready.
+	// 2. Agent finished turn — check if waiting for user input first.
 	if metrics.IsAgentDone() {
+		// 2a. Turn ended with a question → waiting (agent needs user input).
+		if metrics.IsWaitingForUserInput() {
+			if currentState != session.StateWaiting {
+				return session.StateWaiting, "turn ended with question → waiting"
+			}
+			return currentState, ""
+		}
+		// 2b. Normal turn completion → ready.
 		if currentState == session.StateWorking || currentState == session.StateWaiting {
 			return session.StateReady, "agent finished turn → ready"
 		}
