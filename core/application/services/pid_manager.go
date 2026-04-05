@@ -1,7 +1,7 @@
-// PIDManager handles process lifecycle for sessions: PID discovery (lsof +
-// CWD fallback), ProcessWatcher registration, exit handling, and periodic
-// liveness sweeps. It was extracted from SessionDetector to separate process
-// management (~250 lines) from session detection.
+// PIDManager handles process lifecycle for sessions: CWD-based PID discovery,
+// ProcessWatcher registration, exit handling, and periodic liveness sweeps.
+// It was extracted from SessionDetector to separate process management from
+// session detection.
 package services
 
 import (
@@ -24,8 +24,7 @@ type PIDManager struct {
 	broadcaster outbound.PushBroadcaster // optional
 	readyTTL    time.Duration            // max idle time for ready sessions
 
-	discoverPID      func(string) (int, error)                    // lsof-based discovery
-	discoverPIDByCWD func(string, func([]int) int) (int, error) // optional CWD fallback
+	discoverPIDByCWD func(string, func([]int) int) (int, error) // CWD-based discovery
 
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
@@ -40,7 +39,7 @@ func NewPIDManager(
 	log outbound.Logger,
 	broadcaster outbound.PushBroadcaster,
 	readyTTL time.Duration,
-	discoverPID func(string) (int, error),
+	discoverPIDByCWD func(string, func([]int) int) (int, error),
 	onSessionDeleted func(sessionID string),
 ) *PIDManager {
 	return &PIDManager{
@@ -49,16 +48,9 @@ func NewPIDManager(
 		log:              log,
 		broadcaster:      broadcaster,
 		readyTTL:         readyTTL,
-		discoverPID:      discoverPID,
+		discoverPIDByCWD: discoverPIDByCWD,
 		onSessionDeleted: onSessionDeleted,
 	}
-}
-
-// SetCWDDiscovery sets an optional fallback PID discovery function that finds
-// a process by matching its working directory. Called when lsof on the
-// transcript file fails to find a PID.
-func (pm *PIDManager) SetCWDDiscovery(fn func(string, func([]int) int) (int, error)) {
-	pm.discoverPIDByCWD = fn
 }
 
 // HandleProcessExit deletes a session when its process exits.
@@ -113,14 +105,6 @@ func (pm *PIDManager) cleanupChildren(parentID string) {
 // This handles the /clear scenario: the CLI process stays alive (same PID) but
 // starts a new transcript, making the old session obsolete.
 func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
-	pm.handlePIDAssignedInternal(pid, sessionID, true)
-}
-
-// handlePIDAssignedInternal is the core of HandlePIDAssigned. When authoritative
-// is true (lsof-based discovery), old sessions sharing the same PID are cleaned
-// up (/clear scenario). When false (CWD-based fallback), cleanup is skipped
-// because CWD discovery is ambiguous for multiple instances in the same repo.
-func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, authoritative bool) {
 	if pid <= 0 {
 		return
 	}
@@ -142,20 +126,15 @@ func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, autho
 		}
 	}
 
-	// Clean up old sessions that had the same PID (e.g. /clear).
-	// Only do this for authoritative (lsof) discoveries — CWD-based
-	// fallback is unreliable when multiple instances share a directory
-	// and could incorrectly delete a still-active session.
-	if !authoritative {
-		return
-	}
-
 	// Subagent sessions share the parent's PID, so skip cleanup when
 	// either side is a subagent.
 	if state.ParentSessionID != "" {
 		return
 	}
 
+	// Clean up old sessions that had the same PID (e.g. /clear).
+	// A non-subagent PID can only belong to one session at a time —
+	// if a new session claims a PID, the old one is stale.
 	states, err := pm.repo.ListAll()
 	if err != nil {
 		return
@@ -182,8 +161,7 @@ func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, autho
 }
 
 // claimedPIDs returns the set of PIDs already assigned to sessions other than
-// excludeSessionID. Used to prevent CWD-based discovery from assigning a PID
-// that is already tracked by another session.
+// excludeSessionID.
 func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
 	states, err := pm.repo.ListAll()
 	if err != nil {
@@ -198,10 +176,12 @@ func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
 	return claimed
 }
 
-// TryDiscoverPID attempts lsof-on-transcript (primary), then CWD-based
-// discovery (fallback). Returns true if a PID was found and assigned.
-func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool {
-	if pm.pw == nil {
+// TryDiscoverPID finds the PID for a session by matching Claude processes
+// by working directory. Prefers unclaimed PIDs but falls back to already-
+// claimed PIDs when no unclaimed candidate exists (the /clear scenario where
+// the same process starts a new transcript). Returns true if a PID was found.
+func (pm *PIDManager) TryDiscoverPID(sessionID, cwd string) bool {
+	if pm.pw == nil || pm.discoverPIDByCWD == nil || cwd == "" {
 		return false
 	}
 	// Check if session already has a PID.
@@ -210,48 +190,39 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool
 		return true
 	}
 
-	// Primary: lsof on transcript file (authoritative).
-	if transcriptPath != "" {
-		if pid, err := pm.discoverPID(transcriptPath); err == nil && pid > 0 {
-			pm.log.LogInfo("session-detector", sessionID,
-				fmt.Sprintf("lsof discovered pid %d", pid))
-			pm.handlePIDAssignedInternal(pid, sessionID, true)
-			return true
+	// Prefer unclaimed PIDs (multiple instances in same dir), but allow
+	// claimed PIDs when all candidates are claimed (/clear scenario).
+	claimed := pm.claimedPIDs(sessionID)
+	disambiguate := func(pids []int) int {
+		bestUnclaimed, bestAny := 0, 0
+		for _, p := range pids {
+			if p > bestAny {
+				bestAny = p
+			}
+			if !claimed[p] && p > bestUnclaimed {
+				bestUnclaimed = p
+			}
 		}
+		if bestUnclaimed > 0 {
+			return bestUnclaimed
+		}
+		return bestAny
 	}
 
-	// Fallback: CWD-based discovery (not authoritative).
-	// Filter out PIDs already claimed by other sessions to prevent
-	// assigning the same PID to multiple sessions in the same directory.
-	if pm.discoverPIDByCWD != nil && cwd != "" {
-		claimed := pm.claimedPIDs(sessionID)
-		disambiguate := func(pids []int) int {
-			best := 0
-			for _, p := range pids {
-				if claimed[p] {
-					continue
-				}
-				if p > best {
-					best = p
-				}
-			}
-			return best
-		}
-		if pid, err := pm.discoverPIDByCWD(cwd, disambiguate); err == nil && pid > 0 {
-			pm.log.LogInfo("session-detector", sessionID,
-				fmt.Sprintf("cwd fallback discovered pid %d", pid))
-			pm.handlePIDAssignedInternal(pid, sessionID, false)
-			return true
-		}
+	if pid, err := pm.discoverPIDByCWD(cwd, disambiguate); err == nil && pid > 0 {
+		pm.log.LogInfo("session-detector", sessionID,
+			fmt.Sprintf("discovered pid %d via cwd %s", pid, cwd))
+		pm.HandlePIDAssigned(pid, sessionID)
+		return true
 	}
 	return false
 }
 
 // DiscoverPIDWithRetry tries to discover a PID immediately, then retries at
-// 500ms, 1s, 2s intervals. This covers the common timing issue where the CLI
-// hasn't opened the transcript file yet at session creation time.
-func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, transcriptPath, cwd string) {
-	if pm.TryDiscoverPID(sessionID, transcriptPath, cwd) {
+// 500ms, 1s, 2s intervals. This covers the timing where the Claude process
+// hasn't started yet or CWD isn't resolved at session creation time.
+func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, cwd string) {
+	if pm.TryDiscoverPID(sessionID, cwd) {
 		return
 	}
 	for _, delay := range []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second} {
@@ -260,7 +231,7 @@ func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, transcriptPath, cwd string
 		if state == nil || state.PID > 0 {
 			return
 		}
-		if pm.TryDiscoverPID(sessionID, transcriptPath, cwd) {
+		if pm.TryDiscoverPID(sessionID, cwd) {
 			return
 		}
 	}
@@ -342,6 +313,20 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 				}
 				continue
 			}
+			// Claude Code sessions with PID=0 that are ready: the process
+			// likely exited before CWD discovery succeeded. Clean up quickly
+			// (30s) rather than waiting the full readyTTL. Non-Claude
+			// adapters (Pi, Codex) legitimately have PID=0 — they don't
+			// use PID-based lifecycle.
+			if state.PID == 0 && state.State == session.StateReady &&
+				state.Adapter == "claude-code" &&
+				time.Since(time.Unix(state.UpdatedAt, 0)) > 30*time.Second {
+				pm.log.LogInfo("session-detector", state.SessionID,
+					"ready session with no PID for >30s, deleting")
+				pm.deleteWithChildren(state)
+				continue
+			}
+
 			if !state.IsStale(pm.readyTTL) {
 				continue
 			}
@@ -365,6 +350,9 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 // SeedPIDs cleans up dead sessions and registers alive PIDs with ProcessWatcher
 // during startup. Called from SessionDetector.seedFromDisk.
 func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
+	// Track the newest session per PID for deduplication.
+	newestByPID := make(map[int]*session.SessionState)
+
 	for _, state := range states {
 		switch {
 		case state.PID > 0:
@@ -381,14 +369,46 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 				}
 			}
 
-		case state.PID == 0 && state.ParentSessionID == "" && isStaleTranscript(state.TranscriptPath):
-			// Orphan from exited Claude Code process (never assigned a PID
-			// because Claude Code doesn't keep transcript files open).
-			// Child sessions (ParentSessionID set) are exempt — they run
-			// inside the parent process and never get their own PID.
+			// Track newest non-subagent session per PID for dedup below.
+			if state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-") {
+				if prev, ok := newestByPID[state.PID]; !ok || state.FirstSeen > prev.FirstSeen {
+					newestByPID[state.PID] = state
+				}
+			}
+
+		case state.PID == 0 && state.ParentSessionID == "" && state.Adapter == "claude-code" && isStaleTranscript(state.TranscriptPath):
+			// Orphan from exited Claude Code process (PID discovery never
+			// succeeded). Child sessions (ParentSessionID set) are exempt —
+			// they run inside the parent process and never get their own PID.
+			// Non-Claude adapters (Pi, Codex) legitimately have PID=0.
 			pm.log.LogInfo("session-detector-seed", state.SessionID,
 				"deleting orphan session")
 			pm.deleteWithChildren(state)
+		}
+	}
+
+	// Deduplicate: when multiple non-subagent sessions share a PID (e.g.
+	// orphans left by /clear), keep only the newest one.
+	for pid, newest := range newestByPID {
+		for _, state := range states {
+			if state.PID != pid || state.SessionID == newest.SessionID {
+				continue
+			}
+			if state.ParentSessionID != "" || strings.HasPrefix(state.SessionID, "proc-") {
+				continue
+			}
+			// Verify session still exists (may have been deleted above).
+			if s, _ := pm.repo.Load(state.SessionID); s == nil {
+				continue
+			}
+			pm.log.LogInfo("session-detector-seed", state.SessionID,
+				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID))
+
+			if pm.onSessionDeleted != nil {
+				pm.onSessionDeleted(state.SessionID)
+			}
+			_ = pm.repo.Delete(state.SessionID)
+			pm.broadcast(outbound.PushTypeDeleted, state)
 		}
 	}
 }

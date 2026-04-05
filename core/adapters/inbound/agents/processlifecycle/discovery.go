@@ -1,13 +1,8 @@
 package processlifecycle
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strconv"
-	"strings"
-	"time"
 )
 
 // DiscoverPIDByCWD finds a "claude" process whose CWD matches the given
@@ -57,36 +52,3 @@ func DiscoverPIDByCWD(cwd string, disambiguate func([]int) int) (int, error) {
 	}
 }
 
-// DiscoverPID uses lsof to find the PID that has filePath open.
-// Returns 0, nil when no process has the file open.
-func DiscoverPID(filePath string) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, "lsof", "-t", filePath).Output()
-	if err != nil {
-		// Exit status 1 means no matches — not an error.
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("lsof %s: %w", filePath, err)
-	}
-
-	// Skip our own PID — the daemon reads transcript files for metrics,
-	// so lsof often returns the daemon itself. We want the external
-	// process (e.g. Claude Code CLI) that owns the session.
-	myPID := os.Getpid()
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(line))
-		if err != nil {
-			continue
-		}
-		if pid != myPID {
-			return pid, nil
-		}
-	}
-	return 0, nil
-}

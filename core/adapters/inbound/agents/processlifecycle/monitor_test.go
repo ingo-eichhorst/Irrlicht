@@ -1,7 +1,6 @@
 package processlifecycle
 
 import (
-	"os"
 	"os/exec"
 	"sync"
 	"testing"
@@ -166,41 +165,3 @@ func TestUnwatch(t *testing.T) {
 	}
 }
 
-func TestDiscoverPID_FiltersSelf(t *testing.T) {
-	// Create a temp file and keep it open — only our own process has it open.
-	// DiscoverPID should filter out the caller's own PID (the daemon in prod)
-	// and return 0 since no external process has the file open.
-	f, err := os.CreateTemp("", "processlifecycle-test-*")
-	if err != nil {
-		t.Fatalf("CreateTemp: %v", err)
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-
-	pid, err := DiscoverPID(f.Name())
-	if err != nil {
-		t.Fatalf("DiscoverPID: %v", err)
-	}
-	if pid != 0 {
-		t.Errorf("DiscoverPID got pid %d, want 0 (self-PID should be filtered)", pid)
-	}
-}
-
-func TestDiscoverPID_NoMatch(t *testing.T) {
-	// File that no one has open.
-	f, err := os.CreateTemp("", "processlifecycle-noop-*")
-	if err != nil {
-		t.Fatalf("CreateTemp: %v", err)
-	}
-	name := f.Name()
-	f.Close() // Close it so no one has it open.
-	defer os.Remove(name)
-
-	pid, err := DiscoverPID(name)
-	if err != nil {
-		t.Fatalf("DiscoverPID: %v", err)
-	}
-	if pid != 0 {
-		t.Errorf("DiscoverPID got pid %d, want 0 (no match)", pid)
-	}
-}
