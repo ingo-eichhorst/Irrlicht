@@ -99,14 +99,19 @@ The transcript tailer maps these system events to `LastEventType = "turn_done"`:
 |---------------|-------------|
 | `turn_duration` | End of each agent turn (primary signal) |
 | `stop_hook_summary` | After stop hooks run (fallback when turn_duration is absent) |
+| `local_command` | After local commands like `/clear` (conversation reset) |
 
 ### Transcript Event Classification
 
 **Message events** (affect `LastEventType`):
 `user`, `assistant`, `tool_use`, `tool_call`, `tool_result`, `user_message`, `assistant_message`, `user_input`, `assistant_output`, `message`
 
+**Local command events** (filtered — do NOT affect `LastEventType`):
+User messages whose string content starts with `<local-command-caveat>`, `<command-name>`, or `<local-command-stdout>`. Written by `/clear`, `/context`, `/model`, `!` shell escapes, etc. Skill invocations (`/seo`, `/simplify`) start with `<command-message>` and are NOT filtered.
+
 **System events** (do NOT affect `LastEventType`, except turn completion):
-`turn_duration`, `stop_hook_summary`, `local_command`, `compact_boundary`, `api_error`
+`turn_duration`, `stop_hook_summary`, `local_command` → set `LastEventType = "turn_done"`
+`compact_boundary`, `api_error` → ignored
 
 **Management events** (ignored):
 `permission-mode`, `attachment`, `file-history-snapshot`, `progress`, `last-prompt`

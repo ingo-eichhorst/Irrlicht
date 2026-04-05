@@ -484,11 +484,23 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 	// writes multiple assistant messages per turn that would trigger false
 	// positives. Some transcript versions omit turn_duration but still emit
 	// stop_hook_summary.
+	// "local_command" fires after /clear and other commands that reset the
+	// conversation — treat it as turn_done so the session transitions to ready.
 	if eventType == "system" {
-		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
+		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" || subtype == "local_command" {
 			t.metrics.LastEventType = "turn_done"
 		}
 		return nil, nil
+	}
+
+	// Local commands (/clear, /context, /model, ! shell escapes) write user
+	// messages with XML-tagged content. These are not real user input and
+	// must not trigger state transitions. Skill invocations (/seo, /simplify)
+	// start with <command-message>, not <command-name>, so they pass through.
+	if eventType == "user" || eventType == "user_message" {
+		if isLocalCommandMessage(raw) {
+			return nil, nil
+		}
 	}
 
 	// Only track message-related events
@@ -597,6 +609,23 @@ func (t *TranscriptTailer) isMessageEvent(eventType string) bool {
 		"function_call_output": true,
 	}
 	return messageEvents[eventType]
+}
+
+// isLocalCommandMessage returns true if a user message belongs to a local
+// command (/clear, /context, /model, ! shell escape). These write string
+// content starting with XML markers that distinguish them from real user input.
+func isLocalCommandMessage(raw map[string]interface{}) bool {
+	msg, ok := raw["message"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	content, ok := msg["content"].(string)
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix(content, "<local-command-caveat>") ||
+		strings.HasPrefix(content, "<command-name>") ||
+		strings.HasPrefix(content, "<local-command-stdout>")
 }
 
 // addMessageEvent adds a new message event and maintains sliding window
