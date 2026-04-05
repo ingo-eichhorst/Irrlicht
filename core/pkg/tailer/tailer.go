@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"irrlicht/core/pkg/capacity"
+	"irrlicht/core/pkg/transcript"
 )
 
 // Helper functions for Go versions that don't have built-in min/max
@@ -378,24 +379,9 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		return nil, fmt.Errorf("JSON unmarshal error: %w", err)
 	}
 
-	// Extract CWD — mirrors all paths from git adapter's GetCWDFromTranscript.
-	if cwd, ok := raw["cwd"].(string); ok && cwd != "" {
+	// Extract CWD using shared logic (Claude Code cwd field, Codex XML tag, Codex workdir).
+	if cwd := transcript.ExtractCWDFromLine(raw); cwd != "" {
 		t.lastCWD = cwd
-	}
-	// Codex: <cwd> XML tag inside environment_context content blocks.
-	if cwd := extractCWDFromContentBlocks(raw); cwd != "" {
-		t.lastCWD = cwd
-	}
-	// Codex: workdir inside function_call arguments.
-	if raw["type"] == "function_call" {
-		if args, ok := raw["arguments"].(string); ok {
-			var parsed map[string]interface{}
-			if json.Unmarshal([]byte(args), &parsed) == nil {
-				if wd, ok := parsed["workdir"].(string); ok && wd != "" {
-					t.lastCWD = wd
-				}
-			}
-		}
 	}
 
 	// Extract timestamp
@@ -565,32 +551,6 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		EventType: eventType,
 		Content:   line,
 	}, nil
-}
-
-// cwdTagRe matches <cwd>/path</cwd> in Codex environment_context blocks.
-var cwdTagRe = regexp.MustCompile(`<cwd>([^<]+)</cwd>`)
-
-// extractCWDFromContentBlocks scans content[] blocks for a <cwd> XML tag
-// (Codex environment_context format).
-func extractCWDFromContentBlocks(raw map[string]interface{}) string {
-	content, ok := raw["content"].([]interface{})
-	if !ok {
-		return ""
-	}
-	for _, item := range content {
-		block, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		text, ok := block["text"].(string)
-		if !ok {
-			continue
-		}
-		if m := cwdTagRe.FindStringSubmatch(text); len(m) > 1 {
-			return strings.TrimSpace(m[1])
-		}
-	}
-	return ""
 }
 
 // extractContentChars returns the total character count of text content in

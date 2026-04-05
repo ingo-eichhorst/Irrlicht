@@ -28,21 +28,12 @@ func New() *Adapter {
 	return &Adapter{tailers: make(map[string]*lockedTailer)}
 }
 
-// RemoveTailer removes the cached tailer for a transcript path.
-// Call when a session is removed to free resources.
-func (a *Adapter) RemoveTailer(path string) {
-	a.mu.Lock()
-	delete(a.tailers, path)
-	a.mu.Unlock()
-}
-
 // ComputeMetrics analyses the transcript at transcriptPath and returns session metrics.
 // Returns (nil, nil) when the transcript doesn't exist yet or yields no data.
 func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics, error) {
 	if transcriptPath == "" {
 		return nil, nil
 	}
-	// Get or create the per-path tailer (map lock held briefly).
 	a.mu.Lock()
 	lt, ok := a.tailers[transcriptPath]
 	if !ok {

@@ -6,8 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"irrlicht/core/pkg/transcript"
 )
 
 // Adapter implements ports/outbound.GitResolver using local git commands and
@@ -116,54 +117,13 @@ func (a *Adapter) GetCWDFromTranscript(transcriptPath string) string {
 		if err := json.Unmarshal(scanner.Bytes(), &data); err != nil {
 			continue
 		}
-		// Claude Code: top-level "cwd" field.
-		if cwd, ok := data["cwd"].(string); ok && cwd != "" {
+		if cwd := transcript.ExtractCWDFromLine(data); cwd != "" {
 			lastCWD = cwd
-		}
-		// Codex: CWD embedded in <cwd> XML tag inside environment_context.
-		if cwd := extractCWDFromContent(data); cwd != "" {
-			lastCWD = cwd
-		}
-		// Codex: workdir inside function_call arguments JSON string.
-		if data["type"] == "function_call" {
-			if args, ok := data["arguments"].(string); ok {
-				var parsed map[string]interface{}
-				if json.Unmarshal([]byte(args), &parsed) == nil {
-					if wd, ok := parsed["workdir"].(string); ok && wd != "" {
-						lastCWD = wd
-					}
-				}
-			}
 		}
 	}
 	return lastCWD
 }
 
-// cwdTagRe matches <cwd>/path</cwd> in Codex environment_context blocks.
-var cwdTagRe = regexp.MustCompile(`<cwd>([^<]+)</cwd>`)
-
-// extractCWDFromContent extracts CWD from Codex-style content blocks
-// where environment_context contains <cwd>/path</cwd>.
-func extractCWDFromContent(data map[string]interface{}) string {
-	content, ok := data["content"].([]interface{})
-	if !ok {
-		return ""
-	}
-	for _, item := range content {
-		block, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		text, ok := block["text"].(string)
-		if !ok {
-			continue
-		}
-		if m := cwdTagRe.FindStringSubmatch(text); len(m) > 1 {
-			return strings.TrimSpace(m[1])
-		}
-	}
-	return ""
-}
 
 // GetBranchFromTranscript tries to extract the gitBranch field from the last
 // few lines of a Claude Code transcript file.
