@@ -283,8 +283,8 @@ func main() {
 		watchers, pwPort,
 		cachedRepo, logger, gitResolver, metricsCollector, push,
 		Version, cfg.ReadySessionTTL,
+		processlifecycle.DiscoverPIDByCWD,
 	)
-	detector.WithCWDDiscovery(processlifecycle.DiscoverPIDByCWD)
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()

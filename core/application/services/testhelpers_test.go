@@ -161,7 +161,7 @@ func newDetector(
 	return services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0,
+		"test", 0, nil,
 	)
 }
 
@@ -176,25 +176,23 @@ func newDetectorWithStaleTimeout(
 	det := services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0,
+		"test", 0, nil,
 	)
 	det.SetStaleToolTimeout(timeout)
 	return det
 }
 
 // newDetectorWithCWDDiscovery builds a SessionDetector with a mock CWD-based
-// PID discovery function wired up via WithCWDDiscovery.
+// PID discovery function.
 func newDetectorWithCWDDiscovery(
 	tw *mockAgentWatcher,
 	pw *mockProcessWatcher,
 	repo *mockRepo,
 	cwdFn func(string, func([]int) int) (int, error),
 ) *services.SessionDetector {
-	det := services.NewSessionDetector(
+	return services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0,
+		"test", 0, cwdFn,
 	)
-	det.WithCWDDiscovery(cwdFn)
-	return det
 }

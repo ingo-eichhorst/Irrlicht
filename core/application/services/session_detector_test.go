@@ -792,6 +792,7 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 	// Send two new sessions in the same project (same CWD).
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
+		Adapter:        "claude-code",
 		SessionID:      "sess-a",
 		ProjectDir:     "-Users-test-project",
 		TranscriptPath: "/home/.claude/projects/-Users-test-project/sess-a.jsonl",
@@ -803,6 +804,7 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
+		Adapter:        "claude-code",
 		SessionID:      "sess-b",
 		ProjectDir:     "-Users-test-project",
 		TranscriptPath: "/home/.claude/projects/-Users-test-project/sess-b.jsonl",
@@ -836,7 +838,7 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 	}
 }
 
-func TestSessionDetector_CWDFallback_SkipsAlreadyClaimedPID(t *testing.T) {
+func TestSessionDetector_CWDFallback_CleansUpOldSessionOnClear(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -844,9 +846,9 @@ func TestSessionDetector_CWDFallback_SkipsAlreadyClaimedPID(t *testing.T) {
 	// Use our own PID so seedFromDisk doesn't delete sess-a as a dead process.
 	myPID := os.Getpid()
 
-	// Mock CWD discovery returns only our PID — the only candidate is
-	// already claimed by sess-a, so the disambiguator should filter it out
-	// and sess-b should NOT get a PID assigned at all.
+	// Mock CWD discovery returns only our PID — simulates the /clear scenario
+	// where the same process starts a new transcript. The new session should
+	// claim the PID and clean up the old session.
 	cwdFn := func(cwd string, disambiguate func([]int) int) (int, error) {
 		return disambiguate([]int{myPID}), nil
 	}
@@ -865,17 +867,19 @@ func TestSessionDetector_CWDFallback_SkipsAlreadyClaimedPID(t *testing.T) {
 	// Session A already has a PID assigned (discovered earlier).
 	repo.Save(&session.SessionState{
 		SessionID:      "sess-a",
+		Adapter:        "claude-code",
 		State:          session.StateWorking,
 		PID:            myPID,
 		TranscriptPath: "/home/.claude/projects/-Users-test/sess-a.jsonl",
 		CWD:            "/Users/test/project",
 		FirstSeen:      now,
-		UpdatedAt:       now,
+		UpdatedAt:      now,
 	})
 
-	// Session B has no PID yet.
+	// Session B has no PID yet (new transcript after /clear).
 	repo.Save(&session.SessionState{
 		SessionID:      "sess-b",
+		Adapter:        "claude-code",
 		State:          session.StateReady,
 		TranscriptPath: "/home/.claude/projects/-Users-test/sess-b.jsonl",
 		CWD:            "/Users/test/project",
@@ -883,7 +887,7 @@ func TestSessionDetector_CWDFallback_SkipsAlreadyClaimedPID(t *testing.T) {
 		UpdatedAt:      now,
 	})
 
-	// Trigger activity on sess-b to initiate PID discovery (CWD fallback).
+	// Trigger activity on sess-b to initiate PID discovery.
 	tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
 		SessionID:      "sess-b",
@@ -895,25 +899,25 @@ func TestSessionDetector_CWDFallback_SkipsAlreadyClaimedPID(t *testing.T) {
 	cancel()
 	<-done
 
-	// sess-a must NOT be deleted.
+	// sess-a should be deleted — replaced by sess-b (same PID, /clear).
 	stateA, _ := repo.Load("sess-a")
-	if stateA == nil {
-		t.Error("sess-a must not be deleted")
+	if stateA != nil {
+		t.Error("sess-a should be deleted (replaced by sess-b with same PID)")
 	}
 
-	// sess-b should still exist but with PID=0 (no unclaimed PID available).
+	// sess-b should have the PID.
 	stateB, _ := repo.Load("sess-b")
 	if stateB == nil {
 		t.Fatal("sess-b should exist")
 	}
-	if stateB.PID != 0 {
-		t.Errorf("sess-b PID: got %d, want 0 (all candidates were claimed)", stateB.PID)
+	if stateB.PID != myPID {
+		t.Errorf("sess-b PID: got %d, want %d", stateB.PID, myPID)
 	}
 }
 
-func TestSessionDetector_LsofPath_StillCleansUpOldSession(t *testing.T) {
-	// Verify that the /clear cleanup still works when using the authoritative
-	// path (HandlePIDAssigned, which delegates with authoritative=true).
+func TestSessionDetector_HandlePIDAssigned_CleansUpOldSession(t *testing.T) {
+	// Verify that HandlePIDAssigned cleans up old sessions with the same PID
+	// (the /clear scenario).
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -941,11 +945,11 @@ func TestSessionDetector_LsofPath_StillCleansUpOldSession(t *testing.T) {
 
 	det := newDetector(tw, pw, repo)
 
-	// Authoritative PID assignment (lsof path) should clean up old session.
+	// PID assignment should clean up old session.
 	det.HandlePIDAssigned(42, "new")
 
 	if state, _ := repo.Load("old"); state != nil {
-		t.Error("old session should be deleted by authoritative /clear cleanup")
+		t.Error("old session should be deleted by /clear cleanup")
 	}
 	newState, _ := repo.Load("new")
 	if newState == nil {
