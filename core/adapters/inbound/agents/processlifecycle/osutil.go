@@ -13,13 +13,41 @@ import (
 	"time"
 )
 
-// FindProcesses returns PIDs of processes whose name exactly matches name.
+// FindProcesses returns PIDs of processes whose name exactly matches name
+// (uses pgrep -x for exact binary name match).
 func FindProcesses(name string) ([]int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "pgrep", "-x", name).Output()
 	if err != nil {
 		// pgrep exits 1 when there are no matches — not an error.
+		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var pids []int
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(line)
+		if err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
+}
+
+// FindProcessesByPattern returns PIDs of processes whose full command line
+// matches the given pattern (uses pgrep -f for substring match). This is
+// needed for agents that run as scripts (e.g. Pi runs as "node /path/to/pi").
+func FindProcessesByPattern(pattern string) ([]int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "pgrep", "-f", pattern).Output()
+	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
 			return nil, nil
 		}

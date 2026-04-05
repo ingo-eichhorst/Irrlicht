@@ -57,6 +57,53 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 	}
 }
 
+// DiscoverPIDByCmdPattern finds a process whose command line matches a pattern
+// (pgrep -f) and whose CWD matches the given directory. This is needed for
+// agents that run as scripts (e.g. Pi runs as "node /path/to/pi" so pgrep -x
+// won't match "pi").
+func DiscoverPIDByCmdPattern(pattern, cwd string, disambiguate func([]int) int) (int, error) {
+	if cwd == "" || pattern == "" {
+		return 0, nil
+	}
+	pids, err := FindProcessesByPattern(pattern)
+	if err != nil {
+		return 0, fmt.Errorf("find processes matching %q: %w", pattern, err)
+	}
+
+	myPID := os.Getpid()
+	var matches []int
+	for _, pid := range pids {
+		if pid == myPID {
+			continue
+		}
+		dir, err := ProcessCWD(pid)
+		if err != nil {
+			continue
+		}
+		if dir == cwd {
+			matches = append(matches, pid)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return 0, nil
+	case 1:
+		return matches[0], nil
+	default:
+		if disambiguate != nil {
+			return disambiguate(matches), nil
+		}
+		best := 0
+		for _, p := range matches {
+			if p > best {
+				best = p
+			}
+		}
+		return best, nil
+	}
+}
+
 // DiscoverPIDByTranscriptWriter finds the process that has a transcript file
 // open for writing. This is used for agents (Codex, Pi) that keep transcript
 // files open during their lifetime — unlike Claude Code which opens, writes,

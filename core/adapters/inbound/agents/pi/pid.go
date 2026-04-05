@@ -4,10 +4,9 @@ import (
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 )
 
-// DiscoverPID finds the Pi process owning a session by checking which
-// process has the transcript file open for writing. Pi keeps transcript
-// files open during the session lifetime, unlike Claude Code which opens,
-// writes, and closes.
+// DiscoverPID finds the Pi process owning a session by matching "pi" processes
+// whose CWD equals the session's working directory. Pi's binary resolves to
+// process name "pi" (despite being a Node.js script), so pgrep -x "pi" works.
 func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
-	return processlifecycle.DiscoverPIDByTranscriptWriter(transcriptPath)
+	return processlifecycle.DiscoverPIDByCWD("pi", cwd, disambiguate)
 }
