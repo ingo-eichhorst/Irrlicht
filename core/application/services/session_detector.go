@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
@@ -57,6 +56,11 @@ type SessionDetector struct {
 	mu              sync.Mutex
 	projectSessions map[string]string // sessionID → projectDir
 
+	// deletedSessions tracks session IDs that were explicitly deleted (process
+	// exit, /clear cleanup). Prevents late-arriving transcript activity from
+	// re-creating a session that was intentionally removed.
+	deletedSessions map[string]bool
+
 	// debounce coalesces rapid transcript activity events per session.
 	debounceMu sync.Mutex
 	debounce   map[string]*debounceEntry
@@ -74,6 +78,7 @@ func NewSessionDetector(
 	broadcaster outbound.PushBroadcaster,
 	version string,
 	readyTTL time.Duration,
+	discoverPIDByCWD func(string, func([]int) int) (int, error),
 ) *SessionDetector {
 	det := &SessionDetector{
 		watchers:        watchers,
@@ -83,20 +88,14 @@ func NewSessionDetector(
 		version:         version,
 		enricher:        NewMetadataEnricher(git, metrics),
 		projectSessions: make(map[string]string),
+		deletedSessions: make(map[string]bool),
 		debounce:        make(map[string]*debounceEntry),
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
-		processlifecycle.DiscoverPID, det.removeFromProjectSessions,
+		discoverPIDByCWD, det.removeFromProjectSessions,
 	)
 	return det
-}
-
-// WithCWDDiscovery sets an optional fallback PID discovery function that finds
-// a process by matching its working directory. Called when lsof on the
-// transcript file fails to find a PID.
-func (d *SessionDetector) WithCWDDiscovery(fn func(string, func([]int) int) (int, error)) {
-	d.pidMgr.SetCWDDiscovery(fn)
 }
 
 // Run subscribes to all AgentWatcher event streams, fans them into a single
@@ -188,6 +187,18 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 	now := time.Now().Unix()
 
 	if isNew {
+		// Skip transcripts whose session was recently deleted (process exit
+		// or /clear cleanup). This prevents late-arriving file events from
+		// re-creating a session that was intentionally removed.
+		d.mu.Lock()
+		deleted := d.deletedSessions[ev.SessionID]
+		d.mu.Unlock()
+		if deleted {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"skipping recently deleted session")
+			return
+		}
+
 		// Skip orphan transcripts left by exited Claude Code processes.
 		if isStaleTranscript(ev.TranscriptPath) {
 			d.log.LogInfo("session-detector", ev.SessionID,
@@ -241,12 +252,20 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		}
 	}
 
-	// PID discovery with retry and CWD fallback (async).
-	cwd := ev.CWD
+	// PID discovery (async). Only for claude-code sessions — the CWD-based
+	// discovery searches for "claude" processes and would assign the wrong
+	// PID to Codex/Pi sessions that share the same directory.
+	adapter := ev.Adapter
 	if !isNew {
-		cwd = existing.CWD
+		adapter = existing.Adapter
 	}
-	go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, ev.TranscriptPath, cwd)
+	if adapter == "claude-code" {
+		cwd := ev.CWD
+		if !isNew {
+			cwd = existing.CWD
+		}
+		go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, cwd)
+	}
 }
 
 // onActivity debounces transcript activity events per session. The first event
@@ -293,16 +312,24 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// Load session state.
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
-		// Session not tracked yet — treat as new.
+		// If the session was explicitly deleted (process exit, /clear cleanup),
+		// don't re-create it from a late-arriving transcript write.
+		d.mu.Lock()
+		deleted := d.deletedSessions[ev.SessionID]
+		d.mu.Unlock()
+		if deleted {
+			return
+		}
+		// Session not tracked yet — treat as new (startup race where activity
+		// arrives before the initial scan).
 		d.onNewSession(ev)
 		return
 	}
 
-	// Retry PID discovery if not yet known (async to avoid blocking the
-	// event loop on lsof I/O). Includes CWD fallback.
-	if state.PID == 0 && ev.TranscriptPath != "" {
-		sid, tp, cwd := ev.SessionID, ev.TranscriptPath, state.CWD
-		go d.pidMgr.TryDiscoverPID(sid, tp, cwd)
+	// Retry PID discovery if not yet known (claude-code only).
+	if state.PID == 0 && state.CWD != "" && state.Adapter == "claude-code" {
+		sid, cwd := ev.SessionID, state.CWD
+		go d.pidMgr.TryDiscoverPID(sid, cwd)
 	}
 
 	// Refresh CWD/branch/project and metrics from transcript.
@@ -468,11 +495,12 @@ func (d *SessionDetector) seedFromDisk() {
 	d.pidMgr.SeedPIDs(states)
 }
 
-// removeFromProjectSessions removes a session from the projectSessions map.
-// Used as a callback by PIDManager when sessions are deleted.
+// removeFromProjectSessions removes a session from the projectSessions map and
+// marks it as deleted. Used as a callback by PIDManager when sessions are deleted.
 func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	d.mu.Lock()
 	delete(d.projectSessions, sessionID)
+	d.deletedSessions[sessionID] = true
 	d.mu.Unlock()
 }
 
