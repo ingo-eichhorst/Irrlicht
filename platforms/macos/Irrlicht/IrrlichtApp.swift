@@ -32,11 +32,10 @@ struct StatusIndicatorLabel: View {
     }
 
     private func buildStatusImage() -> NSImage? {
-        // Group sessions by project
+        // Group sessions by project (top-level only)
         var groups: [(String, [SessionState])] = []
         var seen: [String: Int] = [:]
-        let capped = Array(sessions.filter { $0.parentSessionId == nil }.prefix(8))
-        for s in capped {
+        for s in sessions where s.parentSessionId == nil {
             let key = s.projectName ?? s.cwd
             if let idx = seen[key] {
                 groups[idx].1.append(s)
@@ -46,36 +45,68 @@ struct StatusIndicatorLabel: View {
             }
         }
 
-        let r: CGFloat = 5          // circle radius
-        let overlap: CGFloat = 4    // overlap within group
-        let groupGap: CGFloat = 6   // gap between groups
+        let r: CGFloat = 5
+        let overlap: CGFloat = 4
+        let groupGap: CGFloat = 6
         let height: CGFloat = 18
         let cy = height / 2
 
-        // Calculate total width
-        var totalWidth: CGFloat = 0
-        for (i, (_, group)) in groups.enumerated() {
-            if i > 0 { totalWidth += groupGap }
-            totalWidth += CGFloat(group.count) * (r * 2 - overlap) + overlap
+        // Pre-compute SVG elements for each group
+        struct GroupRender {
+            var elements: String
+            var width: CGFloat
         }
 
-        // Build SVG
-        var svg = """
-        <svg xmlns="http://www.w3.org/2000/svg" width="\(Int(totalWidth))" height="\(Int(height))">
-        """
-
-        var x: CGFloat = r
-        for (i, (_, group)) in groups.enumerated() {
-            if i > 0 { x += groupGap }
-            for s in group {
-                let hex = s.state.color.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-                svg += """
-                <circle cx="\(Int(x))" cy="\(Int(cy))" r="\(Int(r))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
+        var renders: [GroupRender] = []
+        for (_, groupSessions) in groups {
+            if groupSessions.count <= 3 {
+                // ≤3: individual overlapping filled circles
+                var el = ""
+                var lx: CGFloat = r
+                for s in groupSessions {
+                    let hex = s.state.color.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+                    el += """
+                    <circle cx="\(Int(lx))" cy="\(Int(cy))" r="\(Int(r))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
+                    """
+                    lx += r * 2 - overlap
+                }
+                let w = CGFloat(groupSessions.count) * (r * 2 - overlap) + overlap
+                renders.append(GroupRender(elements: el, width: w))
+            } else {
+                // >3: single filled circle (dominant state) + total count
+                let hex = dominantColor(groupSessions).trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+                let count = groupSessions.count
+                let fontSize: CGFloat = 10
+                let textX = Int(r * 2 + 2)
+                let textY = Int(cy + fontSize * 0.35)
+                let countStr = "\(count)"
+                let textWidth: CGFloat = CGFloat(countStr.count) * 6.5
+                let el = """
+                <circle cx="\(Int(r))" cy="\(Int(cy))" r="\(Int(r))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
+                <text x="\(textX)" y="\(textY)" font-family="Menlo,monospace" font-size="\(Int(fontSize))" font-weight="bold" fill="#\(hex)">\(countStr)</text>
                 """
-                x += r * 2 - overlap
+                renders.append(GroupRender(elements: el, width: r * 2 + 2 + textWidth))
             }
         }
 
+        // Calculate total width
+        var totalWidth: CGFloat = 0
+        for (i, render) in renders.enumerated() {
+            if i > 0 { totalWidth += groupGap }
+            totalWidth += render.width
+        }
+        guard totalWidth > 0 else { return nil }
+
+        // Assemble SVG
+        var svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="\(Int(totalWidth))" height="\(Int(height))">
+        """
+        var offsetX: CGFloat = 0
+        for (i, render) in renders.enumerated() {
+            if i > 0 { offsetX += groupGap }
+            svg += "<g transform=\"translate(\(Int(offsetX)),0)\">\(render.elements)</g>"
+            offsetX += render.width
+        }
         svg += "</svg>"
 
         guard let data = svg.data(using: .utf8),
@@ -84,6 +115,17 @@ struct StatusIndicatorLabel: View {
         nsImage.isTemplate = false
         nsImage.size = NSSize(width: totalWidth, height: height)
         return nsImage
+    }
+
+    /// Returns the hex color of the highest-priority state (waiting > working > ready).
+    private func dominantColor(_ sessions: [SessionState]) -> String {
+        if sessions.contains(where: { $0.state == .waiting }) {
+            return SessionState.State.waiting.color
+        }
+        if sessions.contains(where: { $0.state == .working }) {
+            return SessionState.State.working.color
+        }
+        return SessionState.State.ready.color
     }
 }
 
