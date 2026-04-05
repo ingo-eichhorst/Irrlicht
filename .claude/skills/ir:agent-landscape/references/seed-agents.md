@@ -30,7 +30,7 @@ Known coding agents and agent orchestrators to seed the initial scan. On every r
 | Amp | (no public repo) | agent |
 | Gemini CLI | google-gemini/gemini-cli | agent |
 | Claude Squad | smtg-ai/claude-squad | orchestrator |
-| Pi | (anthropics, limited) | agent |
+| Pi | badlogic/pi-mono | agent |
 
 ## Agent Orchestrators / Multi-Agent Frameworks
 

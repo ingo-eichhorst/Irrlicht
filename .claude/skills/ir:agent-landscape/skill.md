@@ -22,9 +22,11 @@ All state persists in `references/agent-data.json` (relative to this skill direc
       "website": "https://aider.chat",
       "description": "AI pair programming in your terminal",
       "stars": 30000,
-      "stars_prev": 28500,
-      "stars_date": "2026-04-05",
-      "stars_prev_date": "2026-03-05",
+      "stars_history": [
+        {"date": "2026-04-05", "stars": 30000},
+        {"date": "2026-03-05", "stars": 28500},
+        {"date": "2026-02-05", "stars": 27000}
+      ],
       "irrlicht_support": "none",
       "first_seen": "2026-04-05"
     }
@@ -34,17 +36,20 @@ All state persists in `references/agent-data.json` (relative to this skill direc
 
 Field definitions:
 - `stars` — current GitHub stars (null if no public repo)
-- `stars_prev` — stars from the previous run (null on first run)
-- `stars_date` / `stars_prev_date` — ISO dates of current and previous snapshots
+- `stars_history` — array of `{date, stars}` snapshots, newest first, keep up to 6 entries (covers ~6 months). On each run, prepend a new entry and trim to 6.
 - `irrlicht_support` — one of: `"live"`, `"planned"`, `"none"`
 - `category` — one of: `"agent"`, `"orchestrator"`
+
+## Deny List
+
+`references/deny-list.txt` lists agent/orchestrator names to explicitly exclude (one per line). Skip any agent whose name matches a line in this file during discovery and HTML generation. Remove matching entries from `agent-data.json` if present.
 
 ## Irrlicht Support Status
 
 These agents have irrlicht adapters (mark as `"live"`):
-- Claude Code
-- OpenAI Codex CLI (display as "OpenAI Codex")
-- Pi
+- Claude Code (`anthropics/claude-code`)
+- OpenAI Codex CLI (`openai/codex`, display as "OpenAI Codex")
+- Pi (`badlogic/pi-mono`)
 - Gas Town
 
 These are planned (mark as `"planned"`):
@@ -61,6 +66,8 @@ Everything else: `"none"`.
 
 Read `references/agent-data.json`. If `agents` is empty, read `references/seed-agents.md` for the initial list of known agents.
 
+Read `references/deny-list.txt`. Remove any agents whose name matches a deny-list entry from the loaded data. Skip denied names during discovery (step 2).
+
 ### 2. Search for New Agents
 
 Use WebSearch to find coding agents and orchestrators not already tracked:
@@ -76,25 +83,32 @@ Add any genuinely new coding agents or orchestrators found. Skip IDE themes, lin
 For each agent with a `github_repo`:
 
 1. Use WebFetch to get `https://api.github.com/repos/{owner}/{repo}` (JSON response includes `stargazers_count`)
-2. Rotate `stars` -> `stars_prev` and `stars_date` -> `stars_prev_date`
-3. Set `stars` to current `stargazers_count`, `stars_date` to today
+2. Prepend `{"date": "<today>", "stars": <count>}` to `stars_history`, trim to 6 entries
+3. Set `stars` to current `stargazers_count`
 
 For agents without a public GitHub repo, set `stars: null`.
 
 If the GitHub API rate-limits (403), use WebSearch `"{agent name}" github stars` as fallback and parse the count from search results.
 
+**Migration:** If an existing entry has the old `stars_prev`/`stars_date`/`stars_prev_date` fields instead of `stars_history`, convert: build `stars_history` from current + previous snapshot, then delete the old fields.
+
 ### 4. Compute Rankings
 
-For each agent, compute a `score`:
+For each agent, compute a `score` using the **3-month star increase** from `stars_history`:
 
 ```
-trend = (stars - stars_prev) / days_between_snapshots   # stars/day, 0 if no prev
+# Find the oldest snapshot within the last 90 days
+oldest = stars_history entry closest to 90 days ago (or the oldest available)
+stars_3m = stars - oldest.stars                          # absolute 3-month gain
+days = days between today and oldest.date
+trend = stars_3m / days * 30                             # normalized to stars/month, 0 if < 2 snapshots
+
 normalized_stars = log10(stars + 1)                      # dampen mega-repos
-normalized_trend = log10(trend * 30 + 1)                 # monthly scale
+normalized_trend = log10(trend + 1)                      # monthly gain scale
 score = 0.6 * normalized_stars + 0.4 * normalized_trend
 ```
 
-Agents with `stars: null` get `score = 0` and sort to the bottom.
+Agents with `stars: null` get `score = 0` and sort to the bottom. Agents with only 1 snapshot get `trend = 0`.
 
 Sort agents descending by score within each category.
 
