@@ -173,6 +173,47 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T)
 	}
 }
 
+func TestSessionDetector_Activity_TransitionsToReady_WhenAssistantNoSystemEvents(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	repo.states["nosys1"] = &session.SessionState{
+		SessionID:      "nosys1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/nosys1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant",
+			HasOpenToolCall: false,
+		},
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "nosys1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/nosys1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("nosys1")
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready (assistant with no open tools, no turn_done system event)", state.State)
+	}
+}
+
 func TestSessionDetector_Activity_TransitionsToWaiting_WhenAssistantButOpenTools(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -925,7 +966,7 @@ func TestIsAgentDone(t *testing.T) {
 		{"turn_done", &session.SessionMetrics{LastEventType: "turn_done"}, true},
 		{"turn_done, open tools (subagent running)", &session.SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}, false},
 		{"assistant_message, no open tools (legacy)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
-		{"assistant, no open tools (intermediate — NOT done)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
+		{"assistant, no open tools (done — fallback for transcripts without turn_done)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
 		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},
 		{"user, no open tools", &session.SessionMetrics{LastEventType: "user", HasOpenToolCall: false}, false},
 		{"empty", &session.SessionMetrics{}, false},

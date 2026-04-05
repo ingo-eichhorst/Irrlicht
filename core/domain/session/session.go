@@ -116,9 +116,11 @@ func (m *SessionMetrics) IsAgentDone() bool {
 	if m.LastEventType == "turn_done" {
 		return true
 	}
-	// Fallback for legacy/Codex transcripts.
+	// Fallback: some transcripts lack turn_duration/stop_hook_summary entirely.
+	// Claude Code uses "assistant", Codex uses "assistant_message"/"assistant_output".
+	// Safe because HasOpenToolCall is checked first — mid-turn tool calls block this.
 	switch m.LastEventType {
-	case "assistant_message", "assistant_output":
+	case "assistant", "assistant_message", "assistant_output":
 		return true
 	}
 	return false
