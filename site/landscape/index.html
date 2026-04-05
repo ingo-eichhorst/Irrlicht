@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Coding Agent Landscape — Irrlicht</title>
+<meta name="description" content="Live rankings of AI coding agents and orchestrators by GitHub stars and growth trend. See which agents Irrlicht monitors.">
+<link rel="canonical" href="https://irrlicht.io/landscape/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="AI Coding Agent Landscape — Irrlicht">
+<meta property="og:description" content="Live rankings of AI coding agents and orchestrators by GitHub stars and growth trend.">
+<meta property="og:url" content="https://irrlicht.io/landscape/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="AI Coding Agent Landscape — Irrlicht">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=DM+Mono:wght@300;400&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root {
+  --bg: #050a14;
+  --bg-card: rgba(12, 18, 35, 0.65);
+  --bg-surface: #0a1020;
+  --working: #8B5CF6;
+  --waiting: #FF9500;
+  --ready: #34C759;
+  --text: #c8cdd8;
+  --text-dim: #5a6378;
+  --text-bright: #e8ecf4;
+  --accent: #8B5CF6;
+  --border: rgba(138, 92, 246, 0.08);
+  --border-subtle: rgba(200, 205, 216, 0.06);
+}
+html { scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: rgba(138,92,246,0.2) transparent; }
+body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1.25rem 2.5rem; display: flex; align-items: center; justify-content: space-between; backdrop-filter: blur(20px) saturate(1.2); background: rgba(5,10,20,0.7); border-bottom: 1px solid var(--border); }
+.nav-logo { font-family: 'Cormorant Garamond', serif; font-size: 1.4rem; font-weight: 300; letter-spacing: 0.15em; color: var(--text-bright); text-decoration: none; display: flex; align-items: center; gap: 0.6rem; }
+.nav-logo .sparkle { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--working); box-shadow: 0 0 12px var(--working); }
+.nav-links { list-style: none; display: flex; align-items: center; gap: 1.5rem; }
+.nav-links a { color: var(--text-dim); text-decoration: none; font-size: 0.9rem; font-weight: 400; transition: color 0.3s; }
+.nav-links a:hover { color: var(--text-bright); }
+.nav-links a.active { color: var(--text-bright); }
+.btn-nav { padding: 0.45rem 1.1rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem !important; }
+.btn-nav:hover { border-color: rgba(138,92,246,0.25); background: rgba(138,92,246,0.06); }
+
+.container { max-width: 1100px; margin: 0 auto; padding: 7rem 2rem 4rem; }
+.page-header { margin-bottom: 3rem; }
+.page-header h1 { font-family: 'Cormorant Garamond', serif; font-size: 2.4rem; font-weight: 300; color: var(--text-bright); margin-bottom: 0.5rem; }
+.updated { font-size: 0.85rem; color: var(--text-dim); font-family: 'DM Mono', monospace; }
+.intro { margin-top: 1rem; max-width: 720px; color: var(--text); font-size: 0.95rem; line-height: 1.7; }
+
+.section-title { font-family: 'Cormorant Garamond', serif; font-size: 1.6rem; font-weight: 300; color: var(--text-bright); margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+.section-count { font-size: 0.8rem; color: var(--text-dim); font-weight: 400; font-family: 'Outfit', sans-serif; }
+
+table { width: 100%; border-collapse: collapse; margin-bottom: 2.5rem; }
+th { text-align: left; font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border); }
+td { padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border-subtle); font-size: 0.9rem; vertical-align: middle; }
+tr:hover td { background: rgba(138,92,246,0.03); }
+.rank { font-family: 'DM Mono', monospace; color: var(--text-dim); font-size: 0.8rem; width: 2.5rem; }
+.name a { color: var(--text-bright); text-decoration: none; font-weight: 500; }
+.name a:hover { color: var(--accent); }
+.desc { color: var(--text-dim); font-size: 0.82rem; max-width: 280px; }
+.stars { font-family: 'DM Mono', monospace; font-size: 0.85rem; white-space: nowrap; }
+.trend { font-family: 'DM Mono', monospace; font-size: 0.82rem; white-space: nowrap; }
+.trend-na { color: var(--text-dim); font-style: italic; }
+
+.badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 4px; font-size: 0.72rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.badge-live { background: rgba(52,199,89,0.12); color: var(--ready); border: 1px solid rgba(52,199,89,0.2); }
+.badge-planned { background: rgba(255,149,0,0.1); color: var(--waiting); border: 1px solid rgba(255,149,0,0.15); }
+.badge-none { background: rgba(200,205,216,0.04); color: var(--text-dim); border: 1px solid var(--border-subtle); }
+
+footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: var(--text-dim); }
+.footer-right { display: flex; gap: 1.5rem; }
+.footer-right a { color: var(--text-dim); text-decoration: none; }
+.footer-right a:hover { color: var(--text-bright); }
+
+@media (max-width: 768px) {
+  nav { padding: 1rem 1.2rem; }
+  .nav-hide-sm { display: none; }
+  .container { padding: 5.5rem 1rem 2rem; }
+  .page-header h1 { font-size: 1.8rem; }
+  table { font-size: 0.82rem; }
+  .desc { display: none; }
+  footer { flex-direction: column; gap: 1rem; text-align: center; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../" class="nav-logo"><span class="sparkle"></span> IRRLICHT</a>
+  <ul class="nav-links">
+    <li class="nav-hide-sm"><a href="../#features">Features</a></li>
+    <li class="nav-hide-sm"><a href="./" class="active">Landscape</a></li>
+    <li class="nav-hide-sm"><a href="../docs/">Docs</a></li>
+    <li><a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-nav">GitHub</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+  <div class="page-header">
+    <h1>AI Coding Agent Landscape</h1>
+    <div class="updated">Last updated: 2026-04-05</div>
+    <p class="intro">A living ranking of AI coding agents and agent orchestrators, sorted by GitHub popularity. Agents that Irrlicht already monitors are marked <span class="badge badge-live">live</span>, upcoming integrations are <span class="badge badge-planned">planned</span>. Trend data will appear after the second scan.</p>
+  </div>
+
+  <!-- ─── Coding Agents ─── -->
+  <h2 class="section-title">Coding Agents <span class="section-count">(39 tracked)</span></h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Name</th><th class="desc">Description</th><th>Stars</th><th>Trend</th><th>Irrlicht</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="rank">1</td><td class="name"><a href="https://github.com/openclaw/openclaw">OpenClaw</a></td><td class="desc">Open-source AI virtual assistant and agentic interface</td><td class="stars">348,970</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">2</td><td class="name"><a href="https://claw-code.codes">Claw Code</a></td><td class="desc">Clean-room Python/Rust rewrite of Claude Code architecture</td><td class="stars">170,566</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">3</td><td class="name"><a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a></td><td class="desc">Google's terminal AI coding agent</td><td class="stars">100,312</td><td class="trend trend-na">first scan</td><td><span class="badge badge-planned">planned</span></td></tr>
+      <tr><td class="rank">4</td><td class="name"><a href="https://github.com/openai/codex">OpenAI Codex</a></td><td class="desc">OpenAI's terminal AI coding agent</td><td class="stars">73,298</td><td class="trend trend-na">first scan</td><td><span class="badge badge-live">live</span></td></tr>
+      <tr><td class="rank">5</td><td class="name"><a href="https://github.com/All-Hands-AI/OpenHands">OpenHands</a></td><td class="desc">Open-source platform for autonomous AI software agents</td><td class="stars">70,624</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">6</td><td class="name"><a href="https://github.com/cline/cline">Cline</a></td><td class="desc">Autonomous AI coding agent for VS Code</td><td class="stars">59,915</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">7</td><td class="name"><a href="https://aider.chat">Aider</a></td><td class="desc">AI pair programming in your terminal</td><td class="stars">42,859</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">8</td><td class="name"><a href="https://block.github.io/goose/">Goose</a></td><td class="desc">Block's open-source extensible AI agent for full dev workflows</td><td class="stars">36,868</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">9</td><td class="name"><a href="https://cursor.com">Cursor</a></td><td class="desc">AI-first code editor with agent mode</td><td class="stars">32,577</td><td class="trend trend-na">first scan</td><td><span class="badge badge-planned">planned</span></td></tr>
+      <tr><td class="rank">10</td><td class="name"><a href="https://continue.dev">Continue</a></td><td class="desc">Open-source AI code assistant for VS Code and JetBrains</td><td class="stars">32,304</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">11</td><td class="name"><a href="https://github.com/voideditor/void">Void</a></td><td class="desc">Open-source AI code editor</td><td class="stars">28,499</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">12</td><td class="name"><a href="https://github.com/RooVetGit/Roo-Code">Roo Code</a></td><td class="desc">AI coding agent for VS Code with multi-mode support</td><td class="stars">22,989</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">13</td><td class="name"><a href="https://github.com/princeton-nlp/SWE-agent">SWE-agent</a></td><td class="desc">Princeton's autonomous software engineering agent</td><td class="stars">18,927</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">14</td><td class="name"><a href="https://kilo.ai">Kilo Code</a></td><td class="desc">Open-source agentic coding platform for VS Code, JetBrains, CLI</td><td class="stars">17,712</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">15</td><td class="name"><a href="https://opencode.ai">OpenCode</a></td><td class="desc">Open-source Go-based terminal AI coding agent with TUI</td><td class="stars">11,835</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">16</td><td class="name"><a href="https://github.com/langchain-ai/open-swe">Open SWE</a></td><td class="desc">LangChain's open-source async cloud-hosted coding agent</td><td class="stars">9,194</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">17</td><td class="name"><a href="https://sweep.dev">Sweep</a></td><td class="desc">AI junior developer for GitHub issues</td><td class="stars">7,707</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">18</td><td class="name"><a href="https://github.com/antinomyhq/forgecode">Forge Code</a></td><td class="desc">Rust-based open-source terminal AI pair programmer</td><td class="stars">5,894</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">19</td><td class="name"><a href="https://www.ra-aid.ai">RA.Aid</a></td><td class="desc">LangGraph-based autonomous coding agent</td><td class="stars">2,217</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">20</td><td class="name"><a href="https://www.factory.ai">Factory</a></td><td class="desc">Agent-native development platform with Droid agents</td><td class="stars">714</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">21</td><td class="name"><a href="https://trypear.ai">Pear AI</a></td><td class="desc">Open-source AI code editor</td><td class="stars">674</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">22</td><td class="name"><a href="https://codegen.com">Codegen</a></td><td class="desc">AI coding agent platform with SDK</td><td class="stars">521</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></td><td class="desc">Anthropic's terminal-based AI coding agent</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-live">live</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name">Pi</td><td class="desc">Anthropic's lightweight coding agent</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-live">live</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://ampcode.com">Amp</a></td><td class="desc">Sourcegraph's AI coding agent</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-planned">planned</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://aws.amazon.com/q/developer/">Amazon Q Developer</a></td><td class="desc">AWS AI coding assistant</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://www.augmentcode.com">Augment Code</a></td><td class="desc">AI coding agent with deep codebase understanding</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://codebuff.com">Codebuff</a></td><td class="desc">AI coding agent in your terminal</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://www.codegpt.co">CodeGPT</a></td><td class="desc">Full-stack AI agent platform with codebase knowledge graph</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://cosine.sh">Cosine Genie</a></td><td class="desc">Fully autonomous AI software engineer</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://devin.ai">Devin</a></td><td class="desc">Autonomous AI software engineer by Cognition</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://github.com/features/copilot">GitHub Copilot</a></td><td class="desc">GitHub's AI pair programmer</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://www.morphllm.com">MorphLLM</a></td><td class="desc">Subagent infrastructure: Fast Apply, WarpGrep, compression</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://www.poolside.ai">Poolside</a></td><td class="desc">Enterprise AI coding platform with custom foundation models</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://www.qodo.ai">Qodo</a></td><td class="desc">Agentic code integrity platform for review and testing</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://sourcegraph.com/cody">Sourcegraph Cody</a></td><td class="desc">AI coding assistant with full codebase context</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://www.tabnine.com">Tabnine</a></td><td class="desc">AI code completion and chat assistant</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://codeium.com/windsurf">Windsurf</a></td><td class="desc">AI-powered IDE by Codeium</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://zencoder.ai">Zencoder</a></td><td class="desc">AI coding agent with repo-wide context indexing</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+    </tbody>
+  </table>
+
+  <!-- ─── Agent Orchestrators ─── -->
+  <h2 class="section-title">Agent Orchestrators <span class="section-count">(24 tracked)</span></h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Name</th><th class="desc">Description</th><th>Stars</th><th>Trend</th><th>Irrlicht</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="rank">1</td><td class="name"><a href="https://github.com/geekan/MetaGPT">MetaGPT</a></td><td class="desc">Multi-agent framework simulating a software company</td><td class="stars">66,665</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">2</td><td class="name"><a href="https://github.com/microsoft/autogen">AutoGen</a></td><td class="desc">Microsoft's multi-agent conversation framework</td><td class="stars">56,725</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">3</td><td class="name"><a href="https://github.com/gpt-engineer-org/gpt-engineer">GPT Engineer</a></td><td class="desc">AI agent that builds codebases from specifications</td><td class="stars">55,218</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">4</td><td class="name"><a href="https://www.crewai.com">CrewAI</a></td><td class="desc">Framework for orchestrating role-playing AI agents</td><td class="stars">48,101</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">5</td><td class="name"><a href="https://www.agno.com">Agno</a></td><td class="desc">Python agent runtime for teams and workflows (formerly Phidata)</td><td class="stars">39,190</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">6</td><td class="name"><a href="https://github.com/OpenBMB/ChatDev">ChatDev</a></td><td class="desc">Virtual software company powered by AI agents</td><td class="stars">32,586</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">7</td><td class="name"><a href="https://github.com/ruvnet/ruflo">Ruflo</a></td><td class="desc">Multi-agent swarm orchestration platform for Claude</td><td class="stars">30,076</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">8</td><td class="name"><a href="https://github.com/langchain-ai/langgraph">LangGraph</a></td><td class="desc">Framework for building stateful multi-agent applications</td><td class="stars">28,480</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">9</td><td class="name"><a href="https://www.warp.dev">Warp</a></td><td class="desc">Agentic terminal with Oz cloud orchestration</td><td class="stars">26,322</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">10</td><td class="name"><a href="https://github.com/stitionai/devika">Devika</a></td><td class="desc">Open-source AI software engineer</td><td class="stars">19,499</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">11</td><td class="name"><a href="https://google.github.io/adk-docs/">Google ADK</a></td><td class="desc">Google's framework for building multi-agent systems</td><td class="stars">18,760</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">12</td><td class="name"><a href="https://bolt.new">Bolt.new</a></td><td class="desc">StackBlitz's AI full-stack web app builder</td><td class="stars">16,306</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">13</td><td class="name"><a href="https://github.com/smtg-ai/claude-squad">Claude Squad</a></td><td class="desc">Manage multiple Claude Code instances in tmux</td><td class="stars">6,843</td><td class="trend trend-na">first scan</td><td><span class="badge badge-planned">planned</span></td></tr>
+      <tr><td class="rank">14</td><td class="name"><a href="https://composio.dev">Composio</a></td><td class="desc">Agent-agnostic orchestrator for parallel coding agents</td><td class="stars">5,777</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">15</td><td class="name"><a href="https://container-use.com">Dagger Container Use</a></td><td class="desc">MCP server giving agents isolated container environments</td><td class="stars">3,698</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">16</td><td class="name"><a href="https://github.com/dlorenc/multiclaude">Multiclaude</a></td><td class="desc">Parallel Claude Code instances with Brownian ratchet CI</td><td class="stars">527</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">17</td><td class="name"><a href="https://forge.nxtg.ai">Forge Orchestrator</a></td><td class="desc">Rust-based multi-AI task orchestrator with drift detection</td><td class="stars">106</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">18</td><td class="name"><a href="https://stoneforge.ai">Stoneforge</a></td><td class="desc">Web dashboard orchestrating AI coding agent teams</td><td class="stars">105</td><td class="trend trend-na">first scan</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name">Gas Town</td><td class="desc">Agent orchestrator for AI coding sessions</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-live">live</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://lovable.dev">Lovable</a></td><td class="desc">AI full-stack web app builder</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://learn.microsoft.com/en-us/agent-framework/">Microsoft Agent Framework</a></td><td class="desc">AutoGen + Semantic Kernel convergence</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://replit.com">Replit Agent</a></td><td class="desc">Replit's AI coding agent</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://superinterface.ai">Superinterface</a></td><td class="desc">AI agent interface platform</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+      <tr><td class="rank">&mdash;</td><td class="name"><a href="https://v0.dev">v0</a></td><td class="desc">Vercel's AI UI generation tool</td><td class="stars">&mdash;</td><td class="trend trend-na">&mdash;</td><td><span class="badge badge-none">&mdash;</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>
+  <div>MIT License &middot; Irrlicht &middot; Follow the right light.</div>
+  <div class="footer-right">
+    <a href="../landscape/">Agent Landscape</a>
+    <a href="../docs/">Docs</a>
+    <a href="https://github.com/ingo-eichhorst/Irrlicht">GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>
