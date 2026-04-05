@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,6 +30,13 @@ type PIDManager struct {
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
 	onSessionDeleted func(sessionID string)
+
+	// pendingPIDs stores PIDs discovered by background goroutines, to be
+	// applied by processActivity on its next run. This avoids a race where
+	// HandlePIDAssigned's load-modify-save overwrites a state transition
+	// made by processActivity (e.g. working → ready).
+	pendingMu   sync.Mutex
+	pendingPIDs map[string]int
 }
 
 // NewPIDManager creates a PIDManager with the given dependencies.
@@ -50,6 +58,7 @@ func NewPIDManager(
 		readyTTL:         readyTTL,
 		discoverPIDByCWD: discoverPIDByCWD,
 		onSessionDeleted: onSessionDeleted,
+		pendingPIDs:      make(map[string]int),
 	}
 }
 
@@ -102,13 +111,25 @@ func (pm *PIDManager) cleanupChildren(parentID string) {
 
 // HandlePIDAssigned records a newly-discovered PID for a session, registers it
 // with the ProcessWatcher, and cleans up old sessions that shared the same PID.
-// This handles the /clear scenario: the CLI process stays alive (same PID) but
-// starts a new transcript, making the old session obsolete.
+//
+// The PID is saved directly to the repo AND stored as a pending PID. The direct
+// save ensures the PID is persisted even if no subsequent processActivity call
+// happens. The pending PID is a safety net: if this direct save races with a
+// concurrent processActivity and overwrites a state transition (e.g. working →
+// ready), the next processActivity call will consume the pending PID and
+// re-classify the state correctly.
 func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	if pid <= 0 {
 		return
 	}
 
+	// Store pending PID FIRST so processActivity can correct any stale state
+	// that our direct save below might overwrite.
+	pm.pendingMu.Lock()
+	pm.pendingPIDs[sessionID] = pid
+	pm.pendingMu.Unlock()
+
+	// Load latest state and save PID directly for immediate persistence.
 	state, _ := pm.repo.Load(sessionID)
 	if state == nil || state.PID == pid {
 		return
@@ -158,6 +179,19 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 		_ = pm.repo.Delete(old.SessionID)
 		pm.broadcast(outbound.PushTypeDeleted, old)
 	}
+}
+
+// ConsumePendingPID returns and removes a pending PID for the given session.
+// Called by processActivity to atomically apply PID assignment during the
+// normal state-update flow, avoiding the race with direct Save.
+func (pm *PIDManager) ConsumePendingPID(sessionID string) (int, bool) {
+	pm.pendingMu.Lock()
+	defer pm.pendingMu.Unlock()
+	pid, ok := pm.pendingPIDs[sessionID]
+	if ok {
+		delete(pm.pendingPIDs, sessionID)
+	}
+	return pid, ok
 }
 
 // claimedPIDs returns the set of PIDs already assigned to sessions other than

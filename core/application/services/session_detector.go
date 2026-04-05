@@ -70,6 +70,12 @@ type SessionDetector struct {
 	debounceMu sync.Mutex
 	debounce   map[string]*debounceEntry
 
+	// debouncedEvents receives coalesced events from debounce timer callbacks.
+	// Timer callbacks send here instead of calling processActivity directly,
+	// so all processActivity calls run in the single event-loop goroutine
+	// and never overlap for the same session.
+	debouncedEvents chan agent.Event
+
 	// staleToolTimers tracks per-session timers for detecting permission-pending
 	// tool calls. When a session is "working" with open non-blocking tool calls
 	// and the permission mode requires approval, a timer starts. If no new
@@ -94,15 +100,16 @@ func NewSessionDetector(
 	discoverPIDByCWD func(string, func([]int) int) (int, error),
 ) *SessionDetector {
 	det := &SessionDetector{
-		watchers:        watchers,
-		repo:            repo,
-		log:             log,
-		broadcaster:     broadcaster,
-		version:         version,
-		enricher:        NewMetadataEnricher(git, metrics),
+		watchers:         watchers,
+		repo:             repo,
+		log:              log,
+		broadcaster:      broadcaster,
+		version:          version,
+		enricher:         NewMetadataEnricher(git, metrics),
 		projectSessions:  make(map[string]string),
 		deletedSessions:  make(map[string]bool),
 		debounce:         make(map[string]*debounceEntry),
+		debouncedEvents:  make(chan agent.Event, 64),
 		staleToolTimeout: defaultStaleToolTimeout,
 		staleToolTimers:  make(map[string]*time.Timer),
 	}
@@ -258,6 +265,10 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 				return ctx.Err()
 			}
 			d.handleTranscriptEvent(ev)
+		case ev := <-d.debouncedEvents:
+			// Coalesced events from debounce timers — process in the event
+			// loop goroutine so processActivity never runs concurrently.
+			d.processActivity(ev)
 		}
 	}
 }
@@ -390,7 +401,12 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 				coalesced := e.latest
 				delete(d.debounce, sid)
 				d.debounceMu.Unlock()
-				d.processActivity(coalesced)
+				// Send to the event loop instead of calling processActivity
+				// directly, so all processActivity calls are serialized.
+				select {
+				case d.debouncedEvents <- coalesced:
+				default:
+				}
 			} else {
 				delete(d.debounce, sid)
 				d.debounceMu.Unlock()
@@ -432,6 +448,18 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 
 	// Cancel any pending stale-tool timer — new activity arrived.
 	d.cancelStaleToolTimer(ev.SessionID)
+
+	// Apply any deferred PID from background discovery goroutines.
+	// This must happen before ClassifyState so that the PID and state
+	// transition are saved atomically, avoiding the race where
+	// HandlePIDAssigned's separate Save would overwrite a state change.
+	if pid, ok := d.pidMgr.ConsumePendingPID(ev.SessionID); ok {
+		if state.PID != pid {
+			state.PID = pid
+			d.log.LogInfo("session-detector", ev.SessionID,
+				fmt.Sprintf("applied deferred pid %d", pid))
+		}
+	}
 
 	// Retry PID discovery if not yet known (claude-code only).
 	if state.PID == 0 && state.CWD != "" && state.Adapter == "claude-code" {

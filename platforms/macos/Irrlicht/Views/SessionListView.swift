@@ -914,28 +914,10 @@ struct SessionStateDots: View {
         .tooltip(tooltipText)
     }
 
-    @ViewBuilder
     private func dotForState(_ state: SessionState.State) -> some View {
-        let color = Color(hex: state.color)
-        switch state {
-        case .working:
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-        case .waiting:
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-                .overlay(
-                    Circle()
-                        .stroke(color, lineWidth: 1)
-                        .frame(width: 9, height: 9)
-                )
-        case .ready:
-            Circle()
-                .stroke(color.opacity(0.6), lineWidth: 1)
-                .frame(width: 6, height: 6)
-        }
+        Circle()
+            .fill(Color(hex: state.color))
+            .frame(width: 6, height: 6)
     }
 
     // MARK: Overflow mode (>4 sessions): state counts
@@ -944,13 +926,13 @@ struct SessionStateDots: View {
         let c = stateCounts
         return HStack(spacing: 4) {
             if c.waiting > 0 {
-                stateCountLabel("◉", count: c.waiting, color: Color(hex: SessionState.State.waiting.color))
+                stateCountLabel("●", count: c.waiting, color: Color(hex: SessionState.State.waiting.color))
             }
             if c.working > 0 {
                 stateCountLabel("●", count: c.working, color: Color(hex: SessionState.State.working.color))
             }
             if c.ready > 0 {
-                stateCountLabel("○", count: c.ready, color: Color(hex: SessionState.State.ready.color))
+                stateCountLabel("●", count: c.ready, color: Color(hex: SessionState.State.ready.color))
             }
         }
         .tooltip(tooltipText)
