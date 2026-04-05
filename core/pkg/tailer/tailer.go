@@ -446,14 +446,19 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		return nil, nil
 	}
 
-	// Pi uses "message" type with role. Must be checked before the Codex
-	// fallback below since both formats use type: "message".
-	if eventType == "message" && t.isPi {
-		if role, ok := raw["role"].(string); ok {
+	// Pi nests role, stopReason, content, and usage inside a "message" object:
+	//   {"type": "message", "message": {"role": "assistant", "stopReason": "stop", ...}}
+	// Extract the inner message for Pi-specific field access.
+	piMsg, hasPiMsg := raw["message"].(map[string]interface{})
+
+	// Pi uses "message" type with message.role. Must be checked before the
+	// Codex fallback below since both formats use type: "message".
+	if eventType == "message" && t.isPi && hasPiMsg {
+		if role, ok := piMsg["role"].(string); ok {
 			switch role {
 			case "assistant":
 				// Distinguish mid-turn (toolUse) from end-of-turn (stop).
-				stopReason, _ := raw["stopReason"].(string)
+				stopReason, _ := piMsg["stopReason"].(string)
 				if stopReason == "stop" {
 					eventType = "assistant_message"
 				} else {
@@ -474,27 +479,24 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 
 	// Pi secondary detection: role values unique to Pi (for 64KB-tail scenarios
 	// where the session header was not included in the read window).
-	if eventType == "message" && !t.isPi {
-		if role, ok := raw["role"].(string); ok {
+	if eventType == "message" && !t.isPi && hasPiMsg {
+		if role, ok := piMsg["role"].(string); ok {
 			if role == "toolResult" || role == "bashExecution" {
 				t.isPi = true
-				switch role {
-				case "toolResult", "bashExecution":
-					eventType = "tool_result"
-					t.toolResultCount++
-					if len(t.lastOpenToolNames) > 0 {
-						t.lastOpenToolNames = t.lastOpenToolNames[1:]
-					}
+				eventType = "tool_result"
+				t.toolResultCount++
+				if len(t.lastOpenToolNames) > 0 {
+					t.lastOpenToolNames = t.lastOpenToolNames[1:]
 				}
 			}
 		}
-		// Also detect from stopReason field presence (Pi-specific).
-		if _, ok := raw["stopReason"].(string); ok && !t.isCodex {
+		// Also detect from message.stopReason field presence (Pi-specific).
+		if _, ok := piMsg["stopReason"].(string); ok && !t.isCodex {
 			t.isPi = true
-			if role, ok := raw["role"].(string); ok {
+			if role, ok := piMsg["role"].(string); ok {
 				switch role {
 				case "assistant":
-					stopReason, _ := raw["stopReason"].(string)
+					stopReason, _ := piMsg["stopReason"].(string)
 					if stopReason == "stop" {
 						eventType = "assistant_message"
 					} else {
@@ -635,15 +637,17 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 		}
 	}
 
-	// Pi embeds toolCall in top-level content[] array (not under message.content).
+	// Pi embeds toolCall in message.content[] array.
 	if t.isPi {
-		if contentArr, ok := raw["content"].([]interface{}); ok {
-			for _, item := range contentArr {
-				if block, ok := item.(map[string]interface{}); ok {
-					if block["type"] == "toolCall" {
-						t.toolUseCount++
-						if name, ok := block["name"].(string); ok {
-							t.lastOpenToolNames = append(t.lastOpenToolNames, name)
+		if piMsg, ok := raw["message"].(map[string]interface{}); ok {
+			if contentArr, ok := piMsg["content"].([]interface{}); ok {
+				for _, item := range contentArr {
+					if block, ok := item.(map[string]interface{}); ok {
+						if block["type"] == "toolCall" {
+							t.toolUseCount++
+							if name, ok := block["name"].(string); ok {
+								t.lastOpenToolNames = append(t.lastOpenToolNames, name)
+							}
 						}
 					}
 				}
