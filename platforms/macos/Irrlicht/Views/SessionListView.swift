@@ -65,33 +65,33 @@ struct SessionListView: View {
                 // Settings and Quit buttons at bottom
                 Divider()
                 HStack(spacing: 0) {
-                    Button("Settings…") {
-                        showSettings = true
+                    Button(action: { showSettings = true }) {
+                        Text("Settings…")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(isSettingsButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                            .contentShape(Rectangle())
+                            .onHover { hovering in
+                                isSettingsButtonHovered = hovering
+                            }
                     }
                     .buttonStyle(.plain)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(isSettingsButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
-                    .onHover { hovering in
-                        isSettingsButtonHovered = hovering
-                        if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                    }
 
                     Divider().frame(height: 20)
 
-                    Button("Quit") {
-                        NSApplication.shared.terminate(nil)
+                    Button(action: { NSApplication.shared.terminate(nil) }) {
+                        Text("Quit")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(isQuitButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                            .contentShape(Rectangle())
+                            .onHover { hovering in
+                                isQuitButtonHovered = hovering
+                            }
                     }
                     .buttonStyle(.plain)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(isQuitButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
-                    .onHover { hovering in
-                        isQuitButtonHovered = hovering
-                        if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                    }
                 }
             }
             .frame(width: 350)
@@ -1174,7 +1174,8 @@ struct SessionListView_Previews: PreviewProvider {
                             modelName: "claude-sonnet-4-6",
                             contextUtilization: 7.5,
                             pressureLevel: "safe",
-                            estimatedCostUSD: nil
+                            estimatedCostUSD: nil,
+                            lastAssistantText: nil
                         )
                     )
                 ]
