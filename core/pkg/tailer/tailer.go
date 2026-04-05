@@ -212,6 +212,10 @@ type SessionMetrics struct {
 	// LastAssistantText is the text content of the most recent assistant
 	// message, truncated to ~200 characters.
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
+
+	// PermissionMode is the session's permission mode (e.g. "default",
+	// "plan", "bypassPermissions"). Extracted from "permission-mode" events.
+	PermissionMode string `json:"permission_mode,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -645,6 +649,14 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 				}
 			}
 		}
+	}
+
+	// Capture permission mode from management events (e.g. "default", "bypassPermissions").
+	if eventType == "permission-mode" {
+		if mode, ok := raw["permissionMode"].(string); ok {
+			t.metrics.PermissionMode = mode
+		}
+		return nil, nil
 	}
 
 	// Only track message-related events

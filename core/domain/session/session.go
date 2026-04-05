@@ -54,6 +54,11 @@ type SessionMetrics struct {
 	// message, truncated to ~200 characters. Used to surface the question
 	// or request when the session is in the waiting state.
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
+
+	// PermissionMode is the session's permission mode from the JSONL
+	// (e.g. "default", "plan", "bypassPermissions"). Used to skip the
+	// stale-tool-call timer when permissions are bypassed.
+	PermissionMode string `json:"permission_mode,omitempty"`
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one
@@ -208,6 +213,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		LastToolResultWasError: newM.LastToolResultWasError,
 		EstimatedCostUSD:       newM.EstimatedCostUSD,
 		LastAssistantText:      newM.LastAssistantText,
+		PermissionMode:         newM.PermissionMode,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
@@ -229,6 +235,9 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	}
 	if merged.EstimatedCostUSD == 0 && oldM.EstimatedCostUSD > 0 {
 		merged.EstimatedCostUSD = oldM.EstimatedCostUSD
+	}
+	if merged.PermissionMode == "" && oldM.PermissionMode != "" {
+		merged.PermissionMode = oldM.PermissionMode
 	}
 	return merged
 }

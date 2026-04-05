@@ -32,6 +32,11 @@ const orphanTranscriptAge = 2 * time.Minute
 // window are coalesced into a single processing when the timer expires.
 const activityDebounceWindow = 2 * time.Second
 
+// defaultStaleToolTimeout is how long a non-user-blocking open tool call must
+// remain unanswered before we assume it's permission-pending and transition to
+// waiting. Empirically, 95% of auto-approved tools complete within 8 seconds.
+const defaultStaleToolTimeout = 5 * time.Second
+
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {
 	timer   *time.Timer
@@ -60,6 +65,14 @@ type SessionDetector struct {
 	// debounce coalesces rapid transcript activity events per session.
 	debounceMu sync.Mutex
 	debounce   map[string]*debounceEntry
+
+	// staleToolTimers tracks per-session timers for detecting permission-pending
+	// tool calls. When a session is "working" with open non-blocking tool calls
+	// and the permission mode requires approval, a timer starts. If no new
+	// activity arrives before it fires, the session transitions to "waiting".
+	staleToolTimeout time.Duration
+	staleToolMu      sync.Mutex
+	staleToolTimers  map[string]*time.Timer
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -82,8 +95,10 @@ func NewSessionDetector(
 		broadcaster:     broadcaster,
 		version:         version,
 		enricher:        NewMetadataEnricher(git, metrics),
-		projectSessions: make(map[string]string),
-		debounce:        make(map[string]*debounceEntry),
+		projectSessions:  make(map[string]string),
+		debounce:         make(map[string]*debounceEntry),
+		staleToolTimeout: defaultStaleToolTimeout,
+		staleToolTimers:  make(map[string]*time.Timer),
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -97,6 +112,95 @@ func NewSessionDetector(
 // transcript file fails to find a PID.
 func (d *SessionDetector) WithCWDDiscovery(fn func(string, func([]int) int) (int, error)) {
 	d.pidMgr.SetCWDDiscovery(fn)
+}
+
+// SetStaleToolTimeout overrides the default stale-tool-call timeout.
+// Intended for tests that need a shorter duration.
+func (d *SessionDetector) SetStaleToolTimeout(timeout time.Duration) {
+	d.staleToolTimeout = timeout
+}
+
+// startStaleToolTimer starts a timer that will transition a session to "waiting"
+// if no new transcript activity arrives within staleToolTimeout. Called when
+// processActivity leaves the session in "working" with open non-blocking tool
+// calls in a permission mode that requires user approval.
+func (d *SessionDetector) startStaleToolTimer(sessionID string, expectedUpdatedAt int64) {
+	d.staleToolMu.Lock()
+	defer d.staleToolMu.Unlock()
+
+	if t, ok := d.staleToolTimers[sessionID]; ok {
+		t.Stop()
+	}
+
+	d.staleToolTimers[sessionID] = time.AfterFunc(d.staleToolTimeout, func() {
+		d.onStaleToolTimeout(sessionID, expectedUpdatedAt)
+	})
+}
+
+// cancelStaleToolTimer cancels any pending stale-tool timer for a session.
+func (d *SessionDetector) cancelStaleToolTimer(sessionID string) {
+	d.staleToolMu.Lock()
+	defer d.staleToolMu.Unlock()
+	if t, ok := d.staleToolTimers[sessionID]; ok {
+		t.Stop()
+		delete(d.staleToolTimers, sessionID)
+	}
+}
+
+// onStaleToolTimeout fires when a session has had an open non-blocking tool call
+// for staleToolTimeout without any new transcript activity. If the session state
+// hasn't changed since the timer was set, transition it to "waiting".
+func (d *SessionDetector) onStaleToolTimeout(sessionID string, expectedUpdatedAt int64) {
+	d.staleToolMu.Lock()
+	delete(d.staleToolTimers, sessionID)
+	d.staleToolMu.Unlock()
+
+	state, err := d.repo.Load(sessionID)
+	if err != nil || state == nil {
+		return
+	}
+
+	// Guard: only transition if the session is still in the exact state we
+	// expect. If UpdatedAt changed, new activity arrived and processActivity
+	// already re-evaluated.
+	if state.State != session.StateWorking || state.UpdatedAt != expectedUpdatedAt {
+		return
+	}
+	if state.Metrics == nil || !state.Metrics.HasOpenToolCall || state.Metrics.NeedsUserAttention() {
+		return
+	}
+
+	d.log.LogInfo("session-detector", sessionID,
+		"open tool call with no activity → waiting (likely permission-pending)")
+
+	now := time.Now().Unix()
+	state.State = session.StateWaiting
+	state.UpdatedAt = now
+	state.WaitingStartTime = &now
+	state.LastEvent = "stale_tool_timeout"
+
+	if err := d.repo.Save(state); err != nil {
+		d.log.LogError("session-detector", sessionID,
+			fmt.Sprintf("failed to save stale-tool transition: %v", err))
+		return
+	}
+
+	d.broadcast(outbound.PushTypeUpdated, state)
+}
+
+// hasOnlyAgentTools returns true if all open tool names are "Agent".
+// Agent tool calls are in-process subagents that legitimately run for minutes
+// and should not trigger the stale-tool timer.
+func hasOnlyAgentTools(names []string) bool {
+	if len(names) == 0 {
+		return false
+	}
+	for _, n := range names {
+		if n != "Agent" {
+			return false
+		}
+	}
+	return true
 }
 
 // Run subscribes to all AgentWatcher event streams, fans them into a single
@@ -298,6 +402,9 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 		return
 	}
 
+	// Cancel any pending stale-tool timer — new activity arrived.
+	d.cancelStaleToolTimer(ev.SessionID)
+
 	// Retry PID discovery if not yet known (async to avoid blocking the
 	// event loop on lsof I/O). Includes CWD fallback.
 	if state.PID == 0 && ev.TranscriptPath != "" {
@@ -342,6 +449,18 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 
 	d.broadcast(outbound.PushTypeUpdated, state)
 
+	// If the session is still "working" with open non-blocking tool calls
+	// in a permission mode that requires approval, start a timer to detect
+	// permission-pending state.
+	if state.State == session.StateWorking &&
+		state.Metrics != nil &&
+		state.Metrics.HasOpenToolCall &&
+		!state.Metrics.NeedsUserAttention() &&
+		!hasOnlyAgentTools(state.Metrics.LastOpenToolNames) &&
+		state.Metrics.PermissionMode != "bypassPermissions" {
+		d.startStaleToolTimer(ev.SessionID, state.UpdatedAt)
+	}
+
 	// When a parent session finishes, clean up all its child sessions.
 	if state.State == session.StateReady && state.ParentSessionID == "" {
 		d.pidMgr.cleanupChildren(state.SessionID)
@@ -359,6 +478,9 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 		delete(d.debounce, ev.SessionID)
 	}
 	d.debounceMu.Unlock()
+
+	// Cancel any pending stale-tool timer for this session.
+	d.cancelStaleToolTimer(ev.SessionID)
 
 	// Remove from project tracking.
 	d.mu.Lock()
@@ -447,6 +569,18 @@ func (d *SessionDetector) seedFromDisk() {
 			}
 			state.State = newState
 			_ = d.repo.Save(state)
+		}
+
+		// Start stale-tool timer for sessions that are working with open
+		// non-blocking tool calls — they may be permission-pending from a
+		// previous daemon run.
+		if state.State == session.StateWorking &&
+			state.Metrics != nil &&
+			state.Metrics.HasOpenToolCall &&
+			!state.Metrics.NeedsUserAttention() &&
+			!hasOnlyAgentTools(state.Metrics.LastOpenToolNames) &&
+			state.Metrics.PermissionMode != "bypassPermissions" {
+			d.startStaleToolTimer(state.SessionID, state.UpdatedAt)
 		}
 	}
 
