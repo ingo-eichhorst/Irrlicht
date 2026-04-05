@@ -252,13 +252,13 @@ section {
 
 /* ─── Hero ─── */
 .hero {
-  height: 100vh;
+  min-height: 80vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 4rem 2rem 4rem;
+  padding: 8rem 2rem 4rem;
   position: relative;
   overflow: hidden;
   background: url('assets/bg_no_lights.png') center center / cover no-repeat;
@@ -276,23 +276,6 @@ section {
   z-index: 0;
 }
 
-.hero-glow {
-  position: absolute;
-  width: 600px;
-  height: 600px;
-  border-radius: 50%;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -55%);
-  background: radial-gradient(circle, rgba(139,92,246,0.06) 0%, rgba(139,92,246,0.02) 40%, transparent 70%);
-  pointer-events: none;
-  animation: hero-pulse 8s ease-in-out infinite;
-}
-
-@keyframes hero-pulse {
-  0%,100% { transform: translate(-50%,-55%) scale(1); opacity: 1; }
-  50% { transform: translate(-50%,-55%) scale(1.15); opacity: 0.7; }
-}
 
 .hero > *:not(canvas) {
   position: relative;
@@ -1056,11 +1039,11 @@ footer {
 <!-- ─── Hero ─── -->
 <section class="hero">
   <canvas id="wisp-canvas"></canvas>
-  <div class="hero-glow"></div>
+
   <p class="hero-subtitle-top">Menu-bar telemetry for AI coding agents</p>
   <h1><span>Irrlicht</span></h1>
-  <p class="hero-meaning">/ eer-likht / &mdash; will-o'-the-wisp &mdash; the ghostly light of the Harz mountains</p>
-  <p class="tagline">In Goethe's <em>Faust</em>, an Irrlicht guides the way up the Brocken on Walpurgis Night. This one guides you through your agents &mdash; who's working, who's waiting, and where you're needed next.</p>
+  <p class="hero-meaning">/ eer-likht / &mdash; will-o'-the-wisp</p>
+  <p class="tagline">In <em>Faust</em>, an Irrlicht guides the way through the night. This one guides you through your agents &mdash; who's working, who's waiting, and where you're needed next.</p>
 
   <div class="session-viz">
     <div>
@@ -1069,14 +1052,12 @@ footer {
         <div class="session-dot dot-working"></div>
         <div class="session-dot dot-working"></div>
       </div>
-      <div class="group-label">backend</div>
       <div class="group-claim">3 agents busy.</div>
     </div>
     <div>
       <div class="session-group">
         <div class="session-dot dot-ready"></div>
       </div>
-      <div class="group-label">docs</div>
       <div class="group-claim">Ready for work.</div>
     </div>
     <div>
@@ -1084,7 +1065,6 @@ footer {
         <div class="session-dot dot-working"></div>
         <div class="session-dot dot-waiting"></div>
       </div>
-      <div class="group-label">auth-service</div>
       <div class="group-claim">One needs you.</div>
     </div>
   </div>
