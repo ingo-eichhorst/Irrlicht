@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Coding Agent Landscape — Irrlicht</title>
+<meta name="description" content="Live rankings of AI coding agents and orchestrators by GitHub stars and growth trend. See which agents Irrlicht monitors.">
+<link rel="canonical" href="https://irrlicht.io/landscape/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="AI Coding Agent Landscape — Irrlicht">
+<meta property="og:description" content="Live rankings of AI coding agents and orchestrators by GitHub stars and growth trend.">
+<meta property="og:url" content="https://irrlicht.io/landscape/">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=DM+Mono:wght@300;400&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root {
+  --bg: #050a14;
+  --bg-card: rgba(12, 18, 35, 0.65);
+  --bg-surface: #0a1020;
+  --working: #8B5CF6;
+  --waiting: #FF9500;
+  --ready: #34C759;
+  --text: #c8cdd8;
+  --text-dim: #5a6378;
+  --text-bright: #e8ecf4;
+  --accent: #8B5CF6;
+  --border: rgba(138, 92, 246, 0.08);
+  --border-subtle: rgba(200, 205, 216, 0.06);
+}
+html { scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: rgba(138,92,246,0.2) transparent; }
+body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+/* Nav */
+nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1.25rem 2.5rem; display: flex; align-items: center; justify-content: space-between; backdrop-filter: blur(20px) saturate(1.2); background: rgba(5,10,20,0.7); border-bottom: 1px solid var(--border); }
+.nav-logo { font-family: 'Cormorant Garamond', serif; font-size: 1.4rem; font-weight: 300; letter-spacing: 0.15em; color: var(--text-bright); text-decoration: none; display: flex; align-items: center; gap: 0.6rem; }
+.nav-logo .sparkle { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--working); box-shadow: 0 0 12px var(--working); }
+.nav-links { list-style: none; display: flex; align-items: center; gap: 1.5rem; }
+.nav-links a { color: var(--text-dim); text-decoration: none; font-size: 0.9rem; font-weight: 400; transition: color 0.3s; }
+.nav-links a:hover { color: var(--text-bright); }
+.nav-links a.active { color: var(--text-bright); }
+.btn-nav { padding: 0.45rem 1.1rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; }
+.btn-nav:hover { border-color: rgba(138,92,246,0.25); background: rgba(138,92,246,0.06); }
+
+/* Main content */
+.container { max-width: 1100px; margin: 0 auto; padding: 7rem 2rem 4rem; }
+.page-header { margin-bottom: 3rem; }
+.page-header h1 { font-family: 'Cormorant Garamond', serif; font-size: 2.4rem; font-weight: 300; color: var(--text-bright); margin-bottom: 0.5rem; }
+.page-header .updated { font-size: 0.85rem; color: var(--text-dim); font-family: 'DM Mono', monospace; }
+.page-header .intro { margin-top: 1rem; max-width: 720px; color: var(--text); font-size: 0.95rem; line-height: 1.7; }
+
+/* Section */
+.section-title { font-family: 'Cormorant Garamond', serif; font-size: 1.6rem; font-weight: 300; color: var(--text-bright); margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+
+/* Table */
+.landscape-table { width: 100%; border-collapse: collapse; margin-bottom: 2.5rem; }
+.landscape-table th { text-align: left; font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border); }
+.landscape-table td { padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border-subtle); font-size: 0.9rem; vertical-align: middle; }
+.landscape-table tr:hover td { background: rgba(138,92,246,0.03); }
+.landscape-table .rank { font-family: 'DM Mono', monospace; color: var(--text-dim); font-size: 0.8rem; width: 2.5rem; }
+.landscape-table .name a { color: var(--text-bright); text-decoration: none; font-weight: 500; }
+.landscape-table .name a:hover { color: var(--accent); }
+.landscape-table .desc { color: var(--text-dim); font-size: 0.82rem; max-width: 280px; }
+.landscape-table .stars { font-family: 'DM Mono', monospace; font-size: 0.85rem; }
+.landscape-table .trend { font-family: 'DM Mono', monospace; font-size: 0.82rem; white-space: nowrap; }
+.trend-up { color: var(--ready); }
+.trend-down { color: #ff6b6b; }
+.trend-flat { color: var(--text-dim); }
+.trend-na { color: var(--text-dim); font-style: italic; }
+
+/* Badges */
+.badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 4px; font-size: 0.72rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.badge-live { background: rgba(52,199,89,0.12); color: var(--ready); border: 1px solid rgba(52,199,89,0.2); }
+.badge-planned { background: rgba(255,149,0,0.1); color: var(--waiting); border: 1px solid rgba(255,149,0,0.15); }
+.badge-none { background: rgba(200,205,216,0.04); color: var(--text-dim); border: 1px solid var(--border-subtle); }
+
+/* Footer */
+footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: var(--text-dim); }
+.footer-right { display: flex; gap: 1.5rem; }
+.footer-right a { color: var(--text-dim); text-decoration: none; }
+.footer-right a:hover { color: var(--text-bright); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  nav { padding: 1rem 1.2rem; }
+  .nav-hide-sm { display: none; }
+  .container { padding: 5.5rem 1rem 2rem; }
+  .landscape-table { font-size: 0.82rem; }
+  .landscape-table .desc { display: none; }
+  footer { flex-direction: column; gap: 1rem; text-align: center; }
+}
+</style>
+</head>
+<body>
+<nav>
+  <a href="../" class="nav-logo"><span class="sparkle"></span> IRRLICHT</a>
+  <ul class="nav-links">
+    <li class="nav-hide-sm"><a href="../#features">Features</a></li>
+    <li class="nav-hide-sm"><a href="./" class="active">Landscape</a></li>
+    <li class="nav-hide-sm"><a href="../docs/">Docs</a></li>
+    <li><a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-nav">GitHub</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+  <div class="page-header">
+    <h1>AI Coding Agent Landscape</h1>
+    <div class="updated">Last updated: {{LAST_UPDATED}}</div>
+    <p class="intro">A living ranking of AI coding agents and agent orchestrators, sorted by a blend of GitHub popularity and recent momentum. Agents that Irrlicht already monitors are marked <span class="badge badge-live">live</span>, upcoming integrations are <span class="badge badge-planned">planned</span>.</p>
+  </div>
+
+  <h2 class="section-title">Coding Agents</h2>
+  {{AGENTS_TABLE}}
+
+  <h2 class="section-title">Agent Orchestrators</h2>
+  {{ORCHESTRATORS_TABLE}}
+</div>
+
+<footer>
+  <div>MIT License &middot; Irrlicht &middot; Follow the right light.</div>
+  <div class="footer-right">
+    <a href="../landscape/">Agent Landscape</a>
+    <a href="../docs/">Docs</a>
+    <a href="https://github.com/ingo-eichhorst/Irrlicht">GitHub</a>
+  </div>
+</footer>
+</body>
+</html>
