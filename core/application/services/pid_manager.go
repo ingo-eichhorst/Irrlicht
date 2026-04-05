@@ -16,6 +16,12 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// PIDDiscoverFunc discovers the PID owning a session. Each adapter provides
+// its own implementation (e.g. CWD-based for Claude Code, transcript-writer
+// for Codex/Pi). The disambiguate callback selects one PID when multiple
+// candidates match.
+type PIDDiscoverFunc func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error)
+
 // PIDManager manages the process lifecycle for sessions. It discovers PIDs,
 // registers them with ProcessWatcher, handles exits, and sweeps dead processes.
 type PIDManager struct {
@@ -25,7 +31,9 @@ type PIDManager struct {
 	broadcaster outbound.PushBroadcaster // optional
 	readyTTL    time.Duration            // max idle time for ready sessions
 
-	discoverPIDByCWD func(string, func([]int) int) (int, error) // CWD-based discovery
+	// pidDiscovers maps adapter name → PID discovery function.
+	// Nil or missing entry means no PID discovery for that adapter.
+	pidDiscovers map[string]PIDDiscoverFunc
 
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
@@ -47,7 +55,7 @@ func NewPIDManager(
 	log outbound.Logger,
 	broadcaster outbound.PushBroadcaster,
 	readyTTL time.Duration,
-	discoverPIDByCWD func(string, func([]int) int) (int, error),
+	pidDiscovers map[string]PIDDiscoverFunc,
 	onSessionDeleted func(sessionID string),
 ) *PIDManager {
 	return &PIDManager{
@@ -56,7 +64,7 @@ func NewPIDManager(
 		log:              log,
 		broadcaster:      broadcaster,
 		readyTTL:         readyTTL,
-		discoverPIDByCWD: discoverPIDByCWD,
+		pidDiscovers:     pidDiscovers,
 		onSessionDeleted: onSessionDeleted,
 		pendingPIDs:      make(map[string]int),
 	}
@@ -210,12 +218,16 @@ func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
 	return claimed
 }
 
-// TryDiscoverPID finds the PID for a session by matching Claude processes
-// by working directory. Prefers unclaimed PIDs but falls back to already-
+// TryDiscoverPID finds the PID for a session using the adapter-specific
+// discovery function. Prefers unclaimed PIDs but falls back to already-
 // claimed PIDs when no unclaimed candidate exists (the /clear scenario where
 // the same process starts a new transcript). Returns true if a PID was found.
-func (pm *PIDManager) TryDiscoverPID(sessionID, cwd string) bool {
-	if pm.pw == nil || pm.discoverPIDByCWD == nil || cwd == "" {
+func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter string) bool {
+	if pm.pw == nil {
+		return false
+	}
+	discoverFn := pm.pidDiscovers[adapter]
+	if discoverFn == nil {
 		return false
 	}
 	// Check if session already has a PID.
@@ -243,9 +255,9 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd string) bool {
 		return bestAny
 	}
 
-	if pid, err := pm.discoverPIDByCWD(cwd, disambiguate); err == nil && pid > 0 {
+	if pid, err := discoverFn(cwd, transcriptPath, disambiguate); err == nil && pid > 0 {
 		pm.log.LogInfo("session-detector", sessionID,
-			fmt.Sprintf("discovered pid %d via cwd %s", pid, cwd))
+			fmt.Sprintf("discovered pid %d for %s session", pid, adapter))
 		pm.HandlePIDAssigned(pid, sessionID)
 		return true
 	}
@@ -253,10 +265,10 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd string) bool {
 }
 
 // DiscoverPIDWithRetry tries to discover a PID immediately, then retries at
-// 500ms, 1s, 2s intervals. This covers the timing where the Claude process
-// hasn't started yet or CWD isn't resolved at session creation time.
-func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, cwd string) {
-	if pm.TryDiscoverPID(sessionID, cwd) {
+// 500ms, 1s, 2s intervals. This covers the timing where the agent process
+// hasn't started yet or the transcript file isn't open yet.
+func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, cwd, transcriptPath, adapter string) {
+	if pm.TryDiscoverPID(sessionID, cwd, transcriptPath, adapter) {
 		return
 	}
 	for _, delay := range []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second} {
@@ -265,7 +277,7 @@ func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, cwd string) {
 		if state == nil || state.PID > 0 {
 			return
 		}
-		if pm.TryDiscoverPID(sessionID, cwd) {
+		if pm.TryDiscoverPID(sessionID, cwd, transcriptPath, adapter) {
 			return
 		}
 	}
@@ -347,13 +359,10 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 				}
 				continue
 			}
-			// Claude Code sessions with PID=0 that are ready: the process
-			// likely exited before CWD discovery succeeded. Clean up quickly
-			// (30s) rather than waiting the full readyTTL. Non-Claude
-			// adapters (Pi, Codex) legitimately have PID=0 — they don't
-			// use PID-based lifecycle.
+			// Sessions with PID=0 that are ready: the process likely exited
+			// before PID discovery succeeded. Clean up quickly (30s) rather
+			// than waiting the full readyTTL.
 			if state.PID == 0 && state.State == session.StateReady &&
-				state.Adapter == "claude-code" &&
 				time.Since(time.Unix(state.UpdatedAt, 0)) > 30*time.Second {
 				pm.log.LogInfo("session-detector", state.SessionID,
 					"ready session with no PID for >30s, deleting")
@@ -410,11 +419,10 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 				}
 			}
 
-		case state.PID == 0 && state.ParentSessionID == "" && state.Adapter == "claude-code" && isStaleTranscript(state.TranscriptPath):
-			// Orphan from exited Claude Code process (PID discovery never
-			// succeeded). Child sessions (ParentSessionID set) are exempt —
-			// they run inside the parent process and never get their own PID.
-			// Non-Claude adapters (Pi, Codex) legitimately have PID=0.
+		case state.PID == 0 && state.ParentSessionID == "" && isStaleTranscript(state.TranscriptPath):
+			// Orphan from exited process (PID discovery never succeeded).
+			// Child sessions (ParentSessionID set) are exempt — they run
+			// inside the parent process and never get their own PID.
 			pm.log.LogInfo("session-detector-seed", state.SessionID,
 				"deleting orphan session")
 			pm.deleteWithChildren(state)

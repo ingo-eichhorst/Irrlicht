@@ -97,7 +97,7 @@ func NewSessionDetector(
 	broadcaster outbound.PushBroadcaster,
 	version string,
 	readyTTL time.Duration,
-	discoverPIDByCWD func(string, func([]int) int) (int, error),
+	pidDiscovers map[string]PIDDiscoverFunc,
 ) *SessionDetector {
 	det := &SessionDetector{
 		watchers:         watchers,
@@ -115,7 +115,7 @@ func NewSessionDetector(
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
-		discoverPIDByCWD, det.removeFromProjectSessions,
+		pidDiscovers, det.removeFromProjectSessions,
 	)
 	return det
 }
@@ -367,20 +367,21 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		}
 	}
 
-	// PID discovery (async). Only for claude-code sessions — the CWD-based
-	// discovery searches for "claude" processes and would assign the wrong
-	// PID to Codex/Pi sessions that share the same directory.
+	// PID discovery (async). Each adapter has its own strategy:
+	// Claude Code uses CWD-based matching, Codex/Pi use transcript file writer.
 	adapter := ev.Adapter
 	if !isNew {
 		adapter = existing.Adapter
 	}
-	if adapter == "claude-code" {
-		cwd := ev.CWD
-		if !isNew {
-			cwd = existing.CWD
-		}
-		go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, cwd)
+	cwd := ev.CWD
+	if !isNew {
+		cwd = existing.CWD
 	}
+	transcriptPath := ev.TranscriptPath
+	if !isNew && transcriptPath == "" {
+		transcriptPath = existing.TranscriptPath
+	}
+	go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, cwd, transcriptPath, adapter)
 }
 
 // onActivity debounces transcript activity events per session. The first event
@@ -461,10 +462,9 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 		}
 	}
 
-	// Retry PID discovery if not yet known (claude-code only).
-	if state.PID == 0 && state.CWD != "" && state.Adapter == "claude-code" {
-		sid, cwd := ev.SessionID, state.CWD
-		go d.pidMgr.TryDiscoverPID(sid, cwd)
+	// Retry PID discovery if not yet known.
+	if state.PID == 0 {
+		go d.pidMgr.TryDiscoverPID(ev.SessionID, state.CWD, ev.TranscriptPath, state.Adapter)
 	}
 
 	// Refresh CWD/branch/project and metrics from transcript.
