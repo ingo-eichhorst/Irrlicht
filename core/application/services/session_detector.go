@@ -440,21 +440,20 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 // set by the tailer when it processes the system local_command event. If found,
 // the old session adopts the new transcript and the new session is not created.
 func (d *SessionDetector) tryMergeCleared(ev agent.Event) bool {
-	d.mu.Lock()
-	var candidates []string
-	for sid, projDir := range d.projectSessions {
-		if projDir == ev.ProjectDir && sid != ev.SessionID {
-			candidates = append(candidates, sid)
-		}
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return false
 	}
-	d.mu.Unlock()
 
-	for _, sid := range candidates {
-		state, _ := d.repo.Load(sid)
-		if state == nil || state.State != session.StateReady {
+	for _, state := range states {
+		if state.SessionID == ev.SessionID || state.State != session.StateReady {
 			continue
 		}
 		if state.Metrics == nil || state.Metrics.LastEventType != "local_command" {
+			continue
+		}
+		// Match by project directory derived from transcript path.
+		if extractProjectDir(state.TranscriptPath) != ev.ProjectDir {
 			continue
 		}
 

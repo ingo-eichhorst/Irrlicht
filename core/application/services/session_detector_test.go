@@ -711,18 +711,8 @@ func TestSessionDetector_ClearMergesViaLocalCommand(t *testing.T) {
 
 	now := time.Now().Unix()
 
-	// First, send an EventNewSession for the old session so it registers
-	// in the projectSessions map (needed by tryMergeCleared).
-	tw.ch <- agent.Event{
-		Type:           agent.EventNewSession,
-		SessionID:      "old-session",
-		ProjectDir:     "-Users-test",
-		TranscriptPath: "/home/.claude/projects/-Users-test/old.jsonl",
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	// Now update the old session to simulate /clear: ready state with
-	// LastEventType="local_command" and a live PID.
+	// Old session with local_command signal (from /clear).
+	// Saved directly to repo — simulates a session loaded from disk.
 	repo.Save(&session.SessionState{
 		SessionID:      "old-session",
 		State:          session.StateReady,
