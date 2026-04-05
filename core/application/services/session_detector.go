@@ -27,6 +27,18 @@ import (
 // orphans left by exited processes and skipped.
 const orphanTranscriptAge = 2 * time.Minute
 
+// activityDebounceWindow is the debounce window for transcript activity
+// events. The first event fires immediately; subsequent events within this
+// window are coalesced into a single processing when the timer expires.
+const activityDebounceWindow = 2 * time.Second
+
+// debounceEntry holds debounce state for a single session.
+type debounceEntry struct {
+	timer   *time.Timer
+	latest  agent.Event
+	pending bool // true when timer is running with a coalesced event
+}
+
 // SessionDetector watches transcript files to detect sessions and orchestrate
 // lifecycle management. It is a thin coordinator that delegates state
 // classification, metadata enrichment, and PID management to focused
@@ -44,6 +56,10 @@ type SessionDetector struct {
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
 	projectSessions map[string]string // sessionID → projectDir
+
+	// debounce coalesces rapid transcript activity events per session.
+	debounceMu sync.Mutex
+	debounce   map[string]*debounceEntry
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -67,6 +83,7 @@ func NewSessionDetector(
 		version:         version,
 		enricher:        NewMetadataEnricher(git, metrics),
 		projectSessions: make(map[string]string),
+		debounce:        make(map[string]*debounceEntry),
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -133,7 +150,9 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 			return ctx.Err()
 		case ev, ok := <-merged:
 			if !ok {
-				return nil
+				// Watcher goroutines exited (usually because ctx was cancelled).
+				// Return the context error if set, nil otherwise.
+				return ctx.Err()
 			}
 			d.handleTranscriptEvent(ev)
 		}
@@ -230,9 +249,47 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 	go d.pidMgr.DiscoverPIDWithRetry(ev.SessionID, ev.TranscriptPath, cwd)
 }
 
-// onActivity handles transcript file writes. It uses content-based detection
-// to determine whether the agent is working or waiting for user input.
+// onActivity debounces transcript activity events per session. The first event
+// fires immediately (so the UI stays responsive), then subsequent events
+// within a 2-second window are coalesced into a single processActivity call.
 func (d *SessionDetector) onActivity(ev agent.Event) {
+	sid := ev.SessionID
+
+	d.debounceMu.Lock()
+	entry, exists := d.debounce[sid]
+	if !exists {
+		// First event for this session — fire immediately and start cooldown.
+		entry = &debounceEntry{}
+		entry.timer = time.AfterFunc(activityDebounceWindow, func() {
+			d.debounceMu.Lock()
+			e := d.debounce[sid]
+			if e != nil && e.pending {
+				coalesced := e.latest
+				delete(d.debounce, sid)
+				d.debounceMu.Unlock()
+				d.processActivity(coalesced)
+			} else {
+				delete(d.debounce, sid)
+				d.debounceMu.Unlock()
+			}
+		})
+		d.debounce[sid] = entry
+		d.debounceMu.Unlock()
+		d.processActivity(ev)
+		return
+	}
+
+	// Subsequent event within the debounce window — coalesce.
+	entry.latest = ev
+	entry.pending = true
+	entry.timer.Reset(activityDebounceWindow)
+	d.debounceMu.Unlock()
+}
+
+// processActivity handles a (possibly debounced) transcript activity event.
+// It uses content-based detection to determine whether the agent is working
+// or waiting for user input.
+func (d *SessionDetector) processActivity(ev agent.Event) {
 	// Load session state.
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
@@ -294,6 +351,14 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 // onRemoved handles transcript file deletion or pre-session expiry.
 func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.log.LogInfo("session-detector", ev.SessionID, "session removed")
+
+	// Cancel any pending debounce timer for this session.
+	d.debounceMu.Lock()
+	if entry, ok := d.debounce[ev.SessionID]; ok {
+		entry.timer.Stop()
+		delete(d.debounce, ev.SessionID)
+	}
+	d.debounceMu.Unlock()
 
 	// Remove from project tracking.
 	d.mu.Lock()

@@ -15,6 +15,12 @@ import (
 // DefaultInterval is the polling interval used when none is specified.
 const DefaultInterval = 1 * time.Second
 
+// BackoffInterval is the slower polling interval used when the PID set is stable.
+const BackoffInterval = 5 * time.Second
+
+// stableThreshold is the number of consecutive stable polls before backing off.
+const stableThreshold = 5
+
 // trackedProc holds the pre-session metadata for a running process.
 type trackedProc struct {
 	sessionID  string
@@ -41,6 +47,10 @@ type Scanner struct {
 	mu      sync.Mutex
 	tracked map[int]trackedProc // pid → pre-session
 	subs    []chan agent.Event
+
+	// Adaptive backoff: back off to BackoffInterval when PID set is stable.
+	lastPIDCount int
+	stablePolls  int
 }
 
 // NewScanner creates a Scanner for the given agent process.
@@ -71,12 +81,14 @@ func (s *Scanner) WithSessionChecker(fn func(projectDir string) bool) *Scanner {
 }
 
 // Watch begins polling. It runs an immediate scan then continues on the
-// configured interval until ctx is cancelled.
+// configured interval until ctx is cancelled. The interval backs off from
+// DefaultInterval to BackoffInterval when the PID set is stable.
 func (s *Scanner) Watch(ctx context.Context) error {
 	s.poll()
 
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
+	currentInterval := s.interval
 
 	for {
 		select {
@@ -84,6 +96,29 @@ func (s *Scanner) Watch(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			s.poll()
+
+			// Adaptive backoff: count how many polls the PID set stayed the same.
+			s.mu.Lock()
+			pidCount := len(s.tracked)
+			s.mu.Unlock()
+
+			if pidCount == s.lastPIDCount {
+				s.stablePolls++
+			} else {
+				s.stablePolls = 0
+				s.lastPIDCount = pidCount
+			}
+
+			var targetInterval time.Duration
+			if s.stablePolls >= stableThreshold {
+				targetInterval = BackoffInterval
+			} else {
+				targetInterval = s.interval
+			}
+			if targetInterval != currentInterval {
+				ticker.Reset(targetInterval)
+				currentInterval = targetInterval
+			}
 		}
 	}
 }

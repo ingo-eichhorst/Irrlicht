@@ -1,15 +1,32 @@
 package metrics
 
 import (
+	"sync"
+
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
+// lockedTailer wraps a TranscriptTailer with its own mutex so that
+// concurrent ComputeMetrics calls for different sessions don't block
+// each other — only calls for the same transcript path serialize.
+type lockedTailer struct {
+	mu sync.Mutex
+	t  *tailer.TranscriptTailer
+}
+
 // Adapter implements ports/outbound.MetricsCollector using the transcript-tailer package.
-type Adapter struct{}
+// It caches TranscriptTailer instances per path so that lastOffset-based
+// incremental reads work across calls, avoiding re-parsing the full 64KB tail.
+type Adapter struct {
+	mu      sync.Mutex // protects the map only
+	tailers map[string]*lockedTailer
+}
 
 // New returns a new metrics Adapter.
-func New() *Adapter { return &Adapter{} }
+func New() *Adapter {
+	return &Adapter{tailers: make(map[string]*lockedTailer)}
+}
 
 // ComputeMetrics analyses the transcript at transcriptPath and returns session metrics.
 // Returns (nil, nil) when the transcript doesn't exist yet or yields no data.
@@ -17,8 +34,19 @@ func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics
 	if transcriptPath == "" {
 		return nil, nil
 	}
-	t := tailer.NewTranscriptTailer(transcriptPath)
-	m, err := t.TailAndProcess()
+	a.mu.Lock()
+	lt, ok := a.tailers[transcriptPath]
+	if !ok {
+		lt = &lockedTailer{t: tailer.NewTranscriptTailer(transcriptPath)}
+		a.tailers[transcriptPath] = lt
+	}
+	a.mu.Unlock()
+
+	// Per-tailer lock: serializes calls for the same path but allows
+	// different sessions to process concurrently.
+	lt.mu.Lock()
+	m, err := lt.t.TailAndProcess()
+	lt.mu.Unlock()
 	if err != nil || m == nil {
 		return nil, nil //nolint:nilerr — absent transcript is not an error
 	}
@@ -35,6 +63,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics
 		LastOpenToolNames:      m.LastOpenToolNames,
 		LastToolResultWasError: m.LastToolResultWasError,
 		EstimatedCostUSD:       m.EstimatedCostUSD,
+		LastCWD:                m.LastCWD,
 	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -113,6 +114,10 @@ func main() {
 		}
 	}
 
+	// Wrap the filesystem repo with a caching layer to avoid redundant
+	// directory scans from the many concurrent ListAll() callers.
+	cachedRepo := filesystem.NewCachedSessionRepository(fsRepo, 3*time.Second)
+
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
 
@@ -149,10 +154,17 @@ func main() {
 	// HTTP mux.
 	mux := http.NewServeMux()
 	// Sessions endpoint registered after orchMonitor is available (see below).
-	mux.HandleFunc("GET /state", handleGetState(fsRepo))
+	mux.HandleFunc("GET /state", handleGetState(cachedRepo))
 
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
+
+	// pprof debug endpoints for runtime profiling (localhost only).
+	mux.HandleFunc("GET /debug/pprof/", localhostOnly(pprof.Index))
+	mux.HandleFunc("GET /debug/pprof/cmdline", localhostOnly(pprof.Cmdline))
+	mux.HandleFunc("GET /debug/pprof/profile", localhostOnly(pprof.Profile))
+	mux.HandleFunc("GET /debug/pprof/symbol", localhostOnly(pprof.Symbol))
+	mux.HandleFunc("GET /debug/pprof/trace", localhostOnly(pprof.Trace))
 
 	// Static web UI: serve the embedded ui/ directory at root.
 	// API routes registered above take precedence over the catch-all "/".
@@ -197,7 +209,7 @@ func main() {
 	}
 
 	// Orchestrator adapters: detect and watch multi-agent orchestration systems.
-	gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, fsRepo)
+	gtAdapter := gastownadapter.NewAdapter(gtResolver.Path(), 5*time.Second, cachedRepo)
 	var orchWatchers []inbound.OrchestratorWatcher
 	if gtAdapter.Detected() {
 		logger.LogInfo("startup", "", fmt.Sprintf("Gas Town detected at %s", gtAdapter.Root()))
@@ -226,7 +238,7 @@ func main() {
 	}
 
 	// Register API endpoints (after orchMonitor is available).
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(fsRepo, orchMonitor))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor))
 	mux.HandleFunc("GET /api/v1/orchestrators/{name}", handleGetOrchestrator(orchMonitor))
 	mux.HandleFunc("GET /api/v1/gastown", handleGetOrchestrator(orchMonitor)) // backward compat
 
@@ -248,7 +260,7 @@ func main() {
 	// recently. Without this, idle sessions allow short-lived helper processes
 	// to create spurious proc-<pid> entries in the UI.
 	procScanner.WithSessionChecker(func(projectDir string) bool {
-		sessions, err := fsRepo.ListAll()
+		sessions, err := cachedRepo.ListAll()
 		if err != nil {
 			return false
 		}
@@ -269,7 +281,7 @@ func main() {
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
 		watchers, pwPort,
-		fsRepo, logger, gitResolver, metricsCollector, push,
+		cachedRepo, logger, gitResolver, metricsCollector, push,
 		Version, cfg.ReadySessionTTL,
 	)
 	detector.WithCWDDiscovery(processlifecycle.DiscoverPIDByCWD)
@@ -429,5 +441,24 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		enc.Encode(resp)
+	}
+}
+
+// localhostOnly wraps an HTTP handler to reject requests not originating from
+// localhost or Unix sockets. Used to protect sensitive endpoints like pprof.
+func localhostOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			// Unix socket connections have no host:port — allow them.
+			h(w, r)
+			return
+		}
+		ip := net.ParseIP(host)
+		if ip != nil && ip.IsLoopback() {
+			h(w, r)
+			return
+		}
+		http.Error(w, "forbidden", http.StatusForbidden)
 	}
 }

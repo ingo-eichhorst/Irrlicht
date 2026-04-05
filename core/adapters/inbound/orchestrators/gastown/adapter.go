@@ -7,6 +7,7 @@ package gastown
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"time"
 
@@ -155,6 +156,7 @@ func (a *Adapter) watchDaemonOnly(ctx context.Context) error {
 }
 
 // runPoller runs the gt CLI poller and converts its output to orchestrator.State.
+// It backs off from the base interval to 3× when the state is stable.
 func (a *Adapter) runPoller(ctx context.Context, p *Poller) error {
 	// Initial poll.
 	a.setState(p.BuildOrchestratorState(ctx))
@@ -162,12 +164,54 @@ func (a *Adapter) runPoller(ctx context.Context, p *Poller) error {
 	ticker := time.NewTicker(a.interval)
 	defer ticker.Stop()
 
+	stablePolls := 0
+	currentInterval := a.interval
+	backoffInterval := a.interval * 3 // e.g. 5s → 15s
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			a.setState(p.BuildOrchestratorState(ctx))
+			newState := p.BuildOrchestratorState(ctx)
+
+			a.mu.RLock()
+			changed := a.state == nil || stateChanged(a.state, newState)
+			a.mu.RUnlock()
+
+			a.setState(newState)
+
+			if changed {
+				stablePolls = 0
+			} else {
+				stablePolls++
+			}
+
+			var targetInterval time.Duration
+			if stablePolls >= 3 {
+				targetInterval = backoffInterval
+			} else {
+				targetInterval = a.interval
+			}
+			if targetInterval != currentInterval {
+				ticker.Reset(targetInterval)
+				currentInterval = targetInterval
+			}
 		}
 	}
+}
+
+// stateChanged returns true if meaningful fields differ between two states.
+// Uses reflect.DeepEqual for correctness — catches content changes within
+// same-length slices (e.g., agent status transitions).
+func stateChanged(prev, curr *orchestrator.State) bool {
+	if prev.Running != curr.Running {
+		return true
+	}
+	if !reflect.DeepEqual(prev.Codebases, curr.Codebases) ||
+		!reflect.DeepEqual(prev.GlobalAgents, curr.GlobalAgents) ||
+		!reflect.DeepEqual(prev.WorkUnits, curr.WorkUnits) {
+		return true
+	}
+	return false
 }

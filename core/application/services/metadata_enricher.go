@@ -50,25 +50,29 @@ func (e *MetadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 }
 
 // RefreshOnActivity refreshes CWD/branch/project from the latest transcript
-// content and recomputes metrics. GetCWDFromTranscript returns the LATEST cwd,
-// which may change mid-session (e.g. worktree switch).
+// content and recomputes metrics. A single transcript read serves both metrics
+// and CWD extraction, eliminating the redundant 32KB read that
+// GetCWDFromTranscript would perform.
 func (e *MetadataEnricher) RefreshOnActivity(state *session.SessionState, transcriptPath string) {
-	if transcriptPath != "" {
-		if cwd := e.git.GetCWDFromTranscript(transcriptPath); cwd != "" && cwd != state.CWD {
-			state.CWD = cwd
-			state.GitBranch = e.git.GetBranch(cwd)
-			// Only update ProjectName when the new CWD is inside a git repo.
-			// For non-git directories, keep the original project name set at
-			// session creation to avoid subdirectory names overriding it.
-			if gitRoot := e.git.GetGitRoot(cwd); gitRoot != "" {
-				state.ProjectName = filepath.Base(gitRoot)
-			}
-		}
+	// Refresh metrics first — the tailer now extracts LastCWD during parsing,
+	// so we get CWD for free without a separate file read.
+	var metricsCWD string
+	if m, _ := e.metrics.ComputeMetrics(transcriptPath); m != nil {
+		metricsCWD = m.LastCWD
+		state.Metrics = session.MergeMetrics(m, state.Metrics)
 	}
 
-	// Refresh metrics (includes LastEventType for content-based detection).
-	if m, _ := e.metrics.ComputeMetrics(transcriptPath); m != nil {
-		state.Metrics = session.MergeMetrics(m, state.Metrics)
+	// Update CWD from metrics (preferred) or fallback to dedicated read.
+	cwd := metricsCWD
+	if cwd == "" && transcriptPath != "" {
+		cwd = e.git.GetCWDFromTranscript(transcriptPath)
+	}
+	if cwd != "" && cwd != state.CWD {
+		state.CWD = cwd
+		state.GitBranch = e.git.GetBranch(cwd)
+		if gitRoot := e.git.GetGitRoot(cwd); gitRoot != "" {
+			state.ProjectName = filepath.Base(gitRoot)
+		}
 	}
 }
 

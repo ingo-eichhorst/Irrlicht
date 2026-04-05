@@ -269,30 +269,59 @@ func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, transcriptPath, cwd string
 // SweepDeadPIDs periodically checks all sessions for dead processes and deletes
 // them. This is a safety net for cases where kqueue misses an exit (PID not
 // registered, daemon restart window, race conditions). Blocks until ctx is
-// cancelled.
+// cancelled. The sweep interval backs off from 5s to 15s when no dead PIDs
+// are found for several consecutive sweeps.
 func (pm *PIDManager) SweepDeadPIDs(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
+	const baseInterval = 5 * time.Second
+	const backoffInterval = 15 * time.Second
+	const cleanThreshold = 3
+
+	ticker := time.NewTicker(baseInterval)
 	defer ticker.Stop()
+
+	cleanSweeps := 0
+	currentInterval := baseInterval
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pm.CheckPIDLiveness()
+			foundDead := pm.CheckPIDLiveness()
+
+			if foundDead {
+				cleanSweeps = 0
+			} else {
+				cleanSweeps++
+			}
+
+			var targetInterval time.Duration
+			if cleanSweeps >= cleanThreshold {
+				targetInterval = backoffInterval
+			} else {
+				targetInterval = baseInterval
+			}
+			if targetInterval != currentInterval {
+				ticker.Reset(targetInterval)
+				currentInterval = targetInterval
+			}
 		}
 	}
 }
 
 // CheckPIDLiveness checks all sessions for dead PIDs and stale state.
-func (pm *PIDManager) CheckPIDLiveness() {
+// Returns true if any dead PID was found and cleaned up.
+func (pm *PIDManager) CheckPIDLiveness() bool {
 	states, err := pm.repo.ListAll()
 	if err != nil {
-		return
+		return false
 	}
+	foundDead := false
 	for _, state := range states {
 		if state.PID > 0 {
 			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
 				pm.HandleProcessExit(state.PID, state.SessionID)
+				foundDead = true
 			}
 		}
 	}
@@ -330,6 +359,7 @@ func (pm *PIDManager) CheckPIDLiveness() {
 			}
 		}
 	}
+	return foundDead
 }
 
 // SeedPIDs cleans up dead sessions and registers alive PIDs with ProcessWatcher

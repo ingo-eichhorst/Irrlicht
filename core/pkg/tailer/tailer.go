@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"irrlicht/core/pkg/capacity"
+	"irrlicht/core/pkg/transcript"
 )
 
 // Helper functions for Go versions that don't have built-in min/max
@@ -203,6 +204,10 @@ type SessionMetrics struct {
 	// LastToolResultWasError is true when the most recently processed
 	// tool_result content block had is_error=true (user rejection / ESC).
 	LastToolResultWasError bool `json:"last_tool_result_was_error"`
+
+	// LastCWD is the most recent working directory seen in the transcript.
+	// Extracted during parsing so callers don't need a separate file read.
+	LastCWD string `json:"last_cwd,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics
@@ -243,6 +248,9 @@ type TranscriptTailer struct {
 
 	// lastToolResultWasError tracks is_error on the most recent tool_result.
 	lastToolResultWasError bool
+
+	// lastCWD tracks the most recent working directory seen in transcript lines.
+	lastCWD string
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path
@@ -391,6 +399,11 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
 		return nil, fmt.Errorf("JSON unmarshal error: %w", err)
+	}
+
+	// Extract CWD using shared logic (Claude Code cwd field, Codex XML tag, Codex workdir).
+	if cwd := transcript.ExtractCWDFromLine(raw); cwd != "" {
+		t.lastCWD = cwd
 	}
 
 	// Extract timestamp
@@ -804,6 +817,7 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.HasOpenToolCall = openCalls > 0
 	t.metrics.LastOpenToolNames = t.lastOpenToolNames
 	t.metrics.LastToolResultWasError = t.lastToolResultWasError
+	t.metrics.LastCWD = t.lastCWD
 
 	// Token breakdown + estimated cost
 	t.metrics.InputTokens = t.inputTokens
