@@ -644,20 +644,20 @@ func TestNeedsUserAttention(t *testing.T) {
 	}
 }
 
-func TestSessionDetector_PIDAssigned_CleansUpOldSession(t *testing.T) {
+func TestSessionDetector_PIDAssigned_MergesIntoOldSession(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
 	now := time.Now().Unix()
 
-	// Old session: real transcript session with known PID (previous /clear victim).
+	// Old session: real transcript session with known PID.
 	repo.states["old-session"] = &session.SessionState{
 		SessionID:      "old-session",
 		State:          session.StateReady,
 		PID:            42,
 		TranscriptPath: "/home/.claude/projects/-Users-test/old-session.jsonl",
-		FirstSeen:      now,
+		FirstSeen:      now - 300, // created 5 minutes ago
 		UpdatedAt:      now,
 	}
 
@@ -675,23 +675,29 @@ func TestSessionDetector_PIDAssigned_CleansUpOldSession(t *testing.T) {
 	// Simulate PID discovery for the new session — same PID as old session.
 	det.HandlePIDAssigned(42, "new-session")
 
-	// Old session should be deleted (replaced by /clear).
-	if state, _ := repo.Load("old-session"); state != nil {
-		t.Errorf("old session should be deleted, but still exists with state %q", state.State)
+	// Old session should survive with the new transcript path.
+	oldState, _ := repo.Load("old-session")
+	if oldState == nil {
+		t.Fatal("old session should survive the merge")
+	}
+	if oldState.TranscriptPath != "/home/.claude/projects/-Users-test/new-session.jsonl" {
+		t.Errorf("old session transcript: got %q, want new-session.jsonl", oldState.TranscriptPath)
+	}
+	if oldState.State != session.StateReady {
+		t.Errorf("old session state: got %q, want ready", oldState.State)
+	}
+	if oldState.FirstSeen != now-300 {
+		t.Errorf("old session FirstSeen should be preserved, got %d", oldState.FirstSeen)
 	}
 
-	// New session should have PID assigned.
-	newState, _ := repo.Load("new-session")
-	if newState == nil {
-		t.Fatal("new session should exist")
-	}
-	if newState.PID != 42 {
-		t.Errorf("new session PID: got %d, want 42", newState.PID)
+	// New session should be deleted (absorbed into old).
+	if state, _ := repo.Load("new-session"); state != nil {
+		t.Errorf("new session should be deleted after merge, but still exists")
 	}
 
-	// ProcessWatcher should track the PID for the new session.
-	if pw.watched[42] != "new-session" {
-		t.Errorf("ProcessWatcher: got %q for PID 42, want new-session", pw.watched[42])
+	// ProcessWatcher should track the PID for the OLD session.
+	if pw.watched[42] != "old-session" {
+		t.Errorf("ProcessWatcher: got %q for PID 42, want old-session", pw.watched[42])
 	}
 }
 
@@ -870,9 +876,9 @@ func TestSessionDetector_CWDFallback_SkipsAlreadyClaimedPID(t *testing.T) {
 	}
 }
 
-func TestSessionDetector_LsofPath_StillCleansUpOldSession(t *testing.T) {
-	// Verify that the /clear cleanup still works when using the authoritative
-	// path (HandlePIDAssigned, which delegates with authoritative=true).
+func TestSessionDetector_LsofPath_MergesOnClear(t *testing.T) {
+	// Verify that authoritative PID assignment (HandlePIDAssigned) merges
+	// the new session into the old one, preserving session identity.
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -885,7 +891,7 @@ func TestSessionDetector_LsofPath_StillCleansUpOldSession(t *testing.T) {
 		State:          session.StateReady,
 		PID:            42,
 		TranscriptPath: "/home/.claude/projects/-Users-test/old.jsonl",
-		FirstSeen:      now,
+		FirstSeen:      now - 600,
 		UpdatedAt:      now,
 	}
 
@@ -900,18 +906,29 @@ func TestSessionDetector_LsofPath_StillCleansUpOldSession(t *testing.T) {
 
 	det := newDetector(tw, pw, repo)
 
-	// Authoritative PID assignment (lsof path) should clean up old session.
+	// Authoritative PID assignment should merge new into old.
 	det.HandlePIDAssigned(42, "new")
 
-	if state, _ := repo.Load("old"); state != nil {
-		t.Error("old session should be deleted by authoritative /clear cleanup")
+	// Old session survives with new transcript.
+	oldState, _ := repo.Load("old")
+	if oldState == nil {
+		t.Fatal("old session should survive the merge")
 	}
-	newState, _ := repo.Load("new")
-	if newState == nil {
-		t.Fatal("new session should exist")
+	if oldState.TranscriptPath != "/home/.claude/projects/-Users-test/new.jsonl" {
+		t.Errorf("old session transcript: got %q, want new.jsonl", oldState.TranscriptPath)
 	}
-	if newState.PID != 42 {
-		t.Errorf("new session PID: got %d, want 42", newState.PID)
+	if oldState.FirstSeen != now-600 {
+		t.Error("old session FirstSeen should be preserved")
+	}
+
+	// New session should be deleted (absorbed).
+	if state, _ := repo.Load("new"); state != nil {
+		t.Error("new session should be deleted after merge")
+	}
+
+	// ProcessWatcher should track the PID for the OLD session.
+	if pw.watched[42] != "old" {
+		t.Errorf("ProcessWatcher: got %q for PID 42, want old", pw.watched[42])
 	}
 }
 

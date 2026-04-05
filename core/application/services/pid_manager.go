@@ -117,8 +117,9 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 }
 
 // handlePIDAssignedInternal is the core of HandlePIDAssigned. When authoritative
-// is true (lsof-based discovery), old sessions sharing the same PID are cleaned
-// up (/clear scenario). When false (CWD-based fallback), cleanup is skipped
+// is true (lsof-based discovery), old sessions sharing the same PID trigger a
+// merge (/clear scenario): the old session adopts the new transcript and the
+// new session is deleted. When false (CWD-based fallback), merge is skipped
 // because CWD discovery is ambiguous for multiple instances in the same repo.
 func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, authoritative bool) {
 	if pid <= 0 {
@@ -142,15 +143,16 @@ func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, autho
 		}
 	}
 
-	// Clean up old sessions that had the same PID (e.g. /clear).
-	// Only do this for authoritative (lsof) discoveries — CWD-based
-	// fallback is unreliable when multiple instances share a directory
-	// and could incorrectly delete a still-active session.
+	// Merge /clear sessions: when the same PID appears on a new transcript,
+	// the old session adopts the new transcript and the new session is deleted.
+	// This preserves session identity (SessionID, FirstSeen, project metadata).
+	// Only do this for authoritative (lsof) discoveries — CWD-based fallback
+	// is unreliable and could incorrectly merge unrelated sessions.
 	if !authoritative {
 		return
 	}
 
-	// Subagent sessions share the parent's PID, so skip cleanup when
+	// Subagent sessions share the parent's PID, so skip merge when
 	// either side is a subagent.
 	if state.ParentSessionID != "" {
 		return
@@ -169,15 +171,33 @@ func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, autho
 			continue
 		}
 
+		// Merge: old session adopts the new transcript, new session is deleted.
 		pm.log.LogInfo("session-detector", old.SessionID,
-			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
+			fmt.Sprintf("merging new session %s into existing (same pid %d, /clear)", sessionID, pid))
 
-		if pm.onSessionDeleted != nil {
-			pm.onSessionDeleted(old.SessionID)
+		now := time.Now().Unix()
+		old.TranscriptPath = state.TranscriptPath
+		old.State = session.StateReady
+		old.UpdatedAt = now
+		old.Metrics = nil
+		old.LastTranscriptSize = 0
+		old.WaitingStartTime = nil
+		old.LastEvent = "clear_merge"
+		_ = pm.repo.Save(old)
+		pm.broadcast(outbound.PushTypeUpdated, old)
+
+		// Re-register ProcessWatcher for the old session's ID.
+		if pm.pw != nil {
+			_ = pm.pw.Watch(pid, old.SessionID)
 		}
 
-		_ = pm.repo.Delete(old.SessionID)
-		pm.broadcast(outbound.PushTypeDeleted, old)
+		// Delete the new session — it has been absorbed.
+		if pm.onSessionDeleted != nil {
+			pm.onSessionDeleted(sessionID)
+		}
+		_ = pm.repo.Delete(sessionID)
+		pm.broadcast(outbound.PushTypeDeleted, state)
+		return // only one merge per PID
 	}
 }
 
