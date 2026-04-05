@@ -7,17 +7,25 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
+// lockedTailer wraps a TranscriptTailer with its own mutex so that
+// concurrent ComputeMetrics calls for different sessions don't block
+// each other — only calls for the same transcript path serialize.
+type lockedTailer struct {
+	mu sync.Mutex
+	t  *tailer.TranscriptTailer
+}
+
 // Adapter implements ports/outbound.MetricsCollector using the transcript-tailer package.
 // It caches TranscriptTailer instances per path so that lastOffset-based
 // incremental reads work across calls, avoiding re-parsing the full 64KB tail.
 type Adapter struct {
-	mu      sync.Mutex
-	tailers map[string]*tailer.TranscriptTailer
+	mu      sync.Mutex // protects the map only
+	tailers map[string]*lockedTailer
 }
 
 // New returns a new metrics Adapter.
 func New() *Adapter {
-	return &Adapter{tailers: make(map[string]*tailer.TranscriptTailer)}
+	return &Adapter{tailers: make(map[string]*lockedTailer)}
 }
 
 // RemoveTailer removes the cached tailer for a transcript path.
@@ -34,16 +42,20 @@ func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics
 	if transcriptPath == "" {
 		return nil, nil
 	}
+	// Get or create the per-path tailer (map lock held briefly).
 	a.mu.Lock()
-	t, ok := a.tailers[transcriptPath]
+	lt, ok := a.tailers[transcriptPath]
 	if !ok {
-		t = tailer.NewTranscriptTailer(transcriptPath)
-		a.tailers[transcriptPath] = t
+		lt = &lockedTailer{t: tailer.NewTranscriptTailer(transcriptPath)}
+		a.tailers[transcriptPath] = lt
 	}
-	// Hold the lock through TailAndProcess to prevent concurrent calls on
-	// the same tailer (TranscriptTailer is not thread-safe).
-	m, err := t.TailAndProcess()
 	a.mu.Unlock()
+
+	// Per-tailer lock: serializes calls for the same path but allows
+	// different sessions to process concurrently.
+	lt.mu.Lock()
+	m, err := lt.t.TailAndProcess()
+	lt.mu.Unlock()
 	if err != nil || m == nil {
 		return nil, nil //nolint:nilerr — absent transcript is not an error
 	}

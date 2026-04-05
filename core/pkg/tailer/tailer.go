@@ -567,8 +567,6 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 	}, nil
 }
 
-// extractContentChars returns the total character count of text content in
-// a transcript event, checking common content locations across formats.
 // cwdTagRe matches <cwd>/path</cwd> in Codex environment_context blocks.
 var cwdTagRe = regexp.MustCompile(`<cwd>([^<]+)</cwd>`)
 
@@ -595,6 +593,8 @@ func extractCWDFromContentBlocks(raw map[string]interface{}) string {
 	return ""
 }
 
+// extractContentChars returns the total character count of text content in
+// a transcript event, checking common content locations across formats.
 func extractContentChars(raw map[string]interface{}) int64 {
 	var chars int64
 	// Top-level content array (Codex newer format)

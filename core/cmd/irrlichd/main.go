@@ -158,12 +158,12 @@ func main() {
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 
-	// pprof debug endpoints for runtime profiling.
-	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
-	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+	// pprof debug endpoints for runtime profiling (localhost only).
+	mux.HandleFunc("GET /debug/pprof/", localhostOnly(pprof.Index))
+	mux.HandleFunc("GET /debug/pprof/cmdline", localhostOnly(pprof.Cmdline))
+	mux.HandleFunc("GET /debug/pprof/profile", localhostOnly(pprof.Profile))
+	mux.HandleFunc("GET /debug/pprof/symbol", localhostOnly(pprof.Symbol))
+	mux.HandleFunc("GET /debug/pprof/trace", localhostOnly(pprof.Trace))
 
 	// Static web UI: serve the embedded ui/ directory at root.
 	// API routes registered above take precedence over the catch-all "/".
@@ -439,5 +439,24 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		enc.Encode(resp)
+	}
+}
+
+// localhostOnly wraps an HTTP handler to reject requests not originating from
+// localhost or Unix sockets. Used to protect sensitive endpoints like pprof.
+func localhostOnly(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			// Unix socket connections have no host:port — allow them.
+			h(w, r)
+			return
+		}
+		ip := net.ParseIP(host)
+		if ip != nil && ip.IsLoopback() {
+			h(w, r)
+			return
+		}
+		http.Error(w, "forbidden", http.StatusForbidden)
 	}
 }
