@@ -656,8 +656,9 @@ func TestSessionDetector_PIDAssigned_MergesIntoOldSession(t *testing.T) {
 		SessionID:      "old-session",
 		State:          session.StateReady,
 		PID:            42,
+		CWD:            "/Users/test/project",
 		TranscriptPath: "/home/.claude/projects/-Users-test/old-session.jsonl",
-		FirstSeen:      now - 300, // created 5 minutes ago
+		FirstSeen:      now - 300,
 		UpdatedAt:      now,
 	}
 
@@ -665,6 +666,7 @@ func TestSessionDetector_PIDAssigned_MergesIntoOldSession(t *testing.T) {
 	repo.states["new-session"] = &session.SessionState{
 		SessionID:      "new-session",
 		State:          session.StateReady,
+		CWD:            "/Users/test/project",
 		TranscriptPath: "/home/.claude/projects/-Users-test/new-session.jsonl",
 		FirstSeen:      now,
 		UpdatedAt:      now,
@@ -698,6 +700,95 @@ func TestSessionDetector_PIDAssigned_MergesIntoOldSession(t *testing.T) {
 	// ProcessWatcher should track the PID for the OLD session.
 	if pw.watched[42] != "old-session" {
 		t.Errorf("ProcessWatcher: got %q for PID 42, want old-session", pw.watched[42])
+	}
+}
+
+func TestSessionDetector_PIDAssigned_NoMergeAcrossProjects(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	now := time.Now().Unix()
+
+	// Session in project A with PID 42.
+	repo.states["proj-a"] = &session.SessionState{
+		SessionID:      "proj-a",
+		State:          session.StateReady,
+		PID:            42,
+		CWD:            "/Users/test/project-a",
+		TranscriptPath: "/home/.claude/projects/-Users-test-project-a/proj-a.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	// Session in project B, PID not yet discovered.
+	repo.states["proj-b"] = &session.SessionState{
+		SessionID:      "proj-b",
+		State:          session.StateReady,
+		CWD:            "/Users/test/project-b",
+		TranscriptPath: "/home/.claude/projects/-Users-test-project-b/proj-b.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	// Assign same PID to proj-b (authoritative). Different CWD means no merge.
+	det.HandlePIDAssigned(42, "proj-b")
+
+	// Both sessions should exist (no merge across projects).
+	if s, _ := repo.Load("proj-a"); s == nil {
+		t.Error("proj-a should still exist")
+	}
+	if s, _ := repo.Load("proj-b"); s == nil {
+		t.Error("proj-b should still exist")
+	}
+}
+
+func TestSessionDetector_TranscriptAlreadyOwned(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Inject a session that adopted a transcript via merge (after Run starts
+	// to avoid seedFromDisk deleting it for a dead PID).
+	repo.Save(&session.SessionState{
+		SessionID:      "merged",
+		State:          session.StateReady,
+		PID:            os.Getpid(),
+		TranscriptPath: "/home/.claude/projects/-Users-test/new.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	})
+
+	// Fsnotify fires EventNewSession for the same transcript (different session ID).
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "new-duplicate",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/new.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	// The duplicate should NOT be created.
+	if s, _ := repo.Load("new-duplicate"); s != nil {
+		t.Error("duplicate session should not be created when transcript is already owned")
+	}
+
+	// The merged session should still exist unchanged.
+	if s, _ := repo.Load("merged"); s == nil {
+		t.Fatal("merged session should still exist")
 	}
 }
 
@@ -890,6 +981,7 @@ func TestSessionDetector_LsofPath_MergesOnClear(t *testing.T) {
 		SessionID:      "old",
 		State:          session.StateReady,
 		PID:            42,
+		CWD:            "/Users/test/project",
 		TranscriptPath: "/home/.claude/projects/-Users-test/old.jsonl",
 		FirstSeen:      now - 600,
 		UpdatedAt:      now,
@@ -899,6 +991,7 @@ func TestSessionDetector_LsofPath_MergesOnClear(t *testing.T) {
 	repo.states["new"] = &session.SessionState{
 		SessionID:      "new",
 		State:          session.StateReady,
+		CWD:            "/Users/test/project",
 		TranscriptPath: "/home/.claude/projects/-Users-test/new.jsonl",
 		FirstSeen:      now,
 		UpdatedAt:      now,

@@ -176,6 +176,15 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			return
 		}
 
+		// Skip if another session already owns this transcript path
+		// (happens after a /clear merge — the old session adopted this
+		// transcript, but fsnotify still fires for the file).
+		if ev.TranscriptPath != "" && d.transcriptAlreadyOwned(ev.TranscriptPath, ev.SessionID) {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"skipping — transcript already owned by merged session")
+			return
+		}
+
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
 		state := &session.SessionState{
@@ -415,6 +424,22 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 	if d.broadcaster != nil {
 		d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
 	}
+}
+
+// transcriptAlreadyOwned returns true if another session already has the given
+// transcript path. This prevents re-creating sessions after a /clear merge
+// where the old session adopted the transcript but fsnotify still fires.
+func (d *SessionDetector) transcriptAlreadyOwned(transcriptPath, excludeSessionID string) bool {
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return false
+	}
+	for _, s := range states {
+		if s.SessionID != excludeSessionID && s.TranscriptPath == transcriptPath {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanupPreSessionsForProject removes all synthetic pre-sessions (proc-*)

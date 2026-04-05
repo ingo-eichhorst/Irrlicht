@@ -170,6 +170,11 @@ func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, autho
 		if old.ParentSessionID != "" || strings.HasPrefix(old.SessionID, "proc-") {
 			continue
 		}
+		// Only merge sessions in the same working directory — prevents
+		// cross-project merges when two sessions share a PID coincidentally.
+		if state.CWD == "" || old.CWD == "" || state.CWD != old.CWD {
+			continue
+		}
 
 		// Merge: old session adopts the new transcript, new session is deleted.
 		pm.log.LogInfo("session-detector", old.SessionID,
@@ -218,10 +223,13 @@ func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
 	return claimed
 }
 
-// findReadyClaimedPID checks if any claimed PID belongs to a session in ready
-// state. This detects /clear: the old session is idle (ready) and the same
-// process created a new transcript. Returns the PID if found, 0 otherwise.
-func (pm *PIDManager) findReadyClaimedPID(excludeSessionID string, claimed map[int]bool) int {
+// findReadyClaimedPID checks if any claimed PID belongs to a ready session
+// with the same CWD. This detects /clear: the old session is idle (ready),
+// same process, same working directory. Returns the PID if found, 0 otherwise.
+func (pm *PIDManager) findReadyClaimedPID(excludeSessionID, cwd string, claimed map[int]bool) int {
+	if cwd == "" {
+		return 0
+	}
 	states, err := pm.repo.ListAll()
 	if err != nil {
 		return 0
@@ -233,7 +241,7 @@ func (pm *PIDManager) findReadyClaimedPID(excludeSessionID string, claimed map[i
 		if s.ParentSessionID != "" || strings.HasPrefix(s.SessionID, "proc-") {
 			continue
 		}
-		if claimed[s.PID] && s.State == session.StateReady {
+		if claimed[s.PID] && s.State == session.StateReady && s.CWD == cwd {
 			return s.PID
 		}
 	}
@@ -287,9 +295,9 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool
 		}
 
 		// All CWD-discovered PIDs were claimed. Check if any belongs to a
-		// ready session — that indicates /clear: same process, new transcript.
-		// Merge the new session into the old one (authoritative).
-		if pid := pm.findReadyClaimedPID(sessionID, claimed); pid > 0 {
+		// ready session with the same CWD — that indicates /clear: same
+		// process, new transcript, same project.
+		if pid := pm.findReadyClaimedPID(sessionID, cwd, claimed); pid > 0 {
 			pm.log.LogInfo("session-detector", sessionID,
 				fmt.Sprintf("claimed pid %d belongs to ready session — merging (/clear)", pid))
 			pm.handlePIDAssignedInternal(pid, sessionID, true)
