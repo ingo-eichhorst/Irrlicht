@@ -49,6 +49,11 @@ type SessionMetrics struct {
 	// LastCWD is the most recent working directory extracted from the
 	// transcript during metrics parsing. Used to avoid a separate file read.
 	LastCWD string `json:"-"` // transient — not persisted in session JSON
+
+	// LastAssistantText is the text content of the most recent assistant
+	// message, truncated to ~200 characters. Used to surface the question
+	// or request when the session is in the waiting state.
+	LastAssistantText string `json:"last_assistant_text,omitempty"`
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one
@@ -72,6 +77,17 @@ func (m *SessionMetrics) NeedsUserAttention() bool {
 // trigger the "waiting" state.
 func isUserBlockingTool(name string) bool {
 	return name == "AskUserQuestion" || name == "ExitPlanMode"
+}
+
+// IsWaitingForUserInput returns true when the agent finished its turn but the
+// last assistant message ends with a question mark — indicating the agent is
+// waiting for user input even though no user-blocking tool is open.
+func (m *SessionMetrics) IsWaitingForUserInput() bool {
+	if m == nil || m.LastAssistantText == "" {
+		return false
+	}
+	// LastAssistantText is already trimmed by the tailer.
+	return m.LastAssistantText[len(m.LastAssistantText)-1] == '?'
 }
 
 // IsAgentDone returns true when the agent finished its turn. The primary
@@ -191,6 +207,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		LastOpenToolNames:      newM.LastOpenToolNames,
 		LastToolResultWasError: newM.LastToolResultWasError,
 		EstimatedCostUSD:       newM.EstimatedCostUSD,
+		LastAssistantText:      newM.LastAssistantText,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow

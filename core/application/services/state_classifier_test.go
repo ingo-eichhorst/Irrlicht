@@ -59,9 +59,54 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWaiting,
 		},
 
-		// Rule 2: IsAgentDone → ready.
+		// Rule 2a: Turn ended with question → waiting.
 		{
-			name:    "working → ready (turn_done)",
+			name:    "working → waiting (turn_done + question)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "turn_done",
+				HasOpenToolCall:   false,
+				LastAssistantText: "Should I proceed with the migration?",
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			name:    "ready → waiting (turn_done + question)",
+			current: session.StateReady,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "turn_done",
+				HasOpenToolCall:   false,
+				LastAssistantText: "Do you want me to fix this?",
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			name:    "waiting stays waiting (turn_done + question, already waiting)",
+			current: session.StateWaiting,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "turn_done",
+				HasOpenToolCall:   false,
+				LastAssistantText: "Which approach do you prefer?",
+			},
+			wantState: session.StateWaiting,
+		},
+
+		// Rule 2b: IsAgentDone without question → ready.
+		{
+			name:    "working → ready (turn_done, no question)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "turn_done",
+				HasOpenToolCall:   false,
+				LastAssistantText: "Done. The tests pass.",
+			},
+			wantState:  session.StateReady,
+			wantReason: true,
+		},
+		{
+			name:    "working → ready (turn_done, empty text)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
 				LastEventType:   "turn_done",

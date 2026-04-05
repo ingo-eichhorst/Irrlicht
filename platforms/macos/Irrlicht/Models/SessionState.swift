@@ -10,6 +10,7 @@ struct SessionMetrics: Codable {
     let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
+    let lastAssistantText: String?  // last assistant message text, truncated (~200 chars)
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -18,6 +19,7 @@ struct SessionMetrics: Codable {
         case contextUtilization = "context_utilization_percentage"
         case pressureLevel = "pressure_level"
         case estimatedCostUSD = "estimated_cost_usd"
+        case lastAssistantText = "last_assistant_text"
     }
     
     // Computed properties for UI display

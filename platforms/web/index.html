@@ -412,6 +412,17 @@
       flex-shrink: 0;
     }
 
+    .row-question {
+      font-size: 9px;
+      color: var(--waiting);
+      opacity: 0.85;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 300px;
+      padding: 0 4px;
+    }
+
     /* Pressure alert row */
     .pressure-alert-row {
       padding: 2px 10px 2px 30px;
@@ -977,6 +988,7 @@
         '<span class="row-num"></span>' +
         '<span class="row-sub-badge" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
+        '<span class="row-question" style="display:none"></span>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span></span>' +
         '<span class="row-ctx-pct"></span>' +
         '<span class="row-cost"></span>' +
@@ -1022,6 +1034,20 @@
       // Branch
       const branchEl = el.querySelector('.row-branch');
       if (branchEl.textContent !== branch) branchEl.textContent = branch || '\u2014';
+
+      // Waiting question — show last assistant text when waiting
+      const questionEl = el.querySelector('.row-question');
+      const questionText = (state === 'waiting' && metrics.last_assistant_text) ?
+        (metrics.last_assistant_text.length > 100 ? metrics.last_assistant_text.slice(0, 100) + '\u2026' : metrics.last_assistant_text) : '';
+      if (questionText) {
+        questionEl.style.display = '';
+        if (questionEl.textContent !== questionText) {
+          questionEl.textContent = questionText;
+          questionEl.title = metrics.last_assistant_text;
+        }
+      } else {
+        questionEl.style.display = 'none';
+      }
 
       // Context bar
       const fill = el.querySelector('.row-ctx-fill');
