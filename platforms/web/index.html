@@ -537,6 +537,41 @@
       flex-shrink: 0;
     }
 
+    /* Role badge on session rows */
+    .row-role-badge {
+      font-size: 10px; padding: 0 5px; height: 14px; border-radius: 3px;
+      background: rgba(139, 92, 246, 0.12); color: var(--working);
+      font-family: var(--font-mono); font-weight: 600;
+      display: flex; align-items: center; white-space: nowrap; flex-shrink: 0;
+    }
+    /* Active tool indicator on session rows */
+    .row-tool {
+      font-family: var(--font-mono); font-size: 9px; color: var(--muted);
+      flex-shrink: 0; white-space: nowrap; max-width: 80px;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .row-tool.tool-user { color: var(--waiting); }
+    /* Gas Town hierarchy */
+    .gt-agents-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 12px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;
+    }
+    .gt-agent-chip {
+      display: flex; align-items: center; gap: 5px;
+      font-family: var(--font-mono); font-size: 10px; color: var(--text);
+      padding: 2px 7px; border-radius: 3px;
+      background: var(--surface-hover); border: 1px solid var(--border-subtle); cursor: default;
+    }
+    .gt-chip-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .gt-chip-id { font-size: 9px; color: var(--muted); }
+    .gt-rig-block { padding: 5px 12px; border-bottom: 1px solid var(--border-subtle); }
+    .gt-rig-block:last-of-type { border-bottom: none; }
+    .gt-rig-name {
+      font-family: var(--font-mono); font-size: 9px; font-weight: 700;
+      color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px;
+    }
+    .gt-workers { display: flex; flex-wrap: wrap; gap: 4px; }
+
     /* Responsive */
     @media (max-width: 768px) {
       header { padding: 10px 14px; }
@@ -592,7 +627,8 @@
   <script>
     // --- State ---
     let dashboardGroups = [];
-    let orchestrator = null;
+    let orchestrator = null;   // OrchestratorSummary from initial load
+    let orchFull = null;       // Full orchestrator.State (global_agents, codebases) from WS / secondary fetch
     let sessionIndex = new Map();
     let collapsedGroups = new Set();
 
@@ -752,7 +788,20 @@
     }
 
     // --- Orchestrator rendering (innerHTML is fine — updates rarely) ---
-    const roleEmoji = { mayor: '\u{1F3A9}', deacon: '\u{1F4CB}', witness: '\u{1F989}', refinery: '\u{1F3ED}', polecat: '\u{1F477}', crew: '\u{1F9D1}\u200D\u{1F4BB}' };
+    // toolLabel maps raw tool names to short display strings for session rows.
+    const toolLabel = {
+      Bash: 'Bash', Read: 'Read', Write: 'Write', Edit: 'Edit',
+      Glob: 'Glob', Grep: 'Grep', Agent: 'Agent',
+      AskUserQuestion: 'Ask User', ExitPlanMode: 'Plan Mode',
+      WebSearch: 'Search', WebFetch: 'Fetch', TodoWrite: 'Todo',
+    };
+
+    function stateColor(s) {
+      if (s === 'working') return 'var(--working)';
+      if (s === 'waiting') return 'var(--waiting)';
+      if (s === 'ready') return 'var(--ready)';
+      return 'var(--muted)';
+    }
 
     function dotBar(total, done) {
       const maxDots = 7;
@@ -764,13 +813,10 @@
 
     function renderOrchestrator() {
       const container = document.getElementById('gt-container');
-      if (!orchestrator || !orchestrator.running) {
-        container.style.display = 'none';
-        return;
-      }
+      const hasOrch = orchestrator && orchestrator.running;
+      const hasFull = orchFull && orchFull.running;
+      if (!hasOrch && !hasFull) { container.style.display = 'none'; return; }
       container.style.display = 'block';
-      const workUnits = orchestrator.work_units || [];
-      const convoys = workUnits.filter(w => w.type === 'convoy');
 
       let html = '<div class="gt-section">';
       html += '<div class="gt-header">';
@@ -778,6 +824,44 @@
       html += '<div class="gt-status-label"><div class="gt-status-dot" style="background:var(--ready)"></div>running</div>';
       html += '</div>';
 
+      // Global agents — icon/description come from the API, no hardcoding here.
+      if (hasFull && orchFull.global_agents && orchFull.global_agents.length) {
+        html += '<div class="gt-agents-row">';
+        for (const ga of orchFull.global_agents) {
+          const sid = ga.session_id ? shortID(ga.session_id) : 'idle';
+          html += '<div class="gt-agent-chip" title="' + esc(ga.description || ga.role) + '">';
+          html += '<span>' + (ga.icon ? esc(ga.icon) + ' ' : '') + esc(ga.role) + '</span>';
+          html += '<span class="gt-chip-dot" style="background:' + stateColor(ga.state) + '"></span>';
+          html += '<span class="gt-chip-id">' + esc(sid) + '</span>';
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+
+      // Rig/codebase blocks — flatten worktrees for readability.
+      if (hasFull && orchFull.codebases && orchFull.codebases.length) {
+        for (const cb of orchFull.codebases) {
+          const workers = (cb.worktrees || []).flatMap(wt => wt.workers || []);
+          if (!workers.length) continue;
+          html += '<div class="gt-rig-block">';
+          html += '<div class="gt-rig-name">rig: ' + esc(cb.name) + '</div>';
+          html += '<div class="gt-workers">';
+          for (const w of workers) {
+            html += '<div class="gt-agent-chip" title="' + esc(w.description || w.role) + '">';
+            html += '<span>' + (w.icon ? esc(w.icon) + ' ' : '') + esc(w.role);
+            if (w.name) html += ' <span style="color:var(--text)">' + esc(w.name) + '</span>';
+            html += '</span>';
+            html += '<span class="gt-chip-dot" style="background:' + stateColor(w.state) + '"></span>';
+            if (w.id) html += '<span class="gt-chip-id">' + esc(w.id.slice(0, 8)) + '</span>';
+            html += '</div>';
+          }
+          html += '</div></div>';
+        }
+      }
+
+      // Convoys — use work_units from whichever source is available.
+      const workUnits = ((orchFull || orchestrator) || {}).work_units || [];
+      const convoys = workUnits.filter(w => w.type === 'convoy');
       if (convoys.length > 0) {
         html += '<div class="gt-body">';
         html += '<div class="gt-convoy-header">\u{1F69A} Convoys</div>';
@@ -889,12 +973,14 @@
       // Build inner structure
       el.innerHTML =
         '<span class="row-state-icon"></span>' +
+        '<span class="row-role-badge" style="display:none"></span>' +
         '<span class="row-num"></span>' +
         '<span class="row-sub-badge" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span></span>' +
         '<span class="row-ctx-pct"></span>' +
         '<span class="row-cost"></span>' +
+        '<span class="row-tool" style="display:none"></span>' +
         '<span class="row-spacer"></span>' +
         '<span class="row-model"></span>' +
         '<span class="row-elapsed"></span>' +
@@ -968,6 +1054,30 @@
       const idEl = el.querySelector('.row-id');
       const sid = shortID(agent.session_id);
       if (idEl.textContent !== sid) idEl.textContent = sid;
+
+      // Role badge — icon and description come from the API (agent.icon, agent.description).
+      const roleBadge = el.querySelector('.row-role-badge');
+      const role = agent.role || '';
+      if (role) {
+        roleBadge.style.display = '';
+        roleBadge.textContent = (agent.icon ? agent.icon + ' ' : '') + role;
+        roleBadge.title = agent.description || role;
+      } else {
+        roleBadge.style.display = 'none';
+      }
+
+      // Active tool label — shown only when agent is working and inside a tool call.
+      const toolEl = el.querySelector('.row-tool');
+      const tools = metrics.last_open_tool_names || [];
+      if (metrics.has_open_tool_call && tools[0] && state === 'working') {
+        const raw = tools[0];
+        const isUser = raw === 'AskUserQuestion' || raw === 'ExitPlanMode';
+        toolEl.style.display = '';
+        toolEl.textContent = toolLabel[raw] || raw.slice(0, 12);
+        toolEl.className = 'row-tool' + (isUser ? ' tool-user' : '');
+      } else {
+        toolEl.style.display = 'none';
+      }
     }
 
     // --- Render ---
@@ -1205,6 +1315,12 @@
       render();
       timelineTick(); // First tick immediately
     });
+    // Secondary fetch for full orchestrator hierarchy (global_agents, codebases).
+    // The initial /api/v1/sessions response only carries an OrchestratorSummary;
+    // the full state is needed to render the Gas Town hierarchy view.
+    fetch('/api/v1/orchestrators/gastown').then(r => r.json()).catch(() => ({})).then(data => {
+      if (data && data.running) { orchFull = data; render(); }
+    });
 
     // --- WebSocket ---
     let ws = null;
@@ -1232,7 +1348,9 @@
         try { msg = JSON.parse(evt.data); } catch(e) { return; }
         if (!msg) return;
         if (msg.type === 'orchestrator_state' && msg.orchestrator) {
-          orchestrator = msg.orchestrator.running ? msg.orchestrator : null;
+          const orch = msg.orchestrator;
+          orchestrator = orch.running ? orch : null;
+          orchFull = orch.running ? orch : null;
           render();
           return;
         }

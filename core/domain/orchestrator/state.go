@@ -25,9 +25,11 @@ type State struct {
 
 // GlobalAgent represents an orchestrator-level agent not scoped to a codebase.
 type GlobalAgent struct {
-	Role      string `json:"role"`
-	SessionID string `json:"session_id,omitempty"`
-	State     string `json:"state"`
+	Role        string `json:"role"`
+	Icon        string `json:"icon,omitempty"`        // Display icon (e.g. "🎩"), set by each adapter.
+	Description string `json:"description,omitempty"` // Human-readable role description, set by each adapter.
+	SessionID   string `json:"session_id,omitempty"`
+	State       string `json:"state"`
 }
 
 // Codebase represents a repository managed by the orchestrator.
@@ -48,11 +50,13 @@ type Worktree struct {
 
 // Worker represents a coding agent operating within a worktree.
 type Worker struct {
-	Role      string `json:"role"`
-	Name      string `json:"name,omitempty"`
-	ID        string `json:"id,omitempty"` // bead ID, task ID, etc.
-	SessionID string `json:"session_id,omitempty"`
-	State     string `json:"state"`
+	Role        string `json:"role"`
+	Icon        string `json:"icon,omitempty"`        // Display icon, set by each adapter.
+	Description string `json:"description,omitempty"` // Human-readable role description, set by each adapter.
+	Name        string `json:"name,omitempty"`
+	ID          string `json:"id,omitempty"` // bead ID, task ID, etc.
+	SessionID   string `json:"session_id,omitempty"`
+	State       string `json:"state"`
 }
 
 // WorkUnit represents a trackable unit of work with progress.
