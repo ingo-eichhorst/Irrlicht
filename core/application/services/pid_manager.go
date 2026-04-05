@@ -218,6 +218,28 @@ func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
 	return claimed
 }
 
+// findReadyClaimedPID checks if any claimed PID belongs to a session in ready
+// state. This detects /clear: the old session is idle (ready) and the same
+// process created a new transcript. Returns the PID if found, 0 otherwise.
+func (pm *PIDManager) findReadyClaimedPID(excludeSessionID string, claimed map[int]bool) int {
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return 0
+	}
+	for _, s := range states {
+		if s.SessionID == excludeSessionID || s.PID <= 0 {
+			continue
+		}
+		if s.ParentSessionID != "" || strings.HasPrefix(s.SessionID, "proc-") {
+			continue
+		}
+		if claimed[s.PID] && s.State == session.StateReady {
+			return s.PID
+		}
+	}
+	return 0
+}
+
 // TryDiscoverPID attempts lsof-on-transcript (primary), then CWD-based
 // discovery (fallback). Returns true if a PID was found and assigned.
 func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool {
@@ -261,6 +283,16 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool
 			pm.log.LogInfo("session-detector", sessionID,
 				fmt.Sprintf("cwd fallback discovered pid %d", pid))
 			pm.handlePIDAssignedInternal(pid, sessionID, false)
+			return true
+		}
+
+		// All CWD-discovered PIDs were claimed. Check if any belongs to a
+		// ready session — that indicates /clear: same process, new transcript.
+		// Merge the new session into the old one (authoritative).
+		if pid := pm.findReadyClaimedPID(sessionID, claimed); pid > 0 {
+			pm.log.LogInfo("session-detector", sessionID,
+				fmt.Sprintf("claimed pid %d belongs to ready session — merging (/clear)", pid))
+			pm.handlePIDAssignedInternal(pid, sessionID, true)
 			return true
 		}
 	}
