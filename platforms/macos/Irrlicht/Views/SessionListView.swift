@@ -275,25 +275,28 @@ struct SessionListView: View {
         }
     }
 
-    var projectGroups: [ProjectGroup] {
+    private var projectGroups: [ProjectGroup] {
         let groups = sessionGroups
 
-        // Group session groups by project name (from git repo root).
+        // Group session groups by project name (from git repo root) or full cwd path.
         // Sessions in different worktrees of the same repo share the same project name.
         var grouped: [String: [SessionGroup]] = [:]
         for group in groups {
-            let project = group.parent.projectName ?? "unknown"
-            grouped[project, default: []].append(group)
+            let key = group.parent.projectName ?? group.parent.cwd
+            grouped[key, default: []].append(group)
         }
 
-        // Convert to ProjectGroup array, sorted by project name
+        // Convert to ProjectGroup array, sorted by display name
         return grouped.map { key, value in
-            ProjectGroup(projectDirectory: key, sessionGroups: value)
-        }.sorted { $0.projectDirectory < $1.projectDirectory }
+            let display = value.first?.parent.projectName
+                ?? URL(fileURLWithPath: key).lastPathComponent
+            return ProjectGroup(projectDirectory: key, displayName: display, sessionGroups: value)
+        }.sorted { $0.displayName < $1.displayName }
     }
 
     private var sessionListContent: some View {
         let allProjectGroups = projectGroups
+        let isCompactMode = allProjectGroups.count > 5
         // Pre-compute starting flat index for each project group (for drag/drop continuity)
         var startIndices: [String: Int] = [:]
         var runningIndex = 0
@@ -308,7 +311,8 @@ struct SessionListView: View {
                 ForEach(allProjectGroups) { projectGroup in
                     ProjectGroupSectionView(
                         projectGroup: projectGroup,
-                        startingGroupIndex: startIndices[projectGroup.id] ?? 0
+                        startingGroupIndex: startIndices[projectGroup.id] ?? 0,
+                        isCompact: isCompactMode
                     )
                 }
 
@@ -856,10 +860,130 @@ struct SessionGroup: Identifiable {
 }
 
 struct ProjectGroup: Identifiable {
-    let projectDirectory: String
+    let projectDirectory: String   // full path or project name (grouping key)
+    let displayName: String        // short name shown in UI
     let sessionGroups: [SessionGroup]
 
     var id: String { projectDirectory }
+
+    /// States in display order (maps left-to-right dots to top-to-bottom sessions).
+    var sessionStates: [SessionState.State] {
+        sessionGroups.map { $0.parent.state }
+    }
+
+    /// Highest-priority state across all sessions (waiting > working > ready).
+    var dominantState: SessionState.State {
+        .dominant(in: sessionStates)
+    }
+}
+
+struct SessionStateDots: View {
+    let projectGroup: ProjectGroup
+    let isCompact: Bool
+
+    private var stateCounts: (waiting: Int, working: Int, ready: Int) {
+        var w = 0, k = 0, r = 0
+        for s in projectGroup.sessionStates {
+            switch s {
+            case .waiting: w += 1
+            case .working: k += 1
+            case .ready:   r += 1
+            }
+        }
+        return (w, k, r)
+    }
+
+    var body: some View {
+        if isCompact {
+            compactDot
+        } else if projectGroup.sessionStates.count > 4 {
+            overflowCounts
+        } else {
+            normalDots
+        }
+    }
+
+    // MARK: Normal mode (≤4 sessions): individual dots
+
+    private var normalDots: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(projectGroup.sessionStates.enumerated()), id: \.offset) { _, state in
+                dotForState(state)
+            }
+        }
+        .tooltip(tooltipText)
+    }
+
+    @ViewBuilder
+    private func dotForState(_ state: SessionState.State) -> some View {
+        let color = Color(hex: state.color)
+        switch state {
+        case .working:
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+        case .waiting:
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+                .overlay(
+                    Circle()
+                        .stroke(color, lineWidth: 1)
+                        .frame(width: 9, height: 9)
+                )
+        case .ready:
+            Circle()
+                .stroke(color.opacity(0.6), lineWidth: 1)
+                .frame(width: 6, height: 6)
+        }
+    }
+
+    // MARK: Overflow mode (>4 sessions): state counts
+
+    private var overflowCounts: some View {
+        let c = stateCounts
+        return HStack(spacing: 4) {
+            if c.waiting > 0 {
+                stateCountLabel("◉", count: c.waiting, color: Color(hex: SessionState.State.waiting.color))
+            }
+            if c.working > 0 {
+                stateCountLabel("●", count: c.working, color: Color(hex: SessionState.State.working.color))
+            }
+            if c.ready > 0 {
+                stateCountLabel("○", count: c.ready, color: Color(hex: SessionState.State.ready.color))
+            }
+        }
+        .tooltip(tooltipText)
+    }
+
+    private func stateCountLabel(_ symbol: String, count: Int, color: Color) -> some View {
+        HStack(spacing: 1) {
+            Text(symbol)
+                .font(.system(size: 8))
+                .foregroundColor(color)
+            Text("\(count)")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(color)
+        }
+    }
+
+    // MARK: Compact mode (many groups): single dominant dot
+
+    private var compactDot: some View {
+        Circle()
+            .fill(Color(hex: projectGroup.dominantState.color))
+            .frame(width: 6, height: 6)
+            .tooltip(tooltipText)
+    }
+
+    private var tooltipText: String {
+        let c = stateCounts
+        var parts: [String] = []
+        if c.waiting > 0 { parts.append("\(c.waiting) waiting") }
+        if c.working > 0 { parts.append("\(c.working) working") }
+        if c.ready > 0 { parts.append("\(c.ready) ready") }
+        return parts.joined(separator: ", ")
+    }
 }
 
 // MARK: - Project Group Section View
@@ -867,6 +991,7 @@ struct ProjectGroup: Identifiable {
 struct ProjectGroupSectionView: View {
     let projectGroup: ProjectGroup
     let startingGroupIndex: Int
+    let isCompact: Bool
     @EnvironmentObject var sessionManager: SessionManager
     @State private var isExpanded = true
 
@@ -914,7 +1039,7 @@ struct ProjectGroupSectionView: View {
                         .foregroundColor(.secondary)
                         .frame(width: 10)
 
-                    Text(projectGroup.projectDirectory)
+                    Text(projectGroup.displayName)
                         .font(.system(.caption, design: .monospaced))
                         .fontWeight(.semibold)
                         .foregroundColor(projectNameColor)
@@ -924,6 +1049,8 @@ struct ProjectGroupSectionView: View {
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
+
+                    SessionStateDots(projectGroup: projectGroup, isCompact: isCompact)
 
                     Spacer()
 

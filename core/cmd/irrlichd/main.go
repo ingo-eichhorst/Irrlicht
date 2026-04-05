@@ -21,6 +21,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
@@ -244,6 +245,7 @@ func main() {
 	// Inbound adapters: watch agent transcript directories for session files.
 	claudeCodeWatcher := claudecode.New(cfg.MaxSessionAge)
 	codexWatcher := codex.New(cfg.MaxSessionAge)
+	piWatcher := pi.New(cfg.MaxSessionAge)
 
 	// Process scanner: detects Claude Code processes before they create a
 	// transcript, so the session appears as ready from the moment the app opens.
@@ -274,7 +276,7 @@ func main() {
 		return false
 	})
 
-	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher, procScanner}
+	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher, piWatcher, procScanner}
 
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
@@ -286,8 +288,8 @@ func main() {
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()
-		logger.LogInfo("startup", "", fmt.Sprintf("watching Claude Code (%s), Codex (%s)",
-			claudeCodeWatcher.Root(), codexWatcher.Root()))
+		logger.LogInfo("startup", "", fmt.Sprintf("watching Claude Code (%s), Codex (%s), Pi (%s)",
+			claudeCodeWatcher.Root(), codexWatcher.Root(), piWatcher.Root()))
 		for _, w := range watchers {
 			go func() {
 				if err := w.Watch(detectorCtx); err != nil && err != context.Canceled {
