@@ -42,7 +42,13 @@ func (a *Adapter) GetBranch(dir string) string {
 // GetGitRoot returns the absolute path of the git repo root for the given
 // directory, or "" if the directory is not inside a git repository.
 // For worktrees it returns the main repo root (not the worktree path).
+// If dir has been deleted (e.g. a cleaned-up worktree), it walks up to the
+// nearest existing ancestor so the repo can still be resolved.
 func (a *Adapter) GetGitRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	dir = nearestExistingDir(dir)
 	if dir == "" {
 		return ""
 	}
@@ -62,6 +68,21 @@ func (a *Adapter) GetGitRoot(dir string) string {
 		return ""
 	}
 	return root
+}
+
+// nearestExistingDir returns dir if it exists, otherwise walks up to the
+// nearest existing ancestor directory. Returns "" if no ancestor exists.
+func nearestExistingDir(dir string) string {
+	for {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // GetProjectName returns the project name for the given directory.
