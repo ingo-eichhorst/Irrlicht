@@ -143,16 +143,15 @@ func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, autho
 		}
 	}
 
-	// Merge /clear sessions: when the same PID appears on a new transcript,
-	// the old session adopts the new transcript and the new session is deleted.
-	// This preserves session identity (SessionID, FirstSeen, project metadata).
-	// Only do this for authoritative (lsof) discoveries — CWD-based fallback
-	// is unreliable and could incorrectly merge unrelated sessions.
+	// Clean up old sessions that had the same PID (e.g. process reuse).
+	// Only do this for authoritative (lsof) discoveries — CWD-based
+	// fallback is unreliable when multiple instances share a directory
+	// and could incorrectly delete a still-active session.
 	if !authoritative {
 		return
 	}
 
-	// Subagent sessions share the parent's PID, so skip merge when
+	// Subagent sessions share the parent's PID, so skip cleanup when
 	// either side is a subagent.
 	if state.ParentSessionID != "" {
 		return
@@ -170,39 +169,16 @@ func (pm *PIDManager) handlePIDAssignedInternal(pid int, sessionID string, autho
 		if old.ParentSessionID != "" || strings.HasPrefix(old.SessionID, "proc-") {
 			continue
 		}
-		// Only merge sessions in the same working directory — prevents
-		// cross-project merges when two sessions share a PID coincidentally.
-		if state.CWD == "" || old.CWD == "" || state.CWD != old.CWD {
-			continue
-		}
 
-		// Merge: old session adopts the new transcript, new session is deleted.
 		pm.log.LogInfo("session-detector", old.SessionID,
-			fmt.Sprintf("merging new session %s into existing (same pid %d, /clear)", sessionID, pid))
+			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
 
-		now := time.Now().Unix()
-		old.TranscriptPath = state.TranscriptPath
-		old.State = session.StateReady
-		old.UpdatedAt = now
-		old.Metrics = nil
-		old.LastTranscriptSize = 0
-		old.WaitingStartTime = nil
-		old.LastEvent = "clear_merge"
-		_ = pm.repo.Save(old)
-		pm.broadcast(outbound.PushTypeUpdated, old)
-
-		// Re-register ProcessWatcher for the old session's ID.
-		if pm.pw != nil {
-			_ = pm.pw.Watch(pid, old.SessionID)
-		}
-
-		// Delete the new session — it has been absorbed.
 		if pm.onSessionDeleted != nil {
-			pm.onSessionDeleted(sessionID)
+			pm.onSessionDeleted(old.SessionID)
 		}
-		_ = pm.repo.Delete(sessionID)
-		pm.broadcast(outbound.PushTypeDeleted, state)
-		return // only one merge per PID
+
+		_ = pm.repo.Delete(old.SessionID)
+		pm.broadcast(outbound.PushTypeDeleted, old)
 	}
 }
 
@@ -221,31 +197,6 @@ func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
 		}
 	}
 	return claimed
-}
-
-// findReadyClaimedPID checks if any claimed PID belongs to a ready session
-// with the same CWD. This detects /clear: the old session is idle (ready),
-// same process, same working directory. Returns the PID if found, 0 otherwise.
-func (pm *PIDManager) findReadyClaimedPID(excludeSessionID, cwd string, claimed map[int]bool) int {
-	if cwd == "" {
-		return 0
-	}
-	states, err := pm.repo.ListAll()
-	if err != nil {
-		return 0
-	}
-	for _, s := range states {
-		if s.SessionID == excludeSessionID || s.PID <= 0 {
-			continue
-		}
-		if s.ParentSessionID != "" || strings.HasPrefix(s.SessionID, "proc-") {
-			continue
-		}
-		if claimed[s.PID] && s.State == session.StateReady && s.CWD == cwd {
-			return s.PID
-		}
-	}
-	return 0
 }
 
 // TryDiscoverPID attempts lsof-on-transcript (primary), then CWD-based
@@ -294,15 +245,6 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, transcriptPath, cwd string) bool
 			return true
 		}
 
-		// All CWD-discovered PIDs were claimed. Check if any belongs to a
-		// ready session with the same CWD — that indicates /clear: same
-		// process, new transcript, same project.
-		if pid := pm.findReadyClaimedPID(sessionID, cwd, claimed); pid > 0 {
-			pm.log.LogInfo("session-detector", sessionID,
-				fmt.Sprintf("claimed pid %d belongs to ready session — merging (/clear)", pid))
-			pm.handlePIDAssignedInternal(pid, sessionID, true)
-			return true
-		}
 	}
 	return false
 }

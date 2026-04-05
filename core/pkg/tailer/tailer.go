@@ -484,11 +484,14 @@ func (t *TranscriptTailer) parseTranscriptLine(line string) (*MessageEvent, erro
 	// writes multiple assistant messages per turn that would trigger false
 	// positives. Some transcript versions omit turn_duration but still emit
 	// stop_hook_summary.
-	// "local_command" fires after /clear and other commands that reset the
-	// conversation — treat it as turn_done so the session transitions to ready.
+	// "local_command" fires after /clear and similar commands. It gets its
+	// own LastEventType so the session detector can detect /clear and merge
+	// the new transcript into the existing session.
 	if eventType == "system" {
-		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" || subtype == "local_command" {
+		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
 			t.metrics.LastEventType = "turn_done"
+		} else if subtype == "local_command" {
+			t.metrics.LastEventType = "local_command"
 		}
 		return nil, nil
 	}

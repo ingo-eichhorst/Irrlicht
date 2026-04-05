@@ -88,7 +88,8 @@ func (m *SessionMetrics) IsAgentDone() bool {
 		return false
 	}
 	// Primary: Claude Code writes a system/turn_duration event at end of turn.
-	if m.LastEventType == "turn_done" {
+	// local_command fires after /clear and is also a "done" signal.
+	if m.LastEventType == "turn_done" || m.LastEventType == "local_command" {
 		return true
 	}
 	// Fallback for legacy/Codex transcripts.

@@ -170,8 +170,9 @@ func userMsg(offset int, content string) map[string]interface{} {
 	}
 }
 
-func TestLocalCommand_ClearTransitionsToReady(t *testing.T) {
-	// A completed turn followed by /clear should end with LastEventType="turn_done".
+func TestLocalCommand_ClearSetsLocalCommand(t *testing.T) {
+	// A completed turn followed by /clear should end with LastEventType="local_command".
+	// This distinct value lets the session detector detect /clear and merge transcripts.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
 		{"type": "assistant", "timestamp": ts(1)},
@@ -187,8 +188,8 @@ func TestLocalCommand_ClearTransitionsToReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.LastEventType != "turn_done" {
-		t.Errorf("after /clear: LastEventType = %q, want %q", m.LastEventType, "turn_done")
+	if m.LastEventType != "local_command" {
+		t.Errorf("after /clear: LastEventType = %q, want %q", m.LastEventType, "local_command")
 	}
 }
 
@@ -257,7 +258,7 @@ func TestLocalCommand_SkillNotFiltered(t *testing.T) {
 
 func TestLocalCommand_ClearFromWorkingState(t *testing.T) {
 	// /clear while agent is working (mid-turn, no turn_done yet).
-	// The system local_command event should set turn_done.
+	// The system local_command event should set local_command.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
 		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
@@ -277,8 +278,8 @@ func TestLocalCommand_ClearFromWorkingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.LastEventType != "turn_done" {
-		t.Errorf("after /clear mid-turn: LastEventType = %q, want %q", m.LastEventType, "turn_done")
+	if m.LastEventType != "local_command" {
+		t.Errorf("after /clear mid-turn: LastEventType = %q, want %q", m.LastEventType, "local_command")
 	}
 }
 

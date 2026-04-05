@@ -185,6 +185,15 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			return
 		}
 
+		// /clear merge: if an existing session in the same project has
+		// LastEventType="local_command" (from /clear), merge the new
+		// transcript into it instead of creating a duplicate session.
+		if ev.TranscriptPath != "" {
+			if merged := d.tryMergeCleared(ev); merged {
+				return
+			}
+		}
+
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
 		state := &session.SessionState{
@@ -424,6 +433,47 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 	if d.broadcaster != nil {
 		d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
 	}
+}
+
+// tryMergeCleared checks if an existing session in the same project directory
+// was recently cleared (/clear). The signal is LastEventType="local_command"
+// set by the tailer when it processes the system local_command event. If found,
+// the old session adopts the new transcript and the new session is not created.
+func (d *SessionDetector) tryMergeCleared(ev agent.Event) bool {
+	d.mu.Lock()
+	var candidates []string
+	for sid, projDir := range d.projectSessions {
+		if projDir == ev.ProjectDir && sid != ev.SessionID {
+			candidates = append(candidates, sid)
+		}
+	}
+	d.mu.Unlock()
+
+	for _, sid := range candidates {
+		state, _ := d.repo.Load(sid)
+		if state == nil || state.State != session.StateReady {
+			continue
+		}
+		if state.Metrics == nil || state.Metrics.LastEventType != "local_command" {
+			continue
+		}
+
+		d.log.LogInfo("session-detector", state.SessionID,
+			fmt.Sprintf("merging /clear transcript %s into existing session", ev.SessionID))
+
+		now := time.Now().Unix()
+		state.TranscriptPath = ev.TranscriptPath
+		state.State = session.StateReady
+		state.UpdatedAt = now
+		state.Metrics = nil
+		state.LastTranscriptSize = 0
+		state.WaitingStartTime = nil
+		state.LastEvent = "clear_merge"
+		_ = d.repo.Save(state)
+		d.broadcast(outbound.PushTypeUpdated, state)
+		return true
+	}
+	return false
 }
 
 // transcriptAlreadyOwned returns true if another session already has the given
