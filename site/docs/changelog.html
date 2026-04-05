@@ -78,6 +78,50 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.0 <small>(2026-04-05)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Permission-pending detection</strong> &mdash; Sessions with non-blocking tool calls awaiting user approval now transition to <code>waiting</code> state after a 5-second stale-tool timeout, correctly reflecting that the agent is blocked on permission</li>
+        <li><strong>Last question display</strong> &mdash; When an agent asks a question and enters waiting state, the question text is captured and available via the API for display in the menu bar</li>
+        <li><strong>Session state dots</strong> &mdash; Colored dots in the macOS menu bar and popover headers provide at-a-glance status for each session</li>
+        <li><strong>Gas Town educational UI</strong> &mdash; Role hierarchy visualization and active tool display for Gas Town orchestrator sessions</li>
+        <li><strong>Web dashboard redesign</strong> &mdash; Compact rows, DOM reconciliation for flicker-free updates, and timeline heatmap</li>
+        <li><strong>Adapter-specific PID lifecycle</strong> &mdash; Codex and Pi sessions now have tailored PID discovery and process lifecycle handling alongside Claude Code</li>
+        <li><strong>ir:agent-releases skill</strong> &mdash; Tracks upstream coding agent releases and reports changes that impact irrlicht monitoring</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>Per-adapter transcript parsers</strong> &mdash; Each agent adapter (Claude Code, Codex, Pi) now has its own transcript parser instead of a single shared parser, enabling format-specific handling and cleaner architecture</li>
+        <li>Shared CWD extraction logic extracted, dead code removed</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>PID assignment race condition</strong> &mdash; Serialized PID assignment with state transitions to prevent concurrent sessions from claiming the same process</li>
+        <li><strong>Orphan session cleanup after /clear</strong> &mdash; Sessions left behind when a user runs <code>/clear</code> in Claude Code are now properly cleaned up</li>
+        <li><strong>Stuck working state from local commands</strong> &mdash; Local command events (shell escapes) no longer prevent sessions from transitioning out of working state</li>
+        <li><strong>Daemon performance with many sessions</strong> &mdash; Resolved performance degradation when monitoring many concurrent sessions</li>
+        <li>Git root resolution for deleted worktree directories</li>
+        <li>Project name detection for non-git directories on activity refresh</li>
+        <li>Expanded click target for Settings and Quit buttons</li>
+        <li>URL-encoded dynamic badge URLs</li>
+        <li>Pi nested message parsing for role/stopReason/content fields</li>
+        <li>Pi PID discovery via command-line pattern matching</li>
+        <li>Include &ldquo;assistant&rdquo; in IsAgentDone fallback for turn detection</li>
+      </ul>
+
+      <h3>Site</h3>
+
+      <ul>
+        <li>Refined hero section &mdash; removed glow, shortened copy, cleaned up labels</li>
+        <li>Added counter.dev analytics to all pages</li>
+      </ul>
+
       <h2>v0.2.5 <small>(2026-04-05)</small></h2>
 
       <h3>Added</h3>
