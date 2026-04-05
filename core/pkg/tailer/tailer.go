@@ -708,7 +708,9 @@ func extractAssistantText(raw map[string]interface{}) string {
 	collectText := func(arr []interface{}) {
 		for _, item := range arr {
 			if block, ok := item.(map[string]interface{}); ok {
-				if block["type"] == "text" {
+				bt := block["type"]
+				// Claude Code uses "text", Codex uses "output_text".
+				if bt == "text" || bt == "output_text" {
 					if text, ok := block["text"].(string); ok && text != "" {
 						parts = append(parts, text)
 					}
