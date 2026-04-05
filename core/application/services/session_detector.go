@@ -482,6 +482,19 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// Content-based state detection.
 	now := time.Now().Unix()
 	newState, reason := ClassifyState(state.State, state.Metrics)
+
+	// Parent-child propagation: if a parent session would transition to
+	// ready but still has active children (working/waiting), hold it in
+	// working. The parent will be re-evaluated when children finish.
+	if newState == session.StateReady && state.ParentSessionID == "" {
+		if d.hasActiveChildren(state.SessionID) {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"holding parent working — active children still running")
+			newState = session.StateWorking
+			reason = ""
+		}
+	}
+
 	if newState != state.State {
 		if reason != "" {
 			d.log.LogInfo("session-detector", ev.SessionID, reason)
@@ -528,6 +541,12 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// When a parent session finishes, clean up all its child sessions.
 	if state.State == session.StateReady && state.ParentSessionID == "" {
 		d.pidMgr.cleanupChildren(state.SessionID)
+	}
+
+	// When a child session changes state, re-evaluate the parent — it may
+	// be held in working solely because of this child.
+	if state.ParentSessionID != "" {
+		d.reevaluateParent(state.ParentSessionID)
 	}
 }
 
@@ -679,6 +698,75 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 func (d *SessionDetector) broadcast(msgType string, state *session.SessionState) {
 	if d.broadcaster != nil {
 		d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
+	}
+}
+
+// hasActiveChildren returns true if any child session of the given parent is
+// still working or waiting. Used to prevent a parent from transitioning to
+// ready while background/foreground subagents are still processing.
+func (d *SessionDetector) hasActiveChildren(parentID string) bool {
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return false
+	}
+	for _, s := range states {
+		if s.ParentSessionID == parentID &&
+			(s.State == session.StateWorking || s.State == session.StateWaiting) {
+			return true
+		}
+	}
+	return false
+}
+
+// reevaluateParent checks whether a parent session should transition now that
+// a child's state has changed. If the parent's own turn is done (TurnDone flag
+// in metrics) and no more active children remain, the parent transitions to
+// ready (or waiting if ending with a question).
+func (d *SessionDetector) reevaluateParent(parentID string) {
+	parent, err := d.repo.Load(parentID)
+	if err != nil || parent == nil {
+		return
+	}
+	// Only re-evaluate parents that are being held in working.
+	if parent.State != session.StateWorking {
+		return
+	}
+	// The parent's own turn must be done for it to transition.
+	if parent.Metrics == nil || !parent.Metrics.TurnDone {
+		return
+	}
+	// Still have active children — stay working.
+	if d.hasActiveChildren(parentID) {
+		return
+	}
+
+	// All children are done and the parent's turn is complete.
+	newState, reason := ClassifyState(parent.State, parent.Metrics)
+	if newState == parent.State {
+		return
+	}
+
+	now := time.Now().Unix()
+	if reason != "" {
+		d.log.LogInfo("session-detector", parentID,
+			fmt.Sprintf("children done, parent re-evaluated: %s", reason))
+	}
+	parent.State = newState
+	parent.UpdatedAt = now
+	if newState == session.StateWaiting {
+		parent.WaitingStartTime = &now
+	}
+
+	if err := d.repo.Save(parent); err != nil {
+		d.log.LogError("session-detector", parentID,
+			fmt.Sprintf("failed to save parent re-evaluation: %v", err))
+		return
+	}
+	d.broadcast(outbound.PushTypeUpdated, parent)
+
+	// If the parent transitioned to ready, clean up its children.
+	if parent.State == session.StateReady {
+		d.pidMgr.cleanupChildren(parentID)
 	}
 }
 

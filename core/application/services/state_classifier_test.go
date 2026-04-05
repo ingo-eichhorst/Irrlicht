@@ -64,6 +64,7 @@ func TestClassifyState(t *testing.T) {
 			name:    "working → waiting (turn_done + question)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
+				TurnDone:          true,
 				LastEventType:     "turn_done",
 				HasOpenToolCall:   false,
 				LastAssistantText: "Should I proceed with the migration?",
@@ -75,6 +76,7 @@ func TestClassifyState(t *testing.T) {
 			name:    "ready → waiting (turn_done + question)",
 			current: session.StateReady,
 			metrics: &session.SessionMetrics{
+				TurnDone:          true,
 				LastEventType:     "turn_done",
 				HasOpenToolCall:   false,
 				LastAssistantText: "Do you want me to fix this?",
@@ -86,6 +88,7 @@ func TestClassifyState(t *testing.T) {
 			name:    "waiting stays waiting (turn_done + question, already waiting)",
 			current: session.StateWaiting,
 			metrics: &session.SessionMetrics{
+				TurnDone:          true,
 				LastEventType:     "turn_done",
 				HasOpenToolCall:   false,
 				LastAssistantText: "Which approach do you prefer?",
@@ -98,6 +101,7 @@ func TestClassifyState(t *testing.T) {
 			name:    "working → ready (turn_done, no question)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
+				TurnDone:          true,
 				LastEventType:     "turn_done",
 				HasOpenToolCall:   false,
 				LastAssistantText: "Done. The tests pass.",
@@ -109,6 +113,7 @@ func TestClassifyState(t *testing.T) {
 			name:    "working → ready (turn_done, empty text)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
+				TurnDone:        true,
 				LastEventType:   "turn_done",
 				HasOpenToolCall: false,
 			},
@@ -119,6 +124,7 @@ func TestClassifyState(t *testing.T) {
 			name:    "waiting → ready (turn_done)",
 			current: session.StateWaiting,
 			metrics: &session.SessionMetrics{
+				TurnDone:        true,
 				LastEventType:   "turn_done",
 				HasOpenToolCall: false,
 			},
@@ -129,13 +135,14 @@ func TestClassifyState(t *testing.T) {
 			name:    "ready stays ready (turn_done, no transition)",
 			current: session.StateReady,
 			metrics: &session.SessionMetrics{
+				TurnDone:        true,
 				LastEventType:   "turn_done",
 				HasOpenToolCall: false,
 			},
 			wantState: session.StateReady,
 		},
 		{
-			name:    "working → ready (assistant_message legacy)",
+			name:    "working → ready (assistant_message Codex fallback)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
 				LastEventType:   "assistant_message",
@@ -143,6 +150,15 @@ func TestClassifyState(t *testing.T) {
 			},
 			wantState:  session.StateReady,
 			wantReason: true,
+		},
+		{
+			name:    "working stays working (assistant mid-turn, no turn_done)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:   "assistant",
+				HasOpenToolCall: false,
+			},
+			wantState: session.StateWorking,
 		},
 
 		// Rule 3: ESC cancellation → ready.

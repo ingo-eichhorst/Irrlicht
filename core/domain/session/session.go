@@ -59,6 +59,12 @@ type SessionMetrics struct {
 	// (e.g. "default", "plan", "bypassPermissions"). Used to skip the
 	// stale-tool-call timer when permissions are bypassed.
 	PermissionMode string `json:"permission_mode,omitempty"`
+
+	// TurnDone is true when the agent's turn has definitively ended — signalled
+	// by Claude Code's "turn_duration" / "stop_hook_summary" system events.
+	// Cleared when a new user message starts the next turn. Used as the primary
+	// signal for IsAgentDone() to avoid false positives between tool calls.
+	TurnDone bool `json:"turn_done,omitempty"`
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one
@@ -96,9 +102,9 @@ func (m *SessionMetrics) IsWaitingForUserInput() bool {
 }
 
 // IsAgentDone returns true when the agent finished its turn. The primary
-// signal is Claude Code's "turn_duration" system event which fires exactly
-// once at the end of each turn. Legacy formats (Codex) fall back to the
-// heuristic of "last event is assistant and no open tool calls".
+// signal is the TurnDone flag, set when Claude Code emits its "turn_duration"
+// or "stop_hook_summary" system event. For adapters that lack this signal
+// (Codex), a fallback checks the last event type.
 //
 // Open tool calls (e.g. the Agent tool waiting for a sub-agent) override
 // turn_done: the turn isn't truly complete until all tool results arrive.
@@ -106,21 +112,24 @@ func (m *SessionMetrics) IsAgentDone() bool {
 	if m == nil {
 		return false
 	}
-	// Open tool calls mean the agent is still processing — a sub-agent
+	// Open tool calls mean the agent is still processing ��� a sub-agent
 	// spawned via the Agent tool fires turn_done before the tool result
 	// comes back, but the session is NOT idle.
 	if m.HasOpenToolCall {
 		return false
 	}
-	// Primary: Claude Code writes a system/turn_duration event at end of turn.
-	if m.LastEventType == "turn_done" {
+	// Primary: sticky TurnDone flag set by the tailer when the turn_done
+	// event was seen. Cleared on the next user message (new turn starts).
+	// This avoids false positives between tool calls where LastEventType
+	// is "assistant" but the turn hasn't actually ended.
+	if m.TurnDone {
 		return true
 	}
-	// Fallback: some transcripts lack turn_duration/stop_hook_summary entirely.
-	// Claude Code uses "assistant", Codex uses "assistant_message"/"assistant_output".
-	// Safe because HasOpenToolCall is checked first — mid-turn tool calls block this.
+	// Fallback for adapters that don't emit turn_done (Codex).
+	// "assistant_message" and "assistant_output" are Codex-specific event
+	// types that indicate the agent finished its response.
 	switch m.LastEventType {
-	case "assistant", "assistant_message", "assistant_output":
+	case "assistant_message", "assistant_output":
 		return true
 	}
 	return false
@@ -216,6 +225,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		EstimatedCostUSD:       newM.EstimatedCostUSD,
 		LastAssistantText:      newM.LastAssistantText,
 		PermissionMode:         newM.PermissionMode,
+		TurnDone:               newM.TurnDone,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
