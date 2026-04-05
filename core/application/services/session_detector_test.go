@@ -173,6 +173,47 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T)
 	}
 }
 
+func TestSessionDetector_Activity_TransitionsToReady_WhenAssistantNoSystemEvents(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	repo.states["nosys1"] = &session.SessionState{
+		SessionID:      "nosys1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/nosys1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant",
+			HasOpenToolCall: false,
+		},
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "nosys1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/nosys1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("nosys1")
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready (assistant with no open tools, no turn_done system event)", state.State)
+	}
+}
+
 func TestSessionDetector_Activity_TransitionsToWaiting_WhenAssistantButOpenTools(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -929,7 +970,7 @@ func TestIsAgentDone(t *testing.T) {
 		{"turn_done", &session.SessionMetrics{LastEventType: "turn_done"}, true},
 		{"turn_done, open tools (subagent running)", &session.SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}, false},
 		{"assistant_message, no open tools (legacy)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
-		{"assistant, no open tools (intermediate — NOT done)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
+		{"assistant, no open tools (done — fallback for transcripts without turn_done)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
 		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},
 		{"user, no open tools", &session.SessionMetrics{LastEventType: "user", HasOpenToolCall: false}, false},
 		{"empty", &session.SessionMetrics{}, false},
@@ -942,4 +983,279 @@ func TestIsAgentDone(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- stale tool call timer tests ---------------------------------------------
+
+func TestSessionDetector_StaleToolCall_TransitionsToWaiting(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetectorWithStaleTimeout(tw, pw, repo, 100*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond) // wait for seedFromDisk
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "stale1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/stale1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			HasOpenToolCall:   true,
+			OpenToolCallCount: 1,
+			LastOpenToolNames: []string{"Read"},
+			LastEventType:     "assistant",
+			PermissionMode:    "default",
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "stale1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/stale1.jsonl",
+	}
+
+	// Wait for stale tool timeout + buffer.
+	time.Sleep(250 * time.Millisecond)
+
+	state, _ := repo.Load("stale1")
+	if state.State != session.StateWaiting {
+		t.Errorf("state: got %q, want waiting (stale tool call after timeout)", state.State)
+	}
+	if state.LastEvent != "stale_tool_timeout" {
+		t.Errorf("last_event: got %q, want stale_tool_timeout", state.LastEvent)
+	}
+
+	cancel()
+	<-done
+}
+
+func TestSessionDetector_StaleToolCall_CancelledByActivity(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetectorWithStaleTimeout(tw, pw, repo, 200*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "cancel1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/cancel1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			HasOpenToolCall:   true,
+			OpenToolCallCount: 1,
+			LastOpenToolNames: []string{"Bash"},
+			LastEventType:     "assistant",
+			PermissionMode:    "default",
+		},
+	})
+
+	// First activity starts the timer.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "cancel1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/cancel1.jsonl",
+	}
+
+	// Send new activity before timer fires (simulating tool_result arrival).
+	time.Sleep(50 * time.Millisecond)
+	// Update metrics to simulate tool completion.
+	state, _ := repo.Load("cancel1")
+	state.Metrics.HasOpenToolCall = false
+	state.Metrics.OpenToolCallCount = 0
+	state.Metrics.LastOpenToolNames = nil
+	state.Metrics.LastEventType = "turn_done"
+	repo.Save(state)
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "cancel1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/cancel1.jsonl",
+	}
+
+	// Wait past original timeout.
+	time.Sleep(300 * time.Millisecond)
+
+	state, _ = repo.Load("cancel1")
+	if state.State == session.StateWaiting {
+		t.Errorf("state: got waiting, want ready or working (activity cancelled stale timer)")
+	}
+
+	cancel()
+	<-done
+}
+
+func TestSessionDetector_StaleToolCall_SkipsAgentOnlyTools(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetectorWithStaleTimeout(tw, pw, repo, 100*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "agent1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/agent1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			HasOpenToolCall:   true,
+			OpenToolCallCount: 2,
+			LastOpenToolNames: []string{"Agent", "Agent"},
+			LastEventType:     "assistant",
+			PermissionMode:    "default",
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "agent1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/agent1.jsonl",
+	}
+
+	// Wait past timeout.
+	time.Sleep(250 * time.Millisecond)
+
+	state, _ := repo.Load("agent1")
+	if state.State != session.StateWorking {
+		t.Errorf("state: got %q, want working (Agent-only tools should not trigger stale timer)", state.State)
+	}
+
+	cancel()
+	<-done
+}
+
+func TestSessionDetector_StaleToolCall_SkipsBypassPermissions(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetectorWithStaleTimeout(tw, pw, repo, 100*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "bypass1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/bypass1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			HasOpenToolCall:   true,
+			OpenToolCallCount: 1,
+			LastOpenToolNames: []string{"Bash"},
+			LastEventType:     "assistant",
+			PermissionMode:    "bypassPermissions",
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "bypass1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/bypass1.jsonl",
+	}
+
+	// Wait past timeout.
+	time.Sleep(250 * time.Millisecond)
+
+	state, _ := repo.Load("bypass1")
+	if state.State != session.StateWorking {
+		t.Errorf("state: got %q, want working (bypassPermissions should not trigger stale timer)", state.State)
+	}
+
+	cancel()
+	<-done
+}
+
+func TestSessionDetector_StaleToolCall_GuardChecksState(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetectorWithStaleTimeout(tw, pw, repo, 100*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "guard1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/guard1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			HasOpenToolCall:   true,
+			OpenToolCallCount: 1,
+			LastOpenToolNames: []string{"Read"},
+			LastEventType:     "assistant",
+			PermissionMode:    "default",
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "guard1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/guard1.jsonl",
+	}
+
+	// Manually change session state to "ready" before timer fires.
+	time.Sleep(30 * time.Millisecond)
+	state, _ := repo.Load("guard1")
+	state.State = session.StateReady
+	state.UpdatedAt = time.Now().Unix() // different from expectedUpdatedAt
+	repo.Save(state)
+
+	// Wait for timer to fire.
+	time.Sleep(200 * time.Millisecond)
+
+	state, _ = repo.Load("guard1")
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready (guard should prevent overwrite)", state.State)
+	}
+
+	cancel()
+	<-done
 }

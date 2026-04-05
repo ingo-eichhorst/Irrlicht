@@ -65,6 +65,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics
 		EstimatedCostUSD:       m.EstimatedCostUSD,
 		LastCWD:                m.LastCWD,
 		LastAssistantText:      m.LastAssistantText,
+		PermissionMode:         m.PermissionMode,
 	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"
