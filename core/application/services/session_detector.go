@@ -185,15 +185,6 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			return
 		}
 
-		// /clear merge: if an existing session in the same project has
-		// LastEventType="local_command" (from /clear), merge the new
-		// transcript into it instead of creating a duplicate session.
-		if ev.TranscriptPath != "" {
-			if merged := d.tryMergeCleared(ev); merged {
-				return
-			}
-		}
-
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
 		state := &session.SessionState{
@@ -214,6 +205,15 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 
 		// Resolve git metadata and compute initial metrics.
 		d.enricher.EnrichNewSession(state, ev)
+
+		// /clear merge: if the NEW transcript starts with a local_command
+		// event, it was created by /clear. Find the most recent ready
+		// session in the same project and merge this transcript into it.
+		if startsWithLocalCommand(ev.TranscriptPath) {
+			if d.tryMergeCleared(ev) {
+				return
+			}
+		}
 
 		if err := d.repo.Save(state); err != nil {
 			d.log.LogError("session-detector", ev.SessionID,
@@ -435,44 +435,51 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 	}
 }
 
-// tryMergeCleared checks if an existing session in the same project directory
-// was recently cleared (/clear). The signal is LastEventType="local_command"
-// set by the tailer when it processes the system local_command event. If found,
-// the old session adopts the new transcript and the new session is not created.
+// tryMergeCleared finds the most recently updated ready session in the same
+// project and merges the new /clear transcript into it. Called when the new
+// transcript starts with a local_command event (the /clear signal).
+// Returns true if a merge occurred and the new session should not be created.
 func (d *SessionDetector) tryMergeCleared(ev agent.Event) bool {
 	states, err := d.repo.ListAll()
 	if err != nil {
 		return false
 	}
 
-	for _, state := range states {
-		if state.SessionID == ev.SessionID || state.State != session.StateReady {
+	var best *session.SessionState
+	for _, s := range states {
+		if s.SessionID == ev.SessionID || s.State != session.StateReady {
 			continue
 		}
-		if state.Metrics == nil || state.Metrics.LastEventType != "local_command" {
+		if s.ParentSessionID != "" || strings.HasPrefix(s.SessionID, "proc-") {
 			continue
 		}
-		// Match by project directory derived from transcript path.
-		if extractProjectDir(state.TranscriptPath) != ev.ProjectDir {
+		if extractProjectDir(s.TranscriptPath) != ev.ProjectDir {
 			continue
 		}
-
-		d.log.LogInfo("session-detector", state.SessionID,
-			fmt.Sprintf("merging /clear transcript %s into existing session", ev.SessionID))
-
-		now := time.Now().Unix()
-		state.TranscriptPath = ev.TranscriptPath
-		state.State = session.StateReady
-		state.UpdatedAt = now
-		state.Metrics = nil
-		state.LastTranscriptSize = 0
-		state.WaitingStartTime = nil
-		state.LastEvent = "clear_merge"
-		_ = d.repo.Save(state)
-		d.broadcast(outbound.PushTypeUpdated, state)
-		return true
+		// Pick the most recently updated ready session.
+		if best == nil || s.UpdatedAt > best.UpdatedAt {
+			best = s
+		}
 	}
-	return false
+
+	if best == nil {
+		return false
+	}
+
+	d.log.LogInfo("session-detector", best.SessionID,
+		fmt.Sprintf("merging /clear transcript %s into existing session", ev.SessionID))
+
+	now := time.Now().Unix()
+	best.TranscriptPath = ev.TranscriptPath
+	best.State = session.StateReady
+	best.UpdatedAt = now
+	best.Metrics = nil
+	best.LastTranscriptSize = 0
+	best.WaitingStartTime = nil
+	best.LastEvent = "clear_merge"
+	_ = d.repo.Save(best)
+	d.broadcast(outbound.PushTypeUpdated, best)
+	return true
 }
 
 // transcriptAlreadyOwned returns true if another session already has the given

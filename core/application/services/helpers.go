@@ -1,8 +1,11 @@
 package services
 
 import (
+	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -29,6 +32,39 @@ func deriveParentSessionID(transcriptPath string) string {
 		return ""
 	}
 	return filepath.Base(filepath.Dir(dir)) // parent session ID
+}
+
+// startsWithLocalCommand checks whether a transcript file begins with a /clear
+// sequence by scanning the first few lines for a system local_command event.
+// This is cheap (reads <4KB) and directly detects /clear-created transcripts.
+func startsWithLocalCommand(path string) bool {
+	if path == "" {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	// Only check the first 10 lines — /clear events are at the top.
+	for i := 0; i < 10 && scanner.Scan(); i++ {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			continue
+		}
+		if raw["type"] == "system" {
+			if sub, _ := raw["subtype"].(string); sub == "local_command" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // extractProjectDir extracts the project directory name from a transcript path.

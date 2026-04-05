@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,28 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 )
+
+// writeTranscriptForTest writes JSONL entries to a temp file and returns the path.
+func writeTranscriptForTest(t *testing.T, lines []map[string]interface{}) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, line := range lines {
+		if err := enc.Encode(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return path
+}
+
+func ts(offset int) string {
+	return time.Now().Add(time.Duration(offset) * time.Second).Format(time.RFC3339)
+}
 
 // --- tests -------------------------------------------------------------------
 
@@ -695,13 +718,27 @@ func TestSessionDetector_PIDAssigned_CleansUpOldSession(t *testing.T) {
 	}
 }
 
-func TestSessionDetector_ClearMergesViaLocalCommand(t *testing.T) {
-	// When /clear is issued, the old transcript gets a system local_command
-	// event (LastEventType="local_command"). When the new transcript appears,
-	// onNewSession should merge it into the cleared session.
+func TestSessionDetector_ClearMergesNewTranscript(t *testing.T) {
+	// When /clear creates a new transcript file, that file starts with
+	// local_command events. EnrichNewSession computes metrics with
+	// LastEventType="local_command", triggering tryMergeCleared to find
+	// the most recent ready session in the same project and merge into it.
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
+
+	// Create a temp transcript that starts with /clear events
+	// (same structure as real Claude Code /clear transcripts).
+	clearTranscript := writeTranscriptForTest(t, []map[string]interface{}{
+		{"type": "file-history-snapshot"},
+		{"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
+			"role": "user", "content": "<local-command-caveat>Caveat</local-command-caveat>",
+		}},
+		{"type": "user", "timestamp": ts(1), "message": map[string]interface{}{
+			"role": "user", "content": "<command-name>/clear</command-name>",
+		}},
+		{"type": "system", "subtype": "local_command", "timestamp": ts(2)},
+	})
 
 	det := newDetector(tw, pw, repo)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -711,8 +748,7 @@ func TestSessionDetector_ClearMergesViaLocalCommand(t *testing.T) {
 
 	now := time.Now().Unix()
 
-	// Old session with local_command signal (from /clear).
-	// Saved directly to repo — simulates a session loaded from disk.
+	// Old session in ready state (normal turn_done from completed conversation).
 	repo.Save(&session.SessionState{
 		SessionID:      "old-session",
 		State:          session.StateReady,
@@ -720,17 +756,15 @@ func TestSessionDetector_ClearMergesViaLocalCommand(t *testing.T) {
 		TranscriptPath: "/home/.claude/projects/-Users-test/old.jsonl",
 		FirstSeen:      now - 300,
 		UpdatedAt:      now,
-		Metrics: &session.SessionMetrics{
-			LastEventType: "local_command",
-		},
+		Metrics:        &session.SessionMetrics{LastEventType: "turn_done"},
 	})
 
-	// New transcript appears after /clear.
+	// New transcript starting with /clear appears.
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
 		SessionID:      "new-session",
 		ProjectDir:     "-Users-test",
-		TranscriptPath: "/home/.claude/projects/-Users-test/new.jsonl",
+		TranscriptPath: clearTranscript,
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -742,8 +776,8 @@ func TestSessionDetector_ClearMergesViaLocalCommand(t *testing.T) {
 	if oldState == nil {
 		t.Fatal("old session should survive the merge")
 	}
-	if oldState.TranscriptPath != "/home/.claude/projects/-Users-test/new.jsonl" {
-		t.Errorf("old session transcript: got %q, want new.jsonl", oldState.TranscriptPath)
+	if oldState.TranscriptPath != clearTranscript {
+		t.Errorf("old session transcript not updated: got %q", oldState.TranscriptPath)
 	}
 	if oldState.FirstSeen != now-300 {
 		t.Error("old session FirstSeen should be preserved")
