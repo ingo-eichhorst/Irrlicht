@@ -93,7 +93,7 @@ func (g *mockGit) GetCWDFromTranscript(path string) string     { return "" }
 
 type mockMetrics struct{}
 
-func (m *mockMetrics) ComputeMetrics(path string) (*session.SessionMetrics, error) {
+func (m *mockMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
 	return nil, nil
 }
 

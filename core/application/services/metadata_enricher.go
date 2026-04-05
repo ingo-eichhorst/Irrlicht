@@ -44,7 +44,7 @@ func (e *MetadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 	}
 
 	// Compute initial metrics (no-op for pre-sessions with no transcript).
-	if m, _ := e.metrics.ComputeMetrics(ev.TranscriptPath); m != nil {
+	if m, _ := e.metrics.ComputeMetrics(ev.TranscriptPath, ev.Adapter); m != nil {
 		state.Metrics = m
 	}
 }
@@ -57,7 +57,7 @@ func (e *MetadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 	// Refresh metrics first — the tailer now extracts LastCWD during parsing,
 	// so we get CWD for free without a separate file read.
 	var metricsCWD string
-	if m, _ := e.metrics.ComputeMetrics(transcriptPath); m != nil {
+	if m, _ := e.metrics.ComputeMetrics(transcriptPath, state.Adapter); m != nil {
 		metricsCWD = m.LastCWD
 		state.Metrics = session.MergeMetrics(m, state.Metrics)
 	}
@@ -89,7 +89,7 @@ func (e *MetadataEnricher) RefreshMetrics(state *session.SessionState) {
 	if state.TranscriptPath == "" {
 		return
 	}
-	if m, _ := e.metrics.ComputeMetrics(state.TranscriptPath); m != nil {
+	if m, _ := e.metrics.ComputeMetrics(state.TranscriptPath, state.Adapter); m != nil {
 		state.Metrics = session.MergeMetrics(m, state.Metrics)
 	}
 }

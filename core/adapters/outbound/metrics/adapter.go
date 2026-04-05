@@ -3,6 +3,9 @@ package metrics
 import (
 	"sync"
 
+	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
@@ -28,16 +31,29 @@ func New() *Adapter {
 	return &Adapter{tailers: make(map[string]*lockedTailer)}
 }
 
+// parserFor returns the format-specific TranscriptParser for the given adapter name.
+func parserFor(adapter string) tailer.TranscriptParser {
+	switch adapter {
+	case codex.AdapterName:
+		return &codex.Parser{}
+	case pi.AdapterName:
+		return &pi.Parser{}
+	default:
+		return &claudecode.Parser{}
+	}
+}
+
 // ComputeMetrics analyses the transcript at transcriptPath and returns session metrics.
+// The adapter parameter selects the correct transcript parser.
 // Returns (nil, nil) when the transcript doesn't exist yet or yields no data.
-func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics, error) {
+func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.SessionMetrics, error) {
 	if transcriptPath == "" {
 		return nil, nil
 	}
 	a.mu.Lock()
 	lt, ok := a.tailers[transcriptPath]
 	if !ok {
-		lt = &lockedTailer{t: tailer.NewTranscriptTailer(transcriptPath)}
+		lt = &lockedTailer{t: tailer.NewTranscriptTailer(transcriptPath, parserFor(adapter), adapter)}
 		a.tailers[transcriptPath] = lt
 	}
 	a.mu.Unlock()
@@ -51,14 +67,14 @@ func (a *Adapter) ComputeMetrics(transcriptPath string) (*session.SessionMetrics
 		return nil, nil //nolint:nilerr — absent transcript is not an error
 	}
 	result := &session.SessionMetrics{
-		ElapsedSeconds:     m.ElapsedSeconds,
-		TotalTokens:        m.TotalTokens,
-		ModelName:          m.ModelName,
-		ContextWindow:      m.ContextWindow,
-		ContextUtilization: m.ContextUtilization,
-		PressureLevel:      m.PressureLevel,
-		HasOpenToolCall:    m.HasOpenToolCall,
-		OpenToolCallCount:  m.OpenToolCallCount,
+		ElapsedSeconds:         m.ElapsedSeconds,
+		TotalTokens:            m.TotalTokens,
+		ModelName:              m.ModelName,
+		ContextWindow:          m.ContextWindow,
+		ContextUtilization:     m.ContextUtilization,
+		PressureLevel:          m.PressureLevel,
+		HasOpenToolCall:        m.HasOpenToolCall,
+		OpenToolCallCount:      m.OpenToolCallCount,
 		LastEventType:          m.LastEventType,
 		LastOpenToolNames:      m.LastOpenToolNames,
 		LastToolResultWasError: m.LastToolResultWasError,

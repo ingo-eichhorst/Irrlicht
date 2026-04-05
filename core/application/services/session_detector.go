@@ -470,6 +470,15 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// Refresh CWD/branch/project and metrics from transcript.
 	d.enricher.RefreshOnActivity(state, ev.TranscriptPath)
 
+	// Force ready→working when metrics show activity so ClassifyState can
+	// properly detect the working→ready transition. Without this, sessions
+	// that start as ready (initial state) and whose first activity event
+	// already shows IsAgentDone()=true would stay ready with no transition
+	// broadcast — the UI would never see the "agent finished" event.
+	if state.State == session.StateReady && state.Metrics != nil && state.Metrics.LastEventType != "" {
+		state.State = session.StateWorking
+	}
+
 	// Content-based state detection.
 	now := time.Now().Unix()
 	newState, reason := ClassifyState(state.State, state.Metrics)

@@ -8,6 +8,140 @@ import (
 	"time"
 )
 
+// testParser is a minimal TranscriptParser for tests. It handles the basic
+// event types used in test fixtures (Claude Code-like format).
+type testParser struct{}
+
+func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
+	ev := &ParsedEvent{Timestamp: ParseTimestamp(raw)}
+
+	eventType := "unknown"
+	if et, ok := raw["type"].(string); ok {
+		eventType = et
+	} else if _, ok := raw["user_input"]; ok {
+		eventType = "user_message"
+	} else if _, ok := raw["assistant_output"]; ok {
+		eventType = "assistant_message"
+	} else if _, ok := raw["tool_call"]; ok {
+		eventType = "tool_call"
+	}
+
+	// System events.
+	if eventType == "system" {
+		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
+			ev.EventType = "turn_done"
+			return ev
+		}
+		ev.Skip = true
+		return ev
+	}
+
+	// Local command filtering.
+	if eventType == "user" {
+		if isMeta, ok := raw["isMeta"].(bool); ok && isMeta {
+			ev.Skip = true
+			return ev
+		}
+		if msg, ok := raw["message"].(map[string]interface{}); ok {
+			if content, ok := msg["content"].(string); ok {
+				if len(content) > 0 && content[0] == '<' {
+					ev.Skip = true
+					return ev
+				}
+			}
+		}
+	}
+
+	// Permission mode.
+	if eventType == "permission-mode" {
+		if mode, ok := raw["permissionMode"].(string); ok {
+			ev.PermissionMode = mode
+		}
+		ev.Skip = true
+		return ev
+	}
+
+	// Model/token extraction.
+	if message, ok := raw["message"].(map[string]interface{}); ok {
+		if model, ok := message["model"].(string); ok && model != "" {
+			ev.ModelName = model
+		}
+		if usage, ok := message["usage"].(map[string]interface{}); ok {
+			ev.Tokens = ExtractUsage(usage)
+		}
+	}
+	if cm, ok := raw["context_management"].(map[string]interface{}); ok {
+		if cw, ok := cm["context_window"].(float64); ok && cw > 0 {
+			ev.ContextWindow = int64(cw)
+		}
+	}
+	ev.ContentChars = ExtractContentChars(raw)
+
+	// Filter non-message events.
+	switch eventType {
+	case "user_message", "assistant_message", "tool_call", "tool_result",
+		"user_input", "assistant_output", "user", "assistant", "tool_use", "message":
+		// OK
+	default:
+		ev.Skip = true
+		return ev
+	}
+
+	ev.EventType = eventType
+
+	// Scan message.content[] for tool blocks.
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if contentArr, ok := msg["content"].([]interface{}); ok {
+			for _, item := range contentArr {
+				if block, ok := item.(map[string]interface{}); ok {
+					switch block["type"] {
+					case "tool_use":
+						if name, ok := block["name"].(string); ok {
+							ev.ToolUseNames = append(ev.ToolUseNames, name)
+						}
+					case "tool_result":
+						ev.ToolResultCount++
+						if isErr, ok := block["is_error"].(bool); ok && isErr {
+							ev.IsError = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Top-level tool events (not embedded in message.content[]).
+	switch eventType {
+	case "tool_use":
+		name, _ := raw["name"].(string)
+		ev.ToolUseNames = append(ev.ToolUseNames, name)
+	case "tool_call":
+		// Legacy format: {"tool_call": {"name": "Bash"}}
+		name := ""
+		if tc, ok := raw["tool_call"].(map[string]interface{}); ok {
+			name, _ = tc["name"].(string)
+		}
+		ev.ToolUseNames = append(ev.ToolUseNames, name)
+	case "tool_result":
+		ev.ToolResultCount++
+	}
+
+	// Assistant text.
+	switch eventType {
+	case "assistant", "assistant_message", "assistant_output":
+		ev.AssistantText = ExtractAssistantText(raw)
+	case "user", "user_message", "user_input":
+		ev.ClearToolNames = true
+	}
+
+	return ev
+}
+
+// newTestTailer creates a TranscriptTailer with the testParser for unit tests.
+func newTestTailer(path string) *TranscriptTailer {
+	return NewTranscriptTailer(path, &testParser{}, "claude-code")
+}
+
 // writeTranscriptLines writes JSONL entries to a temp file and returns the path.
 func writeTranscriptLines(t *testing.T, lines []map[string]interface{}) string {
 	t.Helper()
@@ -37,7 +171,7 @@ func TestHasOpenToolCall_NoToolEvents(t *testing.T) {
 		{"type": "assistant", "timestamp": ts(1)},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +192,7 @@ func TestHasOpenToolCall_SinglePairedToolCall(t *testing.T) {
 		{"type": "assistant", "timestamp": ts(3)},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +212,7 @@ func TestHasOpenToolCall_OneOpenToolCall(t *testing.T) {
 		// No matching tool_result
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +234,7 @@ func TestHasOpenToolCall_ParallelToolCalls(t *testing.T) {
 		{"type": "tool_result", "timestamp": ts(3)},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +255,7 @@ func TestHasOpenToolCall_ToolCallEventType(t *testing.T) {
 		// No matching tool_result
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +277,7 @@ func TestHasOpenToolCall_ExtraResultsClamped(t *testing.T) {
 		{"type": "assistant", "timestamp": ts(2)},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +301,7 @@ func TestHasOpenToolCall_MultipleRoundsAllClosed(t *testing.T) {
 		{"type": "tool_result", "timestamp": ts(5)},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +328,7 @@ func TestLastAssistantText_ClaudeCode(t *testing.T) {
 		}},
 		{"type": "system", "subtype": "stop_hook_summary", "timestamp": ts(2)},
 	})
-	m, err := NewTranscriptTailer(path).TailAndProcess()
+	m, err := newTestTailer(path).TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,27 +337,6 @@ func TestLastAssistantText_ClaudeCode(t *testing.T) {
 	}
 	if m.LastEventType != "turn_done" {
 		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
-	}
-}
-
-func TestLastAssistantText_Codex(t *testing.T) {
-	// Codex format: type="message" role="assistant", content[].type="output_text"
-	path := writeTranscriptLines(t, []map[string]interface{}{
-		{"type": "message", "role": "user", "timestamp": ts(0),
-			"content": []interface{}{
-				map[string]interface{}{"type": "input_text", "text": "hello"},
-			}},
-		{"type": "message", "role": "assistant", "timestamp": ts(1),
-			"content": []interface{}{
-				map[string]interface{}{"type": "output_text", "text": "What would you like to do with these files?"},
-			}},
-	})
-	m, err := NewTranscriptTailer(path).TailAndProcess()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.LastAssistantText != "What would you like to do with these files?" {
-		t.Errorf("LastAssistantText = %q, want question text", m.LastAssistantText)
 	}
 }
 
@@ -245,7 +358,7 @@ func TestLastAssistantText_ClearedOnUserMessage(t *testing.T) {
 		}},
 		{"type": "system", "subtype": "turn_duration", "timestamp": ts(3)},
 	})
-	m, err := NewTranscriptTailer(path).TailAndProcess()
+	m, err := newTestTailer(path).TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,39 +401,13 @@ func TestLocalCommandsSkipped(t *testing.T) {
 		}},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if m.LastEventType != "turn_done" {
 		t.Errorf("expected LastEventType=%q after local commands, got %q", "turn_done", m.LastEventType)
-	}
-}
-
-func TestPiBashExecutionSkipped(t *testing.T) {
-	// Pi bashExecution events (! shell escapes) should be skipped.
-	path := writeTranscriptLines(t, []map[string]interface{}{
-		{"type": "session", "version": float64(3), "cwd": "/tmp"},
-		{"type": "message", "timestamp": ts(0), "message": map[string]interface{}{
-			"role": "assistant", "stopReason": "stop",
-			"content": []interface{}{
-				map[string]interface{}{"type": "text", "text": "Hi!"},
-			},
-		}},
-		// Pi shell escape
-		{"type": "message", "timestamp": ts(1), "message": map[string]interface{}{
-			"role": "bashExecution",
-		}},
-	})
-
-	tailer := NewTranscriptTailer(path)
-	m, err := tailer.TailAndProcess()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.LastEventType != "assistant_message" {
-		t.Errorf("expected LastEventType=%q after Pi bashExecution, got %q", "assistant_message", m.LastEventType)
 	}
 }
 
@@ -338,7 +425,7 @@ func TestLocalCommandsDoNotAffectNormalUserMessage(t *testing.T) {
 		}},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
