@@ -2,7 +2,7 @@
 
 > A free, open-source macOS menu bar application that monitors AI coding agent sessions in real time.
 
-Irrlicht provides menu-bar telemetry for AI coding agents like Claude Code and OpenAI Codex. It uses a three-state light system — working (purple), waiting (orange), and ready (green) — to show each agent's status at a glance. The app detects sessions automatically via filesystem watching and process scanning, requires zero configuration, and runs entirely on-device with no data leaving the machine. Built with Go and SwiftUI, it supports multi-agent monitoring, context pressure tracking, cost estimation, and git-aware session grouping. MIT licensed.
+Irrlicht provides menu-bar telemetry for AI coding agents like Claude Code, OpenAI Codex, and Pi. It uses a three-state light system — working (purple), waiting (orange), and ready (green) — to show each agent's status at a glance. The app detects sessions automatically via filesystem watching and process scanning, requires zero configuration, and runs entirely on-device with no data leaving the machine. Built with Go and SwiftUI, it supports multi-agent monitoring, context pressure tracking, cost estimation, and git-aware session grouping. MIT licensed.
 
 ## Documentation
 

@@ -4,9 +4,9 @@
 
 ![Banner](assets/banner.png)
 
-[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/ingo-eichhorst/9f14c8e5f25c1ccf5d6500c1685fd9fb/raw/coverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fingo-eichhorst%2F9f14c8e5f25c1ccf5d6500c1685fd9fb%2Fraw%2Fcoverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
 [![License](https://img.shields.io/badge/license-MIT-orange?color=%23FF9500)](LICENSE)
-[![Version](https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/ingo-eichhorst/Irrlicht/main/version.json&query=$.version&label=version&color=%2334C759)](version.json)
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fingo-eichhorst%2FIrrlicht%2Fmain%2Fversion.json&query=%24.version&label=version&color=%2334C759)](version.json)
 
 [![ARS](https://img.shields.io/badge/ARS-Agent--Assisted%207.3%2F10-yellow)](https://github.com/ingo-eichhorst/agent-readyness)
 
@@ -16,7 +16,7 @@
 
 ---
 
-**Irrlicht** is a macOS menu bar application that monitors AI coding agent sessions (Claude Code, OpenAI Codex), providing instant visual feedback on session states. The name comes from German folklore—*Irrlicht* is the German word for will-o'-the-wisp, the ghostly lights that drift over the moors and marshes of the Harz mountains. In Goethe's *Faust*, an Irrlicht guides Faust and Mephistopheles up the Brocken on Walpurgis Night, a treacherous companion on a treacherous path. Harzer miners told of phantom lights in the tunnels near Clausthal-Zellerfeld—sometimes a warning, sometimes a promise of ore ahead.
+**Irrlicht** is a macOS menu bar application that monitors AI coding agent sessions (Claude Code, OpenAI Codex, Pi), providing instant visual feedback on session states. The name comes from German folklore—*Irrlicht* is the German word for will-o'-the-wisp, the ghostly lights that drift over the moors and marshes of the Harz mountains. In Goethe's *Faust*, an Irrlicht guides Faust and Mephistopheles up the Brocken on Walpurgis Night, a treacherous companion on a treacherous path. Harzer miners told of phantom lights in the tunnels near Clausthal-Zellerfeld—sometimes a warning, sometimes a promise of ore ahead.
 
 This Irrlicht flips the old myth: instead of luring you astray, it guides you with honest signals about where your attention is needed.
 
@@ -30,7 +30,7 @@ This Irrlicht flips the old myth: instead of luring you astray, it guides you wi
 >
 > **Irrlicht** flips the myth: it's the *tamed* will-o'-the-wisp—small, honest lights that appear exactly where you need them.
 
-Irrlicht watches agent transcript files (Claude Code, Codex), turns activity into a deterministic state machine, and renders them as quiet, legible beacons. Local-first, atomic writes, zero configuration.
+Irrlicht watches agent transcript files (Claude Code, Codex, Pi), turns activity into a deterministic state machine, and renders them as quiet, legible beacons. Local-first, atomic writes, zero configuration.
 
 ```
 Transcript Files → FSEvents/kqueue → SessionDetector → State Machine → Menu Bar
@@ -69,7 +69,7 @@ No ghosts. **Files → State → Light.**
 - **macOS**: Primary target platform
 - **Go 1.21+**: For building the daemon
 - **Swift 5.9+**: For SwiftUI menu bar application
-- **Claude Code and/or Codex**: At least one supported AI coding agent
+- **Claude Code, Codex, and/or Pi**: At least one supported AI coding agent
 
 ### Installation
 
@@ -133,6 +133,7 @@ Example state file:
 │   │   ├── inbound/           # Drives events into the app
 │   │   │   ├── claudecode/    # Watches ~/.claude/projects for Claude Code sessions
 │   │   │   ├── codex/         # Watches ~/.codex for OpenAI Codex sessions
+│   │   │   ├── pi/            # Watches ~/.pi/agent/sessions for Pi sessions
 │   │   │   ├── gastown/       # Watches Gas Town daemon state + polls gt CLI
 │   │   │   └── fswatcher/     # Shared fsnotify-based watcher implementation
 │   │   └── outbound/          # App calls out to external systems
@@ -185,7 +186,7 @@ cd platforms/macos && swift test
 
 ### Session Detection
 
-Irrlicht detects agent sessions via transcript file-watching (Claude Code, Codex):
+Irrlicht detects agent sessions via transcript file-watching (Claude Code, Codex, Pi):
 
 | Detection | Technology | Transition |
 |-----------|-----------|------------|
@@ -208,6 +209,7 @@ Irrlicht.app (single artifact)
       ├── Inbound Adapters
       │   ├── Claude Code    (~/.claude/projects/**/*.jsonl via fsnotify)
       │   ├── Codex          (~/.codex/**/*.jsonl via fsnotify)
+      │   ├── Pi             (~/.pi/agent/sessions/**/*.jsonl via fsnotify)
       │   └── Gas Town       (daemon/state.json watcher + gt CLI poller)
       ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking)
       ├── GracePeriodTimer   (per-session 2s idle → waiting)
