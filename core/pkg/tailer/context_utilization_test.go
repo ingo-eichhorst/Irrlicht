@@ -33,7 +33,7 @@ func TestContextUtilization_KnownModel_Sonnet45(t *testing.T) {
 		},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestContextUtilization_KnownModel_Opus46(t *testing.T) {
 		},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestContextUtilization_UnknownModel_Fallback200K(t *testing.T) {
 		},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestContextUtilization_ExtendedContext1M(t *testing.T) {
 		},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestContextUtilization_TranscriptContextWindow(t *testing.T) {
 		},
 	})
 
-	tailer := NewTranscriptTailer(path)
+	tailer := newTestTailer(path)
 	m, err := tailer.TailAndProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +181,7 @@ func TestContextUtilization_PressureLevels(t *testing.T) {
 				},
 			})
 
-			tailer := NewTranscriptTailer(path)
+			tailer := newTestTailer(path)
 			m, err := tailer.TailAndProcess()
 			if err != nil {
 				t.Fatal(err)
@@ -215,9 +215,9 @@ func TestNormalizeModelName_NewModels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := normalizeModelName(tt.input)
+			got := NormalizeModelName(tt.input)
 			if got != tt.want {
-				t.Errorf("normalizeModelName(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("NormalizeModelName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

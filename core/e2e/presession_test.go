@@ -332,7 +332,7 @@ func (g *stubGit) GetCWDFromTranscript(_ string) string    { return "" }
 
 type stubMetrics struct{}
 
-func (m *stubMetrics) ComputeMetrics(_ string) (*session.SessionMetrics, error) {
+func (m *stubMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, error) {
 	return nil, nil
 }
 

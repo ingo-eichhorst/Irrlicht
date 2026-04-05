@@ -93,7 +93,7 @@ func (g *mockGit) GetCWDFromTranscript(path string) string     { return "" }
 
 type mockMetrics struct{}
 
-func (m *mockMetrics) ComputeMetrics(path string) (*session.SessionMetrics, error) {
+func (m *mockMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
 	return nil, nil
 }
 
@@ -183,16 +183,21 @@ func newDetectorWithStaleTimeout(
 }
 
 // newDetectorWithCWDDiscovery builds a SessionDetector with a mock CWD-based
-// PID discovery function.
+// PID discovery function registered for the "claude-code" adapter.
 func newDetectorWithCWDDiscovery(
 	tw *mockAgentWatcher,
 	pw *mockProcessWatcher,
 	repo *mockRepo,
 	cwdFn func(string, func([]int) int) (int, error),
 ) *services.SessionDetector {
+	discovers := map[string]services.PIDDiscoverFunc{
+		"claude-code": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+			return cwdFn(cwd, disambiguate)
+		},
+	}
 	return services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, cwdFn,
+		"test", 0, discovers,
 	)
 }

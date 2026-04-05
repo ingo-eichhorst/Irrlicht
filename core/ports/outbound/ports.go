@@ -52,8 +52,10 @@ type GitResolver interface {
 }
 
 // MetricsCollector computes session metrics from a transcript file.
+// The adapter parameter identifies the transcript format (e.g. "claude-code",
+// "codex", "pi") so the correct parser is used.
 type MetricsCollector interface {
-	ComputeMetrics(transcriptPath string) (*session.SessionMetrics, error)
+	ComputeMetrics(transcriptPath, adapter string) (*session.SessionMetrics, error)
 }
 
 // PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).

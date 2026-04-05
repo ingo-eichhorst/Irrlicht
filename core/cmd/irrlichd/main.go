@@ -278,12 +278,20 @@ func main() {
 
 	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher, piWatcher, procScanner}
 
+	// Per-adapter PID discovery: Claude Code uses CWD-based matching,
+	// Codex/Pi use transcript file writer detection.
+	pidDiscovers := map[string]services.PIDDiscoverFunc{
+		claudecode.AdapterName: claudecode.DiscoverPID,
+		codex.AdapterName:      codex.DiscoverPID,
+		pi.AdapterName:         pi.DiscoverPID,
+	}
+
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
 		watchers, pwPort,
 		cachedRepo, logger, gitResolver, metricsCollector, push,
 		Version, cfg.ReadySessionTTL,
-		processlifecycle.DiscoverPIDByCWD,
+		pidDiscovers,
 	)
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
