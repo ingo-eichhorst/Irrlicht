@@ -127,6 +127,18 @@
         <li>Model detection from <code>~/.codex/config.toml</code></li>
       </ul>
 
+      <h3>Pi Coding Agent</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>~/.pi/agent/sessions/--&lt;cwd-dashed&gt;--/&lt;timestamp&gt;_&lt;uuid&gt;.jsonl</code></li>
+        <li>JSONL v3 format &mdash; session header on first line with <code>cwd</code>, <code>parentSession</code>, and <code>version</code> fields</li>
+        <li>Messages use <code>role</code> field: <code>user</code>, <code>assistant</code>, <code>toolResult</code>, <code>bashExecution</code></li>
+        <li>Turn completion detected from <code>stopReason: "stop"</code> on assistant messages</li>
+        <li><strong>Adapter name:</strong> <code>pi</code></li>
+        <li>Model detection from <code>~/.pi/agent/settings.json</code> (<code>defaultModel</code> field)</li>
+        <li>Supports multiple LLM providers (Anthropic, OpenAI, Google, xAI, Groq)</li>
+      </ul>
+
       <h2>PID Discovery</h2>
 
       <table>

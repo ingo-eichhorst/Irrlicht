@@ -101,6 +101,17 @@
         <li>Model detection from <code>~/.codex/config.toml</code></li>
       </ul>
 
+      <h3>Pi Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/pi/</code></li>
+        <li><strong>Watches:</strong> <code>~/.pi/agent/sessions/</code> (nested: <code>--&lt;cwd-dashed&gt;--/*.jsonl</code>)</li>
+        <li>Uses the shared fswatcher with recursive directory watching</li>
+        <li><strong>Adapter name:</strong> <code>"pi"</code></li>
+        <li>Model detection from <code>~/.pi/agent/settings.json</code></li>
+        <li>JSONL v3 format with session header, tree-structured entries, and multi-provider support</li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>
