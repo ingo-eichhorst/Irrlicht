@@ -22,18 +22,39 @@ func ExtractCWDFromLine(raw map[string]interface{}) string {
 	if cwd, ok := raw["cwd"].(string); ok && cwd != "" {
 		return cwd
 	}
+	// Wrapped Codex metadata: payload.cwd.
+	if payload, ok := raw["payload"].(map[string]interface{}); ok {
+		if cwd, ok := payload["cwd"].(string); ok && cwd != "" {
+			return cwd
+		}
+	}
 	// Codex: <cwd> XML tag inside environment_context content blocks.
 	if cwd := extractCWDFromContentBlocks(raw); cwd != "" {
 		return cwd
 	}
+	if payload, ok := raw["payload"].(map[string]interface{}); ok {
+		if cwd := extractCWDFromContentBlocks(payload); cwd != "" {
+			return cwd
+		}
+	}
 	// Codex: workdir inside function_call arguments.
-	if raw["type"] == "function_call" {
-		if args, ok := raw["arguments"].(string); ok {
-			var parsed map[string]interface{}
-			if json.Unmarshal([]byte(args), &parsed) == nil {
-				if wd, ok := parsed["workdir"].(string); ok && wd != "" {
-					return wd
-				}
+	if cwd := extractCWDFromArguments(raw); cwd != "" {
+		return cwd
+	}
+	if payload, ok := raw["payload"].(map[string]interface{}); ok {
+		if cwd := extractCWDFromArguments(payload); cwd != "" {
+			return cwd
+		}
+	}
+	return ""
+}
+
+func extractCWDFromArguments(raw map[string]interface{}) string {
+	if args, ok := raw["arguments"].(string); ok {
+		var parsed map[string]interface{}
+		if json.Unmarshal([]byte(args), &parsed) == nil {
+			if wd, ok := parsed["workdir"].(string); ok && wd != "" {
+				return wd
 			}
 		}
 	}

@@ -127,6 +127,12 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 	if arr, ok := raw["content"].([]interface{}); ok {
 		collectText(arr)
 	}
+	// Wrapped Codex: payload.content[]
+	if payload, ok := raw["payload"].(map[string]interface{}); ok {
+		if arr, ok := payload["content"].([]interface{}); ok {
+			collectText(arr)
+		}
+	}
 
 	var text string
 	switch len(parts) {
@@ -149,8 +155,7 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 // a transcript event, checking common content locations across formats.
 func ExtractContentChars(raw map[string]interface{}) int64 {
 	var chars int64
-	// Top-level content array (Codex newer format)
-	if arr, ok := raw["content"].([]interface{}); ok {
+	addContentChars := func(arr []interface{}) {
 		for _, item := range arr {
 			if block, ok := item.(map[string]interface{}); ok {
 				if text, ok := block["text"].(string); ok {
@@ -159,16 +164,29 @@ func ExtractContentChars(raw map[string]interface{}) int64 {
 			}
 		}
 	}
+	// Top-level content array (Codex newer format)
+	if arr, ok := raw["content"].([]interface{}); ok {
+		addContentChars(arr)
+	}
 	// Nested message.content array (Claude Code format)
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if arr, ok := msg["content"].([]interface{}); ok {
-			for _, item := range arr {
-				if block, ok := item.(map[string]interface{}); ok {
-					if text, ok := block["text"].(string); ok {
-						chars += int64(len(text))
-					}
-				}
-			}
+			addContentChars(arr)
+		}
+	}
+	// Wrapped Codex payload content.
+	if payload, ok := raw["payload"].(map[string]interface{}); ok {
+		if arr, ok := payload["content"].([]interface{}); ok {
+			addContentChars(arr)
+		}
+		if args, ok := payload["arguments"].(string); ok {
+			chars += int64(len(args))
+		}
+		if output, ok := payload["output"].(string); ok {
+			chars += int64(len(output))
+		}
+		if message, ok := payload["message"].(string); ok {
+			chars += int64(len(message))
 		}
 	}
 	// Codex function_call arguments

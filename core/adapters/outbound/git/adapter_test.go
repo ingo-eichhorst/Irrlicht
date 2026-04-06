@@ -1,6 +1,7 @@
 package git
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,5 +94,49 @@ func TestGetProjectName_DeletedWorktree(t *testing.T) {
 	got := a.GetProjectName(deleted)
 	if got != "myproject" {
 		t.Errorf("got %q, want %q", got, "myproject")
+	}
+}
+
+func TestGetCWDFromTranscript_WrappedCodex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wrapped-codex.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	lines := []map[string]interface{}{
+		{
+			"type": "session_meta",
+			"payload": map[string]interface{}{
+				"cwd": "/Users/test/original",
+			},
+		},
+		{
+			"type": "turn_context",
+			"payload": map[string]interface{}{
+				"cwd": "/Users/test/worktree",
+			},
+		},
+		{
+			"type": "response_item",
+			"payload": map[string]interface{}{
+				"type":      "function_call",
+				"name":      "shell_command",
+				"arguments": `{"command":["pwd"],"workdir":"/Users/test/override"}`,
+			},
+		},
+	}
+	for _, line := range lines {
+		if err := enc.Encode(line); err != nil {
+			t.Fatalf("encode transcript line: %v", err)
+		}
+	}
+
+	a := New()
+	got := a.GetCWDFromTranscript(path)
+	if got != "/Users/test/override" {
+		t.Errorf("got %q, want %q", got, "/Users/test/override")
 	}
 }

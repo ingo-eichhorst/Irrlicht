@@ -1,10 +1,8 @@
 package codex
 
 import (
-	"encoding/json"
-	"strings"
-
 	"irrlicht/core/pkg/tailer"
+	"irrlicht/core/pkg/transcript"
 )
 
 // Parser implements tailer.TranscriptParser for OpenAI Codex transcripts.
@@ -41,8 +39,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		return ev
 	}
 
-	// CWD extraction from <cwd> XML tags and function_call workdir.
-	ev.CWD = extractCodexCWD(raw)
+	ev.CWD = transcript.ExtractCWDFromLine(raw)
 
 	// Model/token extraction from payload-wrapped events.
 	ev.ModelName, ev.ContextWindow, ev.Tokens = extractCodexMetadata(raw)
@@ -53,33 +50,14 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// Map event types to normalized forms.
 	switch eventType {
 	case "message":
-		role, _ := raw["role"].(string)
-		switch role {
-		case "assistant":
-			ev.EventType = "assistant_message"
-			ev.AssistantText = tailer.ExtractAssistantText(raw)
-		case "user", "developer":
-			ev.EventType = "user_message"
-			ev.ClearToolNames = true
-		default:
+		if !parseCodexMessage(raw, ev) {
 			ev.Skip = true
 			return ev
 		}
 
 	case "response_item":
 		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if role, ok := payload["role"].(string); ok {
-				switch role {
-				case "assistant":
-					ev.EventType = "assistant_message"
-				case "user", "developer":
-					ev.EventType = "user_message"
-					ev.ClearToolNames = true
-				default:
-					ev.Skip = true
-					return ev
-				}
-			} else {
+			if !parseCodexResponseItem(payload, ev) {
 				ev.Skip = true
 				return ev
 			}
@@ -89,17 +67,15 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		}
 
 	case "function_call":
-		ev.EventType = "function_call"
-		if name, ok := raw["name"].(string); ok {
-			ev.ToolUseNames = []string{name}
+		if !parseCodexFunctionCall(raw, ev) {
+			ev.Skip = true
+			return ev
 		}
 
 	case "function_call_output":
-		ev.EventType = "function_call_output"
-		ev.ToolResultCount = 1
+		parseCodexFunctionCallOutput(ev)
 
 	case "session_meta", "event_msg", "turn_context":
-		// Metadata events — extract model/token info (already done above) and skip.
 		ev.Skip = true
 		return ev
 
@@ -111,36 +87,54 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	return ev
 }
 
-// extractCodexCWD extracts the working directory from a Codex event.
-// Checks <cwd> XML tags in content blocks and workdir in function_call arguments.
-func extractCodexCWD(raw map[string]interface{}) string {
-	// <cwd> XML tag in content blocks.
-	if content, ok := raw["content"].([]interface{}); ok {
-		for _, item := range content {
-			if block, ok := item.(map[string]interface{}); ok {
-				if text, ok := block["text"].(string); ok {
-					if idx := strings.Index(text, "<cwd>"); idx >= 0 {
-						end := strings.Index(text[idx:], "</cwd>")
-						if end > 5 {
-							return strings.TrimSpace(text[idx+5 : idx+end])
-						}
-					}
-				}
-			}
-		}
+func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	role, _ := raw["role"].(string)
+	switch role {
+	case "assistant":
+		ev.EventType = "assistant_message"
+		ev.AssistantText = tailer.ExtractAssistantText(raw)
+	case "user", "developer":
+		ev.EventType = "user_message"
+		ev.ClearToolNames = true
+	default:
+		return false
 	}
-	// workdir in function_call arguments.
-	if raw["type"] == "function_call" {
-		if args, ok := raw["arguments"].(string); ok {
-			var parsed map[string]interface{}
-			if json.Unmarshal([]byte(args), &parsed) == nil {
-				if wd, ok := parsed["workdir"].(string); ok && wd != "" {
-					return wd
-				}
-			}
-		}
+	return true
+}
+
+func parseCodexResponseItem(payload map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	payloadType, _ := payload["type"].(string)
+	switch payloadType {
+	case "message":
+		return parseCodexMessage(payload, ev)
+	case "function_call", "custom_tool_call":
+		return parseCodexFunctionCall(payload, ev)
+	case "function_call_output", "custom_tool_call_output":
+		parseCodexFunctionCallOutput(ev)
+		return true
+	case "web_search_call":
+		ev.EventType = "function_call_output"
+		ev.ToolUseNames = []string{"web_search"}
+		ev.ToolResultCount = 1
+		return true
+	default:
+		return false
 	}
-	return ""
+}
+
+func parseCodexFunctionCall(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	name, _ := raw["name"].(string)
+	if name == "" {
+		return false
+	}
+	ev.EventType = "function_call"
+	ev.ToolUseNames = []string{name}
+	return true
+}
+
+func parseCodexFunctionCallOutput(ev *tailer.ParsedEvent) {
+	ev.EventType = "function_call_output"
+	ev.ToolResultCount = 1
 }
 
 // extractCodexMetadata extracts model, context window, and token info from Codex events.
