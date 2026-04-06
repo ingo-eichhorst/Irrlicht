@@ -85,6 +85,19 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// Content character count for token estimation.
 	ev.ContentChars = tailer.ExtractContentChars(raw)
 
+	// Intermediate streaming messages from Claude Code (thinking blocks,
+	// partial text before tool_use) lack the stop_reason field. Using
+	// "assistant_streaming" prevents IsAgentDone() from falsely returning
+	// true between tool calls when LastEventType would otherwise be
+	// "assistant" with no open tool calls.
+	if eventType == "assistant" {
+		if msg, ok := raw["message"].(map[string]interface{}); ok {
+			if _, hasStopReason := msg["stop_reason"]; !hasStopReason {
+				eventType = "assistant_streaming"
+			}
+		}
+	}
+
 	// Filter non-message events.
 	if !isClaudeCodeMessageEvent(eventType) {
 		ev.Skip = true
@@ -116,7 +129,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	// Track assistant text for waiting-state display.
 	switch eventType {
-	case "assistant", "assistant_message", "assistant_output":
+	case "assistant", "assistant_streaming", "assistant_message", "assistant_output":
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
@@ -195,7 +208,8 @@ func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
 func isClaudeCodeMessageEvent(eventType string) bool {
 	switch eventType {
 	case "user_message", "assistant_message", "tool_call", "tool_result",
-		"user_input", "assistant_output", "user", "assistant", "tool_use", "message":
+		"user_input", "assistant_output", "user", "assistant", "tool_use", "message",
+		"assistant_streaming":
 		return true
 	}
 	return false

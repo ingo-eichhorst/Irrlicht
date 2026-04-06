@@ -145,7 +145,6 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T)
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     3,
 		Metrics: &session.SessionMetrics{
-			TurnDone:        true,
 			LastEventType:   "turn_done",
 			HasOpenToolCall: false,
 		},
@@ -174,13 +173,13 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T)
 	}
 }
 
-func TestSessionDetector_Activity_StaysWorking_WhenAssistantMidTurn(t *testing.T) {
+func TestSessionDetector_Activity_StaysWorking_WhenAssistantStreaming(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
-	// Mid-turn: last event is "assistant" with no open tools, but no turn_done.
-	// This happens between tool calls — should NOT transition to ready.
+	// Mid-turn: Claude Code streaming message (no stop_reason) emits
+	// "assistant_streaming" which should NOT trigger IsAgentDone().
 	repo.states["nosys1"] = &session.SessionState{
 		SessionID:      "nosys1",
 		State:          session.StateWorking,
@@ -189,7 +188,7 @@ func TestSessionDetector_Activity_StaysWorking_WhenAssistantMidTurn(t *testing.T
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     3,
 		Metrics: &session.SessionMetrics{
-			LastEventType:   "assistant",
+			LastEventType:   "assistant_streaming",
 			HasOpenToolCall: false,
 		},
 	}
@@ -213,7 +212,7 @@ func TestSessionDetector_Activity_StaysWorking_WhenAssistantMidTurn(t *testing.T
 
 	state, _ := repo.Load("nosys1")
 	if state.State != session.StateWorking {
-		t.Errorf("state: got %q, want working (mid-turn assistant with no turn_done should stay working)", state.State)
+		t.Errorf("state: got %q, want working (assistant_streaming should not trigger ready)", state.State)
 	}
 }
 
@@ -970,12 +969,12 @@ func TestIsAgentDone(t *testing.T) {
 		want    bool
 	}{
 		{"nil metrics", nil, false},
-		{"TurnDone flag set", &session.SessionMetrics{TurnDone: true}, true},
-		{"TurnDone with open tools (subagent running)", &session.SessionMetrics{TurnDone: true, HasOpenToolCall: true}, false},
-		{"turn_done event without TurnDone flag", &session.SessionMetrics{LastEventType: "turn_done"}, false},
-		{"assistant_message, no open tools (Codex fallback)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
-		{"assistant_output, no open tools (Codex fallback)", &session.SessionMetrics{LastEventType: "assistant_output", HasOpenToolCall: false}, true},
-		{"assistant, no open tools (mid-turn — NOT done)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, false},
+		{"turn_done", &session.SessionMetrics{LastEventType: "turn_done"}, true},
+		{"turn_done, open tools (subagent running)", &session.SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}, false},
+		{"assistant with stop_reason (end_turn)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
+		{"assistant_message, no open tools (Codex)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
+		{"assistant_output, no open tools (Codex)", &session.SessionMetrics{LastEventType: "assistant_output", HasOpenToolCall: false}, true},
+		{"assistant_streaming (no stop_reason — NOT done)", &session.SessionMetrics{LastEventType: "assistant_streaming", HasOpenToolCall: false}, false},
 		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},
 		{"user, no open tools", &session.SessionMetrics{LastEventType: "user", HasOpenToolCall: false}, false},
 		{"empty", &session.SessionMetrics{}, false},
@@ -1090,7 +1089,6 @@ func TestSessionDetector_StaleToolCall_CancelledByActivity(t *testing.T) {
 	state.Metrics.OpenToolCallCount = 0
 	state.Metrics.LastOpenToolNames = nil
 	state.Metrics.LastEventType = "turn_done"
-	state.Metrics.TurnDone = true
 	repo.Save(state)
 
 	tw.ch <- agent.Event{
@@ -1283,7 +1281,7 @@ func TestSessionDetector_ParentHeldWorking_WhenChildrenActive(t *testing.T) {
 
 	now := time.Now().Unix()
 
-	// Parent session: turn is done (TurnDone=true), no open tool calls.
+	// Parent session: turn is done, no open tool calls.
 	// Without children this would transition to ready.
 	repo.Save(&session.SessionState{
 		SessionID:      "parent1",
@@ -1293,7 +1291,6 @@ func TestSessionDetector_ParentHeldWorking_WhenChildrenActive(t *testing.T) {
 		UpdatedAt:      now,
 		EventCount:     5,
 		Metrics: &session.SessionMetrics{
-			TurnDone:          true,
 			LastEventType:     "turn_done",
 			HasOpenToolCall:   false,
 			LastAssistantText: "Done.",
@@ -1359,7 +1356,6 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
 		UpdatedAt:      now,
 		EventCount:     5,
 		Metrics: &session.SessionMetrics{
-			TurnDone:          true,
 			LastEventType:     "turn_done",
 			HasOpenToolCall:   false,
 			LastAssistantText: "Done.",
@@ -1376,7 +1372,6 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
 		UpdatedAt:       now,
 		EventCount:      3,
 		Metrics: &session.SessionMetrics{
-			TurnDone:        true,
 			LastEventType:   "turn_done",
 			HasOpenToolCall: false,
 		},
@@ -1429,7 +1424,6 @@ func TestSessionDetector_ParentNotAffected_WhenNoChildren(t *testing.T) {
 		UpdatedAt:      now,
 		EventCount:     5,
 		Metrics: &session.SessionMetrics{
-			TurnDone:          true,
 			LastEventType:     "turn_done",
 			HasOpenToolCall:   false,
 			LastAssistantText: "All done.",

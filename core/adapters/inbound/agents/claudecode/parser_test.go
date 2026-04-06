@@ -81,7 +81,8 @@ func TestParser_ToolUseInContent(t *testing.T) {
 		"type":      "assistant",
 		"timestamp": "2026-04-05T22:00:00Z",
 		"message": map[string]interface{}{
-			"role": "assistant",
+			"role":        "assistant",
+			"stop_reason": "tool_use",
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Let me check."},
 				map[string]interface{}{"type": "tool_use", "name": "Bash", "id": "tu_1"},
@@ -122,7 +123,8 @@ func TestParser_AssistantText(t *testing.T) {
 		"type":      "assistant",
 		"timestamp": "2026-04-05T22:00:00Z",
 		"message": map[string]interface{}{
-			"role": "assistant",
+			"role":        "assistant",
+			"stop_reason": "end_turn",
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Should I proceed?"},
 			},
@@ -130,6 +132,110 @@ func TestParser_AssistantText(t *testing.T) {
 	})
 	if ev.AssistantText != "Should I proceed?" {
 		t.Errorf("AssistantText = %q, want question", ev.AssistantText)
+	}
+}
+
+func TestParser_AssistantStreaming_NoStopReason(t *testing.T) {
+	// Intermediate streaming messages (thinking, partial text) lack stop_reason.
+	// They should emit "assistant_streaming" to prevent false IsAgentDone().
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{"type": "thinking", "thinking": "Let me think..."},
+			},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.EventType != "assistant_streaming" {
+		t.Errorf("EventType = %q, want assistant_streaming (no stop_reason)", ev.EventType)
+	}
+}
+
+func TestParser_AssistantStreaming_TextNoStopReason(t *testing.T) {
+	// Text-only assistant message without stop_reason = intermediate.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role": "assistant",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Let me check the file..."},
+			},
+		},
+	})
+	if ev.EventType != "assistant_streaming" {
+		t.Errorf("EventType = %q, want assistant_streaming", ev.EventType)
+	}
+	if ev.AssistantText != "Let me check the file..." {
+		t.Errorf("AssistantText = %q, want text (should still extract)", ev.AssistantText)
+	}
+}
+
+func TestParser_AssistantFinal_EndTurn(t *testing.T) {
+	// Final response with stop_reason=end_turn keeps EventType="assistant".
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role":        "assistant",
+			"stop_reason": "end_turn",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Done. All tests pass."},
+			},
+		},
+	})
+	if ev.EventType != "assistant" {
+		t.Errorf("EventType = %q, want assistant (stop_reason=end_turn)", ev.EventType)
+	}
+}
+
+func TestParser_AssistantFinal_ToolUse(t *testing.T) {
+	// Tool call with stop_reason=tool_use keeps EventType="assistant".
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role":        "assistant",
+			"stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Read", "id": "tu_1"},
+			},
+		},
+	})
+	if ev.EventType != "assistant" {
+		t.Errorf("EventType = %q, want assistant (stop_reason=tool_use)", ev.EventType)
+	}
+	if len(ev.ToolUseNames) != 1 || ev.ToolUseNames[0] != "Read" {
+		t.Errorf("ToolUseNames = %v, want [Read]", ev.ToolUseNames)
+	}
+}
+
+func TestParser_AssistantFinal_NullStopReason(t *testing.T) {
+	// stop_reason: null (field present, value nil) = potentially done.
+	// Should keep "assistant" EventType (not "assistant_streaming").
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role":        "assistant",
+			"stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Here are the files."},
+			},
+		},
+	})
+	if ev.EventType != "assistant" {
+		t.Errorf("EventType = %q, want assistant (stop_reason=null → field present)", ev.EventType)
 	}
 }
 

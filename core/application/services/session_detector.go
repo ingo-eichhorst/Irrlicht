@@ -732,7 +732,7 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 		return
 	}
 	// The parent's own turn must be done for it to transition.
-	if parent.Metrics == nil || !parent.Metrics.TurnDone {
+	if parent.Metrics == nil || !parent.Metrics.IsAgentDone() {
 		return
 	}
 	// Still have active children — stay working.

@@ -73,9 +73,6 @@ type SessionMetrics struct {
 	// "plan", "bypassPermissions"). Extracted from "permission-mode" events.
 	PermissionMode string `json:"permission_mode,omitempty"`
 
-	// TurnDone is true when the agent's turn has definitively ended —
-	// set when a turn_done event is seen, cleared on the next user message.
-	TurnDone bool `json:"turn_done,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -115,9 +112,6 @@ type TranscriptTailer struct {
 
 	// lastToolResultWasError tracks is_error on the most recent tool_result.
 	lastToolResultWasError bool
-
-	// turnDone is set when a turn_done event is seen, cleared on user events.
-	turnDone bool
 
 	// lastCWD tracks the most recent working directory seen in transcript lines.
 	lastCWD string
@@ -210,14 +204,6 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 				t.applyMetadata(parsed)
 			}
 			continue
-		}
-
-		// Track turn_done signal: set on turn_done, cleared on user events.
-		if parsed.EventType == "turn_done" {
-			t.turnDone = true
-		}
-		if parsed.ClearToolNames {
-			t.turnDone = false
 		}
 
 		// Apply tool tracking deltas from the parser.
@@ -389,7 +375,6 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.LastToolResultWasError = t.lastToolResultWasError
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText
-	t.metrics.TurnDone = t.turnDone
 
 	// Token breakdown + estimated cost.
 	t.metrics.InputTokens = t.inputTokens
