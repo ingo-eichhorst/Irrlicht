@@ -23,11 +23,18 @@ func NewCapacityManagerFromData(data []byte) (*CapacityManager, error) {
 }
 
 // DefaultCapacityManager returns a CapacityManager initialized with the
-// embedded model-capacity.json. Returns nil if parsing fails.
+// embedded model-capacity.json, merged with any cached remote data.
+// Returns nil if parsing fails.
 func DefaultCapacityManager() *CapacityManager {
 	cm, err := NewCapacityManagerFromData(defaultConfigData)
 	if err != nil {
 		return nil
 	}
+
+	// Merge cached remote data (fills in models not in embedded JSON).
+	if remote := LoadCachedRemoteData(); remote != nil {
+		cm.MergeRemoteModels(remote)
+	}
+
 	return cm
 }

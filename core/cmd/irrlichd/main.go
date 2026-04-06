@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
@@ -75,6 +76,25 @@ func main() {
 		}
 	}
 	logger.LogInfo("startup", "", fmt.Sprintf("max session age: %s", cfg.MaxSessionAge))
+
+	// Background model capacity refresh from LiteLLM.
+	go func() {
+		if n, err := capacity.RefreshRemoteDataIfStale(); err != nil {
+			logger.LogError("capacity", "", fmt.Sprintf("remote refresh failed: %v", err))
+		} else if n > 0 {
+			logger.LogInfo("capacity", "", fmt.Sprintf("cached %d remote models from LiteLLM", n))
+		}
+
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if n, err := capacity.RefreshRemoteDataIfStale(); err != nil {
+				logger.LogError("capacity", "", fmt.Sprintf("remote refresh failed: %v", err))
+			} else if n > 0 {
+				logger.LogInfo("capacity", "", fmt.Sprintf("cached %d remote models from LiteLLM", n))
+			}
+		}
+	}()
 
 	// Resolve the gt binary path (GT_BIN env → common paths → which gt).
 	gtResolver := gtbin.New()

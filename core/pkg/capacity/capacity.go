@@ -176,6 +176,23 @@ func (cm *CapacityManager) GetModelCapacity(modelName string) ModelCapacity {
 	return fallback
 }
 
+// MergeRemoteModels adds models from remote data that don't already exist
+// in the current config. Existing (hand-tuned) entries are preserved.
+func (cm *CapacityManager) MergeRemoteModels(remote *CapacityConfig) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if remote == nil || cm.config == nil {
+		return
+	}
+
+	for name, remoteCap := range remote.Models {
+		if _, exists := cm.config.Models[name]; !exists {
+			cm.config.Models[name] = remoteCap
+		}
+	}
+}
+
 // EstimateTokensFromContent estimates token count from text content
 func (cm *CapacityManager) EstimateTokensFromContent(content string, modelName string) TokenEstimation {
 	capacity := cm.GetModelCapacity(modelName)
@@ -202,11 +219,23 @@ func (cm *CapacityManager) EstimateTokensFromContent(content string, modelName s
 
 // CalculateContextUtilization computes context utilization metrics
 func (cm *CapacityManager) CalculateContextUtilization(tokensUsed int64, modelName string, isEstimated bool) ContextUtilization {
-	capacity := cm.GetModelCapacity(modelName)
-	
-	utilizationPercentage := (float64(tokensUsed) / float64(capacity.ContextWindow)) * 100
-	remainingTokens := capacity.ContextWindow - tokensUsed
-	
+	cap := cm.GetModelCapacity(modelName)
+
+	// Unknown model: no context window — report raw tokens only.
+	if cap.ContextWindow <= 0 {
+		return ContextUtilization{
+			TokensUsed:    tokensUsed,
+			IsEstimated:   isEstimated,
+			ModelName:     modelName,
+			ModelFamily:   cap.Family,
+			LastTokenCount: tokensUsed,
+			PressureLevel: "unknown",
+		}
+	}
+
+	utilizationPercentage := (float64(tokensUsed) / float64(cap.ContextWindow)) * 100
+	remainingTokens := cap.ContextWindow - tokensUsed
+
 	// Determine pressure level
 	pressureLevel := "safe"
 	if utilizationPercentage >= 96 {
@@ -216,17 +245,17 @@ func (cm *CapacityManager) CalculateContextUtilization(tokensUsed int64, modelNa
 	} else if utilizationPercentage >= 51 {
 		pressureLevel = "caution"
 	}
-	
+
 	return ContextUtilization{
-		TokensUsed:              tokensUsed,
-		ContextCapacity:         capacity.ContextWindow,
-		UtilizationPercentage:   utilizationPercentage,
+		TokensUsed:               tokensUsed,
+		ContextCapacity:          cap.ContextWindow,
+		UtilizationPercentage:    utilizationPercentage,
 		EstimatedTokensRemaining: remainingTokens,
-		IsEstimated:             isEstimated,
-		ModelName:               modelName,
-		ModelFamily:             capacity.Family,
-		LastTokenCount:          tokensUsed,
-		PressureLevel:           pressureLevel,
+		IsEstimated:              isEstimated,
+		ModelName:                modelName,
+		ModelFamily:              cap.Family,
+		LastTokenCount:           tokensUsed,
+		PressureLevel:            pressureLevel,
 	}
 }
 

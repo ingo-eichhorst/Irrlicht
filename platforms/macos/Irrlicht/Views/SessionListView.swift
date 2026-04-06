@@ -427,6 +427,10 @@ struct SessionRowView: View {
                     Text(metrics.formattedContextUtilization)
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(Color(hex: metrics.contextPressureColor))
+                } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
+                    Text(metrics.formattedTokenUsage)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(Color(hex: "#8E8E93"))
                 }
 
                 // Estimated cost
@@ -490,6 +494,9 @@ struct SessionRowView: View {
                             .help("Click to copy full ID")
                         Text("updated: \(elapsedString(from: session.updatedAt, now: context.date))")
                         Text("created: \(elapsedString(from: session.firstSeen, now: context.date))")
+                        if let metrics = session.metrics, metrics.totalTokens > 0 {
+                            Text("ctx: \(metrics.formattedTokenUsage)")
+                        }
                         Spacer()
                     }
                     .font(.system(size: 9, design: .monospaced))
@@ -560,6 +567,7 @@ struct SessionActionButtons: View {
 
 struct SubagentRowView: View {
     let session: SessionState
+    @AppStorage("debugMode") private var debugMode: Bool = false
     @State private var isHovered = false
 
     var body: some View {
@@ -579,6 +587,10 @@ struct SubagentRowView: View {
                 Text(metrics.formattedContextUtilization)
                     .font(.caption2)
                     .foregroundColor(Color(hex: metrics.contextPressureColor))
+            } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
+                Text(metrics.formattedTokenUsage)
+                    .font(.caption2)
+                    .foregroundColor(.secondary.opacity(0.6))
             } else {
                 Text("—")
                     .font(.caption2)
@@ -1248,6 +1260,7 @@ struct SessionListView_Previews: PreviewProvider {
                             elapsedSeconds: 180,
                             totalTokens: 15000,
                             modelName: "claude-sonnet-4-6",
+                            contextWindow: 200000,
                             contextUtilization: 7.5,
                             pressureLevel: "safe",
                             estimatedCostUSD: nil,

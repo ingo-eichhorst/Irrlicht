@@ -1,0 +1,240 @@
+package capacity
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+const (
+	liteLLMURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+	cacheTTL   = 24 * time.Hour
+	cacheFile  = "model-capacity-cache.json"
+)
+
+// liteLLMEntry represents a single model entry from LiteLLM's JSON.
+type liteLLMEntry struct {
+	MaxInputTokens              int64   `json:"max_input_tokens"`
+	MaxOutputTokens             int64   `json:"max_output_tokens"`
+	InputCostPerToken           float64 `json:"input_cost_per_token"`
+	OutputCostPerToken          float64 `json:"output_cost_per_token"`
+	CacheReadInputTokenCost     float64 `json:"cache_read_input_token_cost"`
+	CacheCreationInputTokenCost float64 `json:"cache_creation_input_token_cost"`
+	LiteLLMProvider             string  `json:"litellm_provider"`
+	Mode                        string  `json:"mode"`
+}
+
+// cachedCapacity wraps CapacityConfig with cache metadata.
+type cachedCapacity struct {
+	FetchedAt time.Time      `json:"fetched_at"`
+	Config    CapacityConfig `json:"config"`
+}
+
+// CachePath returns the path for the cached remote capacity data.
+func CachePath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(homeDir, ".local", "share", "irrlicht")
+	return filepath.Join(dir, cacheFile), nil
+}
+
+// FetchAndCacheLiteLLMData fetches model data from LiteLLM and caches it locally.
+// Non-fatal: callers should fall back to embedded data on error.
+func FetchAndCacheLiteLLMData() (*CapacityConfig, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(liteLLMURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch LiteLLM data: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("LiteLLM returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read LiteLLM response: %w", err)
+	}
+
+	config, err := parseLiteLLMData(body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache to disk (non-fatal if this fails).
+	_ = saveCachedData(config)
+
+	return config, nil
+}
+
+// parseLiteLLMData converts LiteLLM's JSON format to our CapacityConfig.
+func parseLiteLLMData(data []byte) (*CapacityConfig, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse LiteLLM JSON: %w", err)
+	}
+
+	config := &CapacityConfig{
+		Version:     "remote",
+		LastUpdated: time.Now().Format("2006-01-02"),
+		Models:      make(map[string]ModelCapacity),
+	}
+
+	for key, rawEntry := range raw {
+		// Skip provider-prefixed entries (e.g. "bedrock/anthropic.claude...")
+		// and the sample_spec entry. Only keep canonical model IDs.
+		if strings.Contains(key, "/") || key == "sample_spec" {
+			continue
+		}
+
+		var entry liteLLMEntry
+		if err := json.Unmarshal(rawEntry, &entry); err != nil {
+			continue
+		}
+
+		if entry.MaxInputTokens <= 0 {
+			continue
+		}
+
+		// Skip non-chat models.
+		if entry.Mode != "" && entry.Mode != "chat" {
+			continue
+		}
+
+		mc := ModelCapacity{
+			ContextWindow:    entry.MaxInputTokens,
+			MaxOutput:        entry.MaxOutputTokens,
+			CharToTokenRatio: 3.5,
+			DisplayName:      key,
+			Family:           deriveFamilyFromLiteLLM(key, entry.LiteLLMProvider),
+		}
+
+		// Convert per-token pricing to per-million-token pricing.
+		if entry.InputCostPerToken > 0 || entry.OutputCostPerToken > 0 {
+			mc.Pricing = &ModelPricing{
+				InputPerMTok:         entry.InputCostPerToken * 1_000_000,
+				OutputPerMTok:        entry.OutputCostPerToken * 1_000_000,
+				CacheReadPerMTok:     entry.CacheReadInputTokenCost * 1_000_000,
+				CacheCreationPerMTok: entry.CacheCreationInputTokenCost * 1_000_000,
+			}
+		}
+
+		config.Models[key] = mc
+	}
+
+	return config, nil
+}
+
+// deriveFamilyFromLiteLLM infers a model family string.
+func deriveFamilyFromLiteLLM(modelID, provider string) string {
+	lower := strings.ToLower(modelID)
+	switch {
+	case strings.Contains(lower, "claude-4") ||
+		strings.Contains(lower, "claude-opus-4") ||
+		strings.Contains(lower, "claude-sonnet-4") ||
+		strings.Contains(lower, "claude-haiku-4"):
+		return "claude-4"
+	case strings.Contains(lower, "claude-3.7"):
+		return "claude-3.7"
+	case strings.Contains(lower, "claude-3.5"):
+		return "claude-3.5"
+	case strings.Contains(lower, "claude-3"):
+		return "claude-3"
+	case strings.Contains(lower, "gpt-5"):
+		return "gpt-5"
+	case strings.Contains(lower, "gpt-4"):
+		return "gpt-4"
+	default:
+		return provider
+	}
+}
+
+// LoadCachedRemoteData reads previously cached remote capacity data.
+// Returns nil if cache doesn't exist or is expired.
+func LoadCachedRemoteData() *CapacityConfig {
+	path, err := CachePath()
+	if err != nil {
+		return nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	var cached cachedCapacity
+	if err := json.Unmarshal(data, &cached); err != nil {
+		return nil
+	}
+
+	if time.Since(cached.FetchedAt) > cacheTTL {
+		return nil
+	}
+
+	return &cached.Config
+}
+
+// saveCachedData writes capacity config to the cache file.
+func saveCachedData(config *CapacityConfig) error {
+	path, err := CachePath()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	cached := cachedCapacity{
+		FetchedAt: time.Now(),
+		Config:    *config,
+	}
+
+	data, err := json.Marshal(cached)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, data, 0644)
+}
+
+// IsCacheStale returns true if the cache doesn't exist or has expired.
+func IsCacheStale() bool {
+	path, err := CachePath()
+	if err != nil {
+		return true
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return true
+	}
+
+	var cached cachedCapacity
+	if err := json.Unmarshal(data, &cached); err != nil {
+		return true
+	}
+
+	return time.Since(cached.FetchedAt) > cacheTTL
+}
+
+// RefreshRemoteDataIfStale checks if the cache is stale and fetches fresh data.
+// Returns the number of models fetched, or an error.
+func RefreshRemoteDataIfStale() (int, error) {
+	if !IsCacheStale() {
+		return 0, nil
+	}
+	config, err := FetchAndCacheLiteLLMData()
+	if err != nil {
+		return 0, err
+	}
+	return len(config.Models), nil
+}

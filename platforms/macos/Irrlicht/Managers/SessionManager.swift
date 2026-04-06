@@ -360,24 +360,6 @@ class SessionManager: ObservableObject {
                 }
             }
 
-            // TTL-based auto-cleanup for ready sessions
-            let storedTTL = UserDefaults.standard.object(forKey: "sessionTTLMinutes") as? Int ?? 30
-            if storedTTL > 0 {
-                let ttlCutoff = Date().addingTimeInterval(-TimeInterval(storedTTL * 60))
-                var expiredIds: [String] = []
-                for session in newSessions where session.state == .ready {
-                    if session.updatedAt < ttlCutoff {
-                        let filePath = instancesPath.appendingPathComponent("\(session.id).json")
-                        try? FileManager.default.removeItem(at: filePath)
-                        expiredIds.append(session.id)
-                        print("🧹 TTL-expired ready session \(session.shortId) (ttl=\(storedTTL)m)")
-                    }
-                }
-                if !expiredIds.isEmpty {
-                    newSessions.removeAll { expiredIds.contains($0.id) }
-                }
-            }
-
             // Auto-cleanup orphaned sessions whose Claude Code process has exited.
             // This catches the common case where Claude Code is force-quit or crashes
             // without firing SessionEnd.
@@ -403,28 +385,6 @@ class SessionManager: ObservableObject {
             }
             if !orphanedIds.isEmpty {
                 newSessions.removeAll { orphanedIds.contains($0.id) }
-            }
-
-            // TTL-based expiry for ready sessions.
-            // sessionTTLMinutes: 0 = never expire, >0 = expire after N minutes.
-            // Default is 30 when the key hasn't been set yet.
-            let effectiveTTL: Int = UserDefaults.standard.object(forKey: "sessionTTLMinutes") == nil
-                ? 30
-                : UserDefaults.standard.integer(forKey: "sessionTTLMinutes")
-            if effectiveTTL > 0 {
-                let ttlCutoff = Date().addingTimeInterval(-Double(effectiveTTL) * 60)
-                var expiredIds: [String] = []
-                for session in newSessions where session.state == .ready {
-                    if session.updatedAt < ttlCutoff {
-                        let filePath = instancesPath.appendingPathComponent("\(session.id).json")
-                        try? FileManager.default.removeItem(at: filePath)
-                        expiredIds.append(session.id)
-                        print("⏰ TTL-expired ready session \(session.shortId) (idle > \(effectiveTTL)m)")
-                    }
-                }
-                if !expiredIds.isEmpty {
-                    newSessions.removeAll { expiredIds.contains($0.id) }
-                }
             }
 
             // Sort sessions according to saved order, with new sessions at the end
