@@ -7,6 +7,10 @@ import (
 	"irrlicht/core/pkg/transcript"
 )
 
+// eventTypeAssistantStreaming is emitted for intermediate Claude Code assistant
+// messages (thinking blocks, partial text) that should not trigger IsAgentDone().
+const eventTypeAssistantStreaming = "assistant_streaming"
+
 // Parser implements tailer.TranscriptParser for Claude Code transcripts.
 // Claude Code events use top-level "type" fields ("user", "assistant", "system")
 // and embed tool calls inside message.content[] arrays.
@@ -79,6 +83,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 							if text, ok := block["text"].(string); ok {
 								if strings.HasPrefix(text, "[Request interrupted by user") {
 									ev.IsError = true
+									break
 								}
 							}
 						}
@@ -109,7 +114,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// Intermediate streaming messages from Claude Code (thinking blocks,
 	// partial text before tool_use) are written as separate JSONL lines
 	// sharing the same message.id within one API response. Using
-	// "assistant_streaming" for these prevents IsAgentDone() from falsely
+	// eventTypeAssistantStreaming for these prevents IsAgentDone() from falsely
 	// returning true between tool calls.
 	//
 	// Detection: messages with stop_reason=null that share the same message.id
@@ -124,13 +129,13 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			if stopReason == nil {
 				// Same message ID as previous → part of ongoing streaming sequence.
 				if msgID != "" && msgID == p.lastAssistantMsgID {
-					eventType = "assistant_streaming"
+					eventType = eventTypeAssistantStreaming
 				}
 				// Thinking blocks are always intermediate (never the final response).
 				if contentArr, ok := msg["content"].([]interface{}); ok && len(contentArr) > 0 {
 					if block, ok := contentArr[0].(map[string]interface{}); ok {
 						if block["type"] == "thinking" {
-							eventType = "assistant_streaming"
+							eventType = eventTypeAssistantStreaming
 						}
 					}
 				}
@@ -173,7 +178,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	// Track assistant text for waiting-state display.
 	switch eventType {
-	case "assistant", "assistant_streaming", "assistant_message", "assistant_output":
+	case "assistant", eventTypeAssistantStreaming, "assistant_message", "assistant_output":
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
@@ -253,7 +258,7 @@ func isClaudeCodeMessageEvent(eventType string) bool {
 	switch eventType {
 	case "user_message", "assistant_message", "tool_call", "tool_result",
 		"user_input", "assistant_output", "user", "assistant", "tool_use", "message",
-		"assistant_streaming":
+		eventTypeAssistantStreaming:
 		return true
 	}
 	return false

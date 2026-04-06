@@ -87,10 +87,10 @@ type SessionDetector struct {
 	staleToolMu      sync.Mutex
 	staleToolTimers  map[string]*time.Timer
 
-	// deletedCooldown is the minimum seconds after deletion before a session
+	// deletedCooldown is the minimum time after deletion before a session
 	// can be re-created from transcript activity (e.g. --continue). Prevents
 	// ghost sessions from late-arriving writes of a dying process.
-	deletedCooldown int64
+	deletedCooldown time.Duration
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -120,7 +120,7 @@ func NewSessionDetector(
 		debouncedEvents:  make(chan agent.Event, 64),
 		staleToolTimeout: defaultStaleToolTimeout,
 		staleToolTimers:  make(map[string]*time.Timer),
-		deletedCooldown: 10,
+		deletedCooldown: 10 * time.Second,
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -135,10 +135,10 @@ func (d *SessionDetector) SetStaleToolTimeout(timeout time.Duration) {
 	d.staleToolTimeout = timeout
 }
 
-// SetDeletedCooldown overrides the deleted-session cooldown (seconds).
+// SetDeletedCooldown overrides the deleted-session cooldown.
 // Intended for tests that need immediate re-creation.
-func (d *SessionDetector) SetDeletedCooldown(seconds int64) {
-	d.deletedCooldown = seconds
+func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
+	d.deletedCooldown = dur
 }
 
 // startStaleToolTimer starts a timer that will transition a session to "waiting"
@@ -318,10 +318,16 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 
 	if isNew {
 		// Skip transcripts whose session was recently deleted (process exit
-		// or /clear cleanup). This prevents late-arriving file events from
-		// re-creating a session that was intentionally removed.
+		// or /clear cleanup). Allow re-creation if the cooldown has passed
+		// and the transcript has fresh activity (--continue scenario).
 		d.mu.Lock()
-		_, deleted := d.deletedSessions[ev.SessionID]
+		deletedAt, deleted := d.deletedSessions[ev.SessionID]
+		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
+			delete(d.deletedSessions, ev.SessionID)
+			deleted = false
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"previously deleted session has fresh activity (--continue), allowing re-creation")
+		}
 		d.mu.Unlock()
 		if deleted {
 			d.log.LogInfo("session-detector", ev.SessionID,
@@ -456,7 +462,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 		// late-arriving writes of a dying process.
 		d.mu.Lock()
 		deletedAt, deleted := d.deletedSessions[ev.SessionID]
-		if deleted && time.Now().Unix()-deletedAt >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
+		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
 			delete(d.deletedSessions, ev.SessionID)
 			deleted = false
 			d.log.LogInfo("session-detector", ev.SessionID,
@@ -708,6 +714,18 @@ func (d *SessionDetector) seedFromDisk() {
 
 	// Clean up dead sessions and register alive PIDs with ProcessWatcher.
 	d.pidMgr.SeedPIDs(states)
+
+	// Prune stale deletedSessions entries from previous daemon runs.
+	// Entries older than 1 hour serve no purpose — the cooldown window
+	// is only 10 seconds.
+	d.mu.Lock()
+	pruneThreshold := time.Now().Add(-1 * time.Hour).Unix()
+	for id, ts := range d.deletedSessions {
+		if ts < pruneThreshold {
+			delete(d.deletedSessions, id)
+		}
+	}
+	d.mu.Unlock()
 }
 
 // removeFromProjectSessions removes a session from the projectSessions map and
