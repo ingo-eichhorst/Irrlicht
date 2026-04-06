@@ -414,7 +414,7 @@ struct SessionRowView: View {
                     ContextBar(utilization: metrics.contextUtilization,
                                pressureColor: metrics.contextPressureColor)
                         .frame(maxWidth: 80, maxHeight: 8)
-                    Text(debugMode ? metrics.formattedTokenUsage : metrics.formattedContextUtilization)
+                    Text(metrics.formattedContextUtilization)
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(Color(hex: metrics.contextPressureColor))
                 } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
@@ -574,7 +574,7 @@ struct SubagentRowView: View {
 
             // Context utilization
             if let metrics = session.metrics, metrics.hasContextData {
-                Text(debugMode ? metrics.formattedTokenUsage : metrics.formattedContextUtilization)
+                Text(metrics.formattedContextUtilization)
                     .font(.caption2)
                     .foregroundColor(Color(hex: metrics.contextPressureColor))
             } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
