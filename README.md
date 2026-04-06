@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-MIT-orange?color=%23FF9500)](LICENSE)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fingo-eichhorst%2FIrrlicht%2Fmain%2Fversion.json&query=%24.version&label=version&color=%2334C759)](version.json)
 
-[![ARS](https://img.shields.io/badge/ARS-Agent--Assisted%207.4%2F10-yellow)](https://github.com/ingo-eichhorst/agent-readyness)
+[![ARS](https://img.shields.io/badge/ARS-Agent--Assisted%207.3%2F10-yellow)](https://github.com/ingo-eichhorst/agent-readyness)
 
 [🌐 Landing Page](https://ingo-eichhorst.github.io/Irrlicht/) · [📖 Documentation](https://ingo-eichhorst.github.io/Irrlicht/docs/quickstart.html) · [📦 Latest Release](https://github.com/ingo-eichhorst/Irrlicht/releases/latest)
 
