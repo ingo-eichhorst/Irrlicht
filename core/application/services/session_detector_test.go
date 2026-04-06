@@ -1330,6 +1330,59 @@ func TestSessionDetector_StaleToolCall_SkipsBypassPermissions(t *testing.T) {
 	<-done
 }
 
+func TestSessionDetector_StaleToolCall_DisabledByAdapterPolicy(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetectorWithStaleTimeout(tw, pw, repo, 100*time.Millisecond)
+	det.SetAdapterPolicies(map[string]agent.StatePolicy{
+		"pi": {EnableStaleToolTimer: false},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "pi1",
+		Adapter:        "pi",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.pi/agent/sessions/--Users-test--/pi1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			HasOpenToolCall:   true,
+			OpenToolCallCount: 1,
+			LastOpenToolNames: []string{"Bash"},
+			LastEventType:     "assistant",
+			PermissionMode:    "default",
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "pi1",
+		ProjectDir:     "--Users-test--",
+		TranscriptPath: "/home/.pi/agent/sessions/--Users-test--/pi1.jsonl",
+	}
+
+	// Wait past timeout: adapter policy disables the stale timer.
+	time.Sleep(250 * time.Millisecond)
+
+	state, _ := repo.Load("pi1")
+	if state.State != session.StateWorking {
+		t.Errorf("state: got %q, want working (pi policy disables stale timer)", state.State)
+	}
+
+	cancel()
+	<-done
+}
+
 func TestSessionDetector_StaleToolCall_GuardChecksState(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
