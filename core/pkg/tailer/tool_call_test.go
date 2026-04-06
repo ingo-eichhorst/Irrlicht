@@ -434,3 +434,126 @@ func TestLocalCommandsDoNotAffectNormalUserMessage(t *testing.T) {
 		t.Errorf("expected LastEventType=%q for normal user message, got %q", "user", m.LastEventType)
 	}
 }
+
+// --- Agent subagent tool name tracking tests (issue #88) ---
+
+func TestLastOpenToolNames_AgentToolsPreservedAfterPartialResults(t *testing.T) {
+	// Simulate Claude Code format: 3 streaming assistant events each with one
+	// Agent tool_use, followed by 1 user event carrying a tool_result.
+	// After the first result, 2 Agent calls remain open — LastOpenToolNames
+	// must still contain them so InferSubagents can count them.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		// 3 streaming assistant chunks, each with one Agent tool_use
+		{"type": "assistant", "timestamp": ts(0), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+			},
+		}},
+		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+			},
+		}},
+		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+			},
+		}},
+		// First tool_result arrives (user event with embedded tool_result)
+		{"type": "user", "timestamp": ts(3), "message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_result", "content": "done"},
+			},
+		}},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3 uses - 1 result = 2 open
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true with 2 unmatched Agent calls")
+	}
+	if m.OpenToolCallCount != 2 {
+		t.Errorf("expected OpenToolCallCount=2, got %d", m.OpenToolCallCount)
+	}
+
+	// BUG (issue #88): ClearToolNames on the user event wipes LastOpenToolNames
+	// even though tool_result blocks are present. The remaining 2 Agent names
+	// should be preserved so InferSubagents can detect them.
+	if len(m.LastOpenToolNames) != 2 {
+		t.Errorf("expected LastOpenToolNames to have 2 entries, got %d: %v",
+			len(m.LastOpenToolNames), m.LastOpenToolNames)
+	}
+	for i, name := range m.LastOpenToolNames {
+		if name != "Agent" {
+			t.Errorf("LastOpenToolNames[%d] = %q, want \"Agent\"", i, name)
+		}
+	}
+}
+
+func TestLastOpenToolNames_AllAgentResultsCleared(t *testing.T) {
+	// All 3 Agent tool_results arrive — verify everything is properly zeroed out.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "assistant", "timestamp": ts(0), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+			},
+		}},
+		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+			},
+		}},
+		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+			},
+		}},
+		// All 3 results
+		{"type": "user", "timestamp": ts(3), "message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_result", "content": "done"},
+			},
+		}},
+		{"type": "user", "timestamp": ts(4), "message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_result", "content": "done"},
+			},
+		}},
+		{"type": "user", "timestamp": ts(5), "message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_result", "content": "done"},
+			},
+		}},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=false when all Agent calls are paired")
+	}
+	if m.OpenToolCallCount != 0 {
+		t.Errorf("expected OpenToolCallCount=0, got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 0 {
+		t.Errorf("expected empty LastOpenToolNames, got %v", m.LastOpenToolNames)
+	}
+}
