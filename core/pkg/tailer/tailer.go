@@ -72,7 +72,6 @@ type SessionMetrics struct {
 	// PermissionMode is the session's permission mode (e.g. "default",
 	// "plan", "bypassPermissions"). Extracted from "permission-mode" events.
 	PermissionMode string `json:"permission_mode,omitempty"`
-
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.

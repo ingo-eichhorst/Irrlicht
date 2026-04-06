@@ -744,9 +744,9 @@ func (d *SessionDetector) hasActiveChildren(parentID string) bool {
 }
 
 // reevaluateParent checks whether a parent session should transition now that
-// a child's state has changed. If the parent's own turn is done (TurnDone flag
-// in metrics) and no more active children remain, the parent transitions to
-// ready (or waiting if ending with a question).
+// a child's state has changed. If the parent's own turn is done (IsAgentDone)
+// and no more active children remain, the parent transitions to ready (or
+// waiting if ending with a question).
 func (d *SessionDetector) reevaluateParent(parentID string) {
 	parent, err := d.repo.Load(parentID)
 	if err != nil || parent == nil {

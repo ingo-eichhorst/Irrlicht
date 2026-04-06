@@ -59,7 +59,6 @@ type SessionMetrics struct {
 	// (e.g. "default", "plan", "bypassPermissions"). Used to skip the
 	// stale-tool-call timer when permissions are bypassed.
 	PermissionMode string `json:"permission_mode,omitempty"`
-
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one
