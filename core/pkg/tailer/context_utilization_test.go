@@ -94,6 +94,67 @@ func TestContextUtilization_UnknownModel_Fallback200K(t *testing.T) {
 	assertPressure(t, m, "safe", 50.0)
 }
 
+func TestContextUtilization_Codex53_Uses256KContextWindow(t *testing.T) {
+	// gpt-5.3-codex should use 256K context window.
+	// 35,650 / 256,000 = 13.93% → "safe"
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{
+			"type":      "assistant",
+			"timestamp": ts(0),
+			"message": map[string]interface{}{
+				"model": "gpt-5.3-codex",
+				"usage": map[string]interface{}{
+					"input":      float64(1093),
+					"output":     float64(509),
+					"cacheRead":  float64(34048),
+					"cacheWrite": float64(0),
+					"totalTokens": float64(35650),
+				},
+			},
+		},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if m.ContextWindow != 256000 {
+		t.Fatalf("ContextWindow = %d, want 256000", m.ContextWindow)
+	}
+	assertPressure(t, m, "safe", 13.93)
+}
+
+func TestContextUtilization_GPT5FamilyDefault_Uses256KContextWindow(t *testing.T) {
+	// Unknown gpt-5 variant should resolve through family_defaults.gpt-5.
+	// 102,400 / 256,000 = 40% → "safe"
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{
+			"type":      "assistant",
+			"timestamp": ts(0),
+			"message": map[string]interface{}{
+				"model": "gpt-5.9-codex-preview",
+				"usage": map[string]interface{}{
+					"input_tokens":  float64(102400),
+					"output_tokens": float64(0),
+				},
+			},
+		},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if m.ContextWindow != 256000 {
+		t.Fatalf("ContextWindow = %d, want 256000", m.ContextWindow)
+	}
+	assertPressure(t, m, "safe", 40.0)
+}
+
 func TestContextUtilization_ExtendedContext1M(t *testing.T) {
 	// Model with [1m] suffix → 1M window
 	// 180K tokens / 1M = 18% → "safe"

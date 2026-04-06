@@ -1,6 +1,6 @@
 {
   "version": "2.1.0",
-  "last_updated": "2026-04-03",
+  "last_updated": "2026-04-06",
   "models": {
     "claude-3.5-sonnet": {
       "context_window": 200000,
@@ -196,6 +196,20 @@
         "cache_creation_per_mtok": 3.75
       }
     },
+    "gpt-5.3-codex": {
+      "context_window": 256000,
+      "max_output": 32768,
+      "char_to_token_ratio": 3.5,
+      "family": "gpt-5",
+      "display_name": "GPT-5.3 Codex",
+      "notes": "OpenAI Codex model with 256K context window",
+      "pricing": {
+        "input_per_mtok": 2.0,
+        "output_per_mtok": 8.0,
+        "cache_read_per_mtok": 0,
+        "cache_creation_per_mtok": 0
+      }
+    },
     "gpt-5.4": {
       "context_window": 258400,
       "max_output": 32768,
@@ -254,6 +268,17 @@
         "output_per_mtok": 15.0,
         "cache_read_per_mtok": 0.30,
         "cache_creation_per_mtok": 3.75
+      }
+    },
+    "gpt-5": {
+      "context_window": 256000,
+      "max_output": 32768,
+      "char_to_token_ratio": 3.5,
+      "pricing": {
+        "input_per_mtok": 2.0,
+        "output_per_mtok": 8.0,
+        "cache_read_per_mtok": 0,
+        "cache_creation_per_mtok": 0
       }
     }
   },
