@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -161,6 +162,18 @@ func writeTranscriptLines(t *testing.T, lines []map[string]interface{}) string {
 	return path
 }
 
+func appendTranscriptLine(t *testing.T, path string, line map[string]interface{}) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := json.NewEncoder(f).Encode(line); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func ts(offset int) string {
 	return time.Now().Add(time.Duration(offset) * time.Second).Format(time.RFC3339)
 }
@@ -222,6 +235,38 @@ func TestHasOpenToolCall_OneOpenToolCall(t *testing.T) {
 	}
 	if m.OpenToolCallCount != 1 {
 		t.Errorf("expected OpenToolCallCount=1, got %d", m.OpenToolCallCount)
+	}
+}
+
+func TestTailAndProcess_LargeAppendedToolResult_NotSkipped(t *testing.T) {
+	// Regression: if >64KB is appended between polls, we must continue from
+	// lastOffset and parse the full new JSON line instead of skipping into it.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{"type": "tool_use", "timestamp": ts(1), "name": "Read"},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall || m.OpenToolCallCount != 1 {
+		t.Fatalf("setup failed: expected one open call, got open=%v count=%d", m.HasOpenToolCall, m.OpenToolCallCount)
+	}
+
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type":      "tool_result",
+		"timestamp": ts(2),
+		"output":    strings.Repeat("x", 120*1024),
+	})
+
+	m, err = tailer.TailAndProcess()
+	if err != nil {
+		t.Fatalf("unexpected tail error on large appended line: %v", err)
+	}
+	if m.HasOpenToolCall || m.OpenToolCallCount != 0 {
+		t.Fatalf("expected large tool_result to close call, got open=%v count=%d", m.HasOpenToolCall, m.OpenToolCallCount)
 	}
 }
 

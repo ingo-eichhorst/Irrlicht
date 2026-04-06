@@ -22,21 +22,21 @@ type MessageEvent struct {
 
 // SessionMetrics holds computed performance metrics
 type SessionMetrics struct {
-	MessagesPerMinute float64        `json:"messages_per_minute"`
-	ElapsedSeconds    int64          `json:"elapsed_seconds"`
-	LastMessageAt     time.Time      `json:"last_message_at"`
-	MessageHistory    []MessageEvent `json:"-"` // Sliding window, not serialized
-	SessionStartAt    time.Time      `json:"session_start_at"`
-	TotalTokens       int64          `json:"total_tokens,omitempty"`
-	InputTokens       int64          `json:"input_tokens,omitempty"`
-	OutputTokens      int64          `json:"output_tokens,omitempty"`
-	CacheReadTokens   int64          `json:"cache_read_tokens,omitempty"`
-	CacheCreationTokens int64        `json:"cache_creation_tokens,omitempty"`
-	EstimatedCostUSD  float64        `json:"estimated_cost_usd,omitempty"`
-	ModelName         string         `json:"model_name,omitempty"`
-	ContextWindow     int64          `json:"context_window,omitempty"`
-	ContextUtilization float64       `json:"context_utilization_percentage,omitempty"`
-	PressureLevel     string         `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
+	MessagesPerMinute   float64        `json:"messages_per_minute"`
+	ElapsedSeconds      int64          `json:"elapsed_seconds"`
+	LastMessageAt       time.Time      `json:"last_message_at"`
+	MessageHistory      []MessageEvent `json:"-"` // Sliding window, not serialized
+	SessionStartAt      time.Time      `json:"session_start_at"`
+	TotalTokens         int64          `json:"total_tokens,omitempty"`
+	InputTokens         int64          `json:"input_tokens,omitempty"`
+	OutputTokens        int64          `json:"output_tokens,omitempty"`
+	CacheReadTokens     int64          `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int64          `json:"cache_creation_tokens,omitempty"`
+	EstimatedCostUSD    float64        `json:"estimated_cost_usd,omitempty"`
+	ModelName           string         `json:"model_name,omitempty"`
+	ContextWindow       int64          `json:"context_window,omitempty"`
+	ContextUtilization  float64        `json:"context_utilization_percentage,omitempty"`
+	PressureLevel       string         `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
 
 	// Raw event data for real-time client-side calculations
 	TotalEventCount        int64     `json:"total_event_count,omitempty"`
@@ -161,11 +161,16 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 
 	const maxTailSize = 64 * 1024
 	startPos := int64(0)
-	if fileSize > maxTailSize {
-		startPos = fileSize - maxTailSize
-	}
-	if t.lastOffset > startPos {
+	switch {
+	case fileSize < t.lastOffset:
+		// File rotated/truncated.
+		startPos = 0
+	case t.lastOffset > 0:
+		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
+	case fileSize > maxTailSize:
+		// Initial read for large files: only tail the latest window.
+		startPos = fileSize - maxTailSize
 	}
 
 	_, err = file.Seek(startPos, io.SeekStart)
@@ -173,8 +178,29 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		return nil, fmt.Errorf("failed to seek transcript: %w", err)
 	}
 
-	scanner := bufio.NewScanner(file)
 	currentOffset := startPos
+	var reader io.Reader = file
+
+	// On the initial truncated read of a large file, we may start in the
+	// middle of a JSON line. If so, discard the partial line to align scanner
+	// to a full JSONL entry boundary.
+	if t.lastOffset == 0 && startPos > 0 {
+		prev := []byte{0}
+		if _, err := file.ReadAt(prev, startPos-1); err == nil && prev[0] != '\n' {
+			br := bufio.NewReader(file)
+			if discarded, err := br.ReadString('\n'); err == nil {
+				currentOffset += int64(len(discarded))
+			} else {
+				return nil, fmt.Errorf("failed to align transcript boundary: %w", err)
+			}
+			reader = br
+		}
+	}
+
+	scanner := bufio.NewScanner(reader)
+	// Large tool results (especially from Pi/Codex read/bash output) can exceed
+	// bufio.Scanner's 64KB default token size.
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
