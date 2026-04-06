@@ -7,6 +7,7 @@ struct SessionMetrics: Codable {
     let elapsedSeconds: Int64       // elapsed time when metrics were computed (for ready sessions)
     let totalTokens: Int64          // total token count from transcript (0 if not available)
     let modelName: String           // model name extracted from transcript ("" if not available) 
+    let contextWindow: Int64?       // model context window size (nil/0 if unknown)
     let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
@@ -16,6 +17,7 @@ struct SessionMetrics: Codable {
         case elapsedSeconds = "elapsed_seconds"
         case totalTokens = "total_tokens"
         case modelName = "model_name"
+        case contextWindow = "context_window"
         case contextUtilization = "context_utilization_percentage"
         case pressureLevel = "pressure_level"
         case estimatedCostUSD = "estimated_cost_usd"
@@ -50,6 +52,23 @@ struct SessionMetrics: Codable {
         }
     }
     
+    var formattedTokenUsage: String {
+        if totalTokens == 0 { return "—" }
+        let used = formattedTokenCount
+        if let cw = contextWindow, cw > 0 {
+            let window: String
+            if cw < 1000 {
+                window = "\(cw)"
+            } else if cw < 1000000 {
+                window = String(format: "%.0fK", Double(cw) / 1000)
+            } else {
+                window = String(format: "%.0fM", Double(cw) / 1000000)
+            }
+            return "\(used) / \(window)"
+        }
+        return "\(used) / ?"
+    }
+
     var formattedContextUtilization: String {
         if contextUtilization == 0 && pressureLevel == "unknown" { return "—" }
         return String(format: "%.1f%%", contextUtilization)
