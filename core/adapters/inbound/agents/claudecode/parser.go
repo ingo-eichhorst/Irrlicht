@@ -113,32 +113,20 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	// Intermediate streaming messages from Claude Code (thinking blocks,
 	// partial text before tool_use) are written as separate JSONL lines
-	// sharing the same message.id within one API response. Using
-	// eventTypeAssistantStreaming for these prevents IsAgentDone() from falsely
-	// returning true between tool calls.
+	// within one API response. Using eventTypeAssistantStreaming for these
+	// prevents IsAgentDone() from falsely returning true between tool calls.
 	//
-	// Detection: messages with stop_reason=null that share the same message.id
-	// as the previous assistant message are definitely intermediate. Thinking
-	// blocks (content[0].type="thinking") are always intermediate regardless.
-	// Messages with stop_reason="end_turn" or "tool_use" are always final.
+	// Detection: any message with stop_reason=null is intermediate. Claude
+	// Code final messages always carry stop_reason="end_turn" or "tool_use".
+	// The previous approach only caught same-message-ID chunks, missing the
+	// first chunk of each new message and causing working→ready flicker.
 	if eventType == "assistant" {
 		if msg, ok := raw["message"].(map[string]interface{}); ok {
 			stopReason, _ := msg["stop_reason"]
 			msgID, _ := msg["id"].(string)
 
 			if stopReason == nil {
-				// Same message ID as previous → part of ongoing streaming sequence.
-				if msgID != "" && msgID == p.lastAssistantMsgID {
-					eventType = eventTypeAssistantStreaming
-				}
-				// Thinking blocks are always intermediate (never the final response).
-				if contentArr, ok := msg["content"].([]interface{}); ok && len(contentArr) > 0 {
-					if block, ok := contentArr[0].(map[string]interface{}); ok {
-						if block["type"] == "thinking" {
-							eventType = eventTypeAssistantStreaming
-						}
-					}
-				}
+				eventType = eventTypeAssistantStreaming
 			}
 
 			if msgID != "" {

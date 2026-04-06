@@ -33,8 +33,9 @@ const activityDebounceWindow = 2 * time.Second
 
 // defaultStaleToolTimeout is how long a non-user-blocking open tool call must
 // remain unanswered before we assume it's permission-pending and transition to
-// waiting. Empirically, 95% of auto-approved tools complete within 8 seconds.
-const defaultStaleToolTimeout = 5 * time.Second
+// waiting. Set high enough to avoid false positives from long-running tools
+// (builds, tests) that produce no transcript output while executing.
+const defaultStaleToolTimeout = 15 * time.Second
 
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {

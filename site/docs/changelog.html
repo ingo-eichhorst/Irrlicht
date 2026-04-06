@@ -78,6 +78,42 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.1 <small>(2026-04-06)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Dynamic model capacity from LiteLLM</strong> &mdash; Context window sizes and pricing are now fetched from the LiteLLM API at daemon startup, removing hardcoded fallback assumptions</li>
+        <li><strong>Token usage in debug mode</strong> &mdash; Debug mode now shows token usage metrics for all models, with percentage kept next to the context bar</li>
+        <li><strong>Reorderable project groups</strong> &mdash; Project groups in the macOS popup and menu bar can now be reordered by the user</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>Removed client-side session expiry setting</strong> &mdash; Session expiry is now handled entirely by the daemon, simplifying the macOS app settings</li>
+        <li><strong>Adapter-driven stale-tool waiting</strong> &mdash; Stale-tool timeout is now configured per adapter policy rather than globally</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li>Codex gpt-5.3 context window mapping corrected to 256K</li>
+        <li>Large appended transcript lines no longer skip events</li>
+        <li>Wrapped Codex transcript schema now parsed correctly</li>
+        <li>Pi compaction events treated as activity for working-state detection</li>
+        <li>Subagent tool tracking and debug row display preserved correctly</li>
+        <li>False ready state during tool calls and subagent work prevented</li>
+        <li><strong>Session state flicker between tool calls</strong> &mdash; First streaming chunk of each new assistant message (new message ID, <code>stop_reason=null</code>) was misclassified as final, triggering false working&rarr;ready&rarr;working transitions on every tool call cycle</li>
+        <li>Stale-tool timeout increased from 5s to 15s to reduce false waiting transitions during long-running builds</li>
+      </ul>
+
+      <h3>Site</h3>
+
+      <ul>
+        <li>Agent landscape page with 63 tracked agents, 3-month trends, and deny list</li>
+      </ul>
+
       <h2>v0.3.0 <small>(2026-04-05)</small></h2>
 
       <h3>Added</h3>

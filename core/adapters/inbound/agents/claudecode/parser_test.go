@@ -197,9 +197,11 @@ func TestParser_AssistantStreaming_SameID(t *testing.T) {
 	}
 }
 
-func TestParser_AssistantFinal_NullStopReason_DifferentID(t *testing.T) {
-	// A standalone text response with null stop_reason and a new message ID
-	// should keep "assistant" (potentially final — like session 891f03e9 L8).
+func TestParser_AssistantStreaming_NullStopReason_DifferentID(t *testing.T) {
+	// Any assistant message with stop_reason=null is intermediate streaming,
+	// even with a new message ID. Claude Code final messages always have
+	// stop_reason="end_turn" or "tool_use". Classifying these as "assistant"
+	// caused working→ready flicker between tool calls.
 	p := &Parser{}
 
 	// Set a previous ID.
@@ -214,7 +216,7 @@ func TestParser_AssistantFinal_NullStopReason_DifferentID(t *testing.T) {
 		},
 	})
 
-	// New ID + null stop_reason + text → assistant (not streaming).
+	// New ID + null stop_reason → streaming (not final).
 	ev := p.ParseLine(map[string]interface{}{
 		"type":      "assistant",
 		"timestamp": "2026-04-05T22:00:01Z",
@@ -225,8 +227,8 @@ func TestParser_AssistantFinal_NullStopReason_DifferentID(t *testing.T) {
 			},
 		},
 	})
-	if ev.EventType != "assistant" {
-		t.Errorf("EventType = %q, want assistant (different ID, potentially final)", ev.EventType)
+	if ev.EventType != "assistant_streaming" {
+		t.Errorf("EventType = %q, want assistant_streaming (null stop_reason is always intermediate)", ev.EventType)
 	}
 }
 
@@ -726,6 +728,69 @@ func TestTranscript_SimpleTextTurn_EndTurn(t *testing.T) {
 	if m.LastAssistantText != "Hi! How can I help?" {
 		t.Errorf("LastAssistantText = %q", m.LastAssistantText)
 	}
+}
+
+// Regression: first chunk of a new assistant message between tool calls was
+// classified as "assistant" (not streaming) because it had a new message ID.
+// With no open tools at that moment, IsAgentDone() returned true → working→ready flicker.
+func TestTranscript_FirstChunkNewMessage_NoFlicker(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+
+	// Write: user → tool_use → tool_result → first chunk of next message (new ID, no tools)
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := json.NewEncoder(f)
+	enc.Encode(map[string]interface{}{
+		"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
+			"role": "user", "content": "build and test",
+		},
+	})
+	enc.Encode(map[string]interface{}{
+		"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
+			"id": "msg_1", "role": "assistant", "stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Bash", "id": "tu_1"},
+			},
+		},
+	})
+	enc.Encode(map[string]interface{}{
+		"type": "user", "timestamp": ts(5), "message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_1", "is_error": false},
+			},
+		},
+	})
+	// First chunk of NEW message — stop_reason=nil, new ID, no tool_use yet.
+	// This is the critical moment: HasOpenToolCall=false, LastEventType must NOT
+	// be "assistant" or IsAgentDone() fires and state flickers to ready.
+	enc.Encode(map[string]interface{}{
+		"type": "assistant", "timestamp": ts(6), "message": map[string]interface{}{
+			"id": "msg_2", "role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Now let me run the tests."},
+			},
+		},
+	})
+	f.Close()
+
+	tail := newCCTailer(path)
+	m, err := tail.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if m.LastEventType != "assistant_streaming" {
+		t.Errorf("LastEventType = %q, want assistant_streaming (first chunk of new message must not trigger IsAgentDone)", m.LastEventType)
+	}
+	if m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=false (tool_result resolved tu_1)")
+	}
+	// Critical: "assistant_streaming" is not matched by IsAgentDone's fallback,
+	// so even with HasOpenToolCall=false the session stays working.
 }
 
 // Streaming text still extracts AssistantText for UI display.
