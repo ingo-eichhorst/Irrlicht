@@ -17,6 +17,7 @@ let appVersion: String = {
 
 struct StatusIndicatorLabel: View {
     let sessions: [SessionState]
+    let projectGroupOrder: [String]
 
     var body: some View {
         if sessions.isEmpty {
@@ -33,16 +34,22 @@ struct StatusIndicatorLabel: View {
 
     private func buildStatusImage() -> NSImage? {
         // Group sessions by project (top-level only)
-        var groups: [(String, [SessionState])] = []
-        var seen: [String: Int] = [:]
+        var groupMap: [String: [SessionState]] = [:]
         for s in sessions where s.parentSessionId == nil {
             let key = s.projectName ?? s.cwd
-            if let idx = seen[key] {
-                groups[idx].1.append(s)
-            } else {
-                seen[key] = groups.count
-                groups.append((key, [s]))
+            groupMap[key, default: []].append(s)
+        }
+
+        // Order groups according to saved project group order
+        var groups: [(String, [SessionState])] = []
+        var remaining = groupMap
+        for key in projectGroupOrder {
+            if let sessions = remaining.removeValue(forKey: key) {
+                groups.append((key, sessions))
             }
+        }
+        for (key, sessions) in remaining.sorted(by: { $0.key < $1.key }) {
+            groups.append((key, sessions))
         }
 
         let r: CGFloat = 5
@@ -144,7 +151,7 @@ struct IrrlichtApp: App {
                     sessionManager.gasTownProvider = gasTownProvider
                 }
         } label: {
-            StatusIndicatorLabel(sessions: sessionManager.sessions)
+            StatusIndicatorLabel(sessions: sessionManager.sessions, projectGroupOrder: sessionManager.projectGroupOrder)
                 .task {
                     // Start daemon on app launch (label renders immediately, unlike popover content).
                     appDelegate.daemonManager = daemonManager
