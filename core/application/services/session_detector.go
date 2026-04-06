@@ -434,9 +434,17 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
 		// If the session was explicitly deleted (process exit, /clear cleanup),
-		// don't re-create it from a late-arriving transcript write.
+		// don't re-create it from a late-arriving transcript write. However,
+		// if the transcript file has fresh activity (e.g. --continue reusing
+		// the same file), clear the deleted flag and allow re-creation.
 		d.mu.Lock()
 		deleted := d.deletedSessions[ev.SessionID]
+		if deleted && !isStaleTranscript(ev.TranscriptPath) {
+			delete(d.deletedSessions, ev.SessionID)
+			deleted = false
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"previously deleted session has fresh activity (--continue), allowing re-creation")
+		}
 		d.mu.Unlock()
 		if deleted {
 			return

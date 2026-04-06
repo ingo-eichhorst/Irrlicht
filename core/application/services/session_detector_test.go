@@ -598,6 +598,69 @@ func TestSessionDetector_HandleProcessExit_DeletesReadySession(t *testing.T) {
 	}
 }
 
+func TestSessionDetector_ContinueSession_RecreatableAfterProcessExit(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	now := time.Now().Unix()
+
+	// Session exists with a PID.
+	repo.states["cont1"] = &session.SessionState{
+		SessionID:      "cont1",
+		State:          session.StateWorking,
+		PID:            12345,
+		TranscriptPath: "/tmp/test-cont1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	// Process exits — session is deleted and added to deletedSessions.
+	det.HandleProcessExit(12345, "cont1")
+
+	state, _ := repo.Load("cont1")
+	if state != nil {
+		t.Fatal("session should be deleted after process exit")
+	}
+
+	// Start the event loop.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond) // wait for seedFromDisk
+
+	// Create a fresh transcript file (simulating --continue writing to it).
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "cont1.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Activity event for the deleted session with a fresh transcript.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "cont1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Session should be re-created (--continue with fresh transcript).
+	state, err := repo.Load("cont1")
+	if err != nil || state == nil {
+		t.Fatal("session should be re-created after --continue (fresh transcript)")
+	}
+	if state.TranscriptPath != transcriptPath {
+		t.Errorf("transcript_path: got %q, want %q", state.TranscriptPath, transcriptPath)
+	}
+}
+
 func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
