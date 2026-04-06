@@ -57,6 +57,7 @@ These are planned (mark as `"planned"`):
 - Cursor
 - Amp
 - Claude Squad
+- OpenCode (`anomalyco/opencode`)
 
 Everything else: `"none"`.
 

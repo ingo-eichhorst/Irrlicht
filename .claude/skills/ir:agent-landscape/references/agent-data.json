@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-04-05",
+  "last_updated": "2026-04-06",
   "agents": [
     {
       "name": "Claw Code",
@@ -259,14 +259,18 @@
     },
     {
       "name": "OpenCode",
-      "github_repo": "opencode-ai/opencode",
+      "github_repo": "anomalyco/opencode",
       "category": "agent",
       "website": "https://opencode.ai",
-      "description": "Open-source Go-based terminal AI coding agent with TUI",
-      "stars": 11835,
-      "irrlicht_support": "none",
+      "description": "The open source coding agent",
+      "stars": 138332,
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "stars_history": [
+        {
+          "date": "2026-04-06",
+          "stars": 138332
+        },
         {
           "date": "2026-04-05",
           "stars": 11835
