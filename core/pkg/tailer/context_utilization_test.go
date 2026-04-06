@@ -68,9 +68,9 @@ func TestContextUtilization_KnownModel_Opus46(t *testing.T) {
 	assertPressure(t, m, "critical", 90.0)
 }
 
-func TestContextUtilization_UnknownModel_Fallback200K(t *testing.T) {
-	// Unknown model falls back to 200K
-	// 100K tokens / 200K = 50% → "safe"
+func TestContextUtilization_UnknownModel_ShowsTokensOnly(t *testing.T) {
+	// Unknown model: no context window assumption, pressure is "unknown",
+	// raw token count is still available.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{
 			"type":      "assistant",
@@ -91,7 +91,18 @@ func TestContextUtilization_UnknownModel_Fallback200K(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertPressure(t, m, "safe", 50.0)
+	if m.PressureLevel != "unknown" {
+		t.Errorf("PressureLevel = %q, want %q", m.PressureLevel, "unknown")
+	}
+	if m.ContextWindow != 0 {
+		t.Errorf("ContextWindow = %d, want 0 (unknown)", m.ContextWindow)
+	}
+	if m.ContextUtilization != 0 {
+		t.Errorf("ContextUtilization = %.1f, want 0", m.ContextUtilization)
+	}
+	if m.TotalTokens != 100000 {
+		t.Errorf("TotalTokens = %d, want 100000", m.TotalTokens)
+	}
 }
 
 func TestContextUtilization_Codex53_Uses256KContextWindow(t *testing.T) {

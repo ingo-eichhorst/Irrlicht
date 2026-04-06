@@ -475,8 +475,12 @@ func (t *TranscriptTailer) computeContextUtilization() {
 		}
 	}
 
+	// Unknown model: no context window data available — report raw tokens only.
 	if effectiveContextWindow <= 0 {
-		effectiveContextWindow = int64(200000)
+		t.metrics.ContextWindow = 0
+		t.metrics.ContextUtilization = 0
+		t.metrics.PressureLevel = "unknown"
+		return
 	}
 
 	utilizationPercentage := (float64(t.metrics.TotalTokens) / float64(effectiveContextWindow)) * 100

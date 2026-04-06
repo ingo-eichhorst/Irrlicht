@@ -283,16 +283,10 @@
     }
   },
   "fallback": {
-    "context_window": 200000,
-    "max_output": 4096,
+    "context_window": 0,
+    "max_output": 0,
     "char_to_token_ratio": 4.0,
-    "display_name": "Unknown Model",
-    "pricing": {
-      "input_per_mtok": 3.0,
-      "output_per_mtok": 15.0,
-      "cache_read_per_mtok": 0.30,
-      "cache_creation_per_mtok": 3.75
-    }
+    "display_name": "Unknown Model"
   },
   "estimation_notes": {
     "char_to_token_ratio": "Average characters per token, varies by language and content type",
