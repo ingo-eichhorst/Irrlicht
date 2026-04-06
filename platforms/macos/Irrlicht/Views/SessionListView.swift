@@ -286,12 +286,13 @@ struct SessionListView: View {
             grouped[key, default: []].append(group)
         }
 
-        // Convert to ProjectGroup array, sorted by display name
-        return grouped.map { key, value in
+        // Convert to ProjectGroup array, ordered by user preference
+        let unsorted = grouped.map { key, value in
             let display = value.first?.parent.projectName
                 ?? URL(fileURLWithPath: key).lastPathComponent
             return ProjectGroup(projectDirectory: key, displayName: display, sessionGroups: value)
-        }.sorted { $0.displayName < $1.displayName }
+        }
+        return sessionManager.orderedProjectGroups(from: unsorted)
     }
 
     private var sessionListContent: some View {
@@ -306,17 +307,29 @@ struct SessionListView: View {
         }
         let totalGroups = runningIndex
 
+        let projectGroupCount = allProjectGroups.count
+
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 1) {
-                ForEach(allProjectGroups) { projectGroup in
+                ForEach(Array(allProjectGroups.enumerated()), id: \.element.id) { pgIndex, projectGroup in
                     ProjectGroupSectionView(
                         projectGroup: projectGroup,
                         startingGroupIndex: startIndices[projectGroup.id] ?? 0,
-                        isCompact: isCompactMode
+                        isCompact: isCompactMode,
+                        projectGroupIndex: pgIndex,
+                        totalProjectGroups: projectGroupCount
                     )
+                    .onDrag {
+                        NSItemProvider(object: projectGroup.projectDirectory as NSString)
+                    }
+                    .onDrop(of: [.text], delegate: ProjectGroupDropDelegate(
+                        sessionManager: sessionManager,
+                        targetProjectGroupIndex: pgIndex,
+                        allProjectDirectories: Set(allProjectGroups.map(\.projectDirectory))
+                    ))
                 }
 
-                // Drop zone at the end of the list
+                // Drop zone at the end of the list (for sessions)
                 Rectangle()
                     .fill(Color.clear)
                     .frame(height: 20)
@@ -974,6 +987,8 @@ struct ProjectGroupSectionView: View {
     let projectGroup: ProjectGroup
     let startingGroupIndex: Int
     let isCompact: Bool
+    let projectGroupIndex: Int
+    let totalProjectGroups: Int
     @EnvironmentObject var sessionManager: SessionManager
     @AppStorage("debugMode") private var debugMode: Bool = false
     @State private var isExpanded = true
@@ -1036,6 +1051,32 @@ struct ProjectGroupSectionView: View {
                     SessionStateDots(projectGroup: projectGroup, isCompact: isCompact)
 
                     Spacer()
+
+                    if totalProjectGroups > 1 {
+                        HStack(spacing: 2) {
+                            Button(action: {
+                                sessionManager.moveProjectGroupUp(projectDirectory: projectGroup.projectDirectory)
+                            }) {
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 8))
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(projectGroupIndex == 0)
+                            .opacity(projectGroupIndex == 0 ? 0.3 : 1.0)
+
+                            Button(action: {
+                                sessionManager.moveProjectGroupDown(projectDirectory: projectGroup.projectDirectory)
+                            }) {
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 8))
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(projectGroupIndex == totalProjectGroups - 1)
+                            .opacity(projectGroupIndex == totalProjectGroups - 1 ? 0.3 : 1.0)
+                        }
+                    }
 
                     let count = projectGroup.sessionGroups.count
                     Text("\(count) \(count == 1 ? "session" : "sessions")")
@@ -1131,6 +1172,41 @@ struct SessionGroupDropDelegate: DropDelegate {
             guard let parentId = item as? String else { return }
             DispatchQueue.main.async {
                 sessionManager.reorderGroup(parentId: parentId, to: targetGroupIndex)
+            }
+        }
+
+        return true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+}
+
+// MARK: - Project Group Drag and Drop
+
+struct ProjectGroupDropDelegate: DropDelegate {
+    let sessionManager: SessionManager
+    let targetProjectGroupIndex: Int
+    let allProjectDirectories: Set<String>
+
+    func validateDrop(info: DropInfo) -> Bool {
+        return info.hasItemsConforming(to: [.text])
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let itemProvider = info.itemProviders(for: [.text]).first else {
+            return false
+        }
+
+        itemProvider.loadObject(ofClass: NSString.self) { item, error in
+            guard let projectDirectory = item as? String,
+                  allProjectDirectories.contains(projectDirectory) else { return }
+            DispatchQueue.main.async {
+                sessionManager.reorderProjectGroup(
+                    projectDirectory: projectDirectory,
+                    to: targetProjectGroupIndex
+                )
             }
         }
 

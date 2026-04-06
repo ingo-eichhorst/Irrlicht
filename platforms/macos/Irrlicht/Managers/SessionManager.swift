@@ -21,6 +21,10 @@ class SessionManager: ObservableObject {
     private let orderFilePath: URL
     private var sessionOrder: [String] = []
 
+    // Project group ordering (persisted in UserDefaults)
+    @Published var projectGroupOrder: [String] = []
+    private let projectGroupOrderKey = "projectGroupOrder"
+
     // Tracks which pressure thresholds (80, 95) have already fired a notification
     // for each session ID. Prevents re-firing on every state update.
     private var notifiedThresholds: [String: Set<Int>] = [:]
@@ -62,6 +66,7 @@ class SessionManager: ObservableObject {
 
         Task {
             loadSessionOrder()
+            loadProjectGroupOrder()
             requestNotificationPermission()
             if self.useFilePolling {
                 self.startWatching()
@@ -674,6 +679,71 @@ class SessionManager: ObservableObject {
         saveSessionOrder()
 
         print("🔄 Reordered session \(session.shortId) from \(sourceIndex) to \(adjustedDestination)")
+    }
+
+    // MARK: - Project Group Order Management
+
+    private func loadProjectGroupOrder() {
+        projectGroupOrder = UserDefaults.standard.stringArray(forKey: projectGroupOrderKey) ?? []
+        print("📋 Loaded project group order with \(projectGroupOrder.count) groups")
+    }
+
+    private func saveProjectGroupOrder() {
+        UserDefaults.standard.set(projectGroupOrder, forKey: projectGroupOrderKey)
+        print("💾 Saved project group order with \(projectGroupOrder.count) groups")
+    }
+
+    func orderedProjectGroups(from groups: [ProjectGroup]) -> [ProjectGroup] {
+        let groupMap = Dictionary(uniqueKeysWithValues: groups.map { ($0.projectDirectory, $0) })
+        var ordered: [ProjectGroup] = []
+
+        // Groups in saved order first
+        for key in projectGroupOrder {
+            if let group = groupMap[key] {
+                ordered.append(group)
+            }
+        }
+
+        // New groups not in saved order, sorted alphabetically
+        let orderedKeys = Set(projectGroupOrder)
+        let newGroups = groups.filter { !orderedKeys.contains($0.projectDirectory) }
+            .sorted { $0.displayName < $1.displayName }
+        ordered.append(contentsOf: newGroups)
+
+        // Prune stale entries and persist if changed
+        let newOrder = ordered.map { $0.projectDirectory }
+        if newOrder != projectGroupOrder {
+            projectGroupOrder = newOrder
+            saveProjectGroupOrder()
+        }
+
+        return ordered
+    }
+
+    func reorderProjectGroup(projectDirectory: String, to destinationIndex: Int) {
+        guard let sourceIndex = projectGroupOrder.firstIndex(of: projectDirectory) else { return }
+        guard destinationIndex >= 0, destinationIndex <= projectGroupOrder.count else { return }
+        guard sourceIndex != destinationIndex else { return }
+
+        projectGroupOrder.remove(at: sourceIndex)
+        let adjusted = destinationIndex > sourceIndex ? destinationIndex - 1 : destinationIndex
+        projectGroupOrder.insert(projectDirectory, at: adjusted)
+        saveProjectGroupOrder()
+
+        print("🔄 Reordered project group \(projectDirectory) from \(sourceIndex) to \(adjusted)")
+    }
+
+    func moveProjectGroupUp(projectDirectory: String) {
+        guard let index = projectGroupOrder.firstIndex(of: projectDirectory), index > 0 else { return }
+        projectGroupOrder.swapAt(index, index - 1)
+        saveProjectGroupOrder()
+    }
+
+    func moveProjectGroupDown(projectDirectory: String) {
+        guard let index = projectGroupOrder.firstIndex(of: projectDirectory),
+              index < projectGroupOrder.count - 1 else { return }
+        projectGroupOrder.swapAt(index, index + 1)
+        saveProjectGroupOrder()
     }
 
     // MARK: - Duplicate Session Handling
