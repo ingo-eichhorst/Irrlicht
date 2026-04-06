@@ -319,9 +319,6 @@ struct SessionListView: View {
                         projectGroupIndex: pgIndex,
                         totalProjectGroups: projectGroupCount
                     )
-                    .onDrag {
-                        NSItemProvider(object: projectGroup.projectDirectory as NSString)
-                    }
                     .onDrop(of: [.text], delegate: ProjectGroupDropDelegate(
                         sessionManager: sessionManager,
                         targetProjectGroupIndex: pgIndex,
@@ -1025,69 +1022,78 @@ struct ProjectGroupSectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Collapsible project header
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary)
-                        .frame(width: 10)
-
-                    Text(projectGroup.displayName)
-                        .font(.system(.caption, design: .monospaced))
-                        .fontWeight(.semibold)
-                        .foregroundColor(projectNameColor)
-
-                    if let cost = formattedTotalCost {
-                        Text(cost)
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+            // Collapsible project header with reorder arrows
+            HStack(spacing: 0) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isExpanded.toggle()
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8))
                             .foregroundColor(.secondary)
-                    }
+                            .frame(width: 10)
 
-                    SessionStateDots(projectGroup: projectGroup, isCompact: isCompact)
+                        Text(projectGroup.displayName)
+                            .font(.system(.caption, design: .monospaced))
+                            .fontWeight(.semibold)
+                            .foregroundColor(projectNameColor)
 
-                    Spacer()
-
-                    if totalProjectGroups > 1 {
-                        HStack(spacing: 2) {
-                            Button(action: {
-                                sessionManager.moveProjectGroupUp(projectDirectory: projectGroup.projectDirectory)
-                            }) {
-                                Image(systemName: "chevron.up")
-                                    .font(.system(size: 8))
-                                    .foregroundColor(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(projectGroupIndex == 0)
-                            .opacity(projectGroupIndex == 0 ? 0.3 : 1.0)
-
-                            Button(action: {
-                                sessionManager.moveProjectGroupDown(projectDirectory: projectGroup.projectDirectory)
-                            }) {
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 8))
-                                    .foregroundColor(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(projectGroupIndex == totalProjectGroups - 1)
-                            .opacity(projectGroupIndex == totalProjectGroups - 1 ? 0.3 : 1.0)
+                        if let cost = formattedTotalCost {
+                            Text(cost)
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundColor(.secondary)
                         }
-                    }
 
-                    let count = projectGroup.sessionGroups.count
-                    Text("\(count) \(count == 1 ? "session" : "sessions")")
-                        .font(.caption2)
-                        .foregroundColor(.secondary.opacity(0.7))
+                        SessionStateDots(projectGroup: projectGroup, isCompact: isCompact)
+
+                        Spacer()
+
+                        let count = projectGroup.sessionGroups.count
+                        Text("\(count) \(count == 1 ? "session" : "sessions")")
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                if totalProjectGroups > 1 {
+                    HStack(spacing: 0) {
+                        Button(action: {
+                            sessionManager.moveProjectGroupUp(projectDirectory: projectGroup.projectDirectory)
+                        }) {
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                                .frame(width: 14, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(projectGroupIndex == 0)
+                        .opacity(projectGroupIndex == 0 ? 0.3 : 1.0)
+
+                        Button(action: {
+                            sessionManager.moveProjectGroupDown(projectDirectory: projectGroup.projectDirectory)
+                        }) {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                                .frame(width: 14, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(projectGroupIndex == totalProjectGroups - 1)
+                        .opacity(projectGroupIndex == totalProjectGroups - 1 ? 0.3 : 1.0)
+                    }
+                }
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .onDrag {
+                NSItemProvider(object: projectGroup.projectDirectory as NSString)
+            }
 
             // Session rows (indented under the project header)
             if isExpanded {
