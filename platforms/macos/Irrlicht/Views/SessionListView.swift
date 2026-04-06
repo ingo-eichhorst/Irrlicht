@@ -177,11 +177,11 @@ struct SessionListView: View {
                 .font(.system(size: 24))
                 .foregroundColor(.secondary)
 
-            Text("No Claude Code sessions detected")
+            Text("No coding agent sessions detected")
                 .font(.headline)
                 .foregroundColor(.secondary)
 
-            Text("Start a Claude Code session to see it here.")
+            Text("Start a coding agent session to see it here.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
