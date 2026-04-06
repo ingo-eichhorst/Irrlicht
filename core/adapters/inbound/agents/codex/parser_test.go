@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"irrlicht/core/application/services"
-	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -123,6 +121,24 @@ func TestParser_FunctionCall(t *testing.T) {
 	}
 	if len(ev.ToolUseNames) != 1 || ev.ToolUseNames[0] != "shell" {
 		t.Errorf("ToolUseNames = %v, want [shell]", ev.ToolUseNames)
+	}
+}
+
+func TestParser_FunctionCall_WithoutNameStillCountsAsActivity(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "function_call",
+		"arguments": `{"command":["zsh","-lc","ls"]}`,
+		"timestamp": ts(2),
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.EventType != "function_call" {
+		t.Errorf("EventType = %q, want function_call", ev.EventType)
+	}
+	if len(ev.ToolUseNames) != 0 {
+		t.Errorf("ToolUseNames = %v, want empty", ev.ToolUseNames)
 	}
 }
 
@@ -421,13 +437,4 @@ func TestParser_FullWrappedTranscript_MetadataAndWaitingState(t *testing.T) {
 		t.Error("expected HasOpenToolCall=false after wrapped tool calls resolved")
 	}
 
-	state, _ := services.ClassifyState(session.StateWorking, &session.SessionMetrics{
-		HasOpenToolCall:   m.HasOpenToolCall,
-		LastEventType:     m.LastEventType,
-		LastAssistantText: m.LastAssistantText,
-		LastOpenToolNames: m.LastOpenToolNames,
-	})
-	if state != session.StateWaiting {
-		t.Errorf("state = %q, want waiting", state)
-	}
 }

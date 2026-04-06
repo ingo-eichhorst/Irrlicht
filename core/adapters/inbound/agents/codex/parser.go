@@ -45,7 +45,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev.ModelName, ev.ContextWindow, ev.Tokens = extractCodexMetadata(raw)
 
 	// Content character count.
-	ev.ContentChars = tailer.ExtractContentChars(raw)
+	ev.ContentChars = extractCodexContentChars(raw)
 
 	// Map event types to normalized forms.
 	switch eventType {
@@ -124,17 +124,27 @@ func parseCodexResponseItem(payload map[string]interface{}, ev *tailer.ParsedEve
 
 func parseCodexFunctionCall(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	name, _ := raw["name"].(string)
-	if name == "" {
-		return false
-	}
 	ev.EventType = "function_call"
-	ev.ToolUseNames = []string{name}
+	if name != "" {
+		ev.ToolUseNames = []string{name}
+	}
 	return true
 }
 
 func parseCodexFunctionCallOutput(ev *tailer.ParsedEvent) {
 	ev.EventType = "function_call_output"
 	ev.ToolResultCount = 1
+}
+
+func extractCodexContentChars(raw map[string]interface{}) int64 {
+	if payload, ok := raw["payload"].(map[string]interface{}); ok {
+		return extractCodexContentChars(payload)
+	}
+	chars := tailer.ExtractContentChars(raw)
+	if message, ok := raw["message"].(string); ok {
+		chars += int64(len(message))
+	}
+	return chars
 }
 
 // extractCodexMetadata extracts model, context window, and token info from Codex events.

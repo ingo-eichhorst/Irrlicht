@@ -50,6 +50,10 @@ func ExtractCWDFromLine(raw map[string]interface{}) string {
 }
 
 func extractCWDFromArguments(raw map[string]interface{}) string {
+	typeName, _ := raw["type"].(string)
+	if typeName != "function_call" && typeName != "custom_tool_call" {
+		return ""
+	}
 	if args, ok := raw["arguments"].(string); ok {
 		var parsed map[string]interface{}
 		if json.Unmarshal([]byte(args), &parsed) == nil {

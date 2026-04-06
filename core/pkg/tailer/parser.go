@@ -127,12 +127,6 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 	if arr, ok := raw["content"].([]interface{}); ok {
 		collectText(arr)
 	}
-	// Wrapped Codex: payload.content[]
-	if payload, ok := raw["payload"].(map[string]interface{}); ok {
-		if arr, ok := payload["content"].([]interface{}); ok {
-			collectText(arr)
-		}
-	}
 
 	var text string
 	switch len(parts) {
@@ -172,21 +166,6 @@ func ExtractContentChars(raw map[string]interface{}) int64 {
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if arr, ok := msg["content"].([]interface{}); ok {
 			addContentChars(arr)
-		}
-	}
-	// Wrapped Codex payload content.
-	if payload, ok := raw["payload"].(map[string]interface{}); ok {
-		if arr, ok := payload["content"].([]interface{}); ok {
-			addContentChars(arr)
-		}
-		if args, ok := payload["arguments"].(string); ok {
-			chars += int64(len(args))
-		}
-		if output, ok := payload["output"].(string); ok {
-			chars += int64(len(output))
-		}
-		if message, ok := payload["message"].(string); ok {
-			chars += int64(len(message))
 		}
 	}
 	// Codex function_call arguments
