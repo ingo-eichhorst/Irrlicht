@@ -173,11 +173,13 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T)
 	}
 }
 
-func TestSessionDetector_Activity_TransitionsToReady_WhenAssistantNoSystemEvents(t *testing.T) {
+func TestSessionDetector_Activity_StaysWorking_WhenAssistantStreaming(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
+	// Mid-turn: Claude Code streaming message (no stop_reason) emits
+	// "assistant_streaming" which should NOT trigger IsAgentDone().
 	repo.states["nosys1"] = &session.SessionState{
 		SessionID:      "nosys1",
 		State:          session.StateWorking,
@@ -186,7 +188,7 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAssistantNoSystemEvents
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     3,
 		Metrics: &session.SessionMetrics{
-			LastEventType:   "assistant",
+			LastEventType:   "assistant_streaming",
 			HasOpenToolCall: false,
 		},
 	}
@@ -209,8 +211,8 @@ func TestSessionDetector_Activity_TransitionsToReady_WhenAssistantNoSystemEvents
 	<-done
 
 	state, _ := repo.Load("nosys1")
-	if state.State != session.StateReady {
-		t.Errorf("state: got %q, want ready (assistant with no open tools, no turn_done system event)", state.State)
+	if state.State != session.StateWorking {
+		t.Errorf("state: got %q, want working (assistant_streaming should not trigger ready)", state.State)
 	}
 }
 
@@ -596,6 +598,128 @@ func TestSessionDetector_HandleProcessExit_DeletesReadySession(t *testing.T) {
 	}
 }
 
+func TestSessionDetector_ContinueSession_RecreatableAfterProcessExit(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	now := time.Now().Unix()
+
+	// Session exists with a PID.
+	repo.states["cont1"] = &session.SessionState{
+		SessionID:      "cont1",
+		State:          session.StateWorking,
+		PID:            12345,
+		TranscriptPath: "/tmp/test-cont1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	det := newDetector(tw, pw, repo)
+	det.SetDeletedCooldown(0) // allow immediate re-creation
+
+	// Process exits — session is deleted and added to deletedSessions.
+	det.HandleProcessExit(12345, "cont1")
+
+	state, _ := repo.Load("cont1")
+	if state != nil {
+		t.Fatal("session should be deleted after process exit")
+	}
+
+	// Start the event loop.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond) // wait for seedFromDisk
+
+	// Create a fresh transcript file (simulating --continue writing to it).
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "cont1.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Activity event for the deleted session with a fresh transcript.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "cont1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Session should be re-created (--continue with fresh transcript).
+	state, err := repo.Load("cont1")
+	if err != nil || state == nil {
+		t.Fatal("session should be re-created after --continue (fresh transcript)")
+	}
+	if state.TranscriptPath != transcriptPath {
+		t.Errorf("transcript_path: got %q, want %q", state.TranscriptPath, transcriptPath)
+	}
+}
+
+func TestSessionDetector_LateWriteAfterQuit_NoGhostSession(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	now := time.Now().Unix()
+
+	repo.states["ghost1"] = &session.SessionState{
+		SessionID:      "ghost1",
+		State:          session.StateWorking,
+		PID:            12345,
+		TranscriptPath: "/tmp/test-ghost1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	det := newDetector(tw, pw, repo)
+	// Keep default 10s cooldown — late writes happen within milliseconds.
+
+	// Process exits — session deleted.
+	det.HandleProcessExit(12345, "ghost1")
+
+	state, _ := repo.Load("ghost1")
+	if state != nil {
+		t.Fatal("session should be deleted after process exit")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Late-arriving write from the dying process (within cooldown).
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "ghost1.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"assistant"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "ghost1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Session should NOT be re-created — still within cooldown.
+	state, _ = repo.Load("ghost1")
+	if state != nil {
+		t.Error("session should NOT be re-created from late writes after quit (within cooldown)")
+	}
+}
+
 func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -969,8 +1093,10 @@ func TestIsAgentDone(t *testing.T) {
 		{"nil metrics", nil, false},
 		{"turn_done", &session.SessionMetrics{LastEventType: "turn_done"}, true},
 		{"turn_done, open tools (subagent running)", &session.SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}, false},
-		{"assistant_message, no open tools (legacy)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
-		{"assistant, no open tools (done — fallback for transcripts without turn_done)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
+		{"assistant with stop_reason (end_turn)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
+		{"assistant_message, no open tools (Codex)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
+		{"assistant_output, no open tools (Codex)", &session.SessionMetrics{LastEventType: "assistant_output", HasOpenToolCall: false}, true},
+		{"assistant_streaming (no stop_reason — NOT done)", &session.SessionMetrics{LastEventType: "assistant_streaming", HasOpenToolCall: false}, false},
 		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},
 		{"user, no open tools", &session.SessionMetrics{LastEventType: "user", HasOpenToolCall: false}, false},
 		{"empty", &session.SessionMetrics{}, false},
@@ -1254,6 +1380,190 @@ func TestSessionDetector_StaleToolCall_GuardChecksState(t *testing.T) {
 	state, _ = repo.Load("guard1")
 	if state.State != session.StateReady {
 		t.Errorf("state: got %q, want ready (guard should prevent overwrite)", state.State)
+	}
+
+	cancel()
+	<-done
+}
+
+// --- parent-child state propagation tests ------------------------------------
+
+func TestSessionDetector_ParentHeldWorking_WhenChildrenActive(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Parent session: turn is done, no open tool calls.
+	// Without children this would transition to ready.
+	repo.Save(&session.SessionState{
+		SessionID:      "parent1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "turn_done",
+			HasOpenToolCall:   false,
+			LastAssistantText: "Done.",
+		},
+	})
+
+	// Child session: still working.
+	repo.Save(&session.SessionState{
+		SessionID:       "child1",
+		State:           session.StateWorking,
+		ParentSessionID: "parent1",
+		TranscriptPath:  "/home/.claude/projects/-Users-test/parent1/subagents/child1.jsonl",
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   true,
+			LastOpenToolNames: []string{"Bash"},
+		},
+	})
+
+	// Trigger parent activity — should be held in working because child is active.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	state, _ := repo.Load("parent1")
+	if state.State != session.StateWorking {
+		t.Errorf("parent state: got %q, want working (child still active)", state.State)
+	}
+
+	cancel()
+	<-done
+}
+
+func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Parent: turn done, held in working because of child.
+	repo.Save(&session.SessionState{
+		SessionID:      "parent2",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent2.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "turn_done",
+			HasOpenToolCall:   false,
+			LastAssistantText: "Done.",
+		},
+	})
+
+	// Child: still working.
+	repo.Save(&session.SessionState{
+		SessionID:       "child2",
+		State:           session.StateWorking,
+		ParentSessionID: "parent2",
+		TranscriptPath:  "/home/.claude/projects/-Users-test/parent2/subagents/child2.jsonl",
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "turn_done",
+			HasOpenToolCall: false,
+		},
+	})
+
+	// Trigger child activity — child now has turn_done, transitions to ready.
+	// This should trigger parent re-evaluation → parent also goes ready.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "child2",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent2/subagents/child2.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	parent, _ := repo.Load("parent2")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateReady {
+		t.Errorf("parent state: got %q, want ready (child finished, parent turn was done)", parent.State)
+	}
+
+	cancel()
+	<-done
+}
+
+func TestSessionDetector_ParentNotAffected_WhenNoChildren(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Session with no children, turn done → should transition to ready normally.
+	repo.Save(&session.SessionState{
+		SessionID:      "solo1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/solo1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "turn_done",
+			HasOpenToolCall:   false,
+			LastAssistantText: "All done.",
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "solo1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/solo1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	state, _ := repo.Load("solo1")
+	if state.State != session.StateReady {
+		t.Errorf("state: got %q, want ready (no children, turn done)", state.State)
 	}
 
 	cancel()

@@ -7,10 +7,19 @@ import (
 	"irrlicht/core/pkg/transcript"
 )
 
+// eventTypeAssistantStreaming is emitted for intermediate Claude Code assistant
+// messages (thinking blocks, partial text) that should not trigger IsAgentDone().
+const eventTypeAssistantStreaming = "assistant_streaming"
+
 // Parser implements tailer.TranscriptParser for Claude Code transcripts.
 // Claude Code events use top-level "type" fields ("user", "assistant", "system")
 // and embed tool calls inside message.content[] arrays.
-type Parser struct{}
+//
+// The parser is stateful: it tracks the last assistant message ID to detect
+// intermediate streaming chunks within the same API response.
+type Parser struct {
+	lastAssistantMsgID string
+}
 
 // ParseLine parses a Claude Code JSONL line into a normalized ParsedEvent.
 func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
@@ -64,6 +73,23 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 					return ev
 				}
 			}
+			// ESC during text generation writes a user message with
+			// "[Request interrupted by user]" as text content. Mark as
+			// IsError so the classifier's ESC cancellation rule fires.
+			if contentArr, ok := msg["content"].([]interface{}); ok {
+				for _, item := range contentArr {
+					if block, ok := item.(map[string]interface{}); ok {
+						if block["type"] == "text" {
+							if text, ok := block["text"].(string); ok {
+								if strings.HasPrefix(text, "[Request interrupted by user") {
+									ev.IsError = true
+									break
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -84,6 +110,42 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	// Content character count for token estimation.
 	ev.ContentChars = tailer.ExtractContentChars(raw)
+
+	// Intermediate streaming messages from Claude Code (thinking blocks,
+	// partial text before tool_use) are written as separate JSONL lines
+	// sharing the same message.id within one API response. Using
+	// eventTypeAssistantStreaming for these prevents IsAgentDone() from falsely
+	// returning true between tool calls.
+	//
+	// Detection: messages with stop_reason=null that share the same message.id
+	// as the previous assistant message are definitely intermediate. Thinking
+	// blocks (content[0].type="thinking") are always intermediate regardless.
+	// Messages with stop_reason="end_turn" or "tool_use" are always final.
+	if eventType == "assistant" {
+		if msg, ok := raw["message"].(map[string]interface{}); ok {
+			stopReason, _ := msg["stop_reason"]
+			msgID, _ := msg["id"].(string)
+
+			if stopReason == nil {
+				// Same message ID as previous → part of ongoing streaming sequence.
+				if msgID != "" && msgID == p.lastAssistantMsgID {
+					eventType = eventTypeAssistantStreaming
+				}
+				// Thinking blocks are always intermediate (never the final response).
+				if contentArr, ok := msg["content"].([]interface{}); ok && len(contentArr) > 0 {
+					if block, ok := contentArr[0].(map[string]interface{}); ok {
+						if block["type"] == "thinking" {
+							eventType = eventTypeAssistantStreaming
+						}
+					}
+				}
+			}
+
+			if msgID != "" {
+				p.lastAssistantMsgID = msgID
+			}
+		}
+	}
 
 	// Filter non-message events.
 	if !isClaudeCodeMessageEvent(eventType) {
@@ -116,7 +178,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	// Track assistant text for waiting-state display.
 	switch eventType {
-	case "assistant", "assistant_message", "assistant_output":
+	case "assistant", eventTypeAssistantStreaming, "assistant_message", "assistant_output":
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
@@ -195,7 +257,8 @@ func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
 func isClaudeCodeMessageEvent(eventType string) bool {
 	switch eventType {
 	case "user_message", "assistant_message", "tool_call", "tool_result",
-		"user_input", "assistant_output", "user", "assistant", "tool_use", "message":
+		"user_input", "assistant_output", "user", "assistant", "tool_use", "message",
+		eventTypeAssistantStreaming:
 		return true
 	}
 	return false

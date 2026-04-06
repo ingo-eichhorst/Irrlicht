@@ -135,7 +135,7 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateReady,
 		},
 		{
-			name:    "working → ready (assistant_message legacy)",
+			name:    "working → ready (assistant_message Codex fallback)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
 				LastEventType:   "assistant_message",
@@ -143,6 +143,25 @@ func TestClassifyState(t *testing.T) {
 			},
 			wantState:  session.StateReady,
 			wantReason: true,
+		},
+		{
+			name:    "working → ready (assistant with stop_reason)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:   "assistant",
+				HasOpenToolCall: false,
+			},
+			wantState:  session.StateReady,
+			wantReason: true,
+		},
+		{
+			name:    "working stays working (assistant_streaming, no stop_reason)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:   "assistant_streaming",
+				HasOpenToolCall: false,
+			},
+			wantState: session.StateWorking,
 		},
 
 		// Rule 3: ESC cancellation → ready.
