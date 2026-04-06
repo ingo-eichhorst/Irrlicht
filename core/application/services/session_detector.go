@@ -62,9 +62,12 @@ type SessionDetector struct {
 	projectSessions map[string]string // sessionID → projectDir
 
 	// deletedSessions tracks session IDs that were explicitly deleted (process
-	// exit, /clear cleanup). Prevents late-arriving transcript activity from
-	// re-creating a session that was intentionally removed.
-	deletedSessions map[string]bool
+	// exit, /clear cleanup) with their deletion timestamp. Prevents late-
+	// arriving transcript activity from re-creating a session that was
+	// intentionally removed. The timestamp enables --continue detection:
+	// activity arriving well after deletion (>10s) indicates a genuine
+	// --continue, not ghost events from a dying process.
+	deletedSessions map[string]int64
 
 	// debounce coalesces rapid transcript activity events per session.
 	debounceMu sync.Mutex
@@ -83,6 +86,11 @@ type SessionDetector struct {
 	staleToolTimeout time.Duration
 	staleToolMu      sync.Mutex
 	staleToolTimers  map[string]*time.Timer
+
+	// deletedCooldown is the minimum time after deletion before a session
+	// can be re-created from transcript activity (e.g. --continue). Prevents
+	// ghost sessions from late-arriving writes of a dying process.
+	deletedCooldown time.Duration
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -107,11 +115,12 @@ func NewSessionDetector(
 		version:          version,
 		enricher:         NewMetadataEnricher(git, metrics),
 		projectSessions:  make(map[string]string),
-		deletedSessions:  make(map[string]bool),
+		deletedSessions:  make(map[string]int64),
 		debounce:         make(map[string]*debounceEntry),
 		debouncedEvents:  make(chan agent.Event, 64),
 		staleToolTimeout: defaultStaleToolTimeout,
 		staleToolTimers:  make(map[string]*time.Timer),
+		deletedCooldown: 10 * time.Second,
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -124,6 +133,12 @@ func NewSessionDetector(
 // Intended for tests that need a shorter duration.
 func (d *SessionDetector) SetStaleToolTimeout(timeout time.Duration) {
 	d.staleToolTimeout = timeout
+}
+
+// SetDeletedCooldown overrides the deleted-session cooldown.
+// Intended for tests that need immediate re-creation.
+func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
+	d.deletedCooldown = dur
 }
 
 // startStaleToolTimer starts a timer that will transition a session to "waiting"
@@ -303,10 +318,16 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 
 	if isNew {
 		// Skip transcripts whose session was recently deleted (process exit
-		// or /clear cleanup). This prevents late-arriving file events from
-		// re-creating a session that was intentionally removed.
+		// or /clear cleanup). Allow re-creation if the cooldown has passed
+		// and the transcript has fresh activity (--continue scenario).
 		d.mu.Lock()
-		deleted := d.deletedSessions[ev.SessionID]
+		deletedAt, deleted := d.deletedSessions[ev.SessionID]
+		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
+			delete(d.deletedSessions, ev.SessionID)
+			deleted = false
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"previously deleted session has fresh activity (--continue), allowing re-creation")
+		}
 		d.mu.Unlock()
 		if deleted {
 			d.log.LogInfo("session-detector", ev.SessionID,
@@ -434,9 +455,19 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
 		// If the session was explicitly deleted (process exit, /clear cleanup),
-		// don't re-create it from a late-arriving transcript write.
+		// don't re-create it from a late-arriving transcript write. However,
+		// if activity arrives well after deletion (>10s) with a fresh
+		// transcript, it's a genuine --continue — clear the flag and allow
+		// re-creation. The 10s cooldown prevents ghost sessions from
+		// late-arriving writes of a dying process.
 		d.mu.Lock()
-		deleted := d.deletedSessions[ev.SessionID]
+		deletedAt, deleted := d.deletedSessions[ev.SessionID]
+		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
+			delete(d.deletedSessions, ev.SessionID)
+			deleted = false
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"previously deleted session has fresh activity (--continue), allowing re-creation")
+		}
 		d.mu.Unlock()
 		if deleted {
 			return
@@ -482,6 +513,19 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// Content-based state detection.
 	now := time.Now().Unix()
 	newState, reason := ClassifyState(state.State, state.Metrics)
+
+	// Parent-child propagation: if a parent session would transition to
+	// ready but still has active children (working/waiting), hold it in
+	// working. The parent will be re-evaluated when children finish.
+	if newState == session.StateReady && state.ParentSessionID == "" {
+		if d.hasActiveChildren(state.SessionID) {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"holding parent working — active children still running")
+			newState = session.StateWorking
+			reason = ""
+		}
+	}
+
 	if newState != state.State {
 		if reason != "" {
 			d.log.LogInfo("session-detector", ev.SessionID, reason)
@@ -528,6 +572,12 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// When a parent session finishes, clean up all its child sessions.
 	if state.State == session.StateReady && state.ParentSessionID == "" {
 		d.pidMgr.cleanupChildren(state.SessionID)
+	}
+
+	// When a child session changes state, re-evaluate the parent — it may
+	// be held in working solely because of this child.
+	if state.ParentSessionID != "" {
+		d.reevaluateParent(state.ParentSessionID)
 	}
 }
 
@@ -664,6 +714,18 @@ func (d *SessionDetector) seedFromDisk() {
 
 	// Clean up dead sessions and register alive PIDs with ProcessWatcher.
 	d.pidMgr.SeedPIDs(states)
+
+	// Prune stale deletedSessions entries from previous daemon runs.
+	// Entries older than 1 hour serve no purpose — the cooldown window
+	// is only 10 seconds.
+	d.mu.Lock()
+	pruneThreshold := time.Now().Add(-1 * time.Hour).Unix()
+	for id, ts := range d.deletedSessions {
+		if ts < pruneThreshold {
+			delete(d.deletedSessions, id)
+		}
+	}
+	d.mu.Unlock()
 }
 
 // removeFromProjectSessions removes a session from the projectSessions map and
@@ -671,7 +733,7 @@ func (d *SessionDetector) seedFromDisk() {
 func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	d.mu.Lock()
 	delete(d.projectSessions, sessionID)
-	d.deletedSessions[sessionID] = true
+	d.deletedSessions[sessionID] = time.Now().Unix()
 	d.mu.Unlock()
 }
 
@@ -679,6 +741,75 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 func (d *SessionDetector) broadcast(msgType string, state *session.SessionState) {
 	if d.broadcaster != nil {
 		d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
+	}
+}
+
+// hasActiveChildren returns true if any child session of the given parent is
+// still working or waiting. Used to prevent a parent from transitioning to
+// ready while background/foreground subagents are still processing.
+func (d *SessionDetector) hasActiveChildren(parentID string) bool {
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return false
+	}
+	for _, s := range states {
+		if s.ParentSessionID == parentID &&
+			(s.State == session.StateWorking || s.State == session.StateWaiting) {
+			return true
+		}
+	}
+	return false
+}
+
+// reevaluateParent checks whether a parent session should transition now that
+// a child's state has changed. If the parent's own turn is done (IsAgentDone)
+// and no more active children remain, the parent transitions to ready (or
+// waiting if ending with a question).
+func (d *SessionDetector) reevaluateParent(parentID string) {
+	parent, err := d.repo.Load(parentID)
+	if err != nil || parent == nil {
+		return
+	}
+	// Only re-evaluate parents that are being held in working.
+	if parent.State != session.StateWorking {
+		return
+	}
+	// The parent's own turn must be done for it to transition.
+	if parent.Metrics == nil || !parent.Metrics.IsAgentDone() {
+		return
+	}
+	// Still have active children — stay working.
+	if d.hasActiveChildren(parentID) {
+		return
+	}
+
+	// All children are done and the parent's turn is complete.
+	newState, reason := ClassifyState(parent.State, parent.Metrics)
+	if newState == parent.State {
+		return
+	}
+
+	now := time.Now().Unix()
+	if reason != "" {
+		d.log.LogInfo("session-detector", parentID,
+			fmt.Sprintf("children done, parent re-evaluated: %s", reason))
+	}
+	parent.State = newState
+	parent.UpdatedAt = now
+	if newState == session.StateWaiting {
+		parent.WaitingStartTime = &now
+	}
+
+	if err := d.repo.Save(parent); err != nil {
+		d.log.LogError("session-detector", parentID,
+			fmt.Sprintf("failed to save parent re-evaluation: %v", err))
+		return
+	}
+	d.broadcast(outbound.PushTypeUpdated, parent)
+
+	// If the parent transitioned to ready, clean up its children.
+	if parent.State == session.StateReady {
+		d.pidMgr.cleanupChildren(parentID)
 	}
 }
 
