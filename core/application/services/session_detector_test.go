@@ -662,6 +662,64 @@ func TestSessionDetector_ContinueSession_RecreatableAfterProcessExit(t *testing.
 	}
 }
 
+func TestSessionDetector_LateWriteAfterQuit_NoGhostSession(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	now := time.Now().Unix()
+
+	repo.states["ghost1"] = &session.SessionState{
+		SessionID:      "ghost1",
+		State:          session.StateWorking,
+		PID:            12345,
+		TranscriptPath: "/tmp/test-ghost1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	det := newDetector(tw, pw, repo)
+	// Keep default 10s cooldown — late writes happen within milliseconds.
+
+	// Process exits — session deleted.
+	det.HandleProcessExit(12345, "ghost1")
+
+	state, _ := repo.Load("ghost1")
+	if state != nil {
+		t.Fatal("session should be deleted after process exit")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Late-arriving write from the dying process (within cooldown).
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "ghost1.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"assistant"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "ghost1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Session should NOT be re-created — still within cooldown.
+	state, _ = repo.Load("ghost1")
+	if state != nil {
+		t.Error("session should NOT be re-created from late writes after quit (within cooldown)")
+	}
+}
+
 func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
