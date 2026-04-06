@@ -149,8 +149,7 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 // a transcript event, checking common content locations across formats.
 func ExtractContentChars(raw map[string]interface{}) int64 {
 	var chars int64
-	// Top-level content array (Codex newer format)
-	if arr, ok := raw["content"].([]interface{}); ok {
+	addContentChars := func(arr []interface{}) {
 		for _, item := range arr {
 			if block, ok := item.(map[string]interface{}); ok {
 				if text, ok := block["text"].(string); ok {
@@ -159,16 +158,14 @@ func ExtractContentChars(raw map[string]interface{}) int64 {
 			}
 		}
 	}
+	// Top-level content array (Codex newer format)
+	if arr, ok := raw["content"].([]interface{}); ok {
+		addContentChars(arr)
+	}
 	// Nested message.content array (Claude Code format)
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if arr, ok := msg["content"].([]interface{}); ok {
-			for _, item := range arr {
-				if block, ok := item.(map[string]interface{}); ok {
-					if text, ok := block["text"].(string); ok {
-						chars += int64(len(text))
-					}
-				}
-			}
+			addContentChars(arr)
 		}
 	}
 	// Codex function_call arguments

@@ -16,15 +16,15 @@ func TestClassifyState(t *testing.T) {
 	}{
 		// Nil metrics — no transition.
 		{
-			name:    "nil metrics, working stays working",
-			current: session.StateWorking,
-			metrics: nil,
+			name:      "nil metrics, working stays working",
+			current:   session.StateWorking,
+			metrics:   nil,
 			wantState: session.StateWorking,
 		},
 		{
-			name:    "nil metrics, ready stays ready",
-			current: session.StateReady,
-			metrics: nil,
+			name:      "nil metrics, ready stays ready",
+			current:   session.StateReady,
+			metrics:   nil,
 			wantState: session.StateReady,
 		},
 
@@ -145,6 +145,17 @@ func TestClassifyState(t *testing.T) {
 			wantReason: true,
 		},
 		{
+			name:    "working → waiting (assistant_message Codex fallback + question)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "assistant_message",
+				HasOpenToolCall:   false,
+				LastAssistantText: "Should I run the tests?",
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
 			name:    "working → ready (assistant with stop_reason)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
@@ -213,8 +224,8 @@ func TestClassifyState(t *testing.T) {
 			name:    "working stays working (no transition needed)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
-				LastEventType:   "assistant",
-				HasOpenToolCall: true,
+				LastEventType:     "assistant",
+				HasOpenToolCall:   true,
 				LastOpenToolNames: []string{"Bash"},
 			},
 			wantState: session.StateWorking,
