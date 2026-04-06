@@ -58,8 +58,10 @@ No ghosts. **Files → State → Light.**
 ### Session Information & Features
 - **Complete session context**: Track project name, git branch, working directory, Claude model, and current state for each active session
 - **Real-time performance metrics**: Monitor elapsed time, token usage (1.2K, 15.0K, 1.5M), and context utilization with live updates
+- **Per-session cost estimation**: Real-time USD cost tracking using model-specific pricing from LiteLLM, aggregated per session and project
 - **Context pressure indicators**: Visual warnings (🟢 safe, 🟡 caution, 🔴 warning, ⚠️ critical) alert you before auto-compaction at 155K tokens
-- **Session management tools**: Reset stuck sessions, delete completed ones, or drag-and-drop to reorder by priority
+- **Subagent visibility**: Parent-child session trees show background agents and in-process subagents (Explore, Plan) with per-child state
+- **Session management tools**: Reset stuck sessions, delete completed ones, or drag-and-drop to reorder projects by priority
 - **Smart display handling**: Clean empty state when idle, automatic overflow management for 7+ sessions
 
 ## Quick Start
@@ -191,8 +193,10 @@ Irrlicht detects agent sessions via transcript file-watching (Claude Code, Codex
 | Detection | Technology | Transition |
 |-----------|-----------|------------|
 | New `.jsonl` file | FSEvents | → **working** |
-| File write activity | FSEvents | Reset idle timer |
-| 2s idle + no open tools | Grace timer | → **waiting** |
+| File write activity | FSEvents | Re-evaluate state |
+| Agent asks question / plan mode | Transcript parser | → **waiting** |
+| Open tool call stale >15s | Stale-tool timer | → **waiting** (permission-pending) |
+| Turn completed (end_turn) | Transcript parser | → **ready** |
 | Process exit | kqueue NOTE_EXIT | → **ready** |
 
 See [events.md](events.md) for the full state machine.
@@ -211,8 +215,8 @@ Irrlicht.app (single artifact)
       │   ├── Codex          (~/.codex/**/*.jsonl via fsnotify)
       │   ├── Pi             (~/.pi/agent/sessions/**/*.jsonl via fsnotify)
       │   └── Gas Town       (daemon/state.json watcher + gt CLI poller)
-      ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking)
-      ├── GracePeriodTimer   (per-session 2s idle → waiting)
+      ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking, cost)
+      ├── StaleToolTimer     (per-adapter timeout → waiting if permission-pending)
       └── ProcessWatcher     (kqueue EVFILT_PROC NOTE_EXIT → ready)
 ```
 
