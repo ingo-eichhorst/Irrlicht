@@ -78,6 +78,24 @@ func TestParser_ThinkingLevelChange_Skip(t *testing.T) {
 	}
 }
 
+func TestParser_Compaction_IsActivityEvent(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "compaction",
+		"timestamp": ts(0),
+		"summary":   "checkpoint",
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.Skip {
+		t.Fatal("expected compaction not to be skipped")
+	}
+	if ev.EventType != "assistant" {
+		t.Errorf("EventType = %q, want assistant", ev.EventType)
+	}
+}
+
 func TestParser_BashExecution_Skip(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
@@ -250,6 +268,22 @@ func TestParser_FullTranscript_EndDetection(t *testing.T) {
 	}
 	if m.OpenToolCallCount != 0 {
 		t.Errorf("OpenToolCallCount = %d, want 0", m.OpenToolCallCount)
+	}
+}
+
+func TestParser_Compaction_SetsLastEventToAssistant(t *testing.T) {
+	path := writeLines(t, []map[string]interface{}{
+		{"type": "session", "version": float64(3), "cwd": "/tmp"},
+		{"type": "compaction", "timestamp": ts(0), "summary": "checkpoint"},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "pi")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastEventType != "assistant" {
+		t.Errorf("LastEventType = %q, want assistant (compaction should count as activity)", m.LastEventType)
 	}
 }
 

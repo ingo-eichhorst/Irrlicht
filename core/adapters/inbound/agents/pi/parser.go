@@ -47,8 +47,15 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	// Non-message metadata types — skip.
 	switch eventType {
-	case "thinking_level_change", "compaction", "branch_summary", "custom":
+	case "thinking_level_change", "branch_summary", "custom":
 		ev.Skip = true
+		return ev
+	}
+
+	// Compaction is active model work and should promote ready→working.
+	// Pi emits this as a top-level event instead of a message block.
+	if eventType == "compaction" {
+		ev.EventType = "assistant"
 		return ev
 	}
 
