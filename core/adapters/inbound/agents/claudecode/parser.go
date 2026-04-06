@@ -102,13 +102,17 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev.ContentChars = tailer.ExtractContentChars(raw)
 
 	// Intermediate streaming messages from Claude Code (thinking blocks,
-	// partial text before tool_use) lack the stop_reason field. Using
+	// partial text before tool_use) have stop_reason absent or null. Final
+	// messages have stop_reason="end_turn" or "tool_use". Using
 	// "assistant_streaming" prevents IsAgentDone() from falsely returning
 	// true between tool calls when LastEventType would otherwise be
 	// "assistant" with no open tool calls.
 	if eventType == "assistant" {
 		if msg, ok := raw["message"].(map[string]interface{}); ok {
-			if _, hasStopReason := msg["stop_reason"]; !hasStopReason {
+			stopReason, hasField := msg["stop_reason"]
+			// Treat as streaming when field is absent OR value is null.
+			// Only "end_turn" and "tool_use" (non-nil string) are final.
+			if !hasField || stopReason == nil {
 				eventType = "assistant_streaming"
 			}
 		}

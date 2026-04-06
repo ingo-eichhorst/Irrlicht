@@ -219,9 +219,10 @@ func TestParser_AssistantFinal_ToolUse(t *testing.T) {
 	}
 }
 
-func TestParser_AssistantFinal_NullStopReason(t *testing.T) {
-	// stop_reason: null (field present, value nil) = potentially done.
-	// Should keep "assistant" EventType (not "assistant_streaming").
+func TestParser_AssistantStreaming_NullStopReason(t *testing.T) {
+	// stop_reason: null (field present, value nil) = intermediate streaming.
+	// Should emit "assistant_streaming" — null means the response is still
+	// in progress, only "end_turn"/"tool_use" are final signals.
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
 		"type":      "assistant",
@@ -234,8 +235,8 @@ func TestParser_AssistantFinal_NullStopReason(t *testing.T) {
 			},
 		},
 	})
-	if ev.EventType != "assistant" {
-		t.Errorf("EventType = %q, want assistant (stop_reason=null → field present)", ev.EventType)
+	if ev.EventType != "assistant_streaming" {
+		t.Errorf("EventType = %q, want assistant_streaming (stop_reason=null)", ev.EventType)
 	}
 }
 
