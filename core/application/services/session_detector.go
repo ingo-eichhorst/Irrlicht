@@ -62,9 +62,12 @@ type SessionDetector struct {
 	projectSessions map[string]string // sessionID → projectDir
 
 	// deletedSessions tracks session IDs that were explicitly deleted (process
-	// exit, /clear cleanup). Prevents late-arriving transcript activity from
-	// re-creating a session that was intentionally removed.
-	deletedSessions map[string]bool
+	// exit, /clear cleanup) with their deletion timestamp. Prevents late-
+	// arriving transcript activity from re-creating a session that was
+	// intentionally removed. The timestamp enables --continue detection:
+	// activity arriving well after deletion (>10s) indicates a genuine
+	// --continue, not ghost events from a dying process.
+	deletedSessions map[string]int64
 
 	// debounce coalesces rapid transcript activity events per session.
 	debounceMu sync.Mutex
@@ -83,6 +86,11 @@ type SessionDetector struct {
 	staleToolTimeout time.Duration
 	staleToolMu      sync.Mutex
 	staleToolTimers  map[string]*time.Timer
+
+	// deletedCooldown is the minimum seconds after deletion before a session
+	// can be re-created from transcript activity (e.g. --continue). Prevents
+	// ghost sessions from late-arriving writes of a dying process.
+	deletedCooldown int64
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -107,11 +115,12 @@ func NewSessionDetector(
 		version:          version,
 		enricher:         NewMetadataEnricher(git, metrics),
 		projectSessions:  make(map[string]string),
-		deletedSessions:  make(map[string]bool),
+		deletedSessions:  make(map[string]int64),
 		debounce:         make(map[string]*debounceEntry),
 		debouncedEvents:  make(chan agent.Event, 64),
 		staleToolTimeout: defaultStaleToolTimeout,
 		staleToolTimers:  make(map[string]*time.Timer),
+		deletedCooldown: 10,
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -124,6 +133,12 @@ func NewSessionDetector(
 // Intended for tests that need a shorter duration.
 func (d *SessionDetector) SetStaleToolTimeout(timeout time.Duration) {
 	d.staleToolTimeout = timeout
+}
+
+// SetDeletedCooldown overrides the deleted-session cooldown (seconds).
+// Intended for tests that need immediate re-creation.
+func (d *SessionDetector) SetDeletedCooldown(seconds int64) {
+	d.deletedCooldown = seconds
 }
 
 // startStaleToolTimer starts a timer that will transition a session to "waiting"
@@ -306,7 +321,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		// or /clear cleanup). This prevents late-arriving file events from
 		// re-creating a session that was intentionally removed.
 		d.mu.Lock()
-		deleted := d.deletedSessions[ev.SessionID]
+		_, deleted := d.deletedSessions[ev.SessionID]
 		d.mu.Unlock()
 		if deleted {
 			d.log.LogInfo("session-detector", ev.SessionID,
@@ -435,11 +450,13 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	if err != nil || state == nil {
 		// If the session was explicitly deleted (process exit, /clear cleanup),
 		// don't re-create it from a late-arriving transcript write. However,
-		// if the transcript file has fresh activity (e.g. --continue reusing
-		// the same file), clear the deleted flag and allow re-creation.
+		// if activity arrives well after deletion (>10s) with a fresh
+		// transcript, it's a genuine --continue — clear the flag and allow
+		// re-creation. The 10s cooldown prevents ghost sessions from
+		// late-arriving writes of a dying process.
 		d.mu.Lock()
-		deleted := d.deletedSessions[ev.SessionID]
-		if deleted && !isStaleTranscript(ev.TranscriptPath) {
+		deletedAt, deleted := d.deletedSessions[ev.SessionID]
+		if deleted && time.Now().Unix()-deletedAt >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
 			delete(d.deletedSessions, ev.SessionID)
 			deleted = false
 			d.log.LogInfo("session-detector", ev.SessionID,
@@ -698,7 +715,7 @@ func (d *SessionDetector) seedFromDisk() {
 func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	d.mu.Lock()
 	delete(d.projectSessions, sessionID)
-	d.deletedSessions[sessionID] = true
+	d.deletedSessions[sessionID] = time.Now().Unix()
 	d.mu.Unlock()
 }
 

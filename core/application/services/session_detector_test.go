@@ -616,6 +616,7 @@ func TestSessionDetector_ContinueSession_RecreatableAfterProcessExit(t *testing.
 	}
 
 	det := newDetector(tw, pw, repo)
+	det.SetDeletedCooldown(0) // allow immediate re-creation for test
 
 	// Process exits — session is deleted and added to deletedSessions.
 	det.HandleProcessExit(12345, "cont1")
