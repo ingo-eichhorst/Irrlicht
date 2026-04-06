@@ -10,7 +10,12 @@ import (
 // Parser implements tailer.TranscriptParser for Claude Code transcripts.
 // Claude Code events use top-level "type" fields ("user", "assistant", "system")
 // and embed tool calls inside message.content[] arrays.
-type Parser struct{}
+//
+// The parser is stateful: it tracks the last assistant message ID to detect
+// intermediate streaming chunks within the same API response.
+type Parser struct {
+	lastAssistantMsgID string
+}
 
 // ParseLine parses a Claude Code JSONL line into a normalized ParsedEvent.
 func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
@@ -102,18 +107,37 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev.ContentChars = tailer.ExtractContentChars(raw)
 
 	// Intermediate streaming messages from Claude Code (thinking blocks,
-	// partial text before tool_use) have stop_reason absent or null. Final
-	// messages have stop_reason="end_turn" or "tool_use". Using
-	// "assistant_streaming" prevents IsAgentDone() from falsely returning
-	// true between tool calls when LastEventType would otherwise be
-	// "assistant" with no open tool calls.
+	// partial text before tool_use) are written as separate JSONL lines
+	// sharing the same message.id within one API response. Using
+	// "assistant_streaming" for these prevents IsAgentDone() from falsely
+	// returning true between tool calls.
+	//
+	// Detection: messages with stop_reason=null that share the same message.id
+	// as the previous assistant message are definitely intermediate. Thinking
+	// blocks (content[0].type="thinking") are always intermediate regardless.
+	// Messages with stop_reason="end_turn" or "tool_use" are always final.
 	if eventType == "assistant" {
 		if msg, ok := raw["message"].(map[string]interface{}); ok {
-			stopReason, hasField := msg["stop_reason"]
-			// Treat as streaming when field is absent OR value is null.
-			// Only "end_turn" and "tool_use" (non-nil string) are final.
-			if !hasField || stopReason == nil {
-				eventType = "assistant_streaming"
+			stopReason, _ := msg["stop_reason"]
+			msgID, _ := msg["id"].(string)
+
+			if stopReason == nil {
+				// Same message ID as previous → part of ongoing streaming sequence.
+				if msgID != "" && msgID == p.lastAssistantMsgID {
+					eventType = "assistant_streaming"
+				}
+				// Thinking blocks are always intermediate (never the final response).
+				if contentArr, ok := msg["content"].([]interface{}); ok && len(contentArr) > 0 {
+					if block, ok := contentArr[0].(map[string]interface{}); ok {
+						if block["type"] == "thinking" {
+							eventType = "assistant_streaming"
+						}
+					}
+				}
+			}
+
+			if msgID != "" {
+				p.lastAssistantMsgID = msgID
 			}
 		}
 	}

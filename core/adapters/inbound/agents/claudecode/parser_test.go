@@ -141,15 +141,14 @@ func TestParser_AssistantText(t *testing.T) {
 	}
 }
 
-func TestParser_AssistantStreaming_NoStopReason(t *testing.T) {
-	// Intermediate streaming messages (thinking, partial text) lack stop_reason.
-	// They should emit "assistant_streaming" to prevent false IsAgentDone().
+func TestParser_AssistantStreaming_ThinkingBlock(t *testing.T) {
+	// Thinking blocks are always intermediate regardless of ID.
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
 		"type":      "assistant",
 		"timestamp": "2026-04-05T22:00:00Z",
 		"message": map[string]interface{}{
-			"role": "assistant",
+			"id": "msg_new", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "thinking", "thinking": "Let me think..."},
 			},
@@ -159,28 +158,75 @@ func TestParser_AssistantStreaming_NoStopReason(t *testing.T) {
 		t.Fatal("expected non-nil event")
 	}
 	if ev.EventType != "assistant_streaming" {
-		t.Errorf("EventType = %q, want assistant_streaming (no stop_reason)", ev.EventType)
+		t.Errorf("EventType = %q, want assistant_streaming (thinking block)", ev.EventType)
 	}
 }
 
-func TestParser_AssistantStreaming_TextNoStopReason(t *testing.T) {
-	// Text-only assistant message without stop_reason = intermediate.
+func TestParser_AssistantStreaming_SameID(t *testing.T) {
+	// Consecutive messages with the same ID are part of one streaming sequence.
 	p := &Parser{}
-	ev := p.ParseLine(map[string]interface{}{
+
+	// First message sets the ID.
+	p.ParseLine(map[string]interface{}{
 		"type":      "assistant",
 		"timestamp": "2026-04-05T22:00:00Z",
 		"message": map[string]interface{}{
-			"role": "assistant",
+			"id": "msg_abc", "role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "thinking", "thinking": "analyzing..."},
+			},
+		},
+	})
+
+	// Second message with same ID + null stop_reason → streaming.
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:01Z",
+		"message": map[string]interface{}{
+			"id": "msg_abc", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Let me check the file..."},
 			},
 		},
 	})
 	if ev.EventType != "assistant_streaming" {
-		t.Errorf("EventType = %q, want assistant_streaming", ev.EventType)
+		t.Errorf("EventType = %q, want assistant_streaming (same ID)", ev.EventType)
 	}
 	if ev.AssistantText != "Let me check the file..." {
 		t.Errorf("AssistantText = %q, want text (should still extract)", ev.AssistantText)
+	}
+}
+
+func TestParser_AssistantFinal_NullStopReason_DifferentID(t *testing.T) {
+	// A standalone text response with null stop_reason and a new message ID
+	// should keep "assistant" (potentially final — like session 891f03e9 L8).
+	p := &Parser{}
+
+	// Set a previous ID.
+	p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"id": "msg_old", "role": "assistant", "stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Bash", "id": "tu_1"},
+			},
+		},
+	})
+
+	// New ID + null stop_reason + text → assistant (not streaming).
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:01Z",
+		"message": map[string]interface{}{
+			"id": "msg_new", "role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Here are the files."},
+			},
+		},
+	})
+	if ev.EventType != "assistant" {
+		t.Errorf("EventType = %q, want assistant (different ID, potentially final)", ev.EventType)
 	}
 }
 
@@ -225,24 +271,35 @@ func TestParser_AssistantFinal_ToolUse(t *testing.T) {
 	}
 }
 
-func TestParser_AssistantStreaming_NullStopReason(t *testing.T) {
-	// stop_reason: null (field present, value nil) = intermediate streaming.
-	// Should emit "assistant_streaming" — null means the response is still
-	// in progress, only "end_turn"/"tool_use" are final signals.
+func TestParser_AssistantStreaming_NullStopReason_SameID(t *testing.T) {
+	// stop_reason: null + same message ID as previous = streaming sequence.
 	p := &Parser{}
-	ev := p.ParseLine(map[string]interface{}{
+
+	// First message in sequence
+	p.ParseLine(map[string]interface{}{
 		"type":      "assistant",
 		"timestamp": "2026-04-05T22:00:00Z",
 		"message": map[string]interface{}{
-			"role":        "assistant",
-			"stop_reason": nil,
+			"id": "msg_x", "role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "thinking", "thinking": "hmm"},
+			},
+		},
+	})
+
+	// Same ID, text content → streaming
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:01Z",
+		"message": map[string]interface{}{
+			"id": "msg_x", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Here are the files."},
 			},
 		},
 	})
 	if ev.EventType != "assistant_streaming" {
-		t.Errorf("EventType = %q, want assistant_streaming (stop_reason=null)", ev.EventType)
+		t.Errorf("EventType = %q, want assistant_streaming (null + same ID)", ev.EventType)
 	}
 }
 
@@ -317,23 +374,23 @@ func newCCTailer(path string) *tailer.TranscriptTailer {
 
 // Regression: consecutive assistant messages (thinking + text + tool_use)
 // caused false ready because intermediate messages set LastEventType="assistant".
-// With stop_reason check, intermediates use "assistant_streaming".
+// With stop_reason + message ID check, intermediates use "assistant_streaming".
 func TestTranscript_ConsecutiveAssistantMessages_StaysWorking(t *testing.T) {
-	// Real pattern from session 8b00212a: thinking → text → tool_use
+	// Real pattern from session 8b00212a: thinking → text → tool_use (same API call ID)
 	path := writeTranscript(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
 			"role": "user", "content": "fix the bug",
 		}},
-		// Thinking block (no stop_reason) — intermediate
+		// Thinking block — intermediate (same ID, thinking content)
 		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": nil,
+			"id": "msg_1", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "thinking", "thinking": "Let me analyze..."},
 			},
 		}},
-		// Text response (no stop_reason) — intermediate
+		// Text response — intermediate (same ID as thinking)
 		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": nil,
+			"id": "msg_1", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "I'll check the file."},
 			},
@@ -359,23 +416,23 @@ func TestTranscript_ToolCallAfterStreaming_Working(t *testing.T) {
 		{"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
 			"role": "user", "content": "fix the bug",
 		}},
-		// Thinking (streaming)
+		// Thinking (streaming, same API call msg_1)
 		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": nil,
+			"id": "msg_1", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "thinking", "thinking": "analyzing..."},
 			},
 		}},
-		// Text (streaming)
+		// Text (streaming, same API call msg_1)
 		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": nil,
+			"id": "msg_1", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Let me read that."},
 			},
 		}},
-		// Tool call with stop_reason — final message of this API call
+		// Tool call with stop_reason — final message of API call msg_1
 		{"type": "assistant", "timestamp": ts(3), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": "tool_use",
+			"id": "msg_1", "role": "assistant", "stop_reason": "tool_use",
 			"content": []interface{}{
 				map[string]interface{}{"type": "tool_use", "name": "Read", "id": "tu_1"},
 			},
@@ -402,16 +459,16 @@ func TestTranscript_MultiToolTurn_FullCycle(t *testing.T) {
 		{"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
 			"role": "user", "content": "refactor the module",
 		}},
-		// Thinking
+		// Thinking (API call msg_1)
 		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": nil,
+			"id": "msg_1", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "thinking", "thinking": "planning..."},
 			},
 		}},
-		// First tool call
+		// First tool call (API call msg_1)
 		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": "tool_use",
+			"id": "msg_1", "role": "assistant", "stop_reason": "tool_use",
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Let me read the file."},
 				map[string]interface{}{"type": "tool_use", "name": "Read", "id": "tu_1"},
@@ -424,16 +481,16 @@ func TestTranscript_MultiToolTurn_FullCycle(t *testing.T) {
 				map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_1", "is_error": false},
 			},
 		}},
-		// Mid-turn text (streaming, no stop_reason) — the bug trigger
+		// Mid-turn text (API call msg_2, different from msg_1)
 		{"type": "assistant", "timestamp": ts(4), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": nil,
+			"id": "msg_2", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Now I'll edit it."},
 			},
 		}},
-		// Second tool call
+		// Second tool call (API call msg_2)
 		{"type": "assistant", "timestamp": ts(5), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": "tool_use",
+			"id": "msg_2", "role": "assistant", "stop_reason": "tool_use",
 			"content": []interface{}{
 				map[string]interface{}{"type": "tool_use", "name": "Edit", "id": "tu_2"},
 			},
@@ -445,9 +502,9 @@ func TestTranscript_MultiToolTurn_FullCycle(t *testing.T) {
 				map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_2", "is_error": false},
 			},
 		}},
-		// Final response
+		// Final response (API call msg_3)
 		{"type": "assistant", "timestamp": ts(7), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": "end_turn",
+			"id": "msg_3", "role": "assistant", "stop_reason": "end_turn",
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Done. The refactoring is complete."},
 			},
@@ -481,7 +538,7 @@ func TestTranscript_IncrementalRead_MidTurnThenToolUse(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "transcript.jsonl")
 
-	// Write first batch: user → thinking → mid-turn text
+	// Write first batch: user → thinking (streaming)
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -494,9 +551,9 @@ func TestTranscript_IncrementalRead_MidTurnThenToolUse(t *testing.T) {
 	})
 	enc.Encode(map[string]interface{}{
 		"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": nil,
+			"id": "msg_1", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
-				map[string]interface{}{"type": "text", "text": "I'll check..."},
+				map[string]interface{}{"type": "thinking", "thinking": "I'll check..."},
 			},
 		},
 	})
@@ -516,12 +573,12 @@ func TestTranscript_IncrementalRead_MidTurnThenToolUse(t *testing.T) {
 		t.Error("first read: expected HasOpenToolCall=false")
 	}
 
-	// Append tool_use
+	// Append tool_use (same API call msg_1)
 	f, _ = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	enc = json.NewEncoder(f)
 	enc.Encode(map[string]interface{}{
 		"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": "tool_use",
+			"id": "msg_1", "role": "assistant", "stop_reason": "tool_use",
 			"content": []interface{}{
 				map[string]interface{}{"type": "tool_use", "name": "Bash", "id": "tu_1"},
 			},
@@ -677,8 +734,16 @@ func TestTranscript_StreamingText_StillExtractsText(t *testing.T) {
 		{"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
 			"role": "user", "content": "explain",
 		}},
+		// Thinking block first (sets msg_1 as current ID)
 		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
-			"role": "assistant", "stop_reason": nil,
+			"id": "msg_1", "role": "assistant", "stop_reason": nil,
+			"content": []interface{}{
+				map[string]interface{}{"type": "thinking", "thinking": "..."},
+			},
+		}},
+		// Same ID text → streaming
+		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
+			"id": "msg_1", "role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "Let me explain the architecture."},
 			},
