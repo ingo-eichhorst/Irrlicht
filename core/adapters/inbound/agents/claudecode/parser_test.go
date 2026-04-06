@@ -239,6 +239,31 @@ func TestParser_AssistantFinal_NullStopReason(t *testing.T) {
 	}
 }
 
+func TestParser_UserInterrupted_SetsIsError(t *testing.T) {
+	// ESC during text generation writes "[Request interrupted by user]"
+	// as a user text message. Parser should set IsError=true.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "user",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "[Request interrupted by user]"},
+			},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if !ev.IsError {
+		t.Error("expected IsError=true for user interruption message")
+	}
+	if ev.EventType != "user" {
+		t.Errorf("EventType = %q, want user", ev.EventType)
+	}
+}
+
 func TestParser_UserMessage_ClearsToolNames(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
