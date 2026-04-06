@@ -214,7 +214,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 				t.lastOpenToolNames = t.lastOpenToolNames[1:]
 			}
 		}
-		if parsed.ClearToolNames {
+		if parsed.ClearToolNames && parsed.ToolResultCount == 0 {
 			t.lastOpenToolNames = nil
 		}
 		if parsed.IsError {

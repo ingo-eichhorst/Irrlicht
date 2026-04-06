@@ -975,6 +975,7 @@ struct ProjectGroupSectionView: View {
     let startingGroupIndex: Int
     let isCompact: Bool
     @EnvironmentObject var sessionManager: SessionManager
+    @AppStorage("debugMode") private var debugMode: Bool = false
     @State private var isExpanded = true
 
     /// Combined cost of all sessions in the group
@@ -1050,7 +1051,10 @@ struct ProjectGroupSectionView: View {
             // Session rows (indented under the project header)
             if isExpanded {
                 ForEach(Array(projectGroup.sessionGroups.enumerated()), id: \.element.id) { localIndex, group in
-                    let activeCount = group.subagents.filter { $0.state != .ready }.count
+                    // Use the daemon's unified subagent summary (in-process + file-based)
+                    // rather than counting file-based children only.
+                    let activeCount = (group.parent.subagents?.working ?? 0)
+                        + (group.parent.subagents?.waiting ?? 0)
                     SessionRowView(session: group.parent, agentNumber: localIndex + 1, activeSubagentCount: activeCount)
                         .padding(.leading, 8)
                         .contentShape(Rectangle())
@@ -1064,6 +1068,14 @@ struct ProjectGroupSectionView: View {
                             sessionManager: sessionManager,
                             targetGroupIndex: startingGroupIndex + localIndex
                         ))
+
+                    // Subagent rows (indented, compact) — debug mode only
+                    if debugMode {
+                        ForEach(group.subagents) { subagent in
+                            SubagentRowView(session: subagent)
+                                .padding(.leading, 8)
+                        }
+                    }
                 }
             }
         }
