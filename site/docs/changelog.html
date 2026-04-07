@@ -78,6 +78,43 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.2 <small>(2026-04-07)</small></h2>
+
+      <h3>Fixed — Claude Code session state flicker (#102)</h3>
+
+      <p>Four distinct bugs were causing long-running Claude Code sessions to bounce between <code>working</code>, <code>waiting</code>, and <code>ready</code>. All are fixed in this release.</p>
+
+      <ul>
+        <li><strong>Stale-tool timer disabled for Claude Code</strong> &mdash; The 15s heuristic tripped on every multi-second Bash invocation (builds, tests, <code>find</code>, network calls). Permission-pending modals and long-running Bash are indistinguishable in the JSONL stream, so the false-positive rate swamped the signal. Brings Claude Code in line with the Pi adapter's existing policy.</li>
+        <li><strong>Tailer open-tool tracking collapsed to a single source of truth</strong> &mdash; Parallel integer counters and a name slice could desync on orphan <code>tool_result</code> events (from <code>--continue</code> resumes or compact replays), leaving metrics in an impossible <code>has_open=false / open_tool_names=[Bash]</code> state. Now derived solely from the name slice &mdash; orphans are idempotent no-ops.</li>
+        <li><strong>ESC interrupts distinguished from benign tool errors</strong> &mdash; The classifier's cancellation rule fired on any <code>tool_result.is_error=true</code> (<code>grep</code> misses, failed builds, <code>find</code> on protected dirs), incorrectly flipping the session to <code>ready</code>. New <code>LastWasUserInterrupt</code> signal fires only on the literal <code>[Request interrupted by user</code> text marker.</li>
+        <li><strong><code>stop_reason</code> allow-list</strong> &mdash; Only <code>null</code> was treated as intermediate streaming; <code>max_tokens</code> and <code>pause_turn</code> passed through as terminal and tripped <code>IsAgentDone()</code> mid-turn. Flipped to an allow-list of <code>end_turn</code>/<code>stop_sequence</code>/<code>refusal</code>/<code>tool_use</code> &mdash; unknown future values default to "assume streaming".</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li>OpenCode agent registry corrected to <code>anomalyco/opencode</code> and marked as planned</li>
+        <li>Empty-state text updated from "Claude Code" to the generic "coding agent"</li>
+      </ul>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Offline replay harness</strong> (<code>core/cmd/replay-session</code>) &mdash; Takes any Claude Code, Codex, or Pi transcript and feeds it through the production tailer + classifier using virtual time. A 500-hour session replays in under a second. Every transition is logged with reason, metric snapshot, and trigger cause</li>
+        <li><strong>Regression fixtures</strong> under <code>testdata/replay/&lt;adapter&gt;/</code> &mdash; Four Claude Code, one Codex, one Pi &mdash; all post-fix flicker-clean</li>
+        <li><strong>Local session scanner</strong> (<code>scripts/find-flicker-sessions.sh</code>) &mdash; Ranks every transcript under <code>~/.claude/projects</code>, <code>~/.codex/sessions</code>, and <code>~/.pi/agent/sessions</code> by flicker count, for harvesting new regressions</li>
+        <li><strong>Adapter registry</strong> (<code>core/adapters/inbound/agents/registry.go</code>) &mdash; Single source of truth for adapter name &rarr; parser and adapter name &rarr; <code>StatePolicy</code> lookups, consumed by the replay harness</li>
+      </ul>
+
+      <h3>Docs</h3>
+
+      <ul>
+        <li>README updated with cost tracking, subagent visibility, and corrected state detection behavior</li>
+        <li>State machine docs: cancellation section rewritten to reflect the new <code>LastWasUserInterrupt</code> signal</li>
+        <li>API reference: session metrics schema updated (<code>last_tool_result_was_error</code> removed, <code>last_was_user_interrupt</code> added)</li>
+      </ul>
+
       <h2>v0.3.1 <small>(2026-04-06)</small></h2>
 
       <h3>Added</h3>
