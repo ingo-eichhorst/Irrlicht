@@ -114,6 +114,6 @@ __pycache__/
 state.json
 .beads/
 
-# Issue #102 replay — fixtures are committed as regression data; reports are
+# Replay harness — fixtures are committed as regression data; reports are
 # regenerated locally by scripts/replay-fixtures.sh.
-testdata/issue-102/reports/
+testdata/replay/reports/

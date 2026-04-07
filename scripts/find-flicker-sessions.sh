@@ -21,14 +21,22 @@ set -euo pipefail
 
 LIMIT=15
 MIN_EVENTS=200
-PROJECTS_ROOT="${HOME}/.claude/projects"
 OUT="/dev/stdout"
+
+# Canonical session-storage roots for each supported adapter. Missing
+# directories are silently skipped so the script works on machines that
+# don't use all three agents.
+ROOTS=(
+  "${HOME}/.claude/projects"
+  "${HOME}/.codex/sessions"
+  "${HOME}/.pi/agent/sessions"
+)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --limit)         LIMIT="$2"; shift 2 ;;
     --min-events)    MIN_EVENTS="$2"; shift 2 ;;
-    --projects-root) PROJECTS_ROOT="$2"; shift 2 ;;
+    --root)          ROOTS=("$2"); shift 2 ;;
     --out)           OUT="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,18p' "$0"
@@ -53,22 +61,24 @@ results_file="$TMPDIR_REPORT/results.tsv"
 : >"$results_file"
 
 count=0
-while IFS= read -r -d '' transcript; do
-  count=$((count + 1))
+for root in "${ROOTS[@]}"; do
+  [[ -d "$root" ]] || continue
+  while IFS= read -r -d '' transcript; do
+    count=$((count + 1))
 
-  # Skip subagent transcripts — they have a different lifecycle.
-  if [[ "$transcript" == */subagents/* ]]; then continue; fi
+    # Skip subagent transcripts — they have a different lifecycle.
+    if [[ "$transcript" == */subagents/* ]]; then continue; fi
 
-  events=$(wc -l <"$transcript" | tr -d ' ')
-  if (( events < MIN_EVENTS )); then continue; fi
+    events=$(wc -l <"$transcript" | tr -d ' ')
+    if (( events < MIN_EVENTS )); then continue; fi
 
-  report="$TMPDIR_REPORT/report-${count}.json"
-  if ! "./$BIN" --out "$report" --quiet "$transcript" 2>/dev/null; then
-    continue
-  fi
+    report="$TMPDIR_REPORT/report-${count}.json"
+    if ! "./$BIN" --out "$report" --quiet "$transcript" 2>/dev/null; then
+      continue
+    fi
 
-  # Pull summary fields with python (no jq dependency).
-  python3 - "$report" "$transcript" >>"$results_file" <<'PY'
+    # Pull summary fields with python (no jq dependency).
+    python3 - "$report" "$transcript" >>"$results_file" <<'PY'
 import json, sys
 report_path, transcript = sys.argv[1], sys.argv[2]
 with open(report_path) as f:
@@ -80,18 +90,19 @@ print(
         str(s["stale_timer_fires"]),
         str(s["total_transitions"]),
         str(s["total_events"]),
+        r["settings"].get("adapter", "?"),
         s["first_event_time"],
         transcript,
     ])
 )
 PY
-
-done < <(find "$PROJECTS_ROOT" -name '*.jsonl' -print0)
+  done < <(find "$root" -name '*.jsonl' -print0)
+done
 
 # Sort by flicker count desc, then stale-timer fires desc.
 sort -t $'\t' -k1,1nr -k2,2nr "$results_file" | head -n "$LIMIT" > "$TMPDIR_REPORT/top.tsv"
 
 {
-  printf "flickers\tstale_fires\ttransitions\tevents\tfirst_event\ttranscript\n"
+  printf "flickers\tstale_fires\ttransitions\tevents\tadapter\tfirst_event\ttranscript\n"
   cat "$TMPDIR_REPORT/top.tsv"
 } > "$OUT"

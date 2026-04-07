@@ -32,18 +32,46 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
-// claudeCodePolicy is the production Claude Code state policy as seen by the
-// replay simulator. Captured once so the simulator reads the same flag flips
-// the daemon would.
-var claudeCodePolicy = claudecode.StatePolicy()
+// defaultStaleToolFallback mirrors services.defaultStaleToolTimeout. Used
+// when an adapter enables the stale-tool timer but doesn't specify a custom
+// timeout on its StatePolicy.
+const defaultStaleToolFallback = 15 * time.Second
+
+// detectAdapter infers the adapter name from a transcript path by matching
+// either the canonical session-storage root for each supported format or the
+// repo-relative testdata/replay/<adapter>/ fixture layout.
+func detectAdapter(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case strings.Contains(abs, "/.claude/projects/"),
+		strings.Contains(abs, "/testdata/replay/claudecode/"):
+		return claudecode.AdapterName, nil
+	case strings.Contains(abs, "/.codex/sessions/"),
+		strings.Contains(abs, "/testdata/replay/codex/"):
+		return codex.AdapterName, nil
+	case strings.Contains(abs, "/.pi/agent/sessions/"),
+		strings.Contains(abs, "/.pi/sessions/"),
+		strings.Contains(abs, "/testdata/replay/pi/"):
+		return pi.AdapterName, nil
+	}
+	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi", path)
+}
 
 // Cause distinguishes why a state evaluation happened — was it triggered by a
 // real transcript event, by a (simulated) stale-tool timer firing, or by the
@@ -86,9 +114,11 @@ type Report struct {
 }
 
 type ReportSettings struct {
-	DebounceWindow     time.Duration `json:"debounce_window"`
-	StaleToolTimeout   time.Duration `json:"stale_tool_timeout"`
-	FlickerMaxDuration time.Duration `json:"flicker_max_duration"` // episodes shorter than this are flickers
+	Adapter            string              `json:"adapter"`
+	Policy             agent.StatePolicy   `json:"-"` // carried for Replay(), not serialized
+	DebounceWindow     time.Duration       `json:"debounce_window"`
+	StaleToolTimeout   time.Duration       `json:"stale_tool_timeout"`
+	FlickerMaxDuration time.Duration       `json:"flicker_max_duration"` // episodes shorter than this are flickers
 }
 
 type ReportSummary struct {
@@ -113,17 +143,18 @@ type ReportSummary struct {
 func main() {
 	var (
 		outPath       string
+		adapterFlag   string
 		debounceFlag  time.Duration
 		staleToolFlag time.Duration
 		flickerMax    time.Duration
 		quiet         bool
 	)
 	flag.StringVar(&outPath, "out", "", "output JSON report path (default: stdout)")
+	flag.StringVar(&adapterFlag, "adapter", "", "adapter name (claude-code, codex, pi); auto-detected from path if omitted")
 	flag.DurationVar(&debounceFlag, "debounce", 2*time.Second, "simulated activity debounce window")
-	// Default 0 — Claude Code's production policy disables the stale-tool
-	// timer (see core/adapters/inbound/agents/claudecode/policy.go). Pass a
-	// positive duration to simulate a hypothetical re-enabled version.
-	flag.DurationVar(&staleToolFlag, "stale-tool", 0, "simulated stale-tool timeout (0 = disabled, production default)")
+	// Default -1 means "use the adapter's production policy". Pass a positive
+	// duration to simulate a hypothetical timeout, or 0 to force-disable.
+	flag.DurationVar(&staleToolFlag, "stale-tool", -1, "simulated stale-tool timeout (negative = use policy; 0 = disabled)")
 	flag.DurationVar(&flickerMax, "flicker-max", 10*time.Second, "episodes shorter than this are counted as flickers (automated agent loops cycle turns in ~25s, so 30s overcounts)")
 	flag.BoolVar(&quiet, "quiet", false, "suppress per-event progress on stderr")
 	flag.Parse()
@@ -135,7 +166,33 @@ func main() {
 	}
 	src := flag.Arg(0)
 
+	adapterName := adapterFlag
+	if adapterName == "" {
+		var err error
+		adapterName, err = detectAdapter(src)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
+	policy := agents.PolicyFor(adapterName)
+
+	// Derive stale-tool timeout from the policy when the flag wasn't
+	// explicitly overridden (negative sentinel).
+	if staleToolFlag < 0 {
+		if policy.EnableStaleToolTimer {
+			staleToolFlag = policy.StaleToolTimeout
+			if staleToolFlag <= 0 {
+				staleToolFlag = defaultStaleToolFallback
+			}
+		} else {
+			staleToolFlag = 0
+		}
+	}
+
 	report, err := Replay(src, ReportSettings{
+		Adapter:            adapterName,
+		Policy:             policy,
 		DebounceWindow:     debounceFlag,
 		StaleToolTimeout:   staleToolFlag,
 		FlickerMaxDuration: flickerMax,
@@ -219,8 +276,12 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	}
 	defer tmp.Close()
 
-	parser := &claudecode.Parser{}
-	t := tailer.NewTranscriptTailer(tmpPath, parser, "claude-code")
+	adapterName := cfg.Adapter
+	if adapterName == "" {
+		adapterName = claudecode.AdapterName
+	}
+	parser := agents.ParserFor(adapterName)
+	t := tailer.NewTranscriptTailer(tmpPath, parser, adapterName)
 
 	report := &Report{
 		SchemaVersion:    1,
@@ -369,7 +430,7 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 		// 3. (Re)arm the stale-tool timer if conditions match the production
 		//    rule. Delegates to services.ShouldStartStaleToolTimer so the
 		//    simulator automatically tracks any future policy changes.
-		if services.ShouldStartStaleToolTimer(state, domainMetrics, claudeCodePolicy) {
+		if services.ShouldStartStaleToolTimer(state, domainMetrics, cfg.Policy) {
 			staleArmed = true
 			staleArmedAt = nextEventTime
 		} else {
@@ -509,7 +570,13 @@ func computeFlickers(trs []Transition, maxDur time.Duration) (map[string]int, ma
 		if prev.NewState != next.NewState {
 			continue
 		}
-		if next.VirtualTime.Sub(cur.VirtualTime) >= maxDur {
+		dur := next.VirtualTime.Sub(cur.VirtualTime)
+		// Zero-duration sandwiches are same-batch replay artifacts: the
+		// force-promotion + classifier revert happen inside one
+		// processActivity call and coalesce into a single production
+		// broadcast. Skip so flicker counts reflect what the UI actually
+		// sees, not intermediate classifier evaluations.
+		if dur <= 0 || dur >= maxDur {
 			continue
 		}
 		byCategory[cur.NewState+"_between_"+prev.NewState]++

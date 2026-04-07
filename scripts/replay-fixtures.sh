@@ -1,33 +1,30 @@
 #!/usr/bin/env bash
 # replay-fixtures.sh — run the offline replay against every fixture in
-# testdata/issue-102/fixtures/ and emit JSON + Markdown reports next to them.
+# testdata/replay/<adapter>/*.jsonl and emit JSON + Markdown reports into
+# testdata/replay/reports/.
 #
 # Usage:
 #   scripts/replay-fixtures.sh                       # default settings
 #   scripts/replay-fixtures.sh --debounce 200ms      # tighter debounce window
-#   scripts/replay-fixtures.sh --stale-tool 5s       # tighter stale-tool timeout
+#   scripts/replay-fixtures.sh --stale-tool 5s       # override the policy default
 #
-# Outputs (per fixture <name>.jsonl):
-#   testdata/issue-102/reports/<name>.json   — full structured replay log
-#   testdata/issue-102/reports/<name>.md     — human-readable summary
-#
-# The fixtures themselves are NOT committed to git (see .gitignore). Generate
-# them by either copying transcripts from ~/.claude/projects manually or by
-# running scripts/find-flicker-sessions.sh and picking candidates.
+# The replay binary auto-detects the adapter from the fixture path (claude
+# code, codex, or pi) and derives the stale-tool timeout from that adapter's
+# production StatePolicy. Override with --stale-tool if you want to simulate
+# a different timeout.
 
 set -euo pipefail
 
 DEBOUNCE="2s"
-# Default to disabled — matches the Claude Code production policy after the
-# fix for issue #102. Pass --stale-tool 15s to simulate the pre-fix behavior.
-STALE_TOOL="0"
+# Empty means "let the replay tool derive it from each adapter's policy".
+STALE_TOOL=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --debounce)   DEBOUNCE="$2"; shift 2 ;;
     --stale-tool) STALE_TOOL="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,17p' "$0"
+      sed -n '2,15p' "$0"
       exit 0
       ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
@@ -37,12 +34,11 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-FIXTURES_DIR="testdata/issue-102/fixtures"
-REPORTS_DIR="testdata/issue-102/reports"
+FIXTURES_ROOT="testdata/replay"
+REPORTS_DIR="testdata/replay/reports"
 
-if [[ ! -d "$FIXTURES_DIR" ]]; then
-  echo "no fixtures dir at $FIXTURES_DIR" >&2
-  echo "create it and drop transcripts in, or run scripts/find-flicker-sessions.sh" >&2
+if [[ ! -d "$FIXTURES_ROOT" ]]; then
+  echo "no fixtures root at $FIXTURES_ROOT" >&2
   exit 1
 fi
 
@@ -51,20 +47,23 @@ BIN=".build/replay-session"
 echo "building $BIN ..." >&2
 ( cd core && go build -o "../${BIN}" ./cmd/replay-session )
 
-shopt -s nullglob
-fixtures=("$FIXTURES_DIR"/*.jsonl)
-if [[ ${#fixtures[@]} -eq 0 ]]; then
-  echo "no .jsonl fixtures found in $FIXTURES_DIR" >&2
-  exit 1
-fi
-
-for fix in "${fixtures[@]}"; do
+# Walk every adapter subdirectory, skipping the reports/ output dir. Portable
+# to macOS bash 3.2 — avoid `mapfile`, use a while-read loop.
+found_any=0
+while IFS= read -r fix; do
+  [[ -z "$fix" ]] && continue
+  found_any=1
+  adapter="$(basename "$(dirname "$fix")")"
   name="$(basename "${fix%.jsonl}")"
-  json="$REPORTS_DIR/$name.json"
-  md="$REPORTS_DIR/$name.md"
+  json="$REPORTS_DIR/${adapter}-${name}.json"
+  md="$REPORTS_DIR/${adapter}-${name}.md"
 
-  echo ">> replaying $name" >&2
-  "./$BIN" --out "$json" --debounce "$DEBOUNCE" --stale-tool "$STALE_TOOL" "$fix"
+  echo ">> replaying ${adapter}/${name}" >&2
+  if [[ -n "$STALE_TOOL" ]]; then
+    "./$BIN" --out "$json" --debounce "$DEBOUNCE" --stale-tool "$STALE_TOOL" "$fix"
+  else
+    "./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix"
+  fi
 
   python3 - "$json" "$md" "$fix" <<'PY'
 import json, sys, os
@@ -170,7 +169,12 @@ with open(md_path, "w") as out:
 PY
 
   echo "   wrote $json + $md" >&2
-done
+done < <(find "$FIXTURES_ROOT" -mindepth 2 -name '*.jsonl' -not -path '*/reports/*' | sort)
+
+if [[ "$found_any" -eq 0 ]]; then
+  echo "no .jsonl fixtures found under $FIXTURES_ROOT/*/" >&2
+  exit 1
+fi
 
 echo >&2
 echo "done. reports in $REPORTS_DIR/" >&2
