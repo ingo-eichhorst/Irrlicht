@@ -38,9 +38,15 @@ type SessionMetrics struct {
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 
 	// LastToolResultWasError is true when the most recent tool_result had
-	// is_error=true (user rejection via ESC). Distinguishes cancellation
-	// from normal tool completion.
+	// is_error=true. Informational only — many tool results are benign
+	// errors (grep with no matches, non-zero exit). The classifier uses
+	// LastWasUserInterrupt for cancellation detection. See issue #102 Bug B.
 	LastToolResultWasError bool `json:"last_tool_result_was_error"`
+
+	// LastWasUserInterrupt is true when the most recent user event was a
+	// real ESC cancellation ("[Request interrupted by user" text marker).
+	// Distinguishes a genuine ESC from a normal tool failure.
+	LastWasUserInterrupt bool `json:"last_was_user_interrupt,omitempty"`
 
 	// EstimatedCostUSD is the estimated session cost in USD, computed from
 	// token breakdown and per-model pricing.
@@ -204,17 +210,18 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		return newM
 	}
 	merged := &SessionMetrics{
-		ElapsedSeconds:     newM.ElapsedSeconds,
-		TotalTokens:        newM.TotalTokens,
-		ModelName:          newM.ModelName,
-		ContextWindow:      newM.ContextWindow,
-		ContextUtilization: newM.ContextUtilization,
-		PressureLevel:      newM.PressureLevel,
-		HasOpenToolCall:    newM.HasOpenToolCall,
-		OpenToolCallCount:  newM.OpenToolCallCount,
+		ElapsedSeconds:         newM.ElapsedSeconds,
+		TotalTokens:            newM.TotalTokens,
+		ModelName:              newM.ModelName,
+		ContextWindow:          newM.ContextWindow,
+		ContextUtilization:     newM.ContextUtilization,
+		PressureLevel:          newM.PressureLevel,
+		HasOpenToolCall:        newM.HasOpenToolCall,
+		OpenToolCallCount:      newM.OpenToolCallCount,
 		LastEventType:          newM.LastEventType,
 		LastOpenToolNames:      newM.LastOpenToolNames,
 		LastToolResultWasError: newM.LastToolResultWasError,
+		LastWasUserInterrupt:   newM.LastWasUserInterrupt,
 		EstimatedCostUSD:       newM.EstimatedCostUSD,
 		LastAssistantText:      newM.LastAssistantText,
 		PermissionMode:         newM.PermissionMode,

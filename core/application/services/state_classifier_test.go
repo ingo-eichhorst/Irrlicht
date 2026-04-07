@@ -175,14 +175,16 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 
-		// Rule 3: ESC cancellation → ready.
+		// Rule 3: ESC cancellation → ready. The signal is LastWasUserInterrupt
+		// (the "[Request interrupted by user" text marker), NOT
+		// LastToolResultWasError — see issue #102 Bug B.
 		{
 			name:    "working → ready (ESC cancellation)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
-				LastEventType:          "user",
-				HasOpenToolCall:        false,
-				LastToolResultWasError: true,
+				LastEventType:        "user",
+				HasOpenToolCall:      false,
+				LastWasUserInterrupt: true,
 			},
 			wantState:  session.StateReady,
 			wantReason: true,
@@ -191,12 +193,23 @@ func TestClassifyState(t *testing.T) {
 			name:    "waiting → ready (ESC cancellation)",
 			current: session.StateWaiting,
 			metrics: &session.SessionMetrics{
-				LastEventType:          "user",
-				HasOpenToolCall:        false,
-				LastToolResultWasError: true,
+				LastEventType:        "user",
+				HasOpenToolCall:      false,
+				LastWasUserInterrupt: true,
 			},
 			wantState:  session.StateReady,
 			wantReason: true,
+		},
+		{
+			name:    "benign tool_result.is_error stays working (#102 Bug B regression)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:          "user",
+				HasOpenToolCall:        false,
+				LastToolResultWasError: true, // e.g. grep miss, build failure
+				LastWasUserInterrupt:   false,
+			},
+			wantState: session.StateWorking,
 		},
 		{
 			name:    "normal tool completion stays working (is_error=false)",

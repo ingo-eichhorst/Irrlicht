@@ -48,12 +48,18 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 		return currentState, ""
 	}
 
-	// 3. ESC cancellation: user event with is_error=true while working/waiting
-	// with no open tool calls → ready.
+	// 3. ESC cancellation: user explicitly interrupted the turn while
+	// working/waiting with no open tool calls → ready.
+	//
+	// This checks LastWasUserInterrupt (the "[Request interrupted by user"
+	// text marker), NOT LastToolResultWasError. The latter fires on benign
+	// tool failures (grep miss, build exit ≠ 0, find on protected dirs) —
+	// using it here produced ~84 spurious flickers across the issue #102
+	// fixtures. See Bug B in issue #102.
 	if (currentState == session.StateWorking || currentState == session.StateWaiting) &&
-		!metrics.HasOpenToolCall && metrics.LastEventType == "user" && metrics.LastToolResultWasError {
+		!metrics.HasOpenToolCall && metrics.LastEventType == "user" && metrics.LastWasUserInterrupt {
 		return session.StateReady,
-			fmt.Sprintf("rejected tool result while %s → ready (cancellation)", currentState)
+			fmt.Sprintf("user ESC interrupt while %s → ready (cancellation)", currentState)
 	}
 
 	// 4. Default: transcript activity → working.

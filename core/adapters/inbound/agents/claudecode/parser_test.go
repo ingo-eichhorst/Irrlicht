@@ -305,9 +305,11 @@ func TestParser_AssistantStreaming_NullStopReason_SameID(t *testing.T) {
 	}
 }
 
-func TestParser_UserInterrupted_SetsIsError(t *testing.T) {
+func TestParser_UserInterrupted_SetsIsUserInterrupt(t *testing.T) {
 	// ESC during text generation writes "[Request interrupted by user]"
-	// as a user text message. Parser should set IsError=true.
+	// as a user text message. Parser should set IsUserInterrupt=true, NOT
+	// IsError=true — see issue #102 Bug B: we must distinguish a real ESC
+	// from a benign tool_result.is_error=true (grep miss, build fail).
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
 		"type":      "user",
@@ -322,8 +324,11 @@ func TestParser_UserInterrupted_SetsIsError(t *testing.T) {
 	if ev == nil {
 		t.Fatal("expected non-nil event")
 	}
-	if !ev.IsError {
-		t.Error("expected IsError=true for user interruption message")
+	if !ev.IsUserInterrupt {
+		t.Error("expected IsUserInterrupt=true for user ESC interruption")
+	}
+	if ev.IsError {
+		t.Error("IsError must remain false for ESC interrupts — it's reserved for tool_result.is_error")
 	}
 	if ev.EventType != "user" {
 		t.Errorf("EventType = %q, want user", ev.EventType)
@@ -602,7 +607,8 @@ func TestTranscript_IncrementalRead_MidTurnThenToolUse(t *testing.T) {
 }
 
 // ESC during text generation: user message with "[Request interrupted by user]"
-// should trigger cancellation detection via IsError.
+// should trigger cancellation detection via LastWasUserInterrupt (not IsError —
+// see issue #102 Bug B).
 func TestTranscript_ESCDuringGeneration_TransitionsToReady(t *testing.T) {
 	path := writeTranscript(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
@@ -655,8 +661,8 @@ func TestTranscript_ESCDuringGeneration_TransitionsToReady(t *testing.T) {
 	if m.HasOpenToolCall {
 		t.Error("expected HasOpenToolCall=false (both tools resolved)")
 	}
-	if !m.LastToolResultWasError {
-		t.Error("expected LastToolResultWasError=true (ESC interruption)")
+	if !m.LastWasUserInterrupt {
+		t.Error("expected LastWasUserInterrupt=true (ESC text marker)")
 	}
 }
 

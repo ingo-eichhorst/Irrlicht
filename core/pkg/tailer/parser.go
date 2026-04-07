@@ -22,6 +22,13 @@ type ParsedEvent struct {
 	IsError         bool     // true if the tool result had is_error=true
 	ClearToolNames  bool     // true → reset lastOpenToolNames (on user messages)
 
+	// IsUserInterrupt is true only for real user ESC cancellations (the
+	// "[Request interrupted by user" text marker on a user event). Kept
+	// distinct from IsError so the classifier can tell an ESC apart from a
+	// normal tool failure (grep with no matches, a failing build, etc.).
+	// See issue #102 Bug B.
+	IsUserInterrupt bool
+
 	// Metadata extracted by the parser.
 	ModelName      string
 	ContextWindow  int64

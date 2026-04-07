@@ -74,15 +74,17 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 				}
 			}
 			// ESC during text generation writes a user message with
-			// "[Request interrupted by user]" as text content. Mark as
-			// IsError so the classifier's ESC cancellation rule fires.
+			// "[Request interrupted by user]" as text content. Mark with
+			// IsUserInterrupt (NOT IsError — issue #102 Bug B) so the
+			// classifier's cancellation rule only fires on real interrupts,
+			// not on benign tool_result.is_error=true (grep miss, build fail).
 			if contentArr, ok := msg["content"].([]interface{}); ok {
 				for _, item := range contentArr {
 					if block, ok := item.(map[string]interface{}); ok {
 						if block["type"] == "text" {
 							if text, ok := block["text"].(string); ok {
 								if strings.HasPrefix(text, "[Request interrupted by user") {
-									ev.IsError = true
+									ev.IsUserInterrupt = true
 									break
 								}
 							}

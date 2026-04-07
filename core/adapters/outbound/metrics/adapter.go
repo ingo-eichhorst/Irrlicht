@@ -78,6 +78,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		LastEventType:          m.LastEventType,
 		LastOpenToolNames:      m.LastOpenToolNames,
 		LastToolResultWasError: m.LastToolResultWasError,
+		LastWasUserInterrupt:   m.LastWasUserInterrupt,
 		EstimatedCostUSD:       m.EstimatedCostUSD,
 		LastCWD:                m.LastCWD,
 		LastAssistantText:      m.LastAssistantText,
