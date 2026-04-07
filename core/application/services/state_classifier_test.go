@@ -201,23 +201,11 @@ func TestClassifyState(t *testing.T) {
 			wantReason: true,
 		},
 		{
-			name:    "benign tool_result.is_error stays working (#102 Bug B regression)",
+			name:    "user event without interrupt stays working",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
-				LastEventType:          "user",
-				HasOpenToolCall:        false,
-				LastToolResultWasError: true, // e.g. grep miss, build failure
-				LastWasUserInterrupt:   false,
-			},
-			wantState: session.StateWorking,
-		},
-		{
-			name:    "normal tool completion stays working (is_error=false)",
-			current: session.StateWorking,
-			metrics: &session.SessionMetrics{
-				LastEventType:          "user",
-				HasOpenToolCall:        false,
-				LastToolResultWasError: false,
+				LastEventType:   "user",
+				HasOpenToolCall: false,
 			},
 			wantState: session.StateWorking,
 		},

@@ -40,6 +40,11 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
+// claudeCodePolicy is the production Claude Code state policy as seen by the
+// replay simulator. Captured once so the simulator reads the same flag flips
+// the daemon would.
+var claudeCodePolicy = claudecode.StatePolicy()
+
 // Cause distinguishes why a state evaluation happened — was it triggered by a
 // real transcript event, by a (simulated) stale-tool timer firing, or by the
 // initial seed state.
@@ -274,6 +279,7 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 			if nextEventTime.Sub(staleArmedAt) >= cfg.StaleToolTimeout {
 				report.Summary.StaleTimerFires++
 				fireAt := staleArmedAt.Add(cfg.StaleToolTimeout)
+				snap := t.GetMetrics()
 				emit(Transition{
 					EventIndex:    -1,
 					VirtualTime:   fireAt,
@@ -281,9 +287,9 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 					PrevState:     state,
 					NewState:      session.StateWaiting,
 					Reason:        "open tool call with no activity → waiting (likely permission-pending)",
-					LastEventType: lastEventTypeFromMetrics(t.GetMetrics()),
-					HasOpenTool:   t.GetMetrics().HasOpenToolCall,
-					OpenToolNames: copyStrings(t.GetMetrics().LastOpenToolNames),
+					LastEventType: snap.LastEventType,
+					HasOpenTool:   snap.HasOpenToolCall,
+					OpenToolNames: copyStrings(snap.LastOpenToolNames),
 				})
 				state = session.StateWaiting
 				staleArmed = false
@@ -298,9 +304,8 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 			}
 			consumed++
 		}
-		if err := tmp.Sync(); err != nil {
-			return nil, err
-		}
+		// No fsync needed: the tailer reads from the same process via the
+		// OS page cache and sees the written bytes immediately.
 
 		metrics, err := t.TailAndProcess()
 		if err != nil {
@@ -362,8 +367,9 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 		}
 
 		// 3. (Re)arm the stale-tool timer if conditions match the production
-		//    rule in shouldStartStaleToolTimer.
-		if shouldArmStaleTimer(state, domainMetrics) {
+		//    rule. Delegates to services.ShouldStartStaleToolTimer so the
+		//    simulator automatically tracks any future policy changes.
+		if services.ShouldStartStaleToolTimer(state, domainMetrics, claudeCodePolicy) {
 			staleArmed = true
 			staleArmedAt = nextEventTime
 		} else {
@@ -382,7 +388,7 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	// the sandwich metric: a short episode (<FlickerMaxDuration) whose state
 	// differs from the state immediately before and after.
 	flickerCat, flickerReason, flickerTotal := computeFlickers(
-		report.Transitions, report.Summary.LastEventTime, cfg.FlickerMaxDuration)
+		report.Transitions, cfg.FlickerMaxDuration)
 	report.Summary.FlickerCount = flickerTotal
 	report.Summary.FlickersByCategory = flickerCat
 	report.Summary.FlickersByReason = flickerReason
@@ -475,50 +481,11 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		OpenToolCallCount:      m.OpenToolCallCount,
 		LastEventType:          m.LastEventType,
 		LastOpenToolNames:      copyStrings(m.LastOpenToolNames),
-		LastToolResultWasError: m.LastToolResultWasError,
 		LastWasUserInterrupt:   m.LastWasUserInterrupt,
 		EstimatedCostUSD:       m.EstimatedCostUSD,
 		LastAssistantText:      m.LastAssistantText,
 		PermissionMode:         m.PermissionMode,
 	}
-}
-
-func lastEventTypeFromMetrics(m *tailer.SessionMetrics) string {
-	if m == nil {
-		return ""
-	}
-	return m.LastEventType
-}
-
-// shouldArmStaleTimer mirrors SessionDetector.shouldStartStaleToolTimer for
-// the Claude Code adapter. We can't call the unexported method, so we
-// re-implement the same predicate.
-func shouldArmStaleTimer(state string, m *session.SessionMetrics) bool {
-	if state != session.StateWorking || m == nil {
-		return false
-	}
-	if !m.HasOpenToolCall || m.NeedsUserAttention() {
-		return false
-	}
-	if hasOnlyAgentTools(m.LastOpenToolNames) {
-		return false
-	}
-	if m.PermissionMode == "bypassPermissions" {
-		return false
-	}
-	return true
-}
-
-func hasOnlyAgentTools(names []string) bool {
-	if len(names) == 0 {
-		return false
-	}
-	for _, n := range names {
-		if n != "Agent" {
-			return false
-		}
-	}
-	return true
 }
 
 // computeFlickers walks the transition list and counts "true flickers": short
@@ -527,7 +494,7 @@ func hasOnlyAgentTools(names []string) bool {
 //
 // Returns a category breakdown (e.g. "working_between_ready": 4501), a reason
 // breakdown keyed by the classifier's reason string, and the total count.
-func computeFlickers(trs []Transition, lastEventTime time.Time, maxDur time.Duration) (map[string]int, map[string]int, int) {
+func computeFlickers(trs []Transition, maxDur time.Duration) (map[string]int, map[string]int, int) {
 	byCategory := map[string]int{}
 	byReason := map[string]int{}
 	if len(trs) < 3 || maxDur <= 0 {
@@ -542,12 +509,10 @@ func computeFlickers(trs []Transition, lastEventTime time.Time, maxDur time.Dura
 		if prev.NewState != next.NewState {
 			continue
 		}
-		dur := next.VirtualTime.Sub(cur.VirtualTime)
-		if dur >= maxDur {
+		if next.VirtualTime.Sub(cur.VirtualTime) >= maxDur {
 			continue
 		}
-		category := cur.NewState + "_between_" + prev.NewState
-		byCategory[category]++
+		byCategory[cur.NewState+"_between_"+prev.NewState]++
 		reason := cur.Reason
 		if reason == "" {
 			reason = "(no reason)"
@@ -555,10 +520,6 @@ func computeFlickers(trs []Transition, lastEventTime time.Time, maxDur time.Dura
 		byReason[reason]++
 		total++
 	}
-	// Also inspect the tail: if the last transition starts a short-lived
-	// episode that never gets returned to the previous state, it's not a
-	// flicker — skipped intentionally.
-	_ = lastEventTime
 	return byCategory, byReason, total
 }
 

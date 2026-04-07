@@ -59,6 +59,16 @@ type TranscriptParser interface {
 
 // --- Shared helpers used by multiple parsers ---
 
+// IsUserEventType reports whether a ParsedEvent.EventType represents a user
+// turn across any of the supported transcript formats.
+func IsUserEventType(eventType string) bool {
+	switch eventType {
+	case "user", "user_message", "user_input":
+		return true
+	}
+	return false
+}
+
 // NormalizeModelName normalizes model names by removing date suffixes, extended
 // context markers, and handling aliases. Exported for use by adapter parsers.
 func NormalizeModelName(rawModel string) string {

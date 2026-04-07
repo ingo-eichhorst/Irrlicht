@@ -378,9 +378,8 @@ func TestSessionDetector_Activity_NormalToolCompletion_StaysWorking(t *testing.T
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     5,
 		Metrics: &session.SessionMetrics{
-			LastEventType:          "user",
-			HasOpenToolCall:        false,
-			LastToolResultWasError: false,
+			LastEventType:   "user",
+			HasOpenToolCall: false,
 		},
 	})
 

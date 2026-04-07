@@ -57,12 +57,6 @@ type SessionMetrics struct {
 	// Used to detect user-blocking tools (AskUserQuestion, ExitPlanMode).
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 
-	// LastToolResultWasError is true when the most recently processed
-	// tool_result content block had is_error=true. Informational only —
-	// used for display; the classifier consumes LastWasUserInterrupt for
-	// cancellation detection (see issue #102 Bug B).
-	LastToolResultWasError bool `json:"last_tool_result_was_error"`
-
 	// LastWasUserInterrupt is true when the most recent user event was a
 	// real ESC cancellation (the "[Request interrupted by user" text
 	// marker). Reset when any subsequent non-interrupt user event arrives.
@@ -124,11 +118,8 @@ type TranscriptTailer struct {
 	cacheReadTokens     int64
 	cacheCreationTokens int64
 
-	// lastToolResultWasError tracks is_error on the most recent tool_result.
-	lastToolResultWasError bool
-
 	// lastWasUserInterrupt tracks whether the most recent user event was
-	// an ESC cancellation (separate from tool_result errors — see #102).
+	// an ESC cancellation ([Request interrupted by user] text marker).
 	lastWasUserInterrupt bool
 
 	// lastCWD tracks the most recent working directory seen in transcript lines.
@@ -264,18 +255,13 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		if parsed.ClearToolNames && parsed.ToolResultCount == 0 {
 			t.lastOpenToolNames = nil
 		}
-		if parsed.IsError {
-			t.lastToolResultWasError = true
-		} else if parsed.ToolResultCount > 0 {
-			t.lastToolResultWasError = false
-		}
-
-		// Track ESC interrupt separately from tool errors (#102 Bug B).
 		// IsUserInterrupt sets the sticky flag; any subsequent user event
-		// that is NOT itself an interrupt clears it.
+		// (including tool_result carriers) that isn't itself an interrupt
+		// clears it. parsed.IsError is for tool_result errors — not used
+		// by the classifier, so we don't track it.
 		if parsed.IsUserInterrupt {
 			t.lastWasUserInterrupt = true
-		} else if parsed.EventType == "user" || parsed.EventType == "user_message" || parsed.EventType == "user_input" {
+		} else if IsUserEventType(parsed.EventType) {
 			t.lastWasUserInterrupt = false
 		}
 
@@ -426,7 +412,6 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.OpenToolCallCount = openCalls
 	t.metrics.HasOpenToolCall = openCalls > 0
 	t.metrics.LastOpenToolNames = t.lastOpenToolNames
-	t.metrics.LastToolResultWasError = t.lastToolResultWasError
 	t.metrics.LastWasUserInterrupt = t.lastWasUserInterrupt
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText

@@ -177,19 +177,31 @@ func (d *SessionDetector) staleToolTimeoutFor(adapter string) time.Duration {
 }
 
 func (d *SessionDetector) shouldStartStaleToolTimer(state *session.SessionState) bool {
-	if state == nil || state.State != session.StateWorking || state.Metrics == nil {
+	if state == nil {
 		return false
 	}
-	if !d.adapterPolicy(state.Adapter).EnableStaleToolTimer {
+	return ShouldStartStaleToolTimer(state.State, state.Metrics, d.adapterPolicy(state.Adapter))
+}
+
+// ShouldStartStaleToolTimer is the pure predicate that decides whether a
+// session in the given state, with the given metrics, under the given policy,
+// warrants a stale-tool timer. Exported so the replay harness in
+// core/cmd/replay-session can reproduce production behavior without
+// duplicating the logic.
+func ShouldStartStaleToolTimer(currentState string, metrics *session.SessionMetrics, policy agent.StatePolicy) bool {
+	if currentState != session.StateWorking || metrics == nil {
 		return false
 	}
-	if !state.Metrics.HasOpenToolCall || state.Metrics.NeedsUserAttention() {
+	if !policy.EnableStaleToolTimer {
 		return false
 	}
-	if hasOnlyAgentTools(state.Metrics.LastOpenToolNames) {
+	if !metrics.HasOpenToolCall || metrics.NeedsUserAttention() {
 		return false
 	}
-	if state.Metrics.PermissionMode == "bypassPermissions" {
+	if HasOnlyAgentTools(metrics.LastOpenToolNames) {
+		return false
+	}
+	if metrics.PermissionMode == "bypassPermissions" {
 		return false
 	}
 	return true
@@ -266,10 +278,10 @@ func (d *SessionDetector) onStaleToolTimeout(sessionID string, expectedUpdatedAt
 	d.broadcast(outbound.PushTypeUpdated, state)
 }
 
-// hasOnlyAgentTools returns true if all open tool names are "Agent".
+// HasOnlyAgentTools returns true if all open tool names are "Agent".
 // Agent tool calls are in-process subagents that legitimately run for minutes
 // and should not trigger the stale-tool timer.
-func hasOnlyAgentTools(names []string) bool {
+func HasOnlyAgentTools(names []string) bool {
 	if len(names) == 0 {
 		return false
 	}
