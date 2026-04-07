@@ -305,6 +305,30 @@ func TestParser_AssistantStreaming_NullStopReason_SameID(t *testing.T) {
 	}
 }
 
+func TestParser_MaxTokensStopReason_ClassifiedAsStreaming(t *testing.T) {
+	// Regression for issue #102 Bug D: an assistant message with
+	// stop_reason="max_tokens" is the agent hitting its thinking budget
+	// mid-turn, not end-of-turn. It must be classified as streaming so
+	// IsAgentDone() doesn't fire. Same for pause_turn and unknown reasons.
+	p := &Parser{}
+	for _, stop := range []string{"max_tokens", "pause_turn", "something_new"} {
+		ev := p.ParseLine(map[string]interface{}{
+			"type":      "assistant",
+			"timestamp": "2026-04-07T20:02:08Z",
+			"message": map[string]interface{}{
+				"role":        "assistant",
+				"stop_reason": stop,
+				"content": []interface{}{
+					map[string]interface{}{"type": "thinking", "thinking": "…"},
+				},
+			},
+		})
+		if ev.EventType != "assistant_streaming" {
+			t.Errorf("stop_reason=%q: EventType = %q, want assistant_streaming", stop, ev.EventType)
+		}
+	}
+}
+
 func TestParser_UserInterrupted_SetsIsUserInterrupt(t *testing.T) {
 	// ESC during text generation writes "[Request interrupted by user]"
 	// as a user text message. Parser should set IsUserInterrupt=true, NOT
