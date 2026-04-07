@@ -37,10 +37,10 @@ type SessionMetrics struct {
 	// message that called tools. Used to detect user-blocking tools.
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 
-	// LastToolResultWasError is true when the most recent tool_result had
-	// is_error=true (user rejection via ESC). Distinguishes cancellation
-	// from normal tool completion.
-	LastToolResultWasError bool `json:"last_tool_result_was_error"`
+	// LastWasUserInterrupt is true when the most recent user event was a
+	// real ESC cancellation ("[Request interrupted by user" text marker).
+	// Used by the classifier to distinguish ESC from normal tool failures.
+	LastWasUserInterrupt bool `json:"last_was_user_interrupt,omitempty"`
 
 	// EstimatedCostUSD is the estimated session cost in USD, computed from
 	// token breakdown and per-model pricing.
@@ -204,17 +204,17 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		return newM
 	}
 	merged := &SessionMetrics{
-		ElapsedSeconds:     newM.ElapsedSeconds,
-		TotalTokens:        newM.TotalTokens,
-		ModelName:          newM.ModelName,
-		ContextWindow:      newM.ContextWindow,
-		ContextUtilization: newM.ContextUtilization,
-		PressureLevel:      newM.PressureLevel,
-		HasOpenToolCall:    newM.HasOpenToolCall,
-		OpenToolCallCount:  newM.OpenToolCallCount,
+		ElapsedSeconds:         newM.ElapsedSeconds,
+		TotalTokens:            newM.TotalTokens,
+		ModelName:              newM.ModelName,
+		ContextWindow:          newM.ContextWindow,
+		ContextUtilization:     newM.ContextUtilization,
+		PressureLevel:          newM.PressureLevel,
+		HasOpenToolCall:        newM.HasOpenToolCall,
+		OpenToolCallCount:      newM.OpenToolCallCount,
 		LastEventType:          newM.LastEventType,
 		LastOpenToolNames:      newM.LastOpenToolNames,
-		LastToolResultWasError: newM.LastToolResultWasError,
+		LastWasUserInterrupt:   newM.LastWasUserInterrupt,
 		EstimatedCostUSD:       newM.EstimatedCostUSD,
 		LastAssistantText:      newM.LastAssistantText,
 		PermissionMode:         newM.PermissionMode,

@@ -273,8 +273,10 @@ func TestSessionDetector_Activity_CancellationFromWorking_TransitionsToReady(t *
 	time.Sleep(20 * time.Millisecond)
 
 	// Simulate post-ESC state: session was working, user cancelled via ESC.
-	// Claude Code writes tool_result rejections (is_error=true) followed by
-	// "[Request interrupted by user for tool use]".
+	// Claude Code writes "[Request interrupted by user for tool use]" as the
+	// text content of a user event — the parser flags this as
+	// LastWasUserInterrupt. Tool result errors alone are NOT enough — see
+	// issue #102 Bug B.
 	repo.Save(&session.SessionState{
 		SessionID:      "esc1",
 		State:          session.StateWorking,
@@ -283,9 +285,9 @@ func TestSessionDetector_Activity_CancellationFromWorking_TransitionsToReady(t *
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     5,
 		Metrics: &session.SessionMetrics{
-			LastEventType:          "user",
-			HasOpenToolCall:        false,
-			LastToolResultWasError: true,
+			LastEventType:        "user",
+			HasOpenToolCall:      false,
+			LastWasUserInterrupt: true,
 		},
 	})
 
@@ -330,9 +332,9 @@ func TestSessionDetector_Activity_CancellationFromWaiting_TransitionsToReady(t *
 		WaitingStartTime: &now,
 		EventCount:       3,
 		Metrics: &session.SessionMetrics{
-			LastEventType:          "user",
-			HasOpenToolCall:        false,
-			LastToolResultWasError: true,
+			LastEventType:        "user",
+			HasOpenToolCall:      false,
+			LastWasUserInterrupt: true,
 		},
 	})
 
@@ -376,9 +378,8 @@ func TestSessionDetector_Activity_NormalToolCompletion_StaysWorking(t *testing.T
 		UpdatedAt:      time.Now().Unix(),
 		EventCount:     5,
 		Metrics: &session.SessionMetrics{
-			LastEventType:          "user",
-			HasOpenToolCall:        false,
-			LastToolResultWasError: false,
+			LastEventType:   "user",
+			HasOpenToolCall: false,
 		},
 	})
 

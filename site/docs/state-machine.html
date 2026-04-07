@@ -366,11 +366,11 @@
 
       <!-- ─── Cancellation ─── -->
       <h2>Cancellation</h2>
-      <p>When the user presses ESC during an agent turn, Claude Code cancels the current operation. Irrlicht detects this through the transcript: the last tool result will have <code>is_error</code> set to <code>true</code>.</p>
+      <p>When the user presses ESC during an agent turn, Claude Code writes a user event whose text content starts with <code>[Request interrupted by user</code>. Irrlicht detects this specific marker to distinguish a real ESC from benign tool failures (a <code>grep</code> with no matches, a failing build, a <code>find</code> hitting a protected directory) which also set <code>is_error=true</code> but should not end the turn.</p>
 
       <p>Cancellation maps directly to <span class="badge badge-ready">ready</span>. There is no intermediate "cancelled" state. The detection logic:</p>
       <ul>
-        <li><code>LastToolResultWasError = true</code> signals the cancellation occurred.</li>
+        <li><code>LastWasUserInterrupt = true</code> signals the ESC marker was seen.</li>
         <li>The agent stops executing, so <code>IsAgentDone()</code> fires.</li>
         <li>The session transitions to <span class="badge badge-ready">ready</span>.</li>
       </ul>

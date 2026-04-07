@@ -57,9 +57,12 @@ type SessionMetrics struct {
 	// Used to detect user-blocking tools (AskUserQuestion, ExitPlanMode).
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 
-	// LastToolResultWasError is true when the most recently processed
-	// tool_result content block had is_error=true (user rejection / ESC).
-	LastToolResultWasError bool `json:"last_tool_result_was_error"`
+	// LastWasUserInterrupt is true when the most recent user event was a
+	// real ESC cancellation (the "[Request interrupted by user" text
+	// marker). Reset when any subsequent non-interrupt user event arrives.
+	// The classifier uses this to transition working/waiting → ready on
+	// genuine interrupts without being fooled by normal tool failures.
+	LastWasUserInterrupt bool `json:"last_was_user_interrupt"`
 
 	// LastCWD is the most recent working directory seen in the transcript.
 	// Extracted during parsing so callers don't need a separate file read.
@@ -92,11 +95,17 @@ type TranscriptTailer struct {
 	// Context window override from transcript or extended context model suffix.
 	contextWindowOverride int64
 
-	// Tool call pairing counters — accumulated from ParsedEvent deltas.
-	toolUseCount    int
-	toolResultCount int
-
-	// lastOpenToolNames holds tool names from open tool calls.
+	// lastOpenToolNames is the single source of truth for currently-open tool
+	// calls. Tool uses append, tool results shift from the front. HasOpenToolCall
+	// and OpenToolCallCount are derived from `len(lastOpenToolNames)`.
+	//
+	// Historical note: this used to be paired with integer counters
+	// `toolUseCount` / `toolResultCount`, with HasOpenToolCall computed from
+	// (use > result). That allowed the two bookkeeping paths to desync on
+	// orphan tool_result events (--continue resume, compact replay, retries)
+	// leaving metrics in an impossible state (has_open=false, names=["Bash"]).
+	// The classifier then treated the session as done mid-turn, producing
+	// thousands of spurious working→ready flickers. See issue #102.
 	lastOpenToolNames []string
 
 	// contentChars accumulates character count from message content for
@@ -109,8 +118,9 @@ type TranscriptTailer struct {
 	cacheReadTokens     int64
 	cacheCreationTokens int64
 
-	// lastToolResultWasError tracks is_error on the most recent tool_result.
-	lastToolResultWasError bool
+	// lastWasUserInterrupt tracks whether the most recent user event was
+	// an ESC cancellation ([Request interrupted by user] text marker).
+	lastWasUserInterrupt bool
 
 	// lastCWD tracks the most recent working directory seen in transcript lines.
 	lastCWD string
@@ -231,10 +241,12 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			continue
 		}
 
-		// Apply tool tracking deltas from the parser.
-		t.toolUseCount += len(parsed.ToolUseNames)
+		// Apply tool tracking deltas from the parser. lastOpenToolNames is
+		// the single source of truth — tool_use blocks append, tool_result
+		// blocks shift from the front. Orphan tool_result events (more
+		// results than we've seen uses for — common on --continue resume or
+		// compaction replay) shift a no-op instead of corrupting a counter.
 		t.lastOpenToolNames = append(t.lastOpenToolNames, parsed.ToolUseNames...)
-		t.toolResultCount += parsed.ToolResultCount
 		for i := 0; i < parsed.ToolResultCount; i++ {
 			if len(t.lastOpenToolNames) > 0 {
 				t.lastOpenToolNames = t.lastOpenToolNames[1:]
@@ -243,10 +255,14 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		if parsed.ClearToolNames && parsed.ToolResultCount == 0 {
 			t.lastOpenToolNames = nil
 		}
-		if parsed.IsError {
-			t.lastToolResultWasError = true
-		} else if parsed.ToolResultCount > 0 {
-			t.lastToolResultWasError = false
+		// IsUserInterrupt sets the sticky flag; any subsequent user event
+		// (including tool_result carriers) that isn't itself an interrupt
+		// clears it. parsed.IsError is for tool_result errors — not used
+		// by the classifier, so we don't track it.
+		if parsed.IsUserInterrupt {
+			t.lastWasUserInterrupt = true
+		} else if IsUserEventType(parsed.EventType) {
+			t.lastWasUserInterrupt = false
 		}
 
 		// Apply metadata.
@@ -389,15 +405,14 @@ func (t *TranscriptTailer) computeMetrics() {
 	}
 	t.metrics.RecentEventCount = recentEventCount
 
-	// Compute open tool call count from pairing counters.
-	openCalls := t.toolUseCount - t.toolResultCount
-	if openCalls < 0 {
-		openCalls = 0
-	}
+	// Open tool calls are derived directly from the name slice — the only
+	// source of truth. See the lastOpenToolNames field comment for why the
+	// previous counter-based approach was removed (issue #102).
+	openCalls := len(t.lastOpenToolNames)
 	t.metrics.OpenToolCallCount = openCalls
 	t.metrics.HasOpenToolCall = openCalls > 0
 	t.metrics.LastOpenToolNames = t.lastOpenToolNames
-	t.metrics.LastToolResultWasError = t.lastToolResultWasError
+	t.metrics.LastWasUserInterrupt = t.lastWasUserInterrupt
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText
 

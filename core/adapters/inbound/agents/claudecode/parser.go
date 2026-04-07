@@ -74,15 +74,17 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 				}
 			}
 			// ESC during text generation writes a user message with
-			// "[Request interrupted by user]" as text content. Mark as
-			// IsError so the classifier's ESC cancellation rule fires.
+			// "[Request interrupted by user]" as text content. Mark with
+			// IsUserInterrupt (NOT IsError — issue #102 Bug B) so the
+			// classifier's cancellation rule only fires on real interrupts,
+			// not on benign tool_result.is_error=true (grep miss, build fail).
 			if contentArr, ok := msg["content"].([]interface{}); ok {
 				for _, item := range contentArr {
 					if block, ok := item.(map[string]interface{}); ok {
 						if block["type"] == "text" {
 							if text, ok := block["text"].(string); ok {
 								if strings.HasPrefix(text, "[Request interrupted by user") {
-									ev.IsError = true
+									ev.IsUserInterrupt = true
 									break
 								}
 							}
@@ -116,16 +118,36 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// within one API response. Using eventTypeAssistantStreaming for these
 	// prevents IsAgentDone() from falsely returning true between tool calls.
 	//
-	// Detection: any message with stop_reason=null is intermediate. Claude
-	// Code final messages always carry stop_reason="end_turn" or "tool_use".
-	// The previous approach only caught same-message-ID chunks, missing the
-	// first chunk of each new message and causing working→ready flicker.
+	// We use an allow-list of terminal stop_reasons rather than a deny-list
+	// of intermediate ones — any stop_reason NOT known to be terminal is
+	// assumed to be mid-turn. This protects against Bug D in issue #102,
+	// where `max_tokens` (agent hit thinking budget, will continue) was
+	// classified as "done" because the previous deny-list only handled nil.
+	//
+	// Terminal stop_reasons (this message is complete):
+	//   - end_turn       normal completion → agent's turn is over
+	//   - stop_sequence  stop token matched → turn is over
+	//   - refusal        agent refused to answer → turn is over
+	//   - tool_use       message ends because a tool was called → turn NOT
+	//                    over, but the message is complete. IsAgentDone()
+	//                    downstream uses HasOpenToolCall to stay in working.
+	//
+	// Everything else (nil, max_tokens, pause_turn, unknown) is treated as
+	// streaming/mid-turn. max_tokens in particular was Bug D in #102: an
+	// agent that hits its thinking budget mid-turn emits a thinking-only
+	// assistant message with stop_reason=max_tokens, which used to classify
+	// as "assistant" and trip IsAgentDone() → spurious ready. Any future
+	// stop_reason Claude adds defaults to "assume streaming", which is the
+	// safe side of the error.
 	if eventType == "assistant" {
 		if msg, ok := raw["message"].(map[string]interface{}); ok {
-			stopReason, _ := msg["stop_reason"]
+			stopReason, _ := msg["stop_reason"].(string)
 			msgID, _ := msg["id"].(string)
 
-			if stopReason == nil {
+			switch stopReason {
+			case "end_turn", "stop_sequence", "refusal", "tool_use":
+				// Terminal for this message — keep eventType as "assistant".
+			default:
 				eventType = eventTypeAssistantStreaming
 			}
 
