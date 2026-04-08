@@ -334,6 +334,7 @@ func TestParser_UserInterrupted_SetsIsUserInterrupt(t *testing.T) {
 	// as a user text message. Parser should set IsUserInterrupt=true, NOT
 	// IsError=true — see issue #102 Bug B: we must distinguish a real ESC
 	// from a benign tool_result.is_error=true (grep miss, build fail).
+	// And NOT IsToolDenial — that's the "for tool use" suffix variant.
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
 		"type":      "user",
@@ -351,8 +352,46 @@ func TestParser_UserInterrupted_SetsIsUserInterrupt(t *testing.T) {
 	if !ev.IsUserInterrupt {
 		t.Error("expected IsUserInterrupt=true for user ESC interruption")
 	}
+	if ev.IsToolDenial {
+		t.Error("IsToolDenial must be false for plain ESC — that flag is reserved for the 'for tool use' marker")
+	}
 	if ev.IsError {
 		t.Error("IsError must remain false for ESC interrupts — it's reserved for tool_result.is_error")
+	}
+	if ev.EventType != "user" {
+		t.Errorf("EventType = %q, want user", ev.EventType)
+	}
+}
+
+func TestParser_ToolDenial_SetsIsToolDenialNotUserInterrupt(t *testing.T) {
+	// When the user clicks "no" on a permission prompt, Claude Code writes
+	// "[Request interrupted by user for tool use]" as a user text message.
+	// This is a *different* signal from ESC: the agent's turn is NOT over,
+	// so the cancellation rule must NOT fire. Parser sets IsToolDenial=true
+	// and leaves IsUserInterrupt=false so the classifier keeps the session
+	// in working instead of bouncing through ready.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "user",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "[Request interrupted by user for tool use]"},
+			},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if !ev.IsToolDenial {
+		t.Error("expected IsToolDenial=true for tool permission denial")
+	}
+	if ev.IsUserInterrupt {
+		t.Error("IsUserInterrupt must be false for tool denials — that flag is reserved for plain ESC")
+	}
+	if ev.IsError {
+		t.Error("IsError must remain false for tool denials — it's reserved for tool_result.is_error")
 	}
 	if ev.EventType != "user" {
 		t.Errorf("EventType = %q, want user", ev.EventType)
@@ -687,6 +726,49 @@ func TestTranscript_ESCDuringGeneration_TransitionsToReady(t *testing.T) {
 	}
 	if !m.LastWasUserInterrupt {
 		t.Error("expected LastWasUserInterrupt=true (ESC text marker)")
+	}
+	if m.LastWasToolDenial {
+		t.Error("expected LastWasToolDenial=false (this is plain ESC, not the 'for tool use' marker)")
+	}
+}
+
+// Tool denial: user clicks "no" on a permission prompt → Claude Code writes
+// "[Request interrupted by user for tool use]" as a user text message. The
+// parser must set LastWasToolDenial (not LastWasUserInterrupt) so the
+// classifier's cancellation rule does NOT fire — denials don't end the turn.
+func TestTranscript_ToolDenial_DoesNotSetUserInterrupt(t *testing.T) {
+	path := writeTranscript(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
+			"role": "user", "content": "delete /tmp/foo for me",
+		}},
+		// Tool call requesting Bash permission
+		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "name": "Bash", "id": "tu_1"},
+			},
+		}},
+		// User denies the permission prompt
+		{"type": "user", "timestamp": ts(2), "message": map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "[Request interrupted by user for tool use]"},
+			},
+		}},
+	})
+
+	m, err := newCCTailer(path).TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastEventType != "user" {
+		t.Errorf("LastEventType = %q, want user", m.LastEventType)
+	}
+	if !m.LastWasToolDenial {
+		t.Error("expected LastWasToolDenial=true (the 'for tool use' marker)")
+	}
+	if m.LastWasUserInterrupt {
+		t.Error("expected LastWasUserInterrupt=false (denial is not ESC)")
 	}
 }
 

@@ -4,9 +4,9 @@
 //
 // It exists to reproduce and diagnose issue #102 — long-running Claude Code
 // sessions flickering between working and waiting. The replay is fully
-// deterministic and runs much faster than realtime: there are no real sleeps,
-// debounce timers, or stale-tool timers. Their effects are simulated by
-// inspecting timestamp gaps and applying scaled-down thresholds.
+// deterministic and runs much faster than realtime: there are no real sleeps
+// or debounce timers. Their effects are simulated by inspecting timestamp
+// gaps and applying scaled-down thresholds.
 //
 // Usage:
 //
@@ -16,7 +16,6 @@
 //
 //	--out FILE              Write JSON report to FILE (default stdout).
 //	--debounce DURATION     Simulated activity debounce window. Default 2s.
-//	--stale-tool DURATION   Simulated stale-tool timeout. Default 15s.
 //	--quiet                 Suppress per-event progress on stderr.
 //
 // The report is a JSON object containing every state transition (with reason,
@@ -40,15 +39,9 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/application/services"
-	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
-
-// defaultStaleToolFallback mirrors services.defaultStaleToolTimeout. Used
-// when an adapter enables the stale-tool timer but doesn't specify a custom
-// timeout on its StatePolicy.
-const defaultStaleToolFallback = 15 * time.Second
 
 // detectAdapter infers the adapter name from a transcript path by matching
 // either the canonical session-storage root for each supported format or the
@@ -74,14 +67,12 @@ func detectAdapter(path string) (string, error) {
 }
 
 // Cause distinguishes why a state evaluation happened — was it triggered by a
-// real transcript event, by a (simulated) stale-tool timer firing, or by the
-// initial seed state.
+// real transcript event, debounce coalescing, or the initial seed state.
 type Cause string
 
 const (
-	CauseInit            Cause = "init"
-	CauseEvent           Cause = "event"
-	CauseStaleToolTimer  Cause = "stale_tool_timer"
+	CauseInit             Cause = "init"
+	CauseEvent            Cause = "event"
 	CauseDebounceCoalesce Cause = "debounce_coalesce"
 )
 
@@ -114,18 +105,15 @@ type Report struct {
 }
 
 type ReportSettings struct {
-	Adapter            string              `json:"adapter"`
-	Policy             agent.StatePolicy   `json:"-"` // carried for Replay(), not serialized
-	DebounceWindow     time.Duration       `json:"debounce_window"`
-	StaleToolTimeout   time.Duration       `json:"stale_tool_timeout"`
-	FlickerMaxDuration time.Duration       `json:"flicker_max_duration"` // episodes shorter than this are flickers
+	Adapter            string        `json:"adapter"`
+	DebounceWindow     time.Duration `json:"debounce_window"`
+	FlickerMaxDuration time.Duration `json:"flicker_max_duration"` // episodes shorter than this are flickers
 }
 
 type ReportSummary struct {
 	TotalEvents       int                      `json:"total_events"`
 	ConsumedEvents    int                      `json:"consumed_events"` // after debounce coalescing
 	TotalTransitions  int                      `json:"total_transitions"`
-	StaleTimerFires   int                      `json:"stale_timer_fires"`
 	FirstEventTime    time.Time                `json:"first_event_time"`
 	LastEventTime     time.Time                `json:"last_event_time"`
 	WallClockDuration time.Duration            `json:"wall_clock_session_duration"` // last - first
@@ -135,26 +123,22 @@ type ReportSummary struct {
 	// whose state is different from the state immediately before and after it,
 	// i.e. the X → Y → X sandwich pattern. This is the user-visible "bouncing"
 	// irrlicht surfaces in notifications.
-	FlickerCount      int            `json:"flicker_count"`
+	FlickerCount       int            `json:"flicker_count"`
 	FlickersByCategory map[string]int `json:"flickers_by_category"` // e.g. "working_between_ready": 4501
 	FlickersByReason   map[string]int `json:"flickers_by_reason"`
 }
 
 func main() {
 	var (
-		outPath       string
-		adapterFlag   string
-		debounceFlag  time.Duration
-		staleToolFlag time.Duration
-		flickerMax    time.Duration
-		quiet         bool
+		outPath      string
+		adapterFlag  string
+		debounceFlag time.Duration
+		flickerMax   time.Duration
+		quiet        bool
 	)
 	flag.StringVar(&outPath, "out", "", "output JSON report path (default: stdout)")
 	flag.StringVar(&adapterFlag, "adapter", "", "adapter name (claude-code, codex, pi); auto-detected from path if omitted")
 	flag.DurationVar(&debounceFlag, "debounce", 2*time.Second, "simulated activity debounce window")
-	// Default -1 means "use the adapter's production policy". Pass a positive
-	// duration to simulate a hypothetical timeout, or 0 to force-disable.
-	flag.DurationVar(&staleToolFlag, "stale-tool", -1, "simulated stale-tool timeout (negative = use policy; 0 = disabled)")
 	flag.DurationVar(&flickerMax, "flicker-max", 10*time.Second, "episodes shorter than this are counted as flickers (automated agent loops cycle turns in ~25s, so 30s overcounts)")
 	flag.BoolVar(&quiet, "quiet", false, "suppress per-event progress on stderr")
 	flag.Parse()
@@ -175,26 +159,10 @@ func main() {
 			os.Exit(2)
 		}
 	}
-	policy := agents.PolicyFor(adapterName)
-
-	// Derive stale-tool timeout from the policy when the flag wasn't
-	// explicitly overridden (negative sentinel).
-	if staleToolFlag < 0 {
-		if policy.EnableStaleToolTimer {
-			staleToolFlag = policy.StaleToolTimeout
-			if staleToolFlag <= 0 {
-				staleToolFlag = defaultStaleToolFallback
-			}
-		} else {
-			staleToolFlag = 0
-		}
-	}
 
 	report, err := Replay(src, ReportSettings{
 		Adapter:            adapterName,
-		Policy:             policy,
 		DebounceWindow:     debounceFlag,
-		StaleToolTimeout:   staleToolFlag,
 		FlickerMaxDuration: flickerMax,
 	})
 	if err != nil {
@@ -212,12 +180,11 @@ func main() {
 	if !quiet {
 		s := report.Summary
 		fmt.Fprintf(os.Stderr,
-			"replay: %d events → %d transitions, %d flickers (ww=%d wr=%d rw=%d), %d stale-timer fires\n",
+			"replay: %d events → %d transitions, %d flickers (ww=%d wr=%d rw=%d)\n",
 			s.TotalEvents, s.TotalTransitions, s.FlickerCount,
 			s.FlickersByCategory["working_between_waiting"]+s.FlickersByCategory["waiting_between_working"],
 			s.FlickersByCategory["working_between_ready"]+s.FlickersByCategory["ready_between_working"],
-			s.FlickersByCategory["ready_between_waiting"]+s.FlickersByCategory["waiting_between_ready"],
-			s.StaleTimerFires)
+			s.FlickersByCategory["ready_between_waiting"]+s.FlickersByCategory["waiting_between_ready"])
 	}
 }
 
@@ -321,44 +288,12 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 		Reason:      "initial state",
 	})
 
-	// staleArmedAt tracks when the most recent batch left the session in
-	// "working" with a non-blocking open tool call. If the next batch arrives
-	// after staleArmedAt + staleToolTimeout, we emit a synthetic
-	// stale_tool_timer transition to "waiting" *before* processing the next
-	// batch — this is what the production daemon would do.
-	var staleArmed bool
-	var staleArmedAt time.Time
-
 	consumed := 0
 	for bi, batch := range batches {
-		// 1. If a stale-tool timer is armed and the next batch is far enough
-		//    in the future, fire it now. A zero-or-negative StaleToolTimeout
-		//    disables the simulated timer entirely (matches the production
-		//    policy flag `EnableStaleToolTimer=false`).
 		nextEventTime := batch[len(batch)-1].Time
-		if staleArmed && state == session.StateWorking && cfg.StaleToolTimeout > 0 {
-			if nextEventTime.Sub(staleArmedAt) >= cfg.StaleToolTimeout {
-				report.Summary.StaleTimerFires++
-				fireAt := staleArmedAt.Add(cfg.StaleToolTimeout)
-				snap := t.GetMetrics()
-				emit(Transition{
-					EventIndex:    -1,
-					VirtualTime:   fireAt,
-					Cause:         CauseStaleToolTimer,
-					PrevState:     state,
-					NewState:      session.StateWaiting,
-					Reason:        "open tool call with no activity → waiting (likely permission-pending)",
-					LastEventType: snap.LastEventType,
-					HasOpenTool:   snap.HasOpenToolCall,
-					OpenToolNames: copyStrings(snap.LastOpenToolNames),
-				})
-				state = session.StateWaiting
-				staleArmed = false
-			}
-		}
 
-		// 2. Append every line in the batch to the temp transcript and let
-		//    the tailer process them in one call.
+		// Append every line in the batch to the temp transcript and let
+		// the tailer process them in one call.
 		for _, ev := range batch {
 			if _, err := tmp.Write(ev.Bytes); err != nil {
 				return nil, err
@@ -425,16 +360,6 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
 			})
 			state = newState
-		}
-
-		// 3. (Re)arm the stale-tool timer if conditions match the production
-		//    rule. Delegates to services.ShouldStartStaleToolTimer so the
-		//    simulator automatically tracks any future policy changes.
-		if services.ShouldStartStaleToolTimer(state, domainMetrics, cfg.Policy) {
-			staleArmed = true
-			staleArmedAt = nextEventTime
-		} else {
-			staleArmed = false
 		}
 	}
 
@@ -543,6 +468,7 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		LastEventType:          m.LastEventType,
 		LastOpenToolNames:      copyStrings(m.LastOpenToolNames),
 		LastWasUserInterrupt:   m.LastWasUserInterrupt,
+		LastWasToolDenial:      m.LastWasToolDenial,
 		EstimatedCostUSD:       m.EstimatedCostUSD,
 		LastAssistantText:      m.LastAssistantText,
 		PermissionMode:         m.PermissionMode,

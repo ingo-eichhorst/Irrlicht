@@ -73,16 +73,30 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 					return ev
 				}
 			}
-			// ESC during text generation writes a user message with
-			// "[Request interrupted by user]" as text content. Mark with
-			// IsUserInterrupt (NOT IsError — issue #102 Bug B) so the
-			// classifier's cancellation rule only fires on real interrupts,
-			// not on benign tool_result.is_error=true (grep miss, build fail).
+			// User interrupts come in two flavors that look similar but mean
+			// different things:
+			//   - "[Request interrupted by user]" — ESC during text generation.
+			//     The agent's turn is over; the classifier should transition
+			//     to ready. Marked with IsUserInterrupt.
+			//   - "[Request interrupted by user for tool use]" — the user
+			//     denied a permission prompt for a tool call. The agent's
+			//     turn is NOT over: it typically responds with an alternate
+			//     approach. Marked with IsToolDenial; the cancellation rule
+			//     must NOT fire (otherwise the session bounces working →
+			//     ready → working on every denial).
+			//
+			// Neither sets IsError — that's reserved for tool_result.is_error
+			// (grep with no matches, build failures, etc.). See issue #102
+			// Bug B and the follow-up split for the denial flicker.
 			if contentArr, ok := msg["content"].([]interface{}); ok {
 				for _, item := range contentArr {
 					if block, ok := item.(map[string]interface{}); ok {
 						if block["type"] == "text" {
 							if text, ok := block["text"].(string); ok {
+								if strings.HasPrefix(text, "[Request interrupted by user for tool use") {
+									ev.IsToolDenial = true
+									break
+								}
 								if strings.HasPrefix(text, "[Request interrupted by user") {
 									ev.IsUserInterrupt = true
 									break

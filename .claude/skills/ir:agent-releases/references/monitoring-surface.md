@@ -56,9 +56,7 @@ The classifier checks in order:
 2. Turn finished (`turn_done` or last assistant message) + ends with `?` -> **waiting**
 3. Turn finished + no question -> **ready**
 4. ESC cancellation (user msg + `is_error` tool result + no open tools) -> **ready**
-5. Stale non-blocking tool open + `permissionMode != bypassPermissions` + 5s timeout -> **waiting**
-6. All-Agent open tool calls exempt from stale-tool timeout
-7. Default -> **working**
+5. Default -> **working**
 
 ## What Breaks Irrlicht (Impact Categories)
 
@@ -71,5 +69,5 @@ The classifier checks in order:
 | **Config path/format change** | Settings file moved or reformatted | LOW — only affects model name fallback |
 | **New session type** | New agent mode, new transcript location | MEDIUM — sessions invisible until adapter added |
 | **New tool category** | New user-blocking tools added | MEDIUM — should be added to waiting detection |
-| **Permission system change** | New permission modes, removal of permission-mode events | MEDIUM — stale-tool timer logic affected |
+| **Permission system change** | New permission modes, removal of permission-mode events | MEDIUM — `PermissionMode` surfacing affected |
 | **CLI output change** | Gas Town `gt` command output format changed | HIGH — orchestrator polling breaks |

@@ -38,9 +38,17 @@ type SessionMetrics struct {
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 
 	// LastWasUserInterrupt is true when the most recent user event was a
-	// real ESC cancellation ("[Request interrupted by user" text marker).
-	// Used by the classifier to distinguish ESC from normal tool failures.
+	// real ESC cancellation (the exact "[Request interrupted by user]" text
+	// marker, without the "for tool use" suffix). Used by the classifier
+	// to distinguish ESC from normal tool failures and tool denials.
 	LastWasUserInterrupt bool `json:"last_was_user_interrupt,omitempty"`
+
+	// LastWasToolDenial is true when the most recent user event was a tool
+	// permission denial ("[Request interrupted by user for tool use]"
+	// marker). Distinct from LastWasUserInterrupt because a denial does
+	// NOT end the agent's turn — the cancellation rule must not fire on
+	// it. Carried for observability and replay-harness flicker analysis.
+	LastWasToolDenial bool `json:"last_was_tool_denial,omitempty"`
 
 	// EstimatedCostUSD is the estimated session cost in USD, computed from
 	// token breakdown and per-model pricing.
@@ -56,8 +64,8 @@ type SessionMetrics struct {
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
 
 	// PermissionMode is the session's permission mode from the JSONL
-	// (e.g. "default", "plan", "bypassPermissions"). Used to skip the
-	// stale-tool-call timer when permissions are bypassed.
+	// (e.g. "default", "plan", "bypassPermissions"). Surfaced by the tailer
+	// and carried on session state for UI/telemetry.
 	PermissionMode string `json:"permission_mode,omitempty"`
 }
 
@@ -204,20 +212,21 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		return newM
 	}
 	merged := &SessionMetrics{
-		ElapsedSeconds:         newM.ElapsedSeconds,
-		TotalTokens:            newM.TotalTokens,
-		ModelName:              newM.ModelName,
-		ContextWindow:          newM.ContextWindow,
-		ContextUtilization:     newM.ContextUtilization,
-		PressureLevel:          newM.PressureLevel,
-		HasOpenToolCall:        newM.HasOpenToolCall,
-		OpenToolCallCount:      newM.OpenToolCallCount,
-		LastEventType:          newM.LastEventType,
-		LastOpenToolNames:      newM.LastOpenToolNames,
-		LastWasUserInterrupt:   newM.LastWasUserInterrupt,
-		EstimatedCostUSD:       newM.EstimatedCostUSD,
-		LastAssistantText:      newM.LastAssistantText,
-		PermissionMode:         newM.PermissionMode,
+		ElapsedSeconds:       newM.ElapsedSeconds,
+		TotalTokens:          newM.TotalTokens,
+		ModelName:            newM.ModelName,
+		ContextWindow:        newM.ContextWindow,
+		ContextUtilization:   newM.ContextUtilization,
+		PressureLevel:        newM.PressureLevel,
+		HasOpenToolCall:      newM.HasOpenToolCall,
+		OpenToolCallCount:    newM.OpenToolCallCount,
+		LastEventType:        newM.LastEventType,
+		LastOpenToolNames:    newM.LastOpenToolNames,
+		LastWasUserInterrupt: newM.LastWasUserInterrupt,
+		LastWasToolDenial:    newM.LastWasToolDenial,
+		EstimatedCostUSD:     newM.EstimatedCostUSD,
+		LastAssistantText:    newM.LastAssistantText,
+		PermissionMode:       newM.PermissionMode,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow

@@ -176,8 +176,10 @@ func TestClassifyState(t *testing.T) {
 		},
 
 		// Rule 3: ESC cancellation → ready. The signal is LastWasUserInterrupt
-		// (the "[Request interrupted by user" text marker), NOT
-		// LastToolResultWasError — see issue #102 Bug B.
+		// (the exact "[Request interrupted by user]" text marker), NOT
+		// LastToolResultWasError (issue #102 Bug B), and NOT LastWasToolDenial
+		// (the "for tool use" suffix variant — denial doesn't end the turn,
+		// see the parser-level split in claudecode/parser.go).
 		{
 			name:    "working → ready (ESC cancellation)",
 			current: session.StateWorking,
@@ -206,6 +208,20 @@ func TestClassifyState(t *testing.T) {
 			metrics: &session.SessionMetrics{
 				LastEventType:   "user",
 				HasOpenToolCall: false,
+			},
+			wantState: session.StateWorking,
+		},
+		{
+			// Tool denial must NOT trigger the cancellation rule. The agent's
+			// turn isn't over — it typically continues with a different
+			// approach. Bouncing to ready here is the working→ready→working
+			// flicker the parser-level split was designed to fix.
+			name:    "working stays working on tool denial (LastWasToolDenial)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "user",
+				HasOpenToolCall:   false,
+				LastWasToolDenial: true,
 			},
 			wantState: session.StateWorking,
 		},

@@ -195,7 +195,6 @@ Irrlicht detects agent sessions via transcript file-watching (Claude Code, Codex
 | New `.jsonl` file | FSEvents | → **working** |
 | File write activity | FSEvents | Re-evaluate state |
 | Agent asks question / plan mode | Transcript parser | → **waiting** |
-| Open tool call stale >15s | Stale-tool timer | → **waiting** (permission-pending) |
 | Turn completed (end_turn) | Transcript parser | → **ready** |
 | Process exit | kqueue NOTE_EXIT | → **ready** |
 
@@ -216,7 +215,6 @@ Irrlicht.app (single artifact)
       │   ├── Pi             (~/.pi/agent/sessions/**/*.jsonl via fsnotify)
       │   └── Gas Town       (daemon/state.json watcher + gt CLI poller)
       ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking, cost)
-      ├── StaleToolTimer     (per-adapter timeout → waiting if permission-pending)
       └── ProcessWatcher     (kqueue EVFILT_PROC NOTE_EXIT → ready)
 ```
 

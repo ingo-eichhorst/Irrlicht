@@ -68,8 +68,6 @@ These transitions change the working/waiting/ready state of an existing session.
 | AskUserQuestion tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
 | ExitPlanMode tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
 | User answers question / approves plan | `waiting` | `working` | Tool result in transcript | `NeedsUserAttention()=false` |
-| Tool call pending permission for >5s | `working` | `waiting` | No transcript activity for 5s with open non-blocking tool call | `staleToolTimeout` timer in SessionDetector (skipped for `bypassPermissions` mode and Agent-only calls) |
-| User approves permission / tool completes | `waiting` | `working` | Tool result in transcript | Activity resumes, `ClassifyState` re-evaluates |
 
 ### Impossible Transitions
 
@@ -120,15 +118,7 @@ The transcript tailer maps these system events to `LastEventType = "turn_done"`:
 | `AskUserQuestion` | Explicitly asks the user a question |
 | `ExitPlanMode` | Asks the user to approve the plan |
 
-### Permission-Pending Detection (Stale Tool Call)
-
-When a session is `working` with open tool calls that are NOT user-blocking, a 5-second timer starts. If no new transcript activity arrives before the timer fires, the session transitions to `waiting` — the tool call is likely pending user permission approval.
-
-**Skipped when:**
-- `PermissionMode` is `bypassPermissions` (all tools auto-execute)
-- All open tools are `Agent` (subagents legitimately run for minutes)
-
-The `PermissionMode` field is extracted from `permission-mode` JSONL events. Known values: `default`, `plan`, `bypassPermissions`.
+Note: transcript silence on a non-blocking open tool call (e.g. a long-running build) is **not** used as a signal. Earlier versions of irrlicht had a 15s stale-tool timer that tried to infer permission-pending state from silence, but it could not distinguish a modal from a long-running tool and produced spurious `working → waiting` flicker. If a real permission-pending signal is ever needed it will come from an adapter-specific marker (e.g. a Claude Code Notification hook), not a wall-clock timer.
 
 ---
 

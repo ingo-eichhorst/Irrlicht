@@ -58,11 +58,21 @@ type SessionMetrics struct {
 	LastOpenToolNames []string `json:"last_open_tool_names,omitempty"`
 
 	// LastWasUserInterrupt is true when the most recent user event was a
-	// real ESC cancellation (the "[Request interrupted by user" text
-	// marker). Reset when any subsequent non-interrupt user event arrives.
-	// The classifier uses this to transition working/waiting → ready on
-	// genuine interrupts without being fooled by normal tool failures.
+	// real ESC cancellation (the exact "[Request interrupted by user]" text
+	// marker, without the "for tool use" suffix). Reset when any subsequent
+	// non-interrupt user event arrives. The classifier uses this to
+	// transition working/waiting → ready on genuine interrupts without
+	// being fooled by normal tool failures or tool denials.
 	LastWasUserInterrupt bool `json:"last_was_user_interrupt"`
+
+	// LastWasToolDenial is true when the most recent user event was a tool
+	// denial — the user clicked "no" on a permission prompt, producing the
+	// "[Request interrupted by user for tool use]" text marker. Distinct
+	// from LastWasUserInterrupt because a denial does NOT end the agent's
+	// turn (the agent typically continues with a different approach), so
+	// it must not feed the cancellation rule. Surfaced for observability
+	// and replay-harness flicker categorization.
+	LastWasToolDenial bool `json:"last_was_tool_denial,omitempty"`
 
 	// LastCWD is the most recent working directory seen in the transcript.
 	// Extracted during parsing so callers don't need a separate file read.
@@ -119,8 +129,15 @@ type TranscriptTailer struct {
 	cacheCreationTokens int64
 
 	// lastWasUserInterrupt tracks whether the most recent user event was
-	// an ESC cancellation ([Request interrupted by user] text marker).
+	// an ESC cancellation (the exact "[Request interrupted by user]" text
+	// marker — NOT the "for tool use" suffix variant).
 	lastWasUserInterrupt bool
+
+	// lastWasToolDenial tracks whether the most recent user event was a
+	// tool denial ("[Request interrupted by user for tool use]" marker).
+	// Kept distinct from lastWasUserInterrupt so the cancellation rule
+	// only fires on real ESC, not on denials (which don't end the turn).
+	lastWasToolDenial bool
 
 	// lastCWD tracks the most recent working directory seen in transcript lines.
 	lastCWD string
@@ -255,14 +272,22 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		if parsed.ClearToolNames && parsed.ToolResultCount == 0 {
 			t.lastOpenToolNames = nil
 		}
-		// IsUserInterrupt sets the sticky flag; any subsequent user event
-		// (including tool_result carriers) that isn't itself an interrupt
-		// clears it. parsed.IsError is for tool_result errors — not used
-		// by the classifier, so we don't track it.
+		// IsUserInterrupt and IsToolDenial each set their own sticky flag;
+		// any subsequent user event that isn't itself the same kind clears
+		// it. The two flags are tracked independently because only ESC
+		// feeds the classifier's cancellation rule — denials are recorded
+		// for observability but don't end the agent's turn.
+		// parsed.IsError is for tool_result errors — not used by the
+		// classifier, so we don't track it.
 		if parsed.IsUserInterrupt {
 			t.lastWasUserInterrupt = true
 		} else if IsUserEventType(parsed.EventType) {
 			t.lastWasUserInterrupt = false
+		}
+		if parsed.IsToolDenial {
+			t.lastWasToolDenial = true
+		} else if IsUserEventType(parsed.EventType) {
+			t.lastWasToolDenial = false
 		}
 
 		// Apply metadata.
@@ -413,6 +438,7 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.HasOpenToolCall = openCalls > 0
 	t.metrics.LastOpenToolNames = t.lastOpenToolNames
 	t.metrics.LastWasUserInterrupt = t.lastWasUserInterrupt
+	t.metrics.LastWasToolDenial = t.lastWasToolDenial
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText
 
