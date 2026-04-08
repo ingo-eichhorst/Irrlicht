@@ -543,7 +543,10 @@ func (d *SessionDetector) seedFromDisk() {
 	// Re-evaluate state for sessions with transcripts: recompute metrics
 	// and apply the current detection logic. This ensures sessions persisted
 	// with stale states are corrected on startup (e.g. ready sessions whose
-	// last assistant message ends with a question should be waiting).
+	// last assistant message ends with a question should be waiting), and
+	// that stale persisted metrics from an older daemon version (e.g. pre-
+	// PR #110 codex cumulative token counts) are overwritten with a fresh
+	// recomputation under the current parser.
 	for _, state := range states {
 		if state.TranscriptPath == "" {
 			continue
@@ -560,8 +563,12 @@ func (d *SessionDetector) seedFromDisk() {
 					fmt.Sprintf("re-evaluated %s on startup", reason))
 			}
 			state.State = newState
-			_ = d.repo.Save(state)
 		}
+		// Always persist after RefreshMetrics — stale metrics from an
+		// older daemon version would otherwise linger on disk indefinitely
+		// for idle sessions that never get another transcript_activity
+		// event to trigger RefreshOnActivity + Save.
+		_ = d.repo.Save(state)
 	}
 
 	// Backfill ProjectName / CWD / GitBranch for sessions that were saved

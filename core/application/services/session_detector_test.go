@@ -733,6 +733,107 @@ func TestSessionDetector_HandleProcessExit_UnknownSession(t *testing.T) {
 	det.HandleProcessExit(99999, "nonexistent")
 }
 
+// TestSessionDetector_SeedFromDisk_PersistsRefreshedMetrics is a regression
+// test for irrlicht-qha: after PR #110 fixed the codex parser to read the
+// per-turn last_token_usage, persisted sessions from the pre-fix daemon
+// still served the stale cumulative count. seedFromDisk called RefreshMetrics
+// and mutated the in-memory state, but only Save()'d when the classified
+// state transitioned — so idle ready sessions kept the bad numbers on disk
+// indefinitely. The fix is to persist after RefreshMetrics regardless of
+// whether the state changed.
+func TestSessionDetector_SeedFromDisk_PersistsRefreshedMetrics(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	// Use our own PID so seedFromDisk doesn't delete the session as dead.
+	myPID := os.Getpid()
+
+	// Stale persisted state: cumulative token count from the buggy daemon,
+	// already-ready state (so the state transition path would not fire).
+	repo.states["rollout-stale"] = &session.SessionState{
+		SessionID:      "rollout-stale",
+		State:          session.StateReady,
+		Adapter:        "codex",
+		PID:            myPID,
+		TranscriptPath: "/tmp/rollout-stale.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		Metrics: &session.SessionMetrics{
+			TotalTokens:        2282896, // stale cumulative
+			ContextWindow:      258400,
+			ContextUtilization: 883.47,
+			ModelName:          "gpt-5.4",
+			PressureLevel:      "critical",
+		},
+	}
+
+	// Fresh tailer output: per-turn snapshot. seedFromDisk should merge this
+	// into state.Metrics and then persist, overwriting the stale cumulative.
+	freshMetrics := &session.SessionMetrics{
+		TotalTokens:        123496,
+		ContextWindow:      258400,
+		ContextUtilization: 47.79,
+		ModelName:          "gpt-5.4",
+		PressureLevel:      "safe",
+	}
+	metrics := &funcMetrics{
+		fn: func(path, adapter string) (*session.SessionMetrics, error) {
+			if path == "/tmp/rollout-stale.jsonl" {
+				// Return a fresh copy so the detector can mutate without
+				// affecting subsequent calls.
+				cp := *freshMetrics
+				return &cp, nil
+			}
+			return nil, nil
+		},
+	}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+
+	// Record the save count before Run: seedFromDisk must call Save() for
+	// this session even though its classified state (ready) is unchanged,
+	// otherwise the refreshed metrics would never reach disk. In the real
+	// filesystem repo, an un-saved in-memory mutation is lost because Load
+	// deep-copies from disk; the mockRepo hands back the same pointer, so
+	// we assert on the Save call count, not the loaded state.
+	repo.mu.Lock()
+	savesBefore := repo.saves
+	repo.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	repo.mu.Lock()
+	savesAfter := repo.saves
+	repo.mu.Unlock()
+	if savesAfter <= savesBefore {
+		t.Errorf("expected Save() to be called during seedFromDisk after "+
+			"RefreshMetrics, but saves count did not increase (before=%d after=%d)",
+			savesBefore, savesAfter)
+	}
+
+	state, err := repo.Load("rollout-stale")
+	if err != nil || state == nil {
+		t.Fatalf("rollout-stale should still exist after seed: err=%v state=%v", err, state)
+	}
+	if state.Metrics == nil {
+		t.Fatal("state.Metrics is nil after seed")
+	}
+	if state.Metrics.TotalTokens != 123496 {
+		t.Errorf("TotalTokens = %d, want 123496 (fresh). Stale cumulative leak?",
+			state.Metrics.TotalTokens)
+	}
+	if state.Metrics.ContextUtilization < 40 || state.Metrics.ContextUtilization > 55 {
+		t.Errorf("ContextUtilization = %.2f, want ~47.79", state.Metrics.ContextUtilization)
+	}
+}
+
 func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()

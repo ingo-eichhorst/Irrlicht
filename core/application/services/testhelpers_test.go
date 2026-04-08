@@ -96,6 +96,20 @@ func (m *mockMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetr
 	return nil, nil
 }
 
+// funcMetrics is a metrics collector whose ComputeMetrics behaviour can be
+// configured per test. Used to simulate a tailer that returns refreshed
+// metrics for already-persisted sessions during seedFromDisk.
+type funcMetrics struct {
+	fn func(path, adapter string) (*session.SessionMetrics, error)
+}
+
+func (m *funcMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
+	if m.fn == nil {
+		return nil, nil
+	}
+	return m.fn(path, adapter)
+}
+
 // --- AgentWatcher mock -------------------------------------------------------
 
 // mockAgentWatcher implements inbound.AgentWatcher for tests.
@@ -160,6 +174,21 @@ func newDetector(
 	return services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
+		"test", 0, nil,
+	)
+}
+
+// newDetectorWithMetrics builds a SessionDetector using a caller-provided
+// MetricsCollector (e.g. a funcMetrics that returns refreshed token counts).
+func newDetectorWithMetrics(
+	tw *mockAgentWatcher,
+	pw *mockProcessWatcher,
+	repo *mockRepo,
+	metrics *funcMetrics,
+) *services.SessionDetector {
+	return services.NewSessionDetector(
+		[]inbound.AgentWatcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, metrics, nil,
 		"test", 0, nil,
 	)
 }
