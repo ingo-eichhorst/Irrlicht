@@ -135,24 +135,26 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateReady,
 		},
 		{
-			name:    "working → ready (assistant_message Codex fallback)",
+			// Codex emits preliminary assistant_message events BEFORE tool
+			// calls in the same turn — treating them as terminal would cause
+			// working→ready→working flicker. The real terminal signal is
+			// turn_done (from task_complete).
+			name:    "working stays working (codex assistant_message is NOT terminal)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
 				LastEventType:   "assistant_message",
 				HasOpenToolCall: false,
 			},
-			wantState:  session.StateReady,
-			wantReason: true,
+			wantState: session.StateWorking,
 		},
 		{
-			name:    "working → waiting (assistant_message Codex fallback + question)",
+			name:    "working → ready (codex turn_done)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
-				LastEventType:     "assistant_message",
-				HasOpenToolCall:   false,
-				LastAssistantText: "Should I run the tests?",
+				LastEventType:   "turn_done",
+				HasOpenToolCall: false,
 			},
-			wantState:  session.StateWaiting,
+			wantState:  session.StateReady,
 			wantReason: true,
 		},
 		{

@@ -330,7 +330,7 @@ func TestParser_FullWrappedTranscript_MetadataAndWaitingState(t *testing.T) {
 			"payload": map[string]interface{}{
 				"type": "token_count",
 				"info": map[string]interface{}{
-					"total_token_usage": map[string]interface{}{
+					"last_token_usage": map[string]interface{}{
 						"input_tokens":  12,
 						"output_tokens": 3,
 						"total_tokens":  15,
@@ -437,4 +437,153 @@ func TestParser_FullWrappedTranscript_MetadataAndWaitingState(t *testing.T) {
 		t.Error("expected HasOpenToolCall=false after wrapped tool calls resolved")
 	}
 
+}
+
+// TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot is a regression test for
+// the bug where Codex's cumulative `total_token_usage` was used as the per-turn
+// token snapshot, causing context utilization to grow past 100% over a long
+// session. The parser must read `last_token_usage` (per-turn) instead.
+//
+// Reproduces the shape of a real codex transcript: every token_count event
+// carries both blocks, where total_token_usage grows monotonically while
+// last_token_usage reflects the size of just the most recent turn.
+func TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot(t *testing.T) {
+	mkTokenCount := func(offset int, lastInput, lastOutput, totalCumulative int) map[string]interface{} {
+		return map[string]interface{}{
+			"timestamp": ts(offset),
+			"type":      "event_msg",
+			"payload": map[string]interface{}{
+				"type": "token_count",
+				"info": map[string]interface{}{
+					"total_token_usage": map[string]interface{}{
+						// Cumulative across all turns — should be IGNORED.
+						"input_tokens":  totalCumulative - 100,
+						"output_tokens": 100,
+						"total_tokens":  totalCumulative,
+					},
+					"last_token_usage": map[string]interface{}{
+						// Per-turn — what context utilization should use.
+						"input_tokens":  lastInput,
+						"output_tokens": lastOutput,
+						"total_tokens":  lastInput + lastOutput,
+					},
+					"model_context_window": 258400,
+				},
+			},
+		}
+	}
+
+	path := writeLines(t, []map[string]interface{}{
+		{
+			"timestamp": ts(0),
+			"type":      "turn_context",
+			"payload": map[string]interface{}{
+				"model": "gpt-5.2-codex",
+			},
+		},
+		mkTokenCount(1, 22672, 303, 22975),
+		mkTokenCount(2, 30330, 365, 53670),
+		mkTokenCount(3, 38511, 352, 92533),
+		mkTokenCount(4, 48256, 385, 141174),
+		mkTokenCount(5, 49030, 1431, 191635),
+		mkTokenCount(6, 51241, 93, 242969),
+		mkTokenCount(7, 52130, 104, 295203),
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "codex")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Last per-turn snapshot: 52130 + 104 = 52234. The cumulative 295203
+	// MUST NOT leak through.
+	if m.TotalTokens != 52234 {
+		t.Errorf("TotalTokens = %d, want 52234 (per-turn). Cumulative leak?", m.TotalTokens)
+	}
+	if m.ContextWindow != 258400 {
+		t.Errorf("ContextWindow = %d, want 258400", m.ContextWindow)
+	}
+	// 52234 / 258400 ≈ 20.21%
+	if m.ContextUtilization < 19.0 || m.ContextUtilization > 21.5 {
+		t.Errorf("ContextUtilization = %.2f%%, want ~20.2%%", m.ContextUtilization)
+	}
+	if m.PressureLevel != "safe" {
+		t.Errorf("PressureLevel = %q, want safe", m.PressureLevel)
+	}
+}
+
+// TestParser_TurnCompleteEmitsTurnDone is a regression test for flicker at the
+// start of codex turns: the agent routinely emits a preliminary assistant
+// message BEFORE calling a tool, and the old fallback (`assistant_message`
+// as terminal) flipped the session ready prematurely. The canonical end-of-
+// turn signal is the `event_msg` with payload.type == "task_complete", and
+// the parser must map it to LastEventType == "turn_done" so IsAgentDone()
+// fires via the primary path only at the real turn boundary.
+func TestParser_TurnCompleteEmitsTurnDone(t *testing.T) {
+	path := writeLines(t, []map[string]interface{}{
+		{
+			"timestamp": ts(0),
+			"type":      "turn_context",
+			"payload":   map[string]interface{}{"model": "gpt-5.2-codex"},
+		},
+		// Preliminary assistant message emitted mid-turn before a tool call.
+		// This must NOT look like a terminal event.
+		{
+			"timestamp": ts(1),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message",
+				"role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "let me check"},
+				},
+			},
+		},
+		{
+			"timestamp": ts(2),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "function_call",
+				"name": "shell",
+			},
+		},
+		{
+			"timestamp": ts(3),
+			"type":      "response_item",
+			"payload":   map[string]interface{}{"type": "function_call_output"},
+		},
+		// Real end of turn.
+		{
+			"timestamp": ts(4),
+			"type":      "event_msg",
+			"payload":   map[string]interface{}{"type": "task_complete"},
+		},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "codex")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
+	}
+}
+
+// TestParser_EventMsgNonTaskCompleteSkipped confirms the carve-out is narrow:
+// token_count, task_started, exec_command_*, and friends must still be
+// skipped, otherwise we'd leak spurious LastEventType values that the
+// classifier isn't prepared for.
+func TestParser_EventMsgNonTaskCompleteSkipped(t *testing.T) {
+	p := &Parser{}
+	for _, pt := range []string{"task_started", "token_count", "exec_command_begin", "exec_command_end", "user_message"} {
+		ev := p.ParseLine(map[string]interface{}{
+			"type":    "event_msg",
+			"payload": map[string]interface{}{"type": pt},
+		})
+		if ev == nil || !ev.Skip {
+			t.Errorf("event_msg payload %q: expected skip", pt)
+		}
+	}
 }

@@ -125,6 +125,16 @@ func TestWatch_EmitsActivity(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
+	// Drain the startup EventNewSession emitted for the pre-existing file.
+	select {
+	case ev := <-ch:
+		if ev.Type != agent.EventNewSession {
+			t.Fatalf("startup event type = %q, want %q", ev.Type, agent.EventNewSession)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for startup new_session event")
+	}
+
 	// Append to existing transcript — this triggers an Activity event.
 	f, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
@@ -173,6 +183,16 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 	go func() { watchErr <- w.Watch(ctx) }()
 
 	time.Sleep(100 * time.Millisecond)
+
+	// Drain the startup EventNewSession emitted for the pre-existing file.
+	select {
+	case ev := <-ch:
+		if ev.Type != agent.EventNewSession {
+			t.Fatalf("startup event type = %q, want %q", ev.Type, agent.EventNewSession)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for startup new_session event")
+	}
 
 	// Remove the transcript file.
 	if err := os.Remove(transcriptPath); err != nil {

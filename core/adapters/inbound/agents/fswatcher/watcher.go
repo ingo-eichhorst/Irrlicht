@@ -274,7 +274,12 @@ func (w *Watcher) waitForDir(ctx context.Context, watchDir, targetDir string) er
 	}
 }
 
-// addExistingDirs recursively adds fsnotify watches for all subdirectories under root.
+// addExistingDirs recursively adds fsnotify watches for all subdirectories
+// under root and emits EventNewSession for any transcript files that already
+// exist. Without the emit step, transcript files that were written before the
+// daemon started and receive no further writes would stay invisible until the
+// next write event — e.g. an idle Codex session that the user hasn't typed
+// into since before a daemon restart.
 func (w *Watcher) addExistingDirs(watcher *fsnotify.Watcher) error {
 	return filepath.WalkDir(w.root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -282,6 +287,7 @@ func (w *Watcher) addExistingDirs(watcher *fsnotify.Watcher) error {
 		}
 		if d.IsDir() && path != w.root {
 			_ = watcher.Add(path)
+			w.emitExistingFiles(path)
 		}
 		return nil
 	})
