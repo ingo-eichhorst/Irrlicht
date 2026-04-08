@@ -78,13 +78,16 @@ class SessionManager: ObservableObject {
     }
 
     deinit {
-        Task { @MainActor in
-            if self.useFilePolling {
-                self.stopWatching()
-            } else {
-                self.stopWebSocket()
-            }
-        }
+        connectTask?.cancel()
+        connectTask = nil
+        webSocketTask?.cancel(with: .normalClosure, reason: nil)
+        webSocketTask = nil
+        fileSystemWatcher?.cancel()
+        fileSystemWatcher = nil
+        debounceTimer?.invalidate()
+        debounceTimer = nil
+        periodicUpdateTimer?.invalidate()
+        periodicUpdateTimer = nil
     }
 
     // MARK: - WebSocket
@@ -450,9 +453,19 @@ class SessionManager: ObservableObject {
 
     // MARK: - Context Pressure Notifications
 
-    private func requestNotificationPermission() {
+    private var canUseUserNotifications: Bool {
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
+            return false
+        }
         guard Bundle.main.bundleIdentifier != nil else {
-            print("⚠️ Skipping notification setup (no bundle identifier — running via swift run?)")
+            return false
+        }
+        return Bundle.main.bundleURL.pathExtension == "app"
+    }
+
+    private func requestNotificationPermission() {
+        guard canUseUserNotifications else {
+            print("⚠️ Skipping notification setup outside app bundle")
             return
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
@@ -485,7 +498,7 @@ class SessionManager: ObservableObject {
     }
 
     private func sendContextPressureNotification(session: SessionState, threshold: Int, utilization: Double) {
-        guard Bundle.main.bundleIdentifier != nil else { return }
+        guard canUseUserNotifications else { return }
         let content = UNMutableNotificationContent()
         content.title = "Context pressure: \(threshold)% threshold reached"
         let label = session.projectName ?? session.shortId
