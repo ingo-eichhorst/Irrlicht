@@ -1095,7 +1095,7 @@ func TestIsAgentDone(t *testing.T) {
 		{"turn_done", &session.SessionMetrics{LastEventType: "turn_done"}, true},
 		{"turn_done, open tools (subagent running)", &session.SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}, false},
 		{"assistant with stop_reason (end_turn)", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: false}, true},
-		{"assistant_message, no open tools (Codex)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, true},
+		{"assistant_message, no open tools (Codex preliminary msg — NOT done)", &session.SessionMetrics{LastEventType: "assistant_message", HasOpenToolCall: false}, false},
 		{"assistant_output, no open tools (Codex)", &session.SessionMetrics{LastEventType: "assistant_output", HasOpenToolCall: false}, true},
 		{"assistant_streaming (no stop_reason — NOT done)", &session.SessionMetrics{LastEventType: "assistant_streaming", HasOpenToolCall: false}, false},
 		{"assistant, open tools", &session.SessionMetrics{LastEventType: "assistant", HasOpenToolCall: true}, false},

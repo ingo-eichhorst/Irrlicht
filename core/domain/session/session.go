@@ -116,13 +116,17 @@ func (m *SessionMetrics) IsAgentDone() bool {
 	if m.LastEventType == "turn_done" {
 		return true
 	}
-	// Fallback: some transcripts lack turn_duration/stop_hook_summary entirely.
-	// Claude Code uses "assistant", Codex uses "assistant_message"/"assistant_output".
-	// Safe because HasOpenToolCall is checked first — mid-turn tool calls block this.
-	// Note: Claude Code intermediate/streaming messages use "assistant_streaming"
-	// which is NOT matched here, preventing false positives between tool calls.
+	// Fallback: Claude Code pre-stop_hook transcripts lack turn_duration.
+	// Claude Code's "assistant" event is safe because HasOpenToolCall is
+	// checked first — mid-turn tool calls block this, and streaming chunks
+	// use "assistant_streaming" which isn't matched.
+	//
+	// Codex is NOT in this fallback: codex agents routinely emit a
+	// preliminary `assistant_message` BEFORE calling a tool, so matching it
+	// here would flip the session ready→working→ready on every turn. Codex
+	// must rely on the `turn_done` primary path (emitted from task_complete).
 	switch m.LastEventType {
-	case "assistant", "assistant_message", "assistant_output":
+	case "assistant", "assistant_output":
 		return true
 	}
 	return false

@@ -75,7 +75,26 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	case "function_call_output":
 		parseCodexFunctionCallOutput(ev)
 
-	case "session_meta", "event_msg", "turn_context":
+	case "event_msg":
+		// Most event_msg payloads are metadata (token_count, task_started,
+		// exec_command_*) that we skip. The one exception is `task_complete`:
+		// this is Codex's canonical "turn finished" signal and must be emitted
+		// as `turn_done` so IsAgentDone() fires via the primary path.
+		//
+		// Without this, codex falls into the assistant_message fallback and
+		// flickers working→ready→working every time the agent writes an
+		// intermediate assistant message before calling a tool (typical at
+		// the start of a turn).
+		if payload, ok := raw["payload"].(map[string]interface{}); ok {
+			if pt, _ := payload["type"].(string); pt == "task_complete" {
+				ev.EventType = "turn_done"
+				return ev
+			}
+		}
+		ev.Skip = true
+		return ev
+
+	case "session_meta", "turn_context":
 		ev.Skip = true
 		return ev
 

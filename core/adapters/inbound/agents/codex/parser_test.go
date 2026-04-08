@@ -512,3 +512,78 @@ func TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot(t *testing.T) {
 		t.Errorf("PressureLevel = %q, want safe", m.PressureLevel)
 	}
 }
+
+// TestParser_TurnCompleteEmitsTurnDone is a regression test for flicker at the
+// start of codex turns: the agent routinely emits a preliminary assistant
+// message BEFORE calling a tool, and the old fallback (`assistant_message`
+// as terminal) flipped the session ready prematurely. The canonical end-of-
+// turn signal is the `event_msg` with payload.type == "task_complete", and
+// the parser must map it to LastEventType == "turn_done" so IsAgentDone()
+// fires via the primary path only at the real turn boundary.
+func TestParser_TurnCompleteEmitsTurnDone(t *testing.T) {
+	path := writeLines(t, []map[string]interface{}{
+		{
+			"timestamp": ts(0),
+			"type":      "turn_context",
+			"payload":   map[string]interface{}{"model": "gpt-5.2-codex"},
+		},
+		// Preliminary assistant message emitted mid-turn before a tool call.
+		// This must NOT look like a terminal event.
+		{
+			"timestamp": ts(1),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message",
+				"role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "let me check"},
+				},
+			},
+		},
+		{
+			"timestamp": ts(2),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "function_call",
+				"name": "shell",
+			},
+		},
+		{
+			"timestamp": ts(3),
+			"type":      "response_item",
+			"payload":   map[string]interface{}{"type": "function_call_output"},
+		},
+		// Real end of turn.
+		{
+			"timestamp": ts(4),
+			"type":      "event_msg",
+			"payload":   map[string]interface{}{"type": "task_complete"},
+		},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "codex")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
+	}
+}
+
+// TestParser_EventMsgNonTaskCompleteSkipped confirms the carve-out is narrow:
+// token_count, task_started, exec_command_*, and friends must still be
+// skipped, otherwise we'd leak spurious LastEventType values that the
+// classifier isn't prepared for.
+func TestParser_EventMsgNonTaskCompleteSkipped(t *testing.T) {
+	p := &Parser{}
+	for _, pt := range []string{"task_started", "token_count", "exec_command_begin", "exec_command_end", "user_message"} {
+		ev := p.ParseLine(map[string]interface{}{
+			"type":    "event_msg",
+			"payload": map[string]interface{}{"type": pt},
+		})
+		if ev == nil || !ev.Skip {
+			t.Errorf("event_msg payload %q: expected skip", pt)
+		}
+	}
+}
