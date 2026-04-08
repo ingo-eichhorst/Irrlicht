@@ -468,6 +468,7 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		LastEventType:          m.LastEventType,
 		LastOpenToolNames:      copyStrings(m.LastOpenToolNames),
 		LastWasUserInterrupt:   m.LastWasUserInterrupt,
+		LastWasToolDenial:      m.LastWasToolDenial,
 		EstimatedCostUSD:       m.EstimatedCostUSD,
 		LastAssistantText:      m.LastAssistantText,
 		PermissionMode:         m.PermissionMode,

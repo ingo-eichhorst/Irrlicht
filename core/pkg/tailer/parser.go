@@ -22,12 +22,22 @@ type ParsedEvent struct {
 	IsError         bool     // true if the tool result had is_error=true
 	ClearToolNames  bool     // true → reset lastOpenToolNames (on user messages)
 
-	// IsUserInterrupt is true only for real user ESC cancellations (the
-	// "[Request interrupted by user" text marker on a user event). Kept
-	// distinct from IsError so the classifier can tell an ESC apart from a
-	// normal tool failure (grep with no matches, a failing build, etc.).
-	// See issue #102 Bug B.
+	// IsUserInterrupt is true only for real user ESC cancellations — the
+	// exact "[Request interrupted by user]" text marker on a user event,
+	// without the "for tool use" suffix. Kept distinct from IsError so the
+	// classifier can tell an ESC apart from a normal tool failure (grep
+	// with no matches, a failing build, etc.). See issue #102 Bug B.
 	IsUserInterrupt bool
+
+	// IsToolDenial is true when the user denied a permission prompt for a
+	// tool call ("[Request interrupted by user for tool use]" text marker).
+	// This is a *different* signal from IsUserInterrupt: a tool denial does
+	// not end the agent's turn — the agent typically continues with a
+	// different approach — so it must NOT feed the cancellation rule.
+	// Tracked separately for observability and to suppress the spurious
+	// working→ready→working flicker that happened when the parser lumped
+	// both markers under IsUserInterrupt.
+	IsToolDenial bool
 
 	// Metadata extracted by the parser.
 	ModelName      string

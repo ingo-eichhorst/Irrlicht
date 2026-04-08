@@ -273,10 +273,11 @@ func TestSessionDetector_Activity_CancellationFromWorking_TransitionsToReady(t *
 	time.Sleep(20 * time.Millisecond)
 
 	// Simulate post-ESC state: session was working, user cancelled via ESC.
-	// Claude Code writes "[Request interrupted by user for tool use]" as the
-	// text content of a user event — the parser flags this as
-	// LastWasUserInterrupt. Tool result errors alone are NOT enough — see
-	// issue #102 Bug B.
+	// Claude Code writes "[Request interrupted by user]" as the text content
+	// of a user event — the parser flags this as LastWasUserInterrupt. Tool
+	// result errors alone are NOT enough (issue #102 Bug B), and tool
+	// denials ("[Request interrupted by user for tool use]") set a separate
+	// LastWasToolDenial flag that the cancellation rule does NOT consume.
 	repo.Save(&session.SessionState{
 		SessionID:      "esc1",
 		State:          session.StateWorking,
