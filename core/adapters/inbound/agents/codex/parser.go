@@ -163,9 +163,18 @@ func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.To
 		if model, ok := payload["model"].(string); ok && model != "" {
 			modelName = tailer.NormalizeModelName(model)
 		}
-		// Token info from payload.info.total_token_usage.
+		// Token info from payload.info.last_token_usage.
+		// IMPORTANT: codex emits two usage blocks on every token_count event:
+		//   - total_token_usage: cumulative running total across all turns in
+		//     the session (sum of input+output for every turn). This grows
+		//     unbounded and quickly exceeds the model context window.
+		//   - last_token_usage: per-turn snapshot. last_token_usage.input_tokens
+		//     is the prompt size for the most recent turn = current context
+		//     window usage. This matches the per-turn semantics Claude Code's
+		//     parser already produces.
+		// We use last_token_usage so context utilization stays in [0, 100%].
 		if info, ok := payload["info"].(map[string]interface{}); ok {
-			if usage, ok := info["total_token_usage"].(map[string]interface{}); ok {
+			if usage, ok := info["last_token_usage"].(map[string]interface{}); ok {
 				tokens = tailer.ExtractUsage(usage)
 			}
 			if cw, ok := info["model_context_window"].(float64); ok && cw > 0 {
