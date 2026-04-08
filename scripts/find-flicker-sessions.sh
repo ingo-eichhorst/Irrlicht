@@ -87,7 +87,6 @@ s = r["summary"]
 print(
     "\t".join([
         str(s["flicker_count"]),
-        str(s["stale_timer_fires"]),
         str(s["total_transitions"]),
         str(s["total_events"]),
         r["settings"].get("adapter", "?"),
@@ -99,10 +98,10 @@ PY
   done < <(find "$root" -name '*.jsonl' -print0)
 done
 
-# Sort by flicker count desc, then stale-timer fires desc.
-sort -t $'\t' -k1,1nr -k2,2nr "$results_file" | head -n "$LIMIT" > "$TMPDIR_REPORT/top.tsv"
+# Sort by flicker count desc.
+sort -t $'\t' -k1,1nr "$results_file" | head -n "$LIMIT" > "$TMPDIR_REPORT/top.tsv"
 
 {
-  printf "flickers\tstale_fires\ttransitions\tevents\tadapter\tfirst_event\ttranscript\n"
+  printf "flickers\ttransitions\tevents\tadapter\tfirst_event\ttranscript\n"
   cat "$TMPDIR_REPORT/top.tsv"
 } > "$OUT"

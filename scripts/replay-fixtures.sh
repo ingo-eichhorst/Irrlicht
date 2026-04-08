@@ -6,25 +6,19 @@
 # Usage:
 #   scripts/replay-fixtures.sh                       # default settings
 #   scripts/replay-fixtures.sh --debounce 200ms      # tighter debounce window
-#   scripts/replay-fixtures.sh --stale-tool 5s       # override the policy default
 #
 # The replay binary auto-detects the adapter from the fixture path (claude
-# code, codex, or pi) and derives the stale-tool timeout from that adapter's
-# production StatePolicy. Override with --stale-tool if you want to simulate
-# a different timeout.
+# code, codex, or pi).
 
 set -euo pipefail
 
 DEBOUNCE="2s"
-# Empty means "let the replay tool derive it from each adapter's policy".
-STALE_TOOL=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --debounce)   DEBOUNCE="$2"; shift 2 ;;
-    --stale-tool) STALE_TOOL="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,15p' "$0"
+      sed -n '2,11p' "$0"
       exit 0
       ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
@@ -59,11 +53,7 @@ while IFS= read -r fix; do
   md="$REPORTS_DIR/${adapter}-${name}.md"
 
   echo ">> replaying ${adapter}/${name}" >&2
-  if [[ -n "$STALE_TOOL" ]]; then
-    "./$BIN" --out "$json" --debounce "$DEBOUNCE" --stale-tool "$STALE_TOOL" "$fix"
-  else
-    "./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix"
-  fi
+  "./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix"
 
   python3 - "$json" "$md" "$fix" <<'PY'
 import json, sys, os
@@ -96,8 +86,7 @@ with open(md_path, "w") as out:
     out.write(f"_Generated_: {r['generated_at']}\n\n")
 
     out.write("## Settings\n\n")
-    out.write(f"- debounce window: `{dur(settings['debounce_window'])}`\n")
-    out.write(f"- stale-tool timeout: `{dur(settings['stale_tool_timeout'])}`\n\n")
+    out.write(f"- debounce window: `{dur(settings['debounce_window'])}`\n\n")
 
     out.write("## Summary\n\n")
     out.write(f"| metric | value |\n|---|---|\n")
@@ -105,7 +94,6 @@ with open(md_path, "w") as out:
     out.write(f"| consumed events (post-debounce) | {s['consumed_events']} |\n")
     out.write(f"| total transitions | {s['total_transitions']} |\n")
     out.write(f"| **flicker count** (all categories, short-lived sandwiches) | **{s['flicker_count']}** |\n")
-    out.write(f"| stale-tool timer fires | {s['stale_timer_fires']} |\n")
     out.write(f"| first event | {s['first_event_time']} |\n")
     out.write(f"| last event | {s['last_event_time']} |\n")
     out.write(f"| session wall-clock | {dur(s['wall_clock_session_duration'])} |\n\n")
@@ -141,8 +129,7 @@ with open(md_path, "w") as out:
     if flickers:
         out.write("## Flicker timeline\n\n")
         out.write("Each row is a state change involved in a flicker (the moment a\n")
-        out.write("waiting↔working flip happened). `cause` distinguishes a real event\n")
-        out.write("from a stale-tool timer firing inside a quiet window.\n\n")
+        out.write("waiting↔working flip happened).\n\n")
         out.write("| # | virt. time | prev | new | cause | reason | open tools | last_event_type |\n")
         out.write("|---|---|---|---|---|---|---|---|\n")
         seen = set()

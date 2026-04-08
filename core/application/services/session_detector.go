@@ -31,12 +31,6 @@ const orphanTranscriptAge = 2 * time.Minute
 // window are coalesced into a single processing when the timer expires.
 const activityDebounceWindow = 2 * time.Second
 
-// defaultStaleToolTimeout is how long a non-user-blocking open tool call must
-// remain unanswered before we assume it's permission-pending and transition to
-// waiting. Set high enough to avoid false positives from long-running tools
-// (builds, tests) that produce no transcript output while executing.
-const defaultStaleToolTimeout = 15 * time.Second
-
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {
 	timer   *time.Timer
@@ -80,22 +74,10 @@ type SessionDetector struct {
 	// and never overlap for the same session.
 	debouncedEvents chan agent.Event
 
-	// staleToolTimers tracks per-session timers for detecting permission-pending
-	// tool calls. When a session is "working" with open non-blocking tool calls
-	// and the permission mode requires approval, a timer starts. If no new
-	// activity arrives before it fires, the session transitions to "waiting".
-	staleToolTimeout time.Duration
-	staleToolMu      sync.Mutex
-	staleToolTimers  map[string]*time.Timer
-
 	// deletedCooldown is the minimum time after deletion before a session
 	// can be re-created from transcript activity (e.g. --continue). Prevents
 	// ghost sessions from late-arriving writes of a dying process.
 	deletedCooldown time.Duration
-
-	// adapterPolicies customizes adapter-specific state heuristics.
-	// Keys are adapter names (claude-code, codex, pi).
-	adapterPolicies map[string]agent.StatePolicy
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -113,20 +95,17 @@ func NewSessionDetector(
 	pidDiscovers map[string]PIDDiscoverFunc,
 ) *SessionDetector {
 	det := &SessionDetector{
-		watchers:         watchers,
-		repo:             repo,
-		log:              log,
-		broadcaster:      broadcaster,
-		version:          version,
-		enricher:         NewMetadataEnricher(git, metrics),
-		projectSessions:  make(map[string]string),
-		deletedSessions:  make(map[string]int64),
-		debounce:         make(map[string]*debounceEntry),
-		debouncedEvents:  make(chan agent.Event, 64),
-		staleToolTimeout: defaultStaleToolTimeout,
-		staleToolTimers:  make(map[string]*time.Timer),
-		deletedCooldown:  10 * time.Second,
-		adapterPolicies:  make(map[string]agent.StatePolicy),
+		watchers:        watchers,
+		repo:            repo,
+		log:             log,
+		broadcaster:     broadcaster,
+		version:         version,
+		enricher:        NewMetadataEnricher(git, metrics),
+		projectSessions: make(map[string]string),
+		deletedSessions: make(map[string]int64),
+		debounce:        make(map[string]*debounceEntry),
+		debouncedEvents: make(chan agent.Event, 64),
+		deletedCooldown: 10 * time.Second,
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -135,162 +114,10 @@ func NewSessionDetector(
 	return det
 }
 
-// SetStaleToolTimeout overrides the default stale-tool-call timeout.
-// Intended for tests that need a shorter duration.
-func (d *SessionDetector) SetStaleToolTimeout(timeout time.Duration) {
-	d.staleToolTimeout = timeout
-}
-
 // SetDeletedCooldown overrides the deleted-session cooldown.
 // Intended for tests that need immediate re-creation.
 func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 	d.deletedCooldown = dur
-}
-
-// SetAdapterPolicies installs adapter-specific state policies.
-// Should be called during startup before Run.
-func (d *SessionDetector) SetAdapterPolicies(policies map[string]agent.StatePolicy) {
-	if len(policies) == 0 {
-		d.adapterPolicies = make(map[string]agent.StatePolicy)
-		return
-	}
-	copied := make(map[string]agent.StatePolicy, len(policies))
-	for k, v := range policies {
-		copied[k] = v
-	}
-	d.adapterPolicies = copied
-}
-
-func (d *SessionDetector) adapterPolicy(adapter string) agent.StatePolicy {
-	if p, ok := d.adapterPolicies[adapter]; ok {
-		return p
-	}
-	return agent.DefaultStatePolicy()
-}
-
-func (d *SessionDetector) staleToolTimeoutFor(adapter string) time.Duration {
-	p := d.adapterPolicy(adapter)
-	if p.StaleToolTimeout > 0 {
-		return p.StaleToolTimeout
-	}
-	return d.staleToolTimeout
-}
-
-func (d *SessionDetector) shouldStartStaleToolTimer(state *session.SessionState) bool {
-	if state == nil {
-		return false
-	}
-	return ShouldStartStaleToolTimer(state.State, state.Metrics, d.adapterPolicy(state.Adapter))
-}
-
-// ShouldStartStaleToolTimer is the pure predicate that decides whether a
-// session in the given state, with the given metrics, under the given policy,
-// warrants a stale-tool timer. Exported so the replay harness in
-// core/cmd/replay-session can reproduce production behavior without
-// duplicating the logic.
-func ShouldStartStaleToolTimer(currentState string, metrics *session.SessionMetrics, policy agent.StatePolicy) bool {
-	if currentState != session.StateWorking || metrics == nil {
-		return false
-	}
-	if !policy.EnableStaleToolTimer {
-		return false
-	}
-	if !metrics.HasOpenToolCall || metrics.NeedsUserAttention() {
-		return false
-	}
-	if HasOnlyAgentTools(metrics.LastOpenToolNames) {
-		return false
-	}
-	if metrics.PermissionMode == "bypassPermissions" {
-		return false
-	}
-	return true
-}
-
-// startStaleToolTimer starts a timer that will transition a session to "waiting"
-// if no new transcript activity arrives within staleToolTimeout. Called when
-// processActivity leaves the session in "working" with open non-blocking tool
-// calls in a permission mode that requires user approval.
-func (d *SessionDetector) startStaleToolTimer(sessionID, adapter string, expectedUpdatedAt int64) {
-	d.staleToolMu.Lock()
-	defer d.staleToolMu.Unlock()
-
-	if t, ok := d.staleToolTimers[sessionID]; ok {
-		t.Stop()
-	}
-	timeout := d.staleToolTimeoutFor(adapter)
-	if timeout <= 0 {
-		timeout = defaultStaleToolTimeout
-	}
-	d.staleToolTimers[sessionID] = time.AfterFunc(timeout, func() {
-		d.onStaleToolTimeout(sessionID, expectedUpdatedAt)
-	})
-}
-
-// cancelStaleToolTimer cancels any pending stale-tool timer for a session.
-func (d *SessionDetector) cancelStaleToolTimer(sessionID string) {
-	d.staleToolMu.Lock()
-	defer d.staleToolMu.Unlock()
-	if t, ok := d.staleToolTimers[sessionID]; ok {
-		t.Stop()
-		delete(d.staleToolTimers, sessionID)
-	}
-}
-
-// onStaleToolTimeout fires when a session has had an open non-blocking tool call
-// for staleToolTimeout without any new transcript activity. If the session state
-// hasn't changed since the timer was set, transition it to "waiting".
-func (d *SessionDetector) onStaleToolTimeout(sessionID string, expectedUpdatedAt int64) {
-	d.staleToolMu.Lock()
-	delete(d.staleToolTimers, sessionID)
-	d.staleToolMu.Unlock()
-
-	state, err := d.repo.Load(sessionID)
-	if err != nil || state == nil {
-		return
-	}
-
-	// Guard: only transition if the session is still in the exact state we
-	// expect. If UpdatedAt changed, new activity arrived and processActivity
-	// already re-evaluated.
-	if state.UpdatedAt != expectedUpdatedAt {
-		return
-	}
-	if !d.shouldStartStaleToolTimer(state) {
-		return
-	}
-
-	d.log.LogInfo("session-detector", sessionID,
-		"open tool call with no activity → waiting (likely permission-pending)")
-
-	now := time.Now().Unix()
-	state.State = session.StateWaiting
-	state.UpdatedAt = now
-	state.WaitingStartTime = &now
-	state.LastEvent = "stale_tool_timeout"
-
-	if err := d.repo.Save(state); err != nil {
-		d.log.LogError("session-detector", sessionID,
-			fmt.Sprintf("failed to save stale-tool transition: %v", err))
-		return
-	}
-
-	d.broadcast(outbound.PushTypeUpdated, state)
-}
-
-// HasOnlyAgentTools returns true if all open tool names are "Agent".
-// Agent tool calls are in-process subagents that legitimately run for minutes
-// and should not trigger the stale-tool timer.
-func HasOnlyAgentTools(names []string) bool {
-	if len(names) == 0 {
-		return false
-	}
-	for _, n := range names {
-		if n != "Agent" {
-			return false
-		}
-	}
-	return true
 }
 
 // Run subscribes to all AgentWatcher event streams, fans them into a single
@@ -547,9 +374,6 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 		return
 	}
 
-	// Cancel any pending stale-tool timer — new activity arrived.
-	d.cancelStaleToolTimer(ev.SessionID)
-
 	// Apply any deferred PID from background discovery goroutines.
 	// This must happen before ClassifyState so that the PID and state
 	// transition are saved atomically, avoiding the race where
@@ -626,13 +450,6 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 
 	d.broadcast(outbound.PushTypeUpdated, state)
 
-	// If the session is still "working" with open non-blocking tool calls
-	// in a permission mode that requires approval, start a timer to detect
-	// permission-pending state.
-	if d.shouldStartStaleToolTimer(state) {
-		d.startStaleToolTimer(ev.SessionID, state.Adapter, state.UpdatedAt)
-	}
-
 	// When a parent session finishes, clean up all its child sessions.
 	if state.State == session.StateReady && state.ParentSessionID == "" {
 		d.pidMgr.cleanupChildren(state.SessionID)
@@ -656,9 +473,6 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 		delete(d.debounce, ev.SessionID)
 	}
 	d.debounceMu.Unlock()
-
-	// Cancel any pending stale-tool timer for this session.
-	d.cancelStaleToolTimer(ev.SessionID)
 
 	// Remove from project tracking.
 	d.mu.Lock()
@@ -747,13 +561,6 @@ func (d *SessionDetector) seedFromDisk() {
 			}
 			state.State = newState
 			_ = d.repo.Save(state)
-		}
-
-		// Start stale-tool timer for sessions that are working with open
-		// non-blocking tool calls — they may be permission-pending from a
-		// previous daemon run.
-		if d.shouldStartStaleToolTimer(state) {
-			d.startStaleToolTimer(state.SessionID, state.Adapter, state.UpdatedAt)
 		}
 	}
 

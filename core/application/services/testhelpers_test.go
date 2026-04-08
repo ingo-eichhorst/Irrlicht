@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"time"
 
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
@@ -163,23 +162,6 @@ func newDetector(
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
 		"test", 0, nil,
 	)
-}
-
-// newDetectorWithStaleTimeout builds a SessionDetector with a custom stale-tool
-// timeout for fast tests.
-func newDetectorWithStaleTimeout(
-	tw *mockAgentWatcher,
-	pw *mockProcessWatcher,
-	repo *mockRepo,
-	timeout time.Duration,
-) *services.SessionDetector {
-	det := services.NewSessionDetector(
-		[]inbound.AgentWatcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, nil,
-	)
-	det.SetStaleToolTimeout(timeout)
-	return det
 }
 
 // newDetectorWithCWDDiscovery builds a SessionDetector with a mock CWD-based

@@ -56,8 +56,8 @@ type SessionMetrics struct {
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
 
 	// PermissionMode is the session's permission mode from the JSONL
-	// (e.g. "default", "plan", "bypassPermissions"). Used to skip the
-	// stale-tool-call timer when permissions are bypassed.
+	// (e.g. "default", "plan", "bypassPermissions"). Surfaced by the tailer
+	// and carried on session state for UI/telemetry.
 	PermissionMode string `json:"permission_mode,omitempty"`
 }
 

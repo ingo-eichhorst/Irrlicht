@@ -33,7 +33,6 @@ import (
 	"irrlicht/core/adapters/outbound/metrics"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
-	domainagent "irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
@@ -314,11 +313,6 @@ func main() {
 		Version, cfg.ReadySessionTTL,
 		pidDiscovers,
 	)
-	detector.SetAdapterPolicies(map[string]domainagent.StatePolicy{
-		claudecode.AdapterName: claudecode.StatePolicy(),
-		codex.AdapterName:      codex.StatePolicy(),
-		pi.AdapterName:         pi.StatePolicy(),
-	})
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()
