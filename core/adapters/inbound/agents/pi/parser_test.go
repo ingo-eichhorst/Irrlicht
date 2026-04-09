@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -126,8 +127,8 @@ func TestParser_AssistantEndOfTurn(t *testing.T) {
 	if ev == nil {
 		t.Fatal("expected non-nil event")
 	}
-	if ev.EventType != "assistant_message" {
-		t.Errorf("EventType = %q, want assistant_message (end-of-turn)", ev.EventType)
+	if ev.EventType != "turn_done" {
+		t.Errorf("EventType = %q, want turn_done (end-of-turn)", ev.EventType)
 	}
 	if ev.AssistantText != "Done!" {
 		t.Errorf("AssistantText = %q, want Done!", ev.AssistantText)
@@ -260,14 +261,62 @@ func TestParser_FullTranscript_EndDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.LastEventType != "assistant_message" {
-		t.Errorf("LastEventType = %q, want assistant_message", m.LastEventType)
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
 	}
 	if m.HasOpenToolCall {
 		t.Error("expected HasOpenToolCall=false after all tool calls resolved")
 	}
 	if m.OpenToolCallCount != 0 {
 		t.Errorf("OpenToolCallCount = %d, want 0", m.OpenToolCallCount)
+	}
+}
+
+func TestParser_TextOnlyTurn_TriggersIsAgentDone(t *testing.T) {
+	// Regression for #119: a text-only pi turn (stopReason:stop) must
+	// drive IsAgentDone() to true so the classifier transitions to ready.
+	// Previously, the parser emitted "assistant_message" which IsAgentDone()
+	// deliberately excludes (to avoid codex preliminary-message flicker), so
+	// pi sessions stayed pinned at working after every text-only reply.
+	path := writeLines(t, []map[string]interface{}{
+		{"type": "session", "version": float64(3), "cwd": "/tmp"},
+		{"type": "message", "timestamp": ts(0),
+			"message": map[string]interface{}{
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{"type": "text", "text": "hi"},
+				}}},
+		{"type": "message", "timestamp": ts(1),
+			"message": map[string]interface{}{
+				"role":       "assistant",
+				"stopReason": "stop",
+				"content": []interface{}{
+					map[string]interface{}{"type": "text",
+						"text": "Hi! What would you like to work on?"},
+				}}},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "pi")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
+	}
+	if m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=false for text-only turn")
+	}
+	// Cross-check that the domain's IsAgentDone() — which is what the
+	// classifier ultimately consults — accepts the parser output. The
+	// tailer and domain each have their own SessionMetrics struct; the
+	// classifier pipes LastEventType/HasOpenToolCall from one to the other.
+	dm := &session.SessionMetrics{
+		LastEventType:   m.LastEventType,
+		HasOpenToolCall: m.HasOpenToolCall,
+	}
+	if !dm.IsAgentDone() {
+		t.Error("session.IsAgentDone() = false, want true (session should be ready after text-only turn)")
 	}
 }
 
@@ -309,7 +358,7 @@ func TestParser_BashExecutionSkipped_PreservesLastEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.LastEventType != "assistant_message" {
-		t.Errorf("LastEventType = %q, want assistant_message (bashExecution should be skipped)", m.LastEventType)
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done (bashExecution should be skipped)", m.LastEventType)
 	}
 }

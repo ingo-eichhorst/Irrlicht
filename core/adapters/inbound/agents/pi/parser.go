@@ -77,7 +77,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	case "assistant":
 		stopReason, _ := piMsg["stopReason"].(string)
 		if stopReason == "stop" {
-			ev.EventType = "assistant_message" // end-of-turn
+			ev.EventType = "turn_done" // end-of-turn (primary path for IsAgentDone)
 		} else {
 			ev.EventType = "assistant" // mid-turn (toolUse, etc.)
 		}
