@@ -272,7 +272,6 @@ func main() {
 	procScanner := processlifecycle.NewScanner(
 		"claude",
 		claudecode.AdapterName,
-		claudeCodeWatcher.Root(),
 		0, // use default interval
 	)
 	// Suppress ghost proc sessions for live Claude Code processes whose real

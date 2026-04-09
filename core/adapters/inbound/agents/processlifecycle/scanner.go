@@ -29,19 +29,17 @@ type trackedProc struct {
 // EventRemoved events so the session can be shown before the first message.
 // It implements inbound.AgentWatcher.
 type Scanner struct {
-	processName  string        // exact process name matched by pgrep -x
-	adapter      string        // adapter label placed on emitted events
-	projectsRoot string        // absolute path to ~/.claude/projects (or equivalent)
-	interval     time.Duration
+	processName string // exact process name matched by pgrep -x
+	adapter     string // adapter label placed on emitted events
+	interval    time.Duration
 
 	// sessionChecker is an optional function that reports whether a
 	// non-proc session already exists for the given encoded projectDir and
-	// belongs to the given live PID. When set, it is consulted before the
-	// file-modification-time fallback in hasActiveSession so that idle (but
-	// alive) sessions suppress ghost proc creation for the same process.
-	// Discriminating by PID ensures historical sessions from prior daemon
-	// runs do not block pre-session creation for new processes in the same
-	// project (GH #113).
+	// belongs to the given live PID. It is the sole signal consulted by
+	// hasActiveSession; discriminating by PID ensures historical sessions
+	// from prior daemon runs (GH #113) and freshly-written transcripts
+	// belonging to *other* live sessions in the same project don't block
+	// or prematurely supersede this pre-session.
 	sessionChecker func(projectDir string, pid int) bool
 
 	mu      sync.Mutex
@@ -56,27 +54,26 @@ type Scanner struct {
 // NewScanner creates a Scanner for the given agent process.
 //   - processName: exact binary name, e.g. "claude"
 //   - adapter:     adapter label, e.g. "claude-code"
-//   - projectsRoot: absolute path to the projects directory, e.g. ~/.claude/projects
 //   - interval:    how often to poll; pass 0 to use DefaultInterval
-func NewScanner(processName, adapter, projectsRoot string, interval time.Duration) *Scanner {
+func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 	if interval <= 0 {
 		interval = DefaultInterval
 	}
 	return &Scanner{
-		processName:  processName,
-		adapter:      adapter,
-		projectsRoot: projectsRoot,
-		interval:     interval,
-		tracked:      make(map[int]trackedProc),
+		processName: processName,
+		adapter:     adapter,
+		interval:    interval,
+		tracked:     make(map[int]trackedProc),
 	}
 }
 
 // WithSessionChecker sets a function that reports whether a non-proc session
 // exists for the given encoded projectDir (e.g. "-Users-ingo-projects-foo")
-// AND belongs to the given PID. When set, hasActiveSession consults it before
-// the file-modification fallback, preventing ghost proc sessions for the same
-// live process without also suppressing pre-sessions for new processes in
-// projects that merely have historical sessions on disk.
+// AND belongs to the given PID. The checker is the sole signal used by
+// hasActiveSession: it prevents ghost proc sessions for live processes whose
+// real transcript-backed session is already persisted, without suppressing
+// pre-sessions for new processes in projects that merely have historical
+// or concurrently-active neighbour sessions on disk.
 func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *Scanner {
 	s.sessionChecker = fn
 	return s

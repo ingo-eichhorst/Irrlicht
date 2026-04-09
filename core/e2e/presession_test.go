@@ -45,11 +45,8 @@ func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 	}
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 
-	// Empty projects root — no transcripts exist yet.
-	projectsRoot := realTempDir(t)
-
 	// Wire up: Scanner → SessionDetector (with in-memory stubs).
-	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	detector := services.NewSessionDetector(
@@ -122,7 +119,7 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 
 	projectsRoot := realTempDir(t)
-	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	// Also wire a mock transcript watcher so we can inject a real session event.
@@ -231,7 +228,7 @@ func TestPreSession_CreatedDespiteHistoricalSession(t *testing.T) {
 		TranscriptPath: filepath.Join(projectsRoot, projectDir, "old.jsonl"),
 	})
 
-	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
 	// Mirror the production sessionChecker in core/cmd/irrlichd/main.go:
 	// match on both projectDir and PID so historical sessions don't suppress
 	// new pre-sessions for freshly-opened processes.
@@ -331,7 +328,7 @@ func TestPreSession_SurvivesNeighbourSessionActivity(t *testing.T) {
 
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
-	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
 	// Production-equivalent sessionChecker: PID-aware. No non-proc session
 	// in the repo has our target PID, so this returns false for every call.
 	scanner.WithSessionChecker(func(pd string, pid int) bool {
@@ -404,8 +401,7 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	projectsRoot := realTempDir(t)
-	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	detector := services.NewSessionDetector(
