@@ -292,6 +292,37 @@ func TestHasOpenToolCall_ParallelToolCalls(t *testing.T) {
 	}
 }
 
+func TestHasOpenToolCall_TurnDoneReconciles(t *testing.T) {
+	// Regression for #114: if the FIFO has stale entries (e.g. from an
+	// orphan tool_result or a multi-line assistant split), turn_done must
+	// reconcile them so the classifier can transition working → ready.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{"type": "tool_use", "timestamp": ts(1), "name": "Bash"},
+		{"type": "tool_use", "timestamp": ts(2), "name": "Bash"},
+		// No matching tool_results — simulates the phantom-leak state.
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(3)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=false after turn_done reconciliation")
+	}
+	if m.OpenToolCallCount != 0 {
+		t.Errorf("expected OpenToolCallCount=0, got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 0 {
+		t.Errorf("expected LastOpenToolNames empty, got %v", m.LastOpenToolNames)
+	}
+	if m.LastEventType != "turn_done" {
+		t.Errorf("expected LastEventType=turn_done, got %q", m.LastEventType)
+	}
+}
+
 func TestHasOpenToolCall_ToolCallEventType(t *testing.T) {
 	// The "tool_call" event type (legacy format) should also be counted
 	path := writeTranscriptLines(t, []map[string]interface{}{

@@ -272,6 +272,17 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		if parsed.ClearToolNames && parsed.ToolResultCount == 0 {
 			t.lastOpenToolNames = nil
 		}
+		// turn_done is Claude Code's authoritative end-of-turn signal. By
+		// definition every tool_use opened during the turn has already
+		// received its tool_result, so anything still in lastOpenToolNames
+		// is a stale leak (orphan tool_result from --continue/compact,
+		// multi-line assistant message splits, parallel tool_use
+		// bookkeeping drift — see #114). Reconciling here lets the
+		// classifier see HasOpenToolCall=false and transition
+		// working → ready the way turn_done is supposed to drive.
+		if parsed.EventType == "turn_done" && len(t.lastOpenToolNames) > 0 {
+			t.lastOpenToolNames = nil
+		}
 		// IsUserInterrupt and IsToolDenial each set their own sticky flag;
 		// any subsequent user event that isn't itself the same kind clears
 		// it. The two flags are tracked independently because only ESC
