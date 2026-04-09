@@ -275,17 +275,22 @@ func main() {
 		claudeCodeWatcher.Root(),
 		0, // use default interval
 	)
-	// Suppress ghost proc sessions for directories that already have a real
-	// (transcript-backed) session, even if the transcript hasn't been written
-	// recently. Without this, idle sessions allow short-lived helper processes
-	// to create spurious proc-<pid> entries in the UI.
-	procScanner.WithSessionChecker(func(projectDir string) bool {
+	// Suppress ghost proc sessions for live Claude Code processes whose real
+	// (transcript-backed) session is already persisted, even if the transcript
+	// hasn't been written recently. Discrimination by PID is essential: matching
+	// on projectDir alone blocked pre-session creation in any project that ever
+	// had a prior session on disk (GH #113), because historical sessions remain
+	// in the repo for up to MaxSessionAge (default 5 days).
+	procScanner.WithSessionChecker(func(projectDir string, pid int) bool {
 		sessions, err := cachedRepo.ListAll()
 		if err != nil {
 			return false
 		}
 		for _, s := range sessions {
 			if strings.HasPrefix(s.SessionID, "proc-") {
+				continue
+			}
+			if s.PID != pid {
 				continue
 			}
 			if s.TranscriptPath != "" &&

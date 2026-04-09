@@ -3,9 +3,6 @@ package processlifecycle
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -37,12 +34,15 @@ type Scanner struct {
 	projectsRoot string        // absolute path to ~/.claude/projects (or equivalent)
 	interval     time.Duration
 
-	// sessionChecker is an optional function that reports whether any
-	// non-proc session already exists for the given encoded projectDir.
-	// When set, it is consulted before the file-modification-time fallback
-	// in hasActiveSession so that idle (but alive) sessions suppress ghost
-	// proc creation.
-	sessionChecker func(projectDir string) bool
+	// sessionChecker is an optional function that reports whether a
+	// non-proc session already exists for the given encoded projectDir and
+	// belongs to the given live PID. When set, it is consulted before the
+	// file-modification-time fallback in hasActiveSession so that idle (but
+	// alive) sessions suppress ghost proc creation for the same process.
+	// Discriminating by PID ensures historical sessions from prior daemon
+	// runs do not block pre-session creation for new processes in the same
+	// project (GH #113).
+	sessionChecker func(projectDir string, pid int) bool
 
 	mu      sync.Mutex
 	tracked map[int]trackedProc // pid → pre-session
@@ -71,11 +71,13 @@ func NewScanner(processName, adapter, projectsRoot string, interval time.Duratio
 	}
 }
 
-// WithSessionChecker sets a function that reports whether any non-proc session
-// exists for the given encoded projectDir (e.g. "-Users-ingo-projects-foo").
-// When set, hasActiveSession consults it before the file-modification fallback,
-// preventing ghost proc sessions for directories with idle real sessions.
-func (s *Scanner) WithSessionChecker(fn func(projectDir string) bool) *Scanner {
+// WithSessionChecker sets a function that reports whether a non-proc session
+// exists for the given encoded projectDir (e.g. "-Users-ingo-projects-foo")
+// AND belongs to the given PID. When set, hasActiveSession consults it before
+// the file-modification fallback, preventing ghost proc sessions for the same
+// live process without also suppressing pre-sessions for new processes in
+// projects that merely have historical sessions on disk.
+func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *Scanner {
 	s.sessionChecker = fn
 	return s
 }
@@ -182,7 +184,7 @@ func (s *Scanner) poll() {
 			}
 
 			// Check whether a real transcript has appeared since we last looked.
-			if s.hasActiveSession(projectDir) {
+			if s.hasActiveSession(projectDir, pid) {
 				// Mark as superseded and emit removal. Keep in tracked map
 				// so we don't recreate the pre-session on the next poll.
 				s.mu.Lock()
@@ -202,7 +204,7 @@ func (s *Scanner) poll() {
 		// Skip if an active transcript was recently modified in this project
 		// dir (the file watcher handles those). Old transcripts from previous
 		// sessions are ignored so new processes are still detected.
-		if s.hasActiveSession(projectDir) {
+		if s.hasActiveSession(projectDir, pid) {
 			continue
 		}
 
@@ -252,39 +254,27 @@ func (s *Scanner) poll() {
 	}
 }
 
-// hasActiveSession returns true if the project directory has an active session.
-// It first consults the injected sessionChecker (if set) to catch idle sessions
-// whose transcripts haven't been written recently, then falls back to checking
-// for a recently-modified .jsonl file (within 60 seconds).
-func (s *Scanner) hasActiveSession(projectDir string) bool {
+// hasActiveSession returns true if the project directory has an active session
+// belonging to the given PID, as reported by the injected sessionChecker. The
+// checker discriminates by PID so historical sessions from prior daemon runs
+// don't block pre-session creation (GH #113) and so unrelated activity from
+// *other* live sessions in the same project doesn't prematurely supersede this
+// pre-session.
+//
+// A previous version of this function fell back to a project-wide .jsonl mtime
+// check when sessionChecker returned false. That fallback was fundamentally
+// wrong for the supersession path: it picked up writes from any session in the
+// project, not just the transcript owned by this pid, and silently deleted
+// freshly-created pre-sessions whenever a neighbour session was actively being
+// written to. The sessionChecker is now trusted as the sole signal.
+func (s *Scanner) hasActiveSession(projectDir string, pid int) bool {
 	if projectDir == "" {
 		return false
 	}
-	if s.sessionChecker != nil && s.sessionChecker(projectDir) {
-		return true
-	}
-	if s.projectsRoot == "" {
+	if s.sessionChecker == nil {
 		return false
 	}
-	dir := filepath.Join(s.projectsRoot, projectDir)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	cutoff := time.Now().Add(-60 * time.Second)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(cutoff) {
-			return true
-		}
-	}
-	return false
+	return s.sessionChecker(projectDir, pid)
 }
 
 // broadcast sends an event to all subscribers non-blocking (drops if full).
