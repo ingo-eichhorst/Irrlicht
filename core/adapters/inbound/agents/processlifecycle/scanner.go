@@ -3,10 +3,13 @@ package processlifecycle
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/session"
 )
 
 // DefaultInterval is the polling interval used when none is specified.
@@ -33,13 +36,9 @@ type Scanner struct {
 	adapter     string // adapter label placed on emitted events
 	interval    time.Duration
 
-	// sessionChecker is an optional function that reports whether a
-	// non-proc session already exists for the given encoded projectDir and
-	// belongs to the given live PID. It is the sole signal consulted by
-	// hasActiveSession; discriminating by PID ensures historical sessions
-	// from prior daemon runs (GH #113) and freshly-written transcripts
-	// belonging to *other* live sessions in the same project don't block
-	// or prematurely supersede this pre-session.
+	// sessionChecker is an optional function that reports whether a real
+	// (non-proc) session for the given projectDir and PID already exists.
+	// Callers typically delegate to HasRealSessionForPID.
 	sessionChecker func(projectDir string, pid int) bool
 
 	mu      sync.Mutex
@@ -67,16 +66,38 @@ func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 	}
 }
 
-// WithSessionChecker sets a function that reports whether a non-proc session
-// exists for the given encoded projectDir (e.g. "-Users-ingo-projects-foo")
-// AND belongs to the given PID. The checker is the sole signal used by
-// hasActiveSession: it prevents ghost proc sessions for live processes whose
-// real transcript-backed session is already persisted, without suppressing
-// pre-sessions for new processes in projects that merely have historical
-// or concurrently-active neighbour sessions on disk.
+// WithSessionChecker sets a function that reports whether a real
+// (non-proc) session exists for the given projectDir and PID. It is the
+// sole signal used by hasActiveSession to decide whether a pre-session is
+// redundant — discriminating by PID is what prevents historical sessions
+// (GH #113) and concurrently-active neighbour sessions from suppressing
+// new pre-sessions for freshly-opened processes.
 func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *Scanner {
 	s.sessionChecker = fn
 	return s
+}
+
+// HasRealSessionForPID reports whether sessions contains a real
+// (transcript-backed, non-proc) session that belongs to the given PID and
+// whose transcript lives under the given encoded projectDir (e.g.
+// "-Users-ingo-projects-foo"). It is the canonical predicate the Scanner's
+// sessionChecker should delegate to — encoding the "is a proc- pre-session
+// redundant?" policy in one place so production callers and tests cannot
+// drift apart.
+func HasRealSessionForPID(sessions []*session.SessionState, projectDir string, pid int) bool {
+	for _, s := range sessions {
+		if strings.HasPrefix(s.SessionID, "proc-") {
+			continue
+		}
+		if s.PID != pid {
+			continue
+		}
+		if s.TranscriptPath != "" &&
+			filepath.Base(filepath.Dir(s.TranscriptPath)) == projectDir {
+			return true
+		}
+	}
+	return false
 }
 
 // Watch begins polling. It runs an immediate scan then continues on the
@@ -251,19 +272,10 @@ func (s *Scanner) poll() {
 	}
 }
 
-// hasActiveSession returns true if the project directory has an active session
-// belonging to the given PID, as reported by the injected sessionChecker. The
-// checker discriminates by PID so historical sessions from prior daemon runs
-// don't block pre-session creation (GH #113) and so unrelated activity from
-// *other* live sessions in the same project doesn't prematurely supersede this
-// pre-session.
-//
-// A previous version of this function fell back to a project-wide .jsonl mtime
-// check when sessionChecker returned false. That fallback was fundamentally
-// wrong for the supersession path: it picked up writes from any session in the
-// project, not just the transcript owned by this pid, and silently deleted
-// freshly-created pre-sessions whenever a neighbour session was actively being
-// written to. The sessionChecker is now trusted as the sole signal.
+// hasActiveSession returns true iff the injected sessionChecker reports a
+// real session already exists for this projectDir and PID. The per-PID
+// discrimination is what prevents GH #113 (historical sessions on disk) and
+// the neighbour-session supersession bug.
 func (s *Scanner) hasActiveSession(projectDir string, pid int) bool {
 	if projectDir == "" {
 		return false

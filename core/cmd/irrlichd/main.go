@@ -17,8 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"strings"
-
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/adapters/inbound/agents/codex"
@@ -274,30 +272,17 @@ func main() {
 		claudecode.AdapterName,
 		0, // use default interval
 	)
-	// Suppress ghost proc sessions for live Claude Code processes whose real
-	// (transcript-backed) session is already persisted, even if the transcript
-	// hasn't been written recently. Discrimination by PID is essential: matching
-	// on projectDir alone blocked pre-session creation in any project that ever
-	// had a prior session on disk (GH #113), because historical sessions remain
-	// in the repo for up to MaxSessionAge (default 5 days).
+	// Suppress ghost proc pre-sessions for live Claude Code processes whose
+	// real session is already persisted. The PID discriminator in
+	// HasRealSessionForPID is what prevents historical sessions on disk
+	// (GH #113, within MaxSessionAge) from blocking new processes in the
+	// same project.
 	procScanner.WithSessionChecker(func(projectDir string, pid int) bool {
 		sessions, err := cachedRepo.ListAll()
 		if err != nil {
 			return false
 		}
-		for _, s := range sessions {
-			if strings.HasPrefix(s.SessionID, "proc-") {
-				continue
-			}
-			if s.PID != pid {
-				continue
-			}
-			if s.TranscriptPath != "" &&
-				filepath.Base(filepath.Dir(s.TranscriptPath)) == projectDir {
-				return true
-			}
-		}
-		return false
+		return processlifecycle.HasRealSessionForPID(sessions, projectDir, pid)
 	})
 
 	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher, piWatcher, procScanner}
