@@ -361,11 +361,18 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 			}
 			// Sessions with PID=0 that are ready: the process likely exited
 			// before PID discovery succeeded. Clean up quickly (30s) rather
-			// than waiting the full readyTTL.
+			// than waiting the full readyTTL — BUT only if the transcript
+			// itself is stale. A freshly-written transcript with no PID
+			// yet means PID discovery is still catching up (e.g. Claude
+			// hasn't written ~/.claude/sessions/<pid>.json yet, or multiple
+			// claude processes share a cwd and the metadata lookup is
+			// retrying). Deleting under those conditions causes the flap
+			// loop in issue #109.
 			if state.PID == 0 && state.State == session.StateReady &&
-				time.Since(time.Unix(state.UpdatedAt, 0)) > 30*time.Second {
+				time.Since(time.Unix(state.UpdatedAt, 0)) > 30*time.Second &&
+				isStaleTranscript(state.TranscriptPath) {
 				pm.log.LogInfo("session-detector", state.SessionID,
-					"ready session with no PID for >30s, deleting")
+					"ready session with no PID and stale transcript for >30s, deleting")
 				pm.deleteWithChildren(state)
 				continue
 			}
