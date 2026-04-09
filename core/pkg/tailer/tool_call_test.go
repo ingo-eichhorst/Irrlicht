@@ -323,6 +323,36 @@ func TestHasOpenToolCall_TurnDoneReconciles(t *testing.T) {
 	}
 }
 
+func TestHasOpenToolCall_TurnDonePreservesAgent(t *testing.T) {
+	// Defensive: if turn_done ever arrives while an Agent tool_use is still
+	// open (a sub-agent running in the background — see the IsAgentDone
+	// override in session.go), the reconciliation from #114 must preserve
+	// the Agent entry so InferSubagents can still count in-process
+	// sub-agents. Only non-Agent leaks get swept.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{"type": "tool_use", "timestamp": ts(1), "name": "Bash"},  // leak
+		{"type": "tool_use", "timestamp": ts(2), "name": "Agent"}, // legit subagent
+		{"type": "tool_use", "timestamp": ts(3), "name": "Read"},  // leak
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(4)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true with Agent still open after turn_done")
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected OpenToolCallCount=1, got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "Agent" {
+		t.Errorf("expected LastOpenToolNames=[Agent], got %v", m.LastOpenToolNames)
+	}
+}
+
 func TestHasOpenToolCall_ToolCallEventType(t *testing.T) {
 	// The "tool_call" event type (legacy format) should also be counted
 	path := writeTranscriptLines(t, []map[string]interface{}{

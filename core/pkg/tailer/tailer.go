@@ -273,15 +273,28 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			t.lastOpenToolNames = nil
 		}
 		// turn_done is Claude Code's authoritative end-of-turn signal. By
-		// definition every tool_use opened during the turn has already
-		// received its tool_result, so anything still in lastOpenToolNames
-		// is a stale leak (orphan tool_result from --continue/compact,
-		// multi-line assistant message splits, parallel tool_use
-		// bookkeeping drift — see #114). Reconciling here lets the
+		// definition every non-Agent tool_use opened during the turn has
+		// already received its tool_result, so anything still in
+		// lastOpenToolNames is a stale leak (orphan tool_result from
+		// --continue/compact, multi-line assistant message splits, parallel
+		// tool_use bookkeeping drift — see #114). Reconciling here lets the
 		// classifier see HasOpenToolCall=false and transition
 		// working → ready the way turn_done is supposed to drive.
+		//
+		// Agent tool calls are preserved: a sub-agent spawned via the Agent
+		// tool can still be running when the parent's turn_done fires
+		// (session.go:IsAgentDone treats open tool calls as authoritative
+		// over turn_done for exactly this reason), and InferSubagents relies
+		// on Agent entries in LastOpenToolNames to count in-process
+		// sub-agents. Only non-Agent leaks are swept.
 		if parsed.EventType == "turn_done" && len(t.lastOpenToolNames) > 0 {
-			t.lastOpenToolNames = nil
+			kept := t.lastOpenToolNames[:0]
+			for _, name := range t.lastOpenToolNames {
+				if name == "Agent" {
+					kept = append(kept, name)
+				}
+			}
+			t.lastOpenToolNames = kept
 		}
 		// IsUserInterrupt and IsToolDenial each set their own sticky flag;
 		// any subsequent user event that isn't itself the same kind clears
