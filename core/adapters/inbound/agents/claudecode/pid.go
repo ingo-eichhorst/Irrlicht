@@ -79,8 +79,13 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 	// Used when the metadata file for this session hasn't appeared yet (brief
 	// startup window) or when transcriptPath is empty. Never guesses between
 	// competing candidates — DiscoverPIDWithRetry will retry shortly.
+	//
+	// The disambiguate arg from the caller (PIDManager.TryDiscoverPID) is
+	// deliberately ignored: its "prefer unclaimed, else highest PID" strategy
+	// is the exact behavior that lets a new session steal a rival's PID.
+	// The wrapped callback below enforces the stricter unambiguous rule.
 	wrapped := func(pids []int) int {
-		filtered := pids[:0:0]
+		filtered := make([]int, 0, len(pids))
 		for _, p := range pids {
 			if claimedByOthers[p] {
 				continue
@@ -99,11 +104,6 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 			return 0
 		}
 	}
-	// The disambiguate arg from the caller (PIDManager.TryDiscoverPID) is
-	// deliberately ignored: its "prefer unclaimed, else highest PID" strategy
-	// is the exact behavior that lets a new session steal a rival's PID.
-	// The wrapped callback above enforces the stricter unambiguous rule.
-	_ = disambiguate
 	return discoverByCWD("claude", cwd, wrapped)
 }
 
