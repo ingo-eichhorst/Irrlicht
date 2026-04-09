@@ -17,8 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"strings"
-
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/adapters/inbound/agents/codex"
@@ -272,28 +270,19 @@ func main() {
 	procScanner := processlifecycle.NewScanner(
 		"claude",
 		claudecode.AdapterName,
-		claudeCodeWatcher.Root(),
 		0, // use default interval
 	)
-	// Suppress ghost proc sessions for directories that already have a real
-	// (transcript-backed) session, even if the transcript hasn't been written
-	// recently. Without this, idle sessions allow short-lived helper processes
-	// to create spurious proc-<pid> entries in the UI.
-	procScanner.WithSessionChecker(func(projectDir string) bool {
+	// Suppress ghost proc pre-sessions for live Claude Code processes whose
+	// real session is already persisted. The PID discriminator in
+	// HasRealSessionForPID is what prevents historical sessions on disk
+	// (GH #113, within MaxSessionAge) from blocking new processes in the
+	// same project.
+	procScanner.WithSessionChecker(func(projectDir string, pid int) bool {
 		sessions, err := cachedRepo.ListAll()
 		if err != nil {
 			return false
 		}
-		for _, s := range sessions {
-			if strings.HasPrefix(s.SessionID, "proc-") {
-				continue
-			}
-			if s.TranscriptPath != "" &&
-				filepath.Base(filepath.Dir(s.TranscriptPath)) == projectDir {
-				return true
-			}
-		}
-		return false
+		return processlifecycle.HasRealSessionForPID(sessions, projectDir, pid)
 	})
 
 	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher, piWatcher, procScanner}

@@ -3,13 +3,13 @@ package processlifecycle
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/session"
 )
 
 // DefaultInterval is the polling interval used when none is specified.
@@ -32,17 +32,14 @@ type trackedProc struct {
 // EventRemoved events so the session can be shown before the first message.
 // It implements inbound.AgentWatcher.
 type Scanner struct {
-	processName  string        // exact process name matched by pgrep -x
-	adapter      string        // adapter label placed on emitted events
-	projectsRoot string        // absolute path to ~/.claude/projects (or equivalent)
-	interval     time.Duration
+	processName string // exact process name matched by pgrep -x
+	adapter     string // adapter label placed on emitted events
+	interval    time.Duration
 
-	// sessionChecker is an optional function that reports whether any
-	// non-proc session already exists for the given encoded projectDir.
-	// When set, it is consulted before the file-modification-time fallback
-	// in hasActiveSession so that idle (but alive) sessions suppress ghost
-	// proc creation.
-	sessionChecker func(projectDir string) bool
+	// sessionChecker is an optional function that reports whether a real
+	// (non-proc) session for the given projectDir and PID already exists.
+	// Callers typically delegate to HasRealSessionForPID.
+	sessionChecker func(projectDir string, pid int) bool
 
 	mu      sync.Mutex
 	tracked map[int]trackedProc // pid → pre-session
@@ -56,28 +53,51 @@ type Scanner struct {
 // NewScanner creates a Scanner for the given agent process.
 //   - processName: exact binary name, e.g. "claude"
 //   - adapter:     adapter label, e.g. "claude-code"
-//   - projectsRoot: absolute path to the projects directory, e.g. ~/.claude/projects
 //   - interval:    how often to poll; pass 0 to use DefaultInterval
-func NewScanner(processName, adapter, projectsRoot string, interval time.Duration) *Scanner {
+func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 	if interval <= 0 {
 		interval = DefaultInterval
 	}
 	return &Scanner{
-		processName:  processName,
-		adapter:      adapter,
-		projectsRoot: projectsRoot,
-		interval:     interval,
-		tracked:      make(map[int]trackedProc),
+		processName: processName,
+		adapter:     adapter,
+		interval:    interval,
+		tracked:     make(map[int]trackedProc),
 	}
 }
 
-// WithSessionChecker sets a function that reports whether any non-proc session
-// exists for the given encoded projectDir (e.g. "-Users-ingo-projects-foo").
-// When set, hasActiveSession consults it before the file-modification fallback,
-// preventing ghost proc sessions for directories with idle real sessions.
-func (s *Scanner) WithSessionChecker(fn func(projectDir string) bool) *Scanner {
+// WithSessionChecker sets a function that reports whether a real
+// (non-proc) session exists for the given projectDir and PID. It is the
+// sole signal used by hasActiveSession to decide whether a pre-session is
+// redundant — discriminating by PID is what prevents historical sessions
+// (GH #113) and concurrently-active neighbour sessions from suppressing
+// new pre-sessions for freshly-opened processes.
+func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *Scanner {
 	s.sessionChecker = fn
 	return s
+}
+
+// HasRealSessionForPID reports whether sessions contains a real
+// (transcript-backed, non-proc) session that belongs to the given PID and
+// whose transcript lives under the given encoded projectDir (e.g.
+// "-Users-ingo-projects-foo"). It is the canonical predicate the Scanner's
+// sessionChecker should delegate to — encoding the "is a proc- pre-session
+// redundant?" policy in one place so production callers and tests cannot
+// drift apart.
+func HasRealSessionForPID(sessions []*session.SessionState, projectDir string, pid int) bool {
+	for _, s := range sessions {
+		if strings.HasPrefix(s.SessionID, "proc-") {
+			continue
+		}
+		if s.PID != pid {
+			continue
+		}
+		if s.TranscriptPath != "" &&
+			filepath.Base(filepath.Dir(s.TranscriptPath)) == projectDir {
+			return true
+		}
+	}
+	return false
 }
 
 // Watch begins polling. It runs an immediate scan then continues on the
@@ -182,7 +202,7 @@ func (s *Scanner) poll() {
 			}
 
 			// Check whether a real transcript has appeared since we last looked.
-			if s.hasActiveSession(projectDir) {
+			if s.hasActiveSession(projectDir, pid) {
 				// Mark as superseded and emit removal. Keep in tracked map
 				// so we don't recreate the pre-session on the next poll.
 				s.mu.Lock()
@@ -202,7 +222,7 @@ func (s *Scanner) poll() {
 		// Skip if an active transcript was recently modified in this project
 		// dir (the file watcher handles those). Old transcripts from previous
 		// sessions are ignored so new processes are still detected.
-		if s.hasActiveSession(projectDir) {
+		if s.hasActiveSession(projectDir, pid) {
 			continue
 		}
 
@@ -252,39 +272,18 @@ func (s *Scanner) poll() {
 	}
 }
 
-// hasActiveSession returns true if the project directory has an active session.
-// It first consults the injected sessionChecker (if set) to catch idle sessions
-// whose transcripts haven't been written recently, then falls back to checking
-// for a recently-modified .jsonl file (within 60 seconds).
-func (s *Scanner) hasActiveSession(projectDir string) bool {
+// hasActiveSession returns true iff the injected sessionChecker reports a
+// real session already exists for this projectDir and PID. The per-PID
+// discrimination is what prevents GH #113 (historical sessions on disk) and
+// the neighbour-session supersession bug.
+func (s *Scanner) hasActiveSession(projectDir string, pid int) bool {
 	if projectDir == "" {
 		return false
 	}
-	if s.sessionChecker != nil && s.sessionChecker(projectDir) {
-		return true
-	}
-	if s.projectsRoot == "" {
+	if s.sessionChecker == nil {
 		return false
 	}
-	dir := filepath.Join(s.projectsRoot, projectDir)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	cutoff := time.Now().Add(-60 * time.Second)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(cutoff) {
-			return true
-		}
-	}
-	return false
+	return s.sessionChecker(projectDir, pid)
 }
 
 // broadcast sends an event to all subscribers non-blocking (drops if full).

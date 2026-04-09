@@ -16,7 +16,7 @@ func TestBackoffConstants(t *testing.T) {
 }
 
 func TestScanner_BackoffFields(t *testing.T) {
-	s := NewScanner("nonexistent-process", "test-adapter", t.TempDir(), 10*time.Millisecond)
+	s := NewScanner("nonexistent-process", "test-adapter", 10*time.Millisecond)
 
 	// Verify initial state.
 	if s.stablePolls != 0 {
@@ -46,19 +46,19 @@ func TestScanner_BackoffFields(t *testing.T) {
 
 func TestNewScanner_DefaultInterval(t *testing.T) {
 	// Passing 0 should use DefaultInterval.
-	s := NewScanner("test", "adapter", "/tmp", 0)
+	s := NewScanner("test", "adapter", 0)
 	if s.interval != DefaultInterval {
 		t.Errorf("interval = %v, want DefaultInterval (%v)", s.interval, DefaultInterval)
 	}
 
 	// Passing a negative value should also use DefaultInterval.
-	s = NewScanner("test", "adapter", "/tmp", -1*time.Second)
+	s = NewScanner("test", "adapter", -1*time.Second)
 	if s.interval != DefaultInterval {
 		t.Errorf("interval = %v, want DefaultInterval (%v) for negative input", s.interval, DefaultInterval)
 	}
 
 	// Passing a positive value should use that value.
-	s = NewScanner("test", "adapter", "/tmp", 2*time.Second)
+	s = NewScanner("test", "adapter", 2*time.Second)
 	if s.interval != 2*time.Second {
 		t.Errorf("interval = %v, want 2s", s.interval)
 	}

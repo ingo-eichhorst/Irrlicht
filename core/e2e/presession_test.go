@@ -45,11 +45,8 @@ func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 	}
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 
-	// Empty projects root — no transcripts exist yet.
-	projectsRoot := realTempDir(t)
-
 	// Wire up: Scanner → SessionDetector (with in-memory stubs).
-	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	detector := services.NewSessionDetector(
@@ -122,7 +119,7 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 
 	projectsRoot := realTempDir(t)
-	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	// Also wire a mock transcript watcher so we can inject a real session event.
@@ -186,6 +183,113 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 	}
 }
 
+// TestPreSession_CreatedDespiteHistoricalSession is the regression test for
+// GH #113: a prior session on disk with a different PID must not block
+// pre-session creation for a freshly-opened process in the same project.
+func TestPreSession_CreatedDespiteHistoricalSession(t *testing.T) {
+	cmd, fakeCWD := startFakeClaudeProcess(t)
+
+	// Seed memRepo with a historical session using os.Getpid() as its PID
+	// so it's guaranteed alive (pidMgr.SeedPIDs keeps it) AND guaranteed
+	// different from the fake claude PID (the new sessionChecker correctly
+	// returns false for the live process).
+	projectsRoot := realTempDir(t)
+	projectDir := processlifecycle.CWDToProjectDir(fakeCWD)
+	histPID := os.Getpid()
+	if histPID == cmd.Process.Pid {
+		t.Fatalf("test PID unexpectedly matches fake process PID")
+	}
+	repo := &memRepo{states: make(map[string]*session.SessionState)}
+	repo.Save(&session.SessionState{
+		SessionID:      "historical-aaaa-bbbb-cccc-dddd",
+		State:          session.StateReady,
+		PID:            histPID,
+		TranscriptPath: filepath.Join(projectsRoot, projectDir, "old.jsonl"),
+	})
+
+	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond)
+	scanner.WithSessionChecker(realSessionCheckerFor(repo))
+
+	detector := services.NewSessionDetector(
+		[]inbound.AgentWatcher{scanner},
+		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
+		"test", 0, nil,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go scanner.Watch(ctx)
+	go detector.Run(ctx)
+
+	expectedID := fmt.Sprintf("proc-%d", cmd.Process.Pid)
+	if !waitForSession(repo, expectedID, 5*time.Second) {
+		t.Fatalf("regression: pre-session %s never appeared while historical session for project %s (PID=%d) was present", expectedID, projectDir, histPID)
+	}
+
+	if s, _ := repo.Load("historical-aaaa-bbbb-cccc-dddd"); s == nil {
+		t.Errorf("historical session should still be in repo, but was removed")
+	}
+}
+
+// TestPreSession_SurvivesNeighbourSessionActivity is the regression test for
+// the mtime-fallback bug: scanner.hasActiveSession used to fall back to a
+// project-wide jsonl mtime check that couldn't discriminate which transcript
+// belonged to which PID, so a freshly-written neighbour transcript would
+// wrongly mark our pre-session as superseded and SessionDetector.onRemoved
+// would delete it.
+func TestPreSession_SurvivesNeighbourSessionActivity(t *testing.T) {
+	cmd, fakeCWD := startFakeClaudeProcess(t)
+
+	// Simulate another active session in the same project by touching a
+	// neighbour .jsonl with a fresh mtime — this is exactly what the old
+	// 60s mtime window would pick up and wrongly attribute to our PID.
+	projectsRoot := realTempDir(t)
+	projectDir := processlifecycle.CWDToProjectDir(fakeCWD)
+	projPath := filepath.Join(projectsRoot, projectDir)
+	if err := os.MkdirAll(projPath, 0755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+	neighbourJSONL := filepath.Join(projPath, "neighbour-aaaa-bbbb-cccc-dddd.jsonl")
+	if err := os.WriteFile(neighbourJSONL, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatalf("write neighbour jsonl: %v", err)
+	}
+	now := time.Now()
+	_ = os.Chtimes(neighbourJSONL, now, now)
+
+	repo := &memRepo{states: make(map[string]*session.SessionState)}
+	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond)
+	scanner.WithSessionChecker(realSessionCheckerFor(repo))
+
+	detector := services.NewSessionDetector(
+		[]inbound.AgentWatcher{scanner},
+		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
+		"test", 0, nil,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go scanner.Watch(ctx)
+	go detector.Run(ctx)
+
+	expectedID := fmt.Sprintf("proc-%d", cmd.Process.Pid)
+	if !waitForSession(repo, expectedID, 5*time.Second) {
+		t.Fatalf("timeout: pre-session %s never appeared (initial detection suppressed?)", expectedID)
+	}
+
+	// Continuously refresh the neighbour mtime across several scanner polls
+	// (200ms interval) to ensure the old 60s window would always be tripped.
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		_ = os.Chtimes(neighbourJSONL, time.Now(), time.Now())
+		time.Sleep(150 * time.Millisecond)
+		if state, _ := repo.Load(expectedID); state == nil {
+			t.Fatalf("regression: pre-session %s was removed while neighbour jsonl had fresh mtime — mtime fallback reintroduced", expectedID)
+		}
+	}
+}
+
 // TestPreSession_RemovedOnProcessExit verifies that if the process exits
 // without ever creating a transcript, the pre-session is deleted from the repo.
 func TestPreSession_RemovedOnProcessExit(t *testing.T) {
@@ -204,8 +308,7 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	projectsRoot := realTempDir(t)
-	scanner := processlifecycle.NewScanner(processName, "test", projectsRoot, 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
 	repo := &memRepo{states: make(map[string]*session.SessionState)}
 
 	detector := services.NewSessionDetector(
@@ -273,6 +376,46 @@ func waitForSession(repo *memRepo, id string, timeout time.Duration) bool {
 	}
 }
 
+// fakeProcessName returns a deterministic per-run process name that won't
+// collide with a real "claude" binary pgrep picks up.
+func fakeProcessName() string {
+	return fmt.Sprintf("irrlicht-e2e-%d", os.Getpid())
+}
+
+// startFakeClaudeProcess symlinks /bin/sleep under a unique name so pgrep -x
+// sees our test-controlled "claude" stand-in, starts it with a controlled
+// CWD, and registers a t.Cleanup to kill and reap it. Returns the running
+// command and its CWD.
+func startFakeClaudeProcess(t *testing.T) (*exec.Cmd, string) {
+	t.Helper()
+	name := fakeProcessName()
+	binDir := realTempDir(t)
+	binPath := filepath.Join(binDir, name)
+	if err := os.Symlink("/bin/sleep", binPath); err != nil {
+		t.Fatalf("symlink /bin/sleep → %s: %v", binPath, err)
+	}
+	fakeCWD := realTempDir(t)
+	cmd := exec.Command(binPath, "60")
+	cmd.Dir = fakeCWD
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start fake process: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return cmd, fakeCWD
+}
+
+// realSessionCheckerFor returns a production-equivalent sessionChecker
+// backed by the given memRepo — the same predicate
+// processlifecycle.HasRealSessionForPID used by the daemon.
+func realSessionCheckerFor(repo *memRepo) func(string, int) bool {
+	return func(projectDir string, pid int) bool {
+		sessions, err := repo.ListAll()
+		if err != nil {
+			return false
+		}
+		return processlifecycle.HasRealSessionForPID(sessions, projectDir, pid)
+	}
+}
 
 // --- stubs -------------------------------------------------------------------
 
