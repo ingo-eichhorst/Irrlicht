@@ -40,10 +40,13 @@ func withTestDeps(t *testing.T, alive map[int]bool, fallbackPids []int) string {
 	return dir
 }
 
-func writeMeta(t *testing.T, dir string, pid int, sessionID, cwd string) {
+func writeMeta(t *testing.T, dir string, pid int, sessionID string) {
 	t.Helper()
-	// Mirror Claude's naming: ~/.claude/sessions/<pid>.json
-	meta := claudeSessionMeta{PID: pid, SessionID: sessionID, CWD: cwd}
+	// Mirror Claude's on-disk schema at ~/.claude/sessions/<pid>.json.
+	// We intentionally write only the fields DiscoverPID consumes; real
+	// files include cwd/startedAt/kind/entrypoint which json.Unmarshal
+	// silently drops.
+	meta := claudeSessionMeta{PID: pid, SessionID: sessionID}
 	data, err := json.Marshal(meta)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -61,7 +64,7 @@ func transcriptFor(sessionID string) string {
 func TestDiscoverPID_StrongMatchByMetadata(t *testing.T) {
 	const sid = "aaaa-1111"
 	dir := withTestDeps(t, map[int]bool{42: true}, nil)
-	writeMeta(t, dir, 42, sid, "/repo")
+	writeMeta(t, dir, 42, sid)
 
 	pid, err := DiscoverPID("/repo", transcriptFor(sid), nil)
 	if err != nil {
@@ -75,9 +78,9 @@ func TestDiscoverPID_StrongMatchByMetadata(t *testing.T) {
 func TestDiscoverPID_StrongMatchAmongMultipleMetadataFiles(t *testing.T) {
 	const wantSID = "bbbb-2222"
 	dir := withTestDeps(t, map[int]bool{100: true, 200: true, 300: true}, nil)
-	writeMeta(t, dir, 100, "other-1", "/repo")
-	writeMeta(t, dir, 200, wantSID, "/repo")
-	writeMeta(t, dir, 300, "other-3", "/repo")
+	writeMeta(t, dir, 100, "other-1")
+	writeMeta(t, dir, 200, wantSID)
+	writeMeta(t, dir, 300, "other-3")
 
 	pid, err := DiscoverPID("/repo", transcriptFor(wantSID), nil)
 	if err != nil {
@@ -93,7 +96,7 @@ func TestDiscoverPID_DeadPIDMetadataIsSkipped(t *testing.T) {
 	// Metadata says pid=42 owns the session, but 42 is dead.
 	// No live fallback candidates → returns 0.
 	dir := withTestDeps(t, map[int]bool{}, nil)
-	writeMeta(t, dir, 42, sid, "/repo")
+	writeMeta(t, dir, 42, sid)
 
 	pid, err := DiscoverPID("/repo", transcriptFor(sid), nil)
 	if err != nil {
@@ -112,7 +115,7 @@ func TestDiscoverPID_CorruptMetadataIsIgnored(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "99999.json"), []byte("not json"), 0o644); err != nil {
 		t.Fatalf("write garbage: %v", err)
 	}
-	writeMeta(t, dir, 50, sid, "/repo")
+	writeMeta(t, dir, 50, sid)
 
 	pid, err := DiscoverPID("/repo", transcriptFor(sid), nil)
 	if err != nil {
@@ -159,7 +162,7 @@ func TestDiscoverPID_FallbackExcludesPIDsClaimedByOthers(t *testing.T) {
 		map[int]bool{100: true, 200: true},
 		[]int{100, 200},
 	)
-	writeMeta(t, dir, 200, "other-session", "/repo")
+	writeMeta(t, dir, 200, "other-session")
 
 	pid, err := DiscoverPID("/repo", transcriptFor("new-sid"), nil)
 	if err != nil {

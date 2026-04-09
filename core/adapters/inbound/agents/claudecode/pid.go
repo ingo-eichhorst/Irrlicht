@@ -25,11 +25,10 @@ func defaultSessionsDir() string {
 }
 
 // claudeSessionMeta mirrors the on-disk schema of ~/.claude/sessions/<pid>.json.
-// Only the fields we need are declared.
+// Only the fields we consume are declared; json.Unmarshal ignores the rest.
 type claudeSessionMeta struct {
 	PID       int    `json:"pid"`
 	SessionID string `json:"sessionId"`
-	CWD       string `json:"cwd"`
 }
 
 // DiscoverPID finds the Claude Code process owning a session. It prefers an
@@ -104,7 +103,7 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 			return 0
 		}
 	}
-	return discoverByCWD("claude", cwd, wrapped)
+	return discoverByCWD(ProcessName, cwd, wrapped)
 }
 
 // sessionIDFromTranscript extracts Claude's canonical session UUID from a
