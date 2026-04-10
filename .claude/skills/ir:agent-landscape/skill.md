@@ -40,6 +40,8 @@ Field definitions:
 - `irrlicht_support` — one of: `"live"`, `"planned"`, `"none"`
 - `category` — one of: `"agent"`, `"orchestrator"`
 
+IMPORTANT: ONLY save the first day of a month. If you are assessing on 2026-06-24, save a snapshot with `date: 2026-06-01` and the previous 3 months (2026-05-01, 2026-04-01, 2026-03-01). Delete all older or wrong datapoints.
+
 ## Deny List
 
 `references/deny-list.txt` lists agent/orchestrator names to explicitly exclude (one per line). Skip any agent whose name matches a line in this file during discovery and HTML generation. Remove matching entries from `agent-data.json` if present.
