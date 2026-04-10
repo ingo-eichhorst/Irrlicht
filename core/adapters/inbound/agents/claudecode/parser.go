@@ -191,11 +191,15 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 				if block, ok := item.(map[string]interface{}); ok {
 					switch block["type"] {
 					case "tool_use":
-						if name, ok := block["name"].(string); ok {
-							ev.ToolUseNames = append(ev.ToolUseNames, name)
+						id, _ := block["id"].(string)
+						name, _ := block["name"].(string)
+						if name != "" {
+							ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: id, Name: name})
 						}
 					case "tool_result":
-						ev.ToolResultCount++
+						if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
+							ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
+						}
 						if isErr, ok := block["is_error"].(bool); ok && isErr {
 							ev.IsError = true
 						}

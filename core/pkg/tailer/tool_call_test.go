@@ -105,11 +105,15 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 				if block, ok := item.(map[string]interface{}); ok {
 					switch block["type"] {
 					case "tool_use":
-						if name, ok := block["name"].(string); ok {
-							ev.ToolUseNames = append(ev.ToolUseNames, name)
+						id, _ := block["id"].(string)
+						name, _ := block["name"].(string)
+						if name != "" {
+							ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
 						}
 					case "tool_result":
-						ev.ToolResultCount++
+						if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
+							ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
+						}
 						if isErr, ok := block["is_error"].(bool); ok && isErr {
 							ev.IsError = true
 						}
@@ -122,17 +126,21 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	// Top-level tool events (not embedded in message.content[]).
 	switch eventType {
 	case "tool_use":
+		id, _ := raw["id"].(string)
 		name, _ := raw["name"].(string)
-		ev.ToolUseNames = append(ev.ToolUseNames, name)
+		ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
 	case "tool_call":
 		// Legacy format: {"tool_call": {"name": "Bash"}}
 		name := ""
+		id := ""
 		if tc, ok := raw["tool_call"].(map[string]interface{}); ok {
 			name, _ = tc["name"].(string)
+			id, _ = tc["id"].(string)
 		}
-		ev.ToolUseNames = append(ev.ToolUseNames, name)
+		ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
 	case "tool_result":
-		ev.ToolResultCount++
+		id, _ := raw["tool_use_id"].(string)
+		ev.ToolResultIDs = append(ev.ToolResultIDs, id)
 	}
 
 	// Assistant text.
@@ -208,8 +216,8 @@ func TestHasOpenToolCall_NoToolEvents(t *testing.T) {
 func TestHasOpenToolCall_SinglePairedToolCall(t *testing.T) {
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
-		{"type": "tool_use", "timestamp": ts(1)},
-		{"type": "tool_result", "timestamp": ts(2)},
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(1)},
+		{"type": "tool_result", "tool_use_id": "tu_1", "timestamp": ts(2)},
 		{"type": "assistant", "timestamp": ts(3)},
 	})
 
@@ -229,7 +237,7 @@ func TestHasOpenToolCall_SinglePairedToolCall(t *testing.T) {
 func TestHasOpenToolCall_OneOpenToolCall(t *testing.T) {
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
-		{"type": "tool_use", "timestamp": ts(1)},
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(1)},
 		// No matching tool_result
 	})
 
@@ -251,7 +259,7 @@ func TestTailAndProcess_LargeAppendedToolResult_NotSkipped(t *testing.T) {
 	// lastOffset and parse the full new JSON line instead of skipping into it.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
-		{"type": "tool_use", "timestamp": ts(1), "name": "Read"},
+		{"type": "tool_use", "id": "tu_read", "name": "Read", "timestamp": ts(1)},
 	})
 
 	tailer := newTestTailer(path)
@@ -264,9 +272,10 @@ func TestTailAndProcess_LargeAppendedToolResult_NotSkipped(t *testing.T) {
 	}
 
 	appendTranscriptLine(t, path, map[string]interface{}{
-		"type":      "tool_result",
-		"timestamp": ts(2),
-		"output":    strings.Repeat("x", 120*1024),
+		"type":        "tool_result",
+		"tool_use_id": "tu_read",
+		"timestamp":   ts(2),
+		"output":      strings.Repeat("x", 120*1024),
 	})
 
 	m, err = tailer.TailAndProcess()
@@ -281,10 +290,10 @@ func TestTailAndProcess_LargeAppendedToolResult_NotSkipped(t *testing.T) {
 func TestHasOpenToolCall_ParallelToolCalls(t *testing.T) {
 	// Simulate 3 parallel tool_use events, only 1 tool_result so far
 	path := writeTranscriptLines(t, []map[string]interface{}{
-		{"type": "tool_use", "timestamp": ts(0)},
-		{"type": "tool_use", "timestamp": ts(1)},
-		{"type": "tool_use", "timestamp": ts(2)},
-		{"type": "tool_result", "timestamp": ts(3)},
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_2", "name": "Read", "timestamp": ts(1)},
+		{"type": "tool_use", "id": "tu_3", "name": "Grep", "timestamp": ts(2)},
+		{"type": "tool_result", "tool_use_id": "tu_1", "timestamp": ts(3)},
 	})
 
 	tailer := newTestTailer(path)
@@ -306,8 +315,8 @@ func TestHasOpenToolCall_TurnDoneReconciles(t *testing.T) {
 	// reconcile them so the classifier can transition working → ready.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
-		{"type": "tool_use", "timestamp": ts(1), "name": "Bash"},
-		{"type": "tool_use", "timestamp": ts(2), "name": "Bash"},
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(1)},
+		{"type": "tool_use", "id": "tu_2", "name": "Bash", "timestamp": ts(2)},
 		// No matching tool_results — simulates the phantom-leak state.
 		{"type": "system", "subtype": "turn_duration", "timestamp": ts(3)},
 	})
@@ -339,9 +348,9 @@ func TestHasOpenToolCall_TurnDonePreservesAgent(t *testing.T) {
 	// sub-agents. Only non-Agent leaks get swept.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
-		{"type": "tool_use", "timestamp": ts(1), "name": "Bash"},  // leak
-		{"type": "tool_use", "timestamp": ts(2), "name": "Agent"}, // legit subagent
-		{"type": "tool_use", "timestamp": ts(3), "name": "Read"},  // leak
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(1)},  // leak
+		{"type": "tool_use", "id": "tu_2", "name": "Agent", "timestamp": ts(2)}, // legit subagent
+		{"type": "tool_use", "id": "tu_3", "name": "Read", "timestamp": ts(3)},  // leak
 		{"type": "system", "subtype": "turn_duration", "timestamp": ts(4)},
 	})
 
@@ -365,7 +374,7 @@ func TestHasOpenToolCall_ToolCallEventType(t *testing.T) {
 	// The "tool_call" event type (legacy format) should also be counted
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
-		{"tool_call": map[string]interface{}{"name": "Bash"}, "timestamp": ts(1)},
+		{"tool_call": map[string]interface{}{"name": "Bash", "id": "tu_1"}, "timestamp": ts(1)},
 		// No matching tool_result
 	})
 
@@ -384,10 +393,10 @@ func TestHasOpenToolCall_ToolCallEventType(t *testing.T) {
 
 func TestHasOpenToolCall_ExtraResultsClamped(t *testing.T) {
 	// If we start reading mid-stream, we might see more tool_results than
-	// tool_use events. The count should be clamped to 0.
+	// tool_use events. Orphan result IDs are harmless no-ops on the map.
 	path := writeTranscriptLines(t, []map[string]interface{}{
-		{"type": "tool_result", "timestamp": ts(0)},
-		{"type": "tool_result", "timestamp": ts(1)},
+		{"type": "tool_result", "tool_use_id": "tu_orphan1", "timestamp": ts(0)},
+		{"type": "tool_result", "tool_use_id": "tu_orphan2", "timestamp": ts(1)},
 		{"type": "assistant", "timestamp": ts(2)},
 	})
 
@@ -407,12 +416,12 @@ func TestHasOpenToolCall_ExtraResultsClamped(t *testing.T) {
 func TestHasOpenToolCall_MultipleRoundsAllClosed(t *testing.T) {
 	// Multiple tool use/result rounds, all closed
 	path := writeTranscriptLines(t, []map[string]interface{}{
-		{"type": "tool_use", "timestamp": ts(0)},
-		{"type": "tool_result", "timestamp": ts(1)},
-		{"type": "tool_use", "timestamp": ts(2)},
-		{"type": "tool_result", "timestamp": ts(3)},
-		{"type": "tool_use", "timestamp": ts(4)},
-		{"type": "tool_result", "timestamp": ts(5)},
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(0)},
+		{"type": "tool_result", "tool_use_id": "tu_1", "timestamp": ts(1)},
+		{"type": "tool_use", "id": "tu_2", "name": "Read", "timestamp": ts(2)},
+		{"type": "tool_result", "tool_use_id": "tu_2", "timestamp": ts(3)},
+		{"type": "tool_use", "id": "tu_3", "name": "Grep", "timestamp": ts(4)},
+		{"type": "tool_result", "tool_use_id": "tu_3", "timestamp": ts(5)},
 	})
 
 	tailer := newTestTailer(path)
@@ -561,26 +570,26 @@ func TestLastOpenToolNames_AgentToolsPreservedAfterPartialResults(t *testing.T) 
 		{"type": "assistant", "timestamp": ts(0), "message": map[string]interface{}{
 			"role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+				map[string]interface{}{"type": "tool_use", "id": "tu_agent1", "name": "Agent"},
 			},
 		}},
 		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
 			"role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+				map[string]interface{}{"type": "tool_use", "id": "tu_agent2", "name": "Agent"},
 			},
 		}},
 		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
 			"role": "assistant", "stop_reason": "tool_use",
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+				map[string]interface{}{"type": "tool_use", "id": "tu_agent3", "name": "Agent"},
 			},
 		}},
 		// First tool_result arrives (user event with embedded tool_result)
 		{"type": "user", "timestamp": ts(3), "message": map[string]interface{}{
 			"role": "user",
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_result", "content": "done"},
+				map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_agent1", "content": "done"},
 			},
 		}},
 	})
@@ -619,38 +628,38 @@ func TestLastOpenToolNames_AllAgentResultsCleared(t *testing.T) {
 		{"type": "assistant", "timestamp": ts(0), "message": map[string]interface{}{
 			"role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+				map[string]interface{}{"type": "tool_use", "id": "tu_agent1", "name": "Agent"},
 			},
 		}},
 		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
 			"role": "assistant", "stop_reason": nil,
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+				map[string]interface{}{"type": "tool_use", "id": "tu_agent2", "name": "Agent"},
 			},
 		}},
 		{"type": "assistant", "timestamp": ts(2), "message": map[string]interface{}{
 			"role": "assistant", "stop_reason": "tool_use",
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_use", "name": "Agent"},
+				map[string]interface{}{"type": "tool_use", "id": "tu_agent3", "name": "Agent"},
 			},
 		}},
 		// All 3 results
 		{"type": "user", "timestamp": ts(3), "message": map[string]interface{}{
 			"role": "user",
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_result", "content": "done"},
+				map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_agent1", "content": "done"},
 			},
 		}},
 		{"type": "user", "timestamp": ts(4), "message": map[string]interface{}{
 			"role": "user",
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_result", "content": "done"},
+				map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_agent2", "content": "done"},
 			},
 		}},
 		{"type": "user", "timestamp": ts(5), "message": map[string]interface{}{
 			"role": "user",
 			"content": []interface{}{
-				map[string]interface{}{"type": "tool_result", "content": "done"},
+				map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_agent3", "content": "done"},
 			},
 		}},
 	})
@@ -669,5 +678,150 @@ func TestLastOpenToolNames_AllAgentResultsCleared(t *testing.T) {
 	}
 	if len(m.LastOpenToolNames) != 0 {
 		t.Errorf("expected empty LastOpenToolNames, got %v", m.LastOpenToolNames)
+	}
+}
+
+// --- Issue #117: id-based tool tracking tests ---
+
+func TestIDTracking_DuplicateToolUseID(t *testing.T) {
+	// Duplicate tool_use with same ID (e.g. multi-line streaming split) should
+	// be idempotent — one delete removes it.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(1)}, // duplicate
+		{"type": "tool_result", "tool_use_id": "tu_1", "timestamp": ts(2)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=false: duplicate ID should be idempotent")
+	}
+	if m.OpenToolCallCount != 0 {
+		t.Errorf("expected OpenToolCallCount=0, got %d", m.OpenToolCallCount)
+	}
+}
+
+func TestIDTracking_OrphanToolResultID(t *testing.T) {
+	// Orphan tool_result with unknown ID (from --continue/compact replay) should
+	// be a no-op — the real entry must survive.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(0)},
+		{"type": "tool_result", "tool_use_id": "tu_unknown", "timestamp": ts(1)}, // orphan
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true: orphan result should not remove the real entry")
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected OpenToolCallCount=1, got %d", m.OpenToolCallCount)
+	}
+
+	// Now close the real one.
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "tool_result", "tool_use_id": "tu_1", "timestamp": ts(2),
+	})
+	m, err = tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=false after real result arrives")
+	}
+}
+
+func TestIDTracking_ParallelOutOfOrder(t *testing.T) {
+	// 3 parallel tool_use events, results arrive in reverse order.
+	// With the old FIFO this would corrupt state; with id-keyed map each
+	// delete targets the correct entry.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "tool_use", "id": "tu_1", "name": "Bash", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_2", "name": "Read", "timestamp": ts(1)},
+		{"type": "tool_use", "id": "tu_3", "name": "Grep", "timestamp": ts(2)},
+		{"type": "tool_result", "tool_use_id": "tu_3", "timestamp": ts(3)}, // last finishes first
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.OpenToolCallCount != 2 {
+		t.Errorf("expected 2 open after tu_3 result, got %d", m.OpenToolCallCount)
+	}
+
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "tool_result", "tool_use_id": "tu_1", "timestamp": ts(4),
+	})
+	m, err = tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected 1 open after tu_1 result, got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "Read" {
+		t.Errorf("expected [Read] remaining, got %v", m.LastOpenToolNames)
+	}
+
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "tool_result", "tool_use_id": "tu_2", "timestamp": ts(5),
+	})
+	m, err = tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=false after all results")
+	}
+}
+
+func TestIDTracking_EmptyID(t *testing.T) {
+	// Empty-ID tool_use degrades to a single-slot fallback via the empty-string
+	// map key. Functional but not ideal — tests graceful degradation.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "tool_use", "id": "", "name": "Bash", "timestamp": ts(0)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Empty IDs are skipped by the insert logic (tu.ID != "")
+	if m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=false: empty ID should be skipped")
+	}
+}
+
+func TestIDTracking_AgentSurvivesTurnDone(t *testing.T) {
+	// Agent + non-Agent open, turn_done sweeps only non-Agent.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "tool_use", "id": "tu_agent", "name": "Agent", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_bash", "name": "Bash", "timestamp": ts(1)}, // leaked
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(2)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true with Agent still open")
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected OpenToolCallCount=1 (Agent only), got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "Agent" {
+		t.Errorf("expected [Agent], got %v", m.LastOpenToolNames)
 	}
 }

@@ -87,8 +87,10 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			for _, item := range contentArr {
 				if block, ok := item.(map[string]interface{}); ok {
 					if block["type"] == "toolCall" {
-						if name, ok := block["name"].(string); ok {
-							ev.ToolUseNames = append(ev.ToolUseNames, name)
+						id, _ := block["id"].(string)
+						name, _ := block["name"].(string)
+						if name != "" {
+							ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: id, Name: name})
 						}
 					}
 				}
@@ -112,7 +114,9 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	case "toolResult":
 		ev.EventType = "tool_result"
-		ev.ToolResultCount = 1 // Single canonical count — NOT also counted in addMessageEvent.
+		if toolCallID, ok := piMsg["toolCallId"].(string); ok && toolCallID != "" {
+			ev.ToolResultIDs = []string{toolCallID}
+		}
 		if isErr, ok := piMsg["isError"].(bool); ok && isErr {
 			ev.IsError = true
 		}

@@ -155,14 +155,14 @@ func TestParser_AssistantMidTurn(t *testing.T) {
 	if ev.EventType != "assistant" {
 		t.Errorf("EventType = %q, want assistant (mid-turn)", ev.EventType)
 	}
-	if len(ev.ToolUseNames) != 1 || ev.ToolUseNames[0] != "bash" {
-		t.Errorf("ToolUseNames = %v, want [bash]", ev.ToolUseNames)
+	if len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "bash" || ev.ToolUses[0].ID != "call_1" {
+		t.Errorf("ToolUses = %v, want [{call_1 bash}]", ev.ToolUses)
 	}
 }
 
 func TestParser_ToolResult_SingleCount(t *testing.T) {
-	// This is the Bug 1 regression test: toolResult should be counted
-	// exactly once (in the parser), not also in addMessageEvent.
+	// This is the Bug 1 regression test: toolResult should produce exactly
+	// one ToolResultID (in the parser), not also in addMessageEvent.
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
 		"type":      "message",
@@ -183,8 +183,8 @@ func TestParser_ToolResult_SingleCount(t *testing.T) {
 	if ev.EventType != "tool_result" {
 		t.Errorf("EventType = %q, want tool_result", ev.EventType)
 	}
-	if ev.ToolResultCount != 1 {
-		t.Errorf("ToolResultCount = %d, want exactly 1 (no double-counting)", ev.ToolResultCount)
+	if len(ev.ToolResultIDs) != 1 || ev.ToolResultIDs[0] != "call_1" {
+		t.Errorf("ToolResultIDs = %v, want [call_1]", ev.ToolResultIDs)
 	}
 }
 

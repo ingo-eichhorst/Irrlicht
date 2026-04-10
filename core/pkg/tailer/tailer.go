@@ -110,18 +110,20 @@ type TranscriptTailer struct {
 	// Context window override from transcript or extended context model suffix.
 	contextWindowOverride int64
 
-	// lastOpenToolNames is the single source of truth for currently-open tool
-	// calls. Tool uses append, tool results shift from the front. HasOpenToolCall
-	// and OpenToolCallCount are derived from `len(lastOpenToolNames)`.
+	// openToolCalls is the single source of truth for currently-open tool
+	// calls. Keyed by tool call ID; value is the tool name. Tool uses
+	// insert by ID (idempotent — duplicate IDs overwrite), tool results
+	// delete by ID (orphan IDs are harmless no-ops). HasOpenToolCall and
+	// OpenToolCallCount are derived from len(openToolCalls).
 	//
-	// Historical note: this used to be paired with integer counters
-	// `toolUseCount` / `toolResultCount`, with HasOpenToolCall computed from
-	// (use > result). That allowed the two bookkeeping paths to desync on
-	// orphan tool_result events (--continue resume, compact replay, retries)
-	// leaving metrics in an impossible state (has_open=false, names=["Bash"]).
-	// The classifier then treated the session as done mid-turn, producing
-	// thousands of spurious working→ready flickers. See issue #102.
-	lastOpenToolNames []string
+	// Historical note: this was originally paired integer counters
+	// (toolUseCount/toolResultCount, see #102), then a []string FIFO
+	// (lastOpenToolNames, see #114). Both had the same structural weakness:
+	// no correlation between a tool_result and the tool_use it pertains to.
+	// The id-keyed map eliminates phantom entries from orphan results,
+	// duplicate tool_use events (multi-line splits), and out-of-order
+	// parallel tool closures. See issue #117.
+	openToolCalls map[string]string
 
 	// contentChars accumulates character count from message content for
 	// token estimation when explicit token counts aren't available.
@@ -171,11 +173,12 @@ type TranscriptTailer struct {
 // config fallback.
 func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *TranscriptTailer {
 	return &TranscriptTailer{
-		path:        path,
-		lastOffset:  0,
-		capacityMgr: capacity.DefaultCapacityManager(),
-		parser:      parser,
-		adapter:     adapter,
+		path:          path,
+		lastOffset:    0,
+		capacityMgr:   capacity.DefaultCapacityManager(),
+		parser:        parser,
+		adapter:       adapter,
+		openToolCalls: make(map[string]string),
 		metrics: &SessionMetrics{
 			MessageHistory: make([]MessageEvent, 0),
 			SessionStartAt: time.Time{},
@@ -284,28 +287,28 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			continue
 		}
 
-		// Apply tool tracking deltas from the parser. lastOpenToolNames is
-		// the single source of truth — tool_use blocks append, tool_result
-		// blocks shift from the front. Orphan tool_result events (more
-		// results than we've seen uses for — common on --continue resume or
-		// compaction replay) shift a no-op instead of corrupting a counter.
-		t.lastOpenToolNames = append(t.lastOpenToolNames, parsed.ToolUseNames...)
-		for i := 0; i < parsed.ToolResultCount; i++ {
-			if len(t.lastOpenToolNames) > 0 {
-				t.lastOpenToolNames = t.lastOpenToolNames[1:]
+		// Apply tool tracking deltas from the parser. openToolCalls is an
+		// id-keyed map — tool_use events insert by ID (idempotent: duplicate
+		// IDs from multi-line splits overwrite), tool_result events delete by
+		// ID (orphan IDs with no matching entry are harmless no-ops). This
+		// eliminates the FIFO's structural weakness where out-of-order or
+		// orphan results could pop unrelated entries. See issue #117.
+		for _, tu := range parsed.ToolUses {
+			if tu.ID != "" {
+				t.openToolCalls[tu.ID] = tu.Name
 			}
 		}
-		if parsed.ClearToolNames && parsed.ToolResultCount == 0 {
-			t.lastOpenToolNames = nil
+		for _, id := range parsed.ToolResultIDs {
+			delete(t.openToolCalls, id)
+		}
+		if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
+			t.openToolCalls = make(map[string]string)
 		}
 		// turn_done is Claude Code's authoritative end-of-turn signal. By
 		// definition every non-Agent tool_use opened during the turn has
 		// already received its tool_result, so anything still in
-		// lastOpenToolNames is a stale leak (orphan tool_result from
-		// --continue/compact, multi-line assistant message splits, parallel
-		// tool_use bookkeeping drift — see #114). Reconciling here lets the
-		// classifier see HasOpenToolCall=false and transition
-		// working → ready the way turn_done is supposed to drive.
+		// openToolCalls is a stale leak. Sweeping here lets the classifier
+		// see HasOpenToolCall=false and transition working → ready.
 		//
 		// Agent tool calls are preserved: a sub-agent spawned via the Agent
 		// tool can still be running when the parent's turn_done fires
@@ -313,14 +316,12 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		// over turn_done for exactly this reason), and InferSubagents relies
 		// on Agent entries in LastOpenToolNames to count in-process
 		// sub-agents. Only non-Agent leaks are swept.
-		if parsed.EventType == "turn_done" && len(t.lastOpenToolNames) > 0 {
-			kept := t.lastOpenToolNames[:0]
-			for _, name := range t.lastOpenToolNames {
-				if name == "Agent" {
-					kept = append(kept, name)
+		if parsed.EventType == "turn_done" && len(t.openToolCalls) > 0 {
+			for id, name := range t.openToolCalls {
+				if name != "Agent" {
+					delete(t.openToolCalls, id)
 				}
 			}
-			t.lastOpenToolNames = kept
 		}
 		// IsUserInterrupt and IsToolDenial each set their own sticky flag;
 		// any subsequent user event that isn't itself the same kind clears
@@ -513,13 +514,17 @@ func (t *TranscriptTailer) computeMetrics() {
 	}
 	t.metrics.RecentEventCount = recentEventCount
 
-	// Open tool calls are derived directly from the name slice — the only
-	// source of truth. See the lastOpenToolNames field comment for why the
-	// previous counter-based approach was removed (issue #102).
-	openCalls := len(t.lastOpenToolNames)
+	// Open tool calls are derived directly from the id-keyed map — the only
+	// source of truth. See the openToolCalls field comment for history (#102,
+	// #114, #117).
+	openCalls := len(t.openToolCalls)
 	t.metrics.OpenToolCallCount = openCalls
 	t.metrics.HasOpenToolCall = openCalls > 0
-	t.metrics.LastOpenToolNames = t.lastOpenToolNames
+	names := make([]string, 0, openCalls)
+	for _, name := range t.openToolCalls {
+		names = append(names, name)
+	}
+	t.metrics.LastOpenToolNames = names
 	t.metrics.LastWasUserInterrupt = t.lastWasUserInterrupt
 	t.metrics.LastWasToolDenial = t.lastWasToolDenial
 	t.metrics.LastCWD = t.lastCWD

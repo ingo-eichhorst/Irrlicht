@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// ToolUse represents a single tool invocation with its unique ID.
+type ToolUse struct {
+	ID   string // unique tool call ID (e.g. "toolu_01FUU...", "call_TkY0...", "call_63hf...")
+	Name string // tool name (e.g. "Bash", "Read", "shell")
+}
+
 // ParsedEvent is the normalized output from a format-specific transcript parser.
 // Each parser maps its native event structure into these fields.
 type ParsedEvent struct {
@@ -17,10 +23,10 @@ type ParsedEvent struct {
 	Skip      bool      // true → ignore this line entirely
 
 	// Tool tracking — parser reports deltas, tailer accumulates.
-	ToolUseNames    []string // tool names from tool_use/toolCall blocks in this event
-	ToolResultCount int      // number of tool_result blocks in this event
-	IsError         bool     // true if the tool result had is_error=true
-	ClearToolNames  bool     // true → reset lastOpenToolNames (on user messages)
+	ToolUses      []ToolUse // tool invocations from this event (id + name)
+	ToolResultIDs []string  // IDs of completed tool results in this event
+	IsError       bool      // true if the tool result had is_error=true
+	ClearToolNames bool     // true → reset open tool state (on user messages)
 
 	// IsUserInterrupt is true only for real user ESC cancellations — the
 	// exact "[Request interrupted by user]" text marker on a user event,
