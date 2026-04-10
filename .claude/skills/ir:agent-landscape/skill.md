@@ -23,9 +23,9 @@ All state persists in `references/agent-data.json` (relative to this skill direc
       "description": "AI pair programming in your terminal",
       "stars": 30000,
       "stars_history": [
-        {"date": "2026-04-05", "stars": 30000},
-        {"date": "2026-03-05", "stars": 28500},
-        {"date": "2026-02-05", "stars": 27000}
+        {"date": "2026-04-01", "stars": 30000},
+        {"date": "2026-03-01", "stars": 28500},
+        {"date": "2026-02-01", "stars": 27000}
       ],
       "irrlicht_support": "none",
       "first_seen": "2026-04-05"
@@ -76,6 +76,8 @@ Use WebSearch to find coding agents and orchestrators not already tracked:
 - `"new coding assistant CLI terminal 2026"`
 - `"AI agent orchestrator framework 2026"`
 - `"agentic coding tools"`
+- `"claude code coding agent alternatives"`
+- `"gas town coding agent orchestrator alternatives"`
 
 Add any genuinely new coding agents or orchestrators found. Skip IDE themes, linters, or general-purpose AI chatbots — only track tools that write/edit code autonomously or orchestrate agents that do.
 

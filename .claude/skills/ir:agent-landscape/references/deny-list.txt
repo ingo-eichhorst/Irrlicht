@@ -7,3 +7,9 @@ Bolt.new
 Google ADK
 Dagger Container Use
 Microsoft Agent Framework
+Lovable
+Replit Agent
+Superinterface
+v0
+AutoGen
+MetaGPT
