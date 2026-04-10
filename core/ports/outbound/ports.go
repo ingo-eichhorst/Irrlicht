@@ -3,6 +3,7 @@ package outbound
 import (
 	"context"
 
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/orchestrator"
 	"irrlicht/core/domain/session"
 )
@@ -70,6 +71,13 @@ type GTBinResolver interface {
 	// Path returns the resolved absolute path to the gt binary,
 	// or "" if the binary could not be found.
 	Path() string
+}
+
+// EventRecorder captures lifecycle events for offline replay.
+// Implementations must be safe for concurrent use.
+type EventRecorder interface {
+	Record(ev lifecycle.Event)
+	Close() error
 }
 
 // ProcessWatcher monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT and

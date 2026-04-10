@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
@@ -45,6 +47,11 @@ type PIDManager struct {
 	// made by processActivity (e.g. working → ready).
 	pendingMu   sync.Mutex
 	pendingPIDs map[string]int
+
+	// recorder captures lifecycle events for offline replay (optional).
+	// Set by SessionDetector.SetRecorder.
+	recorder    outbound.EventRecorder
+	recorderSeq *int64 // shared with SessionDetector for monotonic ordering
 }
 
 // NewPIDManager creates a PIDManager with the given dependencies.
@@ -70,8 +77,24 @@ func NewPIDManager(
 	}
 }
 
+// record emits a lifecycle event if recording is enabled.
+func (pm *PIDManager) record(ev lifecycle.Event) {
+	if pm.recorder == nil {
+		return
+	}
+	if pm.recorderSeq != nil {
+		ev.Seq = atomic.AddInt64(pm.recorderSeq, 1)
+	}
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now()
+	}
+	pm.recorder.Record(ev)
+}
+
 // HandleProcessExit deletes a session when its process exits.
 func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
+	pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, SessionID: sessionID, PID: pid})
+
 	if pm.onSessionDeleted != nil {
 		pm.onSessionDeleted(sessionID)
 	}
@@ -130,6 +153,8 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	if pid <= 0 {
 		return
 	}
+
+	pm.record(lifecycle.Event{Kind: lifecycle.KindPIDDiscovered, SessionID: sessionID, PID: pid})
 
 	// Store pending PID FIRST so processActivity can correct any stale state
 	// that our direct save below might overwrite.

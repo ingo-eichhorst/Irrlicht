@@ -13,9 +13,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
@@ -78,6 +80,10 @@ type SessionDetector struct {
 	// can be re-created from transcript activity (e.g. --continue). Prevents
 	// ghost sessions from late-arriving writes of a dying process.
 	deletedCooldown time.Duration
+
+	// recorder captures lifecycle events for offline replay (optional).
+	recorder    outbound.EventRecorder
+	recorderSeq int64
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -118,6 +124,27 @@ func NewSessionDetector(
 // Intended for tests that need immediate re-creation.
 func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 	d.deletedCooldown = dur
+}
+
+// SetRecorder enables lifecycle event recording. When set, the detector and
+// its PIDManager will emit lifecycle events to the recorder for offline replay.
+func (d *SessionDetector) SetRecorder(r outbound.EventRecorder) {
+	d.recorder = r
+	d.pidMgr.recorder = r
+	d.pidMgr.recorderSeq = &d.recorderSeq
+}
+
+// record emits a lifecycle event if recording is enabled. It assigns a
+// monotonic sequence number and fills in the timestamp if missing.
+func (d *SessionDetector) record(ev lifecycle.Event) {
+	if d.recorder == nil {
+		return
+	}
+	ev.Seq = atomic.AddInt64(&d.recorderSeq, 1)
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now()
+	}
+	d.recorder.Record(ev)
 }
 
 // Run subscribes to all AgentWatcher event streams, fans them into a single
@@ -186,12 +213,16 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 
 // handleTranscriptEvent dispatches a transcript event to the appropriate handler.
 func (d *SessionDetector) handleTranscriptEvent(ev agent.Event) {
+	// Record raw inbound event for lifecycle replay.
 	switch ev.Type {
 	case agent.EventNewSession:
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptNew, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath, FileSize: ev.Size, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
 		d.onNewSession(ev)
 	case agent.EventActivity:
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptActivity, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath, FileSize: ev.Size})
 		d.onActivity(ev)
 	case agent.EventRemoved:
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptRemoved, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath})
 		d.onRemoved(ev)
 	}
 }
@@ -256,6 +287,11 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			LastEvent:       "transcript_new",
 		}
 
+		// Record parent-child linkage if detected.
+		if state.ParentSessionID != "" {
+			d.record(lifecycle.Event{Kind: lifecycle.KindParentLinked, SessionID: ev.SessionID, ParentSessionID: state.ParentSessionID})
+		}
+
 		// Resolve git metadata and compute initial metrics.
 		d.enricher.EnrichNewSession(state, ev)
 
@@ -264,6 +300,9 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 				fmt.Sprintf("failed to save new session: %v", err))
 			return
 		}
+
+		// Record initial state transition.
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: session.StateReady, Reason: "new session created"})
 
 		d.broadcast(outbound.PushTypeCreated, state)
 
@@ -342,6 +381,8 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	entry.pending = true
 	entry.timer.Reset(activityDebounceWindow)
 	d.debounceMu.Unlock()
+
+	d.record(lifecycle.Event{Kind: lifecycle.KindDebounceCoalesced, SessionID: ev.SessionID})
 }
 
 // processActivity handles a (possibly debounced) transcript activity event.
@@ -424,6 +465,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 		if reason != "" {
 			d.log.LogInfo("session-detector", ev.SessionID, reason)
 		}
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason})
 		state.State = newState
 		state.UpdatedAt = now
 
@@ -498,10 +540,13 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 		return
 	}
 
+	prevState := state.State
 	state.State = session.StateReady
 	state.UpdatedAt = time.Now().Unix()
 	state.Confidence = "high"
 	state.LastEvent = "transcript_removed"
+
+	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: prevState, NewState: session.StateReady, Reason: "transcript removed"})
 
 	if err := d.repo.Save(state); err != nil {
 		d.log.LogError("session-detector", ev.SessionID,
