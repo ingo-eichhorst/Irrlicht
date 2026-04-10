@@ -96,7 +96,20 @@ with open(md_path, "w") as out:
     out.write(f"| **flicker count** (all categories, short-lived sandwiches) | **{s['flicker_count']}** |\n")
     out.write(f"| first event | {s['first_event_time']} |\n")
     out.write(f"| last event | {s['last_event_time']} |\n")
-    out.write(f"| session wall-clock | {dur(s['wall_clock_session_duration'])} |\n\n")
+    out.write(f"| session wall-clock | {dur(s['wall_clock_session_duration'])} |\n")
+    if s.get("estimated_cost_usd"):
+        out.write(f"| **estimated cost** | **${s['estimated_cost_usd']:.4f}** |\n")
+    if s.get("model_name"):
+        out.write(f"| model | {s['model_name']} |\n")
+    if s.get("cum_input_tokens"):
+        out.write(f"| cumulative input tokens | {s['cum_input_tokens']:,} |\n")
+    if s.get("cum_output_tokens"):
+        out.write(f"| cumulative output tokens | {s['cum_output_tokens']:,} |\n")
+    if s.get("cum_cache_read_tokens"):
+        out.write(f"| cumulative cache read tokens | {s['cum_cache_read_tokens']:,} |\n")
+    if s.get("cum_cache_creation_tokens"):
+        out.write(f"| cumulative cache creation tokens | {s['cum_cache_creation_tokens']:,} |\n")
+    out.write("\n")
 
     cats = s.get("flickers_by_category") or {}
     if cats:

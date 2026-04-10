@@ -40,13 +40,15 @@ type ParsedEvent struct {
 	IsToolDenial bool
 
 	// Metadata extracted by the parser.
-	ModelName      string
-	ContextWindow  int64
-	Tokens         *TokenSnapshot // nil = no token data in this event
-	AssistantText  string         // ≤200 chars, for waiting-state display
-	ContentChars   int64          // character count for token estimation
-	CWD            string         // working directory if found
-	PermissionMode string         // Claude Code only
+	ModelName        string
+	ContextWindow    int64
+	Tokens           *TokenSnapshot // nil = no token data in this event
+	CumulativeTokens *TokenSnapshot // cumulative totals (set by Codex); tailer uses directly for cost
+	RequestID        string         // unique API call ID — deduplicates streaming events for cost accumulation
+	AssistantText    string         // ≤200 chars, for waiting-state display
+	ContentChars     int64          // character count for token estimation
+	CWD              string         // working directory if found
+	PermissionMode   string         // Claude Code only
 }
 
 // TokenSnapshot holds a token breakdown from a single event.

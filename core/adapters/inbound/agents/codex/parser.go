@@ -42,7 +42,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev.CWD = transcript.ExtractCWDFromLine(raw)
 
 	// Model/token extraction from payload-wrapped events.
-	ev.ModelName, ev.ContextWindow, ev.Tokens = extractCodexMetadata(raw)
+	ev.ModelName, ev.ContextWindow, ev.Tokens, ev.CumulativeTokens = extractCodexMetadata(raw)
 
 	// Content character count.
 	ev.ContentChars = extractCodexContentChars(raw)
@@ -167,10 +167,14 @@ func extractCodexContentChars(raw map[string]interface{}) int64 {
 }
 
 // extractCodexMetadata extracts model, context window, and token info from Codex events.
-func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.TokenSnapshot) {
+// Returns (modelName, contextWindow, lastTurnTokens, cumulativeTokens).
+// lastTurnTokens = last_token_usage (for context utilization);
+// cumulativeTokens = total_token_usage (for cost calculation).
+func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.TokenSnapshot, *tailer.TokenSnapshot) {
 	var modelName string
 	var contextWindow int64
 	var tokens *tailer.TokenSnapshot
+	var cumTokens *tailer.TokenSnapshot
 
 	// Direct model field.
 	if model, ok := raw["model"].(string); ok && model != "" {
@@ -182,7 +186,7 @@ func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.To
 		if model, ok := payload["model"].(string); ok && model != "" {
 			modelName = tailer.NormalizeModelName(model)
 		}
-		// Token info from payload.info.last_token_usage.
+		// Token info from payload.info.
 		// IMPORTANT: codex emits two usage blocks on every token_count event:
 		//   - total_token_usage: cumulative running total across all turns in
 		//     the session (sum of input+output for every turn). This grows
@@ -191,10 +195,14 @@ func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.To
 		//     is the prompt size for the most recent turn = current context
 		//     window usage. This matches the per-turn semantics Claude Code's
 		//     parser already produces.
-		// We use last_token_usage so context utilization stays in [0, 100%].
+		// We use last_token_usage for context utilization (stays in [0, 100%])
+		// and total_token_usage for cumulative cost calculation.
 		if info, ok := payload["info"].(map[string]interface{}); ok {
 			if usage, ok := info["last_token_usage"].(map[string]interface{}); ok {
 				tokens = tailer.ExtractUsage(usage)
+			}
+			if usage, ok := info["total_token_usage"].(map[string]interface{}); ok {
+				cumTokens = tailer.ExtractUsage(usage)
 			}
 			if cw, ok := info["model_context_window"].(float64); ok && cw > 0 {
 				contextWindow = int64(cw)
@@ -217,5 +225,5 @@ func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.To
 		tokens = tailer.ExtractUsage(usage)
 	}
 
-	return modelName, contextWindow, tokens
+	return modelName, contextWindow, tokens, cumTokens
 }

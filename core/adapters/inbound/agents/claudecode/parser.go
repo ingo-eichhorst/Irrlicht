@@ -124,6 +124,11 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// Token extraction.
 	ev.Tokens = extractClaudeCodeTokens(raw)
 
+	// Request ID for deduplicating streaming events within one API turn.
+	if reqID, ok := raw["requestId"].(string); ok {
+		ev.RequestID = reqID
+	}
+
 	// Content character count for token estimation.
 	ev.ContentChars = tailer.ExtractContentChars(raw)
 

@@ -126,6 +126,14 @@ type ReportSummary struct {
 	FlickerCount       int            `json:"flicker_count"`
 	FlickersByCategory map[string]int `json:"flickers_by_category"` // e.g. "working_between_ready": 4501
 	FlickersByReason   map[string]int `json:"flickers_by_reason"`
+
+	// Cost metrics — cumulative token totals and estimated cost for the session.
+	EstimatedCostUSD       float64 `json:"estimated_cost_usd,omitempty"`
+	CumInputTokens         int64   `json:"cum_input_tokens,omitempty"`
+	CumOutputTokens        int64   `json:"cum_output_tokens,omitempty"`
+	CumCacheReadTokens     int64   `json:"cum_cache_read_tokens,omitempty"`
+	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens,omitempty"`
+	ModelName              string  `json:"model_name,omitempty"`
 }
 
 func main() {
@@ -289,6 +297,7 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	})
 
 	consumed := 0
+	var lastMetrics *tailer.SessionMetrics
 	for bi, batch := range batches {
 		nextEventTime := batch[len(batch)-1].Time
 
@@ -307,6 +316,7 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 		if err != nil {
 			return nil, fmt.Errorf("batch %d: %w", bi, err)
 		}
+		lastMetrics = metrics
 
 		// Convert tailer.SessionMetrics → session.SessionMetrics for the
 		// classifier (the classifier consumes the domain type).
@@ -378,6 +388,16 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	report.Summary.FlickerCount = flickerTotal
 	report.Summary.FlickersByCategory = flickerCat
 	report.Summary.FlickersByReason = flickerReason
+
+	// Cost metrics from the final tailer state.
+	if lastMetrics != nil {
+		report.Summary.EstimatedCostUSD = lastMetrics.EstimatedCostUSD
+		report.Summary.CumInputTokens = lastMetrics.CumInputTokens
+		report.Summary.CumOutputTokens = lastMetrics.CumOutputTokens
+		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
+		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
+		report.Summary.ModelName = lastMetrics.ModelName
+	}
 
 	return report, nil
 }
@@ -470,6 +490,10 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		LastWasUserInterrupt:   m.LastWasUserInterrupt,
 		LastWasToolDenial:      m.LastWasToolDenial,
 		EstimatedCostUSD:       m.EstimatedCostUSD,
+		CumInputTokens:        m.CumInputTokens,
+		CumOutputTokens:       m.CumOutputTokens,
+		CumCacheReadTokens:    m.CumCacheReadTokens,
+		CumCacheCreationTokens: m.CumCacheCreationTokens,
 		LastAssistantText:      m.LastAssistantText,
 		PermissionMode:         m.PermissionMode,
 	}

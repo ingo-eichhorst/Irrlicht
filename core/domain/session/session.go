@@ -51,8 +51,14 @@ type SessionMetrics struct {
 	LastWasToolDenial bool `json:"last_was_tool_denial,omitempty"`
 
 	// EstimatedCostUSD is the estimated session cost in USD, computed from
-	// token breakdown and per-model pricing.
+	// cumulative token totals and per-model pricing.
 	EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
+
+	// Cumulative token totals across all API turns (for cost breakdown).
+	CumInputTokens         int64 `json:"cum_input_tokens,omitempty"`
+	CumOutputTokens        int64 `json:"cum_output_tokens,omitempty"`
+	CumCacheReadTokens     int64 `json:"cum_cache_read_tokens,omitempty"`
+	CumCacheCreationTokens int64 `json:"cum_cache_creation_tokens,omitempty"`
 
 	// LastCWD is the most recent working directory extracted from the
 	// transcript during metrics parsing. Used to avoid a separate file read.

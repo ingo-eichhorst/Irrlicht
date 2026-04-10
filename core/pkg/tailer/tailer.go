@@ -32,6 +32,11 @@ type SessionMetrics struct {
 	OutputTokens        int64          `json:"output_tokens,omitempty"`
 	CacheReadTokens     int64          `json:"cache_read_tokens,omitempty"`
 	CacheCreationTokens int64          `json:"cache_creation_tokens,omitempty"`
+	// Cumulative token totals across all API turns (for cost calculation).
+	CumInputTokens         int64   `json:"cum_input_tokens,omitempty"`
+	CumOutputTokens        int64   `json:"cum_output_tokens,omitempty"`
+	CumCacheReadTokens     int64   `json:"cum_cache_read_tokens,omitempty"`
+	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens,omitempty"`
 	EstimatedCostUSD    float64        `json:"estimated_cost_usd,omitempty"`
 	ModelName           string         `json:"model_name,omitempty"`
 	ContextWindow       int64          `json:"context_window,omitempty"`
@@ -123,10 +128,24 @@ type TranscriptTailer struct {
 	contentChars int64
 
 	// Token breakdown accumulators (latest snapshot, not cumulative).
+	// Used for context utilization — always reflects the most recent API turn.
 	inputTokens         int64
 	outputTokens        int64
 	cacheReadTokens     int64
 	cacheCreationTokens int64
+
+	// Cumulative token accumulators for cost calculation.
+	// These sum the FINAL usage from each unique API turn (requestId).
+	cumInputTokens         int64
+	cumOutputTokens        int64
+	cumCacheReadTokens     int64
+	cumCacheCreationTokens int64
+
+	// Deduplication: track requestId to avoid double-counting streaming events
+	// within a single API turn. When the requestId changes, the previous turn's
+	// final snapshot is flushed to the cumulative accumulators.
+	lastRequestID   string
+	pendingSnapshot *TokenSnapshot // latest snapshot for current requestId; flushed on ID change
 
 	// lastWasUserInterrupt tracks whether the most recent user event was
 	// an ESC cancellation (the exact "[Request interrupted by user]" text
@@ -190,8 +209,15 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	startPos := int64(0)
 	switch {
 	case fileSize < t.lastOffset:
-		// File rotated/truncated.
+		// File rotated/truncated — reset cumulative accumulators to avoid
+		// double-counting tokens from the previous file.
 		startPos = 0
+		t.cumInputTokens = 0
+		t.cumOutputTokens = 0
+		t.cumCacheReadTokens = 0
+		t.cumCacheCreationTokens = 0
+		t.lastRequestID = ""
+		t.pendingSnapshot = nil
 	case t.lastOffset > 0:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
@@ -360,8 +386,11 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		}
 	}
 
-	// Recompute cost if token estimation filled in the breakdown.
-	if t.metrics.EstimatedCostUSD == 0 && t.inputTokens > 0 && t.capacityMgr != nil && t.metrics.ModelName != "" {
+	// Recompute cost if token estimation filled in the breakdown but no
+	// cumulative data is available yet (char-based fallback only).
+	if t.metrics.EstimatedCostUSD == 0 && t.inputTokens > 0 &&
+		t.cumInputTokens == 0 && t.cumOutputTokens == 0 && t.pendingSnapshot == nil &&
+		t.capacityMgr != nil && t.metrics.ModelName != "" {
 		t.metrics.InputTokens = t.inputTokens
 		t.metrics.OutputTokens = t.outputTokens
 		t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
@@ -388,12 +417,42 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 		if parsed.Tokens.Total > 0 {
 			t.metrics.TotalTokens = parsed.Tokens.Total
 		}
+		// Snapshot fields — always overwritten with latest turn for context utilization.
 		if parsed.Tokens.Input > 0 || parsed.Tokens.Output > 0 {
 			t.inputTokens = parsed.Tokens.Input
 			t.outputTokens = parsed.Tokens.Output
 			t.cacheReadTokens = parsed.Tokens.CacheRead
 			t.cacheCreationTokens = parsed.Tokens.CacheCreation
 		}
+	}
+
+	// Cumulative token accumulation for cost calculation.
+	if parsed.CumulativeTokens != nil {
+		// Codex-style: authoritative cumulative total provided directly.
+		t.cumInputTokens = parsed.CumulativeTokens.Input
+		t.cumOutputTokens = parsed.CumulativeTokens.Output
+		t.cumCacheReadTokens = parsed.CumulativeTokens.CacheRead
+		t.cumCacheCreationTokens = parsed.CumulativeTokens.CacheCreation
+		t.pendingSnapshot = nil
+	} else if parsed.Tokens != nil && parsed.RequestID != "" {
+		// Claude Code-style: deduplicate by requestId — multiple streaming
+		// events share the same requestId within one API turn; only the final
+		// event's tokens should be counted.
+		if parsed.RequestID != t.lastRequestID && t.lastRequestID != "" && t.pendingSnapshot != nil {
+			// Flush previous turn's final snapshot to accumulators.
+			t.cumInputTokens += t.pendingSnapshot.Input
+			t.cumOutputTokens += t.pendingSnapshot.Output
+			t.cumCacheReadTokens += t.pendingSnapshot.CacheRead
+			t.cumCacheCreationTokens += t.pendingSnapshot.CacheCreation
+		}
+		t.pendingSnapshot = parsed.Tokens
+		t.lastRequestID = parsed.RequestID
+	} else if parsed.Tokens != nil && (parsed.Tokens.Input > 0 || parsed.Tokens.Output > 0) {
+		// No requestId (Pi-style): accumulate directly, no dedup needed.
+		t.cumInputTokens += parsed.Tokens.Input
+		t.cumOutputTokens += parsed.Tokens.Output
+		t.cumCacheReadTokens += parsed.Tokens.CacheRead
+		t.cumCacheCreationTokens += parsed.Tokens.CacheCreation
 	}
 	if parsed.CWD != "" {
 		t.lastCWD = parsed.CWD
@@ -466,14 +525,33 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText
 
-	// Token breakdown + estimated cost.
+	// Token snapshot (latest turn — for context utilization display).
 	t.metrics.InputTokens = t.inputTokens
 	t.metrics.OutputTokens = t.outputTokens
 	t.metrics.CacheReadTokens = t.cacheReadTokens
 	t.metrics.CacheCreationTokens = t.cacheCreationTokens
+
+	// Cumulative tokens (sum of all turns — for cost calculation).
+	// Include the unflushed pendingSnapshot from the current/final requestId.
+	effectiveCumInput := t.cumInputTokens
+	effectiveCumOutput := t.cumOutputTokens
+	effectiveCumCacheRead := t.cumCacheReadTokens
+	effectiveCumCacheCreate := t.cumCacheCreationTokens
+	if t.pendingSnapshot != nil {
+		effectiveCumInput += t.pendingSnapshot.Input
+		effectiveCumOutput += t.pendingSnapshot.Output
+		effectiveCumCacheRead += t.pendingSnapshot.CacheRead
+		effectiveCumCacheCreate += t.pendingSnapshot.CacheCreation
+	}
+	t.metrics.CumInputTokens = effectiveCumInput
+	t.metrics.CumOutputTokens = effectiveCumOutput
+	t.metrics.CumCacheReadTokens = effectiveCumCacheRead
+	t.metrics.CumCacheCreationTokens = effectiveCumCacheCreate
+
 	if t.capacityMgr != nil && t.metrics.ModelName != "" {
 		t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
-			t.metrics.ModelName, t.inputTokens, t.outputTokens, t.cacheReadTokens, t.cacheCreationTokens)
+			t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
+			effectiveCumCacheRead, effectiveCumCacheCreate)
 	}
 
 	// Sliding window for messages per minute.
@@ -512,9 +590,16 @@ func (t *TranscriptTailer) GetMetrics() *SessionMetrics {
 	return t.metrics
 }
 
-// ResetOffset resets the file offset (useful for testing or file rotation)
+// ResetOffset resets the file offset and cumulative cost accumulators
+// (useful for testing or file rotation).
 func (t *TranscriptTailer) ResetOffset() {
 	t.lastOffset = 0
+	t.cumInputTokens = 0
+	t.cumOutputTokens = 0
+	t.cumCacheReadTokens = 0
+	t.cumCacheCreationTokens = 0
+	t.lastRequestID = ""
+	t.pendingSnapshot = nil
 }
 
 // computeContextUtilization calculates context utilization percentage and pressure level.
