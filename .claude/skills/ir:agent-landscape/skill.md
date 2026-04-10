@@ -36,7 +36,7 @@ All state persists in `references/agent-data.json` (relative to this skill direc
 
 Field definitions:
 - `stars` — current GitHub stars (null if no public repo)
-- `stars_history` — array of `{date, stars}` snapshots, newest first, keep up to 6 entries (covers ~6 months). On each run, prepend a new entry and trim to 6.
+- `stars_history` — array of `{date, stars}` snapshots, newest first. Always retain entries for the 1st of the current month and the 1st of 3 months ago; other entries may be trimmed. Keep up to 6 entries total.
 - `irrlicht_support` — one of: `"live"`, `"planned"`, `"none"`
 - `category` — one of: `"agent"`, `"orchestrator"`
 
@@ -86,8 +86,10 @@ Add any genuinely new coding agents or orchestrators found. Skip IDE themes, lin
 For each agent with a `github_repo`:
 
 1. Use WebFetch to get `https://api.github.com/repos/{owner}/{repo}` (JSON response includes `stargazers_count`)
-2. Prepend `{"date": "<today>", "stars": <count>}` to `stars_history`, trim to 6 entries
-3. Set `stars` to current `stargazers_count`
+2. Set `stars` to current `stargazers_count`
+3. Upsert a snapshot for the **1st of the current month** in `stars_history` (add if missing, update if present)
+4. Ensure a snapshot for the **1st of 3 months ago** is retained — never trim it
+5. Trim any other entries beyond 6 total, keeping newest first
 
 For agents without a public GitHub repo, set `stars: null`.
 
@@ -100,11 +102,17 @@ If the GitHub API rate-limits (403), use WebSearch `"{agent name}" github stars`
 For each agent, compute a `score` using the **3-month star increase** from `stars_history`:
 
 ```
-# Find the oldest snapshot within the last 90 days
-oldest = stars_history entry closest to 90 days ago (or the oldest available)
-stars_3m = stars - oldest.stars                          # absolute 3-month gain
-days = days between today and oldest.date
-trend = stars_3m / days * 30                             # normalized to stars/month, 0 if < 2 snapshots
+# Anchor dates (always use these exact points)
+month_start     = first day of current month (e.g. 2026-04-01)
+month_start_3m  = first day of 3 months ago  (e.g. 2026-01-01)
+
+# Pick the snapshots closest to each anchor
+current  = stars_history entry closest to month_start
+baseline = stars_history entry closest to month_start_3m
+
+stars_3m = current.stars - baseline.stars                # absolute 3-month gain
+days     = days between baseline.date and current.date
+trend    = stars_3m / days * 30                          # normalized to stars/month, 0 if < 2 snapshots
 
 normalized_stars = log10(stars + 1)                      # dampen mega-repos
 normalized_trend = log10(trend + 1)                      # monthly gain scale
