@@ -268,9 +268,10 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		d.broadcast(outbound.PushTypeCreated, state)
 
 		// When a real transcript session arrives, remove any pre-sessions for
-		// the same project directory (they are now superseded).
+		// the same project. Match by projectDir first (Claude Code layout),
+		// then fall back to CWD (Codex/Pi have different transcript layouts).
 		if ev.TranscriptPath != "" {
-			d.cleanupPreSessionsForProject(ev.ProjectDir)
+			d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, ev.Adapter)
 		}
 	} else {
 		// Session already exists. Update transcript path if missing.
@@ -687,18 +688,41 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 }
 
 // cleanupPreSessionsForProject removes all synthetic pre-sessions (proc-*)
-// in the given project directory. Called when a real transcript session arrives
-// so the pre-session doesn't linger alongside the real one.
-func (d *SessionDetector) cleanupPreSessionsForProject(projectDir string) {
+// in the given project. It matches by projectDir first (Claude Code layout
+// where the transcript path encodes the project directory), then falls back
+// to CWD comparison for adapters whose transcript paths use different layouts
+// (Codex stores by date, Pi uses double-dash encoding).
+func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adapter string) {
+	// Collect candidates under the lock; defer I/O (repo.Load) to outside.
 	d.mu.Lock()
 	var ids []string
+	var cwdCandidates []string
 	for sid, pdir := range d.projectSessions {
-		if pdir == projectDir && strings.HasPrefix(sid, "proc-") {
+		if !strings.HasPrefix(sid, "proc-") {
+			continue
+		}
+		if pdir == projectDir {
 			ids = append(ids, sid)
 			delete(d.projectSessions, sid)
+			continue
+		}
+		if realCWD != "" {
+			cwdCandidates = append(cwdCandidates, sid)
 		}
 	}
 	d.mu.Unlock()
+
+	// CWD fallback: match pre-sessions whose CWD equals the real session's
+	// CWD. Needed for adapters whose transcript paths don't encode the
+	// project directory (Codex stores by date, Pi uses double-dash encoding).
+	for _, sid := range cwdCandidates {
+		if state, _ := d.repo.Load(sid); state != nil && state.Adapter == adapter && state.CWD == realCWD {
+			d.mu.Lock()
+			delete(d.projectSessions, sid)
+			d.mu.Unlock()
+			ids = append(ids, sid)
+		}
+	}
 
 	for _, sid := range ids {
 		state, _ := d.repo.Load(sid)
