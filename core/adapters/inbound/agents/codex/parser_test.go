@@ -110,6 +110,7 @@ func TestParser_FunctionCall(t *testing.T) {
 	ev := p.ParseLine(map[string]interface{}{
 		"type":      "function_call",
 		"name":      "shell",
+		"call_id":   "call_abc",
 		"arguments": `{"command":["zsh","-lc","ls"]}`,
 		"timestamp": ts(2),
 	})
@@ -119,8 +120,8 @@ func TestParser_FunctionCall(t *testing.T) {
 	if ev.EventType != "function_call" {
 		t.Errorf("EventType = %q, want function_call", ev.EventType)
 	}
-	if len(ev.ToolUseNames) != 1 || ev.ToolUseNames[0] != "shell" {
-		t.Errorf("ToolUseNames = %v, want [shell]", ev.ToolUseNames)
+	if len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "shell" || ev.ToolUses[0].ID != "call_abc" {
+		t.Errorf("ToolUses = %v, want [{call_abc shell}]", ev.ToolUses)
 	}
 }
 
@@ -137,8 +138,8 @@ func TestParser_FunctionCall_WithoutNameStillCountsAsActivity(t *testing.T) {
 	if ev.EventType != "function_call" {
 		t.Errorf("EventType = %q, want function_call", ev.EventType)
 	}
-	if len(ev.ToolUseNames) != 0 {
-		t.Errorf("ToolUseNames = %v, want empty", ev.ToolUseNames)
+	if len(ev.ToolUses) != 0 {
+		t.Errorf("ToolUses = %v, want empty", ev.ToolUses)
 	}
 }
 
@@ -156,8 +157,8 @@ func TestParser_FunctionCallOutput(t *testing.T) {
 	if ev.EventType != "function_call_output" {
 		t.Errorf("EventType = %q, want function_call_output", ev.EventType)
 	}
-	if ev.ToolResultCount != 1 {
-		t.Errorf("ToolResultCount = %d, want 1", ev.ToolResultCount)
+	if len(ev.ToolResultIDs) != 1 || ev.ToolResultIDs[0] != "call_abc" {
+		t.Errorf("ToolResultIDs = %v, want [call_abc]", ev.ToolResultIDs)
 	}
 }
 
@@ -275,8 +276,8 @@ func TestParser_WrappedCustomAndWebSearchTools(t *testing.T) {
 	if custom.EventType != "function_call" {
 		t.Errorf("custom EventType = %q, want function_call", custom.EventType)
 	}
-	if len(custom.ToolUseNames) != 1 || custom.ToolUseNames[0] != "apply_patch" {
-		t.Errorf("custom ToolUseNames = %v, want [apply_patch]", custom.ToolUseNames)
+	if len(custom.ToolUses) != 1 || custom.ToolUses[0].Name != "apply_patch" || custom.ToolUses[0].ID != "call_patch" {
+		t.Errorf("custom ToolUses = %v, want [{call_patch apply_patch}]", custom.ToolUses)
 	}
 
 	web := p.ParseLine(map[string]interface{}{
@@ -284,6 +285,7 @@ func TestParser_WrappedCustomAndWebSearchTools(t *testing.T) {
 		"timestamp": ts(1),
 		"payload": map[string]interface{}{
 			"type":   "web_search_call",
+			"id":     "ws_1",
 			"status": "completed",
 			"action": map[string]interface{}{"type": "search", "query": "irrlicht issue 90"},
 		},
@@ -294,11 +296,11 @@ func TestParser_WrappedCustomAndWebSearchTools(t *testing.T) {
 	if web.EventType != "function_call_output" {
 		t.Errorf("web EventType = %q, want function_call_output", web.EventType)
 	}
-	if len(web.ToolUseNames) != 1 || web.ToolUseNames[0] != "web_search" {
-		t.Errorf("web ToolUseNames = %v, want [web_search]", web.ToolUseNames)
+	if len(web.ToolUses) != 1 || web.ToolUses[0].Name != "web_search" {
+		t.Errorf("web ToolUses = %v, want [{ws_1 web_search}]", web.ToolUses)
 	}
-	if web.ToolResultCount != 1 {
-		t.Errorf("web ToolResultCount = %d, want 1", web.ToolResultCount)
+	if len(web.ToolResultIDs) != 1 || web.ToolResultIDs[0] != "ws_1" {
+		t.Errorf("web ToolResultIDs = %v, want [ws_1]", web.ToolResultIDs)
 	}
 }
 

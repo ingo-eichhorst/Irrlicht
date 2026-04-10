@@ -98,8 +98,8 @@ func TestParser_ToolUseInContent(t *testing.T) {
 	if ev == nil {
 		t.Fatal("expected non-nil event")
 	}
-	if len(ev.ToolUseNames) != 1 || ev.ToolUseNames[0] != "Bash" {
-		t.Errorf("ToolUseNames = %v, want [Bash]", ev.ToolUseNames)
+	if len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "Bash" || ev.ToolUses[0].ID != "tu_1" {
+		t.Errorf("ToolUses = %v, want [{tu_1 Bash}]", ev.ToolUses)
 	}
 }
 
@@ -118,8 +118,8 @@ func TestParser_ToolResultInContent(t *testing.T) {
 	if ev == nil {
 		t.Fatal("expected non-nil event")
 	}
-	if ev.ToolResultCount != 1 {
-		t.Errorf("ToolResultCount = %d, want 1", ev.ToolResultCount)
+	if len(ev.ToolResultIDs) != 1 || ev.ToolResultIDs[0] != "tu_1" {
+		t.Errorf("ToolResultIDs = %v, want [tu_1]", ev.ToolResultIDs)
 	}
 }
 
@@ -268,8 +268,8 @@ func TestParser_AssistantFinal_ToolUse(t *testing.T) {
 	if ev.EventType != "assistant" {
 		t.Errorf("EventType = %q, want assistant (stop_reason=tool_use)", ev.EventType)
 	}
-	if len(ev.ToolUseNames) != 1 || ev.ToolUseNames[0] != "Read" {
-		t.Errorf("ToolUseNames = %v, want [Read]", ev.ToolUseNames)
+	if len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "Read" || ev.ToolUses[0].ID != "tu_1" {
+		t.Errorf("ToolUses = %v, want [{tu_1 Read}]", ev.ToolUses)
 	}
 }
 

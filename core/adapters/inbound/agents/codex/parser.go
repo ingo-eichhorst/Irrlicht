@@ -73,7 +73,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		}
 
 	case "function_call_output":
-		parseCodexFunctionCallOutput(ev)
+		parseCodexFunctionCallOutput(raw, ev)
 
 	case "event_msg":
 		// Most event_msg payloads are metadata (token_count, task_started,
@@ -129,12 +129,14 @@ func parseCodexResponseItem(payload map[string]interface{}, ev *tailer.ParsedEve
 	case "function_call", "custom_tool_call":
 		return parseCodexFunctionCall(payload, ev)
 	case "function_call_output", "custom_tool_call_output":
-		parseCodexFunctionCallOutput(ev)
+		parseCodexFunctionCallOutput(payload, ev)
 		return true
 	case "web_search_call":
+		// Self-closing tool: both opens and closes in the same event.
 		ev.EventType = "function_call_output"
-		ev.ToolUseNames = []string{"web_search"}
-		ev.ToolResultCount = 1
+		id, _ := payload["id"].(string)
+		ev.ToolUses = []tailer.ToolUse{{ID: id, Name: "web_search"}}
+		ev.ToolResultIDs = []string{id}
 		return true
 	default:
 		return false
@@ -143,16 +145,19 @@ func parseCodexResponseItem(payload map[string]interface{}, ev *tailer.ParsedEve
 
 func parseCodexFunctionCall(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	name, _ := raw["name"].(string)
+	callID, _ := raw["call_id"].(string)
 	ev.EventType = "function_call"
-	if name != "" {
-		ev.ToolUseNames = []string{name}
+	if name != "" || callID != "" {
+		ev.ToolUses = []tailer.ToolUse{{ID: callID, Name: name}}
 	}
 	return true
 }
 
-func parseCodexFunctionCallOutput(ev *tailer.ParsedEvent) {
+func parseCodexFunctionCallOutput(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	ev.EventType = "function_call_output"
-	ev.ToolResultCount = 1
+	if callID, ok := raw["call_id"].(string); ok && callID != "" {
+		ev.ToolResultIDs = []string{callID}
+	}
 }
 
 func extractCodexContentChars(raw map[string]interface{}) int64 {
