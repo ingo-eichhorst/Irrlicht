@@ -209,8 +209,15 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	startPos := int64(0)
 	switch {
 	case fileSize < t.lastOffset:
-		// File rotated/truncated.
+		// File rotated/truncated — reset cumulative accumulators to avoid
+		// double-counting tokens from the previous file.
 		startPos = 0
+		t.cumInputTokens = 0
+		t.cumOutputTokens = 0
+		t.cumCacheReadTokens = 0
+		t.cumCacheCreationTokens = 0
+		t.lastRequestID = ""
+		t.pendingSnapshot = nil
 	case t.lastOffset > 0:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
@@ -583,9 +590,16 @@ func (t *TranscriptTailer) GetMetrics() *SessionMetrics {
 	return t.metrics
 }
 
-// ResetOffset resets the file offset (useful for testing or file rotation)
+// ResetOffset resets the file offset and cumulative cost accumulators
+// (useful for testing or file rotation).
 func (t *TranscriptTailer) ResetOffset() {
 	t.lastOffset = 0
+	t.cumInputTokens = 0
+	t.cumOutputTokens = 0
+	t.cumCacheReadTokens = 0
+	t.cumCacheCreationTokens = 0
+	t.lastRequestID = ""
+	t.pendingSnapshot = nil
 }
 
 // computeContextUtilization calculates context utilization percentage and pressure level.
