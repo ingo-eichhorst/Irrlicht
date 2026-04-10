@@ -36,9 +36,9 @@ Build the irrlicht daemon and Swift app, then replace all running instances with
    rm -f /Users/ingo/.local/share/irrlicht/irrlichd.sock
    ```
 
-5. **Start the dev daemon**
+5. **Start the dev daemon** (with `--record` for lifecycle event capture)
    ```bash
-   cd /Users/ingo/projects/irrlicht/core && nohup ./bin/irrlichd > /tmp/irrlichd-dev.log 2>&1 & disown
+   cd /Users/ingo/projects/irrlicht/core && nohup ./bin/irrlichd --record > /tmp/irrlichd-dev.log 2>&1 & disown
    ```
 
 6. **Wait for daemon to be ready** — confirm port 7837 is listening before launching the app
