@@ -79,11 +79,12 @@ func (s *Scanner) WithSessionChecker(fn func(projectDir string, pid int) bool) *
 
 // HasRealSessionForPID reports whether sessions contains a real
 // (transcript-backed, non-proc) session that belongs to the given PID and
-// whose transcript lives under the given encoded projectDir (e.g.
-// "-Users-ingo-projects-foo"). It is the canonical predicate the Scanner's
-// sessionChecker should delegate to — encoding the "is a proc- pre-session
-// redundant?" policy in one place so production callers and tests cannot
-// drift apart.
+// project directory. It matches by transcript path (Claude Code layout:
+// ~/.claude/projects/<projectDir>/) or by CWD (codex/pi layouts where the
+// transcript path doesn't encode the project directory). It is the canonical
+// predicate the Scanner's sessionChecker should delegate to — encoding the
+// "is a proc- pre-session redundant?" policy in one place so production
+// callers and tests cannot drift apart.
 func HasRealSessionForPID(sessions []*session.SessionState, projectDir string, pid int) bool {
 	for _, s := range sessions {
 		if strings.HasPrefix(s.SessionID, "proc-") {
@@ -92,8 +93,13 @@ func HasRealSessionForPID(sessions []*session.SessionState, projectDir string, p
 		if s.PID != pid {
 			continue
 		}
-		if s.TranscriptPath != "" &&
-			filepath.Base(filepath.Dir(s.TranscriptPath)) == projectDir {
+		if s.TranscriptPath == "" {
+			continue
+		}
+		if filepath.Base(filepath.Dir(s.TranscriptPath)) == projectDir {
+			return true
+		}
+		if s.CWD != "" && CWDToProjectDir(s.CWD) == projectDir {
 			return true
 		}
 	}
@@ -186,7 +192,7 @@ func (s *Scanner) poll() {
 		s.mu.Unlock()
 
 		cwd, err := ProcessCWD(pid)
-		if err != nil || cwd == "" {
+		if err != nil || cwd == "" || cwd == "/" {
 			continue
 		}
 		projectDir := CWDToProjectDir(cwd)

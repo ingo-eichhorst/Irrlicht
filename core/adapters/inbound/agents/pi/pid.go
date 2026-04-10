@@ -8,5 +8,5 @@ import (
 // whose CWD equals the session's working directory. Pi's binary resolves to
 // process name "pi" (despite being a Node.js script), so pgrep -x "pi" works.
 func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
-	return processlifecycle.DiscoverPIDByCWD("pi", cwd, disambiguate)
+	return processlifecycle.DiscoverPIDByCWD(ProcessName, cwd, disambiguate)
 }

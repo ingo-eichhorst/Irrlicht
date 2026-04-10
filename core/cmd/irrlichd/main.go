@@ -265,27 +265,45 @@ func main() {
 	codexWatcher := codex.New(cfg.MaxSessionAge)
 	piWatcher := pi.New(cfg.MaxSessionAge)
 
-	// Process scanner: detects Claude Code processes before they create a
-	// transcript, so the session appears as ready from the moment the app opens.
-	procScanner := processlifecycle.NewScanner(
-		"claude",
-		claudecode.AdapterName,
-		0, // use default interval
-	)
-	// Suppress ghost proc pre-sessions for live Claude Code processes whose
-	// real session is already persisted. The PID discriminator in
-	// HasRealSessionForPID is what prevents historical sessions on disk
-	// (GH #113, within MaxSessionAge) from blocking new processes in the
-	// same project.
-	procScanner.WithSessionChecker(func(projectDir string, pid int) bool {
+	// Suppress ghost proc pre-sessions for live processes whose real session
+	// is already persisted. The PID discriminator in HasRealSessionForPID
+	// prevents historical sessions on disk (GH #113, within MaxSessionAge)
+	// from blocking new processes in the same project.
+	realSessionCheck := func(projectDir string, pid int) bool {
 		sessions, err := cachedRepo.ListAll()
 		if err != nil {
 			return false
 		}
 		return processlifecycle.HasRealSessionForPID(sessions, projectDir, pid)
-	})
+	}
 
-	watchers := []inbound.AgentWatcher{claudeCodeWatcher, codexWatcher, piWatcher, procScanner}
+	// Process scanners: detect agent processes before they create a
+	// transcript, so the session appears as ready from the moment the app opens.
+	procScanner := processlifecycle.NewScanner(
+		claudecode.ProcessName,
+		claudecode.AdapterName,
+		0, // use default interval
+	)
+	procScanner.WithSessionChecker(realSessionCheck)
+
+	codexProcScanner := processlifecycle.NewScanner(
+		codex.ProcessName,
+		codex.AdapterName,
+		0,
+	)
+	codexProcScanner.WithSessionChecker(realSessionCheck)
+
+	piProcScanner := processlifecycle.NewScanner(
+		pi.ProcessName,
+		pi.AdapterName,
+		0,
+	)
+	piProcScanner.WithSessionChecker(realSessionCheck)
+
+	watchers := []inbound.AgentWatcher{
+		claudeCodeWatcher, codexWatcher, piWatcher,
+		procScanner, codexProcScanner, piProcScanner,
+	}
 
 	// Per-adapter PID discovery: Claude Code uses CWD-based matching,
 	// Codex/Pi use transcript file writer detection.
