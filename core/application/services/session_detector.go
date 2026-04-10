@@ -130,8 +130,7 @@ func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 // its PIDManager will emit lifecycle events to the recorder for offline replay.
 func (d *SessionDetector) SetRecorder(r outbound.EventRecorder) {
 	d.recorder = r
-	d.pidMgr.recorder = r
-	d.pidMgr.recorderSeq = &d.recorderSeq
+	d.pidMgr.SetRecorder(r, &d.recorderSeq)
 }
 
 // record emits a lifecycle event if recording is enabled. It assigns a
@@ -442,6 +441,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// already shows IsAgentDone()=true would stay ready with no transition
 	// broadcast — the UI would never see the "agent finished" event.
 	if state.State == session.StateReady && state.Metrics != nil && state.Metrics.LastEventType != "" {
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: "force ready→working on first activity"})
 		state.State = session.StateWorking
 	}
 
@@ -713,6 +713,7 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 		d.log.LogInfo("session-detector", parentID,
 			fmt.Sprintf("children done, parent re-evaluated: %s", reason))
 	}
+	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: parentID, PrevState: parent.State, NewState: newState, Reason: reason})
 	parent.State = newState
 	parent.UpdatedAt = now
 	if newState == session.StateWaiting {

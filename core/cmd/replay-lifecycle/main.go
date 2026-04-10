@@ -34,12 +34,12 @@ type SessionTimeline struct {
 	ParentSessionID string           `json:"parent_session_id,omitempty"`
 	FirstSeen       time.Time        `json:"first_seen"`
 	LastSeen        time.Time        `json:"last_seen"`
-	Duration        time.Duration    `json:"duration"`
+	DurationMs      int64            `json:"duration_ms"`
 	EventCount      int              `json:"event_count"`
 	StateChanges    int              `json:"state_changes"`
 	FinalState      string           `json:"final_state,omitempty"`
 	PID             int              `json:"pid,omitempty"`
-	PIDDiscoveryLag time.Duration    `json:"pid_discovery_lag,omitempty"` // time from first event to PID discovery
+	PIDDiscoveryMs  int64            `json:"pid_discovery_lag_ms,omitempty"`
 	DebounceEvents  int              `json:"debounce_coalesced_events"`
 	StateDurations  map[string]int64 `json:"state_durations_ms"`
 }
@@ -242,7 +242,7 @@ func buildReport(src string, events []lifecycle.Event) *Report {
 		case lifecycle.KindPIDDiscovered:
 			report.Summary.TotalPIDEvents++
 			st.timeline.PID = ev.PID
-			st.timeline.PIDDiscoveryLag = ev.Timestamp.Sub(st.firstSeen)
+			st.timeline.PIDDiscoveryMs = ev.Timestamp.Sub(st.firstSeen).Milliseconds()
 
 		case lifecycle.KindProcessExited:
 			report.Summary.TotalProcessExits++
@@ -266,7 +266,7 @@ func buildReport(src string, events []lifecycle.Event) *Report {
 		}
 
 		st.timeline.FirstSeen = st.firstSeen
-		st.timeline.Duration = st.timeline.LastSeen.Sub(st.firstSeen)
+		st.timeline.DurationMs = st.timeline.LastSeen.Sub(st.firstSeen).Milliseconds()
 
 		for state, dur := range st.stateDurations {
 			st.timeline.StateDurations[state] = dur.Milliseconds()

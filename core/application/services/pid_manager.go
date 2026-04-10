@@ -77,6 +77,14 @@ func NewPIDManager(
 	}
 }
 
+// SetRecorder enables lifecycle event recording on this PIDManager.
+// The shared sequence counter ensures monotonic ordering across the
+// SessionDetector and PIDManager.
+func (pm *PIDManager) SetRecorder(r outbound.EventRecorder, seq *int64) {
+	pm.recorder = r
+	pm.recorderSeq = seq
+}
+
 // record emits a lifecycle event if recording is enabled.
 func (pm *PIDManager) record(ev lifecycle.Event) {
 	if pm.recorder == nil {
