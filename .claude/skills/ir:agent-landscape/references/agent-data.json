@@ -1,20 +1,45 @@
 {
-  "last_updated": "2026-04-06",
+  "last_updated": "2026-04-10",
   "agents": [
+    {
+      "name": "OpenCode",
+      "github_repo": "anomalyco/opencode",
+      "category": "agent",
+      "website": "https://opencode.ai",
+      "description": "The open source coding agent",
+      "stars": 141121,
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-05",
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 141121},
+        {"date": "2026-01-01", "stars": 5500}
+      ]
+    },
     {
       "name": "Claw Code",
       "github_repo": "instructkr/claw-code",
       "category": "agent",
       "website": "https://claw-code.codes",
       "description": "Clean-room Python/Rust rewrite of Claude Code architecture",
-      "stars": 170566,
+      "stars": 180702,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 170566
-        }
+        {"date": "2026-04-01", "stars": 180702}
+      ]
+    },
+    {
+      "name": "Claude Code",
+      "github_repo": "anthropics/claude-code",
+      "category": "agent",
+      "website": "https://github.com/anthropics/claude-code",
+      "description": "Anthropic's terminal-based AI coding agent",
+      "stars": 112201,
+      "irrlicht_support": "live",
+      "first_seen": "2026-04-05",
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 112201},
+        {"date": "2026-01-01", "stars": 51700}
       ]
     },
     {
@@ -23,18 +48,12 @@
       "category": "agent",
       "website": "https://github.com/google-gemini/gemini-cli",
       "description": "Google's terminal AI coding agent",
-      "stars": 100312,
+      "stars": 100831,
       "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 100312
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 89800
-        }
+        {"date": "2026-04-01", "stars": 100831},
+        {"date": "2026-01-01", "stars": 89800}
       ]
     },
     {
@@ -43,18 +62,12 @@
       "category": "agent",
       "website": "https://github.com/openai/codex",
       "description": "OpenAI's terminal AI coding agent",
-      "stars": 73298,
+      "stars": 74416,
       "irrlicht_support": "live",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 73298
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 46000
-        }
+        {"date": "2026-04-01", "stars": 74416},
+        {"date": "2026-01-01", "stars": 46000}
       ]
     },
     {
@@ -63,18 +76,12 @@
       "category": "agent",
       "website": "https://github.com/All-Hands-AI/OpenHands",
       "description": "Open-source platform for autonomous AI software agents",
-      "stars": 70624,
+      "stars": 70983,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 70624
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 52000
-        }
+        {"date": "2026-04-01", "stars": 70983},
+        {"date": "2026-01-01", "stars": 52000}
       ]
     },
     {
@@ -83,18 +90,12 @@
       "category": "agent",
       "website": "https://github.com/cline/cline",
       "description": "Autonomous AI coding agent for VS Code",
-      "stars": 59915,
+      "stars": 60138,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 59915
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 36000
-        }
+        {"date": "2026-04-01", "stars": 60138},
+        {"date": "2026-01-01", "stars": 36000}
       ]
     },
     {
@@ -103,18 +104,12 @@
       "category": "agent",
       "website": "https://aider.chat",
       "description": "AI pair programming in your terminal",
-      "stars": 42859,
+      "stars": 43133,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 42859
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 36000
-        }
+        {"date": "2026-04-01", "stars": 43133},
+        {"date": "2026-01-01", "stars": 36000}
       ]
     },
     {
@@ -123,18 +118,26 @@
       "category": "agent",
       "website": "https://block.github.io/goose/",
       "description": "Block's open-source extensible AI agent for full dev workflows",
-      "stars": 36868,
+      "stars": 40906,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 36868
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 26100
-        }
+        {"date": "2026-04-01", "stars": 40906},
+        {"date": "2026-01-01", "stars": 26100}
+      ]
+    },
+    {
+      "name": "Pi",
+      "github_repo": "badlogic/pi-mono",
+      "category": "agent",
+      "website": "https://github.com/badlogic/pi-mono",
+      "description": "Anthropic's lightweight coding agent",
+      "stars": 34165,
+      "irrlicht_support": "live",
+      "first_seen": "2026-04-05",
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 34165},
+        {"date": "2026-01-01", "stars": 18400}
       ]
     },
     {
@@ -143,18 +146,12 @@
       "category": "agent",
       "website": "https://cursor.com",
       "description": "AI-first code editor with agent mode",
-      "stars": 32577,
+      "stars": 32617,
       "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 32577
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 25000
-        }
+        {"date": "2026-04-01", "stars": 32617},
+        {"date": "2026-01-01", "stars": 25000}
       ]
     },
     {
@@ -163,18 +160,12 @@
       "category": "agent",
       "website": "https://continue.dev",
       "description": "Open-source AI code assistant for VS Code and JetBrains",
-      "stars": 32304,
+      "stars": 32469,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 32304
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 31000
-        }
+        {"date": "2026-04-01", "stars": 32469},
+        {"date": "2026-01-01", "stars": 31000}
       ]
     },
     {
@@ -183,18 +174,52 @@
       "category": "agent",
       "website": "https://github.com/voideditor/void",
       "description": "Open-source AI code editor",
-      "stars": 28499,
+      "stars": 28544,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 28499
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 23000
-        }
+        {"date": "2026-04-01", "stars": 28544},
+        {"date": "2026-01-01", "stars": 23000}
+      ]
+    },
+    {
+      "name": "Warp",
+      "github_repo": "warpdotdev/Warp",
+      "category": "agent",
+      "website": "https://www.warp.dev",
+      "description": "Agentic terminal with Oz cloud orchestration for parallel coding agents",
+      "stars": 26362,
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 26362},
+        {"date": "2026-01-01", "stars": 24000}
+      ]
+    },
+    {
+      "name": "Crush",
+      "github_repo": "charmbracelet/crush",
+      "category": "agent",
+      "website": "https://charm.land/crush",
+      "description": "Open-source terminal coding agent by Charmbracelet with multi-model support",
+      "stars": 22815,
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-10",
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 22815}
+      ]
+    },
+    {
+      "name": "Qwen Code",
+      "github_repo": "QwenLM/qwen-code",
+      "category": "agent",
+      "website": "https://qwen.ai/qwencode",
+      "description": "Alibaba's open-source terminal coding agent optimized for the Qwen3-Coder model family",
+      "stars": 22493,
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-10",
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 22493}
       ]
     },
     {
@@ -203,18 +228,12 @@
       "category": "agent",
       "website": "https://github.com/RooVetGit/Roo-Code",
       "description": "AI coding agent for VS Code with multi-mode support",
-      "stars": 22989,
+      "stars": 23069,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 22989
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 17500
-        }
+        {"date": "2026-04-01", "stars": 23069},
+        {"date": "2026-01-01", "stars": 17500}
       ]
     },
     {
@@ -223,18 +242,12 @@
       "category": "agent",
       "website": "https://github.com/princeton-nlp/SWE-agent",
       "description": "Princeton's autonomous software engineering agent",
-      "stars": 18927,
+      "stars": 18961,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 18927
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 13000
-        }
+        {"date": "2026-04-01", "stars": 18961},
+        {"date": "2026-01-01", "stars": 13000}
       ]
     },
     {
@@ -243,42 +256,25 @@
       "category": "agent",
       "website": "https://kilo.ai",
       "description": "Open-source agentic coding platform for VS Code, JetBrains, and CLI",
-      "stars": 17712,
+      "stars": 17922,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 17712
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 11000
-        }
+        {"date": "2026-04-01", "stars": 17922},
+        {"date": "2026-01-01", "stars": 11000}
       ]
     },
     {
-      "name": "OpenCode",
-      "github_repo": "anomalyco/opencode",
+      "name": "Plandex",
+      "github_repo": "plandex-ai/plandex",
       "category": "agent",
-      "website": "https://opencode.ai",
-      "description": "The open source coding agent",
-      "stars": 138332,
-      "irrlicht_support": "planned",
-      "first_seen": "2026-04-05",
+      "website": "https://plandex.ai",
+      "description": "Open-source terminal agent for large, multi-step coding tasks spanning many files",
+      "stars": 15226,
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-10",
       "stars_history": [
-        {
-          "date": "2026-04-06",
-          "stars": 138332
-        },
-        {
-          "date": "2026-04-05",
-          "stars": 11835
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 5500
-        }
+        {"date": "2026-04-01", "stars": 15226}
       ]
     },
     {
@@ -287,14 +283,11 @@
       "category": "agent",
       "website": "https://github.com/langchain-ai/open-swe",
       "description": "LangChain's open-source async cloud-hosted coding agent",
-      "stars": 9194,
+      "stars": 9413,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 9194
-        }
+        {"date": "2026-04-01", "stars": 9413}
       ]
     },
     {
@@ -303,18 +296,12 @@
       "category": "agent",
       "website": "https://sweep.dev",
       "description": "AI junior developer for GitHub issues",
-      "stars": 7707,
+      "stars": 7705,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 7707
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 7200
-        }
+        {"date": "2026-04-01", "stars": 7705},
+        {"date": "2026-01-01", "stars": 7200}
       ]
     },
     {
@@ -323,14 +310,11 @@
       "category": "agent",
       "website": "https://github.com/antinomyhq/forgecode",
       "description": "Rust-based open-source terminal AI pair programmer",
-      "stars": 5894,
+      "stars": 6417,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 5894
-        }
+        {"date": "2026-04-01", "stars": 6417}
       ]
     },
     {
@@ -343,10 +327,7 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 2217
-        }
+        {"date": "2026-04-01", "stars": 2217}
       ]
     },
     {
@@ -355,14 +336,11 @@
       "category": "agent",
       "website": "https://www.factory.ai",
       "description": "Agent-native development platform with Droid agents",
-      "stars": 714,
+      "stars": 734,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 714
-        }
+        {"date": "2026-04-01", "stars": 734}
       ]
     },
     {
@@ -371,18 +349,12 @@
       "category": "agent",
       "website": "https://trypear.ai",
       "description": "Open-source AI code editor",
-      "stars": 674,
+      "stars": 675,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 674
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 500
-        }
+        {"date": "2026-04-01", "stars": 675},
+        {"date": "2026-01-01", "stars": 500}
       ]
     },
     {
@@ -395,50 +367,7 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 521
-        }
-      ]
-    },
-    {
-      "name": "Claude Code",
-      "github_repo": "anthropics/claude-code",
-      "category": "agent",
-      "website": "https://github.com/anthropics/claude-code",
-      "description": "Anthropic's terminal-based AI coding agent",
-      "stars": 109343,
-      "irrlicht_support": "live",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 109343
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 51700
-        }
-      ]
-    },
-    {
-      "name": "Pi",
-      "github_repo": "badlogic/pi-mono",
-      "category": "agent",
-      "website": "https://github.com/badlogic/pi-mono",
-      "description": "Anthropic's lightweight coding agent",
-      "stars": 31871,
-      "irrlicht_support": "live",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 31871
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 18400
-        }
+        {"date": "2026-04-01", "stars": 521}
       ]
     },
     {
@@ -607,44 +536,15 @@
       "stars_history": []
     },
     {
-      "name": "MetaGPT",
-      "github_repo": "geekan/MetaGPT",
-      "category": "orchestrator",
-      "website": "https://github.com/geekan/MetaGPT",
-      "description": "Multi-agent framework simulating a software company",
-      "stars": 66665,
+      "name": "Kiro",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://kiro.dev",
+      "description": "AWS-backed agentic IDE with spec-driven development and autonomous task execution",
+      "stars": null,
       "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 66665
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 64000
-        }
-      ]
-    },
-    {
-      "name": "AutoGen",
-      "github_repo": "microsoft/autogen",
-      "category": "orchestrator",
-      "website": "https://github.com/microsoft/autogen",
-      "description": "Microsoft's multi-agent conversation framework",
-      "stars": 56725,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 56725
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 53500
-        }
-      ]
+      "first_seen": "2026-04-10",
+      "stars_history": []
     },
     {
       "name": "GPT Engineer",
@@ -652,18 +552,25 @@
       "category": "orchestrator",
       "website": "https://github.com/gpt-engineer-org/gpt-engineer",
       "description": "AI agent that builds codebases from specifications",
-      "stars": 55218,
+      "stars": 55220,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 55218
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 53000
-        }
+        {"date": "2026-04-01", "stars": 55220},
+        {"date": "2026-01-01", "stars": 53000}
+      ]
+    },
+    {
+      "name": "Paperclip",
+      "github_repo": "paperclipai/paperclip",
+      "category": "orchestrator",
+      "website": "https://paperclip.ing",
+      "description": "Open-source hierarchical agent orchestrator modelling a zero-human company with CEO, manager, and worker agents",
+      "stars": 51241,
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-10",
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 51241}
       ]
     },
     {
@@ -672,18 +579,12 @@
       "category": "orchestrator",
       "website": "https://www.agno.com",
       "description": "Python agent runtime for teams and workflows (formerly Phidata)",
-      "stars": 39190,
+      "stars": 39332,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 39190
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 36000
-        }
+        {"date": "2026-04-01", "stars": 39332},
+        {"date": "2026-01-01", "stars": 36000}
       ]
     },
     {
@@ -692,18 +593,12 @@
       "category": "orchestrator",
       "website": "https://github.com/OpenBMB/ChatDev",
       "description": "Virtual software company powered by AI agents",
-      "stars": 32586,
+      "stars": 32660,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 32586
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 28000
-        }
+        {"date": "2026-04-01", "stars": 32660},
+        {"date": "2026-01-01", "stars": 28000}
       ]
     },
     {
@@ -712,38 +607,12 @@
       "category": "orchestrator",
       "website": "https://github.com/ruvnet/ruflo",
       "description": "Multi-agent swarm orchestration platform for Claude",
-      "stars": 30076,
+      "stars": 31095,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 30076
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 29700
-        }
-      ]
-    },
-    {
-      "name": "Warp",
-      "github_repo": "warpdotdev/Warp",
-      "category": "agent",
-      "website": "https://www.warp.dev",
-      "description": "Agentic terminal with Oz cloud orchestration for parallel coding agents",
-      "stars": 26322,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 26322
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 24000
-        }
+        {"date": "2026-04-01", "stars": 31095},
+        {"date": "2026-01-01", "stars": 29700}
       ]
     },
     {
@@ -756,98 +625,8 @@
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 19499
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 18500
-        }
-      ]
-    },
-    {
-      "name": "Claude Squad",
-      "github_repo": "smtg-ai/claude-squad",
-      "category": "orchestrator",
-      "website": "https://github.com/smtg-ai/claude-squad",
-      "description": "Manage multiple Claude Code instances in tmux",
-      "stars": 6843,
-      "irrlicht_support": "planned",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 6843
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 5800
-        }
-      ]
-    },
-    {
-      "name": "Composio",
-      "github_repo": "ComposioHQ/agent-orchestrator",
-      "category": "orchestrator",
-      "website": "https://composio.dev",
-      "description": "Agent-agnostic orchestrator for parallel coding agents with CI auto-fix",
-      "stars": 5777,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 5777
-        }
-      ]
-    },
-    {
-      "name": "Multiclaude",
-      "github_repo": "dlorenc/multiclaude",
-      "category": "orchestrator",
-      "website": "https://github.com/dlorenc/multiclaude",
-      "description": "Parallel Claude Code instances in tmux with Brownian ratchet CI model",
-      "stars": 527,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 527
-        }
-      ]
-    },
-    {
-      "name": "Stoneforge",
-      "github_repo": "stoneforge-ai/stoneforge",
-      "category": "orchestrator",
-      "website": "https://stoneforge.ai",
-      "description": "Web dashboard orchestrating AI coding agent teams with worktree isolation",
-      "stars": 105,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 105
-        }
-      ]
-    },
-    {
-      "name": "Forge Orchestrator",
-      "github_repo": "nxtg-ai/forge-orchestrator",
-      "category": "orchestrator",
-      "website": "https://forge.nxtg.ai",
-      "description": "Rust-based multi-AI task orchestrator with file locking and drift detection",
-      "stars": 106,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 106
-        }
+        {"date": "2026-04-01", "stars": 19499},
+        {"date": "2026-01-01", "stars": 18500}
       ]
     },
     {
@@ -856,63 +635,79 @@
       "category": "orchestrator",
       "website": "https://github.com/gastownhall/gastown",
       "description": "Multi-agent workspace manager by Steve Yegge",
-      "stars": 13540,
+      "stars": 13824,
       "irrlicht_support": "live",
       "first_seen": "2026-04-05",
       "stars_history": [
-        {
-          "date": "2026-04-05",
-          "stars": 13540
-        },
-        {
-          "date": "2026-01-05",
-          "stars": 1000
-        }
+        {"date": "2026-04-01", "stars": 13824},
+        {"date": "2026-01-01", "stars": 1000}
       ]
     },
     {
-      "name": "v0",
-      "github_repo": null,
+      "name": "Claude Squad",
+      "github_repo": "smtg-ai/claude-squad",
       "category": "orchestrator",
-      "website": "https://v0.dev",
-      "description": "Vercel's AI UI generation tool",
-      "stars": null,
-      "irrlicht_support": "none",
+      "website": "https://github.com/smtg-ai/claude-squad",
+      "description": "Manage multiple Claude Code instances in tmux",
+      "stars": 6939,
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
-      "stars_history": []
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 6939},
+        {"date": "2026-01-01", "stars": 5800}
+      ]
     },
     {
-      "name": "Replit Agent",
-      "github_repo": null,
+      "name": "Composio",
+      "github_repo": "ComposioHQ/agent-orchestrator",
       "category": "orchestrator",
-      "website": "https://replit.com",
-      "description": "Replit's AI coding agent",
-      "stars": null,
+      "website": "https://composio.dev",
+      "description": "Agent-agnostic orchestrator for parallel coding agents with CI auto-fix",
+      "stars": 6141,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
-      "stars_history": []
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 6141}
+      ]
     },
     {
-      "name": "Lovable",
-      "github_repo": null,
+      "name": "Multiclaude",
+      "github_repo": "dlorenc/multiclaude",
       "category": "orchestrator",
-      "website": "https://lovable.dev",
-      "description": "AI full-stack web app builder",
-      "stars": null,
+      "website": "https://github.com/dlorenc/multiclaude",
+      "description": "Parallel Claude Code instances in tmux with Brownian ratchet CI model",
+      "stars": 530,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
-      "stars_history": []
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 530}
+      ]
     },
     {
-      "name": "Superinterface",
-      "github_repo": null,
+      "name": "Stoneforge",
+      "github_repo": "stoneforge-ai/stoneforge",
       "category": "orchestrator",
-      "website": "https://superinterface.ai",
-      "description": "AI agent interface platform",
-      "stars": null,
+      "website": "https://stoneforge.ai",
+      "description": "Web dashboard orchestrating AI coding agent teams with worktree isolation",
+      "stars": 110,
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
-      "stars_history": []
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 110}
+      ]
+    },
+    {
+      "name": "Forge Orchestrator",
+      "github_repo": "nxtg-ai/forge-orchestrator",
+      "category": "orchestrator",
+      "website": "https://forge.nxtg.ai",
+      "description": "Rust-based multi-AI task orchestrator with file locking and drift detection",
+      "stars": 107,
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "stars_history": [
+        {"date": "2026-04-01", "stars": 107}
+      ]
     }
   ]
 }
