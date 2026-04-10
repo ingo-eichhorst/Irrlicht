@@ -173,7 +173,7 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 		if old.SessionID == sessionID || old.PID != pid {
 			continue
 		}
-		if old.ParentSessionID != "" || strings.HasPrefix(old.SessionID, "proc-") {
+		if old.ParentSessionID != "" {
 			continue
 		}
 
@@ -458,6 +458,37 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 			}
 			_ = pm.repo.Delete(state.SessionID)
 			pm.broadcast(outbound.PushTypeDeleted, state)
+		}
+	}
+
+	// Clean up stale pre-sessions (proc-*) that have a corresponding real
+	// session. Match by PID (preferred) or by adapter + CWD (for adapters
+	// like Codex whose PID discovery may not have completed yet).
+	for _, proc := range states {
+		if !strings.HasPrefix(proc.SessionID, "proc-") {
+			continue
+		}
+		if s, _ := pm.repo.Load(proc.SessionID); s == nil {
+			continue // already deleted above
+		}
+		for _, candidate := range states {
+			if strings.HasPrefix(candidate.SessionID, "proc-") || candidate.TranscriptPath == "" {
+				continue
+			}
+			matched := proc.PID > 0 && proc.PID == candidate.PID
+			if !matched && proc.CWD != "" && proc.Adapter == candidate.Adapter && proc.CWD == candidate.CWD {
+				matched = true
+			}
+			if matched {
+				pm.log.LogInfo("session-detector-seed", proc.SessionID,
+					fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID))
+				if pm.onSessionDeleted != nil {
+					pm.onSessionDeleted(proc.SessionID)
+				}
+				_ = pm.repo.Delete(proc.SessionID)
+				pm.broadcast(outbound.PushTypeDeleted, proc)
+				break
+			}
 		}
 	}
 }
