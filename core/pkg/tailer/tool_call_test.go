@@ -71,6 +71,14 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 			ev.Tokens = ExtractUsage(usage)
 		}
 	}
+	// RequestID for cost deduplication.
+	if reqID, ok := raw["requestId"].(string); ok {
+		ev.RequestID = reqID
+	}
+	// CumulativeTokens (Codex-style).
+	if cumUsage, ok := raw["cumulative_usage"].(map[string]interface{}); ok {
+		ev.CumulativeTokens = ExtractUsage(cumUsage)
+	}
 	if cm, ok := raw["context_management"].(map[string]interface{}); ok {
 		if cw, ok := cm["context_window"].(float64); ok && cw > 0 {
 			ev.ContextWindow = int64(cw)
