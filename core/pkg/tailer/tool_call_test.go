@@ -128,7 +128,9 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	case "tool_use":
 		id, _ := raw["id"].(string)
 		name, _ := raw["name"].(string)
-		ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
+		if name != "" {
+			ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
+		}
 	case "tool_call":
 		// Legacy format: {"tool_call": {"name": "Bash"}}
 		name := ""
@@ -137,10 +139,13 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 			name, _ = tc["name"].(string)
 			id, _ = tc["id"].(string)
 		}
-		ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
+		if name != "" {
+			ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
+		}
 	case "tool_result":
-		id, _ := raw["tool_use_id"].(string)
-		ev.ToolResultIDs = append(ev.ToolResultIDs, id)
+		if id, ok := raw["tool_use_id"].(string); ok && id != "" {
+			ev.ToolResultIDs = append(ev.ToolResultIDs, id)
+		}
 	}
 
 	// Assistant text.
@@ -785,8 +790,9 @@ func TestIDTracking_ParallelOutOfOrder(t *testing.T) {
 }
 
 func TestIDTracking_EmptyID(t *testing.T) {
-	// Empty-ID tool_use degrades to a single-slot fallback via the empty-string
-	// map key. Functional but not ideal — tests graceful degradation.
+	// Empty-ID tool_use is skipped by the tailer's insert guard (tu.ID != "").
+	// Not tracked, but harmless — tests graceful degradation when a parser
+	// fails to extract an ID from a transcript format.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "tool_use", "id": "", "name": "Bash", "timestamp": ts(0)},
 	})
@@ -796,7 +802,6 @@ func TestIDTracking_EmptyID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Empty IDs are skipped by the insert logic (tu.ID != "")
 	if m.HasOpenToolCall {
 		t.Error("expected HasOpenToolCall=false: empty ID should be skipped")
 	}
