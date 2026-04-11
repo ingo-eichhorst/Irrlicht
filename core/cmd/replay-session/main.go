@@ -608,6 +608,26 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	if err != nil {
 		return nil, fmt.Errorf("load sidecar: %w", err)
 	}
+
+	// Curated fixtures are single-session — the curate script filters the
+	// raw recording by session_id. Reject sidecars that contain events for
+	// more than one session so we fail fast rather than interleaving
+	// foreign events into this fixture's replay.
+	seenSessions := make(map[string]bool)
+	for _, ev := range sidecarEvents {
+		if ev.SessionID != "" {
+			seenSessions[ev.SessionID] = true
+		}
+	}
+	if len(seenSessions) > 1 {
+		ids := make([]string, 0, len(seenSessions))
+		for id := range seenSessions {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		return nil, fmt.Errorf("sidecar %s contains events for %d sessions %v — curated fixtures must be single-session (re-run scripts/curate-lifecycle-fixture.sh to filter)", sidecarPath, len(seenSessions), ids)
+	}
+
 	var fswatches []lifecycle.Event
 	var processExitAt time.Time
 	for _, ev := range sidecarEvents {
@@ -841,7 +861,8 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 // loadAllLifecycleEvents reads a lifecycle sidecar file and returns every
 // event sorted by sequence number (the fields that make sidecar replay
 // deterministic). Unlike loadLifecycleStateTransitions it does not filter
-// by Kind.
+// by Kind. Malformed lines are logged to stderr and skipped so a partial
+// file doesn't silently produce bogus replay output.
 func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -853,9 +874,12 @@ func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 
 	var out []lifecycle.Event
+	lineNum := 0
 	for scanner.Scan() {
+		lineNum++
 		var ev lifecycle.Event
 		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			fmt.Fprintf(os.Stderr, "replay-session: skipping malformed sidecar line %d in %s: %v\n", lineNum, path, err)
 			continue
 		}
 		out = append(out, ev)

@@ -4,6 +4,8 @@ package recorder
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -29,16 +31,26 @@ type JSONLRecorder struct {
 }
 
 // NewJSONLRecorder creates a new recorder that writes to a timestamped file
-// in dir. The directory is created if it does not exist.
+// in dir. The directory is created if it does not exist. The filename
+// includes a short random suffix so that sub-second daemon restarts don't
+// collide and overwrite a prior recording.
 func NewJSONLRecorder(dir string) (*JSONLRecorder, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create recordings dir: %w", err)
 	}
 
-	name := fmt.Sprintf("%s.jsonl", time.Now().Format("2006-01-02T150405"))
+	var suffixBytes [3]byte
+	if _, err := rand.Read(suffixBytes[:]); err != nil {
+		return nil, fmt.Errorf("generate recording suffix: %w", err)
+	}
+	name := fmt.Sprintf("%s-%s.jsonl",
+		time.Now().Format("2006-01-02T150405"),
+		hex.EncodeToString(suffixBytes[:]))
 	path := filepath.Join(dir, name)
 
-	f, err := os.Create(path)
+	// O_EXCL refuses to open if the file already exists — catches the
+	// astronomically-unlikely case where the random suffix collides.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("create recording file: %w", err)
 	}
@@ -64,7 +76,14 @@ func (r *JSONLRecorder) periodicFlush() {
 			return
 		case <-ticker.C:
 			r.mu.Lock()
-			_ = r.w.Flush()
+			// Guard against the ticker-vs-done race: Go's select picks
+			// pseudo-randomly when both cases are ready, so a Close() that
+			// already fired `close(r.done)` can still lose the draw and we
+			// end up here after the underlying file is closed. Skip the
+			// flush in that case rather than writing to a closed fd.
+			if !r.closed {
+				_ = r.w.Flush()
+			}
 			r.mu.Unlock()
 		}
 	}

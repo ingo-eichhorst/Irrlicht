@@ -142,3 +142,45 @@ func TestJSONLRecorder_CreatesDir(t *testing.T) {
 		t.Fatalf("recording file not created: %v", err)
 	}
 }
+
+// TestJSONLRecorder_SubSecondRestartDoesNotCollide ensures two recorders
+// created in the same wall-clock second land on distinct files thanks to
+// the random filename suffix. Previously the filename used second-precision
+// timestamps only, so a tight restart loop would silently overwrite the
+// prior recording.
+func TestJSONLRecorder_SubSecondRestartDoesNotCollide(t *testing.T) {
+	dir := t.TempDir()
+	r1, err := NewJSONLRecorder(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLRecorder #1: %v", err)
+	}
+	r2, err := NewJSONLRecorder(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLRecorder #2: %v", err)
+	}
+	if r1.Path() == r2.Path() {
+		t.Errorf("sub-second restart produced identical paths: %s", r1.Path())
+	}
+	_ = r1.Close()
+	_ = r2.Close()
+}
+
+// TestJSONLRecorder_CloseIsSafeWithRunningFlushLoop exercises the
+// Close→periodicFlush race. Using a very short flushInterval is not
+// practical (it's a package const) so we just hammer Close after writes
+// and confirm no panic or error.
+func TestJSONLRecorder_CloseIsSafeWithRunningFlushLoop(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		dir := t.TempDir()
+		rec, err := NewJSONLRecorder(dir)
+		if err != nil {
+			t.Fatalf("NewJSONLRecorder: %v", err)
+		}
+		for j := 0; j < 10; j++ {
+			rec.Record(lifecycle.Event{Seq: int64(j), Kind: lifecycle.KindTranscriptNew, SessionID: "s"})
+		}
+		if err := rec.Close(); err != nil {
+			t.Errorf("Close #%d: %v", i, err)
+		}
+	}
+}
