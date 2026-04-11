@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Binding var isPresented: Bool
     @AppStorage("debugMode") private var debugMode: Bool = false
+    @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -19,6 +20,14 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Show Estimated Cost", isOn: $showCostDisplay)
+
+                Text("Display estimated USD cost per session and per project group. Cost estimates are approximate.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Spacer()
 
             HStack {
@@ -28,6 +37,6 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 320, height: 200)
+        .frame(width: 320, height: 260)
     }
 }
