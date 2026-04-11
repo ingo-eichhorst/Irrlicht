@@ -286,6 +286,26 @@ func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
 	return nil
 }
 
+// CountOpenSubagents returns the number of in-process Claude Code sub-agents
+// currently running, derived from open Agent tool calls. Claude Code
+// Explore/Plan agents run inside the parent process and don't create separate
+// transcripts, so the only detection signal is the Agent tool name in
+// LastOpenToolNames. Background agents that DO create separate transcripts
+// are tracked elsewhere via ParentSessionID and merged in by the domain-level
+// ComputeSubagentSummary helper.
+func CountOpenSubagents(m *tailer.SessionMetrics) int {
+	if m == nil || !m.HasOpenToolCall {
+		return 0
+	}
+	count := 0
+	for _, name := range m.LastOpenToolNames {
+		if name == "Agent" {
+			count++
+		}
+	}
+	return count
+}
+
 // isClaudeCodeMessageEvent returns true for event types that count as messages.
 func isClaudeCodeMessageEvent(eventType string) bool {
 	switch eventType {

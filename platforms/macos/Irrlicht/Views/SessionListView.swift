@@ -1112,8 +1112,9 @@ struct ProjectGroupSectionView: View {
             // Session rows (indented under the project header)
             if isExpanded {
                 ForEach(Array(projectGroup.sessionGroups.enumerated()), id: \.element.id) { localIndex, group in
-                    // Use the daemon's unified subagent summary (in-process + file-based)
-                    // rather than counting file-based children only.
+                    // The daemon publishes a unified subagent summary (in-process
+                    // from the adapter plus file-based children) on both REST and
+                    // WebSocket paths; see ComputeSubagentSummary in core.
                     let activeCount = (group.parent.subagents?.working ?? 0)
                         + (group.parent.subagents?.waiting ?? 0)
                     SessionRowView(session: group.parent, agentNumber: localIndex + 1, activeSubagentCount: activeCount)

@@ -160,25 +160,48 @@ func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildre
 }
 
 // unifySubagents recomputes the Subagents summary for an agent by merging
-// in-process agents (from open Agent tool calls) with file-based children.
+// the adapter-reported in-process count (metrics.OpenSubagents) with the
+// file-based children attached to the agent tree. Delegates to
+// ComputeSubagentSummary so the detector and REST path share one formula.
 func unifySubagents(a *Agent) {
-	fileChildren := len(a.Children)
+	children := make([]*SessionState, 0, len(a.Children))
+	for _, c := range a.Children {
+		children = append(children, c.SessionState)
+	}
+	a.Subagents = ComputeSubagentSummary(a.SessionState, children)
+}
+
+// ComputeSubagentSummary returns the unified subagent summary for a parent
+// session. The "in-process" component comes from the adapter via
+// parent.Metrics.OpenSubagents (e.g. claudecode counts open Agent tool calls);
+// the "file-based" component comes from child sessions in childSessions whose
+// ParentSessionID matches the parent. Passing nil or an empty slice for
+// childSessions skips the file-based contribution. Returns nil when there are
+// no subagents at all, so callers can leave Subagents unset on the wire.
+func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState) *SubagentSummary {
 	inProcess := 0
-	if a.Subagents != nil {
-		inProcess = a.Subagents.Total
+	if parent != nil && parent.Metrics != nil {
+		inProcess = parent.Metrics.OpenSubagents
 	}
 
-	if fileChildren == 0 && inProcess == 0 {
-		a.Subagents = nil
-		return
+	var fileChildren []*SessionState
+	if parent != nil {
+		for _, c := range childSessions {
+			if c != nil && c.ParentSessionID == parent.SessionID {
+				fileChildren = append(fileChildren, c)
+			}
+		}
+	}
+
+	if inProcess == 0 && len(fileChildren) == 0 {
+		return nil
 	}
 
 	summary := &SubagentSummary{
-		Total:   fileChildren + inProcess,
+		Total:   inProcess + len(fileChildren),
 		Working: inProcess, // in-process agents are always working
 	}
-
-	for _, c := range a.Children {
+	for _, c := range fileChildren {
 		switch c.State {
 		case StateWorking:
 			summary.Working++
@@ -188,8 +211,7 @@ func unifySubagents(a *Agent) {
 			summary.Ready++
 		}
 	}
-
-	a.Subagents = summary
+	return summary
 }
 
 // buildOrchestratorSummary creates a lightweight summary from orchestrator state.

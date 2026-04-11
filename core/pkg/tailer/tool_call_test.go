@@ -349,7 +349,7 @@ func TestHasOpenToolCall_TurnDonePreservesAgent(t *testing.T) {
 	// Defensive: if turn_done ever arrives while an Agent tool_use is still
 	// open (a sub-agent running in the background — see the IsAgentDone
 	// override in session.go), the reconciliation from #114 must preserve
-	// the Agent entry so InferSubagents can still count in-process
+	// the Agent entry so the claudecode adapter's CountOpenSubagents can still count in-process
 	// sub-agents. Only non-Agent leaks get swept.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
@@ -569,7 +569,7 @@ func TestLastOpenToolNames_AgentToolsPreservedAfterPartialResults(t *testing.T) 
 	// Simulate Claude Code format: 3 streaming assistant events each with one
 	// Agent tool_use, followed by 1 user event carrying a tool_result.
 	// After the first result, 2 Agent calls remain open — LastOpenToolNames
-	// must still contain them so InferSubagents can count them.
+	// must still contain them so the claudecode adapter's CountOpenSubagents can count them.
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		// 3 streaming assistant chunks, each with one Agent tool_use
 		{"type": "assistant", "timestamp": ts(0), "message": map[string]interface{}{
@@ -615,7 +615,7 @@ func TestLastOpenToolNames_AgentToolsPreservedAfterPartialResults(t *testing.T) 
 
 	// BUG (issue #88): ClearToolNames on the user event wipes LastOpenToolNames
 	// even though tool_result blocks are present. The remaining 2 Agent names
-	// should be preserved so InferSubagents can detect them.
+	// should be preserved so the claudecode adapter's CountOpenSubagents can detect them.
 	if len(m.LastOpenToolNames) != 2 {
 		t.Errorf("expected LastOpenToolNames to have 2 entries, got %d: %v",
 			len(m.LastOpenToolNames), m.LastOpenToolNames)

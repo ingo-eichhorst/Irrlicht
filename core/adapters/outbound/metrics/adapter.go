@@ -43,6 +43,20 @@ func parserFor(adapter string) tailer.TranscriptParser {
 	}
 }
 
+// countOpenSubagents returns the adapter-specific count of in-process child
+// agents currently running. Each adapter decides how to recognize subagents
+// in its own transcript format; codex and pi currently report subagents as
+// separate transcript sessions (tracked via ParentSessionID), so they return
+// zero here and the domain-level ComputeSubagentSummary picks them up by
+// walking file-based children.
+func countOpenSubagents(adapter string, m *tailer.SessionMetrics) int {
+	switch adapter {
+	case claudecode.AdapterName:
+		return claudecode.CountOpenSubagents(m)
+	}
+	return 0
+}
+
 // ComputeMetrics analyses the transcript at transcriptPath and returns session metrics.
 // The adapter parameter selects the correct transcript parser.
 // Returns (nil, nil) when the transcript doesn't exist yet or yields no data.
@@ -75,6 +89,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		PressureLevel:          m.PressureLevel,
 		HasOpenToolCall:        m.HasOpenToolCall,
 		OpenToolCallCount:      m.OpenToolCallCount,
+		OpenSubagents:          countOpenSubagents(adapter, m),
 		LastEventType:          m.LastEventType,
 		LastOpenToolNames:      m.LastOpenToolNames,
 		LastWasUserInterrupt:   m.LastWasUserInterrupt,
