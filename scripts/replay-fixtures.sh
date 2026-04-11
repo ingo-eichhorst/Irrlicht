@@ -46,6 +46,9 @@ echo "building $BIN ..." >&2
 found_any=0
 while IFS= read -r fix; do
   [[ -z "$fix" ]] && continue
+  # Skip lifecycle-event sidecars — they share the .jsonl suffix but are not
+  # transcripts. replay-session picks them up automatically when present.
+  [[ "$fix" == *.events.jsonl ]] && continue
   found_any=1
   adapter="$(basename "$(dirname "$fix")")"
   name="$(basename "${fix%.jsonl}")"

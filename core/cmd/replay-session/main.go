@@ -39,6 +39,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
@@ -102,6 +103,51 @@ type Report struct {
 	Settings         ReportSettings `json:"settings"`
 	Summary          ReportSummary `json:"summary"`
 	Transitions      []Transition  `json:"transitions"`
+
+	// ExtendedCheck is populated when a <transcript-basename>.events.jsonl
+	// sidecar is present next to the transcript fixture. It diffs the
+	// replayed state transitions against the recorded ones so fixtures act
+	// as regression tests for the detector.
+	ExtendedCheck *ExtendedCheck `json:"extended_check,omitempty"`
+}
+
+// ExtendedCheck compares the replayed state transitions against a committed
+// lifecycle recording (.events.jsonl sidecar produced by `irrlichd --record`).
+//
+// This is an **informational drift signal**, not a regression oracle. The
+// replay and the real daemon don't process events the same way: the replay
+// uses transcript-embedded timestamps for debounce batching, while the daemon
+// debounces on fswatcher write arrival. Identical transcripts can therefore
+// produce different transition sequences — both valid — depending on how
+// events cluster. The check is useful for understanding those differences,
+// not for gating CI.
+//
+// Hard regression testing should compare committed replay reports run-over-
+// run (existing pattern in testdata/replay/reports/), not replay output
+// against daemon output.
+//
+// Exit policy: this check never fails the process on its own. Pass
+// --strict-check on the command line to exit non-zero on any ordered-diff
+// mismatch — only useful when you expect byte-identical reproduction.
+type ExtendedCheck struct {
+	SidecarPath         string               `json:"sidecar_path"`
+	RecordedCount       int                  `json:"recorded_transition_count"`
+	ReplayedCount       int                  `json:"replayed_transition_count"`
+	OrderedMatches      int                  `json:"ordered_matches"`
+	OrderedMismatches   []TransitionMismatch `json:"ordered_mismatches,omitempty"`
+	RecordedUniqueKinds []string             `json:"recorded_unique_kinds"`
+	ReplayedUniqueKinds []string             `json:"replayed_unique_kinds"`
+	MissingKinds        []string             `json:"missing_kinds,omitempty"` // kinds in recorded but not replayed
+	ExtraKinds          []string             `json:"extra_kinds,omitempty"`   // kinds in replayed but not recorded
+}
+
+// TransitionMismatch is a single divergence between replayed and recorded
+// state transitions.
+type TransitionMismatch struct {
+	Index    int    `json:"index"`
+	Kind     string `json:"kind"` // "missing_in_replay" | "extra_in_replay" | "state_differs"
+	Recorded string `json:"recorded,omitempty"` // "prev→new"
+	Replayed string `json:"replayed,omitempty"` // "prev→new"
 }
 
 type ReportSettings struct {
@@ -143,12 +189,14 @@ func main() {
 		debounceFlag time.Duration
 		flickerMax   time.Duration
 		quiet        bool
+		strictCheck  bool
 	)
 	flag.StringVar(&outPath, "out", "", "output JSON report path (default: stdout)")
 	flag.StringVar(&adapterFlag, "adapter", "", "adapter name (claude-code, codex, pi); auto-detected from path if omitted")
 	flag.DurationVar(&debounceFlag, "debounce", 2*time.Second, "simulated activity debounce window")
 	flag.DurationVar(&flickerMax, "flicker-max", 10*time.Second, "episodes shorter than this are counted as flickers (automated agent loops cycle turns in ~25s, so 30s overcounts)")
 	flag.BoolVar(&quiet, "quiet", false, "suppress per-event progress on stderr")
+	flag.BoolVar(&strictCheck, "strict-check", false, "exit non-zero on any ordered-diff mismatch in the extended check (default: only unique-kind regressions fail)")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
@@ -178,6 +226,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Extended check: when a <transcript-basename>.events.jsonl sidecar is
+	// present, diff replayed transitions against the recorded ones. Absent
+	// sidecar = no check, report unchanged.
+	sidecarPath := strings.TrimSuffix(src, ".jsonl") + ".events.jsonl"
+	if _, err := os.Stat(sidecarPath); err == nil {
+		check, err := runExtendedCheck(sidecarPath, report.Transitions)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "extended check failed:", err)
+			os.Exit(1)
+		}
+		report.ExtendedCheck = check
+	}
+
 	enc := json.NewEncoder(chooseOutput(outPath))
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(report); err != nil {
@@ -188,11 +249,34 @@ func main() {
 	if !quiet {
 		s := report.Summary
 		fmt.Fprintf(os.Stderr,
-			"replay: %d events → %d transitions, %d flickers (ww=%d wr=%d rw=%d)\n",
+			"replay: %d events → %d transitions, %d flickers (ww=%d wr=%d rw=%d)",
 			s.TotalEvents, s.TotalTransitions, s.FlickerCount,
 			s.FlickersByCategory["working_between_waiting"]+s.FlickersByCategory["waiting_between_working"],
 			s.FlickersByCategory["working_between_ready"]+s.FlickersByCategory["ready_between_working"],
 			s.FlickersByCategory["ready_between_waiting"]+s.FlickersByCategory["waiting_between_ready"])
+		if c := report.ExtendedCheck; c != nil {
+			kindsMark := "✓"
+			if len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
+				kindsMark = "✗"
+			}
+			orderMark := "✓"
+			if len(c.OrderedMismatches) > 0 {
+				orderMark = "✗"
+			}
+			fmt.Fprintf(os.Stderr, " [extended-check: kinds %s ordered %d/%d %s]",
+				kindsMark, c.OrderedMatches, c.RecordedCount, orderMark)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+
+	// Exit policy: the extended check is informational by default. Pass
+	// --strict-check when you expect byte-identical reproduction and want
+	// the process to fail on any drift.
+	if strictCheck && report.ExtendedCheck != nil {
+		c := report.ExtendedCheck
+		if len(c.OrderedMismatches) > 0 || len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
+			os.Exit(1)
+		}
 	}
 }
 
@@ -554,4 +638,141 @@ func head(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// runExtendedCheck loads a lifecycle-events sidecar, extracts its state
+// transitions, and compares them to the replayed transitions. Transitions
+// with an empty prev_state are dropped on both sides (the sidecar's "new
+// session created" row and the replay's synthetic init row).
+func runExtendedCheck(sidecarPath string, replayed []Transition) (*ExtendedCheck, error) {
+	recorded, err := loadLifecycleStateTransitions(sidecarPath)
+	if err != nil {
+		return nil, err
+	}
+
+	replayedReal := make([]Transition, 0, len(replayed))
+	for _, t := range replayed {
+		if t.PrevState == "" {
+			continue
+		}
+		replayedReal = append(replayedReal, t)
+	}
+
+	check := &ExtendedCheck{
+		SidecarPath:   sidecarPath,
+		RecordedCount: len(recorded),
+		ReplayedCount: len(replayedReal),
+	}
+
+	// Ordered diff.
+	n := len(recorded)
+	if len(replayedReal) < n {
+		n = len(replayedReal)
+	}
+	for i := 0; i < n; i++ {
+		r := recorded[i]
+		p := replayedReal[i]
+		if r.PrevState == p.PrevState && r.NewState == p.NewState {
+			check.OrderedMatches++
+			continue
+		}
+		check.OrderedMismatches = append(check.OrderedMismatches, TransitionMismatch{
+			Index:    i,
+			Kind:     "state_differs",
+			Recorded: r.PrevState + "→" + r.NewState,
+			Replayed: p.PrevState + "→" + p.NewState,
+		})
+	}
+	for i := n; i < len(recorded); i++ {
+		r := recorded[i]
+		check.OrderedMismatches = append(check.OrderedMismatches, TransitionMismatch{
+			Index:    i,
+			Kind:     "missing_in_replay",
+			Recorded: r.PrevState + "→" + r.NewState,
+		})
+	}
+	for i := n; i < len(replayedReal); i++ {
+		p := replayedReal[i]
+		check.OrderedMismatches = append(check.OrderedMismatches, TransitionMismatch{
+			Index:    i,
+			Kind:     "extra_in_replay",
+			Replayed: p.PrevState + "→" + p.NewState,
+		})
+	}
+
+	// Unique-kinds diff (the strict correctness check).
+	recordedKinds := uniqueTransitionKinds(recorded, func(e lifecycle.Event) (string, string) { return e.PrevState, e.NewState })
+	replayedKinds := uniqueTransitionKinds(replayedReal, func(t Transition) (string, string) { return t.PrevState, t.NewState })
+	check.RecordedUniqueKinds = sortedKinds(recordedKinds)
+	check.ReplayedUniqueKinds = sortedKinds(replayedKinds)
+	for k := range recordedKinds {
+		if !replayedKinds[k] {
+			check.MissingKinds = append(check.MissingKinds, k)
+		}
+	}
+	for k := range replayedKinds {
+		if !recordedKinds[k] {
+			check.ExtraKinds = append(check.ExtraKinds, k)
+		}
+	}
+	sort.Strings(check.MissingKinds)
+	sort.Strings(check.ExtraKinds)
+
+	return check, nil
+}
+
+// uniqueTransitionKinds is a small generic helper that returns the set of
+// "prev→new" strings appearing in a slice of transition-like records.
+func uniqueTransitionKinds[T any](items []T, fields func(T) (prev, next string)) map[string]bool {
+	out := make(map[string]bool)
+	for _, it := range items {
+		prev, next := fields(it)
+		out[prev+"→"+next] = true
+	}
+	return out
+}
+
+func sortedKinds(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// loadLifecycleStateTransitions reads a JSONL lifecycle recording and
+// returns only the state_transition events that carry a non-empty
+// prev_state (dropping "new session created" which the replay does not
+// reproduce). Events are returned in sequence order.
+func loadLifecycleStateTransitions(path string) ([]lifecycle.Event, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+
+	var out []lifecycle.Event
+	for scanner.Scan() {
+		var ev lifecycle.Event
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			continue
+		}
+		if ev.Kind != lifecycle.KindStateTransition {
+			continue
+		}
+		if ev.PrevState == "" {
+			continue
+		}
+		out = append(out, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out, nil
 }
