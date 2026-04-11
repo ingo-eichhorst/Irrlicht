@@ -1,0 +1,79 @@
+name: Adapter request
+description: Request support for a new coding agent or orchestrator.
+title: "[adapter]: support for "
+labels: ["adapter-request", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Irrlicht currently supports Claude Code, OpenAI Codex, Pi, and Gas
+        Town. New adapters are welcome — the more detail you can provide
+        here, the easier it is to prioritize and implement.
+
+        The architecture uses hexagonal inbound adapters under
+        `core/adapters/inbound/<agent>/`. See existing adapters and
+        [docs/adapters.html](https://irrlicht.io/docs/adapters.html) for the
+        integration contract.
+
+  - type: input
+    id: agent-name
+    attributes:
+      label: Agent name
+      placeholder: "e.g. Gemini CLI, OpenCode, Cursor Agent"
+    validations:
+      required: true
+
+  - type: input
+    id: agent-url
+    attributes:
+      label: Project URL
+      placeholder: "https://github.com/..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: usage
+    attributes:
+      label: How do you use it?
+      description: What does a typical session look like? Single-shot? Long-running? Parallel?
+    validations:
+      required: true
+
+  - type: textarea
+    id: transcript
+    attributes:
+      label: Transcript / state location
+      description: |
+        Where does the agent store session data on disk? File format
+        (JSONL, SQLite, plaintext)? How are new sessions discovered?
+      placeholder: "e.g. ~/.gemini/sessions/**/*.jsonl, one file per turn"
+
+  - type: textarea
+    id: state-signals
+    attributes:
+      label: State signals
+      description: |
+        How can Irrlicht tell the agent is **working**, **waiting** (needs
+        you), or **ready** (turn complete) from the transcript or process?
+        Think: prompt markers, process lifecycle, explicit events.
+
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Which platforms does this agent run on?
+      multiple: true
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Cross-platform CLI
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to help build and test this adapter.
+        - label: I can provide sample transcripts for fixtures.
