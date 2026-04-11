@@ -124,11 +124,10 @@ type Report struct {
 // tearing down a session does.
 //
 // The result is a byte-identical reproduction of what the daemon produced
-// for the recorded session. Ordered-diff mismatches are therefore real
-// regressions — pass --strict-check to fail the process on any drift.
-//
-// Unique-kind mismatches (a transition prev→new pair that appears in one
-// side but not the other) are reported either way.
+// for the recorded session. The sidecar acts as the regression oracle:
+// any mismatch (ordered or unique-kind) exits replay-session non-zero so
+// the fixture-replay script and CI catch classifier, tailer, or debounce
+// drift immediately.
 type ExtendedCheck struct {
 	SidecarPath         string               `json:"sidecar_path"`
 	RecordedCount       int                  `json:"recorded_transition_count"`
@@ -189,14 +188,12 @@ func main() {
 		debounceFlag time.Duration
 		flickerMax   time.Duration
 		quiet        bool
-		strictCheck  bool
 	)
 	flag.StringVar(&outPath, "out", "", "output JSON report path (default: stdout)")
 	flag.StringVar(&adapterFlag, "adapter", "", "adapter name (claude-code, codex, pi); auto-detected from path if omitted")
 	flag.DurationVar(&debounceFlag, "debounce", 2*time.Second, "simulated activity debounce window")
 	flag.DurationVar(&flickerMax, "flicker-max", 10*time.Second, "episodes shorter than this are counted as flickers (automated agent loops cycle turns in ~25s, so 30s overcounts)")
 	flag.BoolVar(&quiet, "quiet", false, "suppress per-event progress on stderr")
-	flag.BoolVar(&strictCheck, "strict-check", false, "exit non-zero on any ordered-diff mismatch in the extended check (default: only unique-kind regressions fail)")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
@@ -290,11 +287,10 @@ func main() {
 		fmt.Fprintln(os.Stderr)
 	}
 
-	// Exit policy: the extended check is informational by default. Pass
-	// --strict-check when you expect byte-identical reproduction and want
-	// the process to fail on any drift.
-	if strictCheck && report.ExtendedCheck != nil {
-		c := report.ExtendedCheck
+	// Exit policy: when a sidecar is present, the replay is byte-identical
+	// to the daemon. Any drift is a real regression — fail the process so
+	// CI and the fixture-replay script catch it immediately.
+	if c := report.ExtendedCheck; c != nil {
 		if len(c.OrderedMismatches) > 0 || len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
 			os.Exit(1)
 		}
