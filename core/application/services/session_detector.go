@@ -35,13 +35,17 @@ const orphanTranscriptAge = 2 * time.Minute
 const activityDebounceWindow = 2 * time.Second
 
 // subagentQuietWindow is how long a subagent's transcript must have been
-// silent before finishOrphanedChildren will promote it to ready. Foreground
-// subagents (Explore/Plan) stop writing the moment their final message
-// lands, so they're trivially silent by the time the parent's classifier
-// fires. Background subagents stream their transcripts continuously during
-// runs, so their mtimes are almost always "recent" while active — the
-// window keeps us from falsely promoting them mid-stream.
-const subagentQuietWindow = 2 * time.Second
+// silent before finishOrphanedChildren will promote it to ready.
+//
+// The window has to survive the worst-case normal gap between transcript
+// writes for an actively-running subagent. Background Task agents routinely
+// sit with no writes for 5-15 seconds while waiting on API responses —
+// session b27fdaef-6de4-403a-b277-790fe8d803bb showed a 9-second gap that
+// falsely tripped a 2-second window and re-created the child session on
+// the very next write. 30 seconds comfortably covers normal API latency
+// while still being 4× faster than the 2-minute stale-transcript sweep,
+// which is the fallback cleanup path for anything this function misses.
+const subagentQuietWindow = 30 * time.Second
 
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {

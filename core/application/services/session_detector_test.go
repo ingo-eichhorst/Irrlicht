@@ -1401,10 +1401,10 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 		},
 	})
 
-	// Two orphaned children: real stale transcript files (mtime 10s ago)
-	// so finishOrphanedChildren's quiet-window check (2s) treats them as
+	// Two orphaned children: real stale transcript files (mtime 60s ago)
+	// so finishOrphanedChildren's quiet-window check (30s) treats them as
 	// silent and promotes them.
-	staleMtime := time.Now().Add(-10 * time.Second)
+	staleMtime := time.Now().Add(-60 * time.Second)
 	for _, childID := range []string{"child-orphan-a", "child-orphan-b"} {
 		childPath := filepath.Join(tmpDir, childID+".jsonl")
 		if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
