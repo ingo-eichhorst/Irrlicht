@@ -1352,6 +1352,180 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
 	<-done
 }
 
+// TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone
+// reproduces the bug where in-process Explore/Plan subagents leave
+// their transcripts with stop_reason: null and no terminal event.
+// The classifier correctly treats this as assistant_streaming (not
+// done), so the child stays in working. The parent, whose own turn
+// IS done, is held in working by the active children.
+//
+// The fix is finishOrphanedChildren: when processing the parent's
+// last activity event and its classifier verdict is ready, walk the
+// children and promote any that have no open tool calls to ready.
+// Their work must be complete because the parent's final message
+// already incorporated their results.
+func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Parent: turn done (LastEventType=assistant with final text, no
+	// open tools). Starts in working because force-promotion will fire
+	// on the next activity event.
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-orphans",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-orphans.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "All waves complete.",
+		},
+	})
+
+	// Two orphaned children: stuck in working with assistant_streaming
+	// as their last event (the null-stop-reason final message) and
+	// no open tool calls.
+	for _, childID := range []string{"child-orphan-a", "child-orphan-b"} {
+		repo.Save(&session.SessionState{
+			SessionID:       childID,
+			State:           session.StateWorking,
+			ParentSessionID: "parent-orphans",
+			TranscriptPath:  "/home/.claude/projects/-Users-test/parent-orphans/subagents/" + childID + ".jsonl",
+			FirstSeen:       now,
+			UpdatedAt:       now,
+			EventCount:      5,
+			Metrics: &session.SessionMetrics{
+				LastEventType:   "assistant_streaming",
+				HasOpenToolCall: false,
+			},
+		})
+	}
+
+	// Trigger the parent's processActivity. The classifier will say
+	// ready, finishOrphanedChildren should promote both children,
+	// hasActiveChildren should then return false, and the parent
+	// should land in ready.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-orphans",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-orphans.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	parent, _ := repo.Load("parent-orphans")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateReady {
+		t.Errorf("parent state: got %q, want ready — orphaned children should have been fast-forwarded", parent.State)
+	}
+
+	for _, childID := range []string{"child-orphan-a", "child-orphan-b"} {
+		child, _ := repo.Load(childID)
+		if child == nil {
+			continue // parent-ready cleanup may have deleted it
+		}
+		if child.State != session.StateReady {
+			t.Errorf("child %q state: got %q, want ready", childID, child.State)
+		}
+	}
+
+	cancel()
+	<-done
+}
+
+// TestSessionDetector_ActiveSubagentsNotPromoted_ByOrphanFinish guards
+// against a false-positive in finishOrphanedChildren: a child that has
+// an open tool call (genuinely still running) must NOT be promoted just
+// because the parent's turn is done.
+func TestSessionDetector_ActiveSubagentsNotPromoted_ByOrphanFinish(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-active",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-active.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "Waiting for subagent.",
+		},
+	})
+
+	// Child has an open tool call — genuinely still running.
+	repo.Save(&session.SessionState{
+		SessionID:       "child-active",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-active",
+		TranscriptPath:  "/home/.claude/projects/-Users-test/parent-active/subagents/child-active.jsonl",
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   true,
+			LastOpenToolNames: []string{"Bash"},
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-active",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-active.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Parent should be held in working because the child genuinely
+	// has a tool open — finishOrphanedChildren must NOT touch it.
+	parent, _ := repo.Load("parent-active")
+	if parent.State != session.StateWorking {
+		t.Errorf("parent state: got %q, want working (child has open tool — should be held)", parent.State)
+	}
+	child, _ := repo.Load("child-active")
+	if child == nil {
+		t.Fatal("child should still exist")
+	}
+	if child.State != session.StateWorking {
+		t.Errorf("child state: got %q, want working (has open tool)", child.State)
+	}
+
+	cancel()
+	<-done
+}
+
 // TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness
 // reproduces the bug where a parent session got stuck in `working` after
 // the liveness sweep deleted its last child.

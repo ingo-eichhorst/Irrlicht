@@ -460,7 +460,15 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// Parent-child propagation: if a parent session would transition to
 	// ready but still has active children (working/waiting), hold it in
 	// working. The parent will be re-evaluated when children finish.
+	//
+	// Before holding, fast-forward any "orphaned" children — subagents
+	// whose own tail has no open tool calls but whose transcript ends
+	// with `stop_reason: null` (Claude Code never writes end_turn for
+	// in-process subagents). Since the parent's own turn is done,
+	// those subagents' work is definitionally complete: the parent's
+	// final assistant message already incorporated their results.
 	if newState == session.StateReady && state.ParentSessionID == "" {
+		d.finishOrphanedChildren(state.SessionID)
 		if d.hasActiveChildren(state.SessionID) {
 			d.log.LogInfo("session-detector", ev.SessionID,
 				"holding parent working — active children still running")
@@ -671,6 +679,60 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 	}
 }
 
+// finishOrphanedChildren walks the child sessions of parentID and promotes
+// each one to ready if it has no open tool calls. Called when the parent's
+// own turn is done and we're about to hold the parent in working on
+// behalf of the children.
+//
+// This handles a Claude Code quirk: in-process subagent transcripts
+// (Explore/Plan tools under <parent>/subagents/<agent-id>.jsonl) never
+// emit a proper end_turn event — their final assistant message is written
+// with stop_reason: null, which the classifier correctly treats as
+// streaming. Without this fast-forward the child stays in working until
+// the 2-minute stale-transcript sweep catches it, and the parent is
+// held working for that entire window.
+//
+// Safety: we only promote children whose metrics show no open tool calls.
+// A child that is genuinely still running a tool keeps an entry in the
+// FIFO and is left alone.
+func (d *SessionDetector) finishOrphanedChildren(parentID string) {
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+	now := time.Now().Unix()
+	for _, s := range states {
+		if s.ParentSessionID != parentID {
+			continue
+		}
+		if s.State != session.StateWorking && s.State != session.StateWaiting {
+			continue
+		}
+		if s.Metrics == nil || s.Metrics.HasOpenToolCall {
+			continue
+		}
+		prev := s.State
+		s.State = session.StateReady
+		s.UpdatedAt = now
+		s.WaitingStartTime = nil
+		d.record(lifecycle.Event{
+			Kind:       lifecycle.KindStateTransition,
+			SessionID:  s.SessionID,
+			PrevState:  prev,
+			NewState:   session.StateReady,
+			Reason:     "subagent orphaned (parent turn done, no open tools)",
+		})
+		if err := d.repo.Save(s); err != nil {
+			d.log.LogError("session-detector", s.SessionID,
+				fmt.Sprintf("failed to finish orphaned child: %v", err))
+			continue
+		}
+		d.log.LogInfo("session-detector", s.SessionID,
+			fmt.Sprintf("finished orphaned subagent (%s → ready) — parent %s turn done", prev, parentID))
+		d.broadcast(outbound.PushTypeUpdated, s)
+	}
+}
+
 // hasActiveChildren returns true if any child session of the given parent is
 // still working or waiting. Used to prevent a parent from transitioning to
 // ready while background/foreground subagents are still processing.
@@ -705,6 +767,10 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	if parent.Metrics == nil || !parent.Metrics.IsAgentDone() {
 		return
 	}
+	// Fast-forward orphaned subagents (finished work but no stop_reason)
+	// — see finishOrphanedChildren doc for rationale.
+	d.finishOrphanedChildren(parentID)
+
 	// Still have active children — stay working.
 	if d.hasActiveChildren(parentID) {
 		return
