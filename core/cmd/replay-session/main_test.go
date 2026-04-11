@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"irrlicht/core/adapters/inbound/agents/claudecode"
 )
 
 // fixturePath returns an absolute path to a fixture under the repo-root
@@ -29,7 +31,7 @@ func TestReplayWithSidecar_GoldenFixture(t *testing.T) {
 	sidecar := fixturePath(t, "claudecode/10-full-lifecycle-839f0678.events.jsonl")
 
 	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
-		Adapter:            "claude-code",
+		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})
@@ -86,7 +88,7 @@ func TestReplayWithSidecar_RejectsMultiSessionSidecar(t *testing.T) {
 	}
 
 	_, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
-		Adapter:            "claude-code",
+		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})

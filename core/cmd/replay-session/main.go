@@ -609,28 +609,23 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		return nil, fmt.Errorf("load sidecar: %w", err)
 	}
 
-	// Curated fixtures are single-session — the curate script filters the
-	// raw recording by session_id. Reject sidecars that contain events for
-	// more than one session so we fail fast rather than interleaving
-	// foreign events into this fixture's replay.
-	seenSessions := make(map[string]bool)
-	for _, ev := range sidecarEvents {
-		if ev.SessionID != "" {
-			seenSessions[ev.SessionID] = true
-		}
-	}
-	if len(seenSessions) > 1 {
-		ids := make([]string, 0, len(seenSessions))
-		for id := range seenSessions {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		return nil, fmt.Errorf("sidecar %s contains events for %d sessions %v — curated fixtures must be single-session (re-run scripts/curate-lifecycle-fixture.sh to filter)", sidecarPath, len(seenSessions), ids)
-	}
-
+	// Single walk over sidecar events: collect fswatcher events, remember
+	// the first process_exit timestamp, and fail fast if we encounter
+	// events for more than one session. Curated fixtures are required to
+	// be single-session — the curate script filters the raw recording by
+	// session_id — so a foreign ID means the fixture wasn't properly
+	// curated and would otherwise silently interleave unrelated events.
 	var fswatches []lifecycle.Event
 	var processExitAt time.Time
+	var firstSessionID string
 	for _, ev := range sidecarEvents {
+		if ev.SessionID != "" {
+			if firstSessionID == "" {
+				firstSessionID = ev.SessionID
+			} else if ev.SessionID != firstSessionID {
+				return nil, fmt.Errorf("sidecar %s contains events for multiple sessions (%q and %q) — curated fixtures must be single-session (re-run scripts/curate-lifecycle-fixture.sh to filter)", sidecarPath, firstSessionID, ev.SessionID)
+			}
+		}
 		switch ev.Kind {
 		case lifecycle.KindTranscriptActivity:
 			if ev.FileSize > 0 {
