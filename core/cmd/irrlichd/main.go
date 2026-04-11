@@ -335,7 +335,7 @@ func main() {
 
 	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
 	if recordEnabled {
-		recordingsDir := filepath.Join(filepath.Dir(filepath.Dir(sockPath)), "recordings")
+		recordingsDir := filepath.Join(filepath.Dir(sockPath), "recordings")
 		rec, err := recorder.NewJSONLRecorder(recordingsDir)
 		if err != nil {
 			logger.LogError("startup", "", fmt.Sprintf("failed to init lifecycle recorder: %v", err))
