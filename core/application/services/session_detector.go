@@ -11,6 +11,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,15 @@ const orphanTranscriptAge = 2 * time.Minute
 // events. The first event fires immediately; subsequent events within this
 // window are coalesced into a single processing when the timer expires.
 const activityDebounceWindow = 2 * time.Second
+
+// subagentQuietWindow is how long a subagent's transcript must have been
+// silent before finishOrphanedChildren will promote it to ready. Foreground
+// subagents (Explore/Plan) stop writing the moment their final message
+// lands, so they're trivially silent by the time the parent's classifier
+// fires. Background subagents stream their transcripts continuously during
+// runs, so their mtimes are almost always "recent" while active — the
+// window keeps us from falsely promoting them mid-stream.
+const subagentQuietWindow = 2 * time.Second
 
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {
@@ -711,6 +721,22 @@ func (d *SessionDetector) finishOrphanedChildren(parentID string) {
 		if s.Metrics == nil || s.Metrics.HasOpenToolCall {
 			continue
 		}
+		// Safety: a child whose transcript has been written in the last
+		// subagentQuietWindow is a background agent still mid-run — we
+		// don't know whether the parent's "done" means "finished the
+		// subagents" or "kicked off async background work". Leaving active
+		// children alone avoids the bug where background agents are
+		// promoted and deleted while still writing. If the stat fails
+		// (missing file), skip to be conservative — the liveness sweep
+		// will fall back to its 2-minute window for anything we miss here.
+		info, err := os.Stat(s.TranscriptPath)
+		if err != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) < subagentQuietWindow {
+			continue
+		}
+
 		prev := s.State
 		s.State = session.StateReady
 		s.UpdatedAt = now

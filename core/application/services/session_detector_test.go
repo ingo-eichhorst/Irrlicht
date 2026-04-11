@@ -1378,14 +1378,19 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 	time.Sleep(20 * time.Millisecond)
 
 	now := time.Now().Unix()
+	tmpDir := t.TempDir()
 
-	// Parent: turn done (LastEventType=assistant with final text, no
-	// open tools). Starts in working because force-promotion will fire
-	// on the next activity event.
+	// Parent transcript: real file, mtime = now (so force-promotion
+	// triggered by EventActivity reads a real file).
+	parentPath := filepath.Join(tmpDir, "parent-orphans.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	repo.Save(&session.SessionState{
 		SessionID:      "parent-orphans",
 		State:          session.StateWorking,
-		TranscriptPath: "/home/.claude/projects/-Users-test/parent-orphans.jsonl",
+		TranscriptPath: parentPath,
 		FirstSeen:      now,
 		UpdatedAt:      now,
 		EventCount:     10,
@@ -1396,15 +1401,23 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 		},
 	})
 
-	// Two orphaned children: stuck in working with assistant_streaming
-	// as their last event (the null-stop-reason final message) and
-	// no open tool calls.
+	// Two orphaned children: real stale transcript files (mtime 10s ago)
+	// so finishOrphanedChildren's quiet-window check (2s) treats them as
+	// silent and promotes them.
+	staleMtime := time.Now().Add(-10 * time.Second)
 	for _, childID := range []string{"child-orphan-a", "child-orphan-b"} {
+		childPath := filepath.Join(tmpDir, childID+".jsonl")
+		if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(childPath, staleMtime, staleMtime); err != nil {
+			t.Fatal(err)
+		}
 		repo.Save(&session.SessionState{
 			SessionID:       childID,
 			State:           session.StateWorking,
 			ParentSessionID: "parent-orphans",
-			TranscriptPath:  "/home/.claude/projects/-Users-test/parent-orphans/subagents/" + childID + ".jsonl",
+			TranscriptPath:  childPath,
 			FirstSeen:       now,
 			UpdatedAt:       now,
 			EventCount:      5,
@@ -1423,7 +1436,7 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 		Type:           agent.EventActivity,
 		SessionID:      "parent-orphans",
 		ProjectDir:     "-Users-test",
-		TranscriptPath: "/home/.claude/projects/-Users-test/parent-orphans.jsonl",
+		TranscriptPath: parentPath,
 	}
 
 	time.Sleep(50 * time.Millisecond)
@@ -1444,6 +1457,105 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 		if child.State != session.StateReady {
 			t.Errorf("child %q state: got %q, want ready", childID, child.State)
 		}
+	}
+
+	cancel()
+	<-done
+}
+
+// TestSessionDetector_BackgroundSubagentsNotFastForwarded captures the
+// 3d506c6e bug: background subagents run asynchronously to the parent.
+// The parent's turn can finish while a background agent is mid-stream.
+// In that window the child may momentarily have HasOpenToolCall=false
+// (between tool calls) — the only safety signal is that its transcript
+// is still being written. finishOrphanedChildren must skip any child
+// whose transcript mtime is within subagentQuietWindow of now.
+//
+// Scenario: parent turn done, child has no open tools, but child's
+// transcript was just written. The child must stay in working and the
+// parent must be held in working.
+func TestSessionDetector_BackgroundSubagentsNotFastForwarded(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	tmpDir := t.TempDir()
+
+	parentPath := filepath.Join(tmpDir, "parent-bg.jsonl")
+	if err := os.WriteFile(parentPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-bg",
+		State:          session.StateWorking,
+		TranscriptPath: parentPath,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "All 3 background agents launched.",
+		},
+	})
+
+	// Background child: no open tools (between tool calls) but its
+	// transcript is fresh — mtime = now, indicating it's still being
+	// actively written.
+	childPath := filepath.Join(tmpDir, "child-bg.jsonl")
+	if err := os.WriteFile(childPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the default mtime (just now) — this is the point: a
+	// still-running background agent has a fresh mtime.
+	repo.Save(&session.SessionState{
+		SessionID:       "child-bg",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-bg",
+		TranscriptPath:  childPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant_streaming",
+			HasOpenToolCall: false,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-bg",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: parentPath,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Parent must be held in working because the child is still active.
+	parent, _ := repo.Load("parent-bg")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateWorking {
+		t.Errorf("parent state: got %q, want working — background child has fresh mtime and must hold the parent", parent.State)
+	}
+
+	// Child must NOT have been promoted.
+	child, _ := repo.Load("child-bg")
+	if child == nil {
+		t.Fatal("child session should still exist")
+	}
+	if child.State != session.StateWorking {
+		t.Errorf("child state: got %q, want working — fresh mtime indicates active background agent", child.State)
 	}
 
 	cancel()
