@@ -514,8 +514,9 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 		}
 	}
 
-	// Infer in-process sub-agent activity from open Agent tool calls.
-	state.Subagents = InferSubagents(state.Metrics)
+	// Refresh the unified sub-agent summary (in-process from the adapter
+	// plus file-based children from the repo). See ComputeSubagentSummary.
+	d.refreshSubagentSummary(state)
 
 	state.UpdatedAt = time.Now().Unix()
 	state.EventCount++
@@ -692,11 +693,44 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	d.mu.Unlock()
 }
 
-// broadcast sends a push notification if a broadcaster is configured.
+// broadcast sends a push notification if a broadcaster is configured. For
+// parent sessions, the unified Subagents summary is refreshed so WebSocket
+// clients see the same counts as the REST-hydration path. When a child
+// session is broadcast, the parent is also re-broadcast with an updated
+// summary — otherwise the badge would go stale until the parent's next
+// transcript event.
 func (d *SessionDetector) broadcast(msgType string, state *session.SessionState) {
-	if d.broadcaster != nil {
-		d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
+	if d.broadcaster == nil {
+		return
 	}
+
+	d.refreshSubagentSummary(state)
+	d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
+
+	if state.ParentSessionID == "" {
+		return
+	}
+	parent, err := d.repo.Load(state.ParentSessionID)
+	if err != nil || parent == nil {
+		return
+	}
+	d.refreshSubagentSummary(parent)
+	d.broadcaster.Broadcast(outbound.PushMessage{Type: outbound.PushTypeUpdated, Session: parent})
+}
+
+// refreshSubagentSummary recomputes state.Subagents from the adapter-reported
+// in-process count (state.Metrics.OpenSubagents) merged with file-based
+// children discovered via the repository. A nil repo lookup is treated as
+// "no children", matching the domain helper's contract.
+func (d *SessionDetector) refreshSubagentSummary(state *session.SessionState) {
+	if state == nil {
+		return
+	}
+	children, err := d.repo.ListAll()
+	if err != nil {
+		children = nil
+	}
+	state.Subagents = session.ComputeSubagentSummary(state, children)
 }
 
 // finishOrphanedChildren walks the child sessions of parentID and promotes

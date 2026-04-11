@@ -29,6 +29,12 @@ type SessionMetrics struct {
 	HasOpenToolCall   bool `json:"has_open_tool_call"`
 	OpenToolCallCount int  `json:"open_tool_call_count,omitempty"`
 
+	// OpenSubagents is the number of in-process child agents currently running.
+	// Populated by the adapter (e.g. claudecode counts open Agent tool calls)
+	// and merged with file-based children via ComputeSubagentSummary. The
+	// domain model is agnostic to how each adapter represents subagents.
+	OpenSubagents int `json:"open_subagents,omitempty"`
+
 	// LastEventType is the type of the most recent transcript event
 	// (e.g. "assistant", "user", "tool_use", "tool_result").
 	LastEventType string `json:"last_event_type,omitempty"`
@@ -230,6 +236,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		PressureLevel:        newM.PressureLevel,
 		HasOpenToolCall:      newM.HasOpenToolCall,
 		OpenToolCallCount:    newM.OpenToolCallCount,
+		OpenSubagents:        newM.OpenSubagents,
 		LastEventType:        newM.LastEventType,
 		LastOpenToolNames:    newM.LastOpenToolNames,
 		LastWasUserInterrupt: newM.LastWasUserInterrupt,

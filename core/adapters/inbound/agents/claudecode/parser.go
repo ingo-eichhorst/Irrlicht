@@ -286,6 +286,21 @@ func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
 	return nil
 }
 
+// CountOpenSubagents returns the number of in-process Claude Code sub-agents
+// that are NOT already tracked as file-based child sessions. Current Claude
+// Code writes an isSidechain transcript under `<parent>/subagents/agent-*.jsonl`
+// for every Agent tool call (including Explore/Plan), so the fswatcher picks
+// them up as child SessionStates and the file-based path alone is the single
+// source of truth. Counting open Agent tool_use entries in LastOpenToolNames
+// as well would double-count each running subagent.
+//
+// We keep this function as the seam the adapter exposes to the metrics layer
+// so that if a future Claude Code revision reintroduces truly in-process
+// subagents that don't create transcripts, we only need to change this file.
+func CountOpenSubagents(m *tailer.SessionMetrics) int {
+	return 0
+}
+
 // isClaudeCodeMessageEvent returns true for event types that count as messages.
 func isClaudeCodeMessageEvent(eventType string) bool {
 	switch eventType {

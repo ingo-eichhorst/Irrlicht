@@ -68,25 +68,3 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 	return currentState, ""
 }
 
-// InferSubagents detects in-process sub-agent activity from open Agent tool
-// calls. Claude Code Explore/Plan agents run inside the parent process and
-// don't create separate transcripts, so open Agent tool calls are the only
-// detection path. Returns nil if no Agent tools are open.
-func InferSubagents(metrics *session.SessionMetrics) *session.SubagentSummary {
-	if metrics == nil || !metrics.HasOpenToolCall {
-		return nil
-	}
-	agentCount := 0
-	for _, name := range metrics.LastOpenToolNames {
-		if name == "Agent" {
-			agentCount++
-		}
-	}
-	if agentCount == 0 {
-		return nil
-	}
-	return &session.SubagentSummary{
-		Total:   agentCount,
-		Working: agentCount,
-	}
-}

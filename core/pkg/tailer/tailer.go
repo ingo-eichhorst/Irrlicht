@@ -52,6 +52,11 @@ type SessionMetrics struct {
 	HasOpenToolCall   bool `json:"has_open_tool_call"`
 	OpenToolCallCount int  `json:"open_tool_call_count,omitempty"`
 
+	// OpenSubagents is the number of in-process child agents currently
+	// running. The tailer leaves this at zero; adapters populate it from
+	// LastOpenToolNames or whatever adapter-specific signal they use.
+	OpenSubagents int `json:"open_subagents,omitempty"`
+
 	// LastEventType is the event type of the most recent message event in
 	// the transcript (e.g. "assistant", "user", "tool_use", "tool_result").
 	// Used for content-based working/waiting detection.
@@ -313,9 +318,10 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		// Agent tool calls are preserved: a sub-agent spawned via the Agent
 		// tool can still be running when the parent's turn_done fires
 		// (session.go:IsAgentDone treats open tool calls as authoritative
-		// over turn_done for exactly this reason), and InferSubagents relies
-		// on Agent entries in LastOpenToolNames to count in-process
-		// sub-agents. Only non-Agent leaks are swept.
+		// over turn_done for exactly this reason), and the claudecode
+		// adapter's CountOpenSubagents relies on Agent entries in
+		// LastOpenToolNames to count in-process sub-agents. Only non-Agent
+		// leaks are swept.
 		if parsed.EventType == "turn_done" && len(t.openToolCalls) > 0 {
 			for id, name := range t.openToolCalls {
 				if name != "Agent" {

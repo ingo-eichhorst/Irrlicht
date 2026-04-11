@@ -200,7 +200,7 @@ func TestBuildDashboard_SubagentsUnification(t *testing.T) {
 	sessions := []*SessionState{
 		{
 			SessionID: "parent", State: StateWorking, ProjectName: "proj",
-			Subagents: &SubagentSummary{Total: 2, Working: 2}, // in-process agents
+			Metrics: &SessionMetrics{OpenSubagents: 2}, // in-process agents from adapter
 		},
 		{SessionID: "child1", State: StateWorking, ParentSessionID: "parent"},
 	}
@@ -215,6 +215,53 @@ func TestBuildDashboard_SubagentsUnification(t *testing.T) {
 	if parent.Subagents.Total != 3 || parent.Subagents.Working != 3 {
 		t.Errorf("subagents = %+v, want total=3 working=3", *parent.Subagents)
 	}
+}
+
+func TestComputeSubagentSummary(t *testing.T) {
+	t.Run("no subagents returns nil", func(t *testing.T) {
+		parent := &SessionState{SessionID: "p", Metrics: &SessionMetrics{}}
+		if got := ComputeSubagentSummary(parent, nil); got != nil {
+			t.Errorf("got %+v, want nil", got)
+		}
+	})
+	t.Run("only in-process", func(t *testing.T) {
+		parent := &SessionState{SessionID: "p", Metrics: &SessionMetrics{OpenSubagents: 3}}
+		got := ComputeSubagentSummary(parent, nil)
+		if got == nil || got.Total != 3 || got.Working != 3 {
+			t.Errorf("got %+v, want total=3 working=3", got)
+		}
+	})
+	t.Run("only file-based with mixed states", func(t *testing.T) {
+		parent := &SessionState{SessionID: "p"}
+		children := []*SessionState{
+			{SessionID: "c1", State: StateWorking, ParentSessionID: "p"},
+			{SessionID: "c2", State: StateWaiting, ParentSessionID: "p"},
+			{SessionID: "c3", State: StateReady, ParentSessionID: "p"},
+			{SessionID: "unrelated", State: StateWorking, ParentSessionID: "other"},
+		}
+		got := ComputeSubagentSummary(parent, children)
+		if got == nil {
+			t.Fatal("got nil, want summary")
+		}
+		if got.Total != 3 || got.Working != 1 || got.Waiting != 1 || got.Ready != 1 {
+			t.Errorf("got %+v, want total=3 working=1 waiting=1 ready=1", got)
+		}
+	})
+	t.Run("merges in-process and file-based", func(t *testing.T) {
+		parent := &SessionState{SessionID: "p", Metrics: &SessionMetrics{OpenSubagents: 2}}
+		children := []*SessionState{
+			{SessionID: "c1", State: StateWorking, ParentSessionID: "p"},
+			{SessionID: "c2", State: StateWaiting, ParentSessionID: "p"},
+		}
+		got := ComputeSubagentSummary(parent, children)
+		if got == nil {
+			t.Fatal("got nil, want summary")
+		}
+		// 2 in-process (always working) + 1 working file + 1 waiting file.
+		if got.Total != 4 || got.Working != 3 || got.Waiting != 1 {
+			t.Errorf("got %+v, want total=4 working=3 waiting=1", got)
+		}
+	})
 }
 
 func TestBuildDashboard_Empty(t *testing.T) {
