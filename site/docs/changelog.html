@@ -78,6 +78,37 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.3 <small>(2026-04-11)</small></h2>
+
+      <h3>Fixed — Subagent lifecycle reliability</h3>
+
+      <p>Several edge cases in parent/child session tracking caused subagents to linger in <code>working</code> after their parent's turn ended, or to disappear entirely when transcripts were still being written.</p>
+
+      <ul>
+        <li><strong>Subagent count unified at the adapter level</strong> (#132) &mdash; In-process and file-based counts are now reconciled in the adapter so the daemon sees a single authoritative value, eliminating drift between the two sources</li>
+        <li><strong>Subagent quiet window bumped to 30s</strong> &mdash; API response gaps on long tool calls were tripping the previous window and prematurely marking subagents idle. 30s survives the observed gap distribution</li>
+        <li><strong>Fast-forward orphaned subagents when parent turn is done</strong> &mdash; When the parent session finishes its turn but a child was left in an intermediate state, the child is now fast-forwarded to <code>ready</code> instead of hanging in <code>working</code></li>
+        <li><strong>Don't fast-forward subagents whose transcripts are still being written</strong> &mdash; Guards the fast-forward path so in-flight children aren't killed mid-stream</li>
+        <li><strong>Re-evaluate parent when liveness sweep deletes last child</strong> &mdash; When the liveness sweep removes the final child session, the parent is immediately re-classified so its state reflects the new reality</li>
+        <li><strong>FS watcher recursively watches newly-created subtrees</strong> &mdash; New project/session directories created after daemon startup are now observed without a restart</li>
+      </ul>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Cost display toggle</strong> (#130) &mdash; The macOS menu bar cost readout can now be toggled in Settings and is off by default for users who prefer a lighter status line</li>
+        <li><strong>Full session lifecycle recording &amp; replay</strong> (#107, #138) &mdash; <code>ir:test-mac</code> runs can now record presession events, session events, and tail output into a sidecar file. The <code>replay-session</code> harness replays any recording byte-identically against the production tailer + classifier, and fails loudly on sidecar drift</li>
+        <li><strong>Curated subagent fixtures</strong> &mdash; Real-world subagent transcripts (including an 11-background-agent fixture) are bundled with their lifecycle events so regressions in parent/child tracking are caught offline</li>
+        <li><strong>Tailer FIFO replaced with id-keyed map</strong> (#117) &mdash; Open-tool tracking now uses a stable map keyed by tool use id instead of a FIFO, removing ordering assumptions that broke with parallel tool calls</li>
+      </ul>
+
+      <h3>Docs</h3>
+
+      <ul>
+        <li>README rewritten around real user pain and the competitive landscape of agent monitoring tools</li>
+        <li>GitHub-recognized community health files added: <code>CODE_OF_CONDUCT.md</code>, <code>CONTRIBUTING.md</code>, <code>SECURITY.md</code>, issue and PR templates</li>
+      </ul>
+
       <h2>v0.3.2 <small>(2026-04-07)</small></h2>
 
       <h3>Fixed — Claude Code session state flicker (#102)</h3>
