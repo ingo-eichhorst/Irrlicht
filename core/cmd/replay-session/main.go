@@ -609,22 +609,33 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		return nil, fmt.Errorf("load sidecar: %w", err)
 	}
 
-	// Single walk over sidecar events: collect fswatcher events, remember
-	// the first process_exit timestamp, and fail fast if we encounter
-	// events for more than one session. Curated fixtures are required to
-	// be single-session — the curate script filters the raw recording by
-	// session_id — so a foreign ID means the fixture wasn't properly
-	// curated and would otherwise silently interleave unrelated events.
+	// Identify the primary session: the first transcript_new event in
+	// sequence order. That's always the parent session — the curate
+	// script walks the recording chronologically and the parent is
+	// created before any of its subagents. Sidecar fixtures that
+	// include subagent events (for bundled replay) are fine; we only
+	// drive the primary transcript through the tailer and pass the
+	// subagent events through for future multi-session tooling.
+	var primarySessionID string
+	for _, ev := range sidecarEvents {
+		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" {
+			primarySessionID = ev.SessionID
+			break
+		}
+	}
+	if primarySessionID == "" {
+		return nil, fmt.Errorf("sidecar %s has no transcript_new event — cannot identify the primary session", sidecarPath)
+	}
+
+	// Single walk over sidecar events: collect fswatcher events for the
+	// primary session and the first process_exit timestamp that belongs
+	// to it. Subagent events are left in place for the events log but
+	// don't drive the tailer.
 	var fswatches []lifecycle.Event
 	var processExitAt time.Time
-	var firstSessionID string
 	for _, ev := range sidecarEvents {
-		if ev.SessionID != "" {
-			if firstSessionID == "" {
-				firstSessionID = ev.SessionID
-			} else if ev.SessionID != firstSessionID {
-				return nil, fmt.Errorf("sidecar %s contains events for multiple sessions (%q and %q) — curated fixtures must be single-session (re-run scripts/curate-lifecycle-fixture.sh to filter)", sidecarPath, firstSessionID, ev.SessionID)
-			}
+		if ev.SessionID != primarySessionID {
+			continue
 		}
 		switch ev.Kind {
 		case lifecycle.KindTranscriptActivity:
@@ -638,7 +649,7 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		}
 	}
 	if len(fswatches) == 0 {
-		return nil, fmt.Errorf("sidecar has no transcript_activity events with file_size: %s", sidecarPath)
+		return nil, fmt.Errorf("sidecar has no transcript_activity events with file_size for primary session %s: %s", primarySessionID, sidecarPath)
 	}
 
 	// Set up a temp file and tailer. We append bytes incrementally so the
@@ -1098,9 +1109,14 @@ func sortedKinds(m map[string]bool) []string {
 }
 
 // loadLifecycleStateTransitions reads a JSONL lifecycle recording and
-// returns only the state_transition events that carry a non-empty
-// prev_state (dropping "new session created" which the replay does not
-// reproduce). Events are returned in sequence order.
+// returns only the state_transition events that belong to the primary
+// session (the first transcript_new) and carry a non-empty prev_state.
+//
+// Multi-session sidecars curated via scripts/curate-lifecycle-fixture.sh
+// include both the parent's events and its subagents'. The extended
+// check compares the replay's output (which drives only the parent's
+// transcript) against the parent's recorded transitions — subagent
+// transitions are stored for future tooling but ignored here.
 func loadLifecycleStateTransitions(path string) ([]lifecycle.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1111,24 +1127,41 @@ func loadLifecycleStateTransitions(path string) ([]lifecycle.Event, error) {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 
-	var out []lifecycle.Event
+	var all []lifecycle.Event
 	for scanner.Scan() {
 		var ev lifecycle.Event
 		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
 			continue
 		}
+		all = append(all, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Seq < all[j].Seq })
+
+	// Primary session = first transcript_new event in seq order.
+	var primarySessionID string
+	for _, ev := range all {
+		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" {
+			primarySessionID = ev.SessionID
+			break
+		}
+	}
+
+	out := make([]lifecycle.Event, 0, len(all))
+	for _, ev := range all {
 		if ev.Kind != lifecycle.KindStateTransition {
 			continue
 		}
 		if ev.PrevState == "" {
 			continue
 		}
+		if primarySessionID != "" && ev.SessionID != primarySessionID {
+			continue
+		}
 		out = append(out, ev)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
 	return out, nil
 }
