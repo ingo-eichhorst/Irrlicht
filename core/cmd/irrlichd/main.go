@@ -29,6 +29,7 @@ import (
 	"irrlicht/core/adapters/outbound/logging"
 	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/metrics"
+	"irrlicht/core/adapters/outbound/recorder"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/config"
@@ -50,12 +51,23 @@ const (
 	tcpPort = 7837
 )
 
+func hasFlag(name string) bool {
+	for _, arg := range os.Args[1:] {
+		if arg == name {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+	if hasFlag("--version") || hasFlag("-v") {
 		fmt.Printf("irrlichd version %s\n", Version)
 		fmt.Printf("Built with %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		os.Exit(0)
 	}
+
+	recordEnabled := hasFlag("--record") || os.Getenv("IRRLICHT_RECORD") == "1"
 
 	logger, err := logging.New()
 	if err != nil {
@@ -320,6 +332,19 @@ func main() {
 		Version, cfg.ReadySessionTTL,
 		pidDiscovers,
 	)
+
+	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
+	if recordEnabled {
+		recordingsDir := filepath.Join(filepath.Dir(sockPath), "recordings")
+		rec, err := recorder.NewJSONLRecorder(recordingsDir)
+		if err != nil {
+			logger.LogError("startup", "", fmt.Sprintf("failed to init lifecycle recorder: %v", err))
+		} else {
+			detector.SetRecorder(rec)
+			defer rec.Close()
+			logger.LogInfo("startup", "", fmt.Sprintf("lifecycle recording enabled: %s", rec.Path()))
+		}
+	}
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()

@@ -132,13 +132,18 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	name := ev.Name
 
 	// If a new directory was created anywhere under root, start watching it
-	// recursively. This supports both flat (Claude Code) and deep (Codex
-	// sessions/YYYY/MM/DD/) directory structures.
+	// and any subdirectories it already contains. A recursive walk is
+	// required because the directory may already contain nested
+	// subdirectories by the time we process the event — e.g. Claude Code
+	// creates <session>/, <session>/subagents/, and the subagent files
+	// inside it in rapid succession, and our handler runs late enough
+	// that only <session>/ appears in the fsnotify event stream. Without
+	// the recursive walk, the nested subagents/ dir never gets a watch
+	// and every subagent transcript is silently missed.
 	if ev.Op&fsnotify.Create != 0 {
 		if info, err := os.Stat(name); err == nil && info.IsDir() {
 			if strings.HasPrefix(name, w.root) {
-				_ = watcher.Add(name)
-				w.emitExistingFiles(name)
+				w.addSubtree(watcher, name)
 			}
 			return
 		}
@@ -286,6 +291,25 @@ func (w *Watcher) addExistingDirs(watcher *fsnotify.Watcher) error {
 			return nil // skip unreadable dirs
 		}
 		if d.IsDir() && path != w.root {
+			_ = watcher.Add(path)
+			w.emitExistingFiles(path)
+		}
+		return nil
+	})
+}
+
+// addSubtree recursively adds fsnotify watches for dir and every
+// subdirectory already beneath it, and emits EventNewSession for every
+// existing .jsonl file it finds. Used from handleEvent when a new
+// directory appears at runtime; covers the case where the new dir was
+// created together with nested subdirs and files that already exist by
+// the time our handler processes the fsnotify Create event.
+func (w *Watcher) addSubtree(watcher *fsnotify.Watcher, dir string) {
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
 			_ = watcher.Add(path)
 			w.emitExistingFiles(path)
 		}

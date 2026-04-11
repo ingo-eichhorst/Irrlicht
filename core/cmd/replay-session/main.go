@@ -39,6 +39,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
@@ -102,6 +103,50 @@ type Report struct {
 	Settings         ReportSettings `json:"settings"`
 	Summary          ReportSummary `json:"summary"`
 	Transitions      []Transition  `json:"transitions"`
+
+	// ExtendedCheck is populated when a <transcript-basename>.events.jsonl
+	// sidecar is present next to the transcript fixture. It diffs the
+	// replayed state transitions against the recorded ones so fixtures act
+	// as regression tests for the detector.
+	ExtendedCheck *ExtendedCheck `json:"extended_check,omitempty"`
+}
+
+// ExtendedCheck compares the replayed state transitions against a committed
+// lifecycle recording (.events.jsonl sidecar produced by `irrlichd --record`).
+//
+// When a sidecar is present, replay-session uses `ReplayWithSidecar` to
+// drive the tailer from the recorded fswatcher events — each
+// transcript_activity event in the sidecar carries a file_size that tells
+// the replay exactly how many transcript bytes to feed the tailer at that
+// moment. The debounce state machine is then applied over those events
+// using the same 2-second window the daemon uses, and process_exited
+// events cancel any pending debounce timer the same way the daemon
+// tearing down a session does.
+//
+// The result is a byte-identical reproduction of what the daemon produced
+// for the recorded session. The sidecar acts as the regression oracle:
+// any mismatch (ordered or unique-kind) exits replay-session non-zero so
+// the fixture-replay script and CI catch classifier, tailer, or debounce
+// drift immediately.
+type ExtendedCheck struct {
+	SidecarPath         string               `json:"sidecar_path"`
+	RecordedCount       int                  `json:"recorded_transition_count"`
+	ReplayedCount       int                  `json:"replayed_transition_count"`
+	OrderedMatches      int                  `json:"ordered_matches"`
+	OrderedMismatches   []TransitionMismatch `json:"ordered_mismatches,omitempty"`
+	RecordedUniqueKinds []string             `json:"recorded_unique_kinds"`
+	ReplayedUniqueKinds []string             `json:"replayed_unique_kinds"`
+	MissingKinds        []string             `json:"missing_kinds,omitempty"` // kinds in recorded but not replayed
+	ExtraKinds          []string             `json:"extra_kinds,omitempty"`   // kinds in replayed but not recorded
+}
+
+// TransitionMismatch is a single divergence between replayed and recorded
+// state transitions.
+type TransitionMismatch struct {
+	Index    int    `json:"index"`
+	Kind     string `json:"kind"` // "missing_in_replay" | "extra_in_replay" | "state_differs"
+	Recorded string `json:"recorded,omitempty"` // "prev→new"
+	Replayed string `json:"replayed,omitempty"` // "prev→new"
 }
 
 type ReportSettings struct {
@@ -168,14 +213,48 @@ func main() {
 		}
 	}
 
-	report, err := Replay(src, ReportSettings{
-		Adapter:            adapterName,
-		DebounceWindow:     debounceFlag,
-		FlickerMaxDuration: flickerMax,
-	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "replay failed:", err)
+	// Sidecar-driven replay: when a <transcript-basename>.events.jsonl
+	// sidecar is present, the replay is driven by the lifecycle recording
+	// instead of the transcript's own line timestamps. The sidecar records
+	// one transcript_activity event per fswatcher fire, each with a
+	// file_size. Feeding the tailer bytes up to each recorded file_size
+	// gives a byte-identical reproduction of what the daemon observed —
+	// no more batching-vs-fswatcher drift.
+	sidecarPath := strings.TrimSuffix(src, ".jsonl") + ".events.jsonl"
+	useSidecar := false
+	if _, err := os.Stat(sidecarPath); err == nil {
+		useSidecar = true
+	}
+
+	var (
+		report    *Report
+		replayErr error
+	)
+	if useSidecar {
+		report, replayErr = ReplayWithSidecar(src, sidecarPath, ReportSettings{
+			Adapter:            adapterName,
+			DebounceWindow:     debounceFlag,
+			FlickerMaxDuration: flickerMax,
+		})
+	} else {
+		report, replayErr = Replay(src, ReportSettings{
+			Adapter:            adapterName,
+			DebounceWindow:     debounceFlag,
+			FlickerMaxDuration: flickerMax,
+		})
+	}
+	if replayErr != nil {
+		fmt.Fprintln(os.Stderr, "replay failed:", replayErr)
 		os.Exit(1)
+	}
+
+	if useSidecar {
+		check, err := runExtendedCheck(sidecarPath, report.Transitions)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "extended check failed:", err)
+			os.Exit(1)
+		}
+		report.ExtendedCheck = check
 	}
 
 	enc := json.NewEncoder(chooseOutput(outPath))
@@ -188,11 +267,33 @@ func main() {
 	if !quiet {
 		s := report.Summary
 		fmt.Fprintf(os.Stderr,
-			"replay: %d events → %d transitions, %d flickers (ww=%d wr=%d rw=%d)\n",
+			"replay: %d events → %d transitions, %d flickers (ww=%d wr=%d rw=%d)",
 			s.TotalEvents, s.TotalTransitions, s.FlickerCount,
 			s.FlickersByCategory["working_between_waiting"]+s.FlickersByCategory["waiting_between_working"],
 			s.FlickersByCategory["working_between_ready"]+s.FlickersByCategory["ready_between_working"],
 			s.FlickersByCategory["ready_between_waiting"]+s.FlickersByCategory["waiting_between_ready"])
+		if c := report.ExtendedCheck; c != nil {
+			kindsMark := "✓"
+			if len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
+				kindsMark = "✗"
+			}
+			orderMark := "✓"
+			if len(c.OrderedMismatches) > 0 {
+				orderMark = "✗"
+			}
+			fmt.Fprintf(os.Stderr, " [extended-check: kinds %s ordered %d/%d %s]",
+				kindsMark, c.OrderedMatches, c.RecordedCount, orderMark)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+
+	// Exit policy: when a sidecar is present, the replay is byte-identical
+	// to the daemon. Any drift is a real regression — fail the process so
+	// CI and the fixture-replay script catch it immediately.
+	if c := report.ExtendedCheck; c != nil {
+		if len(c.OrderedMismatches) > 0 || len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
+			os.Exit(1)
+		}
 	}
 }
 
@@ -233,6 +334,14 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	// SessionDetector each activity event would be coalesced into the next
 	// processActivity call within the debounce window. We mimic that here so
 	// the tailer/classifier sees the same compressed event stream.
+	//
+	// Note: this is a coarse approximation of the daemon's real behavior.
+	// The daemon processes one fswatcher event at a time, and fswatcher
+	// may coalesce multiple transcript-line writes into a single fire.
+	// Without a lifecycle-events sidecar we have no way to know where
+	// fswatcher split the writes, so we fall back to batching by transcript
+	// timestamp. A sidecar-driven replay path (see ReplayWithSidecar) is
+	// used when the sidecar is present, giving byte-identical reproduction.
 	batches := batchByDebounce(events, cfg.DebounceWindow)
 
 	// Set up the production tailer + parser writing into a temp transcript
@@ -309,8 +418,6 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 			}
 			consumed++
 		}
-		// No fsync needed: the tailer reads from the same process via the
-		// OS page cache and sees the written bytes immediately.
 
 		metrics, err := t.TailAndProcess()
 		if err != nil {
@@ -318,13 +425,8 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 		}
 		lastMetrics = metrics
 
-		// Convert tailer.SessionMetrics → session.SessionMetrics for the
-		// classifier (the classifier consumes the domain type).
 		domainMetrics := tailerToDomain(metrics)
 
-		// Mirror SessionDetector.processActivity: force ready→working when
-		// metrics show any event activity, so the classifier can later detect
-		// working→ready properly.
 		if state == session.StateReady && domainMetrics.LastEventType != "" {
 			cause := CauseEvent
 			if len(batch) > 1 {
@@ -419,10 +521,21 @@ func loadEvents(path string) ([]rawEvent, error) {
 		// Reattach the trailing newline so the tailer sees a complete JSONL.
 		line = append(line, '\n')
 
+		// Explicit timestamp only — do NOT use tailer.ParseTimestamp here
+		// because it falls back to time.Now() when the field is missing,
+		// which would pollute the sorted virtual timeline with wall-clock
+		// values for metadata lines (permission-mode, file-history-snapshot,
+		// last-prompt, etc.). Those lines inherit from neighbours instead.
 		var raw map[string]interface{}
 		ts := time.Time{}
 		if err := json.Unmarshal(scanner.Bytes(), &raw); err == nil {
-			ts = tailer.ParseTimestamp(raw)
+			if v, ok := raw["timestamp"].(string); ok {
+				if parsed, err := time.Parse(time.RFC3339, v); err == nil {
+					ts = parsed
+				} else if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", v); err == nil {
+					ts = parsed
+				}
+			}
 		}
 
 		out = append(out, rawEvent{
@@ -436,8 +549,34 @@ func loadEvents(path string) ([]rawEvent, error) {
 		return nil, err
 	}
 
-	// Sort by timestamp so out-of-order writes (rare but possible) don't
-	// confuse the simulator.
+	// Resolve null-timestamp lines (summary / metadata) so they process
+	// in-file-order alongside the surrounding real events. First pass:
+	// fill forward from the last real timestamp. Second pass: fill
+	// backward for leading nulls that had no prior real timestamp.
+	var lastTS time.Time
+	for i := range out {
+		if out[i].Time.IsZero() {
+			out[i].Time = lastTS
+		} else {
+			lastTS = out[i].Time
+		}
+	}
+	var firstTS time.Time
+	for _, e := range out {
+		if !e.Time.IsZero() {
+			firstTS = e.Time
+			break
+		}
+	}
+	for i := range out {
+		if out[i].Time.IsZero() {
+			out[i].Time = firstTS
+		}
+	}
+
+	// Stable sort by timestamp. Stable preserves insertion order for ties,
+	// which is important: multi-line writes with slightly-out-of-order
+	// timestamps and our now-inherited nulls rely on physical order.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
 	for i := range out {
 		out[i].Index = i
@@ -445,9 +584,321 @@ func loadEvents(path string) ([]rawEvent, error) {
 	return out, nil
 }
 
+// ReplayWithSidecar runs a deterministic replay driven by a lifecycle-events
+// sidecar. Each transcript_activity event in the sidecar is one fswatcher
+// fire the daemon observed; we feed the tailer the exact bytes the daemon
+// had at that moment and call the classifier. The result is byte-identical
+// to the daemon's behavior for the recorded session.
+//
+// Returns a Report with the same shape as Replay() — the only difference is
+// the virtual timeline, which tracks sidecar event timestamps instead of
+// transcript-line timestamps, and the classifier call granularity.
+func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (*Report, error) {
+	// Load the transcript as raw bytes so we can slice it by file_size.
+	srcBytes, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("read transcript: %w", err)
+	}
+
+	// Load sidecar events and walk them in sequence order. We need the
+	// transcript_activity stream (fswatcher fires with file_size), plus
+	// process_exited events (which cause the daemon to tear down the
+	// session, cancelling any pending debounce timer).
+	sidecarEvents, err := loadAllLifecycleEvents(sidecarPath)
+	if err != nil {
+		return nil, fmt.Errorf("load sidecar: %w", err)
+	}
+
+	// Identify the primary session: the first transcript_new event in
+	// sequence order. That's always the parent session — the curate
+	// script walks the recording chronologically and the parent is
+	// created before any of its subagents. Sidecar fixtures that
+	// include subagent events (for bundled replay) are fine; we only
+	// drive the primary transcript through the tailer and pass the
+	// subagent events through for future multi-session tooling.
+	var primarySessionID string
+	for _, ev := range sidecarEvents {
+		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" {
+			primarySessionID = ev.SessionID
+			break
+		}
+	}
+	if primarySessionID == "" {
+		return nil, fmt.Errorf("sidecar %s has no transcript_new event — cannot identify the primary session", sidecarPath)
+	}
+
+	// Single walk over sidecar events: collect fswatcher events for the
+	// primary session and the first process_exit timestamp that belongs
+	// to it. Subagent events are left in place for the events log but
+	// don't drive the tailer.
+	var fswatches []lifecycle.Event
+	var processExitAt time.Time
+	for _, ev := range sidecarEvents {
+		if ev.SessionID != primarySessionID {
+			continue
+		}
+		switch ev.Kind {
+		case lifecycle.KindTranscriptActivity:
+			if ev.FileSize > 0 {
+				fswatches = append(fswatches, ev)
+			}
+		case lifecycle.KindProcessExited:
+			if processExitAt.IsZero() {
+				processExitAt = ev.Timestamp
+			}
+		}
+	}
+	if len(fswatches) == 0 {
+		return nil, fmt.Errorf("sidecar has no transcript_activity events with file_size for primary session %s: %s", primarySessionID, sidecarPath)
+	}
+
+	// Set up a temp file and tailer. We append bytes incrementally so the
+	// tailer's offset-based incremental read produces the same metrics the
+	// daemon computed at each fswatcher fire.
+	tmpDir, err := os.MkdirTemp("", "irrlicht-replay-sidecar-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpPath := filepath.Join(tmpDir, "transcript.jsonl")
+	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer tmp.Close()
+
+	adapterName := cfg.Adapter
+	if adapterName == "" {
+		adapterName = claudecode.AdapterName
+	}
+	parser := agents.ParserFor(adapterName)
+	t := tailer.NewTranscriptTailer(tmpPath, parser, adapterName)
+
+	report := &Report{
+		SchemaVersion:    1,
+		SourceTranscript: transcriptPath,
+		GeneratedAt:      time.Now().UTC(),
+		Settings:         cfg,
+	}
+	report.Summary.TotalEvents = len(fswatches)
+	report.Summary.FirstEventTime = fswatches[0].Timestamp
+	report.Summary.LastEventTime = fswatches[len(fswatches)-1].Timestamp
+	report.Summary.WallClockDuration =
+		report.Summary.LastEventTime.Sub(report.Summary.FirstEventTime)
+
+	state := session.StateReady
+	prevTransitionAt := fswatches[0].Timestamp
+	stateDurations := map[string]time.Duration{}
+	addDuration := func(s string, d time.Duration) {
+		if d > 0 {
+			stateDurations[s] += d
+		}
+	}
+	emit := func(tr Transition) {
+		tr.Index = len(report.Transitions)
+		report.Transitions = append(report.Transitions, tr)
+		addDuration(tr.PrevState, tr.VirtualTime.Sub(prevTransitionAt))
+		prevTransitionAt = tr.VirtualTime
+	}
+
+	emit(Transition{
+		EventIndex:  -1,
+		VirtualTime: fswatches[0].Timestamp,
+		Cause:       CauseInit,
+		PrevState:   "",
+		NewState:    state,
+		Reason:      "initial state",
+	})
+
+	var lastMetrics *tailer.SessionMetrics
+	var lastSize int64
+
+	// classifyAtSidecar writes transcript bytes up to the given file_size,
+	// then runs the tailer + classifier (mirroring SessionDetector.processActivity
+	// for the force-r→w + ClassifyState pattern).
+	classifyAtSidecar := func(fileSize int64, virtTime time.Time, eventIdx int, cause Cause) error {
+		target := fileSize
+		if target > int64(len(srcBytes)) {
+			target = int64(len(srcBytes))
+		}
+		if target > lastSize {
+			if _, err := tmp.Write(srcBytes[lastSize:target]); err != nil {
+				return err
+			}
+			lastSize = target
+		}
+
+		metrics, err := t.TailAndProcess()
+		if err != nil {
+			return err
+		}
+		lastMetrics = metrics
+		domainMetrics := tailerToDomain(metrics)
+
+		if state == session.StateReady && domainMetrics.LastEventType != "" {
+			emit(Transition{
+				EventIndex:    eventIdx,
+				VirtualTime:   virtTime,
+				Cause:         cause,
+				PrevState:     state,
+				NewState:      session.StateWorking,
+				Reason:        "force ready→working on first activity",
+				LastEventType: domainMetrics.LastEventType,
+				HasOpenTool:   domainMetrics.HasOpenToolCall,
+				OpenToolNames: copyStrings(domainMetrics.LastOpenToolNames),
+				IsAgentDone:   domainMetrics.IsAgentDone(),
+				NeedsAttn:     domainMetrics.NeedsUserAttention(),
+				WaitingQuery:  domainMetrics.IsWaitingForUserInput(),
+				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
+			})
+			state = session.StateWorking
+		}
+
+		newState, reason := services.ClassifyState(state, domainMetrics)
+		if newState != state {
+			emit(Transition{
+				EventIndex:    eventIdx,
+				VirtualTime:   virtTime,
+				Cause:         cause,
+				PrevState:     state,
+				NewState:      newState,
+				Reason:        reason,
+				LastEventType: domainMetrics.LastEventType,
+				HasOpenTool:   domainMetrics.HasOpenToolCall,
+				OpenToolNames: copyStrings(domainMetrics.LastOpenToolNames),
+				IsAgentDone:   domainMetrics.IsAgentDone(),
+				NeedsAttn:     domainMetrics.NeedsUserAttention(),
+				WaitingQuery:  domainMetrics.IsWaitingForUserInput(),
+				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
+			})
+			state = newState
+		}
+		return nil
+	}
+
+	// Apply the daemon's debounce state machine over the sidecar fswatcher
+	// events. The daemon (session_detector.go:308 onActivity):
+	//   - First event in a quiet period → processActivity fires synchronously
+	//   - Subsequent event within the timer window → coalesce, reset timer
+	//   - Timer fires (2s after last event) → processActivity fires on latest,
+	//     but only if at least one event coalesced (the `pending` flag)
+	//   - A process exit cancels any pending timer (the session is torn down)
+	debounce := cfg.DebounceWindow
+	if debounce <= 0 {
+		debounce = 2 * time.Second
+	}
+
+	debouncePending := false
+	coalescedSinceFire := false
+	var windowDeadline time.Time
+	var pendingSize int64 // file_size of the latest coalesced event
+	var pendingIdx int
+
+	for i, fsev := range fswatches {
+		// If the debounce window for the previous event has expired before
+		// this event arrives, the timer would have fired. Fire it now if
+		// events coalesced, then start a fresh window for this event.
+		if debouncePending && !fsev.Timestamp.Before(windowDeadline) {
+			if coalescedSinceFire {
+				// Don't fire if the process exited before the timer would have.
+				if processExitAt.IsZero() || windowDeadline.Before(processExitAt) {
+					if err := classifyAtSidecar(pendingSize, windowDeadline, pendingIdx, CauseDebounceCoalesce); err != nil {
+						return nil, fmt.Errorf("flush timer at fsev %d: %w", i, err)
+					}
+				}
+			}
+			debouncePending = false
+			coalescedSinceFire = false
+		}
+
+		if !debouncePending {
+			// First event of a new quiet period: fire immediately.
+			if err := classifyAtSidecar(fsev.FileSize, fsev.Timestamp, i, CauseEvent); err != nil {
+				return nil, fmt.Errorf("classify fsev %d: %w", i, err)
+			}
+			debouncePending = true
+			windowDeadline = fsev.Timestamp.Add(debounce)
+			continue
+		}
+
+		// Subsequent event in the same debounce window: coalesce, reset timer.
+		coalescedSinceFire = true
+		windowDeadline = fsev.Timestamp.Add(debounce)
+		pendingSize = fsev.FileSize
+		pendingIdx = i
+	}
+
+	// End of stream: fire the final debounce timer if events were pending
+	// AND the process hadn't exited before it would fire.
+	if debouncePending && coalescedSinceFire {
+		lastFs := fswatches[len(fswatches)-1]
+		fireTime := lastFs.Timestamp.Add(debounce)
+		if processExitAt.IsZero() || fireTime.Before(processExitAt) {
+			if err := classifyAtSidecar(pendingSize, fireTime, pendingIdx, CauseDebounceCoalesce); err != nil {
+				return nil, fmt.Errorf("final flush: %w", err)
+			}
+		}
+	}
+	addDuration(state, report.Summary.LastEventTime.Sub(prevTransitionAt))
+
+	report.Summary.ConsumedEvents = len(fswatches)
+	report.Summary.TotalTransitions = len(report.Transitions)
+	report.Summary.StateDurations = stateDurations
+
+	flickerCat, flickerReason, flickerTotal := computeFlickers(
+		report.Transitions, cfg.FlickerMaxDuration)
+	report.Summary.FlickerCount = flickerTotal
+	report.Summary.FlickersByCategory = flickerCat
+	report.Summary.FlickersByReason = flickerReason
+
+	if lastMetrics != nil {
+		report.Summary.EstimatedCostUSD = lastMetrics.EstimatedCostUSD
+		report.Summary.CumInputTokens = lastMetrics.CumInputTokens
+		report.Summary.CumOutputTokens = lastMetrics.CumOutputTokens
+		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
+		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
+		report.Summary.ModelName = lastMetrics.ModelName
+	}
+
+	return report, nil
+}
+
+// loadAllLifecycleEvents reads a lifecycle sidecar file and returns every
+// event sorted by sequence number (the fields that make sidecar replay
+// deterministic). Unlike loadLifecycleStateTransitions it does not filter
+// by Kind. Malformed lines are logged to stderr and skipped so a partial
+// file doesn't silently produce bogus replay output.
+func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+
+	var out []lifecycle.Event
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		var ev lifecycle.Event
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			fmt.Fprintf(os.Stderr, "replay-session: skipping malformed sidecar line %d in %s: %v\n", lineNum, path, err)
+			continue
+		}
+		out = append(out, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out, nil
+}
+
 func batchByDebounce(events []rawEvent, window time.Duration) [][]rawEvent {
 	if window <= 0 || len(events) == 0 {
-		// Each event is its own batch.
 		out := make([][]rawEvent, len(events))
 		for i, e := range events {
 			out[i] = []rawEvent{e}
@@ -554,4 +1005,163 @@ func head(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// runExtendedCheck loads a lifecycle-events sidecar, extracts its state
+// transitions, and compares them to the replayed transitions. Transitions
+// with an empty prev_state are dropped on both sides (the sidecar's "new
+// session created" row and the replay's synthetic init row).
+func runExtendedCheck(sidecarPath string, replayed []Transition) (*ExtendedCheck, error) {
+	recorded, err := loadLifecycleStateTransitions(sidecarPath)
+	if err != nil {
+		return nil, err
+	}
+
+	replayedReal := make([]Transition, 0, len(replayed))
+	for _, t := range replayed {
+		if t.PrevState == "" {
+			continue
+		}
+		replayedReal = append(replayedReal, t)
+	}
+
+	check := &ExtendedCheck{
+		SidecarPath:   sidecarPath,
+		RecordedCount: len(recorded),
+		ReplayedCount: len(replayedReal),
+	}
+
+	// Ordered diff.
+	n := len(recorded)
+	if len(replayedReal) < n {
+		n = len(replayedReal)
+	}
+	for i := 0; i < n; i++ {
+		r := recorded[i]
+		p := replayedReal[i]
+		if r.PrevState == p.PrevState && r.NewState == p.NewState {
+			check.OrderedMatches++
+			continue
+		}
+		check.OrderedMismatches = append(check.OrderedMismatches, TransitionMismatch{
+			Index:    i,
+			Kind:     "state_differs",
+			Recorded: r.PrevState + "→" + r.NewState,
+			Replayed: p.PrevState + "→" + p.NewState,
+		})
+	}
+	for i := n; i < len(recorded); i++ {
+		r := recorded[i]
+		check.OrderedMismatches = append(check.OrderedMismatches, TransitionMismatch{
+			Index:    i,
+			Kind:     "missing_in_replay",
+			Recorded: r.PrevState + "→" + r.NewState,
+		})
+	}
+	for i := n; i < len(replayedReal); i++ {
+		p := replayedReal[i]
+		check.OrderedMismatches = append(check.OrderedMismatches, TransitionMismatch{
+			Index:    i,
+			Kind:     "extra_in_replay",
+			Replayed: p.PrevState + "→" + p.NewState,
+		})
+	}
+
+	// Unique-kinds diff (the strict correctness check).
+	recordedKinds := uniqueTransitionKinds(recorded, func(e lifecycle.Event) (string, string) { return e.PrevState, e.NewState })
+	replayedKinds := uniqueTransitionKinds(replayedReal, func(t Transition) (string, string) { return t.PrevState, t.NewState })
+	check.RecordedUniqueKinds = sortedKinds(recordedKinds)
+	check.ReplayedUniqueKinds = sortedKinds(replayedKinds)
+	for k := range recordedKinds {
+		if !replayedKinds[k] {
+			check.MissingKinds = append(check.MissingKinds, k)
+		}
+	}
+	for k := range replayedKinds {
+		if !recordedKinds[k] {
+			check.ExtraKinds = append(check.ExtraKinds, k)
+		}
+	}
+	sort.Strings(check.MissingKinds)
+	sort.Strings(check.ExtraKinds)
+
+	return check, nil
+}
+
+// uniqueTransitionKinds is a small generic helper that returns the set of
+// "prev→new" strings appearing in a slice of transition-like records.
+func uniqueTransitionKinds[T any](items []T, fields func(T) (prev, next string)) map[string]bool {
+	out := make(map[string]bool)
+	for _, it := range items {
+		prev, next := fields(it)
+		out[prev+"→"+next] = true
+	}
+	return out
+}
+
+func sortedKinds(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// loadLifecycleStateTransitions reads a JSONL lifecycle recording and
+// returns only the state_transition events that belong to the primary
+// session (the first transcript_new) and carry a non-empty prev_state.
+//
+// Multi-session sidecars curated via scripts/curate-lifecycle-fixture.sh
+// include both the parent's events and its subagents'. The extended
+// check compares the replay's output (which drives only the parent's
+// transcript) against the parent's recorded transitions — subagent
+// transitions are stored for future tooling but ignored here.
+func loadLifecycleStateTransitions(path string) ([]lifecycle.Event, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+
+	var all []lifecycle.Event
+	for scanner.Scan() {
+		var ev lifecycle.Event
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			continue
+		}
+		all = append(all, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Seq < all[j].Seq })
+
+	// Primary session = first transcript_new event in seq order.
+	var primarySessionID string
+	for _, ev := range all {
+		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" {
+			primarySessionID = ev.SessionID
+			break
+		}
+	}
+
+	out := make([]lifecycle.Event, 0, len(all))
+	for _, ev := range all {
+		if ev.Kind != lifecycle.KindStateTransition {
+			continue
+		}
+		if ev.PrevState == "" {
+			continue
+		}
+		if primarySessionID != "" && ev.SessionID != primarySessionID {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out, nil
 }

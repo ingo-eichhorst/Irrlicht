@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -263,6 +264,75 @@ func TestWatch_NewProjectDir(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event from new project dir")
+	}
+
+	cancel()
+	if err := <-watchErr; err != nil && err != context.Canceled {
+		t.Errorf("Watch returned unexpected error: %v", err)
+	}
+}
+
+// TestWatch_NestedSubdirWithExistingFiles reproduces the bug where
+// Claude Code creates a parent session directory together with a
+// nested subagents/ directory and subagent transcript files in rapid
+// succession. By the time our handler processes the fsnotify Create
+// event for the parent dir, the nested subagents/ dir and its files
+// already exist on disk. A shallow emitExistingFiles() walk would
+// miss them — the fix is to recursively add watches for the entire
+// new subtree and emit events for any .jsonl files anywhere in it.
+func TestWatch_NestedSubdirWithExistingFiles(t *testing.T) {
+	root := setupFakeProjects(t)
+	w := NewWithRoot(root, testAdapter, 0)
+	ch := w.Subscribe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchErr := make(chan error, 1)
+	go func() { watchErr <- w.Watch(ctx) }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Build the entire subtree in one go, mimicking Claude Code's
+	// "create parent session + subagents dir + agent transcripts" flow.
+	// Directory tree:
+	//   <parent>/
+	//   <parent>/subagents/
+	//   <parent>/subagents/agent-a.jsonl
+	//   <parent>/subagents/agent-b.jsonl
+	parentDir := filepath.Join(root, "-Users-test-myproject", "parent-session-id")
+	subagentsDir := filepath.Join(parentDir, "subagents")
+	if err := os.MkdirAll(subagentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subagentsDir, "agent-a.jsonl"), []byte(`{}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subagentsDir, "agent-b.jsonl"), []byte(`{}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Collect events for up to 1 second. We expect EventNewSession for
+	// both agent-a and agent-b; the exact order doesn't matter because
+	// fsnotify may reorder Create events.
+	seen := map[string]bool{}
+	deadline := time.After(2 * time.Second)
+	for len(seen) < 2 {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession && strings.HasPrefix(ev.SessionID, "agent-") {
+				seen[ev.SessionID] = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out: saw %d subagent events, want 2 (%v)", len(seen), seen)
+		}
+	}
+
+	if !seen["agent-a"] {
+		t.Error("missing EventNewSession for agent-a")
+	}
+	if !seen["agent-b"] {
+		t.Error("missing EventNewSession for agent-b")
 	}
 
 	cancel()

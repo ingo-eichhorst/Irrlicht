@@ -11,11 +11,14 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
@@ -30,6 +33,19 @@ const orphanTranscriptAge = 2 * time.Minute
 // events. The first event fires immediately; subsequent events within this
 // window are coalesced into a single processing when the timer expires.
 const activityDebounceWindow = 2 * time.Second
+
+// subagentQuietWindow is how long a subagent's transcript must have been
+// silent before finishOrphanedChildren will promote it to ready.
+//
+// The window has to survive the worst-case normal gap between transcript
+// writes for an actively-running subagent. Background Task agents routinely
+// sit with no writes for 5-15 seconds while waiting on API responses —
+// session b27fdaef-6de4-403a-b277-790fe8d803bb showed a 9-second gap that
+// falsely tripped a 2-second window and re-created the child session on
+// the very next write. 30 seconds comfortably covers normal API latency
+// while still being 4× faster than the 2-minute stale-transcript sweep,
+// which is the fallback cleanup path for anything this function misses.
+const subagentQuietWindow = 30 * time.Second
 
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {
@@ -78,6 +94,10 @@ type SessionDetector struct {
 	// can be re-created from transcript activity (e.g. --continue). Prevents
 	// ghost sessions from late-arriving writes of a dying process.
 	deletedCooldown time.Duration
+
+	// recorder captures lifecycle events for offline replay (optional).
+	recorder    outbound.EventRecorder
+	recorderSeq int64
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -111,6 +131,7 @@ func NewSessionDetector(
 		pw, repo, log, broadcaster, readyTTL,
 		pidDiscovers, det.removeFromProjectSessions,
 	)
+	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det
 }
 
@@ -118,6 +139,33 @@ func NewSessionDetector(
 // Intended for tests that need immediate re-creation.
 func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 	d.deletedCooldown = dur
+}
+
+// RunPIDLivenessSweepForTest runs one iteration of the liveness sweep
+// synchronously. Intended for tests that need to exercise the sweep's
+// child-cleanup path without waiting for the real 5-second ticker.
+func (d *SessionDetector) RunPIDLivenessSweepForTest() {
+	d.pidMgr.CheckPIDLiveness()
+}
+
+// SetRecorder enables lifecycle event recording. When set, the detector and
+// its PIDManager will emit lifecycle events to the recorder for offline replay.
+func (d *SessionDetector) SetRecorder(r outbound.EventRecorder) {
+	d.recorder = r
+	d.pidMgr.SetRecorder(r, &d.recorderSeq)
+}
+
+// record emits a lifecycle event if recording is enabled. It assigns a
+// monotonic sequence number and fills in the timestamp if missing.
+func (d *SessionDetector) record(ev lifecycle.Event) {
+	if d.recorder == nil {
+		return
+	}
+	ev.Seq = atomic.AddInt64(&d.recorderSeq, 1)
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now()
+	}
+	d.recorder.Record(ev)
 }
 
 // Run subscribes to all AgentWatcher event streams, fans them into a single
@@ -186,12 +234,16 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 
 // handleTranscriptEvent dispatches a transcript event to the appropriate handler.
 func (d *SessionDetector) handleTranscriptEvent(ev agent.Event) {
+	// Record raw inbound event for lifecycle replay.
 	switch ev.Type {
 	case agent.EventNewSession:
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptNew, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath, FileSize: ev.Size, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
 		d.onNewSession(ev)
 	case agent.EventActivity:
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptActivity, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath, FileSize: ev.Size})
 		d.onActivity(ev)
 	case agent.EventRemoved:
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptRemoved, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath})
 		d.onRemoved(ev)
 	}
 }
@@ -256,6 +308,11 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			LastEvent:       "transcript_new",
 		}
 
+		// Record parent-child linkage if detected.
+		if state.ParentSessionID != "" {
+			d.record(lifecycle.Event{Kind: lifecycle.KindParentLinked, SessionID: ev.SessionID, ParentSessionID: state.ParentSessionID})
+		}
+
 		// Resolve git metadata and compute initial metrics.
 		d.enricher.EnrichNewSession(state, ev)
 
@@ -264,6 +321,9 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 				fmt.Sprintf("failed to save new session: %v", err))
 			return
 		}
+
+		// Record initial state transition.
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: session.StateReady, Reason: "new session created"})
 
 		d.broadcast(outbound.PushTypeCreated, state)
 
@@ -342,6 +402,8 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 	entry.pending = true
 	entry.timer.Reset(activityDebounceWindow)
 	d.debounceMu.Unlock()
+
+	d.record(lifecycle.Event{Kind: lifecycle.KindDebounceCoalesced, SessionID: ev.SessionID})
 }
 
 // processActivity handles a (possibly debounced) transcript activity event.
@@ -401,6 +463,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// already shows IsAgentDone()=true would stay ready with no transition
 	// broadcast — the UI would never see the "agent finished" event.
 	if state.State == session.StateReady && state.Metrics != nil && state.Metrics.LastEventType != "" {
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: "force ready→working on first activity"})
 		state.State = session.StateWorking
 	}
 
@@ -411,7 +474,15 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// Parent-child propagation: if a parent session would transition to
 	// ready but still has active children (working/waiting), hold it in
 	// working. The parent will be re-evaluated when children finish.
+	//
+	// Before holding, fast-forward any "orphaned" children — subagents
+	// whose own tail has no open tool calls but whose transcript ends
+	// with `stop_reason: null` (Claude Code never writes end_turn for
+	// in-process subagents). Since the parent's own turn is done,
+	// those subagents' work is definitionally complete: the parent's
+	// final assistant message already incorporated their results.
 	if newState == session.StateReady && state.ParentSessionID == "" {
+		d.finishOrphanedChildren(state.SessionID)
 		if d.hasActiveChildren(state.SessionID) {
 			d.log.LogInfo("session-detector", ev.SessionID,
 				"holding parent working — active children still running")
@@ -424,6 +495,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 		if reason != "" {
 			d.log.LogInfo("session-detector", ev.SessionID, reason)
 		}
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason})
 		state.State = newState
 		state.UpdatedAt = now
 
@@ -498,10 +570,13 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 		return
 	}
 
+	prevState := state.State
 	state.State = session.StateReady
 	state.UpdatedAt = time.Now().Unix()
 	state.Confidence = "high"
 	state.LastEvent = "transcript_removed"
+
+	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: prevState, NewState: session.StateReady, Reason: "transcript removed"})
 
 	if err := d.repo.Save(state); err != nil {
 		d.log.LogError("session-detector", ev.SessionID,
@@ -618,6 +693,76 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 	}
 }
 
+// finishOrphanedChildren walks the child sessions of parentID and promotes
+// each one to ready if it has no open tool calls. Called when the parent's
+// own turn is done and we're about to hold the parent in working on
+// behalf of the children.
+//
+// This handles a Claude Code quirk: in-process subagent transcripts
+// (Explore/Plan tools under <parent>/subagents/<agent-id>.jsonl) never
+// emit a proper end_turn event — their final assistant message is written
+// with stop_reason: null, which the classifier correctly treats as
+// streaming. Without this fast-forward the child stays in working until
+// the 2-minute stale-transcript sweep catches it, and the parent is
+// held working for that entire window.
+//
+// Safety: we only promote children whose metrics show no open tool calls.
+// A child that is genuinely still running a tool keeps an entry in the
+// FIFO and is left alone.
+func (d *SessionDetector) finishOrphanedChildren(parentID string) {
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+	now := time.Now().Unix()
+	for _, s := range states {
+		if s.ParentSessionID != parentID {
+			continue
+		}
+		if s.State != session.StateWorking && s.State != session.StateWaiting {
+			continue
+		}
+		if s.Metrics == nil || s.Metrics.HasOpenToolCall {
+			continue
+		}
+		// Safety: a child whose transcript has been written in the last
+		// subagentQuietWindow is a background agent still mid-run — we
+		// don't know whether the parent's "done" means "finished the
+		// subagents" or "kicked off async background work". Leaving active
+		// children alone avoids the bug where background agents are
+		// promoted and deleted while still writing. If the stat fails
+		// (missing file), skip to be conservative — the liveness sweep
+		// will fall back to its 2-minute window for anything we miss here.
+		info, err := os.Stat(s.TranscriptPath)
+		if err != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) < subagentQuietWindow {
+			continue
+		}
+
+		prev := s.State
+		s.State = session.StateReady
+		s.UpdatedAt = now
+		s.WaitingStartTime = nil
+		d.record(lifecycle.Event{
+			Kind:       lifecycle.KindStateTransition,
+			SessionID:  s.SessionID,
+			PrevState:  prev,
+			NewState:   session.StateReady,
+			Reason:     "subagent orphaned (parent turn done, no open tools)",
+		})
+		if err := d.repo.Save(s); err != nil {
+			d.log.LogError("session-detector", s.SessionID,
+				fmt.Sprintf("failed to finish orphaned child: %v", err))
+			continue
+		}
+		d.log.LogInfo("session-detector", s.SessionID,
+			fmt.Sprintf("finished orphaned subagent (%s → ready) — parent %s turn done", prev, parentID))
+		d.broadcast(outbound.PushTypeUpdated, s)
+	}
+}
+
 // hasActiveChildren returns true if any child session of the given parent is
 // still working or waiting. Used to prevent a parent from transitioning to
 // ready while background/foreground subagents are still processing.
@@ -652,6 +797,10 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	if parent.Metrics == nil || !parent.Metrics.IsAgentDone() {
 		return
 	}
+	// Fast-forward orphaned subagents (finished work but no stop_reason)
+	// — see finishOrphanedChildren doc for rationale.
+	d.finishOrphanedChildren(parentID)
+
 	// Still have active children — stay working.
 	if d.hasActiveChildren(parentID) {
 		return
@@ -668,6 +817,7 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 		d.log.LogInfo("session-detector", parentID,
 			fmt.Sprintf("children done, parent re-evaluated: %s", reason))
 	}
+	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: parentID, PrevState: parent.State, NewState: newState, Reason: reason})
 	parent.State = newState
 	parent.UpdatedAt = now
 	if newState == session.StateWaiting {

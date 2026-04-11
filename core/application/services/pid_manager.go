@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
@@ -39,12 +41,24 @@ type PIDManager struct {
 	// clean up its own tracking structures (e.g. projectSessions map).
 	onSessionDeleted func(sessionID string)
 
+	// onChildDeleted is called when a child session is removed by the
+	// liveness sweep so the SessionDetector can re-evaluate the parent.
+	// Without this the parent can be left stuck in `working` forever
+	// when it was being held active solely because of the just-deleted
+	// child (see hasActiveChildren in session_detector.go).
+	onChildDeleted func(parentID string)
+
 	// pendingPIDs stores PIDs discovered by background goroutines, to be
 	// applied by processActivity on its next run. This avoids a race where
 	// HandlePIDAssigned's load-modify-save overwrites a state transition
 	// made by processActivity (e.g. working → ready).
 	pendingMu   sync.Mutex
 	pendingPIDs map[string]int
+
+	// recorder captures lifecycle events for offline replay (optional).
+	// Set by SessionDetector.SetRecorder.
+	recorder    outbound.EventRecorder
+	recorderSeq *int64 // shared with SessionDetector for monotonic ordering
 }
 
 // NewPIDManager creates a PIDManager with the given dependencies.
@@ -70,8 +84,40 @@ func NewPIDManager(
 	}
 }
 
+// SetRecorder enables lifecycle event recording on this PIDManager.
+// The shared sequence counter ensures monotonic ordering across the
+// SessionDetector and PIDManager.
+func (pm *PIDManager) SetRecorder(r outbound.EventRecorder, seq *int64) {
+	pm.recorder = r
+	pm.recorderSeq = seq
+}
+
+// SetChildDeletedHandler registers a callback invoked whenever a child
+// session is deleted by the liveness sweep. The parent's ID is passed so
+// the caller can re-evaluate the parent, which may have been held in
+// `working` solely because of that child.
+func (pm *PIDManager) SetChildDeletedHandler(fn func(parentID string)) {
+	pm.onChildDeleted = fn
+}
+
+// record emits a lifecycle event if recording is enabled.
+func (pm *PIDManager) record(ev lifecycle.Event) {
+	if pm.recorder == nil {
+		return
+	}
+	if pm.recorderSeq != nil {
+		ev.Seq = atomic.AddInt64(pm.recorderSeq, 1)
+	}
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now()
+	}
+	pm.recorder.Record(ev)
+}
+
 // HandleProcessExit deletes a session when its process exits.
 func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
+	pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, SessionID: sessionID, PID: pid})
+
 	if pm.onSessionDeleted != nil {
 		pm.onSessionDeleted(sessionID)
 	}
@@ -130,6 +176,8 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	if pid <= 0 {
 		return
 	}
+
+	pm.record(lifecycle.Event{Kind: lifecycle.KindPIDDiscovered, SessionID: sessionID, PID: pid})
 
 	// Store pending PID FIRST so processActivity can correct any stale state
 	// that our direct save below might overwrite.
@@ -354,8 +402,17 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 			// (transcript stopped updating — zombie from a previous run).
 			if state.ParentSessionID != "" {
 				if state.State == session.StateReady || isStaleTranscript(state.TranscriptPath) {
+					parentID := state.ParentSessionID
 					_ = pm.repo.Delete(state.SessionID)
 					pm.broadcast(outbound.PushTypeDeleted, state)
+					// Re-evaluate the parent: it may have been held in
+					// `working` only because of this child. Without this
+					// nudge the parent stays stuck until its own next
+					// transcript event, which may never come for a
+					// finished session.
+					if pm.onChildDeleted != nil {
+						pm.onChildDeleted(parentID)
+					}
 				}
 				continue
 			}
