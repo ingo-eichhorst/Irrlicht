@@ -7,7 +7,6 @@
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fingo-eichhorst%2F9f14c8e5f25c1ccf5d6500c1685fd9fb%2Fraw%2Fcoverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
 [![License](https://img.shields.io/badge/license-MIT-orange?color=%23FF9500)](LICENSE)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fingo-eichhorst%2FIrrlicht%2Fmain%2Fversion.json&query=%24.version&label=version&color=%2334C759)](version.json)
-
 [![ARS](https://img.shields.io/badge/ARS-Agent--Assisted%207.3%2F10-yellow)](https://github.com/ingo-eichhorst/agent-readyness)
 
 [🌐 Landing Page](https://ingo-eichhorst.github.io/Irrlicht/) · [📖 Documentation](https://ingo-eichhorst.github.io/Irrlicht/docs/quickstart.html) · [📦 Latest Release](https://github.com/ingo-eichhorst/Irrlicht/releases/latest)
@@ -16,327 +15,97 @@
 
 ---
 
-**Irrlicht** is a macOS menu bar application that monitors AI coding agent sessions (Claude Code, OpenAI Codex, Pi), providing instant visual feedback on session states. The name comes from German folklore—*Irrlicht* is the German word for will-o'-the-wisp, the ghostly lights that drift over the moors and marshes of the Harz mountains. In Goethe's *Faust*, an Irrlicht guides Faust and Mephistopheles up the Brocken on Walpurgis Night, a treacherous companion on a treacherous path. Harzer miners told of phantom lights in the tunnels near Clausthal-Zellerfeld—sometimes a warning, sometimes a promise of ore ahead.
+> *In Goethe's Faust, an Irrlicht guides the way through the night. This one guides you through your agents — who's working, who's waiting, and where you're needed next.*
 
-This Irrlicht flips the old myth: instead of luring you astray, it guides you with honest signals about where your attention is needed.
+## The problem
 
-## Philosophy
+These aren't hypothetical pain points. They're what developers are writing about today:
 
-> *"In die Traum- und Zaubersphäre / sind wir, scheint es, eingegangen."*
-> — Goethe, *Faust I* (Walpurgisnacht), the Irrlicht speaking as it leads Faust up the Brocken
->
-> By night, in the mist-hollows of the Harz, an *Irrlicht* lures wanderers off the path and into the bog.
-> By day, in our terminals, the real danger is different: ten tasks, four Claude sessions, and no sense of where attention should go.
->
-> **Irrlicht** flips the myth: it's the *tamed* will-o'-the-wisp—small, honest lights that appear exactly where you need them.
+- **You lose track of who needs you.** *"You aren't coding anymore; you're just tabbing through terminal windows trying to find the one that beeped."* ([Brizz, "Mission Control for Claude Code"](https://www.brizz.ai/blog/mission-control-for-claude-code)) Claude Code's desktop notifications [don't even work inside tmux](https://github.com/anthropics/claude-code/issues/19976) — the most common multi-session setup — so developers resort to Telegram bridges and custom hooks instead of a real signal. Meanwhile, the session you forgot about has been waiting on a plan-mode prompt for ten minutes.
 
-Irrlicht watches agent transcript files (Claude Code, Codex, Pi), turns activity into a deterministic state machine, and renders them as quiet, legible beacons. Local-first, atomic writes, zero configuration.
+- **Parallel sessions shred your attention.** *"Juggling multiple Claude sessions is like moderating two separate meetings in neighboring conference rooms — you're endlessly ping-ponging between rooms… The mental gymnastics of context switching wears me out and makes me wonder how well I'm steering each session."* ([dev.to](https://dev.to/datadeer/part-2-running-multiple-claude-code-sessions-in-parallel-with-git-worktree-165i))
+
+- **Context compaction wrecks quality, silently.** *"By the time auto-compaction triggers at 80%+, the model has already spent 20–30% of the session generating degraded output."* ([MindStudio](https://www.mindstudio.ai/blog/claude-code-compact-command-context-management)) Users report Claude Code "has forgotten everything" exactly when they needed it sharpest. There's no warning, no pressure gauge, just worse answers — and [a GitHub issue with hundreds of reactions](https://github.com/anthropics/claude-code/issues/13112) confirms it hits everyone.
+
+- **Cost runs away in the dark.** A recent prompt-caching bug silently inflated token usage 10–20× for weeks while Anthropic's status page showed no incidents ([The Register](https://www.theregister.com/2026/03/31/anthropic_claude_code_limits/)). A user reported *"I used up Max 5 in 1 hour of working, before I could work 8 hours,"* and Anthropic has since admitted *"people are hitting usage limits way faster than expected."* You find out after the fact — not while the session is burning.
+
+- **Subagents and background jobs are a black box.** You spawn three Explore agents, fork a background task, call Plan — then wait, with no per-child state visible. You can't tell when the whole tree is done, only when the parent surfaces a summary.
+
+- **Quota makes you agent-hop — and your monitoring doesn't follow.** Burn your Max 5 quota on Claude Code by 11am (*"out of 30 days I get to use Claude 12"* — [The Register](https://www.theregister.com/2026/03/31/anthropic_claude_code_limits/)), fall back to Codex or Gemini for the afternoon. Multi-provider quota trackers like [tokscale](https://github.com/junhoyeo/tokscale) and [ClaudeBar](https://github.com/tddworks/ClaudeBar) already ship with 9–10 agents each — that's how common the agent-hopping is. But unifying *consumption* isn't the same as unifying *state*. Claude Code in one terminal, Codex in another, Pi in a third, Gas Town somewhere else — *"the hard part isn't the coding, it's knowing what is still running, what needs input, and what changed."* ([Nimbalyst](https://nimbalyst.com/blog/best-session-managers-for-claude-code-and-codex/))
+
+*(Irrlicht is German for will-o'-the-wisp — a light that guides you through the dark.)*
+
+## The Light System
+
+Each session is one icon in your menu bar that tells the truth:
+
+- 🟣 **working** — the agent is thinking, building, streaming
+- 🟠 **waiting** — it needs you; the story pauses for your judgment
+- 🟢 **ready** — the path ahead is clear, ready for new work
+- ✦ **no sessions** — clean slate
+
+![UI Features](assets/irrlicht-explainer.png)
+
+Three states. No ambiguity. Ambient, always visible, nothing to click through.
+
+## What makes Irrlicht different
+
+The space around AI-coding-agent observability is more crowded than it looks. Tools broadly fall into three camps, each with real gaps:
+
+- **Quota and cost trackers** — [ccusage](https://github.com/ryoppippi/ccusage), [ClaudeBar](https://github.com/tddworks/ClaudeBar), [SessionWatcher](https://www.sessionwatcher.com/), [Claude-Code-Usage-Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor), [tokscale](https://github.com/junhoyeo/tokscale). They track *how much you've consumed*. They don't tell you whether any given session is working, waiting on you, or done.
+- **Observability platforms** — [Langfuse](https://langfuse.com/integrations/frameworks/claude-agent-sdk), [Helicone](https://www.helicone.ai/), [SigNoz](https://signoz.io/blog/claude-code-monitoring-with-opentelemetry/), and the rest of the OpenTelemetry stack. Rich tracing and metrics, but require SDK instrumentation, target teams, and live in a cloud dashboard — not in a single developer's menu bar.
+- **Live session monitors** — [Claude Status](https://github.com/gmr/claude-status), [Agent Sessions](https://github.com/jazzyalex/agent-sessions), [Agent of Empires](https://github.com/njbrake/agent-of-empires), [Brizz](https://www.brizz.ai/blog/mission-control-for-claude-code), [recon](https://github.com/gavraz/recon). These actually track per-session state — but each locks you into one form factor: Claude-Code-only, iTerm2-only, tmux-only, or a separate app window you alt-tab to.
+
+Irrlicht claims a narrower, more opinionated slot in that third camp:
+
+- **Ambient, not a dashboard.** State is encoded directly in the menu bar as colored dots — 🟣 working, 🟠 waiting, 🟢 ready — so you never open a window or switch a tab to know what's happening. The closest peer, [Claude Status](https://github.com/gmr/claude-status), is Claude-Code-only and uses four states; [Agent Sessions](https://github.com/jazzyalex/agent-sessions)' live HUD is a separate window that only works inside iTerm2. Irrlicht is terminal-agnostic, IDE-agnostic, and doesn't ask you to context-switch to see the state.
+- **Context pressure is a first-class signal.** Of the menu-bar and CLI tools surveyed above, *none* warn before auto-compact hits the 155K-token cliff. Claude Code Usage Monitor predicts *quota* exhaustion; SessionWatcher tracks *rate limits*; ccusage aggregates *tokens consumed*. Irrlicht's 🟢→🟡→🔴→⚠️ pressure gauge is per-session, tied to the actual context window, and early enough that you can `/compact` manually before quality drops.
+- **Agents *and* orchestrators, one vocabulary.** Claude Code, OpenAI Codex, and Pi — plus Gas Town, an agent orchestrator. Quota trackers unify 9+ providers but only for billing; live-state monitors are usually single-agent. Irrlicht uses the same working/waiting/ready state across every one of them, so agent-hopping when your quota runs dry doesn't mean re-learning a new tool.
+- **Zero integration, nothing to break.** No mendatory hooks, no SDK wrappers, no OpenTelemetry collectors. Irrlicht watches the `.jsonl` transcripts your agents already write via FSEvents and kqueue — install the app and it discovers every session. When Claude Code or Codex ships a new version, there's nothing to update. (Claude Status ships a Claude Code *plugin* that hooks into session lifecycle events; Langfuse/SigNoz need OTEL instrumentation; Irrlicht needs neither.)
+- **Agent-verifiable by design.** State files live as atomic JSON at a known path (`~/Library/Application Support/Irrlicht/instances/*.json`). Any tool — including the coding agents themselves — can read them and verify their own work. Run `./validate.sh` in the repo, exit 0 means done. None of the tools surveyed above are explicitly designed to be read *by* the agents they monitor.
+
+## What you get (and the pain it removes)
+
+| Feature | The pain it removes |
+|---|---|
+| **Real-time state detection** (<1s via FSEvents/kqueue) | "Is it still running or did it finish ten minutes ago?" |
+| **Context pressure warnings** (🟢 → 🟡 → 🔴 → ⚠️ before uncontrolled auto-compaction) | Quality cliff from silent compaction; wasted tokens in a degraded context |
+| **Per-session cost tracking** in live USD (model-aware, via LiteLLM pricing) | Surprise invoices; no kill-signal when a run goes sideways |
+| **Subagent visibility** — parent-child trees for background agents, Explore, Plan | "Is the whole task done, or just the parent?" |
+| **Unified across agents** — Claude Code, OpenAI Codex, Pi, Gas Town | Mental overhead from four different UIs with four different vocabularies |
+| **Git-aware grouping** — sessions clustered by project, branch, worktree | "Which session belongs to which checkout?" |
+| **Zero configuration** — no mendatory hooks, no settings merges, no SDK | Per-project setup tax; breakage when an agent ships a new version |
+
+## Install
+
+**DMG (recommended):**
+
+1. Download `Irrlicht-<version>.dmg` from [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases)
+2. Open the DMG and drag **Irrlicht.app** to **Applications**
+3. Launch Irrlicht
+
+The app ships as a single `.app` bundle with the monitoring daemon embedded — no separate services, no version drift. To build from source instead, see [installation docs](https://ingo-eichhorst.github.io/Irrlicht/docs/installation.html).
+
+## How it works
 
 ```
 Transcript Files → FSEvents/kqueue → SessionDetector → State Machine → Menu Bar
 ```
 
-### The Light System
+Irrlicht watches agent transcript files (`.jsonl`) as they're written, turns the events into a deterministic state machine, and persists each session as an atomic JSON file under `~/Library/Application Support/Irrlicht/instances/`. The SwiftUI menu bar app reads that state over a local WebSocket and renders the lights. Local-first, ~5MB RAM, no telemetry leaves your machine.
 
-Each session appears as a simple icon that tells the truth:
-- **🟣** **working** — the agent is thinking, building, streaming (purple)
-- **🟠** **waiting** — it needs you; the story pauses for your judgment (orange)
-- **🟢** **ready** — the path ahead is clear, ready for new work (green)
-- **✦** **no sessions** — clean slate, ready for new work (white sparkle)
+For the full pipeline, hexagonal architecture, and state-machine rules, see [architecture docs](https://ingo-eichhorst.github.io/Irrlicht/docs/architecture.html).
 
-No ghosts. **Files → State → Light.**
+## Next steps
 
-## Features
+**For humans:** [Documentation](https://ingo-eichhorst.github.io/Irrlicht/docs/) · [Installation](https://ingo-eichhorst.github.io/Irrlicht/docs/installation.html) · [Changelog](https://ingo-eichhorst.github.io/Irrlicht/docs/changelog.html) · [Issues](https://github.com/ingo-eichhorst/Irrlicht/issues) · [Discussions](https://github.com/ingo-eichhorst/Irrlicht/discussions)
 
-![UI Features](assets/irrlicht-explainer.png)
-
-### Menu Bar Indicators
-- **Individual colored status indicators** for each active agent session
-- **Scales with Demand**: Shows first 5 sessions + "…" when 7+ sessions exist
-- **Real-time updates**: Status changes reflected within 1 second
-
-### Session Information & Features
-- **Complete session context**: Track project name, git branch, working directory, Claude model, and current state for each active session
-- **Real-time performance metrics**: Monitor elapsed time, token usage (1.2K, 15.0K, 1.5M), and context utilization with live updates
-- **Per-session cost estimation**: Real-time USD cost tracking using model-specific pricing from LiteLLM, aggregated per session and project
-- **Context pressure indicators**: Visual warnings (🟢 safe, 🟡 caution, 🔴 warning, ⚠️ critical) alert you before auto-compaction at 155K tokens
-- **Subagent visibility**: Parent-child session trees show background agents and in-process subagents (Explore, Plan) with per-child state
-- **Session management tools**: Reset stuck sessions, delete completed ones, or drag-and-drop to reorder projects by priority
-- **Smart display handling**: Clean empty state when idle, automatic overflow management for 7+ sessions
-
-## Quick Start
-
-### Prerequisites
-
-- **macOS**: Primary target platform
-- **Go 1.21+**: For building the daemon
-- **Swift 5.9+**: For SwiftUI menu bar application
-- **Claude Code, Codex, and/or Pi**: At least one supported AI coding agent
-
-### Installation
-
-**Option A — DMG (recommended):**
-
-1. Download `Irrlicht-<version>.dmg` from [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases)
-2. Open the DMG and drag **Irrlicht.app** to **Applications**
-3. Launch Irrlicht from Applications
-
-The app embeds the monitoring daemon — everything runs from a single application. No separate services to manage.
-
-**Option B — Build from source:**
-
-```bash
-git clone https://github.com/ingo-eichhorst/Irrlicht.git
-cd Irrlicht
-./platforms/build-release.sh
-open .build/Irrlicht-*.dmg
-```
-
-**That's it.** No hooks to configure, no settings to merge — Irrlicht watches transcript files automatically.
-
-### State Files
-
-Session states are stored as atomic JSON files:
-- **Location**: `~/Library/Application Support/Irrlicht/instances/`
-- **Format**: `<session_id>.json`
-- **Content**: Current state, timestamp, metadata, performance metrics
-
-Example state file:
-```json
-{
-  "session_id": "sess_abc123",
-  "state": "working",
-  "timestamp": "2024-09-05T14:30:00.000Z",
-  "last_event": "transcript_activity",
-  "model": "claude-sonnet-4-6",
-  "cwd": "/Users/ingo/projects/my-project",
-  "pid": 12345,
-  "metrics": {
-    "elapsed_seconds": 180,
-    "total_tokens": 15000,
-    "context_utilization_percentage": 7.5,
-    "pressure_level": "safe"
-  }
-}
-```
-
-## Development
-
-### Project Structure
-
-```
-├── core/                      # Go daemon (single module, hexagonal architecture)
-│   ├── cmd/irrlichd/          # Daemon entry point
-│   ├── domain/                # SessionState, TranscriptEvent, GasTown state types
-│   ├── ports/
-│   │   ├── inbound/           # AgentWatcher, GasTownCollector interfaces
-│   │   └── outbound/          # SessionRepository, Logger, ProcessWatcher, etc.
-│   ├── adapters/
-│   │   ├── inbound/           # Drives events into the app
-│   │   │   ├── claudecode/    # Watches ~/.claude/projects for Claude Code sessions
-│   │   │   ├── codex/         # Watches ~/.codex for OpenAI Codex sessions
-│   │   │   ├── pi/            # Watches ~/.pi/agent/sessions for Pi sessions
-│   │   │   ├── gastown/       # Watches Gas Town daemon state + polls gt CLI
-│   │   │   └── fswatcher/     # Shared fsnotify-based watcher implementation
-│   │   └── outbound/          # App calls out to external systems
-│   │       ├── filesystem/    # Session state persistence
-│   │       ├── process/       # kqueue process exit monitoring
-│   │       ├── graceperiod/   # Per-session idle timers
-│   │       ├── git/           # Git metadata resolution
-│   │       ├── metrics/       # Transcript metrics computation
-│   │       ├── websocket/     # WebSocket fan-out hub
-│   │       └── ...            # logging, mdns, memory, gtbin
-│   ├── application/services/  # SessionDetector orchestration
-│   └── pkg/                   # tailer, capacity utilities
-├── platforms/
-│   ├── macos/                 # SwiftUI menu bar application + DaemonManager
-│   ├── web/                   # Web frontend (embedded into daemon)
-│   └── build-release.sh       # Release build → .app bundle with embedded daemon + DMG
-├── fixtures/                  # Sample transcript files and edge cases
-```
-
-### Building from Source
-
-```bash
-# Build all components
-./platforms/build-release.sh
-
-# Build daemon
-cd core && go build ./cmd/irrlichd/
-
-# Build SwiftUI app
-cd platforms/macos && swift build
-```
-
-### Validation
-
-The single entry point for verifying the full system contract:
-
-```bash
-./validate.sh
-```
-
-This runs in order: Go build → Swift build → Go tests → Swift tests → integration tests. Exit code 0 means all claims passed. **A change is not done until `./validate.sh` passes.**
-
-Individual components:
-
-```bash
-# Run specific component tests
-cd core && go test -v ./...
-cd platforms/macos && swift test
-```
-
-### Session Detection
-
-Irrlicht detects agent sessions via transcript file-watching (Claude Code, Codex, Pi):
-
-| Detection | Technology | Transition |
-|-----------|-----------|------------|
-| New `.jsonl` file | FSEvents | → **working** |
-| File write activity | FSEvents | Re-evaluate state |
-| Agent asks question / plan mode | Transcript parser | → **waiting** |
-| Turn completed (end_turn) | Transcript parser | → **ready** |
-| Process exit | kqueue NOTE_EXIT | → **ready** |
-
-See [events.md](events.md) for the full state machine.
-
-## Technical Details
-
-### Architecture
-
-```
-Irrlicht.app (single artifact)
-  ├── Irrlicht (SwiftUI menu bar UI)
-  │   └── DaemonManager   (spawns/monitors/restarts irrlichd)
-  └── irrlichd (Go daemon, embedded in app bundle)
-      ├── Inbound Adapters
-      │   ├── Claude Code    (~/.claude/projects/**/*.jsonl via fsnotify)
-      │   ├── Codex          (~/.codex/**/*.jsonl via fsnotify)
-      │   ├── Pi             (~/.pi/agent/sessions/**/*.jsonl via fsnotify)
-      │   └── Gas Town       (daemon/state.json watcher + gt CLI poller)
-      ├── TailerPipeline     (JSONL parsing → model, tokens, tool call tracking, cost)
-      └── ProcessWatcher     (kqueue EVFILT_PROC NOTE_EXIT → ready)
-```
-
-- **Single-artifact packaging**: The `.app` bundle contains both the SwiftUI UI and the Go daemon — no separate installs, no version drift
-- **Daemon lifecycle**: The app automatically spawns `irrlichd` on launch. If an external daemon is already running (e.g. via LaunchAgent), it uses that instead. If the daemon crashes, the app restarts it with exponential backoff
-- **State Machine**: Maintains deterministic session states in JSON files
-- **Communication**: HTTP API + WebSocket on port 7837 for real-time UI updates
-- **File System**: Atomic writes ensure consistency across concurrent sessions
-
-### Performance Specifications
-
-- **Latency**: ~50-200ms session detection via FSEvents; ~1ms process exit via kqueue
-- **Memory**: <5MB typical footprint
-- **Disk**: <100KB state files, <50MB logs (with rotation)
-- **Concurrency**: Tested up to 8 simultaneous sessions
-- **Context Accuracy**: Real-time tracking with model-specific context windows
-
-### Logging System
-
-Structured JSON logs with automatic rotation:
-- **Location**: `~/Library/Application Support/Irrlicht/logs/`
-- **Format**: `irrlicht.log` (current), `irrlicht.log.1` (rotated)
-- **Max size**: 10MB per file, 5 files retained
-- **Content**: All session events, state transitions, errors
-
-### Safety Guarantees
-
-✅ **Zero configuration**: No hooks, no settings — install and run
-✅ **Idempotent**: Multiple runs produce identical results
-✅ **Non-destructive**: Never corrupts existing configurations
-✅ **Atomic**: Either fully succeeds or fails cleanly
-✅ **Kill switch**: `IRRLICHT_DISABLED=1` disables the daemon
-
-## Support
-
-### Troubleshooting
-
-**Irrlicht not showing in menu bar:**
-- Verify the app is running: `ps aux | grep Irrlicht`
-- Check state directory exists: `ls ~/Library/Application\ Support/Irrlicht/`
-- Look for error logs in `~/Library/Application\ Support/Irrlicht/logs/`
-
-**Sessions not updating:**
-- The app manages the daemon automatically — check that both processes are running: `ps aux | grep -E 'Irrlicht|irrlichd'`
-- Test daemon health: `curl http://127.0.0.1:7837/state`
-- Check IRRLICHT_DISABLED environment variable
-- If the daemon isn't starting, check Console.app for logs from `com.anthropic.irrlicht`
-
-**Orphaned sessions (session stuck after agent exits):**
-- Sessions include a `pid` field tracking the agent process
-- kqueue monitors process exit; sessions are deleted immediately when their process exits
-- Ready sessions without activity are automatically cleaned up after 30 minutes (configurable via Session TTL in app settings)
-- Orphan transcript files from previous runs are skipped during startup
-- To manually clear orphaned sessions: `rm ~/Library/Application\ Support/Irrlicht/instances/*.json`
-
-### Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Write tests for new functionality
-4. Ensure all checks pass: `./validate.sh`
-5. Commit your changes with descriptive messages
-6. Submit a pull request
-
-**For AI coding agents:** run `./validate.sh` after every change. A task is only complete when exit code is 0. Never mark a task done based only on compilation. If validation fails, inspect the failing test and fix the root cause — do not skip or comment out failing assertions.
-
-## Coding Agent Support
-
-Irrlicht is designed to be **agent-verifiable**: an AI coding agent can inspect app state and validate its own changes without human assistance.
-
-### Passive observability — read current state
-
-Session state files are the ground truth. An agent can read them directly:
-
-```bash
-# See all active sessions
-ls ~/Library/Application\ Support/Irrlicht/instances/
-
-# Check session count and states
-cat ~/Library/Application\ Support/Irrlicht/instances/*.json | jq '{id: .session_id, state: .state}'
-```
-
-This works without any app changes — the state files are always present while sessions are active.
-
-### Active validation — run executable claims
-
-```bash
-./validate.sh   # must exit 0 before any change is considered done
-```
-
-The validation harness is a semantic firewall around agent-authored changes:
-
-```
-agent generates change → ./validate.sh executes claims → only exit 0 counts as success
-```
-
-### Visual verification
-
-To verify rendering without human review, open the menu bar popup and capture a screenshot:
-
-```bash
-# Open popup via AppleScript
-osascript -e 'tell application "System Events" to click menu bar item 1 of menu bar 2 of process "Irrlicht"'
-screencapture -x /tmp/irrlicht-check.png
-# Pass the image to your vision model for visual assertion
-```
-
-Tools like [Peekaboo](https://github.com/steipete/Peekaboo) combine screenshot capture and vision analysis into a single CLI call.
+**For coding agents:** Irrlicht is agent-verifiable. Read live session state from `~/Library/Application Support/Irrlicht/instances/*.json`, run `./validate.sh` to verify any change (exit 0 = done), and see [AGENTS.md](AGENTS.md) for conventions.
 
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ingo-eichhorst/Irrlicht&type=Date)](https://star-history.com/#ingo-eichhorst/Irrlicht&Date)
 
-### License
+## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
-
-### Community
-
-- **Issues**: [GitHub Issues](https://github.com/ingo-eichhorst/Irrlicht/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/ingo-eichhorst/Irrlicht/discussions)
-
----
-
-*"Führ uns gut und mach dir Ehre" — Follow the right light.*
+MIT License — see [LICENSE](LICENSE).
