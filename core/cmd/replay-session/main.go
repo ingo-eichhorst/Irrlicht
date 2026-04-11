@@ -114,21 +114,21 @@ type Report struct {
 // ExtendedCheck compares the replayed state transitions against a committed
 // lifecycle recording (.events.jsonl sidecar produced by `irrlichd --record`).
 //
-// This is an **informational drift signal**, not a regression oracle. The
-// replay and the real daemon don't process events the same way: the replay
-// uses transcript-embedded timestamps for debounce batching, while the daemon
-// debounces on fswatcher write arrival. Identical transcripts can therefore
-// produce different transition sequences — both valid — depending on how
-// events cluster. The check is useful for understanding those differences,
-// not for gating CI.
+// When a sidecar is present, replay-session uses `ReplayWithSidecar` to
+// drive the tailer from the recorded fswatcher events — each
+// transcript_activity event in the sidecar carries a file_size that tells
+// the replay exactly how many transcript bytes to feed the tailer at that
+// moment. The debounce state machine is then applied over those events
+// using the same 2-second window the daemon uses, and process_exited
+// events cancel any pending debounce timer the same way the daemon
+// tearing down a session does.
 //
-// Hard regression testing should compare committed replay reports run-over-
-// run (existing pattern in testdata/replay/reports/), not replay output
-// against daemon output.
+// The result is a byte-identical reproduction of what the daemon produced
+// for the recorded session. Ordered-diff mismatches are therefore real
+// regressions — pass --strict-check to fail the process on any drift.
 //
-// Exit policy: this check never fails the process on its own. Pass
-// --strict-check on the command line to exit non-zero on any ordered-diff
-// mismatch — only useful when you expect byte-identical reproduction.
+// Unique-kind mismatches (a transition prev→new pair that appears in one
+// side but not the other) are reported either way.
 type ExtendedCheck struct {
 	SidecarPath         string               `json:"sidecar_path"`
 	RecordedCount       int                  `json:"recorded_transition_count"`
@@ -216,21 +216,42 @@ func main() {
 		}
 	}
 
-	report, err := Replay(src, ReportSettings{
-		Adapter:            adapterName,
-		DebounceWindow:     debounceFlag,
-		FlickerMaxDuration: flickerMax,
-	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "replay failed:", err)
+	// Sidecar-driven replay: when a <transcript-basename>.events.jsonl
+	// sidecar is present, the replay is driven by the lifecycle recording
+	// instead of the transcript's own line timestamps. The sidecar records
+	// one transcript_activity event per fswatcher fire, each with a
+	// file_size. Feeding the tailer bytes up to each recorded file_size
+	// gives a byte-identical reproduction of what the daemon observed —
+	// no more batching-vs-fswatcher drift.
+	sidecarPath := strings.TrimSuffix(src, ".jsonl") + ".events.jsonl"
+	useSidecar := false
+	if _, err := os.Stat(sidecarPath); err == nil {
+		useSidecar = true
+	}
+
+	var (
+		report    *Report
+		replayErr error
+	)
+	if useSidecar {
+		report, replayErr = ReplayWithSidecar(src, sidecarPath, ReportSettings{
+			Adapter:            adapterName,
+			DebounceWindow:     debounceFlag,
+			FlickerMaxDuration: flickerMax,
+		})
+	} else {
+		report, replayErr = Replay(src, ReportSettings{
+			Adapter:            adapterName,
+			DebounceWindow:     debounceFlag,
+			FlickerMaxDuration: flickerMax,
+		})
+	}
+	if replayErr != nil {
+		fmt.Fprintln(os.Stderr, "replay failed:", replayErr)
 		os.Exit(1)
 	}
 
-	// Extended check: when a <transcript-basename>.events.jsonl sidecar is
-	// present, diff replayed transitions against the recorded ones. Absent
-	// sidecar = no check, report unchanged.
-	sidecarPath := strings.TrimSuffix(src, ".jsonl") + ".events.jsonl"
-	if _, err := os.Stat(sidecarPath); err == nil {
+	if useSidecar {
 		check, err := runExtendedCheck(sidecarPath, report.Transitions)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "extended check failed:", err)
@@ -317,6 +338,14 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	// SessionDetector each activity event would be coalesced into the next
 	// processActivity call within the debounce window. We mimic that here so
 	// the tailer/classifier sees the same compressed event stream.
+	//
+	// Note: this is a coarse approximation of the daemon's real behavior.
+	// The daemon processes one fswatcher event at a time, and fswatcher
+	// may coalesce multiple transcript-line writes into a single fire.
+	// Without a lifecycle-events sidecar we have no way to know where
+	// fswatcher split the writes, so we fall back to batching by transcript
+	// timestamp. A sidecar-driven replay path (see ReplayWithSidecar) is
+	// used when the sidecar is present, giving byte-identical reproduction.
 	batches := batchByDebounce(events, cfg.DebounceWindow)
 
 	// Set up the production tailer + parser writing into a temp transcript
@@ -393,8 +422,6 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 			}
 			consumed++
 		}
-		// No fsync needed: the tailer reads from the same process via the
-		// OS page cache and sees the written bytes immediately.
 
 		metrics, err := t.TailAndProcess()
 		if err != nil {
@@ -402,13 +429,8 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 		}
 		lastMetrics = metrics
 
-		// Convert tailer.SessionMetrics → session.SessionMetrics for the
-		// classifier (the classifier consumes the domain type).
 		domainMetrics := tailerToDomain(metrics)
 
-		// Mirror SessionDetector.processActivity: force ready→working when
-		// metrics show any event activity, so the classifier can later detect
-		// working→ready properly.
 		if state == session.StateReady && domainMetrics.LastEventType != "" {
 			cause := CauseEvent
 			if len(batch) > 1 {
@@ -503,10 +525,21 @@ func loadEvents(path string) ([]rawEvent, error) {
 		// Reattach the trailing newline so the tailer sees a complete JSONL.
 		line = append(line, '\n')
 
+		// Explicit timestamp only — do NOT use tailer.ParseTimestamp here
+		// because it falls back to time.Now() when the field is missing,
+		// which would pollute the sorted virtual timeline with wall-clock
+		// values for metadata lines (permission-mode, file-history-snapshot,
+		// last-prompt, etc.). Those lines inherit from neighbours instead.
 		var raw map[string]interface{}
 		ts := time.Time{}
 		if err := json.Unmarshal(scanner.Bytes(), &raw); err == nil {
-			ts = tailer.ParseTimestamp(raw)
+			if v, ok := raw["timestamp"].(string); ok {
+				if parsed, err := time.Parse(time.RFC3339, v); err == nil {
+					ts = parsed
+				} else if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", v); err == nil {
+					ts = parsed
+				}
+			}
 		}
 
 		out = append(out, rawEvent{
@@ -520,8 +553,34 @@ func loadEvents(path string) ([]rawEvent, error) {
 		return nil, err
 	}
 
-	// Sort by timestamp so out-of-order writes (rare but possible) don't
-	// confuse the simulator.
+	// Resolve null-timestamp lines (summary / metadata) so they process
+	// in-file-order alongside the surrounding real events. First pass:
+	// fill forward from the last real timestamp. Second pass: fill
+	// backward for leading nulls that had no prior real timestamp.
+	var lastTS time.Time
+	for i := range out {
+		if out[i].Time.IsZero() {
+			out[i].Time = lastTS
+		} else {
+			lastTS = out[i].Time
+		}
+	}
+	var firstTS time.Time
+	for _, e := range out {
+		if !e.Time.IsZero() {
+			firstTS = e.Time
+			break
+		}
+	}
+	for i := range out {
+		if out[i].Time.IsZero() {
+			out[i].Time = firstTS
+		}
+	}
+
+	// Stable sort by timestamp. Stable preserves insertion order for ties,
+	// which is important: multi-line writes with slightly-out-of-order
+	// timestamps and our now-inherited nulls rely on physical order.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
 	for i := range out {
 		out[i].Index = i
@@ -529,9 +588,291 @@ func loadEvents(path string) ([]rawEvent, error) {
 	return out, nil
 }
 
+// ReplayWithSidecar runs a deterministic replay driven by a lifecycle-events
+// sidecar. Each transcript_activity event in the sidecar is one fswatcher
+// fire the daemon observed; we feed the tailer the exact bytes the daemon
+// had at that moment and call the classifier. The result is byte-identical
+// to the daemon's behavior for the recorded session.
+//
+// Returns a Report with the same shape as Replay() — the only difference is
+// the virtual timeline, which tracks sidecar event timestamps instead of
+// transcript-line timestamps, and the classifier call granularity.
+func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (*Report, error) {
+	// Load the transcript as raw bytes so we can slice it by file_size.
+	srcBytes, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("read transcript: %w", err)
+	}
+
+	// Load sidecar events and walk them in sequence order. We need the
+	// transcript_activity stream (fswatcher fires with file_size), plus
+	// process_exited events (which cause the daemon to tear down the
+	// session, cancelling any pending debounce timer).
+	sidecarEvents, err := loadAllLifecycleEvents(sidecarPath)
+	if err != nil {
+		return nil, fmt.Errorf("load sidecar: %w", err)
+	}
+	var fswatches []lifecycle.Event
+	var processExitAt time.Time
+	for _, ev := range sidecarEvents {
+		switch ev.Kind {
+		case lifecycle.KindTranscriptActivity:
+			if ev.FileSize > 0 {
+				fswatches = append(fswatches, ev)
+			}
+		case lifecycle.KindProcessExited:
+			if processExitAt.IsZero() {
+				processExitAt = ev.Timestamp
+			}
+		}
+	}
+	if len(fswatches) == 0 {
+		return nil, fmt.Errorf("sidecar has no transcript_activity events with file_size: %s", sidecarPath)
+	}
+
+	// Set up a temp file and tailer. We append bytes incrementally so the
+	// tailer's offset-based incremental read produces the same metrics the
+	// daemon computed at each fswatcher fire.
+	tmpDir, err := os.MkdirTemp("", "irrlicht-replay-sidecar-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpPath := filepath.Join(tmpDir, "transcript.jsonl")
+	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer tmp.Close()
+
+	adapterName := cfg.Adapter
+	if adapterName == "" {
+		adapterName = claudecode.AdapterName
+	}
+	parser := agents.ParserFor(adapterName)
+	t := tailer.NewTranscriptTailer(tmpPath, parser, adapterName)
+
+	report := &Report{
+		SchemaVersion:    1,
+		SourceTranscript: transcriptPath,
+		GeneratedAt:      time.Now().UTC(),
+		Settings:         cfg,
+	}
+	report.Summary.TotalEvents = len(fswatches)
+	report.Summary.FirstEventTime = fswatches[0].Timestamp
+	report.Summary.LastEventTime = fswatches[len(fswatches)-1].Timestamp
+	report.Summary.WallClockDuration =
+		report.Summary.LastEventTime.Sub(report.Summary.FirstEventTime)
+
+	state := session.StateReady
+	prevTransitionAt := fswatches[0].Timestamp
+	stateDurations := map[string]time.Duration{}
+	addDuration := func(s string, d time.Duration) {
+		if d > 0 {
+			stateDurations[s] += d
+		}
+	}
+	emit := func(tr Transition) {
+		tr.Index = len(report.Transitions)
+		report.Transitions = append(report.Transitions, tr)
+		addDuration(tr.PrevState, tr.VirtualTime.Sub(prevTransitionAt))
+		prevTransitionAt = tr.VirtualTime
+	}
+
+	emit(Transition{
+		EventIndex:  -1,
+		VirtualTime: fswatches[0].Timestamp,
+		Cause:       CauseInit,
+		PrevState:   "",
+		NewState:    state,
+		Reason:      "initial state",
+	})
+
+	var lastMetrics *tailer.SessionMetrics
+	var lastSize int64
+
+	// classifyAtSidecar writes transcript bytes up to the given file_size,
+	// then runs the tailer + classifier (mirroring SessionDetector.processActivity
+	// for the force-r→w + ClassifyState pattern).
+	classifyAtSidecar := func(fileSize int64, virtTime time.Time, eventIdx int, cause Cause) error {
+		target := fileSize
+		if target > int64(len(srcBytes)) {
+			target = int64(len(srcBytes))
+		}
+		if target > lastSize {
+			if _, err := tmp.Write(srcBytes[lastSize:target]); err != nil {
+				return err
+			}
+			lastSize = target
+		}
+
+		metrics, err := t.TailAndProcess()
+		if err != nil {
+			return err
+		}
+		lastMetrics = metrics
+		domainMetrics := tailerToDomain(metrics)
+
+		if state == session.StateReady && domainMetrics.LastEventType != "" {
+			emit(Transition{
+				EventIndex:    eventIdx,
+				VirtualTime:   virtTime,
+				Cause:         cause,
+				PrevState:     state,
+				NewState:      session.StateWorking,
+				Reason:        "force ready→working on first activity",
+				LastEventType: domainMetrics.LastEventType,
+				HasOpenTool:   domainMetrics.HasOpenToolCall,
+				OpenToolNames: copyStrings(domainMetrics.LastOpenToolNames),
+				IsAgentDone:   domainMetrics.IsAgentDone(),
+				NeedsAttn:     domainMetrics.NeedsUserAttention(),
+				WaitingQuery:  domainMetrics.IsWaitingForUserInput(),
+				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
+			})
+			state = session.StateWorking
+		}
+
+		newState, reason := services.ClassifyState(state, domainMetrics)
+		if newState != state {
+			emit(Transition{
+				EventIndex:    eventIdx,
+				VirtualTime:   virtTime,
+				Cause:         cause,
+				PrevState:     state,
+				NewState:      newState,
+				Reason:        reason,
+				LastEventType: domainMetrics.LastEventType,
+				HasOpenTool:   domainMetrics.HasOpenToolCall,
+				OpenToolNames: copyStrings(domainMetrics.LastOpenToolNames),
+				IsAgentDone:   domainMetrics.IsAgentDone(),
+				NeedsAttn:     domainMetrics.NeedsUserAttention(),
+				WaitingQuery:  domainMetrics.IsWaitingForUserInput(),
+				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
+			})
+			state = newState
+		}
+		return nil
+	}
+
+	// Apply the daemon's debounce state machine over the sidecar fswatcher
+	// events. The daemon (session_detector.go:308 onActivity):
+	//   - First event in a quiet period → processActivity fires synchronously
+	//   - Subsequent event within the timer window → coalesce, reset timer
+	//   - Timer fires (2s after last event) → processActivity fires on latest,
+	//     but only if at least one event coalesced (the `pending` flag)
+	//   - A process exit cancels any pending timer (the session is torn down)
+	debounce := cfg.DebounceWindow
+	if debounce <= 0 {
+		debounce = 2 * time.Second
+	}
+
+	debouncePending := false
+	coalescedSinceFire := false
+	var windowDeadline time.Time
+	var pendingSize int64 // file_size of the latest coalesced event
+	var pendingIdx int
+
+	for i, fsev := range fswatches {
+		// If the debounce window for the previous event has expired before
+		// this event arrives, the timer would have fired. Fire it now if
+		// events coalesced, then start a fresh window for this event.
+		if debouncePending && !fsev.Timestamp.Before(windowDeadline) {
+			if coalescedSinceFire {
+				// Don't fire if the process exited before the timer would have.
+				if processExitAt.IsZero() || windowDeadline.Before(processExitAt) {
+					if err := classifyAtSidecar(pendingSize, windowDeadline, pendingIdx, CauseDebounceCoalesce); err != nil {
+						return nil, fmt.Errorf("flush timer at fsev %d: %w", i, err)
+					}
+				}
+			}
+			debouncePending = false
+			coalescedSinceFire = false
+		}
+
+		if !debouncePending {
+			// First event of a new quiet period: fire immediately.
+			if err := classifyAtSidecar(fsev.FileSize, fsev.Timestamp, i, CauseEvent); err != nil {
+				return nil, fmt.Errorf("classify fsev %d: %w", i, err)
+			}
+			debouncePending = true
+			windowDeadline = fsev.Timestamp.Add(debounce)
+			continue
+		}
+
+		// Subsequent event in the same debounce window: coalesce, reset timer.
+		coalescedSinceFire = true
+		windowDeadline = fsev.Timestamp.Add(debounce)
+		pendingSize = fsev.FileSize
+		pendingIdx = i
+	}
+
+	// End of stream: fire the final debounce timer if events were pending
+	// AND the process hadn't exited before it would fire.
+	if debouncePending && coalescedSinceFire {
+		lastFs := fswatches[len(fswatches)-1]
+		fireTime := lastFs.Timestamp.Add(debounce)
+		if processExitAt.IsZero() || fireTime.Before(processExitAt) {
+			if err := classifyAtSidecar(pendingSize, fireTime, pendingIdx, CauseDebounceCoalesce); err != nil {
+				return nil, fmt.Errorf("final flush: %w", err)
+			}
+		}
+	}
+	addDuration(state, report.Summary.LastEventTime.Sub(prevTransitionAt))
+
+	report.Summary.ConsumedEvents = len(fswatches)
+	report.Summary.TotalTransitions = len(report.Transitions)
+	report.Summary.StateDurations = stateDurations
+
+	flickerCat, flickerReason, flickerTotal := computeFlickers(
+		report.Transitions, cfg.FlickerMaxDuration)
+	report.Summary.FlickerCount = flickerTotal
+	report.Summary.FlickersByCategory = flickerCat
+	report.Summary.FlickersByReason = flickerReason
+
+	if lastMetrics != nil {
+		report.Summary.EstimatedCostUSD = lastMetrics.EstimatedCostUSD
+		report.Summary.CumInputTokens = lastMetrics.CumInputTokens
+		report.Summary.CumOutputTokens = lastMetrics.CumOutputTokens
+		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
+		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
+		report.Summary.ModelName = lastMetrics.ModelName
+	}
+
+	return report, nil
+}
+
+// loadAllLifecycleEvents reads a lifecycle sidecar file and returns every
+// event sorted by sequence number (the fields that make sidecar replay
+// deterministic). Unlike loadLifecycleStateTransitions it does not filter
+// by Kind.
+func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+
+	var out []lifecycle.Event
+	for scanner.Scan() {
+		var ev lifecycle.Event
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			continue
+		}
+		out = append(out, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out, nil
+}
+
 func batchByDebounce(events []rawEvent, window time.Duration) [][]rawEvent {
 	if window <= 0 || len(events) == 0 {
-		// Each event is its own batch.
 		out := make([][]rawEvent, len(events))
 		for i, e := range events {
 			out[i] = []rawEvent{e}
