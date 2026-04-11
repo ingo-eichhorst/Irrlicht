@@ -610,15 +610,14 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	}
 
 	// Identify the primary session: the first transcript_new event in
-	// sequence order. That's always the parent session — the curate
-	// script walks the recording chronologically and the parent is
-	// created before any of its subagents. Sidecar fixtures that
-	// include subagent events (for bundled replay) are fine; we only
-	// drive the primary transcript through the tailer and pass the
-	// subagent events through for future multi-session tooling.
+	// sequence order whose session_id is NOT a proc-* pre-session. The
+	// curate script pulls pre-session rows into the fixture (so the
+	// detection window is visible in replay), but the proc-* synthetic
+	// session is never the parent — the real UUID session that replaces
+	// it is.
 	var primarySessionID string
 	for _, ev := range sidecarEvents {
-		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" {
+		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" && !strings.HasPrefix(ev.SessionID, "proc-") {
 			primarySessionID = ev.SessionID
 			break
 		}
@@ -1141,10 +1140,11 @@ func loadLifecycleStateTransitions(path string) ([]lifecycle.Event, error) {
 
 	sort.SliceStable(all, func(i, j int) bool { return all[i].Seq < all[j].Seq })
 
-	// Primary session = first transcript_new event in seq order.
+	// Primary session = first non-proc transcript_new in seq order
+	// (proc-* rows are pre-session synthetic placeholders).
 	var primarySessionID string
 	for _, ev := range all {
-		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" {
+		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" && !strings.HasPrefix(ev.SessionID, "proc-") {
 			primarySessionID = ev.SessionID
 			break
 		}

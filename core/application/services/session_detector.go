@@ -322,6 +322,12 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			return
 		}
 
+		// Record pre-session detection (proc-* IDs only — real transcript
+		// sessions are already covered by KindTranscriptNew above).
+		if strings.HasPrefix(ev.SessionID, "proc-") {
+			d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionCreated, SessionID: ev.SessionID, Adapter: ev.Adapter, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
+		}
+
 		// Record initial state transition.
 		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: session.StateReady, Reason: "new session created"})
 
@@ -877,9 +883,12 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adap
 	for _, sid := range ids {
 		state, _ := d.repo.Load(sid)
 		_ = d.repo.Delete(sid)
+		adapterName := adapter
 		if state != nil {
+			adapterName = state.Adapter
 			d.broadcast(outbound.PushTypeDeleted, state)
 		}
+		d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionRemoved, SessionID: sid, Adapter: adapterName})
 		d.log.LogInfo("session-detector", sid,
 			fmt.Sprintf("removed pre-session — real session arrived in %s", projectDir))
 	}
