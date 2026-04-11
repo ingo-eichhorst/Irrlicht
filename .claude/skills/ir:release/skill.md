@@ -36,9 +36,23 @@ The argument (if any) is the bump type: `patch` (default), `minor`, or `major`.
 
 ## Step 4: Update Docs
 
-1. `site/docs/changelog.html` — add new version entry at the top (before the previous version entry) with categorized changes.
-2. Review other docs pages (`api-reference.html`, `session-detection.html`, `architecture.html`, `cli-tools.html`) — update if any changes in this release affect documented behavior.
-3. Only update pages where content is actually outdated.
+1. **`CHANGELOG.md` (repo root) — REQUIRED every release.** Add a new
+   `## [$NEW_VERSION] — YYYY-MM-DD` section at the top (directly under
+   `## [Unreleased]`), using the Keep a Changelog categories already in the
+   file: **Added**, **Changed**, **Fixed**, **Docs**, **Distribution**, etc.
+   Reuse the release notes drafted in Step 2 — don't paraphrase them into
+   something different. Also add the new version to the reference-link
+   section at the bottom of the file
+   (`[X.Y.Z]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/vX.Y.Z`)
+   and update the `[Unreleased]` compare link to point at `vX.Y.Z...HEAD`.
+   This step is mandatory — never ship a release without updating
+   `CHANGELOG.md`.
+2. `site/docs/changelog.html` — add new version entry at the top (before the
+   previous version entry) with the same categorized changes.
+3. Review other docs pages (`api-reference.html`, `session-detection.html`,
+   `architecture.html`, `cli-tools.html`) — update if any changes in this
+   release affect documented behavior.
+4. Only update pages where content is actually outdated.
 
 ## Step 5: Run Tests
 
@@ -103,7 +117,7 @@ cd /tmp && shasum -a 256 irrlichd-darwin-universal Irrlicht-$NEW_VERSION.dmg Irr
 ## Step 7: Commit, Tag, Push
 
 ```bash
-git add version.json site/ platforms/macos/Irrlicht/Resources/Info.plist
+git add version.json CHANGELOG.md site/ platforms/macos/Irrlicht/Resources/Info.plist
 git commit -m "chore: release v$NEW_VERSION"
 git tag v$NEW_VERSION
 git push origin main --tags
