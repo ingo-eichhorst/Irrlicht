@@ -77,6 +77,18 @@ CHILD_COUNT=$(printf '%s\n' "$CHILD_IDS" | grep -c . || true)
 # the parent plus every discovered child.
 SESSION_SET=$(printf '%s\n%s\n' "$SESSION_ID" "$CHILD_IDS" | grep -v '^$')
 
+# Pull in pre-session events (proc-<pid>) whose pid matches a
+# pid_discovered for any session in the set. The scanner emits
+# presession_created/removed under session_id="proc-<pid>" before the
+# real transcript arrives, so without this step the fixture would miss
+# the detection window.
+PROC_IDS=$(jq -rc --argjson ids "$(printf '%s\n' "$SESSION_SET" | jq -R . | jq -s .)" '
+  select(.kind == "pid_discovered" and (.session_id as $s | $ids | index($s)))
+  | "proc-\(.pid)"
+' "$RECORDING" | sort -u)
+PROC_COUNT=$(printf '%s\n' "$PROC_IDS" | grep -c . || true)
+SESSION_SET=$(printf '%s\n%s\n' "$SESSION_SET" "$PROC_IDS" | grep -v '^$')
+
 # Pass the set via an argfile-style jq variable so we don't exceed shell
 # arg length limits when there are many subagents.
 jq -c --argjson ids "$(printf '%s\n' "$SESSION_SET" | jq -R . | jq -s .)" '
@@ -111,7 +123,7 @@ if [[ -d "$REAL_SUBAGENTS_DIR" ]]; then
 fi
 
 echo "wrote $OUT_TRANSCRIPT ($(wc -l < "$OUT_TRANSCRIPT" | tr -d ' ') lines)"
-echo "wrote $OUT_EVENTS ($EVENT_COUNT events from parent + $CHILD_COUNT children)"
+echo "wrote $OUT_EVENTS ($EVENT_COUNT events from parent + $CHILD_COUNT children + $PROC_COUNT pre-sessions)"
 if [[ "$SUBAGENT_COUNT" -gt 0 ]]; then
   echo "wrote $OUT_SUBAGENTS_DIR ($SUBAGENT_COUNT subagent transcripts)"
 elif [[ "$CHILD_COUNT" -gt 0 ]]; then
