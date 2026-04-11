@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/inbound"
 )
 
 // --- tests -------------------------------------------------------------------
@@ -1344,6 +1346,102 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
 	}
 	if parent.State != session.StateReady {
 		t.Errorf("parent state: got %q, want ready (child finished, parent turn was done)", parent.State)
+	}
+
+	cancel()
+	<-done
+}
+
+// TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness
+// reproduces the bug where a parent session got stuck in `working` after
+// the liveness sweep deleted its last child.
+//
+// Scenario: user launches 3 parallel foreground agents. The parent's own
+// turn finishes but it's held in `working` because the children are still
+// in the repo. The children's transcripts stop updating (the agents are
+// done but Claude Code doesn't write a final turn_done for foreground
+// agents), so CheckPIDLiveness eventually deletes them as stale. Before
+// this fix the parent was never re-evaluated, so it sat in `working`
+// forever.
+func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	// The child-sweep path in PIDManager is gated on readyTTL > 0,
+	// so the default newDetector (readyTTL=0) would skip it entirely.
+	// Use a tiny TTL so the sweep actually runs its child-cleanup loop.
+	det := services.NewSessionDetector(
+		[]inbound.AgentWatcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
+		"test", 1*time.Second, nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Parent: turn is done, no open tools, held in working because of an
+	// active child. This matches the production state observed for
+	// session 57323e2d-4a55-4e00-85de-e9ed21b42171.
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-swept",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-swept.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     10,
+		Metrics: &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   false,
+			LastAssistantText: "All waves complete.",
+		},
+	})
+
+	// Child: stuck in working, transcript went stale 5+ minutes ago so
+	// isStaleTranscript() returns true when the sweep checks it.
+	staleTime := time.Now().Add(-5 * time.Minute)
+	staleTranscriptPath := filepath.Join(t.TempDir(), "stale-child.jsonl")
+	if err := os.WriteFile(staleTranscriptPath, []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(staleTranscriptPath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	repo.Save(&session.SessionState{
+		SessionID:       "child-swept",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-swept",
+		TranscriptPath:  staleTranscriptPath,
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      3,
+		Metrics: &session.SessionMetrics{
+			LastEventType: "tool_use",
+		},
+	})
+
+	// Trigger the sweep directly instead of waiting the real 5s ticker.
+	det.RunPIDLivenessSweepForTest()
+
+	// Give the parent re-evaluation time to land.
+	time.Sleep(30 * time.Millisecond)
+
+	parent, _ := repo.Load("parent-swept")
+	if parent == nil {
+		t.Fatal("parent session should still exist")
+	}
+	if parent.State != session.StateReady {
+		t.Errorf("parent state: got %q, want ready (child was swept, parent should release)", parent.State)
+	}
+
+	// Child should be gone.
+	if child, _ := repo.Load("child-swept"); child != nil {
+		t.Errorf("child should have been deleted by the sweep, got %+v", child)
 	}
 
 	cancel()

@@ -117,6 +117,7 @@ func NewSessionDetector(
 		pw, repo, log, broadcaster, readyTTL,
 		pidDiscovers, det.removeFromProjectSessions,
 	)
+	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det
 }
 
@@ -124,6 +125,13 @@ func NewSessionDetector(
 // Intended for tests that need immediate re-creation.
 func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 	d.deletedCooldown = dur
+}
+
+// RunPIDLivenessSweepForTest runs one iteration of the liveness sweep
+// synchronously. Intended for tests that need to exercise the sweep's
+// child-cleanup path without waiting for the real 5-second ticker.
+func (d *SessionDetector) RunPIDLivenessSweepForTest() {
+	d.pidMgr.CheckPIDLiveness()
 }
 
 // SetRecorder enables lifecycle event recording. When set, the detector and

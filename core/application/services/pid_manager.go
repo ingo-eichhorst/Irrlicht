@@ -41,6 +41,13 @@ type PIDManager struct {
 	// clean up its own tracking structures (e.g. projectSessions map).
 	onSessionDeleted func(sessionID string)
 
+	// onChildDeleted is called when a child session is removed by the
+	// liveness sweep so the SessionDetector can re-evaluate the parent.
+	// Without this the parent can be left stuck in `working` forever
+	// when it was being held active solely because of the just-deleted
+	// child (see hasActiveChildren in session_detector.go).
+	onChildDeleted func(parentID string)
+
 	// pendingPIDs stores PIDs discovered by background goroutines, to be
 	// applied by processActivity on its next run. This avoids a race where
 	// HandlePIDAssigned's load-modify-save overwrites a state transition
@@ -83,6 +90,14 @@ func NewPIDManager(
 func (pm *PIDManager) SetRecorder(r outbound.EventRecorder, seq *int64) {
 	pm.recorder = r
 	pm.recorderSeq = seq
+}
+
+// SetChildDeletedHandler registers a callback invoked whenever a child
+// session is deleted by the liveness sweep. The parent's ID is passed so
+// the caller can re-evaluate the parent, which may have been held in
+// `working` solely because of that child.
+func (pm *PIDManager) SetChildDeletedHandler(fn func(parentID string)) {
+	pm.onChildDeleted = fn
 }
 
 // record emits a lifecycle event if recording is enabled.
@@ -387,8 +402,17 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 			// (transcript stopped updating — zombie from a previous run).
 			if state.ParentSessionID != "" {
 				if state.State == session.StateReady || isStaleTranscript(state.TranscriptPath) {
+					parentID := state.ParentSessionID
 					_ = pm.repo.Delete(state.SessionID)
 					pm.broadcast(outbound.PushTypeDeleted, state)
+					// Re-evaluate the parent: it may have been held in
+					// `working` only because of this child. Without this
+					// nudge the parent stays stuck until its own next
+					// transcript event, which may never come for a
+					// finished session.
+					if pm.onChildDeleted != nil {
+						pm.onChildDeleted(parentID)
+					}
 				}
 				continue
 			}
