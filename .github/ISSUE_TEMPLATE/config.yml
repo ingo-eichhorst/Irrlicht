@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/ingo-eichhorst/Irrlicht/discussions
+    about: Use GitHub Discussions for questions, ideas, and "show your setup" posts.
+  - name: Documentation
+    url: https://irrlicht.io/docs/
+    about: Installation, quick start, state machine, adapters, and architecture docs.
+  - name: Security vulnerabilities
+    url: https://github.com/ingo-eichhorst/Irrlicht/security/advisories/new
+    about: Please report security issues privately, not as a public issue.

@@ -1,0 +1,104 @@
+name: Bug report
+description: Something broken or surprising in Irrlicht? Report it here.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please include logs and
+        version info — it makes the difference between a fix and a guess.
+
+        Daemon logs live at `~/Library/Application Support/Irrlicht/logs/`.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I'm on the latest release from [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases/latest).
+          required: true
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Irrlicht version
+      description: Output of `irrlichd --version`, or the version shown in the app's About panel.
+      placeholder: "e.g. 0.7.3"
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "e.g. 14.4 (Sonoma) on Apple Silicon"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent(s) were involved?
+      multiple: true
+      options:
+        - Claude Code
+        - OpenAI Codex
+        - Pi
+        - Gas Town
+        - Not agent-specific / app or daemon itself
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and its impact.
+      placeholder: "The menu bar showed 'working' after the agent had already printed end_turn..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a Claude Code session in project X
+        2. Ask a question that triggers plan mode
+        3. Observe menu bar still showing 'working' instead of 'waiting'
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpts
+      description: |
+        From `~/Library/Application Support/Irrlicht/logs/irrlicht.log`. Redact
+        anything sensitive. Logs are structured JSON — a few lines around the
+        transition you're reporting is usually enough.
+      render: shell
+
+  - type: textarea
+    id: state
+    attributes:
+      label: Session state file (optional)
+      description: Contents of the relevant file under `~/Library/Application Support/Irrlicht/instances/<session_id>.json` if you can share it.
+      render: json
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, screen recordings, related issues, hypotheses.
