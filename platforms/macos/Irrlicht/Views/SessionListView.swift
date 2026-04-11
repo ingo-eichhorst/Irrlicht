@@ -383,6 +383,7 @@ struct SessionRowView: View {
     let agentNumber: Int
     var activeSubagentCount: Int = 0
     @AppStorage("debugMode") private var debugMode: Bool = false
+    @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @State private var isHovered = false
 
     var body: some View {
@@ -434,7 +435,7 @@ struct SessionRowView: View {
                 }
 
                 // Estimated cost
-                if let cost = session.metrics?.formattedCost {
+                if showCostDisplay, let cost = session.metrics?.formattedCost {
                     Text(cost)
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundColor(.secondary)
@@ -1000,6 +1001,7 @@ struct ProjectGroupSectionView: View {
     let totalProjectGroups: Int
     @EnvironmentObject var sessionManager: SessionManager
     @AppStorage("debugMode") private var debugMode: Bool = false
+    @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @State private var isExpanded = true
 
     /// Combined cost of all sessions in the group
@@ -1052,7 +1054,7 @@ struct ProjectGroupSectionView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(projectNameColor)
 
-                        if let cost = formattedTotalCost {
+                        if showCostDisplay, let cost = formattedTotalCost {
                             Text(cost)
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundColor(.secondary)
