@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @Binding var isPresented: Bool
@@ -6,6 +7,7 @@ struct SettingsView: View {
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @AppStorage("notifyOnReady") private var notifyOnReady: Bool = false
     @AppStorage("notifyOnWaiting") private var notifyOnWaiting: Bool = false
+    @State private var notificationsDenied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -44,7 +46,28 @@ struct SettingsView: View {
                 Text("Send a desktop notification when an agent finishes work or needs your input.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+                if notificationsDenied && (notifyOnReady || notifyOnWaiting) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.caption)
+                        Text("Notifications are blocked.")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                        Button("Open Settings") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.link)
+                    }
+                }
             }
+            .onAppear { checkNotificationAuth() }
+            .onChange(of: notifyOnReady) { _ in checkNotificationAuth() }
+            .onChange(of: notifyOnWaiting) { _ in checkNotificationAuth() }
 
             Spacer()
 
@@ -55,6 +78,16 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 320, height: 360)
+        .frame(width: 320, height: 380)
+    }
+
+    private func checkNotificationAuth() {
+        guard Bundle.main.bundleIdentifier != nil,
+              Bundle.main.bundleURL.pathExtension == "app" else { return }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                notificationsDenied = settings.authorizationStatus == .denied
+            }
+        }
     }
 }
