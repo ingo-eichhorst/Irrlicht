@@ -12,7 +12,7 @@ VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['versio
 BUILD_DIR=".build"
 DAEMON_NAME="irrlichd"
 APP_NAME="Irrlicht"
-BUNDLE_ID="com.anthropic.irrlicht"
+BUNDLE_ID="io.irrlicht.app"
 PKG_NAME="Irrlicht-${VERSION}-mac-installer.pkg"
 DMG_NAME="Irrlicht-${VERSION}.dmg"
 

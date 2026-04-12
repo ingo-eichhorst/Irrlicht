@@ -82,7 +82,7 @@ cd /Users/ingo/projects/irrlicht/platforms/macos && swift build -c release
 2. Copy Swift binary → `Contents/MacOS/Irrlicht`.
 3. Copy universal daemon → `Contents/MacOS/irrlichd`.
 4. Copy `AppIcon.icns` → `Contents/Resources/AppIcon.icns`.
-5. Write a **resolved** `Info.plist` to `Contents/Info.plist` (no Xcode variables — use actual values: `CFBundleExecutable=Irrlicht`, `CFBundleIdentifier=com.anthropic.irrlicht`, `CFBundlePackageType=APPL`, version from `$NEW_VERSION`).
+5. Write a **resolved** `Info.plist` to `Contents/Info.plist` (no Xcode variables — use actual values: `CFBundleExecutable=Irrlicht`, `CFBundleIdentifier=io.irrlicht.app`, `CFBundlePackageType=APPL`, version from `$NEW_VERSION`).
 6. Ad-hoc code sign:
    ```bash
    codesign --force --deep --sign - /tmp/Irrlicht.app/Contents/MacOS/irrlichd
@@ -105,7 +105,7 @@ cd /Users/ingo/projects/irrlicht/platforms/macos && swift build -c release
 
 ### PKG installer
 ```bash
-pkgbuild --root /tmp/Irrlicht.app --identifier com.anthropic.irrlicht --version $NEW_VERSION \
+pkgbuild --root /tmp/Irrlicht.app --identifier io.irrlicht.app --version $NEW_VERSION \
   --install-location /Applications/Irrlicht.app /tmp/Irrlicht-$NEW_VERSION-mac-installer.pkg
 ```
 
