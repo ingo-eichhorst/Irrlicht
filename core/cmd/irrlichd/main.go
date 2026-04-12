@@ -67,6 +67,19 @@ func main() {
 		os.Exit(0)
 	}
 
+	if hasFlag("--uninstall-hooks") {
+		modified, err := claudecode.UninstallHooks()
+		if err != nil {
+			log.Fatalf("failed to uninstall hooks: %v", err)
+		}
+		if modified {
+			fmt.Println("Removed irrlicht hooks from ~/.claude/settings.json")
+		} else {
+			fmt.Println("No irrlicht hooks found in ~/.claude/settings.json")
+		}
+		os.Exit(0)
+	}
+
 	recordEnabled := hasFlag("--record") || os.Getenv("IRRLICHT_RECORD") == "1"
 
 	logger, err := logging.New()
@@ -74,6 +87,13 @@ func main() {
 		log.Fatalf("failed to initialise logger: %v", err)
 	}
 	defer logger.Close()
+
+	// Auto-install Claude Code hooks for permission-pending detection.
+	if modified, err := claudecode.EnsureHooksInstalled(); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to install hooks: %v", err))
+	} else if modified {
+		logger.LogInfo("startup", "", "installed Claude Code hooks for permission tracking")
+	}
 
 	// Configuration.
 	cfg := config.Default()
@@ -332,6 +352,11 @@ func main() {
 		Version, cfg.ReadySessionTTL,
 		pidDiscovers,
 	)
+
+	// Hook receiver: Claude Code PermissionRequest/PostToolUse events.
+	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.
+	mux.HandleFunc("POST /api/v1/hooks/claudecode",
+		claudecode.NewHookHandler(detector, logger))
 
 	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
 	if recordEnabled {
