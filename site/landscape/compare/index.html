@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Comparison — AI Coding Agent Landscape — Irrlicht</title>
+<meta name="description" content="In-depth comparison of AI coding agents and orchestrators: stars, growth trends, licensing, language, interface, and pricing.">
+<link rel="canonical" href="https://irrlicht.io/landscape/compare/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Agent Comparison — Irrlicht">
+<meta property="og:description" content="In-depth comparison of AI coding agents and orchestrators with detailed metrics.">
+<meta property="og:url" content="https://irrlicht.io/landscape/compare/">
+<link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../../assets/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=DM+Mono:wght@300;400&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root {
+  --bg: #050a14;
+  --bg-card: rgba(12, 18, 35, 0.65);
+  --bg-surface: #0a1020;
+  --working: #8B5CF6;
+  --waiting: #FF9500;
+  --ready: #34C759;
+  --text: #c8cdd8;
+  --text-dim: #5a6378;
+  --text-bright: #e8ecf4;
+  --accent: #8B5CF6;
+  --border: rgba(138, 92, 246, 0.08);
+  --border-subtle: rgba(200, 205, 216, 0.06);
+}
+html { scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: rgba(138,92,246,0.2) transparent; }
+body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+/* Nav */
+nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1.25rem 2.5rem; display: flex; align-items: center; justify-content: space-between; backdrop-filter: blur(20px) saturate(1.2); background: rgba(5,10,20,0.7); border-bottom: 1px solid var(--border); }
+.nav-logo { font-family: 'Cormorant Garamond', serif; font-size: 1.4rem; font-weight: 300; letter-spacing: 0.15em; color: var(--text-bright); text-decoration: none; display: flex; align-items: center; gap: 0.6rem; }
+.nav-logo .sparkle { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--working); box-shadow: 0 0 12px var(--working); }
+.nav-links { list-style: none; display: flex; align-items: center; gap: 1.5rem; }
+.nav-links a { color: var(--text-dim); text-decoration: none; font-size: 0.9rem; font-weight: 400; transition: color 0.3s; }
+.nav-links a:hover { color: var(--text-bright); }
+.nav-links a.active { color: var(--text-bright); }
+.btn-nav { padding: 0.45rem 1.1rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; }
+.btn-nav:hover { border-color: rgba(138,92,246,0.25); background: rgba(138,92,246,0.06); }
+
+/* Main content */
+.container { max-width: 1400px; margin: 0 auto; padding: 7rem 2rem 4rem; }
+.page-header { margin-bottom: 2rem; }
+.page-header h1 { font-family: 'Cormorant Garamond', serif; font-size: 2.2rem; font-weight: 300; color: var(--text-bright); margin-bottom: 0.5rem; }
+.page-header .updated { font-size: 0.85rem; color: var(--text-dim); font-family: 'DM Mono', monospace; }
+.page-header .intro { margin-top: 0.8rem; max-width: 800px; color: var(--text); font-size: 0.92rem; line-height: 1.7; }
+.back-link { display: inline-block; margin-bottom: 1rem; color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.back-link:hover { color: var(--text-bright); }
+
+/* Trend note */
+.trend-note { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 1.2rem; font-style: italic; }
+
+/* Table wrapper for horizontal scroll */
+.table-wrap { overflow-x: auto; margin-bottom: 2.5rem; }
+
+/* Comparison table */
+.compare-table { width: 100%; border-collapse: collapse; min-width: 1100px; }
+.compare-table th { text-align: left; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+.compare-table th:hover { color: var(--text-bright); }
+.compare-table th .sort-arrow { font-size: 0.6rem; margin-left: 0.2rem; opacity: 0.4; }
+.compare-table th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
+.compare-table td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border-subtle); font-size: 0.82rem; vertical-align: middle; white-space: nowrap; }
+.compare-table tr:hover td { background: rgba(138,92,246,0.03); }
+.compare-table .name a { color: var(--text-bright); text-decoration: none; font-weight: 500; }
+.compare-table .name a:hover { color: var(--accent); }
+.compare-table .mono { font-family: 'DM Mono', monospace; font-size: 0.8rem; }
+
+/* Growth cells */
+.growth-up { color: var(--ready); }
+.growth-down { color: #ff6b6b; }
+.growth-flat { color: var(--text-dim); }
+.growth-na { color: var(--text-dim); font-style: italic; }
+.growth-pct { font-size: 0.7rem; opacity: 0.75; }
+
+/* Badges */
+.badge { display: inline-block; padding: 0.12rem 0.45rem; border-radius: 4px; font-size: 0.65rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.badge-live { background: rgba(52,199,89,0.12); color: var(--ready); border: 1px solid rgba(52,199,89,0.2); }
+.badge-planned { background: rgba(255,149,0,0.1); color: var(--waiting); border: 1px solid rgba(255,149,0,0.15); }
+.badge-none { background: rgba(200,205,216,0.04); color: var(--text-dim); border: 1px solid var(--border-subtle); }
+.badge-new { background: rgba(138,92,246,0.12); color: var(--accent); border: 1px solid rgba(138,92,246,0.2); font-size: 0.58rem; vertical-align: super; margin-left: 0.2rem; padding: 0.08rem 0.3rem; }
+.badge-cat { font-size: 0.62rem; padding: 0.1rem 0.4rem; }
+.badge-agent { background: rgba(138,92,246,0.1); color: var(--accent); border: 1px solid rgba(138,92,246,0.15); }
+.badge-orchestrator { background: rgba(200,205,216,0.06); color: var(--text); border: 1px solid var(--border-subtle); }
+.badge-oss-yes { color: var(--ready); }
+.badge-oss-no { color: var(--text-dim); }
+
+/* Footer */
+footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: var(--text-dim); }
+.footer-right { display: flex; gap: 1.5rem; }
+.footer-right a { color: var(--text-dim); text-decoration: none; }
+.footer-right a:hover { color: var(--text-bright); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  nav { padding: 1rem 1.2rem; }
+  .nav-hide-sm { display: none; }
+  .container { padding: 5.5rem 1rem 2rem; }
+  footer { flex-direction: column; gap: 1rem; text-align: center; }
+}
+</style>
+</head>
+<body>
+<nav>
+  <a href="../../" class="nav-logo"><span class="sparkle"></span> IRRLICHT</a>
+  <ul class="nav-links">
+    <li class="nav-hide-sm"><a href="../../#features">Features</a></li>
+    <li class="nav-hide-sm"><a href="../" class="active">Landscape</a></li>
+    <li class="nav-hide-sm"><a href="../../docs/">Docs</a></li>
+    <li><a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-nav">GitHub</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+  <a href="../" class="back-link">&larr; Back to Landscape</a>
+  <div class="page-header">
+    <h1>Agent Comparison</h1>
+    <div class="updated">Last updated: 2026-04-12</div>
+    <p class="intro">In-depth comparison of all tracked AI coding agents and orchestrators. Click any column header to sort. Growth measured relative to 2026-04-12. 1M: no snapshot within tolerance yet. 3M baseline: 2026-01-01 (where available).</p>
+  </div>
+
+  <p class="trend-note">Agents without a public GitHub repo show alternative popularity metrics where available (VS Code installs, funding, estimated users).</p>
+
+  <div class="table-wrap">
+    <table class="compare-table">
+<thead>
+<tr>
+<th>Name <span class="sort-arrow">&#x25B2;</span></th>
+<th>Cat. <span class="sort-arrow">&#x25B2;</span></th>
+<th>Stars <span class="sort-arrow">&#x25B2;</span></th>
+<th>1M <span class="sort-arrow">&#x25B2;</span></th>
+<th>3M <span class="sort-arrow">&#x25B2;</span></th>
+<th>OSS <span class="sort-arrow">&#x25B2;</span></th>
+<th>License* <span class="sort-arrow">&#x25B2;</span></th>
+<th>Lang <span class="sort-arrow">&#x25B2;</span></th>
+<th>Interface <span class="sort-arrow">&#x25B2;</span></th>
+<th>Pricing* <span class="sort-arrow">&#x25B2;</span></th>
+<th>Irrlicht <span class="sort-arrow">&#x25B2;</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="name"><a href="https://claw-code.codes">Claw Code</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="182111">182,111</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Unknown</td>
+<td>Rust</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://opencode.ai">OpenCode</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="141888">141,888</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="136388">+136,388 <span class="growth-pct">(2480.7%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>TypeScript</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-planned">Planned</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/anthropics/claude-code">Claude Code</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="112845">112,845</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="61145">+61,145 <span class="growth-pct">(118.3%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>ISC</td>
+<td>TypeScript</td>
+<td>CLI</td>
+<td>Paid (API)</td>
+<td><span class="badge badge-live">Live</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="100994">100,994</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="11194">+11,194 <span class="growth-pct">(12.5%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>TypeScript</td>
+<td>CLI</td>
+<td>Free tier</td>
+<td><span class="badge badge-planned">Planned</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/openai/codex">OpenAI Codex</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="74758">74,758</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="28758">+28,758 <span class="growth-pct">(62.5%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>Rust</td>
+<td>CLI</td>
+<td>Paid (API)</td>
+<td><span class="badge badge-live">Live</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/All-Hands-AI/OpenHands">OpenHands</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="71060">71,060</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="19060">+19,060 <span class="growth-pct">(36.7%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>Python</td>
+<td>CLI, Web</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/cline/cline">Cline</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="60178">60,178</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="24178">+24,178 <span class="growth-pct">(67.2%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>TypeScript</td>
+<td>IDE ext</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/gpt-engineer-org/gpt-engineer">GPT Engineer</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="55217">55,217</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="2217">+2,217 <span class="growth-pct">(4.2%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>Python</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://paperclip.ing">Paperclip</a> <span class="badge badge-new">NEW</span></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="52042">52,042</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>TypeScript</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://aider.chat">Aider</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="43202">43,202</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="7202">+7,202 <span class="growth-pct">(20.0%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>Python</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://block.github.io/goose/">Goose</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="41312">41,312</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="15212">+15,212 <span class="growth-pct">(58.3%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>Rust</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.agno.com">Agno</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="39367">39,367</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="3367">+3,367 <span class="growth-pct">(9.4%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>Python</td>
+<td>Python SDK</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/badlogic/pi-mono">Pi</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="34689">34,689</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="16289">+16,289 <span class="growth-pct">(88.5%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>TypeScript</td>
+<td>CLI</td>
+<td>Paid (API)</td>
+<td><span class="badge badge-live">Live</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/OpenBMB/ChatDev">ChatDev</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="32685">32,685</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="4685">+4,685 <span class="growth-pct">(16.7%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>Python</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://cursor.com">Cursor</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="32624">32,624</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="7624">+7,624 <span class="growth-pct">(30.5%)</span></td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE</td>
+<td>Freemium ($20/mo)</td>
+<td><span class="badge badge-planned">Planned</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://continue.dev">Continue</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="32499">32,499</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="1499">+1,499 <span class="growth-pct">(4.8%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>TypeScript</td>
+<td>IDE ext</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/ruvnet/ruflo">Ruflo</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="31366">31,366</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="1666">+1,666 <span class="growth-pct">(5.6%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>TypeScript</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/voideditor/void">Void</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="28553">28,553</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="5553">+5,553 <span class="growth-pct">(24.1%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>TypeScript</td>
+<td>IDE</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.warp.dev">Warp</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="26372">26,372</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="2372">+2,372 <span class="growth-pct">(9.9%)</span></td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>Terminal</td>
+<td>Freemium</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/RooVetGit/Roo-Code">Roo Code</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="23088">23,088</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="5588">+5,588 <span class="growth-pct">(31.9%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>TypeScript</td>
+<td>IDE ext</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://charm.land/crush">Crush</a> <span class="badge badge-new">NEW</span></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="22889">22,889</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Unknown</td>
+<td>Go</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://qwen.ai/qwencode">Qwen Code</a> <span class="badge badge-new">NEW</span></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="22823">22,823</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>TypeScript</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/stitionai/devika">Devika</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="19497">19,497</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="997">+997 <span class="growth-pct">(5.4%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>Python</td>
+<td>Web</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/princeton-nlp/SWE-agent">SWE-agent</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="18968">18,968</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="5968">+5,968 <span class="growth-pct">(45.9%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>Python</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://kilo.ai">Kilo Code</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="17988">17,988</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="6988">+6,988 <span class="growth-pct">(63.5%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>TypeScript</td>
+<td>IDE ext, CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://plandex.ai">Plandex</a> <span class="badge badge-new">NEW</span></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="15231">15,231</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>Go</td>
+<td>CLI</td>
+<td>Freemium</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/gastownhall/gastown">Gas Town</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="13898">13,898</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="12898">+12,898 <span class="growth-pct">(1289.8%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>Go</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-live">Live</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/langchain-ai/open-swe">Open SWE</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="9484">9,484</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>Python</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://sweep.dev">Sweep</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="7709">7,709</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="509">+509 <span class="growth-pct">(7.1%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Unknown</td>
+<td>Python</td>
+<td>GitHub bot</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/smtg-ai/claude-squad">Claude Squad</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="6961">6,961</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="1161">+1,161 <span class="growth-pct">(20.0%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>AGPL-3.0</td>
+<td>Go</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-planned">Planned</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/antinomyhq/forgecode">Forge Code</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="6466">6,466</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>Rust</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://composio.dev">Composio</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="6182">6,182</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>TypeScript</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.ra-aid.ai">RA.Aid</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="2218">2,218</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>Python</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.factory.ai">Factory</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="756">756</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>Web</td>
+<td>Paid</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://trypear.ai">Pear AI</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="674">674</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-up" data-sort="174">+174 <span class="growth-pct">(34.8%)</span></td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>MIT</td>
+<td>TypeScript</td>
+<td>IDE</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/dlorenc/multiclaude">Multiclaude</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="529">529</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Unknown</td>
+<td>Go</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://codegen.com">Codegen</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="521">521</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>Python</td>
+<td>CLI, Web</td>
+<td>Freemium</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://stoneforge.ai">Stoneforge</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="113">113</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Apache-2.0</td>
+<td>TypeScript</td>
+<td>Web</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://forge.nxtg.ai">Forge Orchestrator</a></td>
+<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+<td class="mono" data-sort="108">108</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-yes">&#x2713;</span></td>
+<td>Unknown</td>
+<td>Rust</td>
+<td>CLI</td>
+<td>Free</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://github.com/features/copilot">GitHub Copilot</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Freemium ($10/mo)</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://codeium.com/windsurf">Windsurf</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE</td>
+<td>Freemium ($15/mo)</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://devin.ai">Devin</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>Web</td>
+<td>Paid ($500/mo)</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://ampcode.com">Amp</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>CLI, IDE ext</td>
+<td>Freemium</td>
+<td><span class="badge badge-planned">Planned</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://aws.amazon.com/q/developer/">Amazon Q Developer</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Freemium</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.augmentcode.com">Augment Code</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Paid</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.poolside.ai">Poolside</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Paid</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.tabnine.com">Tabnine</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Freemium ($12/mo)</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.qodo.ai">Qodo</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Freemium</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://sourcegraph.com/cody">Sourcegraph Cody</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Freemium</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://cosine.sh">Cosine Genie</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>Web</td>
+<td>Paid</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://zencoder.ai">Zencoder</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Paid</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.codegpt.co">CodeGPT</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE ext</td>
+<td>Freemium</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://www.morphllm.com">MorphLLM</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>API</td>
+<td>Paid</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://codebuff.com">Codebuff</a></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>CLI</td>
+<td>Paid</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+<tr>
+<td class="name"><a href="https://kiro.dev">Kiro</a> <span class="badge badge-new">NEW</span></td>
+<td><span class="badge badge-cat badge-agent">Agent</span></td>
+<td class="mono" data-sort="-1">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td class="mono growth-na" data-sort="-999999">&mdash;</td>
+<td><span class="badge-oss-no">&#x2717;</span></td>
+<td>Proprietary</td>
+<td>&mdash;</td>
+<td>IDE</td>
+<td>Freemium</td>
+<td><span class="badge badge-none">None</span></td>
+</tr>
+</tbody>
+</table>
+  </div>
+  <p class="trend-note">* License and pricing data sourced via web search and may not reflect the latest changes. Verify on the project's website.</p>
+</div>
+
+<footer>
+  <div>MIT License &middot; Irrlicht &middot; Follow the right light.</div>
+  <div class="footer-right">
+    <a href="../">Landscape</a>
+    <a href="../../docs/">Docs</a>
+    <a href="https://github.com/ingo-eichhorst/Irrlicht">GitHub</a>
+  </div>
+</footer>
+
+<script>
+// Column sorting
+document.addEventListener('DOMContentLoaded', function() {
+  var table = document.querySelector('.compare-table');
+  if (!table) return;
+  var headers = table.querySelectorAll('th');
+  var tbody = table.querySelector('tbody');
+  var sortCol = -1, sortAsc = true;
+
+  headers.forEach(function(th, idx) {
+    th.addEventListener('click', function() {
+      if (sortCol === idx) { sortAsc = !sortAsc; }
+      else { sortCol = idx; sortAsc = true; }
+      headers.forEach(function(h) { h.classList.remove('sorted'); });
+      th.classList.add('sorted');
+      th.querySelector('.sort-arrow').textContent = sortAsc ? '\u25B2' : '\u25BC';
+
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort(function(a, b) {
+        var cellA = a.children[idx], cellB = b.children[idx];
+        var valA = (cellA.getAttribute('data-sort') || cellA.textContent).trim();
+        var valB = (cellB.getAttribute('data-sort') || cellB.textContent).trim();
+        var numA = parseFloat(valA), numB = parseFloat(valB);
+        if (!isNaN(numA) && !isNaN(numB)) {
+          return sortAsc ? numA - numB : numB - numA;
+        }
+        if (valA === '\u2014' || valA === '') return 1;
+        if (valB === '\u2014' || valB === '') return -1;
+        return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      });
+      rows.forEach(function(r) { tbody.appendChild(r); });
+    });
+  });
+
+  // Default sort: Stars descending (column index 2)
+  var starsHeader = headers[2];
+  sortCol = 2;
+  sortAsc = false;
+  starsHeader.classList.add('sorted');
+  starsHeader.querySelector('.sort-arrow').textContent = '\u25BC';
+});
+</script>
+</body>
+</html>

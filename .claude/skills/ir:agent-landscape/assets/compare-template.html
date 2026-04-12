@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Comparison — AI Coding Agent Landscape — Irrlicht</title>
+<meta name="description" content="In-depth comparison of AI coding agents and orchestrators: stars, growth trends, licensing, language, interface, and pricing.">
+<link rel="canonical" href="https://irrlicht.io/landscape/compare/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Agent Comparison — Irrlicht">
+<meta property="og:description" content="In-depth comparison of AI coding agents and orchestrators with detailed metrics.">
+<meta property="og:url" content="https://irrlicht.io/landscape/compare/">
+<link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../../assets/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=DM+Mono:wght@300;400&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root {
+  --bg: #050a14;
+  --bg-card: rgba(12, 18, 35, 0.65);
+  --bg-surface: #0a1020;
+  --working: #8B5CF6;
+  --waiting: #FF9500;
+  --ready: #34C759;
+  --text: #c8cdd8;
+  --text-dim: #5a6378;
+  --text-bright: #e8ecf4;
+  --accent: #8B5CF6;
+  --border: rgba(138, 92, 246, 0.08);
+  --border-subtle: rgba(200, 205, 216, 0.06);
+}
+html { scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: rgba(138,92,246,0.2) transparent; }
+body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+/* Nav */
+nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1.25rem 2.5rem; display: flex; align-items: center; justify-content: space-between; backdrop-filter: blur(20px) saturate(1.2); background: rgba(5,10,20,0.7); border-bottom: 1px solid var(--border); }
+.nav-logo { font-family: 'Cormorant Garamond', serif; font-size: 1.4rem; font-weight: 300; letter-spacing: 0.15em; color: var(--text-bright); text-decoration: none; display: flex; align-items: center; gap: 0.6rem; }
+.nav-logo .sparkle { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--working); box-shadow: 0 0 12px var(--working); }
+.nav-links { list-style: none; display: flex; align-items: center; gap: 1.5rem; }
+.nav-links a { color: var(--text-dim); text-decoration: none; font-size: 0.9rem; font-weight: 400; transition: color 0.3s; }
+.nav-links a:hover { color: var(--text-bright); }
+.nav-links a.active { color: var(--text-bright); }
+.btn-nav { padding: 0.45rem 1.1rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; }
+.btn-nav:hover { border-color: rgba(138,92,246,0.25); background: rgba(138,92,246,0.06); }
+
+/* Main content */
+.container { max-width: 1400px; margin: 0 auto; padding: 7rem 2rem 4rem; }
+.page-header { margin-bottom: 2rem; }
+.page-header h1 { font-family: 'Cormorant Garamond', serif; font-size: 2.2rem; font-weight: 300; color: var(--text-bright); margin-bottom: 0.5rem; }
+.page-header .updated { font-size: 0.85rem; color: var(--text-dim); font-family: 'DM Mono', monospace; }
+.page-header .intro { margin-top: 0.8rem; max-width: 800px; color: var(--text); font-size: 0.92rem; line-height: 1.7; }
+.back-link { display: inline-block; margin-bottom: 1rem; color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+.back-link:hover { color: var(--text-bright); }
+
+/* Trend note */
+.trend-note { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 1.2rem; font-style: italic; }
+
+/* Table wrapper for horizontal scroll */
+.table-wrap { overflow-x: auto; margin-bottom: 2.5rem; }
+
+/* Comparison table */
+.compare-table { width: 100%; border-collapse: collapse; min-width: 1100px; }
+.compare-table th { text-align: left; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; background: var(--bg); z-index: 2; }
+.compare-table th:hover { color: var(--text-bright); }
+.compare-table th .sort-arrow { font-size: 0.6rem; margin-left: 0.2rem; opacity: 0.4; }
+.compare-table th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
+.compare-table td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border-subtle); font-size: 0.82rem; vertical-align: middle; white-space: nowrap; }
+.compare-table tr:hover td { background: rgba(138,92,246,0.03); }
+.compare-table .name a { color: var(--text-bright); text-decoration: none; font-weight: 500; }
+.compare-table .name a:hover { color: var(--accent); }
+.compare-table .mono { font-family: 'DM Mono', monospace; font-size: 0.8rem; }
+
+/* Growth cells */
+.growth-up { color: var(--ready); }
+.growth-down { color: #ff6b6b; }
+.growth-flat { color: var(--text-dim); }
+.growth-na { color: var(--text-dim); font-style: italic; }
+.growth-pct { font-size: 0.7rem; opacity: 0.75; }
+
+/* Badges */
+.badge { display: inline-block; padding: 0.12rem 0.45rem; border-radius: 4px; font-size: 0.65rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.badge-live { background: rgba(52,199,89,0.12); color: var(--ready); border: 1px solid rgba(52,199,89,0.2); }
+.badge-planned { background: rgba(255,149,0,0.1); color: var(--waiting); border: 1px solid rgba(255,149,0,0.15); }
+.badge-none { background: rgba(200,205,216,0.04); color: var(--text-dim); border: 1px solid var(--border-subtle); }
+.badge-new { background: rgba(138,92,246,0.12); color: var(--accent); border: 1px solid rgba(138,92,246,0.2); font-size: 0.58rem; vertical-align: super; margin-left: 0.2rem; padding: 0.08rem 0.3rem; }
+.badge-cat { font-size: 0.62rem; padding: 0.1rem 0.4rem; }
+.badge-agent { background: rgba(138,92,246,0.1); color: var(--accent); border: 1px solid rgba(138,92,246,0.15); }
+.badge-orchestrator { background: rgba(200,205,216,0.06); color: var(--text); border: 1px solid var(--border-subtle); }
+.badge-oss-yes { color: var(--ready); }
+.badge-oss-no { color: var(--text-dim); }
+
+/* Footer */
+footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: var(--text-dim); }
+.footer-right { display: flex; gap: 1.5rem; }
+.footer-right a { color: var(--text-dim); text-decoration: none; }
+.footer-right a:hover { color: var(--text-bright); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  nav { padding: 1rem 1.2rem; }
+  .nav-hide-sm { display: none; }
+  .container { padding: 5.5rem 1rem 2rem; }
+  footer { flex-direction: column; gap: 1rem; text-align: center; }
+}
+</style>
+</head>
+<body>
+<nav>
+  <a href="../../" class="nav-logo"><span class="sparkle"></span> IRRLICHT</a>
+  <ul class="nav-links">
+    <li class="nav-hide-sm"><a href="../../#features">Features</a></li>
+    <li class="nav-hide-sm"><a href="../" class="active">Landscape</a></li>
+    <li class="nav-hide-sm"><a href="../../docs/">Docs</a></li>
+    <li><a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-nav">GitHub</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+  <a href="../" class="back-link">&larr; Back to Landscape</a>
+  <div class="page-header">
+    <h1>Agent Comparison</h1>
+    <div class="updated">Last updated: {{LAST_UPDATED}}</div>
+    <p class="intro">In-depth comparison of all tracked AI coding agents and orchestrators. Click any column header to sort. Growth figures are measured relative to today using snapshots taken at: today, ~1 month ago, and ~3 months ago.</p>
+  </div>
+
+  <p class="trend-note">Agents without a public GitHub repo show alternative popularity metrics where available (VS Code installs, funding, estimated users).</p>
+
+  <div class="table-wrap">
+    {{COMPARISON_TABLE}}
+  </div>
+</div>
+
+<footer>
+  <div>MIT License &middot; Irrlicht &middot; Follow the right light.</div>
+  <div class="footer-right">
+    <a href="../">Landscape</a>
+    <a href="../../docs/">Docs</a>
+    <a href="https://github.com/ingo-eichhorst/Irrlicht">GitHub</a>
+  </div>
+</footer>
+
+<script>
+// Column sorting
+document.addEventListener('DOMContentLoaded', function() {
+  const table = document.querySelector('.compare-table');
+  if (!table) return;
+  const headers = table.querySelectorAll('th');
+  const tbody = table.querySelector('tbody');
+  let sortCol = -1, sortAsc = true;
+
+  headers.forEach(function(th, idx) {
+    th.addEventListener('click', function() {
+      if (sortCol === idx) { sortAsc = !sortAsc; }
+      else { sortCol = idx; sortAsc = true; }
+      headers.forEach(function(h) { h.classList.remove('sorted'); });
+      th.classList.add('sorted');
+      th.querySelector('.sort-arrow').textContent = sortAsc ? '\u25B2' : '\u25BC';
+
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort(function(a, b) {
+        var cellA = a.children[idx], cellB = b.children[idx];
+        var valA = (cellA.getAttribute('data-sort') || cellA.textContent).trim();
+        var valB = (cellB.getAttribute('data-sort') || cellB.textContent).trim();
+        var numA = parseFloat(valA), numB = parseFloat(valB);
+        if (!isNaN(numA) && !isNaN(numB)) {
+          return sortAsc ? numA - numB : numB - numA;
+        }
+        if (valA === '\u2014' || valA === '') return 1;
+        if (valB === '\u2014' || valB === '') return -1;
+        return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      });
+      rows.forEach(function(r) { tbody.appendChild(r); });
+    });
+  });
+});
+</script>
+</body>
+</html>

@@ -29,7 +29,6 @@ Known coding agents and agent orchestrators to seed the initial scan. On every r
 | Codebuff | (no public repo) | agent |
 | Amp | (no public repo) | agent |
 | Gemini CLI | google-gemini/gemini-cli | agent |
-| Claude Squad | smtg-ai/claude-squad | orchestrator |
 | Pi | badlogic/pi-mono | agent |
 
 ## Agent Orchestrators / Multi-Agent Frameworks
@@ -46,7 +45,3 @@ Known coding agents and agent orchestrators to seed the initial scan. On every r
 | ChatDev | OpenBMB/ChatDev | orchestrator |
 | Devika | stitionai/devika | orchestrator |
 | GPT Engineer | gpt-engineer-org/gpt-engineer | orchestrator |
-| Bolt.new | stackblitz/bolt.new | orchestrator |
-| v0 (Vercel) | (no public repo) | orchestrator |
-| Replit Agent | (no public repo) | orchestrator |
-| Lovable | (no public repo) | orchestrator |

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Coding Agent Landscape — Irrlicht</title>
-<meta name="description" content="Live rankings of AI coding agents and orchestrators by GitHub stars and growth trend. See which agents Irrlicht monitors.">
+<meta name="description" content="Live rankings of AI coding agents and orchestrators by GitHub stars, 1-month and 3-month growth trends. See which agents Irrlicht monitors.">
 <link rel="canonical" href="https://irrlicht.io/landscape/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="AI Coding Agent Landscape — Irrlicht">
@@ -47,14 +47,19 @@ nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1.25rem
 .btn-nav:hover { border-color: rgba(138,92,246,0.25); background: rgba(138,92,246,0.06); }
 
 /* Main content */
-.container { max-width: 1100px; margin: 0 auto; padding: 7rem 2rem 4rem; }
+.container { max-width: 1200px; margin: 0 auto; padding: 7rem 2rem 4rem; }
 .page-header { margin-bottom: 3rem; }
 .page-header h1 { font-family: 'Cormorant Garamond', serif; font-size: 2.4rem; font-weight: 300; color: var(--text-bright); margin-bottom: 0.5rem; }
 .page-header .updated { font-size: 0.85rem; color: var(--text-dim); font-family: 'DM Mono', monospace; }
 .page-header .intro { margin-top: 1rem; max-width: 720px; color: var(--text); font-size: 0.95rem; line-height: 1.7; }
+.compare-link { display: inline-block; margin-top: 0.8rem; color: var(--accent); text-decoration: none; font-size: 0.9rem; font-weight: 500; }
+.compare-link:hover { color: var(--text-bright); }
 
 /* Section */
 .section-title { font-family: 'Cormorant Garamond', serif; font-size: 1.6rem; font-weight: 300; color: var(--text-bright); margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+
+/* Trend note */
+.trend-note { font-size: 0.78rem; color: var(--text-dim); margin-bottom: 1rem; font-style: italic; }
 
 /* Table */
 .landscape-table { width: 100%; border-collapse: collapse; margin-bottom: 2.5rem; }
@@ -64,19 +69,22 @@ nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 1.25rem
 .landscape-table .rank { font-family: 'DM Mono', monospace; color: var(--text-dim); font-size: 0.8rem; width: 2.5rem; }
 .landscape-table .name a { color: var(--text-bright); text-decoration: none; font-weight: 500; }
 .landscape-table .name a:hover { color: var(--accent); }
-.landscape-table .desc { color: var(--text-dim); font-size: 0.82rem; max-width: 280px; }
-.landscape-table .stars { font-family: 'DM Mono', monospace; font-size: 0.85rem; }
-.landscape-table .trend { font-family: 'DM Mono', monospace; font-size: 0.82rem; white-space: nowrap; }
-.trend-up { color: var(--ready); }
-.trend-down { color: #ff6b6b; }
-.trend-flat { color: var(--text-dim); }
-.trend-na { color: var(--text-dim); font-style: italic; }
+.landscape-table .desc { color: var(--text-dim); font-size: 0.82rem; max-width: 240px; }
+.landscape-table .stars { font-family: 'DM Mono', monospace; font-size: 0.85rem; white-space: nowrap; }
+.landscape-table .growth { font-family: 'DM Mono', monospace; font-size: 0.8rem; white-space: nowrap; }
+.growth-up { color: var(--ready); }
+.growth-down { color: #ff6b6b; }
+.growth-flat { color: var(--text-dim); }
+.growth-na { color: var(--text-dim); font-style: italic; }
+.growth-pct { font-size: 0.72rem; opacity: 0.75; }
+.alt-metric { font-size: 0.78rem; color: var(--text-dim); }
 
 /* Badges */
 .badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 4px; font-size: 0.72rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
 .badge-live { background: rgba(52,199,89,0.12); color: var(--ready); border: 1px solid rgba(52,199,89,0.2); }
 .badge-planned { background: rgba(255,149,0,0.1); color: var(--waiting); border: 1px solid rgba(255,149,0,0.15); }
 .badge-none { background: rgba(200,205,216,0.04); color: var(--text-dim); border: 1px solid var(--border-subtle); }
+.badge-new { background: rgba(138,92,246,0.12); color: var(--accent); border: 1px solid rgba(138,92,246,0.2); font-size: 0.62rem; vertical-align: super; margin-left: 0.3rem; padding: 0.1rem 0.35rem; }
 
 /* Footer */
 footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: var(--text-dim); }
@@ -85,13 +93,16 @@ footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: fle
 .footer-right a:hover { color: var(--text-bright); }
 
 /* Responsive */
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   nav { padding: 1rem 1.2rem; }
   .nav-hide-sm { display: none; }
   .container { padding: 5.5rem 1rem 2rem; }
   .landscape-table { font-size: 0.82rem; }
   .landscape-table .desc { display: none; }
   footer { flex-direction: column; gap: 1rem; text-align: center; }
+}
+@media (max-width: 600px) {
+  .landscape-table .growth-3m { display: none; }
 }
 </style>
 </head>
@@ -110,13 +121,16 @@ footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: fle
   <div class="page-header">
     <h1>AI Coding Agent Landscape</h1>
     <div class="updated">Last updated: {{LAST_UPDATED}}</div>
-    <p class="intro">A living ranking of AI coding agents and agent orchestrators, sorted by a blend of GitHub popularity and recent momentum. Agents that Irrlicht already monitors are marked <span class="badge badge-live">live</span>, upcoming integrations are <span class="badge badge-planned">planned</span>.</p>
+    <p class="intro">A living ranking of AI coding agents and agent orchestrators, sorted by a blend of GitHub popularity and growth momentum. Agents that Irrlicht already monitors are marked <span class="badge badge-live">live</span>, upcoming integrations are <span class="badge badge-planned">planned</span>. Agents first tracked less than 3 months ago are marked <span class="badge badge-new">NEW</span>.</p>
+    <a href="compare/" class="compare-link">See detailed comparison with all metrics &rarr;</a>
   </div>
 
   <h2 class="section-title">Coding Agents</h2>
+  <p class="trend-note">Growth measured from snapshots closest to 1 month and 3 months before {{LAST_UPDATED}}.</p>
   {{AGENTS_TABLE}}
 
   <h2 class="section-title">Agent Orchestrators</h2>
+  <p class="trend-note">Growth measured from snapshots closest to 1 month and 3 months before {{LAST_UPDATED}}.</p>
   {{ORCHESTRATORS_TABLE}}
 </div>
 
@@ -124,6 +138,7 @@ footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: fle
   <div>MIT License &middot; Irrlicht &middot; Follow the right light.</div>
   <div class="footer-right">
     <a href="../landscape/">Agent Landscape</a>
+    <a href="compare/">Compare</a>
     <a href="../docs/">Docs</a>
     <a href="https://github.com/ingo-eichhorst/Irrlicht">GitHub</a>
   </div>
