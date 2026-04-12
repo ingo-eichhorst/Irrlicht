@@ -89,7 +89,7 @@ final class DaemonManager: ObservableObject {
             .deletingLastPathComponent() // macos/
             .deletingLastPathComponent() // platforms/
             .deletingLastPathComponent() // repo root
-            .appendingPathComponent("bin/irrlichd")
+            .appendingPathComponent("core/bin/irrlichd")
         return FileManager.default.fileExists(atPath: devURL.path) ? devURL : nil
     }
 
