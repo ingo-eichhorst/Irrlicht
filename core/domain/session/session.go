@@ -79,6 +79,11 @@ type SessionMetrics struct {
 	// (e.g. "default", "plan", "bypassPermissions"). Surfaced by the tailer
 	// and carried on session state for UI/telemetry.
 	PermissionMode string `json:"permission_mode,omitempty"`
+
+	// PermissionPending is true when a PermissionRequest hook has fired and no
+	// corresponding PostToolUse/PostToolUseFailure has cleared it. Transient —
+	// set by the hook receiver in processActivity, not derived from transcript.
+	PermissionPending bool `json:"-"`
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one

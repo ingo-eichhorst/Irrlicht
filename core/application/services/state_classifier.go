@@ -24,6 +24,18 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 		return currentState, ""
 	}
 
+	// 0. Permission prompt is open (hook-based signal) → waiting.
+	// This is the most authoritative signal — deterministic from Claude Code's
+	// own hook system. Checked before NeedsUserAttention because it doesn't
+	// depend on HasOpenToolCall (avoids race where hook fires before fswatcher
+	// processes the tool_use JSONL event).
+	if metrics.PermissionPending {
+		if currentState != session.StateWaiting {
+			return session.StateWaiting, "permission prompt open → waiting"
+		}
+		return currentState, ""
+	}
+
 	// 1. User-blocking tool open → waiting.
 	if metrics.NeedsUserAttention() {
 		if currentState != session.StateWaiting {
@@ -48,15 +60,24 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 		return currentState, ""
 	}
 
-	// 3. ESC cancellation: user explicitly interrupted the turn while
-	// working/waiting with no open tool calls → ready. The signal is the
-	// "[Request interrupted by user" text marker, tracked via
-	// LastWasUserInterrupt — generic tool_result errors are benign (grep
-	// miss, failed build, etc.) and must not trigger this path.
+	// 3. User interruption: ESC or tool-permission denial while
+	// working/waiting with no open tool calls → ready.
+	//
+	// ESC signal: "[Request interrupted by user]" (LastWasUserInterrupt).
+	// Denial signal: "[Request interrupted by user for tool use]"
+	// (LastWasToolDenial). After denial, Claude Code typically returns to
+	// the prompt — the agent's turn is over. If the agent does continue
+	// (writes a new assistant message), the next activity will transition
+	// back to working.
 	if (currentState == session.StateWorking || currentState == session.StateWaiting) &&
-		!metrics.HasOpenToolCall && metrics.LastEventType == "user" && metrics.LastWasUserInterrupt {
+		!metrics.HasOpenToolCall && metrics.LastEventType == "user" &&
+		(metrics.LastWasUserInterrupt || metrics.LastWasToolDenial) {
+		reason := "user ESC interrupt"
+		if metrics.LastWasToolDenial {
+			reason = "tool permission denied"
+		}
 		return session.StateReady,
-			fmt.Sprintf("user ESC interrupt while %s → ready (cancellation)", currentState)
+			fmt.Sprintf("%s while %s → ready", reason, currentState)
 	}
 
 	// 4. Default: transcript activity → working.
