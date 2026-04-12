@@ -1,21 +1,31 @@
-// replay-session is an offline simulator that takes a Claude Code transcript
-// .jsonl file and replays it through the production tailer + state classifier
-// using virtual time (the event timestamps inside the transcript itself).
+// replay is an offline simulator that takes a Claude Code transcript .jsonl
+// file (or a lifecycle-events sidecar) and replays it through the production
+// tailer + state classifier using virtual time.
 //
-// It exists to reproduce and diagnose issue #102 — long-running Claude Code
-// sessions flickering between working and waiting. The replay is fully
-// deterministic and runs much faster than realtime: there are no real sleeps
-// or debounce timers. Their effects are simulated by inspecting timestamp
-// gaps and applying scaled-down thresholds.
+// It consolidates the former replay-session and replay-lifecycle tools into a
+// single binary with two replay paths:
+//
+//   - Sidecar-driven (primary): when a .events.jsonl sidecar is present or
+//     passed directly, the replay is driven by the lifecycle recording —
+//     fswatcher fires, process events, hook events — for full-fidelity state
+//     machine reproduction.
+//   - Transcript-only (fallback): when no sidecar exists, events are batched
+//     by timestamp and debounced, approximating what the daemon would have
+//     seen.
 //
 // Usage:
 //
-//	go run ./core/cmd/replay-session [flags] TRANSCRIPT.jsonl
+//	go run ./core/cmd/replay [flags] INPUT.jsonl
+//
+// INPUT can be a transcript .jsonl or a sidecar .events.jsonl.
 //
 // Flags:
 //
 //	--out FILE              Write JSON report to FILE (default stdout).
+//	--adapter NAME          Adapter name (claude-code, codex, pi); auto-detected from path if omitted.
+//	--session ID            Filter sidecar events to a single session (multi-session recordings).
 //	--debounce DURATION     Simulated activity debounce window. Default 2s.
+//	--flicker-max DURATION  Episodes shorter than this are counted as flickers. Default 10s.
 //	--quiet                 Suppress per-event progress on stderr.
 //
 // The report is a JSON object containing every state transition (with reason,
@@ -67,67 +77,93 @@ func detectAdapter(path string) (string, error) {
 	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi", path)
 }
 
-// Cause distinguishes why a state evaluation happened — was it triggered by a
-// real transcript event, debounce coalescing, or the initial seed state.
+// Cause distinguishes why a state evaluation happened.
 type Cause string
 
 const (
 	CauseInit             Cause = "init"
 	CauseEvent            Cause = "event"
 	CauseDebounceCoalesce Cause = "debounce_coalesce"
+	CauseHook             Cause = "hook"
 )
 
 // Transition is a single recorded state change emitted by the replay.
 type Transition struct {
-	Index         int       `json:"index"`           // monotonic counter, increments per transition
-	EventIndex    int       `json:"event_index"`     // index of triggering event in source transcript (-1 for timer)
-	VirtualTime   time.Time `json:"virtual_time"`    // synthetic clock at the moment of transition
-	Cause         Cause     `json:"cause"`           // event | stale_tool_timer | debounce_coalesce | init
+	Index         int       `json:"index"`
+	EventIndex    int       `json:"event_index"`
+	VirtualTime   time.Time `json:"virtual_time"`
+	Cause         Cause     `json:"cause"`
 	PrevState     string    `json:"prev_state"`
 	NewState      string    `json:"new_state"`
-	Reason        string    `json:"reason"`          // ClassifyState's reason string
+	Reason        string    `json:"reason"`
 	LastEventType string    `json:"last_event_type"`
 	HasOpenTool   bool      `json:"has_open_tool"`
 	OpenToolNames []string  `json:"open_tool_names,omitempty"`
 	IsAgentDone   bool      `json:"is_agent_done"`
 	NeedsAttn     bool      `json:"needs_user_attention"`
 	WaitingQuery  bool      `json:"waiting_for_user_input"`
-	LastTextHead  string    `json:"last_assistant_text_head,omitempty"` // first 80 chars
+	LastTextHead  string    `json:"last_assistant_text_head,omitempty"`
+}
+
+// transitionFromMetrics builds a Transition populated with classifier snapshot
+// fields from domainMetrics. Callers supply the event-specific fields.
+func transitionFromMetrics(eventIdx int, virtTime time.Time, cause Cause, prevState, newState, reason string, m *session.SessionMetrics) Transition {
+	return Transition{
+		EventIndex:    eventIdx,
+		VirtualTime:   virtTime,
+		Cause:         cause,
+		PrevState:     prevState,
+		NewState:      newState,
+		Reason:        reason,
+		LastEventType: m.LastEventType,
+		HasOpenTool:   m.HasOpenToolCall,
+		OpenToolNames: copyStrings(m.LastOpenToolNames),
+		IsAgentDone:   m.IsAgentDone(),
+		NeedsAttn:     m.NeedsUserAttention(),
+		WaitingQuery:  m.IsWaitingForUserInput(),
+		LastTextHead:  head(m.LastAssistantText, 80),
+	}
 }
 
 // Report is the top-level structure written to the output file.
 type Report struct {
-	SchemaVersion    int           `json:"schema_version"`
-	SourceTranscript string        `json:"source_transcript"`
-	GeneratedAt      time.Time     `json:"generated_at"`
+	SchemaVersion    int            `json:"schema_version"`
+	SourceTranscript string         `json:"source_transcript"`
+	GeneratedAt      time.Time      `json:"generated_at"`
 	Settings         ReportSettings `json:"settings"`
-	Summary          ReportSummary `json:"summary"`
-	Transitions      []Transition  `json:"transitions"`
+	Summary          ReportSummary  `json:"summary"`
+	Transitions      []Transition   `json:"transitions"`
 
-	// ExtendedCheck is populated when a <transcript-basename>.events.jsonl
-	// sidecar is present next to the transcript fixture. It diffs the
-	// replayed state transitions against the recorded ones so fixtures act
-	// as regression tests for the detector.
+	// Sessions is populated when a sidecar is present and provides per-session
+	// aggregate statistics (event counts, state durations, PID discovery lag,
+	// debounce stats). Nil for transcript-only replays.
+	Sessions []SessionTimeline `json:"sessions,omitempty"`
+
+	// ExtendedCheck diffs the replayed state transitions against the recorded
+	// ones so fixtures act as regression tests for the detector.
 	ExtendedCheck *ExtendedCheck `json:"extended_check,omitempty"`
+}
+
+// SessionTimeline is a per-session summary within the report, populated from
+// the lifecycle sidecar when available.
+type SessionTimeline struct {
+	SessionID       string           `json:"session_id"`
+	Adapter         string           `json:"adapter,omitempty"`
+	ParentSessionID string           `json:"parent_session_id,omitempty"`
+	FirstSeen       time.Time        `json:"first_seen"`
+	LastSeen        time.Time        `json:"last_seen"`
+	DurationMs      int64            `json:"duration_ms"`
+	EventCount      int              `json:"event_count"`
+	StateChanges    int              `json:"state_changes"`
+	FinalState      string           `json:"final_state,omitempty"`
+	PID             int              `json:"pid,omitempty"`
+	PIDDiscoveryMs  int64            `json:"pid_discovery_lag_ms,omitempty"`
+	DebounceEvents  int              `json:"debounce_coalesced_events"`
+	StateDurations  map[string]int64 `json:"state_durations_ms"`
 }
 
 // ExtendedCheck compares the replayed state transitions against a committed
 // lifecycle recording (.events.jsonl sidecar produced by `irrlichd --record`).
-//
-// When a sidecar is present, replay-session uses `ReplayWithSidecar` to
-// drive the tailer from the recorded fswatcher events — each
-// transcript_activity event in the sidecar carries a file_size that tells
-// the replay exactly how many transcript bytes to feed the tailer at that
-// moment. The debounce state machine is then applied over those events
-// using the same 2-second window the daemon uses, and process_exited
-// events cancel any pending debounce timer the same way the daemon
-// tearing down a session does.
-//
-// The result is a byte-identical reproduction of what the daemon produced
-// for the recorded session. The sidecar acts as the regression oracle:
-// any mismatch (ordered or unique-kind) exits replay-session non-zero so
-// the fixture-replay script and CI catch classifier, tailer, or debounce
-// drift immediately.
 type ExtendedCheck struct {
 	SidecarPath         string               `json:"sidecar_path"`
 	RecordedCount       int                  `json:"recorded_transition_count"`
@@ -136,8 +172,8 @@ type ExtendedCheck struct {
 	OrderedMismatches   []TransitionMismatch `json:"ordered_mismatches,omitempty"`
 	RecordedUniqueKinds []string             `json:"recorded_unique_kinds"`
 	ReplayedUniqueKinds []string             `json:"replayed_unique_kinds"`
-	MissingKinds        []string             `json:"missing_kinds,omitempty"` // kinds in recorded but not replayed
-	ExtraKinds          []string             `json:"extra_kinds,omitempty"`   // kinds in replayed but not recorded
+	MissingKinds        []string             `json:"missing_kinds,omitempty"`
+	ExtraKinds          []string             `json:"extra_kinds,omitempty"`
 }
 
 // TransitionMismatch is a single divergence between replayed and recorded
@@ -145,34 +181,30 @@ type ExtendedCheck struct {
 type TransitionMismatch struct {
 	Index    int    `json:"index"`
 	Kind     string `json:"kind"` // "missing_in_replay" | "extra_in_replay" | "state_differs"
-	Recorded string `json:"recorded,omitempty"` // "prev→new"
-	Replayed string `json:"replayed,omitempty"` // "prev→new"
+	Recorded string `json:"recorded,omitempty"`
+	Replayed string `json:"replayed,omitempty"`
 }
 
 type ReportSettings struct {
 	Adapter            string        `json:"adapter"`
+	SessionFilter      string        `json:"session_filter,omitempty"`
 	DebounceWindow     time.Duration `json:"debounce_window"`
-	FlickerMaxDuration time.Duration `json:"flicker_max_duration"` // episodes shorter than this are flickers
+	FlickerMaxDuration time.Duration `json:"flicker_max_duration"`
 }
 
 type ReportSummary struct {
 	TotalEvents       int                      `json:"total_events"`
-	ConsumedEvents    int                      `json:"consumed_events"` // after debounce coalescing
+	ConsumedEvents    int                      `json:"consumed_events"`
 	TotalTransitions  int                      `json:"total_transitions"`
 	FirstEventTime    time.Time                `json:"first_event_time"`
 	LastEventTime     time.Time                `json:"last_event_time"`
-	WallClockDuration time.Duration            `json:"wall_clock_session_duration"` // last - first
+	WallClockDuration time.Duration            `json:"wall_clock_session_duration"`
 	StateDurations    map[string]time.Duration `json:"state_durations"`
 
-	// Flicker accounting — a flicker is a short-lived episode (<FlickerMaxDuration)
-	// whose state is different from the state immediately before and after it,
-	// i.e. the X → Y → X sandwich pattern. This is the user-visible "bouncing"
-	// irrlicht surfaces in notifications.
 	FlickerCount       int            `json:"flicker_count"`
-	FlickersByCategory map[string]int `json:"flickers_by_category"` // e.g. "working_between_ready": 4501
+	FlickersByCategory map[string]int `json:"flickers_by_category"`
 	FlickersByReason   map[string]int `json:"flickers_by_reason"`
 
-	// Cost metrics — cumulative token totals and estimated cost for the session.
 	EstimatedCostUSD       float64 `json:"estimated_cost_usd,omitempty"`
 	CumInputTokens         int64   `json:"cum_input_tokens,omitempty"`
 	CumOutputTokens        int64   `json:"cum_output_tokens,omitempty"`
@@ -181,49 +213,88 @@ type ReportSummary struct {
 	ModelName              string  `json:"model_name,omitempty"`
 }
 
+// finalizeSummary fills the report's computed summary fields (consumed events,
+// transitions, flickers, cost) from the replay state. Both Replay and
+// ReplayWithSidecar call this at the end to avoid duplicating the logic.
+func finalizeSummary(report *Report, consumed int, stateDurations map[string]time.Duration, lastMetrics *tailer.SessionMetrics) {
+	report.Summary.ConsumedEvents = consumed
+	report.Summary.TotalTransitions = len(report.Transitions)
+	report.Summary.StateDurations = stateDurations
+
+	flickerCat, flickerReason, flickerTotal := computeFlickers(
+		report.Transitions, report.Settings.FlickerMaxDuration)
+	report.Summary.FlickerCount = flickerTotal
+	report.Summary.FlickersByCategory = flickerCat
+	report.Summary.FlickersByReason = flickerReason
+
+	if lastMetrics != nil {
+		report.Summary.EstimatedCostUSD = lastMetrics.EstimatedCostUSD
+		report.Summary.CumInputTokens = lastMetrics.CumInputTokens
+		report.Summary.CumOutputTokens = lastMetrics.CumOutputTokens
+		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
+		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
+		report.Summary.ModelName = lastMetrics.ModelName
+	}
+}
+
 func main() {
 	var (
 		outPath      string
 		adapterFlag  string
+		sessionFlag  string
 		debounceFlag time.Duration
 		flickerMax   time.Duration
 		quiet        bool
 	)
 	flag.StringVar(&outPath, "out", "", "output JSON report path (default: stdout)")
 	flag.StringVar(&adapterFlag, "adapter", "", "adapter name (claude-code, codex, pi); auto-detected from path if omitted")
+	flag.StringVar(&sessionFlag, "session", "", "filter sidecar events to a single session ID")
 	flag.DurationVar(&debounceFlag, "debounce", 2*time.Second, "simulated activity debounce window")
 	flag.DurationVar(&flickerMax, "flicker-max", 10*time.Second, "episodes shorter than this are counted as flickers (automated agent loops cycle turns in ~25s, so 30s overcounts)")
 	flag.BoolVar(&quiet, "quiet", false, "suppress per-event progress on stderr")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: replay-session [flags] TRANSCRIPT.jsonl")
+		fmt.Fprintln(os.Stderr, "usage: replay [flags] INPUT.jsonl")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
 	src := flag.Arg(0)
 
+	// Resolve input: the argument can be a transcript .jsonl or a sidecar
+	// .events.jsonl. When a sidecar is given directly, derive the transcript
+	// path; when a transcript is given, auto-detect a sibling sidecar.
+	var transcriptPath, sidecarPath string
+	useSidecar := false
+
+	if strings.HasSuffix(src, ".events.jsonl") {
+		sidecarPath = src
+		transcriptPath = strings.TrimSuffix(src, ".events.jsonl") + ".jsonl"
+		useSidecar = true
+	} else {
+		transcriptPath = src
+		candidate := strings.TrimSuffix(src, ".jsonl") + ".events.jsonl"
+		if _, err := os.Stat(candidate); err == nil {
+			sidecarPath = candidate
+			useSidecar = true
+		}
+	}
+
 	adapterName := adapterFlag
 	if adapterName == "" {
 		var err error
-		adapterName, err = detectAdapter(src)
+		adapterName, err = detectAdapter(transcriptPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
 	}
 
-	// Sidecar-driven replay: when a <transcript-basename>.events.jsonl
-	// sidecar is present, the replay is driven by the lifecycle recording
-	// instead of the transcript's own line timestamps. The sidecar records
-	// one transcript_activity event per fswatcher fire, each with a
-	// file_size. Feeding the tailer bytes up to each recorded file_size
-	// gives a byte-identical reproduction of what the daemon observed —
-	// no more batching-vs-fswatcher drift.
-	sidecarPath := strings.TrimSuffix(src, ".jsonl") + ".events.jsonl"
-	useSidecar := false
-	if _, err := os.Stat(sidecarPath); err == nil {
-		useSidecar = true
+	cfg := ReportSettings{
+		Adapter:            adapterName,
+		SessionFilter:      sessionFlag,
+		DebounceWindow:     debounceFlag,
+		FlickerMaxDuration: flickerMax,
 	}
 
 	var (
@@ -231,17 +302,13 @@ func main() {
 		replayErr error
 	)
 	if useSidecar {
-		report, replayErr = ReplayWithSidecar(src, sidecarPath, ReportSettings{
-			Adapter:            adapterName,
-			DebounceWindow:     debounceFlag,
-			FlickerMaxDuration: flickerMax,
-		})
+		report, replayErr = ReplayWithSidecar(transcriptPath, sidecarPath, cfg)
 	} else {
-		report, replayErr = Replay(src, ReportSettings{
-			Adapter:            adapterName,
-			DebounceWindow:     debounceFlag,
-			FlickerMaxDuration: flickerMax,
-		})
+		if sessionFlag != "" {
+			fmt.Fprintln(os.Stderr, "--session requires a sidecar (.events.jsonl); no sidecar found")
+			os.Exit(2)
+		}
+		report, replayErr = Replay(transcriptPath, cfg)
 	}
 	if replayErr != nil {
 		fmt.Fprintln(os.Stderr, "replay failed:", replayErr)
@@ -273,13 +340,13 @@ func main() {
 			s.FlickersByCategory["working_between_ready"]+s.FlickersByCategory["ready_between_working"],
 			s.FlickersByCategory["ready_between_waiting"]+s.FlickersByCategory["waiting_between_ready"])
 		if c := report.ExtendedCheck; c != nil {
-			kindsMark := "✓"
+			kindsMark := "ok"
 			if len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
-				kindsMark = "✗"
+				kindsMark = "FAIL"
 			}
-			orderMark := "✓"
+			orderMark := "ok"
 			if len(c.OrderedMismatches) > 0 {
-				orderMark = "✗"
+				orderMark = "FAIL"
 			}
 			fmt.Fprintf(os.Stderr, " [extended-check: kinds %s ordered %d/%d %s]",
 				kindsMark, c.OrderedMatches, c.RecordedCount, orderMark)
@@ -287,9 +354,6 @@ func main() {
 		fmt.Fprintln(os.Stderr)
 	}
 
-	// Exit policy: when a sidecar is present, the replay is byte-identical
-	// to the daemon. Any drift is a real regression — fail the process so
-	// CI and the fixture-replay script catch it immediately.
 	if c := report.ExtendedCheck; c != nil {
 		if len(c.OrderedMismatches) > 0 || len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
 			os.Exit(1)
@@ -314,9 +378,9 @@ func chooseOutput(path string) *os.File {
 
 // rawEvent is one line from the source transcript paired with its parsed timestamp.
 type rawEvent struct {
-	Index    int
-	Bytes    []byte // including trailing newline
-	Time     time.Time
+	Index int
+	Bytes []byte // including trailing newline
+	Time  time.Time
 }
 
 // Replay runs the deterministic simulator on a transcript file and returns the
@@ -344,9 +408,6 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	// used when the sidecar is present, giving byte-identical reproduction.
 	batches := batchByDebounce(events, cfg.DebounceWindow)
 
-	// Set up the production tailer + parser writing into a temp transcript
-	// file. We rebuild the temp file as we go so the tailer's incremental
-	// offset logic processes one batch at a time.
 	tmpDir, err := os.MkdirTemp("", "irrlicht-replay-")
 	if err != nil {
 		return nil, err
@@ -395,7 +456,6 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 		prevTransitionAt = tr.VirtualTime
 	}
 
-	// Seed the initial state row so consumers see "started in ready" too.
 	emit(Transition{
 		EventIndex:  -1,
 		VirtualTime: events[0].Time,
@@ -410,8 +470,6 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	for bi, batch := range batches {
 		nextEventTime := batch[len(batch)-1].Time
 
-		// Append every line in the batch to the temp transcript and let
-		// the tailer process them in one call.
 		for _, ev := range batch {
 			if _, err := tmp.Write(ev.Bytes); err != nil {
 				return nil, err
@@ -427,79 +485,27 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 
 		domainMetrics := tailerToDomain(metrics)
 
+		cause := CauseEvent
+		if len(batch) > 1 {
+			cause = CauseDebounceCoalesce
+		}
+
 		if state == session.StateReady && domainMetrics.LastEventType != "" {
-			cause := CauseEvent
-			if len(batch) > 1 {
-				cause = CauseDebounceCoalesce
-			}
-			emit(Transition{
-				EventIndex:    batch[len(batch)-1].Index,
-				VirtualTime:   nextEventTime,
-				Cause:         cause,
-				PrevState:     state,
-				NewState:      session.StateWorking,
-				Reason:        "force ready→working on first activity",
-				LastEventType: domainMetrics.LastEventType,
-				HasOpenTool:   domainMetrics.HasOpenToolCall,
-				OpenToolNames: copyStrings(domainMetrics.LastOpenToolNames),
-				IsAgentDone:   domainMetrics.IsAgentDone(),
-				NeedsAttn:     domainMetrics.NeedsUserAttention(),
-				WaitingQuery:  domainMetrics.IsWaitingForUserInput(),
-				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
-			})
+			emit(transitionFromMetrics(batch[len(batch)-1].Index, nextEventTime, cause,
+				state, session.StateWorking, "force ready→working on first activity", domainMetrics))
 			state = session.StateWorking
 		}
 
 		newState, reason := services.ClassifyState(state, domainMetrics)
 		if newState != state {
-			cause := CauseEvent
-			if len(batch) > 1 {
-				cause = CauseDebounceCoalesce
-			}
-			emit(Transition{
-				EventIndex:    batch[len(batch)-1].Index,
-				VirtualTime:   nextEventTime,
-				Cause:         cause,
-				PrevState:     state,
-				NewState:      newState,
-				Reason:        reason,
-				LastEventType: domainMetrics.LastEventType,
-				HasOpenTool:   domainMetrics.HasOpenToolCall,
-				OpenToolNames: copyStrings(domainMetrics.LastOpenToolNames),
-				IsAgentDone:   domainMetrics.IsAgentDone(),
-				NeedsAttn:     domainMetrics.NeedsUserAttention(),
-				WaitingQuery:  domainMetrics.IsWaitingForUserInput(),
-				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
-			})
+			emit(transitionFromMetrics(batch[len(batch)-1].Index, nextEventTime, cause,
+				state, newState, reason, domainMetrics))
 			state = newState
 		}
 	}
 
-	// Close the final state interval against the last event time.
 	addDuration(state, report.Summary.LastEventTime.Sub(prevTransitionAt))
-
-	report.Summary.ConsumedEvents = consumed
-	report.Summary.TotalTransitions = len(report.Transitions)
-	report.Summary.StateDurations = stateDurations
-
-	// Flicker accounting — compute from finalised transition list, using
-	// the sandwich metric: a short episode (<FlickerMaxDuration) whose state
-	// differs from the state immediately before and after.
-	flickerCat, flickerReason, flickerTotal := computeFlickers(
-		report.Transitions, cfg.FlickerMaxDuration)
-	report.Summary.FlickerCount = flickerTotal
-	report.Summary.FlickersByCategory = flickerCat
-	report.Summary.FlickersByReason = flickerReason
-
-	// Cost metrics from the final tailer state.
-	if lastMetrics != nil {
-		report.Summary.EstimatedCostUSD = lastMetrics.EstimatedCostUSD
-		report.Summary.CumInputTokens = lastMetrics.CumInputTokens
-		report.Summary.CumOutputTokens = lastMetrics.CumOutputTokens
-		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
-		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
-		report.Summary.ModelName = lastMetrics.ModelName
-	}
+	finalizeSummary(report, consumed, stateDurations, lastMetrics)
 
 	return report, nil
 }
@@ -518,15 +524,13 @@ func loadEvents(path string) ([]rawEvent, error) {
 	idx := 0
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
-		// Reattach the trailing newline so the tailer sees a complete JSONL.
 		line = append(line, '\n')
 
 		// Explicit timestamp only — do NOT use tailer.ParseTimestamp here
 		// because it falls back to time.Now() when the field is missing,
 		// which would pollute the sorted virtual timeline with wall-clock
-		// values for metadata lines (permission-mode, file-history-snapshot,
-		// last-prompt, etc.). Those lines inherit from neighbours instead.
-		var raw map[string]interface{}
+		// values for metadata lines.
+		var raw map[string]any
 		ts := time.Time{}
 		if err := json.Unmarshal(scanner.Bytes(), &raw); err == nil {
 			if v, ok := raw["timestamp"].(string); ok {
@@ -550,9 +554,7 @@ func loadEvents(path string) ([]rawEvent, error) {
 	}
 
 	// Resolve null-timestamp lines (summary / metadata) so they process
-	// in-file-order alongside the surrounding real events. First pass:
-	// fill forward from the last real timestamp. Second pass: fill
-	// backward for leading nulls that had no prior real timestamp.
+	// in-file-order alongside the surrounding real events.
 	var lastTS time.Time
 	for i := range out {
 		if out[i].Time.IsZero() {
@@ -574,9 +576,6 @@ func loadEvents(path string) ([]rawEvent, error) {
 		}
 	}
 
-	// Stable sort by timestamp. Stable preserves insertion order for ties,
-	// which is important: multi-line writes with slightly-out-of-order
-	// timestamps and our now-inherited nulls rely on physical order.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
 	for i := range out {
 		out[i].Index = i
@@ -587,50 +586,35 @@ func loadEvents(path string) ([]rawEvent, error) {
 // ReplayWithSidecar runs a deterministic replay driven by a lifecycle-events
 // sidecar. Each transcript_activity event in the sidecar is one fswatcher
 // fire the daemon observed; we feed the tailer the exact bytes the daemon
-// had at that moment and call the classifier. The result is byte-identical
-// to the daemon's behavior for the recorded session.
-//
-// Returns a Report with the same shape as Replay() — the only difference is
-// the virtual timeline, which tracks sidecar event timestamps instead of
-// transcript-line timestamps, and the classifier call granularity.
+// had at that moment and call the classifier. Hook events (KindHookReceived)
+// are interleaved by timestamp — when a permission-request hook fires, we
+// emit a working→waiting transition without a tailer call, mirroring the
+// daemon's behavior where a permission request pauses the agent.
 func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (*Report, error) {
-	// Load the transcript as raw bytes so we can slice it by file_size.
 	srcBytes, err := os.ReadFile(transcriptPath)
 	if err != nil {
 		return nil, fmt.Errorf("read transcript: %w", err)
 	}
 
-	// Load sidecar events and walk them in sequence order. We need the
-	// transcript_activity stream (fswatcher fires with file_size), plus
-	// process_exited events (which cause the daemon to tear down the
-	// session, cancelling any pending debounce timer).
 	sidecarEvents, err := loadAllLifecycleEvents(sidecarPath)
 	if err != nil {
 		return nil, fmt.Errorf("load sidecar: %w", err)
 	}
 
-	// Identify the primary session: the first transcript_new event in
-	// sequence order whose session_id is NOT a proc-* pre-session. The
-	// curate script pulls pre-session rows into the fixture (so the
-	// detection window is visible in replay), but the proc-* synthetic
-	// session is never the parent — the real UUID session that replaces
-	// it is.
+	// Identify the primary session: either the --session flag or auto-detected.
 	var primarySessionID string
-	for _, ev := range sidecarEvents {
-		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" && !strings.HasPrefix(ev.SessionID, "proc-") {
-			primarySessionID = ev.SessionID
-			break
-		}
+	if cfg.SessionFilter != "" {
+		primarySessionID = cfg.SessionFilter
+	} else {
+		primarySessionID = findPrimarySessionID(sidecarEvents)
 	}
 	if primarySessionID == "" {
 		return nil, fmt.Errorf("sidecar %s has no transcript_new event — cannot identify the primary session", sidecarPath)
 	}
 
-	// Single walk over sidecar events: collect fswatcher events for the
-	// primary session and the first process_exit timestamp that belongs
-	// to it. Subagent events are left in place for the events log but
-	// don't drive the tailer.
+	// Single walk: collect fswatcher events, hook events, and first process exit.
 	var fswatches []lifecycle.Event
+	var hookEvents []lifecycle.Event
 	var processExitAt time.Time
 	for _, ev := range sidecarEvents {
 		if ev.SessionID != primarySessionID {
@@ -645,15 +629,14 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 			if processExitAt.IsZero() {
 				processExitAt = ev.Timestamp
 			}
+		case lifecycle.KindHookReceived:
+			hookEvents = append(hookEvents, ev)
 		}
 	}
 	if len(fswatches) == 0 {
 		return nil, fmt.Errorf("sidecar has no transcript_activity events with file_size for primary session %s: %s", primarySessionID, sidecarPath)
 	}
 
-	// Set up a temp file and tailer. We append bytes incrementally so the
-	// tailer's offset-based incremental read produces the same metrics the
-	// daemon computed at each fswatcher fire.
 	tmpDir, err := os.MkdirTemp("", "irrlicht-replay-sidecar-")
 	if err != nil {
 		return nil, err
@@ -717,10 +700,7 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	// then runs the tailer + classifier (mirroring SessionDetector.processActivity
 	// for the force-r→w + ClassifyState pattern).
 	classifyAtSidecar := func(fileSize int64, virtTime time.Time, eventIdx int, cause Cause) error {
-		target := fileSize
-		if target > int64(len(srcBytes)) {
-			target = int64(len(srcBytes))
-		}
+		target := min(fileSize, int64(len(srcBytes)))
 		if target > lastSize {
 			if _, err := tmp.Write(srcBytes[lastSize:target]); err != nil {
 				return err
@@ -736,53 +716,61 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		domainMetrics := tailerToDomain(metrics)
 
 		if state == session.StateReady && domainMetrics.LastEventType != "" {
-			emit(Transition{
-				EventIndex:    eventIdx,
-				VirtualTime:   virtTime,
-				Cause:         cause,
-				PrevState:     state,
-				NewState:      session.StateWorking,
-				Reason:        "force ready→working on first activity",
-				LastEventType: domainMetrics.LastEventType,
-				HasOpenTool:   domainMetrics.HasOpenToolCall,
-				OpenToolNames: copyStrings(domainMetrics.LastOpenToolNames),
-				IsAgentDone:   domainMetrics.IsAgentDone(),
-				NeedsAttn:     domainMetrics.NeedsUserAttention(),
-				WaitingQuery:  domainMetrics.IsWaitingForUserInput(),
-				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
-			})
+			emit(transitionFromMetrics(eventIdx, virtTime, cause,
+				state, session.StateWorking, "force ready→working on first activity", domainMetrics))
 			state = session.StateWorking
 		}
 
 		newState, reason := services.ClassifyState(state, domainMetrics)
 		if newState != state {
-			emit(Transition{
-				EventIndex:    eventIdx,
-				VirtualTime:   virtTime,
-				Cause:         cause,
-				PrevState:     state,
-				NewState:      newState,
-				Reason:        reason,
-				LastEventType: domainMetrics.LastEventType,
-				HasOpenTool:   domainMetrics.HasOpenToolCall,
-				OpenToolNames: copyStrings(domainMetrics.LastOpenToolNames),
-				IsAgentDone:   domainMetrics.IsAgentDone(),
-				NeedsAttn:     domainMetrics.NeedsUserAttention(),
-				WaitingQuery:  domainMetrics.IsWaitingForUserInput(),
-				LastTextHead:  head(domainMetrics.LastAssistantText, 80),
-			})
+			emit(transitionFromMetrics(eventIdx, virtTime, cause,
+				state, newState, reason, domainMetrics))
 			state = newState
 		}
 		return nil
 	}
 
-	// Apply the daemon's debounce state machine over the sidecar fswatcher
-	// events. The daemon (session_detector.go:308 onActivity):
-	//   - First event in a quiet period → processActivity fires synchronously
-	//   - Subsequent event within the timer window → coalesce, reset timer
-	//   - Timer fires (2s after last event) → processActivity fires on latest,
-	//     but only if at least one event coalesced (the `pending` flag)
-	//   - A process exit cancels any pending timer (the session is torn down)
+	// applyHookEvent processes a hook_received event. Permission-request
+	// hooks (e.g. PreToolUse) pause the agent, producing a working→waiting
+	// transition. The transcript doesn't change at hook time — only the
+	// state machine does.
+	applyHookEvent := func(hookEv lifecycle.Event) {
+		if state != session.StateWorking {
+			return
+		}
+		emit(Transition{
+			EventIndex:  -1,
+			VirtualTime: hookEv.Timestamp,
+			Cause:       CauseHook,
+			PrevState:   state,
+			NewState:    session.StateWaiting,
+			Reason:      fmt.Sprintf("hook: %s (permission pending)", hookEv.HookName),
+		})
+		state = session.StateWaiting
+	}
+
+	// Build a merged timeline of fswatcher events and hook events, ordered
+	// by sidecar sequence number.
+	type timelineEntry struct {
+		isHook  bool
+		fsIdx   int
+		hookIdx int
+		seq     int64
+	}
+	timeline := make([]timelineEntry, 0, len(fswatches)+len(hookEvents))
+	for i, ev := range fswatches {
+		timeline = append(timeline, timelineEntry{fsIdx: i, seq: ev.Seq})
+	}
+	for i, ev := range hookEvents {
+		timeline = append(timeline, timelineEntry{isHook: true, hookIdx: i, seq: ev.Seq})
+	}
+	sort.SliceStable(timeline, func(i, j int) bool {
+		return timeline[i].seq < timeline[j].seq
+	})
+
+	// Apply the daemon's debounce state machine over the merged timeline.
+	// Hook events bypass debounce — they fire immediately regardless of
+	// the debounce window state, matching how the daemon handles them.
 	debounce := cfg.DebounceWindow
 	if debounce <= 0 {
 		debounce = 2 * time.Second
@@ -791,16 +779,20 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	debouncePending := false
 	coalescedSinceFire := false
 	var windowDeadline time.Time
-	var pendingSize int64 // file_size of the latest coalesced event
+	var pendingSize int64
 	var pendingIdx int
 
-	for i, fsev := range fswatches {
-		// If the debounce window for the previous event has expired before
-		// this event arrives, the timer would have fired. Fire it now if
-		// events coalesced, then start a fresh window for this event.
+	for _, entry := range timeline {
+		if entry.isHook {
+			applyHookEvent(hookEvents[entry.hookIdx])
+			continue
+		}
+
+		i := entry.fsIdx
+		fsev := fswatches[i]
+
 		if debouncePending && !fsev.Timestamp.Before(windowDeadline) {
 			if coalescedSinceFire {
-				// Don't fire if the process exited before the timer would have.
 				if processExitAt.IsZero() || windowDeadline.Before(processExitAt) {
 					if err := classifyAtSidecar(pendingSize, windowDeadline, pendingIdx, CauseDebounceCoalesce); err != nil {
 						return nil, fmt.Errorf("flush timer at fsev %d: %w", i, err)
@@ -812,7 +804,6 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		}
 
 		if !debouncePending {
-			// First event of a new quiet period: fire immediately.
 			if err := classifyAtSidecar(fsev.FileSize, fsev.Timestamp, i, CauseEvent); err != nil {
 				return nil, fmt.Errorf("classify fsev %d: %w", i, err)
 			}
@@ -821,15 +812,12 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 			continue
 		}
 
-		// Subsequent event in the same debounce window: coalesce, reset timer.
 		coalescedSinceFire = true
 		windowDeadline = fsev.Timestamp.Add(debounce)
 		pendingSize = fsev.FileSize
 		pendingIdx = i
 	}
 
-	// End of stream: fire the final debounce timer if events were pending
-	// AND the process hadn't exited before it would fire.
 	if debouncePending && coalescedSinceFire {
 		lastFs := fswatches[len(fswatches)-1]
 		fireTime := lastFs.Timestamp.Add(debounce)
@@ -841,33 +829,110 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	}
 	addDuration(state, report.Summary.LastEventTime.Sub(prevTransitionAt))
 
-	report.Summary.ConsumedEvents = len(fswatches)
-	report.Summary.TotalTransitions = len(report.Transitions)
-	report.Summary.StateDurations = stateDurations
-
-	flickerCat, flickerReason, flickerTotal := computeFlickers(
-		report.Transitions, cfg.FlickerMaxDuration)
-	report.Summary.FlickerCount = flickerTotal
-	report.Summary.FlickersByCategory = flickerCat
-	report.Summary.FlickersByReason = flickerReason
-
-	if lastMetrics != nil {
-		report.Summary.EstimatedCostUSD = lastMetrics.EstimatedCostUSD
-		report.Summary.CumInputTokens = lastMetrics.CumInputTokens
-		report.Summary.CumOutputTokens = lastMetrics.CumOutputTokens
-		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
-		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
-		report.Summary.ModelName = lastMetrics.ModelName
-	}
+	finalizeSummary(report, len(fswatches), stateDurations, lastMetrics)
+	report.Sessions = buildSessionTimelines(sidecarEvents)
 
 	return report, nil
 }
 
+// buildSessionTimelines aggregates sidecar events into per-session summaries.
+func buildSessionTimelines(events []lifecycle.Event) []SessionTimeline {
+	type tracker struct {
+		timeline       SessionTimeline
+		firstSeen      time.Time
+		lastState      string
+		lastStateAt    time.Time
+		stateDurations map[string]time.Duration
+	}
+	sessions := make(map[string]*tracker)
+
+	getSession := func(ev lifecycle.Event) *tracker {
+		st, ok := sessions[ev.SessionID]
+		if !ok {
+			st = &tracker{
+				timeline: SessionTimeline{
+					SessionID:      ev.SessionID,
+					Adapter:        ev.Adapter,
+					StateDurations: make(map[string]int64),
+				},
+				firstSeen:      ev.Timestamp,
+				stateDurations: make(map[string]time.Duration),
+			}
+			sessions[ev.SessionID] = st
+		}
+		return st
+	}
+
+	for _, ev := range events {
+		st := getSession(ev)
+		st.timeline.EventCount++
+		st.timeline.LastSeen = ev.Timestamp
+
+		if st.timeline.Adapter == "" && ev.Adapter != "" {
+			st.timeline.Adapter = ev.Adapter
+		}
+
+		switch ev.Kind {
+		case lifecycle.KindStateTransition:
+			st.timeline.StateChanges++
+			if st.lastState != "" && !st.lastStateAt.IsZero() {
+				dur := ev.Timestamp.Sub(st.lastStateAt)
+				st.stateDurations[st.lastState] += dur
+			}
+			st.lastState = ev.NewState
+			st.lastStateAt = ev.Timestamp
+			st.timeline.FinalState = ev.NewState
+
+		case lifecycle.KindPIDDiscovered:
+			st.timeline.PID = ev.PID
+			st.timeline.PIDDiscoveryMs = ev.Timestamp.Sub(st.firstSeen).Milliseconds()
+
+		case lifecycle.KindDebounceCoalesced:
+			st.timeline.DebounceEvents++
+
+		case lifecycle.KindParentLinked:
+			st.timeline.ParentSessionID = ev.ParentSessionID
+		}
+	}
+
+	var timelines []SessionTimeline
+	for _, st := range sessions {
+		if st.lastState != "" && !st.lastStateAt.IsZero() {
+			dur := st.timeline.LastSeen.Sub(st.lastStateAt)
+			st.stateDurations[st.lastState] += dur
+		}
+
+		st.timeline.FirstSeen = st.firstSeen
+		st.timeline.DurationMs = st.timeline.LastSeen.Sub(st.firstSeen).Milliseconds()
+
+		for state, dur := range st.stateDurations {
+			st.timeline.StateDurations[state] = dur.Milliseconds()
+		}
+
+		timelines = append(timelines, st.timeline)
+	}
+
+	sort.SliceStable(timelines, func(i, j int) bool {
+		return timelines[i].FirstSeen.Before(timelines[j].FirstSeen)
+	})
+
+	return timelines
+}
+
+// findPrimarySessionID returns the session ID of the first non-proc
+// transcript_new event, which identifies the primary (parent) session.
+func findPrimarySessionID(events []lifecycle.Event) string {
+	for _, ev := range events {
+		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" && !strings.HasPrefix(ev.SessionID, "proc-") {
+			return ev.SessionID
+		}
+	}
+	return ""
+}
+
 // loadAllLifecycleEvents reads a lifecycle sidecar file and returns every
-// event sorted by sequence number (the fields that make sidecar replay
-// deterministic). Unlike loadLifecycleStateTransitions it does not filter
-// by Kind. Malformed lines are logged to stderr and skipped so a partial
-// file doesn't silently produce bogus replay output.
+// event sorted by sequence number. Malformed lines are logged to stderr and
+// skipped so a partial file doesn't silently produce bogus replay output.
 func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -884,7 +949,7 @@ func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
 		lineNum++
 		var ev lifecycle.Event
 		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-			fmt.Fprintf(os.Stderr, "replay-session: skipping malformed sidecar line %d in %s: %v\n", lineNum, path, err)
+			fmt.Fprintf(os.Stderr, "replay: skipping malformed sidecar line %d in %s: %v\n", lineNum, path, err)
 			continue
 		}
 		out = append(out, ev)
@@ -894,6 +959,26 @@ func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
 	return out, nil
+}
+
+// filterStateTransitions extracts state_transition events for a given session
+// from an already-loaded event slice, skipping rows with empty prev_state
+// (session-creation markers).
+func filterStateTransitions(events []lifecycle.Event, primarySessionID string) []lifecycle.Event {
+	out := make([]lifecycle.Event, 0, len(events))
+	for _, ev := range events {
+		if ev.Kind != lifecycle.KindStateTransition {
+			continue
+		}
+		if ev.PrevState == "" {
+			continue
+		}
+		if primarySessionID != "" && ev.SessionID != primarySessionID {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
 }
 
 func batchByDebounce(events []rawEvent, window time.Duration) [][]rawEvent {
@@ -921,7 +1006,7 @@ func batchByDebounce(events []rawEvent, window time.Duration) [][]rawEvent {
 }
 
 // tailerToDomain converts the tailer's metrics struct into the domain type
-// consumed by ClassifyState. We copy the fields the classifier reads.
+// consumed by ClassifyState.
 func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 	if m == nil {
 		return nil
@@ -949,12 +1034,7 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 	}
 }
 
-// computeFlickers walks the transition list and counts "true flickers": short
-// episodes (<maxDur) whose state differs from the state immediately before and
-// after — the X→Y→X sandwich pattern that a user perceives as "bouncing".
-//
-// Returns a category breakdown (e.g. "working_between_ready": 4501), a reason
-// breakdown keyed by the classifier's reason string, and the total count.
+// computeFlickers counts short-lived X→Y→X sandwich patterns.
 func computeFlickers(trs []Transition, maxDur time.Duration) (map[string]int, map[string]int, int) {
 	byCategory := map[string]int{}
 	byReason := map[string]int{}
@@ -971,11 +1051,8 @@ func computeFlickers(trs []Transition, maxDur time.Duration) (map[string]int, ma
 			continue
 		}
 		dur := next.VirtualTime.Sub(cur.VirtualTime)
-		// Zero-duration sandwiches are same-batch replay artifacts: the
-		// force-promotion + classifier revert happen inside one
-		// processActivity call and coalesce into a single production
-		// broadcast. Skip so flicker counts reflect what the UI actually
-		// sees, not intermediate classifier evaluations.
+		// Zero-duration sandwiches are same-batch replay artifacts — skip so
+		// flicker counts reflect what the UI actually sees.
 		if dur <= 0 || dur >= maxDur {
 			continue
 		}
@@ -1006,15 +1083,16 @@ func head(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// runExtendedCheck loads a lifecycle-events sidecar, extracts its state
-// transitions, and compares them to the replayed transitions. Transitions
-// with an empty prev_state are dropped on both sides (the sidecar's "new
-// session created" row and the replay's synthetic init row).
+// runExtendedCheck compares the replayed state transitions against the sidecar's
+// recorded transitions.
 func runExtendedCheck(sidecarPath string, replayed []Transition) (*ExtendedCheck, error) {
-	recorded, err := loadLifecycleStateTransitions(sidecarPath)
+	all, err := loadAllLifecycleEvents(sidecarPath)
 	if err != nil {
 		return nil, err
 	}
+
+	primaryID := findPrimarySessionID(all)
+	recorded := filterStateTransitions(all, primaryID)
 
 	replayedReal := make([]Transition, 0, len(replayed))
 	for _, t := range replayed {
@@ -1030,11 +1108,7 @@ func runExtendedCheck(sidecarPath string, replayed []Transition) (*ExtendedCheck
 		ReplayedCount: len(replayedReal),
 	}
 
-	// Ordered diff.
-	n := len(recorded)
-	if len(replayedReal) < n {
-		n = len(replayedReal)
-	}
+	n := min(len(recorded), len(replayedReal))
 	for i := 0; i < n; i++ {
 		r := recorded[i]
 		p := replayedReal[i]
@@ -1066,7 +1140,6 @@ func runExtendedCheck(sidecarPath string, replayed []Transition) (*ExtendedCheck
 		})
 	}
 
-	// Unique-kinds diff (the strict correctness check).
 	recordedKinds := uniqueTransitionKinds(recorded, func(e lifecycle.Event) (string, string) { return e.PrevState, e.NewState })
 	replayedKinds := uniqueTransitionKinds(replayedReal, func(t Transition) (string, string) { return t.PrevState, t.NewState })
 	check.RecordedUniqueKinds = sortedKinds(recordedKinds)
@@ -1087,8 +1160,7 @@ func runExtendedCheck(sidecarPath string, replayed []Transition) (*ExtendedCheck
 	return check, nil
 }
 
-// uniqueTransitionKinds is a small generic helper that returns the set of
-// "prev→new" strings appearing in a slice of transition-like records.
+// uniqueTransitionKinds returns the set of "prev→new" strings in a slice.
 func uniqueTransitionKinds[T any](items []T, fields func(T) (prev, next string)) map[string]bool {
 	out := make(map[string]bool)
 	for _, it := range items {
@@ -1105,63 +1177,4 @@ func sortedKinds(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// loadLifecycleStateTransitions reads a JSONL lifecycle recording and
-// returns only the state_transition events that belong to the primary
-// session (the first transcript_new) and carry a non-empty prev_state.
-//
-// Multi-session sidecars curated via scripts/curate-lifecycle-fixture.sh
-// include both the parent's events and its subagents'. The extended
-// check compares the replay's output (which drives only the parent's
-// transcript) against the parent's recorded transitions — subagent
-// transitions are stored for future tooling but ignored here.
-func loadLifecycleStateTransitions(path string) ([]lifecycle.Event, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
-
-	var all []lifecycle.Event
-	for scanner.Scan() {
-		var ev lifecycle.Event
-		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-			continue
-		}
-		all = append(all, ev)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	sort.SliceStable(all, func(i, j int) bool { return all[i].Seq < all[j].Seq })
-
-	// Primary session = first non-proc transcript_new in seq order
-	// (proc-* rows are pre-session synthetic placeholders).
-	var primarySessionID string
-	for _, ev := range all {
-		if ev.Kind == lifecycle.KindTranscriptNew && ev.SessionID != "" && !strings.HasPrefix(ev.SessionID, "proc-") {
-			primarySessionID = ev.SessionID
-			break
-		}
-	}
-
-	out := make([]lifecycle.Event, 0, len(all))
-	for _, ev := range all {
-		if ev.Kind != lifecycle.KindStateTransition {
-			continue
-		}
-		if ev.PrevState == "" {
-			continue
-		}
-		if primarySessionID != "" && ev.SessionID != primarySessionID {
-			continue
-		}
-		out = append(out, ev)
-	}
-	return out, nil
 }

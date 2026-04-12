@@ -97,7 +97,7 @@
 
       <ul>
         <li><strong>Cost display toggle</strong> (#130) &mdash; The macOS menu bar cost readout can now be toggled in Settings and is off by default for users who prefer a lighter status line</li>
-        <li><strong>Full session lifecycle recording &amp; replay</strong> (#107, #138) &mdash; <code>ir:test-mac</code> runs can now record presession events, session events, and tail output into a sidecar file. The <code>replay-session</code> harness replays any recording byte-identically against the production tailer + classifier, and fails loudly on sidecar drift</li>
+        <li><strong>Full session lifecycle recording &amp; replay</strong> (#107, #138) &mdash; <code>ir:test-mac</code> runs can now record presession events, session events, and tail output into a sidecar file. The <code>replay</code> harness replays any recording byte-identically against the production tailer + classifier, and fails loudly on sidecar drift</li>
         <li><strong>Curated subagent fixtures</strong> &mdash; Real-world subagent transcripts (including an 11-background-agent fixture) are bundled with their lifecycle events so regressions in parent/child tracking are caught offline</li>
         <li><strong>Tailer FIFO replaced with id-keyed map</strong> (#117) &mdash; Open-tool tracking now uses a stable map keyed by tool use id instead of a FIFO, removing ordering assumptions that broke with parallel tool calls</li>
       </ul>
@@ -132,7 +132,7 @@
       <h3>Added</h3>
 
       <ul>
-        <li><strong>Offline replay harness</strong> (<code>core/cmd/replay-session</code>) &mdash; Takes any Claude Code, Codex, or Pi transcript and feeds it through the production tailer + classifier using virtual time. A 500-hour session replays in under a second. Every transition is logged with reason, metric snapshot, and trigger cause</li>
+        <li><strong>Offline replay harness</strong> (<code>core/cmd/replay</code>) &mdash; Takes any Claude Code, Codex, or Pi transcript and feeds it through the production tailer + classifier using virtual time. A 500-hour session replays in under a second. Every transition is logged with reason, metric snapshot, and trigger cause</li>
         <li><strong>Regression fixtures</strong> under <code>testdata/replay/&lt;adapter&gt;/</code> &mdash; Four Claude Code, one Codex, one Pi &mdash; all post-fix flicker-clean</li>
         <li><strong>Local session scanner</strong> (<code>scripts/find-flicker-sessions.sh</code>) &mdash; Ranks every transcript under <code>~/.claude/projects</code>, <code>~/.codex/sessions</code>, and <code>~/.pi/agent/sessions</code> by flicker count, for harvesting new regressions</li>
         <li><strong>Adapter registry</strong> (<code>core/adapters/inbound/agents/registry.go</code>) &mdash; Single source of truth for adapter name &rarr; parser and adapter name &rarr; <code>StatePolicy</code> lookups, consumed by the replay harness</li>
