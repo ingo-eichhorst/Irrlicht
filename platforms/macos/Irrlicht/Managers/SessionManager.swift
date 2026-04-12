@@ -231,8 +231,12 @@ class SessionManager: ObservableObject {
             switch envelope.type {
             case "session_created", "session_updated":
                 if let session = envelope.session {
+                    let oldState = sessionMap[session.id]?.state
                     sessionMap[session.id] = session
                     rebuildSessionsFromMap()
+                    if let old = oldState, old != session.state {
+                        checkStateTransitionNotification(session: session)
+                    }
                 }
             case "session_deleted":
                 if let session = envelope.session {
@@ -498,23 +502,54 @@ class SessionManager: ObservableObject {
     }
 
     private func sendContextPressureNotification(session: SessionState, threshold: Int, utilization: Double) {
+        let label = session.projectName ?? session.shortId
+        sendNotification(
+            identifier: "irrlicht-context-\(session.id)-\(threshold)",
+            title: "Context pressure: \(threshold)% threshold reached",
+            body: "\(label) is at \(String(format: "%.1f%%", utilization)) context. Consider switching to a fresh session."
+        )
+    }
+
+    // MARK: - State Transition Notifications
+
+    private func checkStateTransitionNotification(session: SessionState) {
+        // Skip subagent sessions to avoid notification noise
+        if session.parentSessionId != nil { return }
+
+        let notifyReady = UserDefaults.standard.bool(forKey: "notifyOnReady")
+        let notifyWaiting = UserDefaults.standard.bool(forKey: "notifyOnWaiting")
+
+        let title: String
+        switch session.state {
+        case .ready where notifyReady:
+            title = "Agent ready"
+        case .waiting where notifyWaiting:
+            title = "Agent waiting for input"
+        default:
+            return
+        }
+
+        let label = session.projectName ?? session.shortId
+        let branch = session.gitBranch.map { " (\($0))" } ?? ""
+
+        sendNotification(
+            identifier: "irrlicht-state-\(session.id)",
+            title: title,
+            body: "\(label)\(branch)"
+        )
+    }
+
+    private func sendNotification(identifier: String, title: String, body: String) {
         guard canUseUserNotifications else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Context pressure: \(threshold)% threshold reached"
-        let label = session.projectName ?? session.shortId
-        content.body = "\(label) is at \(String(format: "%.1f%%", utilization)) context. Consider switching to a fresh session."
+        content.title = title
+        content.body = body
         content.sound = .default
 
-        let request = UNNotificationRequest(
-            identifier: "irrlicht-context-\(session.id)-\(threshold)",
-            content: content,
-            trigger: nil
-        )
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
-                print("⚠️ Failed to send context pressure notification: \(error.localizedDescription)")
-            } else {
-                print("🔔 Context pressure alert (\(threshold)%) fired for session \(session.shortId)")
+                print("⚠️ Failed to send notification: \(error.localizedDescription)")
             }
         }
     }

@@ -20,7 +20,8 @@ let package = Package(
         .executableTarget(
             name: "Irrlicht",
             dependencies: [],
-            path: "Irrlicht"
+            path: "Irrlicht",
+            resources: [.copy("Resources")]
         ),
         .testTarget(
             name: "IrrlichtTests",

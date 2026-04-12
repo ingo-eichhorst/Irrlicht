@@ -43,6 +43,15 @@ struct StatusIndicatorLabel: View {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var daemonManager: DaemonManager?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Try Bundle.module (SwiftPM resource bundle) first, then Bundle.main (.app bundle)
+        let iconURL = Bundle.module.url(forResource: "AppIcon", withExtension: "icns", subdirectory: "Resources")
+            ?? Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
+        if let iconURL, let icon = NSImage(contentsOf: iconURL) {
+            NSApp.applicationIconImage = icon
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         daemonManager?.stop()
     }
