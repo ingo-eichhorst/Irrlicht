@@ -310,21 +310,20 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			t.openToolCalls = make(map[string]string)
 		}
 		// turn_done is Claude Code's authoritative end-of-turn signal. By
-		// definition every non-Agent tool_use opened during the turn has
-		// already received its tool_result, so anything still in
+		// definition most tool_use events opened during the turn have
+		// already received their tool_result, so anything still in
 		// openToolCalls is a stale leak. Sweeping here lets the classifier
 		// see HasOpenToolCall=false and transition working → ready.
 		//
-		// Agent tool calls are preserved: a sub-agent spawned via the Agent
-		// tool can still be running when the parent's turn_done fires
-		// (session.go:IsAgentDone treats open tool calls as authoritative
-		// over turn_done for exactly this reason), and the claudecode
-		// adapter's CountOpenSubagents relies on Agent entries in
-		// LastOpenToolNames to count in-process sub-agents. Only non-Agent
-		// leaks are swept.
+		// Some tools survive the sweep (see surviveTurnDone): Agent
+		// (sub-agent still running), AskUserQuestion, and ExitPlanMode
+		// (user-blocking tools whose result arrives only after the user
+		// responds). Preserving them ensures NeedsUserAttention() returns
+		// true so the classifier transitions to "waiting" instead of
+		// "ready".
 		if parsed.EventType == "turn_done" && len(t.openToolCalls) > 0 {
 			for id, name := range t.openToolCalls {
-				if name != "Agent" {
+				if !surviveTurnDone(name) {
 					delete(t.openToolCalls, id)
 				}
 			}
@@ -658,6 +657,21 @@ func (t *TranscriptTailer) computeContextUtilization() {
 	t.metrics.ContextWindow = effectiveContextWindow
 	t.metrics.ContextUtilization = utilizationPercentage
 	t.metrics.PressureLevel = pressureLevel
+}
+
+// surviveTurnDone returns true for tools whose tool_result arrives after the
+// turn_done event. These must not be swept from openToolCalls:
+//
+//   - Agent: sub-agents can still be running when the parent's turn ends.
+//   - AskUserQuestion, ExitPlanMode: user-blocking tools whose result only
+//     arrives after the user responds. Also listed in session.isUserBlockingTool;
+//     the overlap is intentional — the two predicates serve different purposes.
+func surviveTurnDone(name string) bool {
+	switch name {
+	case "Agent", "AskUserQuestion", "ExitPlanMode":
+		return true
+	}
+	return false
 }
 
 // --- Model config fallback ---
