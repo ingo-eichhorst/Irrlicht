@@ -13,10 +13,17 @@ Build the irrlicht daemon and Swift app, then replace all running instances with
 
 ## Steps
 
-1. **Build the Go daemon**
+0. **Detect repo root** — use the worktree root if running in a worktree, otherwise the main repo
    ```bash
-   cd /Users/ingo/projects/irrlicht/core && go build -o bin/irrlichd ./cmd/irrlichd
+   REPO_ROOT="$(git rev-parse --show-toplevel)"
    ```
+   All subsequent steps use `$REPO_ROOT` instead of hardcoded paths.
+
+1. **Build the Go daemon** — ensure the embedded `ui/` dir exists (generated file, not committed)
+   ```bash
+   mkdir -p "$REPO_ROOT/core/cmd/irrlichd/ui" && cp /Users/ingo/projects/irrlicht/core/cmd/irrlichd/ui/index.html "$REPO_ROOT/core/cmd/irrlichd/ui/index.html" 2>/dev/null; cd "$REPO_ROOT/core" && go build -o /Users/ingo/projects/irrlicht/core/bin/irrlichd ./cmd/irrlichd
+   ```
+   Note: the binary is always placed in the main repo's `bin/` so the launch step has a stable path.
 
 2. **Build the Swift app**
    ```bash
