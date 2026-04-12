@@ -4,6 +4,8 @@ struct SettingsView: View {
     @Binding var isPresented: Bool
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+    @AppStorage("notifyOnReady") private var notifyOnReady: Bool = false
+    @AppStorage("notifyOnWaiting") private var notifyOnWaiting: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -28,6 +30,22 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
 
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Notifications")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
+                Toggle("Notify when agent is ready", isOn: $notifyOnReady)
+
+                Toggle("Notify when agent is waiting", isOn: $notifyOnWaiting)
+
+                Text("Send a desktop notification when an agent finishes work or needs your input.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Spacer()
 
             HStack {
@@ -37,6 +55,6 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 320, height: 260)
+        .frame(width: 320, height: 360)
     }
 }

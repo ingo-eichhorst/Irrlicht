@@ -231,8 +231,12 @@ class SessionManager: ObservableObject {
             switch envelope.type {
             case "session_created", "session_updated":
                 if let session = envelope.session {
+                    let oldState = sessionMap[session.id]?.state
                     sessionMap[session.id] = session
                     rebuildSessionsFromMap()
+                    if let old = oldState, old != session.state {
+                        checkStateTransitionNotification(session: session, from: old)
+                    }
                 }
             case "session_deleted":
                 if let session = envelope.session {
@@ -515,6 +519,50 @@ class SessionManager: ObservableObject {
                 print("⚠️ Failed to send context pressure notification: \(error.localizedDescription)")
             } else {
                 print("🔔 Context pressure alert (\(threshold)%) fired for session \(session.shortId)")
+            }
+        }
+    }
+
+    // MARK: - State Transition Notifications
+
+    private func checkStateTransitionNotification(session: SessionState, from oldState: SessionState.State) {
+        // Skip subagent sessions to avoid notification noise
+        if session.parentSessionId != nil { return }
+
+        guard canUseUserNotifications else { return }
+
+        let notifyReady = UserDefaults.standard.bool(forKey: "notifyOnReady")
+        let notifyWaiting = UserDefaults.standard.bool(forKey: "notifyOnWaiting")
+
+        let title: String
+        switch session.state {
+        case .ready where notifyReady:
+            title = "Agent ready"
+        case .waiting where notifyWaiting:
+            title = "Agent waiting for input"
+        default:
+            return
+        }
+
+        let label = session.projectName ?? session.shortId
+        let branch = session.gitBranch.map { " (\($0))" } ?? ""
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = "\(label)\(branch)"
+        content.sound = .default
+
+        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        let request = UNNotificationRequest(
+            identifier: "irrlicht-state-\(session.id)-\(timestamp)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("⚠️ Failed to send state transition notification: \(error.localizedDescription)")
+            } else {
+                print("🔔 State transition alert (\(session.state.rawValue)) fired for session \(session.shortId)")
             }
         }
     }
