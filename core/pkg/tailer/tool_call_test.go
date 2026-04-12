@@ -830,3 +830,127 @@ func TestIDTracking_AgentSurvivesTurnDone(t *testing.T) {
 		t.Errorf("expected [Agent], got %v", m.LastOpenToolNames)
 	}
 }
+
+func TestSurviveTurnDone(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"Agent", true},
+		{"AskUserQuestion", true},
+		{"ExitPlanMode", true},
+		{"Bash", false},
+		{"Read", false},
+		{"Write", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := surviveTurnDone(tt.name); got != tt.want {
+				t.Errorf("surviveTurnDone(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasOpenToolCall_TurnDonePreservesAskUserQuestion(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_ask", "name": "AskUserQuestion", "timestamp": ts(1)},
+		{"type": "system", "subtype": "stop_hook_summary", "timestamp": ts(2)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true with AskUserQuestion still open after turn_done")
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected OpenToolCallCount=1, got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "AskUserQuestion" {
+		t.Errorf("expected [AskUserQuestion], got %v", m.LastOpenToolNames)
+	}
+}
+
+func TestHasOpenToolCall_TurnDonePreservesExitPlanMode(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_plan", "name": "ExitPlanMode", "timestamp": ts(1)},
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(2)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true with ExitPlanMode still open after turn_done")
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected OpenToolCallCount=1, got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "ExitPlanMode" {
+		t.Errorf("expected [ExitPlanMode], got %v", m.LastOpenToolNames)
+	}
+}
+
+func TestIDTracking_UserBlockingToolsSurviveTurnDone(t *testing.T) {
+	// AskUserQuestion survives turn_done while Bash is swept.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "tool_use", "id": "tu_ask", "name": "AskUserQuestion", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_bash", "name": "Bash", "timestamp": ts(1)}, // leaked
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(2)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true with AskUserQuestion still open")
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected OpenToolCallCount=1 (AskUserQuestion only), got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "AskUserQuestion" {
+		t.Errorf("expected [AskUserQuestion], got %v", m.LastOpenToolNames)
+	}
+}
+
+func TestHasOpenToolCall_TurnDonePreservesMultipleSurvivors(t *testing.T) {
+	// Agent + AskUserQuestion both survive, Read is swept.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "tool_use", "id": "tu_agent", "name": "Agent", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_ask", "name": "AskUserQuestion", "timestamp": ts(1)},
+		{"type": "tool_use", "id": "tu_read", "name": "Read", "timestamp": ts(2)}, // leaked
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(3)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true with Agent and AskUserQuestion still open")
+	}
+	if m.OpenToolCallCount != 2 {
+		t.Errorf("expected OpenToolCallCount=2, got %d", m.OpenToolCallCount)
+	}
+	nameSet := map[string]bool{}
+	for _, n := range m.LastOpenToolNames {
+		nameSet[n] = true
+	}
+	if !nameSet["Agent"] || !nameSet["AskUserQuestion"] {
+		t.Errorf("expected Agent and AskUserQuestion in LastOpenToolNames, got %v", m.LastOpenToolNames)
+	}
+	if nameSet["Read"] {
+		t.Error("Read should have been swept by turn_done")
+	}
+}
