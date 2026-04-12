@@ -106,6 +106,13 @@ type SessionDetector struct {
 	// recorder captures lifecycle events for offline replay (optional).
 	recorder    outbound.EventRecorder
 	recorderSeq int64
+
+	// permMu guards permissionPending. The map tracks sessions with an active
+	// PermissionRequest hook that hasn't been cleared by PostToolUse/
+	// PostToolUseFailure. Written by HandlePermissionHook (HTTP handler
+	// goroutine), read by processActivity (event-loop goroutine).
+	permMu            sync.Mutex
+	permissionPending map[string]bool // sessionID → true
 }
 
 // NewSessionDetector creates a SessionDetector with all required dependencies.
@@ -133,7 +140,8 @@ func NewSessionDetector(
 		deletedSessions: make(map[string]int64),
 		debounce:        make(map[string]*debounceEntry),
 		debouncedEvents: make(chan agent.Event, 64),
-		deletedCooldown: 10 * time.Second,
+		deletedCooldown:   10 * time.Second,
+		permissionPending: make(map[string]bool),
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -492,6 +500,25 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 		state.State = session.StateWorking
 	}
 
+	// Overlay hook-based permission-pending signal onto metrics. Must happen
+	// after RefreshOnActivity (which recomputes metrics from the transcript)
+	// and before ClassifyState (which reads the flag). The flag persists in
+	// the map until PostToolUse/PostToolUseFailure clears it, so it survives
+	// fswatcher re-evaluations while the permission prompt is shown.
+	d.permMu.Lock()
+	if d.permissionPending[ev.SessionID] && state.Metrics != nil {
+		if state.Metrics.LastWasToolDenial {
+			// Permission was denied — Claude Code doesn't fire
+			// PostToolUseFailure on denial, so clear from transcript
+			// evidence. The denial text "[Request interrupted by user
+			// for tool use]" sets LastWasToolDenial in the parser.
+			delete(d.permissionPending, ev.SessionID)
+		} else {
+			state.Metrics.PermissionPending = true
+		}
+	}
+	d.permMu.Unlock()
+
 	// Content-based state detection.
 	now := time.Now().Unix()
 	newState, reason := ClassifyState(state.State, state.Metrics)
@@ -650,6 +677,43 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 // HandlePIDAssigned records a newly-discovered PID for a session.
 func (d *SessionDetector) HandlePIDAssigned(pid int, sessionID string) {
 	d.pidMgr.HandlePIDAssigned(pid, sessionID)
+}
+
+// HandlePermissionHook processes a Claude Code PermissionRequest, PostToolUse,
+// or PostToolUseFailure hook event. It updates the in-memory permission-pending
+// flag and injects a synthetic activity event to trigger re-classification.
+//
+// Safe to call from any goroutine (e.g. HTTP handler).
+func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
+	d.permMu.Lock()
+	switch hookEventName {
+	case "PermissionRequest":
+		d.permissionPending[sessionID] = true
+	case "PostToolUse", "PostToolUseFailure":
+		delete(d.permissionPending, sessionID)
+	}
+	d.permMu.Unlock()
+
+	d.record(lifecycle.Event{
+		Kind:      lifecycle.KindHookReceived,
+		SessionID: sessionID,
+		HookName:  hookEventName,
+	})
+
+	// Inject synthetic activity event so the event loop re-evaluates the
+	// session. processActivity will overlay PermissionPending onto the
+	// metrics before calling ClassifyState.
+	select {
+	case d.debouncedEvents <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+		Adapter:        "claude-code",
+	}:
+	default:
+		d.log.LogError("hook-receiver", sessionID,
+			"debouncedEvents channel full, permission event dropped")
+	}
 }
 
 // seedFromDisk populates the projectSessions map from existing sessions,

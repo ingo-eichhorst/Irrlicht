@@ -14,7 +14,7 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 ### Added
 - Cost display toggle in the macOS menu bar, off by default (#130).
 - Full session lifecycle recording & replay — `ir:test-mac` writes a sidecar
-  of presession/session/tail events; `replay-session` replays it byte-identically
+  of presession/session/tail events; `replay` replays it byte-identically
   against the production tailer + classifier and fails on drift (#107, #138).
 - Curated subagent fixtures, including an 11-background-agent transcript, so
   parent/child tracking regressions are caught offline.
@@ -69,7 +69,7 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - Empty-state copy updated from "Claude Code" to the generic "coding agent".
 
 ### Added — Testing infrastructure
-- Offline replay harness `core/cmd/replay-session` — any Claude Code, Codex,
+- Offline replay harness `core/cmd/replay` — any Claude Code, Codex,
   or Pi transcript runs through the production tailer + classifier in virtual
   time. A 500-hour session replays in under a second; every transition is
   logged with reason, metric snapshot, and trigger cause.

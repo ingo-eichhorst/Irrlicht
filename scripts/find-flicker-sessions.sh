@@ -13,7 +13,7 @@
 #   --projects-root ~/.claude/projects
 #   --out           /dev/stdout
 #
-# The script builds the replay-session binary into .build/, then runs it
+# The script builds the replay binary into .build/, then runs it
 # against every transcript that meets the size threshold. Results are written
 # as a tab-separated table sorted by flicker count desc.
 
@@ -50,9 +50,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 mkdir -p .build
-BIN=".build/replay-session"
+BIN=".build/replay"
 echo "building $BIN ..." >&2
-( cd core && go build -o "../${BIN}" ./cmd/replay-session )
+( cd core && go build -o "../${BIN}" ./cmd/replay )
 
 TMPDIR_REPORT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_REPORT"' EXIT
