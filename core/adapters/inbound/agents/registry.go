@@ -2,7 +2,7 @@
 // that needs to route a transcript to the correct format-specific handler
 // without depending on each concrete adapter package directly.
 //
-// Today the replay harness in core/cmd/replay-session consumes this; the
+// Today the replay harness in core/cmd/replay consumes this; the
 // metrics collector and irrlichd main can migrate to it in a follow-up.
 package agents
 

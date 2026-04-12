@@ -37,9 +37,9 @@ if [[ ! -d "$FIXTURES_ROOT" ]]; then
 fi
 
 mkdir -p "$REPORTS_DIR" .build
-BIN=".build/replay-session"
+BIN=".build/replay"
 echo "building $BIN ..." >&2
-( cd core && go build -o "../${BIN}" ./cmd/replay-session )
+( cd core && go build -o "../${BIN}" ./cmd/replay )
 
 # Walk every adapter subdirectory, skipping the reports/ output dir. Portable
 # to macOS bash 3.2 — avoid `mapfile`, use a while-read loop.
@@ -47,7 +47,7 @@ found_any=0
 while IFS= read -r fix; do
   [[ -z "$fix" ]] && continue
   # Skip lifecycle-event sidecars — they share the .jsonl suffix but are not
-  # transcripts. replay-session picks them up automatically when present.
+  # transcripts. The replay tool picks them up automatically when present.
   [[ "$fix" == *.events.jsonl ]] && continue
   # Skip subagent transcript bundles — they live in <name>.subagents/
   # sibling dirs next to their parent fixture and are referenced (not
