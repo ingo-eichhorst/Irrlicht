@@ -34,6 +34,14 @@ const orphanTranscriptAge = 2 * time.Minute
 // window are coalesced into a single processing when the timer expires.
 const activityDebounceWindow = 2 * time.Second
 
+// staleWorkingRefreshInterval is how often the event loop checks for working
+// sessions that haven't received a transcript activity event recently. When
+// all file-system watcher events for a session are dropped (e.g. subscriber
+// channel overflow during concurrent bursts), the tailer's lastOffset falls
+// behind and the classifier never sees the pending tool call. Re-reading the
+// transcript on this interval catches the missed events.
+const staleWorkingRefreshInterval = 5 * time.Second
+
 // subagentQuietWindow is how long a subagent's transcript must have been
 // silent before finishOrphanedChildren will promote it to ready.
 //
@@ -213,6 +221,15 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 
 	d.log.LogInfo("session-detector", "", "started — listening for transcript events")
 
+	// Periodic refresh catches missed fswatcher events. When the subscriber
+	// channel overflows during concurrent bursts (multiple sessions + subagent
+	// transcripts on the same watcher), events are silently dropped and the
+	// tailer never sees the pending tool call. Re-reading the transcript on a
+	// short interval recovers within seconds instead of stalling until the
+	// next user action.
+	refreshTicker := time.NewTicker(staleWorkingRefreshInterval)
+	defer refreshTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -228,6 +245,8 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 			// Coalesced events from debounce timers — process in the event
 			// loop goroutine so processActivity never runs concurrently.
 			d.processActivity(ev)
+		case <-refreshTicker.C:
+			d.refreshStaleSessions()
 		}
 	}
 }
@@ -539,6 +558,35 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// be held in working solely because of this child.
 	if state.ParentSessionID != "" {
 		d.reevaluateParent(state.ParentSessionID)
+	}
+}
+
+// refreshStaleSessions re-reads transcripts for working sessions that haven't
+// received a file-system watcher event recently. This catches tool calls
+// (AskUserQuestion, ExitPlanMode) that were missed because the subscriber
+// channel was full during concurrent bursts.
+func (d *SessionDetector) refreshStaleSessions() {
+	sessions, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, state := range sessions {
+		if state.State != session.StateWorking {
+			continue
+		}
+		if state.TranscriptPath == "" {
+			continue
+		}
+		if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
+			continue
+		}
+		d.processActivity(agent.Event{
+			Type:           agent.EventActivity,
+			Adapter:        state.Adapter,
+			SessionID:      state.SessionID,
+			TranscriptPath: state.TranscriptPath,
+		})
 	}
 }
 

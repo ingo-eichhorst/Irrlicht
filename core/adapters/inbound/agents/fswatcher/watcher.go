@@ -105,9 +105,12 @@ func (w *Watcher) Watch(ctx context.Context) error {
 }
 
 // Subscribe returns a channel that receives transcript events. The channel is
-// buffered (capacity 4) so a slow consumer doesn't block the watcher.
+// buffered so a slow consumer doesn't block the watcher. The capacity must be
+// large enough to absorb bursts from concurrent sessions and subagent
+// transcripts — all files in the watched tree share this single channel, and
+// broadcast silently drops events when the channel is full.
 func (w *Watcher) Subscribe() <-chan agent.Event {
-	ch := make(chan agent.Event, 4)
+	ch := make(chan agent.Event, 64)
 	w.subMu.Lock()
 	w.subs = append(w.subs, ch)
 	w.subMu.Unlock()
