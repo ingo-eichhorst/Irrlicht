@@ -213,8 +213,12 @@ func TestReplay_GoldenFixture(t *testing.T) {
 	// Baseline captured from replay-session against the committed fixture.
 	// If this drifts, something changed in Replay()'s debounce or the
 	// detector logic it exercises — investigate before updating the numbers.
+	//
+	// Updated for #108: tool denial now triggers working→ready (was previously
+	// suppressed). This adds 2 transitions (denial→ready + re-enter working)
+	// but the flicker count stays at 1 because the denial→ready is intentional.
 	const (
-		wantTransitions = 6
+		wantTransitions = 8
 		wantFlickers    = 1
 	)
 	if report.Summary.TotalTransitions != wantTransitions {
@@ -227,10 +231,12 @@ func TestReplay_GoldenFixture(t *testing.T) {
 	wantSequence := []string{
 		"→ready",
 		"ready→working",
-		"working→ready",
-		"ready→working",
-		"working→ready",
-		"ready→working",
+		"working→ready",   // tool denial → ready
+		"ready→working",   // agent continues
+		"working→ready",   // agent finished turn
+		"ready→working",   // next turn
+		"working→ready",   // ESC interrupt → ready
+		"ready→working",   // activity after ESC
 	}
 	if got, want := len(report.Transitions), len(wantSequence); got != want {
 		t.Fatalf("replay transitions: got %d, want %d", got, want)

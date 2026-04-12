@@ -28,6 +28,46 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateReady,
 		},
 
+		// Rule 0: PermissionPending → waiting.
+		{
+			name:    "working → waiting (permission pending)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				PermissionPending: true,
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			name:    "waiting stays waiting (permission pending, already waiting)",
+			current: session.StateWaiting,
+			metrics: &session.SessionMetrics{
+				PermissionPending: true,
+			},
+			wantState: session.StateWaiting,
+		},
+		{
+			name:    "ready → waiting (permission pending)",
+			current: session.StateReady,
+			metrics: &session.SessionMetrics{
+				PermissionPending: true,
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			// Regression guard: Bash open without permission pending must NOT
+			// trigger waiting — only the hook signal does.
+			name:    "working stays working (Bash open, no permission pending)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				HasOpenToolCall:   true,
+				LastOpenToolNames: []string{"Bash"},
+				PermissionPending: false,
+			},
+			wantState: session.StateWorking,
+		},
+
 		// Rule 1: NeedsUserAttention → waiting.
 		{
 			name:    "working → waiting (AskUserQuestion)",
@@ -214,18 +254,18 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 		{
-			// Tool denial must NOT trigger the cancellation rule. The agent's
-			// turn isn't over — it typically continues with a different
-			// approach. Bouncing to ready here is the working→ready→working
-			// flicker the parser-level split was designed to fix.
-			name:    "working stays working on tool denial (LastWasToolDenial)",
+			// Tool denial triggers ready — Claude Code returns to the prompt
+			// after a denial. If the agent does continue, the next transcript
+			// activity will transition back to working.
+			name:    "working → ready on tool denial (LastWasToolDenial)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
 				LastEventType:     "user",
 				HasOpenToolCall:   false,
 				LastWasToolDenial: true,
 			},
-			wantState: session.StateWorking,
+			wantState:  session.StateReady,
+			wantReason: true,
 		},
 
 		// Rule 4: Default → working.
