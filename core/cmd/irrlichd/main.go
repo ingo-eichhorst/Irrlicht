@@ -289,8 +289,6 @@ func main() {
 
 	// Register API endpoints (after orchMonitor is available).
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor))
-	mux.HandleFunc("GET /api/v1/orchestrators/{name}", handleGetOrchestrator(orchMonitor))
-	mux.HandleFunc("GET /api/v1/gastown", handleGetOrchestrator(orchMonitor)) // backward compat
 
 	// Inbound adapters: watch agent transcript directories for session files.
 	claudeCodeWatcher := claudecode.New(cfg.MaxSessionAge)
@@ -429,30 +427,6 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		w.Header().Set("Content-Type", "application/json")
 		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
 		json.NewEncoder(w).Encode(resp)
-	}
-}
-
-func handleGetOrchestrator(monitor *services.OrchestratorMonitor) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		// Determine which orchestrator: from path param or default to "gastown".
-		name := r.PathValue("name")
-		if name == "" {
-			name = "gastown"
-		}
-
-		state := monitor.State(name)
-		if state == nil {
-			json.NewEncoder(w).Encode(struct {
-				Detected bool `json:"detected"`
-			}{Detected: false})
-			return
-		}
-
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		enc.Encode(state)
 	}
 }
 

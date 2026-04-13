@@ -1,37 +1,19 @@
 package session
 
-import "irrlicht/core/domain/orchestrator"
+import (
+	"path/filepath"
 
-// DashboardResponse is the unified API response containing the full
-// Orchestrator → Group → Agent → Children hierarchy.
-type DashboardResponse struct {
-	Orchestrator *OrchestratorSummary `json:"orchestrator,omitempty"`
-	Groups       []*AgentGroup        `json:"groups"`
-}
+	"irrlicht/core/domain/orchestrator"
+)
 
-// OrchestratorSummary holds structural orchestrator info (adapter, status,
-// work units). Individual worker states are represented as Agents, not here.
-type OrchestratorSummary struct {
-	Adapter   string             `json:"adapter"`
-	Running   bool               `json:"running"`
-	WorkUnits []WorkUnitSummary  `json:"work_units,omitempty"`
-}
-
-// WorkUnitSummary represents a trackable unit of work (convoy, task list).
-type WorkUnitSummary struct {
-	ID     string `json:"id"`
-	Type   string `json:"type"`
-	Name   string `json:"name"`
-	Source string `json:"source"`
-	Total  int    `json:"total"`
-	Done   int    `json:"done"`
-}
-
-// AgentGroup is a collection of agents working on the same project or rig.
+// AgentGroup is a recursive container for agents and sub-groups.
+// A group may contain direct agents and/or nested sub-groups.
 type AgentGroup struct {
-	Name   string   `json:"name"`
-	Status string   `json:"status,omitempty"`
-	Agents []*Agent `json:"agents"`
+	Name   string        `json:"name"`
+	Type   string        `json:"type,omitempty"`   // "gastown" for orchestrator groups
+	Status string        `json:"status,omitempty"` // codebase status (e.g. "operational")
+	Agents []*Agent      `json:"agents,omitempty"`
+	Groups []*AgentGroup `json:"groups,omitempty"` // nested sub-groups (e.g. rigs)
 }
 
 // Agent is a session with optional orchestrator role and nested children.
@@ -55,17 +37,18 @@ type workerInfo struct {
 	ID          string
 }
 
-// BuildDashboard creates a hierarchical DashboardResponse from a flat list
-// of sessions and optional orchestrator state. Sessions are grouped by rig
-// (if matched to an orchestrator worker) or by ProjectName.
-func BuildDashboard(sessions []*SessionState, orch *orchestrator.State) *DashboardResponse {
-	resp := &DashboardResponse{}
-
-	// 1. Build orchestrator summary + session-to-worker map.
+// BuildDashboard creates a recursive group hierarchy from a flat list of
+// sessions and optional orchestrator state.
+//
+// With an orchestrator: returns [orchGroup, ...regularGroups] where orchGroup
+// contains global agents directly and rig agents in nested sub-groups.
+//
+// Without an orchestrator: returns [...projectGroups] grouped by ProjectName.
+func BuildDashboard(sessions []*SessionState, orch *orchestrator.State) []*AgentGroup {
+	// 1. Build session-to-worker map.
 	workerMap := map[string]*workerInfo{}
 	if orch != nil && orch.Running {
-		resp.Orchestrator = buildOrchestratorSummary(orch)
-		workerMap = buildWorkerMap(orch)
+		workerMap = buildWorkerMap(orch, sessions)
 	}
 
 	// 2. Index sessions and identify parent-child relationships.
@@ -85,51 +68,84 @@ func BuildDashboard(sessions []*SessionState, orch *orchestrator.State) *Dashboa
 		}
 	}
 
-	// 3. Build agent trees from top-level sessions and collect into groups.
-	groupMap := make(map[string]*AgentGroup)
-	var groupOrder []string
+	// 3. Partition top-level sessions into orchestrator vs regular.
+	var orchAgents []*Agent          // global agents (no rig)
+	rigAgentMap := map[string][]*Agent{} // rig name → agents
+	var rigOrder []string
+
+	regularGroupMap := map[string]*AgentGroup{}
+	var regularOrder []string
 
 	for _, s := range sessions {
 		if childIDs[s.SessionID] {
 			continue
 		}
-
 		agent := buildAgent(s, workerMap, parentChildren)
 
-		// Determine group key: rig name from orchestrator, or project name.
-		groupKey := s.ProjectName
-		if wi, ok := workerMap[s.SessionID]; ok && wi.Rig != "" {
-			groupKey = wi.Rig
-		}
-		if groupKey == "" {
-			groupKey = "unknown"
-		}
-
-		g, ok := groupMap[groupKey]
-		if !ok {
-			g = &AgentGroup{Name: groupKey}
-			groupMap[groupKey] = g
-			groupOrder = append(groupOrder, groupKey)
-		}
-		g.Agents = append(g.Agents, agent)
-	}
-
-	// 4. Annotate groups with orchestrator codebase status.
-	if orch != nil {
-		for _, cb := range orch.Codebases {
-			if g, ok := groupMap[cb.Name]; ok {
-				g.Status = cb.Status
+		wi, isOrch := workerMap[s.SessionID]
+		if isOrch {
+			if wi.Rig != "" {
+				if _, exists := rigAgentMap[wi.Rig]; !exists {
+					rigOrder = append(rigOrder, wi.Rig)
+				}
+				rigAgentMap[wi.Rig] = append(rigAgentMap[wi.Rig], agent)
+			} else {
+				orchAgents = append(orchAgents, agent)
 			}
+		} else {
+			key := s.ProjectName
+			if key == "" {
+				key = "unknown"
+			}
+			g, ok := regularGroupMap[key]
+			if !ok {
+				g = &AgentGroup{Name: key}
+				regularGroupMap[key] = g
+				regularOrder = append(regularOrder, key)
+			}
+			g.Agents = append(g.Agents, agent)
 		}
 	}
 
-	// 5. Assemble ordered groups.
-	resp.Groups = make([]*AgentGroup, 0, len(groupOrder))
-	for _, key := range groupOrder {
-		resp.Groups = append(resp.Groups, groupMap[key])
+	// 4. Assemble result.
+	var result []*AgentGroup
+
+	if orch != nil && orch.Running && (len(orchAgents) > 0 || len(rigAgentMap) > 0) {
+		orchGroupName := "Gas Town"
+		if orch.Root != "" {
+			orchGroupName = filepath.Base(orch.Root)
+		}
+
+		orchGroup := &AgentGroup{
+			Name:   orchGroupName,
+			Type:   orch.Adapter,
+			Agents: orchAgents,
+		}
+
+		// Build sub-groups for each rig.
+		for _, rigName := range rigOrder {
+			subGroup := &AgentGroup{
+				Name:   rigName,
+				Agents: rigAgentMap[rigName],
+			}
+			// Annotate with codebase status.
+			for _, cb := range orch.Codebases {
+				if cb.Name == rigName {
+					subGroup.Status = cb.Status
+					break
+				}
+			}
+			orchGroup.Groups = append(orchGroup.Groups, subGroup)
+		}
+
+		result = append(result, orchGroup)
 	}
 
-	return resp
+	for _, key := range regularOrder {
+		result = append(result, regularGroupMap[key])
+	}
+
+	return result
 }
 
 // buildAgent recursively creates an Agent tree from a session and its children.
@@ -161,8 +177,7 @@ func buildAgent(s *SessionState, workerMap map[string]*workerInfo, parentChildre
 
 // unifySubagents recomputes the Subagents summary for an agent by merging
 // the adapter-reported in-process count (metrics.OpenSubagents) with the
-// file-based children attached to the agent tree. Delegates to
-// ComputeSubagentSummary so the detector and REST path share one formula.
+// file-based children attached to the agent tree.
 func unifySubagents(a *Agent) {
 	children := make([]*SessionState, 0, len(a.Children))
 	for _, c := range a.Children {
@@ -175,9 +190,7 @@ func unifySubagents(a *Agent) {
 // session. The "in-process" component comes from the adapter via
 // parent.Metrics.OpenSubagents (e.g. claudecode counts open Agent tool calls);
 // the "file-based" component comes from child sessions in childSessions whose
-// ParentSessionID matches the parent. Passing nil or an empty slice for
-// childSessions skips the file-based contribution. Returns nil when there are
-// no subagents at all, so callers can leave Subagents unset on the wire.
+// ParentSessionID matches the parent. Returns nil when there are no subagents.
 func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState) *SubagentSummary {
 	inProcess := 0
 	if parent != nil && parent.Metrics != nil {
@@ -199,7 +212,7 @@ func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState)
 
 	summary := &SubagentSummary{
 		Total:   inProcess + len(fileChildren),
-		Working: inProcess, // in-process agents are always working
+		Working: inProcess,
 	}
 	for _, c := range fileChildren {
 		switch c.State {
@@ -214,27 +227,8 @@ func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState)
 	return summary
 }
 
-// buildOrchestratorSummary creates a lightweight summary from orchestrator state.
-func buildOrchestratorSummary(orch *orchestrator.State) *OrchestratorSummary {
-	summary := &OrchestratorSummary{
-		Adapter: orch.Adapter,
-		Running: orch.Running,
-	}
-	for _, wu := range orch.WorkUnits {
-		summary.WorkUnits = append(summary.WorkUnits, WorkUnitSummary{
-			ID:     wu.ID,
-			Type:   wu.Type,
-			Name:   wu.Name,
-			Source: wu.Source,
-			Total:  wu.Total,
-			Done:   wu.Done,
-		})
-	}
-	return summary
-}
-
 // buildWorkerMap creates a sessionID → workerInfo index from orchestrator state.
-func buildWorkerMap(orch *orchestrator.State) map[string]*workerInfo {
+func buildWorkerMap(orch *orchestrator.State, sessions []*SessionState) map[string]*workerInfo {
 	m := make(map[string]*workerInfo)
 
 	for _, ga := range orch.GlobalAgents {
@@ -259,6 +253,24 @@ func buildWorkerMap(orch *orchestrator.State) map[string]*workerInfo {
 						Name:        w.Name,
 						ID:          w.ID,
 					}
+				}
+			}
+		}
+	}
+
+	// CWD-based fallback for sessions not matched above.
+	if orch.Root != "" {
+		for _, s := range sessions {
+			if _, ok := m[s.SessionID]; ok {
+				continue
+			}
+			ri := orchestrator.DeriveGasTownRole(s.CWD, orch.Root)
+			if ri != nil {
+				m[s.SessionID] = &workerInfo{
+					Role: ri.Role,
+					Icon: ri.Icon,
+					Rig:  ri.Rig,
+					Name: ri.Name,
 				}
 			}
 		}

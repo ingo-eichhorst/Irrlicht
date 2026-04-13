@@ -12,17 +12,13 @@ func TestBuildDashboard_NoOrchestrator(t *testing.T) {
 		{SessionID: "b1", State: StateWaiting, ProjectName: "proj-b"},
 	}
 
-	resp := BuildDashboard(sessions, nil)
+	groups := BuildDashboard(sessions, nil)
 
-	if resp.Orchestrator != nil {
-		t.Fatal("expected nil orchestrator")
-	}
-	if len(resp.Groups) != 2 {
-		t.Fatalf("got %d groups, want 2", len(resp.Groups))
+	if len(groups) != 2 {
+		t.Fatalf("got %d groups, want 2", len(groups))
 	}
 
-	// Groups should be in input order (proj-a first).
-	g0 := resp.Groups[0]
+	g0 := groups[0]
 	if g0.Name != "proj-a" {
 		t.Errorf("group 0 name = %q, want proj-a", g0.Name)
 	}
@@ -30,7 +26,7 @@ func TestBuildDashboard_NoOrchestrator(t *testing.T) {
 		t.Errorf("group 0 agents = %d, want 2", len(g0.Agents))
 	}
 
-	g1 := resp.Groups[1]
+	g1 := groups[1]
 	if g1.Name != "proj-b" {
 		t.Errorf("group 1 name = %q, want proj-b", g1.Name)
 	}
@@ -50,6 +46,7 @@ func TestBuildDashboard_WithOrchestrator(t *testing.T) {
 	orch := &orchestrator.State{
 		Adapter: "gastown",
 		Running: true,
+		Root:    "/gt",
 		GlobalAgents: []orchestrator.GlobalAgent{
 			{Role: "mayor", SessionID: "mayor-1", State: "working"},
 		},
@@ -75,73 +72,61 @@ func TestBuildDashboard_WithOrchestrator(t *testing.T) {
 				},
 			},
 		},
-		WorkUnits: []orchestrator.WorkUnit{
-			{ID: "c1", Type: "convoy", Name: "Feature X", Source: "gastown", Total: 5, Done: 3},
-		},
 	}
 
-	resp := BuildDashboard(sessions, orch)
+	groups := BuildDashboard(sessions, orch)
 
-	// Orchestrator summary.
-	if resp.Orchestrator == nil {
-		t.Fatal("expected orchestrator summary")
-	}
-	if resp.Orchestrator.Adapter != "gastown" {
-		t.Errorf("adapter = %q, want gastown", resp.Orchestrator.Adapter)
-	}
-	if len(resp.Orchestrator.WorkUnits) != 1 {
-		t.Errorf("work units = %d, want 1", len(resp.Orchestrator.WorkUnits))
+	// Two top-level groups: orchestrator ("gt") and regular ("my-app").
+	if len(groups) != 2 {
+		t.Fatalf("got %d top-level groups, want 2", len(groups))
 	}
 
-	// Groups: irrlicht (witness + polecat), mayor, my-app.
-	if len(resp.Groups) != 3 {
-		t.Fatalf("got %d groups, want 3", len(resp.Groups))
+	// Orchestrator group.
+	orchGroup := groups[0]
+	if orchGroup.Name != "gt" {
+		t.Errorf("orch group name = %q, want gt", orchGroup.Name)
+	}
+	if orchGroup.Type != "gastown" {
+		t.Errorf("orch group type = %q, want gastown", orchGroup.Type)
 	}
 
-	// Find groups by name.
-	groupByName := map[string]*AgentGroup{}
-	for _, g := range resp.Groups {
-		groupByName[g.Name] = g
+	// Global agents (mayor) on the orchestrator group.
+	if len(orchGroup.Agents) != 1 {
+		t.Fatalf("orch agents = %d, want 1", len(orchGroup.Agents))
+	}
+	if orchGroup.Agents[0].Role != "mayor" {
+		t.Errorf("orch agent role = %q, want mayor", orchGroup.Agents[0].Role)
 	}
 
-	// irrlicht group: witness + polecat, status from codebase.
-	rig := groupByName["irrlicht"]
-	if rig == nil {
-		t.Fatal("missing irrlicht group")
+	// Sub-groups (rigs).
+	if len(orchGroup.Groups) != 1 {
+		t.Fatalf("orch sub-groups = %d, want 1", len(orchGroup.Groups))
 	}
-	if rig.Status != "operational" {
-		t.Errorf("irrlicht status = %q, want operational", rig.Status)
+	rigGroup := orchGroup.Groups[0]
+	if rigGroup.Name != "irrlicht" {
+		t.Errorf("rig name = %q, want irrlicht", rigGroup.Name)
 	}
-	if len(rig.Agents) != 2 {
-		t.Fatalf("irrlicht agents = %d, want 2", len(rig.Agents))
+	if rigGroup.Status != "operational" {
+		t.Errorf("rig status = %q, want operational", rigGroup.Status)
 	}
-
-	wit := rig.Agents[0]
-	if wit.Role != "witness" {
-		t.Errorf("agent 0 role = %q, want witness", wit.Role)
+	if len(rigGroup.Agents) != 2 {
+		t.Fatalf("rig agents = %d, want 2", len(rigGroup.Agents))
 	}
-
-	pole := rig.Agents[1]
+	if rigGroup.Agents[0].Role != "witness" {
+		t.Errorf("rig agent 0 role = %q, want witness", rigGroup.Agents[0].Role)
+	}
+	pole := rigGroup.Agents[1]
 	if pole.Role != "polecat" || pole.WorkerName != "fix-42" || pole.WorkerID != "GH-42" {
 		t.Errorf("polecat = role=%q name=%q id=%q", pole.Role, pole.WorkerName, pole.WorkerID)
 	}
 
-	// mayor group: global agent, no rig status.
-	mayorGroup := groupByName["mayor"]
-	if mayorGroup == nil {
-		t.Fatal("missing mayor group")
+	// Regular group.
+	app := groups[1]
+	if app.Name != "my-app" {
+		t.Errorf("regular group name = %q, want my-app", app.Name)
 	}
-	if len(mayorGroup.Agents) != 1 {
-		t.Fatalf("mayor agents = %d, want 1", len(mayorGroup.Agents))
-	}
-	if mayorGroup.Agents[0].Role != "mayor" {
-		t.Errorf("mayor role = %q", mayorGroup.Agents[0].Role)
-	}
-
-	// my-app group: regular session, no role.
-	app := groupByName["my-app"]
-	if app == nil {
-		t.Fatal("missing my-app group")
+	if app.Type != "" {
+		t.Errorf("regular group type = %q, want empty", app.Type)
 	}
 	if app.Agents[0].Role != "" {
 		t.Errorf("regular session has role = %q", app.Agents[0].Role)
@@ -155,21 +140,20 @@ func TestBuildDashboard_ChildrenNesting(t *testing.T) {
 		{SessionID: "child2", State: StateReady, ParentSessionID: "parent"},
 	}
 
-	resp := BuildDashboard(sessions, nil)
+	groups := BuildDashboard(sessions, nil)
 
-	if len(resp.Groups) != 1 {
-		t.Fatalf("got %d groups, want 1", len(resp.Groups))
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1", len(groups))
 	}
-	if len(resp.Groups[0].Agents) != 1 {
-		t.Fatalf("got %d agents, want 1 (parent only)", len(resp.Groups[0].Agents))
+	if len(groups[0].Agents) != 1 {
+		t.Fatalf("got %d agents, want 1 (parent only)", len(groups[0].Agents))
 	}
 
-	parent := resp.Groups[0].Agents[0]
+	parent := groups[0].Agents[0]
 	if len(parent.Children) != 2 {
 		t.Fatalf("parent children = %d, want 2", len(parent.Children))
 	}
 
-	// Subagents summary should reflect children.
 	if parent.Subagents == nil {
 		t.Fatal("expected subagents summary")
 	}
@@ -183,15 +167,15 @@ func TestBuildDashboard_OrphanChildren(t *testing.T) {
 		{SessionID: "orphan", State: StateWaiting, ParentSessionID: "missing", ProjectName: "proj"},
 	}
 
-	resp := BuildDashboard(sessions, nil)
+	groups := BuildDashboard(sessions, nil)
 
-	if len(resp.Groups) != 1 {
-		t.Fatalf("got %d groups, want 1", len(resp.Groups))
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1", len(groups))
 	}
-	if len(resp.Groups[0].Agents) != 1 {
+	if len(groups[0].Agents) != 1 {
 		t.Fatalf("orphan should surface as top-level agent")
 	}
-	if resp.Groups[0].Agents[0].SessionID != "orphan" {
+	if groups[0].Agents[0].SessionID != "orphan" {
 		t.Error("wrong agent")
 	}
 }
@@ -200,18 +184,17 @@ func TestBuildDashboard_SubagentsUnification(t *testing.T) {
 	sessions := []*SessionState{
 		{
 			SessionID: "parent", State: StateWorking, ProjectName: "proj",
-			Metrics: &SessionMetrics{OpenSubagents: 2}, // in-process agents from adapter
+			Metrics: &SessionMetrics{OpenSubagents: 2},
 		},
 		{SessionID: "child1", State: StateWorking, ParentSessionID: "parent"},
 	}
 
-	resp := BuildDashboard(sessions, nil)
+	groups := BuildDashboard(sessions, nil)
 
-	parent := resp.Groups[0].Agents[0]
+	parent := groups[0].Agents[0]
 	if parent.Subagents == nil {
 		t.Fatal("expected subagents")
 	}
-	// 2 in-process + 1 file-based (working) = 3 total, 3 working.
 	if parent.Subagents.Total != 3 || parent.Subagents.Working != 3 {
 		t.Errorf("subagents = %+v, want total=3 working=3", *parent.Subagents)
 	}
@@ -257,7 +240,6 @@ func TestComputeSubagentSummary(t *testing.T) {
 		if got == nil {
 			t.Fatal("got nil, want summary")
 		}
-		// 2 in-process (always working) + 1 working file + 1 waiting file.
 		if got.Total != 4 || got.Working != 3 || got.Waiting != 1 {
 			t.Errorf("got %+v, want total=4 working=3 waiting=1", got)
 		}
@@ -265,12 +247,9 @@ func TestComputeSubagentSummary(t *testing.T) {
 }
 
 func TestBuildDashboard_Empty(t *testing.T) {
-	resp := BuildDashboard(nil, nil)
-	if resp.Orchestrator != nil {
-		t.Error("expected nil orchestrator")
-	}
-	if len(resp.Groups) != 0 {
-		t.Errorf("got %d groups, want 0", len(resp.Groups))
+	groups := BuildDashboard(nil, nil)
+	if len(groups) != 0 {
+		t.Errorf("got %d groups, want 0", len(groups))
 	}
 }
 
@@ -280,14 +259,10 @@ func TestBuildDashboard_OrchestratorNotRunning(t *testing.T) {
 	}
 	orch := &orchestrator.State{Adapter: "gastown", Running: false}
 
-	resp := BuildDashboard(sessions, orch)
+	groups := BuildDashboard(sessions, orch)
 
-	if resp.Orchestrator != nil {
-		t.Error("expected nil orchestrator when not running")
-	}
-	// Session should still be grouped by project name.
-	if len(resp.Groups) != 1 || resp.Groups[0].Name != "proj" {
-		t.Errorf("groups = %+v", resp.Groups)
+	if len(groups) != 1 || groups[0].Name != "proj" {
+		t.Errorf("groups = %+v", groups)
 	}
 }
 
@@ -298,9 +273,9 @@ func TestBuildDashboard_RecursiveChildren(t *testing.T) {
 		{SessionID: "child", State: StateReady, ParentSessionID: "parent"},
 	}
 
-	resp := BuildDashboard(sessions, nil)
+	groups := BuildDashboard(sessions, nil)
 
-	gp := resp.Groups[0].Agents[0]
+	gp := groups[0].Agents[0]
 	if len(gp.Children) != 1 {
 		t.Fatalf("grandparent children = %d, want 1", len(gp.Children))
 	}

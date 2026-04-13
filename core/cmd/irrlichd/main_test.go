@@ -65,15 +65,15 @@ func TestGate_GetSessions(t *testing.T) {
 		t.Fatalf("GET status: got %d, want 200", resp.StatusCode)
 	}
 
-	var dashboard session.DashboardResponse
-	if err := json.NewDecoder(resp.Body).Decode(&dashboard); err != nil {
+	var groups []*session.AgentGroup
+	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(dashboard.Groups) == 0 {
+	if len(groups) == 0 {
 		t.Fatal("expected at least one group")
 	}
 	found := false
-	for _, g := range dashboard.Groups {
+	for _, g := range groups {
 		for _, a := range g.Agents {
 			if a.SessionID == "gate-1" {
 				found = true

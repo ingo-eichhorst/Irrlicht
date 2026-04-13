@@ -45,8 +45,15 @@ class SessionManager: ObservableObject {
     private let maxReconnectDelay: TimeInterval = 30.0
     private var sessionMap: [String: SessionState] = [:]
 
-    /// GasTownProvider reference for forwarding gastown_state WebSocket messages.
-    weak var gasTownProvider: GasTownProvider?
+    /// GasTownProvider reference for forwarding Gas Town availability.
+    weak var gasTownProvider: GasTownProvider? {
+        didSet {
+            // Re-notify availability in case hydration already ran.
+            gasTownProvider?.updateAvailability(hasGasTownGroups)
+        }
+    }
+    /// Tracks whether any group has type == "gastown" from the last hydration.
+    private var hasGasTownGroups = false
 
     // MARK: - Mode selection
 
@@ -159,36 +166,28 @@ class SessionManager: ObservableObject {
         scheduleConnect(after: delay)
     }
 
-    /// Dashboard response from the unified API endpoint.
-    private struct DashboardResponse: Decodable {
-        let orchestrator: OrchestratorSummary?
-        let groups: [AgentGroup]?
-    }
-
-    private struct OrchestratorSummary: Decodable {
-        let adapter: String?
-        let running: Bool?
-        let workUnits: [DashboardWorkUnit]?
-
-        enum CodingKeys: String, CodingKey {
-            case adapter, running
-            case workUnits = "work_units"
-        }
-    }
-
-    private struct DashboardWorkUnit: Decodable {
-        let id: String
-        let type: String
-        let name: String
-        let source: String
-        let total: Int
-        let done: Int
-    }
-
+    /// Recursive group structure from the sessions API.
     private struct AgentGroup: Decodable {
         let name: String
+        let type: String?
         let status: String?
         let agents: [SessionState]?
+        let groups: [AgentGroup]?  // nested sub-groups (e.g. rigs)
+    }
+
+    /// Recursively flatten agents from a group and its sub-groups.
+    private func flattenAgents(from group: AgentGroup) -> [SessionState] {
+        var result: [SessionState] = []
+        for agent in group.agents ?? [] {
+            result.append(agent)
+            for child in agent.children ?? [] {
+                result.append(child)
+            }
+        }
+        for subGroup in group.groups ?? [] {
+            result += flattenAgents(from: subGroup)
+        }
+        return result
     }
 
     private func hydrateSessions() async {
@@ -197,20 +196,22 @@ class SessionManager: ObservableObject {
             let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             let decoder = JSONDecoder()
-            let dashboard = try decoder.decode(DashboardResponse.self, from: data)
+            let topGroups = try decoder.decode([AgentGroup].self, from: data)
 
-            // Flatten groups → agents → sessions (including children).
+            // Flatten all groups → sessions (including nested sub-groups and children).
             var states: [SessionState] = []
-            for group in dashboard.groups ?? [] {
-                for agent in group.agents ?? [] {
-                    states.append(agent)
-                    for child in agent.children ?? [] {
-                        states.append(child)
-                    }
-                }
+            var hasGasTown = false
+            for group in topGroups {
+                if group.type == "gastown" { hasGasTown = true }
+                states += flattenAgents(from: group)
             }
             sessionMap = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
             rebuildSessionsFromMap()
+
+            // Forward Gas Town availability to provider.
+            hasGasTownGroups = hasGasTown
+            gasTownProvider?.updateAvailability(hasGasTown)
+
             print("💧 Hydrated \(states.count) sessions from REST API")
         } catch {
             print("💧 Hydration failed: \(error.localizedDescription)")
@@ -220,8 +221,6 @@ class SessionManager: ObservableObject {
     private struct WsEnvelope: Decodable {
         let type: String
         let session: SessionState?
-        let gastown: GasTownState?
-        let orchestrator: GasTownState?
     }
 
     private func handleWsMessage(_ text: String) {
@@ -244,17 +243,8 @@ class SessionManager: ObservableObject {
                     sessionOrder.removeAll { $0 == session.id }
                     rebuildSessionsFromMap()
                 }
-            case "orchestrator_state":
-                if let orchState = envelope.orchestrator {
-                    gasTownProvider?.handleWebSocketUpdate(orchState)
-                }
-            case "gastown_state":
-                // Legacy: keep for backward compat during transition.
-                if let gtState = envelope.gastown {
-                    gasTownProvider?.handleWebSocketUpdate(gtState)
-                }
             default:
-                print("⚠️ Unknown WS message type: \(envelope.type)")
+                break
             }
         } catch {
             print("⚠️ Failed to decode WS message: \(error.localizedDescription)")

@@ -29,6 +29,7 @@ struct SessionListView: View {
     @State private var isQuitButtonHovered = false
     @State private var isSettingsButtonHovered = false
     @State private var showSettings = false
+    @State private var isGasTownExpanded = true
 
     var body: some View {
         if showSettings {
@@ -37,9 +38,11 @@ struct SessionListView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if gasTownProvider.isAvailable {
                     gasTownHeaderView
-                    Divider()
-                    gasTownContentView
-                    if !sessionManager.sessions.isEmpty {
+                    if isGasTownExpanded {
+                        Divider()
+                        gasTownContentView
+                    }
+                    if !sessionGroups.isEmpty {
                         Divider()
                         Text("Other Sessions")
                             .font(.system(.caption, design: .monospaced))
@@ -101,17 +104,28 @@ struct SessionListView: View {
     
     // MARK: - Gas Town Header
 
+    /// All sessions that belong to Gas Town (have a role).
+    private var gasTownSessions: [SessionState] {
+        sessionManager.sessions.filter { gasTownProvider.ownsSession($0) }
+    }
+
     private var gasTownHeaderView: some View {
         HStack {
             HStack(spacing: 6) {
-                Text("⛽")
+                Image(systemName: isGasTownExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8))
+                    .foregroundColor(.secondary)
+                    .frame(width: 10)
+
+                Text("\u{26FD}")
                     .font(.system(size: 12))
                 Text("Gas Town")
                     .font(.headline)
                     .foregroundColor(.primary)
 
-                if gasTownProvider.activeRigCount > 0 {
-                    Text("x\(gasTownProvider.activeRigCount)")
+                let count = gasTownSessions.count
+                if count > 0 {
+                    Text("x\(count)")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
@@ -119,45 +133,38 @@ struct SessionListView: View {
 
             Spacer()
 
-            if gasTownProvider.isDaemonRunning {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 6, height: 6)
-                    Text("running")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 6, height: 6)
+                Text("running")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isGasTownExpanded.toggle()
+            }
+        }
     }
 
-    // MARK: - Gas Town Content (global agents + convoys + rigs)
+    // MARK: - Gas Town Content (sessions with roles)
 
     private var gasTownContentView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                // Global agents (Mayor, Deacon)
-                ForEach(gasTownProvider.globalAgents) { agent in
-                    GlobalAgentRowView(agent: agent)
+                ForEach(gasTownSessions) { session in
+                    GasTownAgentRowView(session: session)
                 }
 
-                // Convoys section
-                if !gasTownProvider.convoys.isEmpty {
-                    ConvoySectionView(convoys: gasTownProvider.convoys)
-                }
-
-                // Codebases (rig rows with worktrees)
-                ForEach(gasTownProvider.codebases) { codebase in
-                    CodebaseRowView(codebase: codebase)
-                }
-
-                if gasTownProvider.codebases.isEmpty && gasTownProvider.globalAgents.isEmpty {
+                if gasTownSessions.isEmpty {
                     HStack {
                         Spacer()
-                        Text("No rigs")
+                        Text("No agents")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Spacer()
@@ -266,7 +273,12 @@ struct SessionListView: View {
     private var sessionGroups: [SessionGroup] {
         // sessions = top-level only (no children in cycle)
         // allSessions = includes children for badge counting
-        let topLevel = sessionManager.sessions
+        let topLevel: [SessionState]
+        if gasTownProvider.isAvailable {
+            topLevel = sessionManager.sessions.filter { !gasTownProvider.ownsSession($0) }
+        } else {
+            topLevel = sessionManager.sessions
+        }
         let all = sessionManager.allSessions
 
         return topLevel.map { parent in
@@ -630,30 +642,36 @@ struct SubagentRowView: View {
     }
 }
 
-// MARK: - Global Agent Row View
+// MARK: - Gas Town Agent Row View (session-based)
 
-struct GlobalAgentRowView: View {
-    let agent: GlobalAgent
+struct GasTownAgentRowView: View {
+    let session: SessionState
     @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(agent.displayEmoji)
+            Text(session.roleIcon ?? "👤")
                 .font(.system(size: 12))
 
-            Text(agent.role.capitalized)
+            Text(session.workerName ?? session.role?.capitalized ?? "Agent")
                 .font(.system(.body, design: .monospaced))
                 .foregroundColor(.primary)
 
+            if let role = session.role {
+                Text(role)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
             Spacer()
 
-            Image(systemName: agent.stateGlyph)
-                .font(.system(size: 10))
-                .foregroundColor(Color(hex: agent.stateColor))
+            Circle()
+                .fill(Color(hex: session.state.color))
+                .frame(width: 7, height: 7)
 
-            Text(agent.state)
+            Text(session.state.rawValue)
                 .font(.caption2)
-                .foregroundColor(Color(hex: agent.stateColor))
+                .foregroundColor(Color(hex: session.state.color))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
@@ -663,212 +681,7 @@ struct GlobalAgentRowView: View {
                 isHovered = hovering
             }
         }
-        .accessibilityIdentifier("global-agent-\(agent.role)")
-    }
-}
-
-// MARK: - Convoy Section View
-
-struct ConvoySectionView: View {
-    let convoys: [WorkUnit]
-    @State private var isExpanded = true
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Convoy header
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary)
-                        .frame(width: 10)
-
-                    Text("🚚")
-                        .font(.system(size: 10))
-
-                    Text("Convoys")
-                        .font(.system(.caption, design: .monospaced))
-                        .fontWeight(.semibold)
-                        .foregroundColor(.secondary)
-
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                ForEach(convoys) { convoy in
-                    ConvoyRowView(convoy: convoy)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Convoy Row View
-
-struct ConvoyRowView: View {
-    let convoy: WorkUnit
-    @State private var isHovered = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Spacer().frame(width: 20)
-
-            Text(convoy.name)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(convoy.isComplete ? .secondary : .primary)
-
-            Spacer()
-
-            // Dot-bar
-            Text(convoy.dotBar)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(Color(hex: convoy.dotColor))
-
-            // Fraction
-            Text(convoy.fractionString)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-
-            if convoy.isComplete {
-                Text("✓")
-                    .font(.caption2)
-                    .foregroundColor(Color(hex: "#34C759"))
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
-        .opacity(convoy.isComplete ? 0.6 : 1.0)
-        .background(isHovered ? Color.accentColor.opacity(0.05) : Color.clear)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
-        .accessibilityIdentifier("convoy-row-\(convoy.id)")
-    }
-}
-
-// MARK: - Codebase Row View (replaces RigRowView)
-
-struct CodebaseRowView: View {
-    let codebase: GasTownCodebase
-    @State private var isExpanded = true
-    @State private var isHovered = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Rig header
-            HStack(spacing: 6) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8))
-                    .foregroundColor(.secondary)
-                    .frame(width: 10)
-
-                Circle()
-                    .fill(codebase.isOperational ? Color.green : Color.red)
-                    .frame(width: 7, height: 7)
-
-                Text(codebase.rig)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundColor(.primary)
-
-                Spacer()
-
-                // Agent summary
-                if codebase.agentCount > 0 {
-                    Text("\(codebase.agentCount) agent\(codebase.agentCount == 1 ? "" : "s")")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(isHovered ? Color.accentColor.opacity(0.06) : Color.clear)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            }
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isHovered = hovering
-                }
-            }
-
-            // Expanded agent rows
-            if isExpanded {
-                // Main worktree agents (witness, refinery, crew)
-                if let mainWt = codebase.mainWorktree {
-                    ForEach(mainWt.safeAgents) { agent in
-                        AgentRowView(agent: agent)
-                    }
-                }
-
-                // Polecat worktrees
-                ForEach(codebase.polecatWorktrees) { wt in
-                    ForEach(wt.safeAgents) { agent in
-                        AgentRowView(agent: agent)
-                    }
-                }
-            }
-        }
-        .accessibilityIdentifier("codebase-row-\(codebase.rig)")
-    }
-}
-
-// MARK: - Agent Row View (replaces PolecatRowView)
-
-struct AgentRowView: View {
-    let agent: GasTownAgent
-    @State private var isHovered = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Spacer().frame(width: 24)
-
-            Text(agent.displayEmoji)
-                .font(.system(size: 10))
-                .frame(width: 16)
-
-            Text(agent.displayLabel)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.primary)
-
-            if let beadId = agent.beadId, !beadId.isEmpty {
-                Text(beadId)
-                    .font(.caption2)
-                    .foregroundColor(.purple)
-            }
-
-            Spacer()
-
-            Image(systemName: agent.stateGlyph)
-                .font(.system(size: 9))
-                .foregroundColor(Color(hex: agent.stateColor))
-
-            Text(agent.state)
-                .font(.caption2)
-                .foregroundColor(Color(hex: agent.stateColor))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
-        .background(isHovered ? Color.accentColor.opacity(0.05) : Color.clear)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
-        .accessibilityIdentifier("agent-row-\(agent.id)")
+        .accessibilityIdentifier("gastown-agent-\(session.id)")
     }
 }
 

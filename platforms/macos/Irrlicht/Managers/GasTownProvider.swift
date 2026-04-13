@@ -1,73 +1,29 @@
 import Foundation
-import Combine
 
-/// Provides Gas Town state via WebSocket push (primary) with REST polling fallback.
-/// Subscribes to the same WebSocket stream as SessionManager and handles
-/// `gastown_state` messages alongside session messages.
+/// Derives Gas Town availability from session group types.
+/// Updated by SessionManager when it hydrates sessions from the REST API.
 @MainActor
 class GasTownProvider: ObservableObject {
-    @Published var state: GasTownState?
     @Published var isAvailable: Bool = false
 
-    // REST polling fallback
-    private var pollTimer: Timer?
-    private let pollInterval: TimeInterval = 5.0
-    private let endpoint = URL(string: "http://localhost:7837/api/v1/gastown")!
-
-    init() {
-        Task { await fetchOnce() }
-        startPolling()
+    /// Called by SessionManager after hydration to indicate whether any
+    /// groups have type == "gastown".
+    func updateAvailability(_ available: Bool) {
+        isAvailable = available
     }
 
-    deinit {
-        pollTimer?.invalidate()
-    }
+    var isDaemonRunning: Bool { isAvailable }
 
-    private func startPolling() {
-        pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.fetchOnce()
-            }
+    /// Whether a session belongs to Gas Town (has a role assigned by the backend).
+    func ownsSession(_ session: SessionState) -> Bool {
+        if let role = session.role, !role.isEmpty {
+            return true
         }
+        return false
     }
 
-    private func fetchOnce() async {
-        do {
-            let (data, response) = try await URLSession.shared.data(from: endpoint)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                isAvailable = false
-                return
-            }
-            let decoded = try JSONDecoder().decode(GasTownState.self, from: data)
-            state = decoded
-            isAvailable = decoded.running
-        } catch {
-            // Daemon not running or endpoint not available yet — silent.
-            isAvailable = false
-        }
+    /// Count of Gas Town agents from live sessions.
+    func agentCount(from sessions: [SessionState]) -> Int {
+        sessions.filter { ownsSession($0) }.count
     }
-
-    /// Called by SessionManager when a gastown_state WebSocket message arrives.
-    func handleWebSocketUpdate(_ newState: GasTownState) {
-        state = newState
-        isAvailable = newState.running
-    }
-
-    // MARK: - Convenience accessors
-
-    var isDaemonRunning: Bool { state?.running ?? false }
-
-    var globalAgents: [GlobalAgent] { state?.safeGlobalAgents ?? [] }
-    var codebases: [GasTownCodebase] { state?.safeCodebases ?? [] }
-    var workUnits: [WorkUnit] { state?.safeWorkUnits ?? [] }
-    var convoys: [WorkUnit] { state?.convoys ?? [] }
-    var activeConvoys: [WorkUnit] { state?.activeConvoys ?? [] }
-    var completedConvoys: [WorkUnit] { state?.completedConvoys ?? [] }
-    var activeRigCount: Int { state?.activeRigCount ?? 0 }
-
-    /// Mayor agent (if present).
-    var mayor: GlobalAgent? { globalAgents.first { $0.isMayor } }
-
-    /// Deacon agent (if present).
-    var deacon: GlobalAgent? { globalAgents.first { $0.isDeacon } }
 }
