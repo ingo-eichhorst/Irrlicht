@@ -1,7 +1,8 @@
 import Foundation
+import AppKit
 import Combine
 import Darwin
-import UserNotifications
+@preconcurrency import UserNotifications
 
 enum ConnectionState {
     case disconnected   // not started or explicitly stopped
@@ -472,11 +473,60 @@ class SessionManager: ObservableObject {
             print("⚠️ Skipping notification setup outside app bundle")
             return
         }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if granted {
-                print("✅ Notification permission granted")
-            } else if let error = error {
-                print("⚠️ Notification permission error: \(error.localizedDescription)")
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                // LSUIElement apps can't show the permission prompt — temporarily
+                // become a regular app with a visible window so macOS presents the dialog.
+                DispatchQueue.main.async {
+                    Self.requestWithTemporaryWindow(center: center)
+                }
+            case .authorized, .provisional, .ephemeral:
+                print("✅ Notification permission already granted")
+            case .denied:
+                print("⚠️ Notification permission denied — user can re-enable in System Settings")
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    /// Temporarily becomes a regular app with a visible window so macOS will present
+    /// the notification permission dialog. Restores LSUIElement behavior afterwards.
+    /// Note: ad-hoc signed dev builds won't get the prompt — macOS silently denies them.
+    /// The dialog works correctly with Developer ID / notarized builds (release flow).
+    private static func requestWithTemporaryWindow(center: UNUserNotificationCenter) {
+        NSApp.setActivationPolicy(.regular)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 80),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Irrlicht — Notification Setup"
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Give LaunchServices time to register the policy change and window
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+                DispatchQueue.main.async {
+                    window.close()
+                    NSApp.setActivationPolicy(.accessory)
+                }
+                if granted {
+                    print("✅ Notification permission granted")
+                } else if let error = error {
+                    print("⚠️ Notification permission denied: \(error.localizedDescription)")
+                    print("ℹ️ Enable notifications in System Settings → Notifications → Irrlicht")
+                } else {
+                    print("⚠️ Notification permission denied")
+                    print("ℹ️ Enable notifications in System Settings → Notifications → Irrlicht")
+                }
             }
         }
     }
