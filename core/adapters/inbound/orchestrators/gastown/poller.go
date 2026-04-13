@@ -308,8 +308,8 @@ func (p *Poller) mapToOrchestratorState(
 				dogWorker.State = sState
 			}
 			mainWorkers = append(mainWorkers, dogWorker)
-			mainWorktree.Workers = mainWorkers
 		}
+		mainWorktree.Workers = mainWorkers
 
 		cb.Worktrees = worktrees
 		codebases = append(codebases, cb)
