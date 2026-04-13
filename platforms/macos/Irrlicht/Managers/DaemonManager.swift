@@ -16,7 +16,7 @@ final class DaemonManager: ObservableObject {
     private let maxRestartDelay: TimeInterval = 30
     private let daemonPort = 7837
 
-    private let logger = Logger(subsystem: "com.anthropic.irrlicht", category: "DaemonManager")
+    private let logger = Logger(subsystem: "io.irrlicht.app", category: "DaemonManager")
 
     // MARK: - Public
 

@@ -19,8 +19,11 @@ func NewPushService() *PushService {
 }
 
 // Subscribe returns a new buffered channel that will receive state updates.
+// Buffer capacity matches the fswatcher subscriber channel (64) to avoid
+// silently dropping state transition broadcasts during bursts with concurrent
+// sessions and subagent transcripts. See issue #143 for the fswatcher fix.
 func (p *PushService) Subscribe() chan outbound.PushMessage {
-	ch := make(chan outbound.PushMessage, 16)
+	ch := make(chan outbound.PushMessage, 64)
 	p.mu.Lock()
 	p.subs = append(p.subs, ch)
 	p.mu.Unlock()

@@ -25,14 +25,48 @@ Build the irrlicht daemon and Swift app, then replace all running instances with
    ```
    Note: the binary is always placed in the main repo's `bin/` so the launch step has a stable path.
 
-2. **Build the Swift app**
+2. **Build the Swift app and assemble .app bundle**
    ```bash
-   cd /Users/ingo/projects/irrlicht/platforms/macos && swift build 2>&1 | tail -5
+   cd "$REPO_ROOT/platforms/macos" && swift build 2>&1 | tail -5
+   ```
+   Then assemble a proper `.app` bundle so that `UNUserNotificationCenter` (desktop notifications) works:
+   ```bash
+   DEV_APP="/tmp/IrrlichtDev.app"
+   rm -rf "$DEV_APP"
+   mkdir -p "$DEV_APP/Contents/MacOS" "$DEV_APP/Contents/Resources"
+   cp "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht" "$DEV_APP/Contents/MacOS/Irrlicht"
+   cp "$REPO_ROOT/platforms/macos/Irrlicht/Resources/AppIcon.icns" "$DEV_APP/Contents/Resources/AppIcon.icns"
+   # Copy the SwiftPM resource bundle so Bundle.module works at runtime
+   cp -R "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht_Irrlicht.bundle" "$DEV_APP/Contents/Resources/Irrlicht_Irrlicht.bundle" 2>/dev/null || true
+   cat > "$DEV_APP/Contents/Info.plist" << 'PLIST'
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>CFBundleExecutable</key>
+       <string>Irrlicht</string>
+       <key>CFBundleIdentifier</key>
+       <string>io.irrlicht.app</string>
+       <key>CFBundleIconFile</key>
+       <string>AppIcon</string>
+       <key>CFBundleName</key>
+       <string>Irrlicht Dev</string>
+       <key>CFBundlePackageType</key>
+       <string>APPL</string>
+       <key>CFBundleShortVersionString</key>
+       <string>dev</string>
+       <key>LSUIElement</key>
+       <true/>
+   </dict>
+   </plist>
+   PLIST
+   codesign --force --deep --sign - "$DEV_APP" 2>&1
    ```
 
 3. **Kill all running irrlicht processes** (production app, production daemon, debug app, debug daemon)
    ```bash
    pkill -f "Irrlicht.app" 2>/dev/null
+   pkill -f "IrrlichtDev" 2>/dev/null
    pkill -f "\.build.*Irrlicht" 2>/dev/null
    pkill -f irrlichd 2>/dev/null
    sleep 2
@@ -53,14 +87,14 @@ Build the irrlicht daemon and Swift app, then replace all running instances with
    sleep 2 && lsof -iTCP:7837 -sTCP:LISTEN -P -n 2>/dev/null
    ```
 
-7. **Start the dev Swift app**
+7. **Start the dev Swift app** (from the .app bundle via LaunchServices so `Bundle.main` resolves correctly)
    ```bash
-   nohup /Users/ingo/projects/irrlicht/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht > /tmp/irrlicht-app-dev.log 2>&1 & disown
+   open --stdout /tmp/irrlicht-app-dev.log --stderr /tmp/irrlicht-app-dev.log /tmp/IrrlichtDev.app
    ```
 
 8. **Verify** — confirm both processes are running and the daemon is serving sessions
    ```bash
-   pgrep -f "bin/irrlichd" && pgrep -f "\.build.*Irrlicht" && curl -s http://localhost:7837/api/v1/sessions | head -1
+   pgrep -f "bin/irrlichd" && pgrep -f "IrrlichtDev" && curl -s http://localhost:7837/api/v1/sessions | head -1
    ```
 
 ## Notes

@@ -174,7 +174,7 @@ struct SessionState: Identifiable, Codable {
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
 
-    private static let logger = Logger(subsystem: "com.anthropic.irrlicht", category: "SessionState")
+    private static let logger = Logger(subsystem: "io.irrlicht.app", category: "SessionState")
 
     // Custom coding keys to match JSON from irrlichd
     enum CodingKeys: String, CodingKey {

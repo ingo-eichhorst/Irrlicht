@@ -84,9 +84,25 @@ struct SettingsView: View {
     private func checkNotificationAuth() {
         guard Bundle.main.bundleIdentifier != nil,
               Bundle.main.bundleURL.pathExtension == "app" else { return }
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
             DispatchQueue.main.async {
                 notificationsDenied = settings.authorizationStatus == .denied
+            }
+            // If user just toggled a notification setting and we've never asked,
+            // show the "blocked" banner so the user knows to enable in System Settings.
+            if settings.authorizationStatus == .notDetermined,
+               (UserDefaults.standard.bool(forKey: "notifyOnReady") ||
+                UserDefaults.standard.bool(forKey: "notifyOnWaiting")) {
+                DispatchQueue.main.async {
+                    // Request authorization — the SessionManager startup flow handles
+                    // the LSUIElement workaround, but if it hasn't run yet we try here too.
+                    center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                        DispatchQueue.main.async {
+                            notificationsDenied = !granted
+                        }
+                    }
+                }
             }
         }
     }
