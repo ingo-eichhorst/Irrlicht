@@ -939,3 +939,73 @@ func TestTranscript_StreamingText_StillExtractsText(t *testing.T) {
 		t.Errorf("LastEventType = %q, want assistant_streaming", m.LastEventType)
 	}
 }
+
+// Regression: ExitPlanMode delivered as a split message (text in one JSONL line,
+// tool_use in a separate line with the same message ID) must be detected as
+// NeedsUserAttention. In Claude Code ≥2.1, deferred tools (ToolSearch) cause
+// the model to emit text and tool_use as separate JSONL entries. The text line
+// carries stop_reason:"tool_use" but no tool_use block, so it looks like a
+// terminal assistant message with IsAgentDone=true. The parser must still
+// correctly track the subsequent tool_use line.
+//
+// Reproduces the pattern from session 8d89e177 (issue #151-worktree).
+func TestTranscript_ExitPlanMode_SplitMessage_DetectedAsWaiting(t *testing.T) {
+	path := writeTranscript(t, []map[string]interface{}{
+		// User prompt.
+		{"type": "user", "timestamp": ts(0), "message": map[string]interface{}{
+			"role": "user", "content": "implement the plan",
+		}},
+		// ToolSearch for ExitPlanMode (deferred tool loading).
+		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
+			"id": "msg_ts", "role": "assistant", "stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "id": "tu_search", "name": "ToolSearch",
+					"input": map[string]interface{}{"query": "select:ExitPlanMode"}},
+			},
+		}},
+		// ToolSearch result (user event with tool_result).
+		{"type": "user", "timestamp": ts(2), "message": map[string]interface{}{
+			"role": "user", "content": []interface{}{
+				map[string]interface{}{"type": "tool_result", "tool_use_id": "tu_search",
+					"content": []interface{}{
+						map[string]interface{}{"type": "tool_reference", "tool_name": "ExitPlanMode"},
+					}},
+			},
+		}},
+		// Split message part 1: text-only assistant (same msg ID, stop_reason:"tool_use").
+		{"type": "assistant", "timestamp": ts(3), "message": map[string]interface{}{
+			"id": "msg_plan", "role": "assistant", "stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Here is my implementation plan."},
+			},
+		}},
+		// Split message part 2: tool_use-only assistant (same msg ID).
+		{"type": "assistant", "timestamp": ts(3), "message": map[string]interface{}{
+			"id": "msg_plan", "role": "assistant", "stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{"type": "tool_use", "id": "tu_exit", "name": "ExitPlanMode",
+					"input": map[string]interface{}{"plan": "# My plan"}},
+			},
+		}},
+		// No tool_result yet — user is reviewing the plan.
+	})
+
+	m, err := newCCTailer(path).TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true — ExitPlanMode is open")
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected OpenToolCallCount=1, got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "ExitPlanMode" {
+		t.Errorf("expected LastOpenToolNames=[ExitPlanMode], got %v", m.LastOpenToolNames)
+	}
+	// The event type should be "assistant" (terminal stop_reason).
+	if m.LastEventType != "assistant" {
+		t.Errorf("LastEventType = %q, want assistant", m.LastEventType)
+	}
+}
