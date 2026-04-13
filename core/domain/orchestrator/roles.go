@@ -14,6 +14,18 @@ type RoleInfo struct {
 	BeadID string // bead ID extracted from git branch (for polecats)
 }
 
+// gasTownIcons maps role names to display emojis.
+var gasTownIcons = map[string]string{
+	"mayor":    "\U0001F3A9", // 🎩
+	"deacon":   "\U0001F4CB", // 📋
+	"witness":  "\U0001F989", // 🦉
+	"refinery": "\U0001F3ED", // 🏭
+	"polecat":  "\U0001F477", // 👷
+	"crew":     "\U0001F9D1\u200D\U0001F4BB", // 🧑‍💻
+	"boot":     "\U0001F97E", // 🥾
+	"dog":      "\U0001F415", // 🐕
+}
+
 // DeriveGasTownRole parses a session's CWD path to extract the Gas Town role.
 // Returns nil if the CWD is not under gtRoot. RoleMeta must be provided by
 // the caller (adapter) to populate Icon.
@@ -46,43 +58,42 @@ func DeriveGasTownRole(cwd, gtRoot string) *RoleInfo {
 		return nil
 	}
 
-	if parts[0] == "mayor" {
-		return &RoleInfo{Role: "mayor"}
-	}
+	var ri *RoleInfo
 
-	if parts[0] == "deacon" {
+	switch {
+	case parts[0] == "mayor":
+		ri = &RoleInfo{Role: "mayor"}
+	case parts[0] == "deacon":
 		if len(parts) >= 3 && parts[1] == "dogs" {
 			if parts[2] == "boot" {
-				return &RoleInfo{Role: "boot"}
+				ri = &RoleInfo{Role: "boot"}
+			} else if len(parts) >= 4 {
+				ri = &RoleInfo{Role: "dog", Name: parts[2], Rig: parts[3]}
 			}
-			if len(parts) >= 4 {
-				return &RoleInfo{Role: "dog", Name: parts[2], Rig: parts[3]}
+		}
+		if ri == nil {
+			ri = &RoleInfo{Role: "deacon"}
+		}
+	case len(parts) >= 2:
+		rig := parts[0]
+		switch parts[1] {
+		case "witness":
+			ri = &RoleInfo{Role: "witness", Rig: rig}
+		case "refinery":
+			ri = &RoleInfo{Role: "refinery", Rig: rig}
+		case "polecats":
+			if len(parts) >= 3 {
+				ri = &RoleInfo{Role: "polecat", Rig: rig, Name: parts[2]}
+			}
+		case "crew":
+			if len(parts) >= 3 {
+				ri = &RoleInfo{Role: "crew", Rig: rig, Name: parts[2]}
 			}
 		}
-		return &RoleInfo{Role: "deacon"}
 	}
 
-	if len(parts) < 2 {
-		return nil
+	if ri != nil {
+		ri.Icon = gasTownIcons[ri.Role]
 	}
-	rig := parts[0]
-
-	switch parts[1] {
-	case "witness":
-		return &RoleInfo{Role: "witness", Rig: rig}
-	case "refinery":
-		return &RoleInfo{Role: "refinery", Rig: rig}
-	case "polecats":
-		if len(parts) >= 3 {
-			return &RoleInfo{Role: "polecat", Rig: rig, Name: parts[2]}
-		}
-		return nil
-	case "crew":
-		if len(parts) >= 3 {
-			return &RoleInfo{Role: "crew", Rig: rig, Name: parts[2]}
-		}
-		return nil
-	}
-
-	return nil
+	return ri
 }

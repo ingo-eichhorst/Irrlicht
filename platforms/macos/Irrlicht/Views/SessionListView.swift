@@ -330,11 +330,18 @@ struct SessionRowView: View {
                     .tooltip(session.state.label)
                     .accessibilityIdentifier("session-state-icon-\(session.id)")
 
-                // Agent number
-                Text("\(agentNumber)")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .frame(width: 12, alignment: .trailing)
+                // Agent number or role emoji
+                if let icon = session.roleIcon, !icon.isEmpty {
+                    Text(icon)
+                        .font(.system(size: 10))
+                        .frame(width: 14, alignment: .center)
+                        .tooltip(session.role?.capitalized ?? "")
+                } else {
+                    Text("\(agentNumber)")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(width: 12, alignment: .trailing)
+                }
 
                 // Active subagent count badge
                 if activeSubagentCount > 0 {
