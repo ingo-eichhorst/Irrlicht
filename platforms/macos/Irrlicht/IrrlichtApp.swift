@@ -16,27 +16,70 @@ let appVersion: String = {
 }()
 
 struct StatusIndicatorLabel: View {
-    let sessions: [SessionState]
-    let projectGroupOrder: [String]
+    @ObservedObject var sessionManager: SessionManager
+    @ObservedObject var gasTownProvider: GasTownProvider
+
+    private var gasTownRigCount: Int {
+        sessionManager.apiGroups.first { $0.isGasTown }?.groups?.count ?? 0
+    }
 
     var body: some View {
-        if sessions.isEmpty {
+        if let img = buildCombinedImage() {
+            Image(nsImage: img)
+        } else if sessionManager.sessions.isEmpty && !gasTownProvider.isDaemonRunning {
             Image(systemName: "sparkle")
                 .font(.system(size: 14))
                 .foregroundColor(.white)
-        } else if let img = buildStatusImage() {
-            Image(nsImage: img)
         } else {
             Image(systemName: "sparkle")
                 .font(.system(size: 14))
         }
     }
 
-    private func buildStatusImage() -> NSImage? {
-        MenuBarStatusRenderer.buildStatusImage(
-            sessions: sessions,
-            projectGroupOrder: projectGroupOrder
+    private func buildCombinedImage() -> NSImage? {
+        let nonGtSessions = gasTownProvider.isDaemonRunning
+            ? sessionManager.sessions.filter { !gasTownProvider.ownsSession($0) }
+            : sessionManager.sessions
+        let dotsImage = MenuBarStatusRenderer.buildStatusImage(
+            sessions: nonGtSessions,
+            projectGroupOrder: sessionManager.projectGroupOrder
         )
+
+        // No Gas Town → just return session dots as before.
+        guard gasTownProvider.isDaemonRunning else { return dotsImage }
+
+        // Build the "⛽N" badge text.
+        let count = gasTownRigCount
+        let emoji = NSAttributedString(string: "\u{26FD}", attributes: [
+            .font: NSFont.systemFont(ofSize: 12)
+        ])
+        let countStr = NSAttributedString(string: "\(count > 0 ? "\(count)" : "")", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: NSColor.white
+        ])
+        let badge = NSMutableAttributedString()
+        badge.append(emoji)
+        badge.append(countStr)
+        let badgeSize = badge.size()
+
+        let gap: CGFloat = dotsImage != nil ? 4 : 0
+        let dotsWidth = dotsImage?.size.width ?? 0
+        let dotsHeight = dotsImage?.size.height ?? 0
+        let totalWidth = badgeSize.width + gap + dotsWidth
+        let totalHeight = max(badgeSize.height, dotsHeight)
+
+        let combined = NSImage(size: NSSize(width: totalWidth, height: totalHeight))
+        combined.lockFocus()
+        let badgeY = (totalHeight - badgeSize.height) / 2
+        badge.draw(at: NSPoint(x: 0, y: badgeY))
+        if let dotsImage {
+            let dotsY = (totalHeight - dotsHeight) / 2
+            dotsImage.draw(at: NSPoint(x: badgeSize.width + gap, y: dotsY),
+                           from: .zero, operation: .sourceOver, fraction: 1)
+        }
+        combined.unlockFocus()
+        combined.isTemplate = false
+        return combined
     }
 }
 
@@ -70,14 +113,14 @@ struct IrrlichtApp: App {
                 .environmentObject(daemonManager)
                 .environmentObject(sessionManager)
                 .environmentObject(gasTownProvider)
-                .onAppear {
-                    // Wire gasTownProvider to sessionManager for WebSocket forwarding.
-                    sessionManager.gasTownProvider = gasTownProvider
-                }
         } label: {
-            StatusIndicatorLabel(sessions: sessionManager.sessions, projectGroupOrder: sessionManager.projectGroupOrder)
+            StatusIndicatorLabel(
+                    sessionManager: sessionManager,
+                    gasTownProvider: gasTownProvider
+                )
                 .task {
-                    // Start daemon on app launch (label renders immediately, unlike popover content).
+                    // Wire gasTownProvider before daemon starts (hydration needs it).
+                    sessionManager.gasTownProvider = gasTownProvider
                     appDelegate.daemonManager = daemonManager
                     daemonManager.start()
                 }

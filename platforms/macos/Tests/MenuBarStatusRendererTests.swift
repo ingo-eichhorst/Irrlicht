@@ -53,6 +53,15 @@ final class MenuBarStatusRendererTests: XCTestCase {
         XCTAssertTrue(svg.contains(">4</text>"))
     }
 
+    func testBuildStatusImageReturnsImageForSessions() {
+        let image = MenuBarStatusRenderer.buildStatusImage(
+            sessions: [makeSession(id: "1", state: .working)],
+            projectGroupOrder: []
+        )
+
+        XCTAssertNotNil(image)
+    }
+
     private func makeSession(id: String, state: SessionState.State) -> SessionState {
         SessionState(
             id: "sess_\(id)",

@@ -21,6 +21,9 @@ type State struct {
 	WorkUnits []WorkUnit `json:"work_units,omitempty"`
 	// UpdatedAt is when this state snapshot was produced.
 	UpdatedAt time.Time `json:"updated_at"`
+	// RoleIcons maps role names to display emojis. Set by the adapter,
+	// used by the domain for CWD-based role derivation fallback.
+	RoleIcons map[string]string `json:"-"`
 }
 
 // GlobalAgent represents an orchestrator-level agent not scoped to a codebase.

@@ -10,6 +10,8 @@ const (
 	RoleRefinery = "refinery"
 	RolePolecat  = "polecat"
 	RoleCrew     = "crew"
+	RoleBoot     = "boot"
+	RoleDog      = "dog"
 )
 
 // roleMeta provides display metadata for each Gas Town role.
@@ -22,19 +24,10 @@ var roleMeta = map[string]struct{ Icon, Desc string }{
 	RoleRefinery: {"\U0001F3ED", "Merges accepted work into the main branch"},
 	RolePolecat:  {"\U0001F477", "Executes a single task in an isolated worktree"},
 	RoleCrew:     {"\U0001F9D1\u200D\U0001F4BB", "Supports a polecat with research or sub-tasks"},
+	RoleBoot:     {"\U0001F97E", "Watchdog for the Deacon"},
+	RoleDog:      {"\U0001F415", "Cross-rig infrastructure worker"},
 }
 
-// WorkUnit type discriminators.
-const (
-	WorkUnitConvoy   = "convoy"
-	WorkUnitTaskList = "task_list"
-)
-
-// WorkUnit source identifiers.
-const (
-	SourceGasTown    = "gastown"
-	SourceClaudeTasks = "claude_tasks"
-)
 
 // DaemonState represents the Gas Town daemon's runtime state
 // as read from $GT_ROOT/daemon/state.json.
@@ -68,11 +61,18 @@ type PolecatState struct {
 	SessionRunning bool   `json:"session_running"`
 }
 
-// ConvoyState represents a convoy as returned by `gt convoy list --json`.
-type ConvoyState struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Status    string `json:"status"`
-	Total     int    `json:"total"`
-	Completed int    `json:"completed"`
+// DogState represents a dog worker as returned by `gt dog list --json`.
+type DogState struct {
+	Name       string            `json:"name"`
+	State      string            `json:"state"`
+	LastActive string            `json:"last_active"`
+	Worktrees  map[string]string `json:"worktrees"` // rig name → worktree path
+}
+
+// BootStatus represents boot status as returned by `gt boot status --json`.
+type BootStatus struct {
+	BootDir      string `json:"boot_dir"`
+	Degraded     bool   `json:"degraded"`
+	Running      bool   `json:"running"`
+	SessionAlive bool   `json:"session_alive"`
 }

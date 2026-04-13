@@ -17,6 +17,7 @@ class SessionManager: ObservableObject {
     @Published var allSessions: [SessionState] = [] // includes child sessions for badge counting
     @Published var connectionState: ConnectionState = .disconnected
     @Published var lastError: String?
+    @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
 
     private let instancesPath: URL
     private let orderFilePath: URL
@@ -46,8 +47,15 @@ class SessionManager: ObservableObject {
     private let maxReconnectDelay: TimeInterval = 30.0
     private var sessionMap: [String: SessionState] = [:]
 
-    /// GasTownProvider reference for forwarding gastown_state WebSocket messages.
-    weak var gasTownProvider: GasTownProvider?
+    /// GasTownProvider reference for forwarding Gas Town availability.
+    weak var gasTownProvider: GasTownProvider? {
+        didSet {
+            // Re-notify availability in case hydration already ran.
+            gasTownProvider?.updateAvailability(hasGasTownGroups)
+        }
+    }
+    /// Tracks whether any group has type == "gastown" from the last hydration.
+    private var hasGasTownGroups = false
 
     // MARK: - Mode selection
 
@@ -160,36 +168,45 @@ class SessionManager: ObservableObject {
         scheduleConnect(after: delay)
     }
 
-    /// Dashboard response from the unified API endpoint.
-    private struct DashboardResponse: Decodable {
-        let orchestrator: OrchestratorSummary?
+    /// Recursive group structure from the sessions API.
+    struct AgentGroup: Decodable, Identifiable {
+        let name: String
+        let type: String?
+        let status: String?
+        let agents: [SessionState]?
         let groups: [AgentGroup]?
-    }
 
-    private struct OrchestratorSummary: Decodable {
-        let adapter: String?
-        let running: Bool?
-        let workUnits: [DashboardWorkUnit]?
+        var id: String { name }
+        var isGasTown: Bool { type == "gastown" }
 
-        enum CodingKeys: String, CodingKey {
-            case adapter, running
-            case workUnits = "work_units"
+        init(name: String, type: String? = nil, status: String? = nil, agents: [SessionState]? = nil, groups: [AgentGroup]? = nil) {
+            self.name = name
+            self.type = type
+            self.status = status
+            self.agents = agents
+            self.groups = groups
         }
     }
 
-    private struct DashboardWorkUnit: Decodable {
-        let id: String
-        let type: String
-        let name: String
-        let source: String
-        let total: Int
-        let done: Int
+    private func collectSessionIds(from group: AgentGroup) -> [String] {
+        let direct = (group.agents ?? []).map(\.id)
+        let nested = (group.groups ?? []).flatMap { collectSessionIds(from: $0) }
+        return direct + nested
     }
 
-    private struct AgentGroup: Decodable {
-        let name: String
-        let status: String?
-        let agents: [SessionState]?
+    /// Recursively flatten agents from a group and its sub-groups.
+    private func flattenAgents(from group: AgentGroup) -> [SessionState] {
+        var result: [SessionState] = []
+        for agent in group.agents ?? [] {
+            result.append(agent)
+            for child in agent.children ?? [] {
+                result.append(child)
+            }
+        }
+        for subGroup in group.groups ?? [] {
+            result += flattenAgents(from: subGroup)
+        }
+        return result
     }
 
     private func hydrateSessions() async {
@@ -198,20 +215,26 @@ class SessionManager: ObservableObject {
             let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             let decoder = JSONDecoder()
-            let dashboard = try decoder.decode(DashboardResponse.self, from: data)
+            let topGroups = try decoder.decode([AgentGroup].self, from: data)
 
-            // Flatten groups → agents → sessions (including children).
+            // Store the recursive group structure for the UI.
+            apiGroups = topGroups
+            groupedSessionIds = Set(topGroups.flatMap { collectSessionIds(from: $0) })
+
+            // Flatten all groups → sessions (including nested sub-groups and children).
             var states: [SessionState] = []
-            for group in dashboard.groups ?? [] {
-                for agent in group.agents ?? [] {
-                    states.append(agent)
-                    for child in agent.children ?? [] {
-                        states.append(child)
-                    }
-                }
+            var hasGasTown = false
+            for group in topGroups {
+                if group.type == "gastown" { hasGasTown = true }
+                states += flattenAgents(from: group)
             }
             sessionMap = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
             rebuildSessionsFromMap()
+
+            // Forward Gas Town availability to provider.
+            hasGasTownGroups = hasGasTown
+            gasTownProvider?.updateAvailability(hasGasTown)
+
             print("💧 Hydrated \(states.count) sessions from REST API")
         } catch {
             print("💧 Hydration failed: \(error.localizedDescription)")
@@ -221,8 +244,6 @@ class SessionManager: ObservableObject {
     private struct WsEnvelope: Decodable {
         let type: String
         let session: SessionState?
-        let gastown: GasTownState?
-        let orchestrator: GasTownState?
     }
 
     private func handleWsMessage(_ text: String) {
@@ -230,11 +251,22 @@ class SessionManager: ObservableObject {
         do {
             let envelope = try JSONDecoder().decode(WsEnvelope.self, from: data)
             switch envelope.type {
-            case "session_created", "session_updated":
+            case "session_created":
                 if let session = envelope.session {
-                    let oldState = sessionMap[session.id]?.state
                     sessionMap[session.id] = session
                     rebuildSessionsFromMap()
+                    scheduleRehydration() // group structure may have changed
+                }
+            case "session_updated":
+                if var session = envelope.session {
+                    let oldState = sessionMap[session.id]?.state
+                    // Preserve role metadata from hydration (WS sends raw sessions without it).
+                    if let existing = sessionMap[session.id] {
+                        session = session.preservingRole(from: existing)
+                    }
+                    sessionMap[session.id] = session
+                    rebuildSessionsFromMap()
+                    patchApiGroups(session: session)
                     if let old = oldState, old != session.state {
                         checkStateTransitionNotification(session: session)
                     }
@@ -244,21 +276,55 @@ class SessionManager: ObservableObject {
                     sessionMap.removeValue(forKey: session.id)
                     sessionOrder.removeAll { $0 == session.id }
                     rebuildSessionsFromMap()
-                }
-            case "orchestrator_state":
-                if let orchState = envelope.orchestrator {
-                    gasTownProvider?.handleWebSocketUpdate(orchState)
-                }
-            case "gastown_state":
-                // Legacy: keep for backward compat during transition.
-                if let gtState = envelope.gastown {
-                    gasTownProvider?.handleWebSocketUpdate(gtState)
+                    scheduleRehydration()
                 }
             default:
-                print("⚠️ Unknown WS message type: \(envelope.type)")
+                break
             }
         } catch {
             print("⚠️ Failed to decode WS message: \(error.localizedDescription)")
+        }
+    }
+
+    /// Set of session IDs present in apiGroups (for fast membership check).
+    private var groupedSessionIds = Set<String>()
+
+    /// Patch a session in-place within apiGroups so the list view updates reactively.
+    private func patchApiGroups(session: SessionState) {
+        guard groupedSessionIds.contains(session.id) else { return }
+        apiGroups = apiGroups.map { patchGroup($0, with: session) }
+    }
+
+    private func patchGroup(_ group: AgentGroup, with session: SessionState) -> AgentGroup {
+        let hasMatch = group.agents?.contains { $0.id == session.id } ?? false
+        let hasNestedMatch = group.groups?.contains { groupContains($0, sessionId: session.id) } ?? false
+        guard hasMatch || hasNestedMatch else { return group }
+
+        let patchedAgents = hasMatch ? group.agents?.map { $0.id == session.id ? session : $0 } : group.agents
+        let patchedGroups = hasNestedMatch ? group.groups?.map { patchGroup($0, with: session) } : group.groups
+        return AgentGroup(
+            name: group.name,
+            type: group.type,
+            status: group.status,
+            agents: patchedAgents,
+            groups: patchedGroups
+        )
+    }
+
+    private func groupContains(_ group: AgentGroup, sessionId: String) -> Bool {
+        if group.agents?.contains(where: { $0.id == sessionId }) == true { return true }
+        return group.groups?.contains { groupContains($0, sessionId: sessionId) } ?? false
+    }
+
+    private var rehydrationTask: Task<Void, Never>?
+
+    /// Schedule a debounced re-hydration (for structural changes like session deletion).
+    private func scheduleRehydration() {
+        rehydrationTask?.cancel()
+        rehydrationTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s debounce
+            guard !Task.isCancelled else { return }
+            await hydrateSessions()
         }
     }
 

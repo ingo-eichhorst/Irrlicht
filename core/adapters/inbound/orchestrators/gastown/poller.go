@@ -1,5 +1,5 @@
-// Package gastown — Poller invokes the gt CLI to collect rig, polecat, and
-// convoy state, enriches it with session data, and maps it to the standardised
+// Package gastown — Poller invokes the gt CLI to collect rig, polecat, dog,
+// and boot state, enriches it with session data, and maps it to the standardised
 // orchestrator.State model.
 package gastown
 
@@ -21,7 +21,7 @@ type SessionLister interface {
 	ListAll() ([]*session.SessionState, error)
 }
 
-// Poller queries the gt CLI for rig, polecat, and convoy state and maps
+// Poller queries the gt CLI for rig, polecat, dog, and boot state and maps
 // the results to the standardised orchestrator.State model.
 type Poller struct {
 	collector *Collector
@@ -57,37 +57,45 @@ func (p *Poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State
 		}
 	}
 
-	// Fetch rig list, polecat list, and convoy list in parallel.
+	// Fetch rig list, polecat list, dog list, and boot status in parallel.
 	var wg sync.WaitGroup
 	var rigs []RigState
 	var polecats []PolecatState
-	var convoys []ConvoyState
+	var dogs []DogState
+	var boot *BootStatus
 
-	wg.Add(3)
+	wg.Add(4)
 	go func() { defer wg.Done(); rigs = p.fetchRigs(ctx) }()
 	go func() { defer wg.Done(); polecats = p.fetchPolecats(ctx) }()
-	go func() { defer wg.Done(); convoys = p.fetchConvoys(ctx) }()
+	go func() { defer wg.Done(); dogs = p.fetchDogs(ctx) }()
+	go func() { defer wg.Done(); boot = p.fetchBootStatus(ctx) }()
 	wg.Wait()
 
 	running := daemon != nil && daemon.Running
-	return p.mapToOrchestratorState(rigs, polecats, convoys, running, now)
+	return p.mapToOrchestratorState(rigs, polecats, dogs, boot, running, now)
 }
 
 // mapToOrchestratorState maps raw Gas Town types to the standardised model.
 func (p *Poller) mapToOrchestratorState(
 	rigs []RigState,
 	polecats []PolecatState,
-	convoys []ConvoyState,
+	dogs []DogState,
+	boot *BootStatus,
 	running bool,
 	now time.Time,
 ) *orchestrator.State {
 	gtRoot := p.collector.Root()
 
+	icons := make(map[string]string, len(roleMeta))
+	for role, meta := range roleMeta {
+		icons[role] = meta.Icon
+	}
 	state := &orchestrator.State{
 		Adapter:   "gastown",
 		Running:   running,
 		Root:      gtRoot,
 		UpdatedAt: now,
+		RoleIcons: icons,
 	}
 
 	// Get all sessions for CWD matching.
@@ -166,6 +174,25 @@ func (p *Poller) mapToOrchestratorState(
 			State:       "idle",
 		})
 	}
+	// Boot agent (deacon watchdog).
+	bootMeta := roleMeta[RoleBoot]
+	if boot != nil {
+		bootAgent := orchestrator.GlobalAgent{
+			Role:        RoleBoot,
+			Icon:        bootMeta.Icon,
+			Description: bootMeta.Desc,
+		}
+		if sid, sState := matchSession(filepath.Join(gtRoot, "deacon", "dogs", "boot")); sid != "" {
+			bootAgent.SessionID = sid
+			bootAgent.State = sState
+		} else if boot.Running || boot.SessionAlive {
+			bootAgent.State = "working"
+		} else {
+			bootAgent.State = "idle"
+		}
+		globalAgents = append(globalAgents, bootAgent)
+	}
+
 	state.GlobalAgents = globalAgents
 
 	// Group polecats by rig.
@@ -268,6 +295,27 @@ func (p *Poller) mapToOrchestratorState(
 			worktrees = append(worktrees, pcWorktree)
 		}
 
+		// Dog workers assigned to this rig.
+		dogMeta := roleMeta[RoleDog]
+		for _, dog := range dogs {
+			if _, ok := dog.Worktrees[rig.Name]; !ok {
+				continue
+			}
+			dogWorker := orchestrator.Worker{
+				Role:        RoleDog,
+				Icon:        dogMeta.Icon,
+				Description: dogMeta.Desc,
+				Name:        dog.Name,
+				State:       dog.State,
+			}
+			if sid, sState := matchSession(filepath.Join(gtRoot, "deacon", "dogs", dog.Name, rig.Name)); sid != "" {
+				dogWorker.SessionID = sid
+				dogWorker.State = sState
+			}
+			mainWorkers = append(mainWorkers, dogWorker)
+		}
+		mainWorktree.Workers = mainWorkers
+
 		cb.Worktrees = worktrees
 		codebases = append(codebases, cb)
 	}
@@ -276,20 +324,6 @@ func (p *Poller) mapToOrchestratorState(
 		return codebases[i].Name < codebases[j].Name
 	})
 	state.Codebases = codebases
-
-	// Work units from convoys.
-	workUnits := make([]orchestrator.WorkUnit, 0, len(convoys))
-	for _, c := range convoys {
-		workUnits = append(workUnits, orchestrator.WorkUnit{
-			ID:     c.ID,
-			Type:   WorkUnitConvoy,
-			Name:   c.Title,
-			Source: SourceGasTown,
-			Total:  c.Total,
-			Done:   c.Completed,
-		})
-	}
-	state.WorkUnits = workUnits
 
 	return state
 }
@@ -335,17 +369,32 @@ func (p *Poller) fetchPolecats(ctx context.Context) []PolecatState {
 	return polecats
 }
 
-func (p *Poller) fetchConvoys(ctx context.Context) []ConvoyState {
+func (p *Poller) fetchDogs(ctx context.Context) []DogState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	out, err := p.gtCommand(ctx, "convoy", "list", "--json").Output()
+	out, err := p.gtCommand(ctx, "dog", "list", "--json").Output()
 	if err != nil {
 		return nil
 	}
-	var convoys []ConvoyState
-	if err := json.Unmarshal(out, &convoys); err != nil {
+	var dogs []DogState
+	if err := json.Unmarshal(out, &dogs); err != nil {
 		return nil
 	}
-	return convoys
+	return dogs
+}
+
+func (p *Poller) fetchBootStatus(ctx context.Context) *BootStatus {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	out, err := p.gtCommand(ctx, "boot", "status", "--json").Output()
+	if err != nil {
+		return nil
+	}
+	var boot BootStatus
+	if err := json.Unmarshal(out, &boot); err != nil {
+		return nil
+	}
+	return &boot
 }
