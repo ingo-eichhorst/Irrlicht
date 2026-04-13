@@ -19,8 +19,8 @@ struct StatusIndicatorLabel: View {
     @ObservedObject var sessionManager: SessionManager
     @ObservedObject var gasTownProvider: GasTownProvider
 
-    private var gasTownAgentCount: Int {
-        sessionManager.sessions.filter { gasTownProvider.ownsSession($0) }.count
+    private var gasTownRigCount: Int {
+        sessionManager.apiGroups.first { $0.isGasTown }?.groups?.count ?? 0
     }
 
     var body: some View {
@@ -37,8 +37,11 @@ struct StatusIndicatorLabel: View {
     }
 
     private func buildCombinedImage() -> NSImage? {
+        let nonGtSessions = gasTownProvider.isDaemonRunning
+            ? sessionManager.sessions.filter { !gasTownProvider.ownsSession($0) }
+            : sessionManager.sessions
         let dotsImage = MenuBarStatusRenderer.buildStatusImage(
-            sessions: sessionManager.sessions,
+            sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
         )
 
@@ -46,7 +49,7 @@ struct StatusIndicatorLabel: View {
         guard gasTownProvider.isDaemonRunning else { return dotsImage }
 
         // Build the "⛽N" badge text.
-        let count = gasTownAgentCount
+        let count = gasTownRigCount
         let emoji = NSAttributedString(string: "\u{26FD}", attributes: [
             .font: NSFont.systemFont(ofSize: 12)
         ])

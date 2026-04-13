@@ -17,6 +17,7 @@ class SessionManager: ObservableObject {
     @Published var allSessions: [SessionState] = [] // includes child sessions for badge counting
     @Published var connectionState: ConnectionState = .disconnected
     @Published var lastError: String?
+    @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
 
     private let instancesPath: URL
     private let orderFilePath: URL
@@ -168,12 +169,23 @@ class SessionManager: ObservableObject {
     }
 
     /// Recursive group structure from the sessions API.
-    private struct AgentGroup: Decodable {
+    struct AgentGroup: Decodable, Identifiable {
         let name: String
         let type: String?
         let status: String?
         let agents: [SessionState]?
-        let groups: [AgentGroup]?  // nested sub-groups (e.g. rigs)
+        let groups: [AgentGroup]?
+
+        var id: String { name }
+        var isGasTown: Bool { type == "gastown" }
+
+        init(name: String, type: String? = nil, status: String? = nil, agents: [SessionState]? = nil, groups: [AgentGroup]? = nil) {
+            self.name = name
+            self.type = type
+            self.status = status
+            self.agents = agents
+            self.groups = groups
+        }
     }
 
     /// Recursively flatten agents from a group and its sub-groups.
@@ -198,6 +210,9 @@ class SessionManager: ObservableObject {
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             let decoder = JSONDecoder()
             let topGroups = try decoder.decode([AgentGroup].self, from: data)
+
+            // Store the recursive group structure for the UI.
+            apiGroups = topGroups
 
             // Flatten all groups → sessions (including nested sub-groups and children).
             var states: [SessionState] = []
@@ -229,11 +244,22 @@ class SessionManager: ObservableObject {
         do {
             let envelope = try JSONDecoder().decode(WsEnvelope.self, from: data)
             switch envelope.type {
-            case "session_created", "session_updated":
+            case "session_created":
                 if let session = envelope.session {
-                    let oldState = sessionMap[session.id]?.state
                     sessionMap[session.id] = session
                     rebuildSessionsFromMap()
+                    scheduleRehydration() // group structure may have changed
+                }
+            case "session_updated":
+                if var session = envelope.session {
+                    let oldState = sessionMap[session.id]?.state
+                    // Preserve role metadata from hydration (WS sends raw sessions without it).
+                    if let existing = sessionMap[session.id] {
+                        session = session.preservingRole(from: existing)
+                    }
+                    sessionMap[session.id] = session
+                    rebuildSessionsFromMap()
+                    patchApiGroups(session: session)
                     if let old = oldState, old != session.state {
                         checkStateTransitionNotification(session: session)
                     }
@@ -243,12 +269,42 @@ class SessionManager: ObservableObject {
                     sessionMap.removeValue(forKey: session.id)
                     sessionOrder.removeAll { $0 == session.id }
                     rebuildSessionsFromMap()
+                    scheduleRehydration()
                 }
             default:
                 break
             }
         } catch {
             print("⚠️ Failed to decode WS message: \(error.localizedDescription)")
+        }
+    }
+
+    /// Patch a session in-place within apiGroups so the list view updates reactively.
+    private func patchApiGroups(session: SessionState) {
+        apiGroups = apiGroups.map { patchGroup($0, with: session) }
+    }
+
+    private func patchGroup(_ group: AgentGroup, with session: SessionState) -> AgentGroup {
+        let patchedAgents = group.agents?.map { $0.id == session.id ? session : $0 }
+        let patchedGroups = group.groups?.map { patchGroup($0, with: session) }
+        return AgentGroup(
+            name: group.name,
+            type: group.type,
+            status: group.status,
+            agents: patchedAgents,
+            groups: patchedGroups
+        )
+    }
+
+    private var rehydrationTask: Task<Void, Never>?
+
+    /// Schedule a debounced re-hydration (for structural changes like session deletion).
+    private func scheduleRehydration() {
+        rehydrationTask?.cancel()
+        rehydrationTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s debounce
+            guard !Task.isCancelled else { return }
+            await hydrateSessions()
         }
     }
 

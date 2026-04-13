@@ -29,35 +29,18 @@ struct SessionListView: View {
     @State private var isQuitButtonHovered = false
     @State private var isSettingsButtonHovered = false
     @State private var showSettings = false
-    @State private var isGasTownExpanded = true
 
     var body: some View {
         if showSettings {
             SettingsView(isPresented: $showSettings)
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                if gasTownProvider.isAvailable {
-                    gasTownHeaderView
-                    if isGasTownExpanded {
-                        Divider()
-                        gasTownContentView
-                    }
-                    if !sessionGroups.isEmpty {
-                        Divider()
-                        Text("Other Sessions")
-                            .font(.system(.caption, design: .monospaced))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                        sessionListContent
-                    }
-                } else if sessionManager.sessions.isEmpty {
+                if sessionManager.apiGroups.isEmpty && sessionManager.sessions.isEmpty {
                     emptyStateView
                 } else {
                     sessionHeaderView
                     Divider()
-                    sessionListContent
+                    groupListContent
                 }
 
                 if let error = sessionManager.lastError {
@@ -65,11 +48,10 @@ struct SessionListView: View {
                     errorView(error)
                 }
 
-                // Settings and Quit buttons at bottom
                 Divider()
                 HStack(spacing: 0) {
                     Button(action: { showSettings = true }) {
-                        Text("Settings…")
+                        Text("Settings\u{2026}")
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
@@ -101,81 +83,20 @@ struct SessionListView: View {
             .background(Color(NSColor.windowBackgroundColor))
         }
     }
-    
-    // MARK: - Gas Town Header
 
-    /// All sessions that belong to Gas Town (have a role).
-    private var gasTownSessions: [SessionState] {
-        sessionManager.sessions.filter { gasTownProvider.ownsSession($0) }
-    }
+    // MARK: - Group List (renders apiGroups directly)
 
-    private var gasTownHeaderView: some View {
-        HStack {
-            HStack(spacing: 6) {
-                Image(systemName: isGasTownExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8))
-                    .foregroundColor(.secondary)
-                    .frame(width: 10)
-
-                Text("\u{26FD}")
-                    .font(.system(size: 12))
-                Text("Gas Town")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-
-                let count = gasTownSessions.count
-                if count > 0 {
-                    Text("x\(count)")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Spacer()
-
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 6, height: 6)
-                Text("running")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isGasTownExpanded.toggle()
-            }
-        }
-    }
-
-    // MARK: - Gas Town Content (sessions with roles)
-
-    private var gasTownContentView: some View {
+    private var groupListContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(gasTownSessions) { session in
-                    GasTownAgentRowView(session: session)
-                }
-
-                if gasTownSessions.isEmpty {
-                    HStack {
-                        Spacer()
-                        Text("No agents")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .padding(.vertical, 8)
+                ForEach(sessionManager.apiGroups) { group in
+                    TopLevelGroupView(group: group)
                 }
             }
         }
         .frame(maxHeight: 400)
     }
-
+    
     // MARK: - Empty State
 
     private var emptyStateView: some View {
@@ -643,6 +564,121 @@ struct SubagentRowView: View {
 }
 
 // MARK: - Gas Town Agent Row View (session-based)
+
+// MARK: - Top Level Group View (renders one API group with optional sub-groups)
+
+struct TopLevelGroupView: View {
+    let group: SessionManager.AgentGroup
+    @State private var isExpanded = true
+
+    private var agentCount: Int {
+        let direct = group.agents?.count ?? 0
+        let nested = (group.groups ?? []).reduce(0) { $0 + ($1.agents?.count ?? 0) }
+        return direct + nested
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Group header
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                        .frame(width: 10)
+
+                    if group.isGasTown {
+                        Text("\u{26FD}")
+                            .font(.system(size: 10))
+                    }
+
+                    Text(group.name)
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+
+                    Spacer()
+
+                    Text("\(agentCount) \(agentCount == 1 ? "session" : "sessions")")
+                        .font(.caption2)
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+
+            if isExpanded {
+                // Direct agents on this group
+                ForEach(Array((group.agents ?? []).enumerated()), id: \.element.id) { index, session in
+                    let activeCount = (session.subagents?.working ?? 0) + (session.subagents?.waiting ?? 0)
+                    SessionRowView(session: session, agentNumber: index + 1, activeSubagentCount: activeCount)
+                        .padding(.leading, 8)
+                }
+
+                // Nested sub-groups (e.g. rigs inside Gas Town)
+                ForEach(group.groups ?? [], id: \.name) { subGroup in
+                    SubGroupView(group: subGroup)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Sub Group View (nested group, e.g. a rig inside Gas Town)
+
+struct SubGroupView: View {
+    let group: SessionManager.AgentGroup
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary)
+                        .frame(width: 10)
+
+                    Text(group.name)
+                        .font(.system(.caption2, design: .monospaced))
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+
+                    Spacer()
+
+                    let count = group.agents?.count ?? 0
+                    Text("\(count)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary.opacity(0.5))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 3)
+
+            if isExpanded {
+                ForEach(Array((group.agents ?? []).enumerated()), id: \.element.id) { index, session in
+                    let activeCount = (session.subagents?.working ?? 0) + (session.subagents?.waiting ?? 0)
+                    SessionRowView(session: session, agentNumber: index + 1, activeSubagentCount: activeCount)
+                        .padding(.leading, 16)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Gas Town Agent Row View (kept for reference, may be removed)
 
 struct GasTownAgentRowView: View {
     let session: SessionState

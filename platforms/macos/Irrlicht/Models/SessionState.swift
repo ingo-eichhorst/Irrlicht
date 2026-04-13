@@ -352,6 +352,24 @@ struct SessionState: Identifiable, Codable {
         }
     }
     
+    /// Return a copy preserving role/icon/description from an existing session
+    /// when the incoming WS update doesn't carry them.
+    func preservingRole(from existing: SessionState) -> SessionState {
+        if role != nil { return self }
+        return SessionState(
+            id: id, state: state, model: model, cwd: cwd,
+            transcriptPath: transcriptPath, gitBranch: gitBranch,
+            projectName: projectName, firstSeen: firstSeen, updatedAt: updatedAt,
+            eventCount: eventCount, lastEvent: lastEvent, metrics: metrics,
+            pid: pid, parentSessionId: parentSessionId, subagents: subagents,
+            adapter: adapter, daemonVersion: daemonVersion,
+            role: existing.role, roleIcon: existing.roleIcon,
+            roleDescription: existing.roleDescription,
+            workerName: existing.workerName, workerID: existing.workerID,
+            children: children
+        )
+    }
+
     // Computed properties for UI display
     var shortId: String {
         String(id.suffix(6))  // Show last 6 chars of session ID
