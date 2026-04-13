@@ -264,7 +264,10 @@ func buildWorkerMap(orch *orchestrator.State, sessions []*SessionState) map[stri
 			if _, ok := m[s.SessionID]; ok {
 				continue
 			}
-			ri := orchestrator.DeriveGasTownRole(s.CWD, orch.Root)
+			iconFn := orchestrator.IconLookup(func(role string) string {
+				return orch.RoleIcons[role]
+			})
+			ri := orchestrator.DeriveGasTownRole(s.CWD, orch.Root, iconFn)
 			if ri != nil {
 				m[s.SessionID] = &workerInfo{
 					Role: ri.Role,

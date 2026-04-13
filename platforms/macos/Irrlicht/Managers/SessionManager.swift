@@ -188,6 +188,12 @@ class SessionManager: ObservableObject {
         }
     }
 
+    private func collectSessionIds(from group: AgentGroup) -> [String] {
+        let direct = (group.agents ?? []).map(\.id)
+        let nested = (group.groups ?? []).flatMap { collectSessionIds(from: $0) }
+        return direct + nested
+    }
+
     /// Recursively flatten agents from a group and its sub-groups.
     private func flattenAgents(from group: AgentGroup) -> [SessionState] {
         var result: [SessionState] = []
@@ -213,6 +219,7 @@ class SessionManager: ObservableObject {
 
             // Store the recursive group structure for the UI.
             apiGroups = topGroups
+            groupedSessionIds = Set(topGroups.flatMap { collectSessionIds(from: $0) })
 
             // Flatten all groups → sessions (including nested sub-groups and children).
             var states: [SessionState] = []
@@ -279,14 +286,22 @@ class SessionManager: ObservableObject {
         }
     }
 
+    /// Set of session IDs present in apiGroups (for fast membership check).
+    private var groupedSessionIds = Set<String>()
+
     /// Patch a session in-place within apiGroups so the list view updates reactively.
     private func patchApiGroups(session: SessionState) {
+        guard groupedSessionIds.contains(session.id) else { return }
         apiGroups = apiGroups.map { patchGroup($0, with: session) }
     }
 
     private func patchGroup(_ group: AgentGroup, with session: SessionState) -> AgentGroup {
-        let patchedAgents = group.agents?.map { $0.id == session.id ? session : $0 }
-        let patchedGroups = group.groups?.map { patchGroup($0, with: session) }
+        let hasMatch = group.agents?.contains { $0.id == session.id } ?? false
+        let hasNestedMatch = group.groups?.contains { groupContains($0, sessionId: session.id) } ?? false
+        guard hasMatch || hasNestedMatch else { return group }
+
+        let patchedAgents = hasMatch ? group.agents?.map { $0.id == session.id ? session : $0 } : group.agents
+        let patchedGroups = hasNestedMatch ? group.groups?.map { patchGroup($0, with: session) } : group.groups
         return AgentGroup(
             name: group.name,
             type: group.type,
@@ -294,6 +309,11 @@ class SessionManager: ObservableObject {
             agents: patchedAgents,
             groups: patchedGroups
         )
+    }
+
+    private func groupContains(_ group: AgentGroup, sessionId: String) -> Bool {
+        if group.agents?.contains(where: { $0.id == sessionId }) == true { return true }
+        return group.groups?.contains { groupContains($0, sessionId: sessionId) } ?? false
     }
 
     private var rehydrationTask: Task<Void, Never>?

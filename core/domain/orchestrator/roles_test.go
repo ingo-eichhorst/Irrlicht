@@ -38,13 +38,22 @@ func TestDeriveGasTownRole(t *testing.T) {
 		{name: "deacon/dogs without name", cwd: gtRoot + "/deacon/dogs", wantRole: "deacon", wantIcon: "\U0001F4CB"},
 	}
 
+	icons := IconLookup(func(role string) string {
+		m := map[string]string{
+			"mayor": "\U0001F3A9", "deacon": "\U0001F4CB", "witness": "\U0001F989",
+			"refinery": "\U0001F3ED", "polecat": "\U0001F477",
+			"crew": "\U0001F9D1\u200D\U0001F4BB", "boot": "\U0001F97E", "dog": "\U0001F415",
+		}
+		return m[role]
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := gtRoot
 			if tt.name == "empty gtRoot" {
 				root = ""
 			}
-			ri := DeriveGasTownRole(tt.cwd, root)
+			ri := DeriveGasTownRole(tt.cwd, root, icons)
 
 			if tt.wantNil {
 				if ri != nil {

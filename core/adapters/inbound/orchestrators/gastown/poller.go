@@ -86,11 +86,16 @@ func (p *Poller) mapToOrchestratorState(
 ) *orchestrator.State {
 	gtRoot := p.collector.Root()
 
+	icons := make(map[string]string, len(roleMeta))
+	for role, meta := range roleMeta {
+		icons[role] = meta.Icon
+	}
 	state := &orchestrator.State{
 		Adapter:   "gastown",
 		Running:   running,
 		Root:      gtRoot,
 		UpdatedAt: now,
+		RoleIcons: icons,
 	}
 
 	// Get all sessions for CWD matching.

@@ -164,11 +164,11 @@ struct SessionState: Identifiable, Codable {
     let subagents: SubagentSummary? // aggregate state of child sessions (optional)
     let adapter: String?        // source agent: "claude-code", "codex" (optional)
     let daemonVersion: String?  // irrlichd version that created this session (optional)
-    let role: String?           // orchestrator role: "witness", "polecat", etc. (optional)
-    let roleIcon: String?       // orchestrator role emoji (optional)
-    let roleDescription: String? // orchestrator role description (optional)
-    let workerName: String?     // orchestrator worker name (optional)
-    let workerID: String?       // orchestrator worker/bead ID (optional)
+    var role: String?           // orchestrator role: "witness", "polecat", etc.
+    var roleIcon: String?       // orchestrator role emoji
+    var roleDescription: String? // orchestrator role description
+    var workerName: String?     // orchestrator worker name
+    var workerID: String?       // orchestrator worker/bead ID
     let children: [SessionState]? // nested child sessions from API (optional)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
@@ -356,21 +356,19 @@ struct SessionState: Identifiable, Codable {
     /// when the incoming WS update doesn't carry them.
     func preservingRole(from existing: SessionState) -> SessionState {
         if role != nil { return self }
-        return SessionState(
-            id: id, state: state, model: model, cwd: cwd,
-            transcriptPath: transcriptPath, gitBranch: gitBranch,
-            projectName: projectName, firstSeen: firstSeen, updatedAt: updatedAt,
-            eventCount: eventCount, lastEvent: lastEvent, metrics: metrics,
-            pid: pid, parentSessionId: parentSessionId, subagents: subagents,
-            adapter: adapter, daemonVersion: daemonVersion,
-            role: existing.role, roleIcon: existing.roleIcon,
-            roleDescription: existing.roleDescription,
-            workerName: existing.workerName, workerID: existing.workerID,
-            children: children
-        )
+        var copy = self
+        copy.role = existing.role
+        copy.roleIcon = existing.roleIcon
+        copy.roleDescription = existing.roleDescription
+        copy.workerName = existing.workerName
+        copy.workerID = existing.workerID
+        return copy
     }
 
-    // Computed properties for UI display
+    var activeSubagentCount: Int {
+        (subagents?.working ?? 0) + (subagents?.waiting ?? 0)
+    }
+
     var shortId: String {
         String(id.suffix(6))  // Show last 6 chars of session ID
     }

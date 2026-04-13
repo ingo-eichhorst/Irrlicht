@@ -14,17 +14,9 @@ type RoleInfo struct {
 	BeadID string // bead ID extracted from git branch (for polecats)
 }
 
-// gasTownIcons maps role names to display emojis.
-var gasTownIcons = map[string]string{
-	"mayor":    "\U0001F3A9", // 🎩
-	"deacon":   "\U0001F4CB", // 📋
-	"witness":  "\U0001F989", // 🦉
-	"refinery": "\U0001F3ED", // 🏭
-	"polecat":  "\U0001F477", // 👷
-	"crew":     "\U0001F9D1\u200D\U0001F4BB", // 🧑‍💻
-	"boot":     "\U0001F97E", // 🥾
-	"dog":      "\U0001F415", // 🐕
-}
+// IconLookup resolves a role name to its display emoji.
+// Callers pass the adapter's icon map (e.g. gastown.roleMeta).
+type IconLookup func(role string) string
 
 // DeriveGasTownRole parses a session's CWD path to extract the Gas Town role.
 // Returns nil if the CWD is not under gtRoot. RoleMeta must be provided by
@@ -40,7 +32,7 @@ var gasTownIcons = map[string]string{
 //	$GT_ROOT/<rig>/refinery                  → role=refinery, rig=<rig>
 //	$GT_ROOT/<rig>/polecats/<name>           → role=polecat, rig=<rig>, name=<name>
 //	$GT_ROOT/<rig>/crew/<name>               → role=crew, rig=<rig>, name=<name>
-func DeriveGasTownRole(cwd, gtRoot string) *RoleInfo {
+func DeriveGasTownRole(cwd, gtRoot string, iconFn ...IconLookup) *RoleInfo {
 	if gtRoot == "" || cwd == "" {
 		return nil
 	}
@@ -92,8 +84,8 @@ func DeriveGasTownRole(cwd, gtRoot string) *RoleInfo {
 		}
 	}
 
-	if ri != nil {
-		ri.Icon = gasTownIcons[ri.Role]
+	if ri != nil && len(iconFn) > 0 && iconFn[0] != nil {
+		ri.Icon = iconFn[0](ri.Role)
 	}
 	return ri
 }
