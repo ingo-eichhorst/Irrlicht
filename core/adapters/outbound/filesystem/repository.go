@@ -54,7 +54,7 @@ func (r *SessionRepository) Load(sessionID string) (*session.SessionState, error
 
 // Save atomically writes a session state to disk.
 func (r *SessionRepository) Save(state *session.SessionState) error {
-	if err := os.MkdirAll(r.instancesDir, 0755); err != nil {
+	if err := os.MkdirAll(r.instancesDir, 0700); err != nil {
 		return fmt.Errorf("failed to create instances directory: %w", err)
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -63,7 +63,7 @@ func (r *SessionRepository) Save(state *session.SessionState) error {
 	}
 	path := r.statePath(state.SessionID)
 	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {

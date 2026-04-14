@@ -165,6 +165,29 @@ func TestRepository_ListAll_SkipsNonJSON(t *testing.T) {
 	}
 }
 
+func TestRepository_FilePermissions(t *testing.T) {
+	dir := t.TempDir() + "/instances"
+	repo := filesystem.NewWithDir(dir)
+	s := &session.SessionState{SessionID: "perm", State: session.StateReady, UpdatedAt: time.Now().Unix()}
+	if err := repo.Save(s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0700 {
+		t.Errorf("dir perm: got %o, want 0700", got)
+	}
+	fileInfo, err := os.Stat(dir + "/perm.json")
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0600 {
+		t.Errorf("file perm: got %o, want 0600", got)
+	}
+}
+
 func TestRepository_AtomicWrite(t *testing.T) {
 	// Save twice to the same session — should overwrite without leaving tmp files.
 	repo := filesystem.NewWithDir(t.TempDir())

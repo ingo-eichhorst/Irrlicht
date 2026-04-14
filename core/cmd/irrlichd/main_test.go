@@ -99,6 +99,44 @@ func TestGate_WebSocketConnect(t *testing.T) {
 	defer conn.Close()
 }
 
+// TestGate_WebSocketRejectsForeignOrigin verifies that the stream endpoint
+// refuses cross-site WebSocket handshakes.
+func TestGate_WebSocketRejectsForeignOrigin(t *testing.T) {
+	srv, _ := newTestStack(t)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/sessions/stream"
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{
+		"Origin": []string{"https://evil.example.com"},
+	})
+	if err == nil {
+		t.Fatal("expected handshake to fail for foreign origin")
+	}
+	if resp == nil {
+		t.Fatalf("expected HTTP response on rejection, got nil (err=%v)", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status: got %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+func TestResolveBindAddr(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"", defaultBindAddr},
+		{"garbage", defaultBindAddr},
+		{"127.0.0.1:7837", "127.0.0.1:7837"},
+		{"0.0.0.0:7837", "0.0.0.0:7837"},
+		{":7837", ":7837"},
+	}
+	for _, tt := range tests {
+		if got := resolveBindAddr(tt.in); got != tt.want {
+			t.Errorf("resolveBindAddr(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 // TestGate_GetState verifies that GET /state returns the compact debug-state format.
 func TestGate_GetState(t *testing.T) {
 	srv, repo := newTestStack(t)

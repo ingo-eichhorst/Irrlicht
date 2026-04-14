@@ -61,10 +61,22 @@ Out of scope:
 ## Threat model, briefly
 
 Irrlicht is local-first. The daemon reads transcript files the user already
-has on disk and exposes state on `127.0.0.1:7837`. It does not open any
-external network ports and does not transmit transcript contents off the
-machine. Security-relevant areas include: any path traversal or TOCTOU around
-transcript watching, the loopback HTTP/WS surface, file-permission handling
-on the state directory, and the daemon-spawning logic in the macOS app.
+has on disk and exposes state on `127.0.0.1:7837` by default. It does not
+transmit transcript contents off the machine. Security-relevant areas
+include: any path traversal or TOCTOU around transcript watching, the
+loopback HTTP/WS surface, file-permission handling on the state directory,
+and the daemon-spawning logic in the macOS app.
+
+### Network exposure (opt-in)
+
+- `IRRLICHT_BIND_ADDR` overrides the default loopback bind (e.g.
+  `0.0.0.0:7837` to expose on the LAN). Use with care — state files and
+  session metadata become reachable to anyone who can reach that address.
+- `IRRLICHT_MDNS=1` enables mDNS/Bonjour advertisement of `_irrlicht._tcp`
+  on the local network. Off by default.
+- The WebSocket endpoint (`/api/v1/sessions/stream`) rejects cross-site
+  handshakes: only requests from loopback origins (or with no `Origin`
+  header, as native clients send) are accepted. This holds even when the
+  daemon is bound to a non-loopback address.
 
 Thanks for helping keep Irrlicht users safe.
