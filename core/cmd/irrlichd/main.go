@@ -269,7 +269,6 @@ func main() {
 		logger.LogError("startup", "", fmt.Sprintf("failed to listen on TCP %s: %v", bindAddr, err))
 		os.Exit(1)
 	}
-	logger.LogInfo("startup", "", fmt.Sprintf("listening on %s", bindAddr))
 
 	go func() { _ = srv.Serve(unixL) }()
 	go func() { _ = srv.Serve(tcpL) }()
