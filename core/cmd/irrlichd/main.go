@@ -26,6 +26,7 @@ import (
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
+	"irrlicht/core/adapters/outbound/httputil"
 	"irrlicht/core/adapters/outbound/logging"
 	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/metrics"
@@ -47,9 +48,22 @@ var uiFS embed.FS
 var Version = "dev"
 
 const (
-	tcpAddr = ":7837"
-	tcpPort = 7837
+	defaultBindAddr = "127.0.0.1:7837"
+	tcpPort         = 7837
 )
+
+// resolveBindAddr returns the TCP bind address for the daemon. Default is
+// loopback-only; set IRRLICHT_BIND_ADDR to override (e.g. "0.0.0.0:7837" to
+// expose the daemon on the LAN).
+func resolveBindAddr(envValue string) string {
+	if envValue == "" {
+		return defaultBindAddr
+	}
+	if _, _, err := net.SplitHostPort(envValue); err != nil {
+		return defaultBindAddr
+	}
+	return envValue
+}
 
 func hasFlag(name string) bool {
 	for _, arg := range os.Args[1:] {
@@ -225,11 +239,19 @@ func main() {
 	}
 	mux.Handle("/", http.FileServer(http.FS(uiSub)))
 
-	srv := &http.Server{Handler: mux}
+	// WriteTimeout is intentionally 0: WebSocket streams and long-polling
+	// responses need unbounded writes, and gorilla/websocket sets its own
+	// per-message deadlines.
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	// Unix socket.
 	sockPath := socketPath()
-	if err := os.MkdirAll(filepath.Dir(sockPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(sockPath), 0700); err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to create socket dir: %v", err))
 		os.Exit(1)
 	}
@@ -240,22 +262,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TCP listener.
-	tcpL, err := net.Listen("tcp", tcpAddr)
+	// TCP listener — default loopback; override with IRRLICHT_BIND_ADDR.
+	bindAddr := resolveBindAddr(os.Getenv("IRRLICHT_BIND_ADDR"))
+	tcpL, err := net.Listen("tcp", bindAddr)
 	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to listen on TCP %s: %v", tcpAddr, err))
+		logger.LogError("startup", "", fmt.Sprintf("failed to listen on TCP %s: %v", bindAddr, err))
 		os.Exit(1)
 	}
 
 	go func() { _ = srv.Serve(unixL) }()
 	go func() { _ = srv.Serve(tcpL) }()
 
-	// mDNS/Bonjour advertisement — non-fatal if unavailable.
-	mdnsAdv, err := mdns.New(tcpPort)
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("mDNS advertisement failed (non-fatal): %v", err))
+	// mDNS/Bonjour advertisement — opt-in via IRRLICHT_MDNS=1 to avoid
+	// broadcasting the daemon on networks the user did not intend to share on.
+	var mdnsAdv *mdns.Advertiser
+	if os.Getenv("IRRLICHT_MDNS") == "1" {
+		mdnsAdv, err = mdns.New(tcpPort)
+		if err != nil {
+			logger.LogError("startup", "", fmt.Sprintf("mDNS advertisement failed (non-fatal): %v", err))
+		} else {
+			logger.LogInfo("startup", "", "mDNS: advertising _irrlicht._tcp on the local network")
+		}
 	} else {
-		logger.LogInfo("startup", "", "mDNS: advertising _irrlicht._tcp on the local network")
+		logger.LogInfo("startup", "", "mDNS: disabled (set IRRLICHT_MDNS=1 to advertise)")
 	}
 
 	// Orchestrator adapters: detect and watch multi-agent orchestration systems.
@@ -387,7 +416,7 @@ func main() {
 		}()
 	}
 
-	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, tcpAddr))
+	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, bindAddr))
 
 	// Wait for SIGTERM or SIGINT.
 	sig := make(chan os.Signal, 1)
@@ -507,17 +536,10 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 // localhost or Unix sockets. Used to protect sensitive endpoints like pprof.
 func localhostOnly(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			// Unix socket connections have no host:port — allow them.
-			h(w, r)
+		if !httputil.IsLoopbackRequest(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		ip := net.ParseIP(host)
-		if ip != nil && ip.IsLoopback() {
-			h(w, r)
-			return
-		}
-		http.Error(w, "forbidden", http.StatusForbidden)
+		h(w, r)
 	}
 }

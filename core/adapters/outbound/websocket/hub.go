@@ -2,11 +2,14 @@ package websocket
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gorilla/websocket"
 
+	"irrlicht/core/adapters/outbound/httputil"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -16,25 +19,51 @@ const (
 	writeTimeout = 10 * time.Second
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+// LoopbackCheckOrigin accepts WebSocket handshakes only from loopback origins
+// (or requests with no Origin header, which native clients like URLSession do
+// not send). It blocks cross-site WebSocket connections from arbitrary web
+// pages. The RemoteAddr check is a second line of defence in case the daemon
+// is bound to a non-loopback interface.
+func LoopbackCheckOrigin(r *http.Request) bool {
+	if !httputil.IsLoopbackRequest(r) {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Hub manages WebSocket connections and fans out session state updates.
 type Hub struct {
-	push outbound.PushBroadcaster
+	push     outbound.PushBroadcaster
+	upgrader websocket.Upgrader
 }
 
-// NewHub creates a Hub backed by the provided PushBroadcaster.
+// NewHub creates a Hub backed by the provided PushBroadcaster. The upgrader
+// enforces a loopback-only origin policy.
 func NewHub(push outbound.PushBroadcaster) *Hub {
-	return &Hub{push: push}
+	return &Hub{
+		push:     push,
+		upgrader: websocket.Upgrader{CheckOrigin: LoopbackCheckOrigin},
+	}
 }
 
 // ServeWS upgrades the HTTP connection to WebSocket and streams typed session
 // state update messages until the client disconnects.
 // Register on GET /api/v1/sessions/stream.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

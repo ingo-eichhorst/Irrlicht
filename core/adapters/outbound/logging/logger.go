@@ -44,7 +44,7 @@ func New() (*StructuredLogger, error) {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 	logsDir := filepath.Join(homeDir, appSupportDir, "logs")
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
+	if err := os.MkdirAll(logsDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)
 	}
 	return newWithPath(filepath.Join(logsDir, "events.log"))
@@ -56,7 +56,7 @@ func NewWithPath(path string) (*StructuredLogger, error) {
 }
 
 func newWithPath(logPath string) (*StructuredLogger, error) {
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
@@ -169,7 +169,7 @@ func (sl *StructuredLogger) rotate() error {
 	if _, err := os.Stat(sl.logPath); err == nil {
 		os.Rename(sl.logPath, sl.logPath+".1")
 	}
-	file, err := os.OpenFile(sl.logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(sl.logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create new log file: %w", err)
 	}

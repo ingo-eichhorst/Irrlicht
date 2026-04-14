@@ -2,6 +2,7 @@ package filesystem_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -162,6 +163,29 @@ func TestRepository_ListAll_SkipsNonJSON(t *testing.T) {
 	}
 	if len(states) != 1 {
 		t.Errorf("expected 1 valid state, got %d", len(states))
+	}
+}
+
+func TestRepository_FilePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "instances")
+	repo := filesystem.NewWithDir(dir)
+	s := &session.SessionState{SessionID: "perm", State: session.StateReady, UpdatedAt: time.Now().Unix()}
+	if err := repo.Save(s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0700 {
+		t.Errorf("dir perm: got %o, want 0700", got)
+	}
+	fileInfo, err := os.Stat(filepath.Join(dir, "perm.json"))
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0600 {
+		t.Errorf("file perm: got %o, want 0600", got)
 	}
 }
 
