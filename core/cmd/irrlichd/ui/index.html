@@ -723,6 +723,7 @@
       <div class="raw-toolbar">
         <span class="raw-label">Endpoint:</span>
         <button class="active" data-raw-src="sessions">/api/v1/sessions</button>
+        <button data-raw-src="gastown">/api/v1/orchestrators/gastown</button>
         <button id="raw-refresh" title="Refresh">refresh</button>
       </div>
       <pre id="raw-output">Loading…</pre>
@@ -732,7 +733,8 @@
   <script>
     // --- State ---
     let dashboardGroups = [];
-    let orchestrator = null;   // Derived from group type
+    let orchestrator = null;   // OrchestratorSummary from initial load
+    let orchFull = null;       // Full orchestrator.State (global_agents, codebases) from WS / secondary fetch
     let sessionIndex = new Map();
     let collapsedGroups = new Set();
 
@@ -923,48 +925,68 @@
 
     function renderOrchestrator() {
       const container = document.getElementById('gt-container');
-      const gtGroup = dashboardGroups.find(g => g.type === 'gastown');
-      if (!gtGroup) { container.style.display = 'none'; return; }
+      const hasOrch = orchestrator && orchestrator.running;
+      const hasFull = orchFull && orchFull.running;
+      if (!hasOrch && !hasFull) { container.style.display = 'none'; return; }
       container.style.display = 'block';
 
       let html = '<div class="gt-section">';
       html += '<div class="gt-header">';
-      html += '<div class="gt-title"><span class="gt-emoji">\u26FD</span> ' + esc(gtGroup.name) + '</div>';
+      html += '<div class="gt-title"><span class="gt-emoji">\u26FD</span> Gas Town</div>';
       html += '<div class="gt-status-label"><div class="gt-status-dot" style="background:var(--ready)"></div>running</div>';
       html += '</div>';
 
-      // Global agents (direct agents on the orchestrator group).
-      if (gtGroup.agents && gtGroup.agents.length) {
+      // Global agents — icon/description come from the API, no hardcoding here.
+      if (hasFull && orchFull.global_agents && orchFull.global_agents.length) {
         html += '<div class="gt-agents-row">';
-        for (const a of gtGroup.agents) {
-          const sid = a.session_id ? shortID(a.session_id) : 'idle';
-          html += '<div class="gt-agent-chip" title="' + esc(a.description || a.role || '') + '">';
-          html += '<span>' + (a.icon ? esc(a.icon) + ' ' : '') + esc(a.role || '') + '</span>';
-          html += '<span class="gt-chip-dot" style="background:' + stateColor(a.state) + '"></span>';
+        for (const ga of orchFull.global_agents) {
+          const sid = ga.session_id ? shortID(ga.session_id) : 'idle';
+          html += '<div class="gt-agent-chip" title="' + esc(ga.description || ga.role) + '">';
+          html += '<span>' + (ga.icon ? esc(ga.icon) + ' ' : '') + esc(ga.role) + '</span>';
+          html += '<span class="gt-chip-dot" style="background:' + stateColor(ga.state) + '"></span>';
           html += '<span class="gt-chip-id">' + esc(sid) + '</span>';
           html += '</div>';
         }
         html += '</div>';
       }
 
-      // Sub-groups (rigs).
-      if (gtGroup.groups && gtGroup.groups.length) {
-        for (const sub of gtGroup.groups) {
-          if (!sub.agents || !sub.agents.length) continue;
+      // Rig/codebase blocks — flatten worktrees for readability.
+      if (hasFull && orchFull.codebases && orchFull.codebases.length) {
+        for (const cb of orchFull.codebases) {
+          const workers = (cb.worktrees || []).flatMap(wt => wt.workers || []);
+          if (!workers.length) continue;
           html += '<div class="gt-rig-block">';
-          html += '<div class="gt-rig-name">rig: ' + esc(sub.name) + '</div>';
+          html += '<div class="gt-rig-name">rig: ' + esc(cb.name) + '</div>';
           html += '<div class="gt-workers">';
-          for (const a of sub.agents) {
-            html += '<div class="gt-agent-chip" title="' + esc(a.description || a.role || '') + '">';
-            html += '<span>' + (a.icon ? esc(a.icon) + ' ' : '') + esc(a.role || '');
-            if (a.worker_name) html += ' <span style="color:var(--text)">' + esc(a.worker_name) + '</span>';
+          for (const w of workers) {
+            html += '<div class="gt-agent-chip" title="' + esc(w.description || w.role) + '">';
+            html += '<span>' + (w.icon ? esc(w.icon) + ' ' : '') + esc(w.role);
+            if (w.name) html += ' <span style="color:var(--text)">' + esc(w.name) + '</span>';
             html += '</span>';
-            html += '<span class="gt-chip-dot" style="background:' + stateColor(a.state) + '"></span>';
-            if (a.worker_id) html += '<span class="gt-chip-id">' + esc(a.worker_id.slice(0, 8)) + '</span>';
+            html += '<span class="gt-chip-dot" style="background:' + stateColor(w.state) + '"></span>';
+            if (w.id) html += '<span class="gt-chip-id">' + esc(w.id.slice(0, 8)) + '</span>';
             html += '</div>';
           }
           html += '</div></div>';
         }
+      }
+
+      // Convoys — use work_units from whichever source is available.
+      const workUnits = ((orchFull || orchestrator) || {}).work_units || [];
+      const convoys = workUnits.filter(w => w.type === 'convoy');
+      if (convoys.length > 0) {
+        html += '<div class="gt-body">';
+        html += '<div class="gt-convoy-header">\u{1F69A} Convoys</div>';
+        for (const c of convoys) {
+          const isDone = c.done >= c.total;
+          html += '<div class="gt-convoy-row">';
+          html += '<span class="gt-convoy-name' + (isDone ? ' done' : '') + '">' + esc(c.name) + '</span>';
+          html += '<span class="gt-dotbar" style="color:' + (isDone ? 'var(--ready)' : 'var(--working)') + '">' + dotBar(c.total, c.done) + '</span>';
+          html += '<span class="gt-convoy-fraction">' + c.done + ' / ' + c.total + '</span>';
+          if (isDone) html += '<span class="gt-convoy-check">\u2713</span>';
+          html += '</div>';
+        }
+        html += '</div>';
       }
 
       html += '</div>';
@@ -1416,22 +1438,18 @@
     setInterval(timelineTick, TIMELINE_TICK_MS);
 
     // --- Initial load ---
-    fetch('/api/v1/sessions').then(r => r.json()).catch(() => []).then(resp => {
-      const topGroups = Array.isArray(resp) ? resp : (resp.groups || []);
-      // Flatten recursive groups: sub-groups become top-level entries.
-      dashboardGroups = [];
-      for (const g of topGroups) {
-        dashboardGroups.push(g);
-        if (g.groups) {
-          for (const sub of g.groups) dashboardGroups.push(sub);
-        }
-      }
-      // Detect orchestrator from group type.
-      const gtGroup = topGroups.find(g => g.type === 'gastown');
-      orchestrator = gtGroup ? { adapter: gtGroup.type, running: true } : null;
+    fetch('/api/v1/sessions').then(r => r.json()).catch(() => ({})).then(resp => {
+      dashboardGroups = resp.groups || [];
+      orchestrator = resp.orchestrator || null;
       rebuildIndex();
       render();
       timelineTick(); // First tick immediately
+    });
+    // Secondary fetch for full orchestrator hierarchy (global_agents, codebases).
+    // The initial /api/v1/sessions response only carries an OrchestratorSummary;
+    // the full state is needed to render the Gas Town hierarchy view.
+    fetch('/api/v1/orchestrators/gastown').then(r => r.json()).catch(() => ({})).then(data => {
+      if (data && data.running) { orchFull = data; render(); }
     });
 
     // --- WebSocket ---
@@ -1459,6 +1477,13 @@
         var msg;
         try { msg = JSON.parse(evt.data); } catch(e) { return; }
         if (!msg) return;
+        if (msg.type === 'orchestrator_state' && msg.orchestrator) {
+          const orch = msg.orchestrator;
+          orchestrator = orch.running ? orch : null;
+          orchFull = orch.running ? orch : null;
+          render();
+          return;
+        }
         if (!msg.session) return;
         var s = msg.session;
         if (msg.type === 'session_deleted') {
@@ -1496,6 +1521,7 @@
     // --- Raw panel ---
     const rawEndpoints = {
       sessions: '/api/v1/sessions',
+      gastown: '/api/v1/orchestrators/gastown',
     };
 
     for (const btn of document.querySelectorAll('[data-raw-src]')) {

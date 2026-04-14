@@ -583,6 +583,84 @@
     }
     .gt-workers { display: flex; flex-wrap: wrap; gap: 4px; }
 
+    /* --- Tabs --- */
+    .tab-bar {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .tab-btn {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 8px 16px;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .tab-btn:hover { color: var(--text); }
+
+    .tab-btn.active {
+      color: var(--text-bright);
+      border-bottom-color: var(--working);
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    #raw-panel pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--text);
+      overflow: auto;
+      max-height: calc(100vh - 140px);
+      white-space: pre-wrap;
+      word-break: break-all;
+      tab-size: 2;
+    }
+
+    #raw-panel .raw-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    #raw-panel .raw-toolbar button {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.03em;
+      padding: 4px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    #raw-panel .raw-toolbar button:hover { background: var(--surface-hover); }
+    #raw-panel .raw-toolbar button.active { border-color: var(--working); color: var(--working); }
+
+    #raw-panel .raw-toolbar .raw-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+    }
+
     /* Responsive */
     @media (max-width: 768px) {
       header { padding: 10px 14px; }
@@ -626,13 +704,30 @@
   </header>
 
   <main>
-    <div id="gt-container" style="display:none" aria-label="Gas Town"></div>
-    <div id="timeline-wrap"><canvas id="timeline"></canvas></div>
-    <div id="empty-state">
-      <div class="empty-dot"></div>
-      <p>awaiting sessions</p>
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+      <button class="tab-btn" data-tab="raw">Raw</button>
     </div>
-    <div class="session-list" id="session-list" aria-live="polite"></div>
+
+    <div id="dashboard-panel" class="tab-panel active">
+      <div id="gt-container" style="display:none" aria-label="Gas Town"></div>
+      <div id="timeline-wrap"><canvas id="timeline"></canvas></div>
+      <div id="empty-state">
+        <div class="empty-dot"></div>
+        <p>awaiting sessions</p>
+      </div>
+      <div class="session-list" id="session-list" aria-live="polite"></div>
+    </div>
+
+    <div id="raw-panel" class="tab-panel">
+      <div class="raw-toolbar">
+        <span class="raw-label">Endpoint:</span>
+        <button class="active" data-raw-src="sessions">/api/v1/sessions</button>
+        <button data-raw-src="gastown">/api/v1/orchestrators/gastown</button>
+        <button id="raw-refresh" title="Refresh">refresh</button>
+      </div>
+      <pre id="raw-output">Loading…</pre>
+    </div>
   </main>
 
   <script>
@@ -1409,6 +1504,44 @@
     }
 
     connect();
+
+    // --- Tabs ---
+    let activeTab = 'dashboard';
+    let rawSource = 'sessions';
+
+    for (const btn of document.querySelectorAll('.tab-btn')) {
+      btn.addEventListener('click', function() {
+        activeTab = this.dataset.tab;
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === this));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === activeTab + '-panel'));
+        if (activeTab === 'raw') fetchRaw();
+      });
+    }
+
+    // --- Raw panel ---
+    const rawEndpoints = {
+      sessions: '/api/v1/sessions',
+      gastown: '/api/v1/orchestrators/gastown',
+    };
+
+    for (const btn of document.querySelectorAll('[data-raw-src]')) {
+      btn.addEventListener('click', function() {
+        rawSource = this.dataset.rawSrc;
+        document.querySelectorAll('[data-raw-src]').forEach(b => b.classList.toggle('active', b === this));
+        fetchRaw();
+      });
+    }
+
+    document.getElementById('raw-refresh').addEventListener('click', fetchRaw);
+
+    function fetchRaw() {
+      const out = document.getElementById('raw-output');
+      out.textContent = 'Loading…';
+      fetch(rawEndpoints[rawSource])
+        .then(r => r.json())
+        .then(data => { out.textContent = JSON.stringify(data, null, 2); })
+        .catch(err => { out.textContent = 'Error: ' + err.message; });
+    }
   </script>
 </body>
 </html>
