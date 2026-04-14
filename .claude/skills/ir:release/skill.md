@@ -72,22 +72,61 @@ GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$NEW_VERSION" 
 lipo -create /tmp/irrlichd-arm64 /tmp/irrlichd-amd64 -output /tmp/irrlichd-darwin-universal
 ```
 
-### Swift app (release build)
+### Swift app (release build — universal)
+**MUST pass both arches explicitly.** A plain `swift build -c release` only
+builds the host arch (arm64 on Apple Silicon) and leaves
+`.build/apple/Products/Release/Irrlicht` untouched if Xcode last built it — a
+stale Xcode universal binary from a previous session will silently get shipped
+instead of current code. This shipped a 10-day-old Swift app in v0.3.4.
+
 ```bash
-cd /Users/ingo/projects/irrlicht/platforms/macos && swift build -c release
+cd /Users/ingo/projects/irrlicht/platforms/macos && \
+  swift build -c release --arch arm64 --arch x86_64
+```
+
+The universal binary lands at `.build/apple/Products/Release/Irrlicht`.
+
+**Verify it's fresh before bundling:**
+```bash
+SWIFT_BIN=/Users/ingo/projects/irrlicht/platforms/macos/.build/apple/Products/Release/Irrlicht
+# Must be universal
+file "$SWIFT_BIN" | grep -q 'universal binary with 2 architectures' || { echo "NOT universal"; exit 1; }
+# Must be newer than the newest tracked Swift source
+NEWEST_SRC=$(find /Users/ingo/projects/irrlicht/platforms/macos/Irrlicht -name '*.swift' -print0 | xargs -0 stat -f '%m %N' | sort -n | tail -1 | awk '{print $2}')
+[ "$SWIFT_BIN" -nt "$NEWEST_SRC" ] || { echo "STALE Swift binary"; exit 1; }
 ```
 
 ### App bundle
 1. Create `/tmp/Irrlicht.app/Contents/{MacOS,Resources}`.
-2. Copy Swift binary → `Contents/MacOS/Irrlicht`.
+2. Copy Swift binary → `Contents/MacOS/Irrlicht` (from path above).
 3. Copy universal daemon → `Contents/MacOS/irrlichd`.
 4. Copy `AppIcon.icns` → `Contents/Resources/AppIcon.icns`.
-5. Write a **resolved** `Info.plist` to `Contents/Info.plist` (no Xcode variables — use actual values: `CFBundleExecutable=Irrlicht`, `CFBundleIdentifier=io.irrlicht.app`, `CFBundlePackageType=APPL`, version from `$NEW_VERSION`).
-6. Ad-hoc code sign:
+5. **Copy the SwiftPM resource bundle** `Irrlicht_Irrlicht.bundle` →
+   `Contents/Resources/Irrlicht_Irrlicht.bundle`. The Swift code uses
+   `Bundle.module.url(...)` which aborts during its own initialization if
+   the bundle isn't present — the `?? Bundle.main...` fallback never runs.
+   Missing this bundle shipped a broken v0.3.4 that crashed at launch
+   (`EXC_BREAKPOINT` in `resource_bundle_accessor.swift`).
+   ```bash
+   cp -R /Users/ingo/projects/irrlicht/platforms/macos/.build/apple/Products/Release/Irrlicht_Irrlicht.bundle \
+         /tmp/Irrlicht.app/Contents/Resources/Irrlicht_Irrlicht.bundle
+   ```
+6. Write a **resolved** `Info.plist` to `Contents/Info.plist` (no Xcode variables — use actual values: `CFBundleExecutable=Irrlicht`, `CFBundleIdentifier=io.irrlicht.app`, `CFBundlePackageType=APPL`, version from `$NEW_VERSION`).
+7. Ad-hoc code sign:
    ```bash
    codesign --force --deep --sign - /tmp/Irrlicht.app/Contents/MacOS/irrlichd
    codesign --force --deep --sign - /tmp/Irrlicht.app
    codesign --verify --deep --strict /tmp/Irrlicht.app
+   ```
+8. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
+   the process is still alive and has spawned `irrlichd`. Missing resources
+   or codesign issues crash the app silently on launch otherwise.
+   ```bash
+   /tmp/Irrlicht.app/Contents/MacOS/Irrlicht > /tmp/app.log 2>&1 & APP_PID=$!
+   sleep 2
+   kill -0 $APP_PID 2>/dev/null || { echo "FAIL: app crashed"; tail -20 /tmp/app.log; exit 1; }
+   pgrep -f '/tmp/Irrlicht.app/Contents/MacOS/irrlichd' >/dev/null || { echo "FAIL: daemon not spawned"; }
+   pkill -f '/tmp/Irrlicht.app' 2>/dev/null; sleep 0.3
    ```
 
 ### Branded DMG
