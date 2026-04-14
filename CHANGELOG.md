@@ -9,6 +9,52 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-04-14
+
+### Added
+- Gas Town full role support with recursive group nesting — first-class role
+  registry surfaces all roles (mayor, deacon, witness, refinery, polecat,
+  scribe, etc.) instead of treating them as ad-hoc strings, and codebase/rig
+  groups can nest recursively for richer worker hierarchies (#154).
+- Desktop notifications on macOS state transitions — system notifications
+  fire when sessions transition into `waiting` or `ready`, with a Settings
+  toggle to opt out (#147).
+- Permission-pending state surfaced via Claude Code hooks — the daemon now
+  consumes `PreToolUse` / `Notification` hooks to detect modal permission
+  prompts directly, instead of inferring them from transcript heuristics
+  (#108).
+- Landscape page: 3-month growth trend lines, head-to-head comparison page,
+  and alternative agent metrics for visitors evaluating the space.
+
+### Fixed
+- Push: broadcast buffer increased so bursty session updates no longer drop
+  `waiting` transitions before clients can drain them (#152).
+- Tailer: user-blocking tools (Bash, AskUserQuestion, …) are preserved
+  across the `turn_done` sweep so an in-flight permission prompt is not
+  cleared when the assistant briefly stops streaming (#148).
+- Daemon: fswatcher event drops that occasionally missed user-blocking
+  tool starts have been eliminated by switching to a non-blocking event
+  pump (#143).
+- macOS dev workflow: `ir:test-mac` now builds a real `.app` bundle and the
+  bundle identifier was migrated to `io.irrlicht.app`, so dev and
+  release builds no longer share state (#149).
+- macOS: corrected dev fallback path for the bundled `irrlichd` binary so
+  the menu bar app finds the daemon when running outside an installed
+  bundle.
+- Skill: `ir:test-mac` builds from the active worktree when invoked from
+  one, instead of always rebuilding from the main checkout.
+
+### Changed
+- `replay-session` and `replay-lifecycle` consolidated into a single
+  `replay` tool with subcommands, removing duplicated transcript-loading
+  code and giving the harness one entry point (#141).
+
+### Docs
+- README problem section tightened to lead with the concrete user pain
+  rather than the architecture.
+- `CHANGELOG.md` added at the repo root and wired into the `ir:release`
+  skill so every release updates it.
+
 ## [0.3.3] — 2026-04-11
 
 ### Added
@@ -304,7 +350,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.4
 [0.3.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.3
 [0.3.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.2
 [0.3.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.1

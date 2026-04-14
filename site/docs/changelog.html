@@ -78,6 +78,41 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.4 <small>(2026-04-14)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Gas Town full role support with recursive group nesting</strong> (#154) &mdash; First-class role registry surfaces all roles (mayor, deacon, witness, refinery, polecat, scribe, &hellip;) instead of treating them as ad-hoc strings, and codebase/rig groups can nest recursively for richer worker hierarchies</li>
+        <li><strong>Desktop notifications on macOS state transitions</strong> (#147) &mdash; System notifications fire when sessions transition into <code>waiting</code> or <code>ready</code>, with a Settings toggle to opt out</li>
+        <li><strong>Permission-pending state via Claude Code hooks</strong> (#108) &mdash; The daemon consumes <code>PreToolUse</code> / <code>Notification</code> hooks to detect modal permission prompts directly, instead of inferring them from transcript heuristics</li>
+        <li><strong>Landscape page</strong> &mdash; 3-month growth trend lines, head-to-head comparison page, and alternative agent metrics</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>Push: broadcast buffer increased</strong> (#152) &mdash; Bursty session updates no longer drop <code>waiting</code> transitions before clients can drain them</li>
+        <li><strong>Tailer: preserve user-blocking tools across <code>turn_done</code> sweep</strong> (#148) &mdash; In-flight permission prompts (Bash, AskUserQuestion, &hellip;) are no longer cleared when the assistant briefly stops streaming</li>
+        <li><strong>Daemon: prevent fswatcher event drops</strong> (#143) &mdash; Switched to a non-blocking event pump so user-blocking tool starts are never missed</li>
+        <li><strong>macOS dev workflow builds a real <code>.app</code> bundle</strong> (#149) &mdash; Bundle identifier migrated to <code>io.irrlicht.app</code> so dev and release builds no longer share state</li>
+        <li><strong>macOS: corrected dev fallback path for the bundled <code>irrlichd</code> binary</strong> &mdash; The menu bar app finds the daemon when running outside an installed bundle</li>
+        <li><strong>Skill: <code>ir:test-mac</code> builds from the active worktree</strong> &mdash; When invoked from a worktree, builds from there instead of the main checkout</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>Unified <code>replay</code> tool</strong> (#141) &mdash; <code>replay-session</code> and <code>replay-lifecycle</code> consolidated into a single tool with subcommands, removing duplicated transcript-loading code</li>
+      </ul>
+
+      <h3>Docs</h3>
+
+      <ul>
+        <li>README problem section tightened to lead with concrete user pain rather than the architecture</li>
+        <li><code>CHANGELOG.md</code> added at the repo root and wired into the <code>ir:release</code> skill so every release updates it</li>
+      </ul>
+
       <h2>v0.3.3 <small>(2026-04-11)</small></h2>
 
       <h3>Fixed — Subagent lifecycle reliability</h3>
