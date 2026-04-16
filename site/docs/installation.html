@@ -97,15 +97,34 @@
         <li><strong>Xcode Command Line Tools</strong> &mdash; install with <code>xcode-select --install</code></li>
       </ul>
 
-      <!-- ── DMG Install ── -->
-      <h2>Install via DMG (Recommended)</h2>
+      <!-- ── Curl Install ── -->
+      <h2>Install via curl (Recommended)</h2>
 
-      <p>The fastest path. A single app bundle with everything included.</p>
+      <p>One command. No Gatekeeper prompts. The script downloads the signed app, verifies the SHA-256 checksum, strips the quarantine attribute, and launches it.</p>
+
+      <pre><code>curl -fsSL https://irrlicht.io/install.sh | sh</code></pre>
+
+      <p>Options:</p>
+      <ul>
+        <li><code>--daemon-only</code> &mdash; install just <code>irrlichd</code> to <code>~/.local/bin/</code> (no menu bar app)</li>
+        <li><code>--version X.Y.Z</code> &mdash; pin a specific version instead of latest</li>
+      </ul>
+
+      <pre><code># Daemon only
+curl -fsSL https://irrlicht.io/install.sh | sh -s -- --daemon-only
+
+# Specific version
+curl -fsSL https://irrlicht.io/install.sh | sh -s -- --version 0.3.4</code></pre>
+
+      <!-- ── DMG Install ── -->
+      <h2>Install via DMG / PKG</h2>
+
+      <p>Manual drag-and-drop install. Use this if you prefer not to run a shell script, or if you're installing offline.</p>
 
       <ol class="steps">
         <li>
-          <strong>Download the DMG</strong>
-          <p>Grab <code>Irrlicht-&lt;version&gt;.dmg</code> from the <a href="https://github.com/ingo-eichhorst/Irrlicht/releases/latest">GitHub Releases</a> page.</p>
+          <strong>Download the DMG or PKG</strong>
+          <p>Grab <code>Irrlicht-&lt;version&gt;.dmg</code> or <code>Irrlicht-&lt;version&gt;-mac-installer.pkg</code> from the <a href="https://github.com/ingo-eichhorst/Irrlicht/releases/latest">GitHub Releases</a> page.</p>
         </li>
         <li>
           <strong>Install the app</strong>

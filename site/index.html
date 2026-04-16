@@ -403,6 +403,99 @@ section {
   50% { transform: scale(1.2); opacity: 0.7; }
 }
 
+.hero-install {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.5rem auto 0;
+  max-width: 560px;
+  opacity: 0;
+  animation: fade-up 0.8s ease forwards 1.0s;
+}
+
+.install-cmd {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.85rem 1rem 0.85rem 1.25rem;
+  background: rgba(15, 22, 40, 0.6);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 10px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 24px rgba(139, 92, 246, 0.12);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.install-cmd:hover {
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 4px 32px rgba(139, 92, 246, 0.2);
+}
+
+.install-cmd code {
+  flex: 1;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 0.85rem;
+  color: var(--text-bright, #edf0fa);
+  background: none;
+  padding: 0;
+  white-space: nowrap;
+  overflow-x: auto;
+  text-align: left;
+}
+
+.install-cmd code::before {
+  content: '$ ';
+  color: var(--muted, #5a6480);
+  user-select: none;
+}
+
+.install-cmd .copy-btn {
+  flex-shrink: 0;
+  padding: 0.35rem 0.75rem;
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--text-bright, #edf0fa);
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.install-cmd .copy-btn:hover {
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(139, 92, 246, 0.5);
+}
+
+.install-cmd .copy-btn.copied {
+  background: rgba(52, 199, 89, 0.2);
+  border-color: rgba(52, 199, 89, 0.5);
+  color: #34C759;
+}
+
+.install-meta {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--muted, #5a6480);
+  letter-spacing: 0.04em;
+}
+
+.install-meta a {
+  color: var(--muted, #5a6480);
+  text-decoration: underline;
+  text-decoration-color: rgba(139, 92, 246, 0.3);
+  text-underline-offset: 3px;
+}
+
+.install-meta a:hover {
+  color: var(--text, #d4daf0);
+  text-decoration-color: rgba(139, 92, 246, 0.6);
+}
+
 .hero-cta {
   display: flex;
   gap: 1rem;
@@ -838,7 +931,7 @@ section {
 
 .install-options {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1.5rem;
   margin-top: 4rem;
 }
@@ -1044,6 +1137,15 @@ footer {
   <p class="hero-subtitle-top">Menu-bar telemetry for AI coding agents</p>
   <h1><span>Irrlicht</span></h1>
   <p class="hero-meaning">/ eer-likht / &mdash; will-o'-the-wisp</p>
+
+  <div class="hero-install">
+    <div class="install-cmd">
+      <code id="install-cmd-text">curl -fsSL https://irrlicht.io/install.sh | sh</code>
+      <button class="copy-btn" type="button" onclick="copyInstallCmd(this)">Copy</button>
+    </div>
+    <p class="install-meta">macOS 13+ &middot; <a href="#install">other download options</a></p>
+  </div>
+
   <p class="tagline">In <em>Faust</em>, an Irrlicht guides the way through the night. This one guides you through your agents &mdash; who's working, who's waiting, and where you're needed next.</p>
 
   <div class="session-viz">
@@ -1071,10 +1173,6 @@ footer {
   </div>
 
   <div class="hero-cta">
-    <a href="https://github.com/ingo-eichhorst/Irrlicht/releases/latest" class="btn-primary">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 13h10"/></svg>
-      Download v0.3.4
-    </a>
     <a href="docs/" class="btn-secondary">Read the Docs</a>
   </div>
 </section>
@@ -1315,13 +1413,21 @@ footer {
     </div>
     <div class="install-options reveal">
       <div class="install-card">
-        <h3>DMG / Installer</h3>
-        <p class="subtitle">Recommended &mdash; single app, everything included</p>
+        <h3>Install Script</h3>
+        <p class="subtitle">Recommended &mdash; no Gatekeeper prompts</p>
         <div class="code-block">
-          <span class="comment"># Download from GitHub Releases</span><br>
+          <span class="prompt">$ </span><span class="cmd">curl -fsSL https://irrlicht.io/install.sh | sh</span>
+        </div>
+        <p class="install-note">Downloads the signed app, verifies the checksum, strips the quarantine attribute, and launches it. Add <code>-s -- --daemon-only</code> for a headless daemon install.</p>
+      </div>
+      <div class="install-card">
+        <h3>DMG / PKG</h3>
+        <p class="subtitle">Manual download &mdash; drag &amp; drop</p>
+        <div class="code-block">
+          <span class="comment"># From GitHub Releases</span><br>
           <span class="prompt">$ </span><span class="cmd">open Irrlicht-0.3.4.dmg</span>
         </div>
-        <p class="install-note">Drag Irrlicht.app to /Applications and launch. The daemon is embedded &mdash; no separate services to manage.</p>
+        <p class="install-note">Drag <code>Irrlicht.app</code> to <code>/Applications</code> and launch. You'll need to approve the app in System Settings &rarr; Privacy &amp; Security on first launch.</p>
       </div>
       <div class="install-card">
         <h3>Build from Source</h3>
@@ -1329,8 +1435,7 @@ footer {
         <div class="code-block">
           <span class="prompt">$ </span><span class="cmd">git clone https://github.com/ingo-eichhorst/Irrlicht.git</span><br>
           <span class="prompt">$ </span><span class="cmd">cd Irrlicht</span><br>
-          <span class="prompt">$ </span><span class="cmd">./platforms/build-release.sh</span><br>
-          <span class="prompt">$ </span><span class="cmd">open .build/Irrlicht-*.dmg</span>
+          <span class="prompt">$ </span><span class="cmd">./platforms/build-release.sh</span>
         </div>
         <p class="install-note">Requires Go 1.21+ and Swift 5.9+. macOS 13 (Ventura) or later.</p>
       </div>
@@ -1372,6 +1477,20 @@ footer {
 </footer>
 
 <!-- ─── Floating wisps (canvas animation) ─── -->
+<script>
+function copyInstallCmd(btn) {
+  const text = document.getElementById('install-cmd-text').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 1500);
+  }).catch(() => { btn.textContent = 'Failed'; });
+}
+</script>
+
 <script>
 (function() {
   const canvas = document.getElementById('wisp-canvas');

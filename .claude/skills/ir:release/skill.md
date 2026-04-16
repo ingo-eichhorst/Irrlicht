@@ -148,9 +148,22 @@ pkgbuild --root /tmp/Irrlicht.app --identifier io.irrlicht.app --version $NEW_VE
   --install-location /Applications/Irrlicht.app /tmp/Irrlicht-$NEW_VERSION-mac-installer.pkg
 ```
 
+### ZIP archive (for curl installer)
+Used by `https://irrlicht.io/install.sh`. Must be created with `ditto` so
+macOS metadata (including the ad-hoc code signature) is preserved.
+
+```bash
+ditto -c -k --sequesterRsrc --keepParent /tmp/Irrlicht.app /tmp/Irrlicht-$NEW_VERSION.zip
+```
+
 ### Checksums
 ```bash
-cd /tmp && shasum -a 256 irrlichd-darwin-universal Irrlicht-$NEW_VERSION.dmg Irrlicht-$NEW_VERSION-mac-installer.pkg > checksums.sha256
+cd /tmp && shasum -a 256 \
+  irrlichd-darwin-universal \
+  Irrlicht-$NEW_VERSION.dmg \
+  Irrlicht-$NEW_VERSION-mac-installer.pkg \
+  Irrlicht-$NEW_VERSION.zip \
+  > checksums.sha256
 ```
 
 ## Step 7: Commit, Tag, Push
@@ -169,6 +182,7 @@ gh release create v$NEW_VERSION \
   /tmp/irrlichd-darwin-universal \
   /tmp/Irrlicht-$NEW_VERSION.dmg \
   /tmp/Irrlicht-$NEW_VERSION-mac-installer.pkg \
+  /tmp/Irrlicht-$NEW_VERSION.zip \
   /tmp/checksums.sha256 \
   --title "v$NEW_VERSION" \
   --notes "<drafted release notes from Step 2>"
