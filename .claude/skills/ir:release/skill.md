@@ -191,5 +191,36 @@ gh release create v$NEW_VERSION \
 ## Step 9: Verify
 
 1. Confirm release URL is returned.
-2. Run `gh release view v$NEW_VERSION` to verify assets are attached.
-3. Print summary: version, number of commits included, asset sizes.
+2. Run `gh release view v$NEW_VERSION` to verify **all five assets** are attached:
+   - `irrlichd-darwin-universal`
+   - `Irrlicht-$NEW_VERSION.dmg`
+   - `Irrlicht-$NEW_VERSION-mac-installer.pkg`
+   - `Irrlicht-$NEW_VERSION.zip` *(required by the curl installer)*
+   - `checksums.sha256`
+3. Smoke-test the curl installer against the new release — it's version-agnostic (discovers the latest via the GitHub API), but the `.zip` asset is the piece that's tied to this release:
+   ```bash
+   # Download the installer and dry-run the asset fetch
+   curl -fsSL https://irrlicht.io/install.sh -o /tmp/install-check.sh
+   diff /tmp/install-check.sh site/install.sh || echo "WARNING: irrlicht.io/install.sh lags behind main — wait for GitHub Pages to rebuild"
+   # Verify the zip and checksums are downloadable
+   curl -fsI "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/Irrlicht-${NEW_VERSION}.zip" | head -1
+   curl -fsI "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/checksums.sha256" | head -1
+   ```
+4. Print summary: version, number of commits included, asset sizes.
+
+## Step 10: Install script maintenance
+
+The install script at `site/install.sh` is version-agnostic — it queries the
+GitHub API for the latest version and downloads `Irrlicht-<version>.zip` /
+`irrlichd-darwin-universal` from the matching release. **It does not need to
+be edited on every release.**
+
+However, every release must:
+- Upload `Irrlicht-$NEW_VERSION.zip` (done in Step 6 / Step 8).
+- Include that zip's hash in `checksums.sha256` (the installer verifies it).
+- Preserve backward compatibility with the script's current download URL
+  pattern. If you rename an asset, bump the installer too.
+
+If `site/install.sh` has been changed in this release, it deploys
+automatically via GitHub Pages when the release commit lands on `main` —
+no extra step. Confirm by diffing live against repo (see Step 9).

@@ -14,7 +14,13 @@ set -eu
 
 REPO="ingo-eichhorst/Irrlicht"
 DAEMON_ONLY=0
+UNINSTALL=0
 VERSION=""
+
+# Install locations
+APP_PATH="/Applications/Irrlicht.app"
+DAEMON_PATH="$HOME/.local/bin/irrlichd"
+LAUNCHAGENT_PATH="$HOME/Library/LaunchAgents/io.irrlicht.app.daemon.plist"
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -46,9 +52,13 @@ Usage:
 Options:
   --daemon-only         Install only the irrlichd daemon (no menu bar app)
   --version VERSION     Install a specific version (default: latest)
+  --uninstall           Remove any existing Irrlicht install and exit
   -h, --help            Show this help
 
-What it does:
+Re-running without --uninstall removes the existing install first,
+then installs fresh — no leftover processes or stale files.
+
+What a normal install does:
   • Downloads the signed .zip from the GitHub release
   • Verifies the SHA-256 checksum
   • Strips the quarantine attribute (no Gatekeeper prompts)
@@ -56,11 +66,55 @@ What it does:
 EOF
 }
 
+# ─── Uninstall previous install ────────────────────────────────────────────
+# Removes every variant we may have installed in the past:
+# .app bundle, daemon-only binary, LaunchAgent. Leaves user data (logs,
+# Application Support) alone.
+uninstall_previous() {
+    removed_something=0
+
+    # Stop running processes
+    if pgrep -f "$APP_PATH/Contents/MacOS/Irrlicht" >/dev/null 2>&1; then
+        pkill -f "$APP_PATH/Contents/MacOS/Irrlicht" 2>/dev/null || true
+        removed_something=1
+    fi
+    if pgrep -x irrlichd >/dev/null 2>&1; then
+        pkill -x irrlichd 2>/dev/null || true
+        removed_something=1
+    fi
+    # App Translocation ghost processes (macOS runs unsigned apps from random paths)
+    pkill -f 'AppTranslocation.*Irrlicht' 2>/dev/null || true
+
+    # Unload + remove LaunchAgent (daemon-only installs may have registered one)
+    if [ -f "$LAUNCHAGENT_PATH" ]; then
+        launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
+        rm -f "$LAUNCHAGENT_PATH"
+        removed_something=1
+    fi
+
+    # Remove app bundle
+    if [ -d "$APP_PATH" ]; then
+        rm -rf "$APP_PATH" 2>/dev/null || fail "Could not remove $APP_PATH (try with sudo?)"
+        removed_something=1
+    fi
+
+    # Remove daemon-only binary
+    if [ -f "$DAEMON_PATH" ]; then
+        rm -f "$DAEMON_PATH"
+        removed_something=1
+    fi
+
+    # Let running processes finish exiting before we install
+    [ $removed_something -eq 1 ] && sleep 0.5
+    return 0
+}
+
 # ─── Parse args ────────────────────────────────────────────────────────────
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --daemon-only) DAEMON_ONLY=1; shift ;;
+        --uninstall)   UNINSTALL=1; shift ;;
         --version)     VERSION="$2"; shift 2 ;;
         --version=*)   VERSION="${1#*=}"; shift ;;
         -h|--help)     usage; exit 0 ;;
@@ -73,13 +127,27 @@ done
 [ "$(uname -s)" = "Darwin" ] || fail "Irrlicht is macOS-only."
 
 command -v curl >/dev/null 2>&1 || fail "curl is required but not found."
-command -v shasum >/dev/null 2>&1 || fail "shasum is required but not found."
-
-# ─── Detect version ────────────────────────────────────────────────────────
 
 say ""
 say "  ${BOLD}Irrlicht installer${RESET}"
 say ""
+
+# ─── Uninstall-only mode ───────────────────────────────────────────────────
+
+if [ "$UNINSTALL" -eq 1 ]; then
+    step "Removing existing Irrlicht install"
+    uninstall_previous
+    ok
+    say ""
+    say "  ${GREEN}✓${RESET} Irrlicht uninstalled"
+    say "  ${DIM}User data in ~/Library/Application Support/Irrlicht/ was kept.${RESET}"
+    say ""
+    exit 0
+fi
+
+command -v shasum >/dev/null 2>&1 || fail "shasum is required but not found."
+
+# ─── Detect version ────────────────────────────────────────────────────────
 
 if [ -z "$VERSION" ]; then
     step "Detecting latest version"
@@ -89,6 +157,12 @@ if [ -z "$VERSION" ]; then
     [ -n "$VERSION" ] || fail "Could not detect latest version"
     printf 'v%s\n' "$VERSION"
 fi
+
+# ─── Remove any existing install ───────────────────────────────────────────
+
+step "Removing any existing install"
+uninstall_previous
+ok
 
 # ─── Work dir ──────────────────────────────────────────────────────────────
 
@@ -149,21 +223,8 @@ step "Verifying checksum"
     || fail "Checksum mismatch — aborting"
 ok
 
-# Stop running instances so we can replace them
-step "Stopping running instances"
-pkill -f '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' 2>/dev/null || true
-pkill -x irrlichd 2>/dev/null || true
-# App Translocation paths
-pkill -f 'AppTranslocation.*Irrlicht' 2>/dev/null || true
-sleep 0.5
-ok
-
 step "Installing to /Applications"
 # ditto preserves macOS metadata including code signatures
-if [ -d /Applications/Irrlicht.app ]; then
-    rm -rf /Applications/Irrlicht.app 2>/dev/null \
-        || fail "Could not remove old /Applications/Irrlicht.app (try with sudo?)"
-fi
 ditto -xk "$TMPDIR/$ASSET" /Applications/ || fail "Extract failed"
 ok
 
