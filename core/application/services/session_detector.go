@@ -490,6 +490,16 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// Refresh CWD/branch/project and metrics from transcript.
 	d.enricher.RefreshOnActivity(state, ev.TranscriptPath)
 
+	// Drain authoritative subagent-completion signals harvested from this
+	// parent's transcript (origin.kind="task-notification" lines parsed by
+	// the Claude Code adapter). This is the event-based path to ready for
+	// child subagents whose own JSONL ends with stop_reason=null — see
+	// issue #134. The defensive finishOrphanedChildren below still runs as
+	// a fallback for adapters/versions that don't emit notifications.
+	if state.ParentSessionID == "" && state.Metrics != nil && len(state.Metrics.SubagentCompletions) > 0 {
+		d.applySubagentCompletions(state.SessionID, state.Metrics.SubagentCompletions)
+	}
+
 	// Force ready→working when metrics show activity so ClassifyState can
 	// properly detect the working→ready transition. Without this, sessions
 	// that start as ready (initial state) and whose first activity event
@@ -912,6 +922,60 @@ func (d *SessionDetector) finishOrphanedChildren(parentID string) {
 		d.log.LogInfo("session-detector", s.SessionID,
 			fmt.Sprintf("finished orphaned subagent (%s → ready) — parent %s turn done", prev, parentID))
 		d.broadcast(outbound.PushTypeUpdated, s)
+	}
+}
+
+// applySubagentCompletions resolves each completion to a child session and
+// transitions it to ready. Match is by ParentSessionID + transcript filename
+// suffix (agent-<AgentID>.jsonl) — the latter mirrors the subagent transcript
+// layout Claude Code uses on disk. If no child is indexed yet, the no-op is
+// safe: finishOrphanedChildren still acts as a defensive fallback later.
+// See issue #134.
+func (d *SessionDetector) applySubagentCompletions(parentID string, completions []session.SubagentCompletion) {
+	if len(completions) == 0 {
+		return
+	}
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+	now := time.Now().Unix()
+	for _, c := range completions {
+		if c.AgentID == "" {
+			continue
+		}
+		suffix := "agent-" + c.AgentID + ".jsonl"
+		for _, s := range states {
+			if s.ParentSessionID != parentID {
+				continue
+			}
+			if !strings.HasSuffix(s.TranscriptPath, suffix) {
+				continue
+			}
+			if s.State != session.StateWorking && s.State != session.StateWaiting {
+				continue
+			}
+			prev := s.State
+			s.State = session.StateReady
+			s.UpdatedAt = now
+			s.WaitingStartTime = nil
+			d.record(lifecycle.Event{
+				Kind:      lifecycle.KindStateTransition,
+				SessionID: s.SessionID,
+				PrevState: prev,
+				NewState:  session.StateReady,
+				Reason:    "subagent completed (parent task-notification)",
+			})
+			if err := d.repo.Save(s); err != nil {
+				d.log.LogError("session-detector", s.SessionID,
+					fmt.Sprintf("failed to apply subagent completion: %v", err))
+				continue
+			}
+			d.log.LogInfo("session-detector", s.SessionID,
+				fmt.Sprintf("subagent completed via parent task-notification (%s → ready, parent %s)", prev, parentID))
+			d.broadcast(outbound.PushTypeUpdated, s)
+			break
+		}
 	}
 }
 

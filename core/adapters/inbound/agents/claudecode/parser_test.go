@@ -1009,3 +1009,74 @@ func TestTranscript_ExitPlanMode_SplitMessage_DetectedAsWaiting(t *testing.T) {
 		t.Errorf("LastEventType = %q, want assistant", m.LastEventType)
 	}
 }
+
+// TestParser_TaskNotification_EmitsSubagentCompletion is the issue #134
+// regression: parent user line with origin.kind="task-notification" must
+// emit a single SubagentCompletion (parsed task-id, tool-use-id, status),
+// be marked Skip=true so it doesn't pollute LastEventType, and must NOT
+// set IsUserInterrupt or IsToolDenial.
+func TestParser_TaskNotification_EmitsSubagentCompletion(t *testing.T) {
+	p := &Parser{}
+	xmlPayload := "<task-notification>\n" +
+		"<task-id>af7bf8be5a1b511e4</task-id>\n" +
+		"<tool-use-id>toolu_01WfKzuNdE9j8zVUsTE7twbF</tool-use-id>\n" +
+		"<status>completed</status>\n" +
+		"<summary>Agent \"Find TODO comments\" completed</summary>\n" +
+		"</task-notification>"
+
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "user",
+		"timestamp": "2026-04-11T18:53:50.828Z",
+		"origin":    map[string]interface{}{"kind": "task-notification"},
+		"message":   map[string]interface{}{"role": "user", "content": xmlPayload},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if !ev.Skip {
+		t.Error("task-notification line must be Skip=true so it doesn't feed LastEventType")
+	}
+	if ev.IsUserInterrupt {
+		t.Error("task-notification must not be classified as a user interrupt")
+	}
+	if ev.IsToolDenial {
+		t.Error("task-notification must not be classified as a tool denial")
+	}
+	if len(ev.SubagentCompletions) != 1 {
+		t.Fatalf("expected 1 SubagentCompletion, got %d", len(ev.SubagentCompletions))
+	}
+	got := ev.SubagentCompletions[0]
+	want := tailer.SubagentCompletion{
+		AgentID:   "af7bf8be5a1b511e4",
+		ToolUseID: "toolu_01WfKzuNdE9j8zVUsTE7twbF",
+		Status:    "completed",
+	}
+	if got != want {
+		t.Errorf("SubagentCompletion = %+v, want %+v", got, want)
+	}
+}
+
+// TestTailer_TaskNotification_SurfacedThroughMetrics is the per-pass surfacing
+// test: the fixture from issue #134 must produce a SubagentCompletion in
+// SessionMetrics.SubagentCompletions after a single TailAndProcess pass.
+func TestTailer_TaskNotification_SurfacedThroughMetrics(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "..", "..", "testdata", "replay", "claudecode",
+		"13-full-lifecycle-continue-8a525d27.jsonl")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("fixture not present at %s: %v", path, err)
+	}
+	m, err := newCCTailer(path).TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	found := false
+	for _, c := range m.SubagentCompletions {
+		if c.AgentID == "af7bf8be5a1b511e4" && c.Status == "completed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected SubagentCompletion for af7bf8be5a1b511e4 in metrics; got %+v", m.SubagentCompletions)
+	}
+}

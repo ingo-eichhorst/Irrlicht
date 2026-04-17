@@ -57,6 +57,12 @@ type SessionMetrics struct {
 	// LastOpenToolNames or whatever adapter-specific signal they use.
 	OpenSubagents int `json:"open_subagents,omitempty"`
 
+	// SubagentCompletions surfaces parent-side "subagent done" signals
+	// discovered during the most recent TailAndProcess() pass. Cleared at
+	// the start of every pass so the detector drains fresh events only.
+	// See issue #134.
+	SubagentCompletions []SubagentCompletion `json:"-"`
+
 	// LastEventType is the event type of the most recent message event in
 	// the transcript (e.g. "assistant", "user", "tool_use", "tool_result").
 	// Used for content-based working/waiting detection.
@@ -213,6 +219,10 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	}
 	fileSize := stat.Size()
 
+	// Per-pass signals must be cleared so the detector only drains events
+	// discovered in this scan (see issue #134).
+	t.metrics.SubagentCompletions = nil
+
 	const maxTailSize = 64 * 1024
 	startPos := int64(0)
 	switch {
@@ -285,11 +295,21 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		parsed := t.parser.ParseLine(raw)
 		if parsed == nil || parsed.Skip {
 			// Even for skipped events, apply metadata that the parser extracted
-			// (e.g. model from model_change, CWD from session header).
+			// (e.g. model from model_change, CWD from session header) and drain
+			// SubagentCompletions — task-notification lines are deliberately
+			// marked Skip=true so they don't pollute message-event tracking,
+			// but the completion signal must still surface to the detector
+			// (issue #134).
 			if parsed != nil {
 				t.applyMetadata(parsed)
+				if len(parsed.SubagentCompletions) > 0 {
+					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
+				}
 			}
 			continue
+		}
+		if len(parsed.SubagentCompletions) > 0 {
+			t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
 		}
 
 		// Apply tool tracking deltas from the parser. openToolCalls is an
