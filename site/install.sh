@@ -73,17 +73,17 @@ EOF
 uninstall_previous() {
     removed_something=0
 
-    # Stop running processes
-    if pgrep -f "$APP_PATH/Contents/MacOS/Irrlicht" >/dev/null 2>&1; then
-        pkill -f "$APP_PATH/Contents/MacOS/Irrlicht" 2>/dev/null || true
+    # Stop running processes — match any Irrlicht*.app bundle regardless of
+    # parent path, so dev builds (/private/tmp/IrrlichtDev.app) and App
+    # Translocation ghost paths are cleaned up alongside /Applications/Irrlicht.app.
+    if pgrep -f 'Irrlicht[^/]*\.app/Contents/MacOS/Irrlicht' >/dev/null 2>&1; then
+        pkill -f 'Irrlicht[^/]*\.app/Contents/MacOS/Irrlicht' 2>/dev/null || true
         removed_something=1
     fi
     if pgrep -x irrlichd >/dev/null 2>&1; then
         pkill -x irrlichd 2>/dev/null || true
         removed_something=1
     fi
-    # App Translocation ghost processes (macOS runs unsigned apps from random paths)
-    pkill -f 'AppTranslocation.*Irrlicht' 2>/dev/null || true
 
     # Unload + remove LaunchAgent (daemon-only installs may have registered one)
     if [ -f "$LAUNCHAGENT_PATH" ]; then
@@ -229,7 +229,12 @@ ditto -xk "$TMPDIR/$ASSET" /Applications/ || fail "Extract failed"
 ok
 
 step "Stripping quarantine attribute"
-xattr -cr /Applications/Irrlicht.app 2>/dev/null || true
+xattr -dr com.apple.quarantine /Applications/Irrlicht.app 2>/dev/null || true
+ok
+
+step "Registering with LaunchServices"
+"/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister" \
+    -f /Applications/Irrlicht.app 2>/dev/null || true
 ok
 
 step "Launching Irrlicht"
