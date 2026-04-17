@@ -84,6 +84,21 @@ type SessionMetrics struct {
 	// corresponding PostToolUse/PostToolUseFailure has cleared it. Transient —
 	// set by the hook receiver in processActivity, not derived from transcript.
 	PermissionPending bool `json:"-"`
+
+	// SubagentCompletions surfaces parent-side "subagent done" signals
+	// from the most recent transcript scan (origin.kind="task-notification"
+	// lines parsed by the Claude Code adapter). Per-pass and transient —
+	// drained by the detector each activity event. See issue #134.
+	SubagentCompletions []SubagentCompletion `json:"-"`
+}
+
+// SubagentCompletion is the domain mirror of tailer.SubagentCompletion. The
+// detector uses these to transition child sessions to ready as soon as their
+// parent transcript records the authoritative task-notification event.
+type SubagentCompletion struct {
+	AgentID   string
+	ToolUseID string
+	Status    string
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one
@@ -249,6 +264,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		EstimatedCostUSD:     newM.EstimatedCostUSD,
 		LastAssistantText:    newM.LastAssistantText,
 		PermissionMode:       newM.PermissionMode,
+		SubagentCompletions:  newM.SubagentCompletions,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow

@@ -103,6 +103,16 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		LastAssistantText:      m.LastAssistantText,
 		PermissionMode:         m.PermissionMode,
 	}
+	if len(m.SubagentCompletions) > 0 {
+		result.SubagentCompletions = make([]session.SubagentCompletion, len(m.SubagentCompletions))
+		for i, c := range m.SubagentCompletions {
+			result.SubagentCompletions[i] = session.SubagentCompletion{
+				AgentID:   c.AgentID,
+				ToolUseID: c.ToolUseID,
+				Status:    c.Status,
+			}
+		}
+	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"
 	}

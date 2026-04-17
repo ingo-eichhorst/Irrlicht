@@ -15,6 +15,17 @@ type ToolUse struct {
 	Name string // tool name (e.g. "Bash", "Read", "shell")
 }
 
+// SubagentCompletion is an authoritative "subagent done" signal that lives on
+// the parent transcript (Claude Code writes it as a user-origin event with
+// origin.kind="task-notification"). The subagent's own JSONL is structurally
+// ambiguous when stop_reason is null; this parent-side event resolves it
+// without timing-based heuristics. See issue #134.
+type SubagentCompletion struct {
+	AgentID   string // <task-id> — matches the agent-<id>.jsonl filename
+	ToolUseID string // <tool-use-id> — the parent's Agent tool_use call
+	Status    string // <status> — "completed", etc.
+}
+
 // ParsedEvent is the normalized output from a format-specific transcript parser.
 // Each parser maps its native event structure into these fields.
 type ParsedEvent struct {
@@ -44,6 +55,12 @@ type ParsedEvent struct {
 	// working→ready→working flicker that happened when the parser lumped
 	// both markers under IsUserInterrupt.
 	IsToolDenial bool
+
+	// SubagentCompletions are parent-side signals that a child subagent has
+	// finished (parsed from origin.kind="task-notification" lines). The
+	// detector drains these on the parent path to transition children to
+	// ready without depending on the subagent's own ambiguous final line.
+	SubagentCompletions []SubagentCompletion
 
 	// Metadata extracted by the parser.
 	ModelName        string
