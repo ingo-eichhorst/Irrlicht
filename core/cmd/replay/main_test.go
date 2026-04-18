@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/application/services"
+	"irrlicht/core/domain/session"
 )
 
 // fixturePath returns an absolute path to a fixture under the repo-root
@@ -221,6 +223,53 @@ func TestReplay_GoldenFixture(t *testing.T) {
 	}
 	if report.Sessions != nil {
 		t.Errorf("non-sidecar replay produced Sessions: %+v", report.Sessions)
+	}
+}
+
+// TestReplay_Issue150_AskUserQuestion is the regression test for issue #150.
+// The 7b1f6cf4 session contains 6 AskUserQuestion tool_use events. Before
+// the fix, 2 of them collapsed into a single batch with their tool_result
+// (a debounce-window coincidence) and the brief working→waiting episode
+// was never emitted — the session went straight working→ready on denial.
+// After the fix, every AskUserQuestion pair must be represented by a
+// waiting episode (natural "user-blocking tool open → waiting" on the
+// tool_use, or synthetic on same-pass collapse).
+func TestReplay_Issue150_AskUserQuestion(t *testing.T) {
+	src := fixturePath(t, "claudecode/16-ask-user-question-issue-150.jsonl")
+	report, err := Replay(src, ReportSettings{
+		Adapter:            claudecode.AdapterName,
+		DebounceWindow:     2 * time.Second,
+		FlickerMaxDuration: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	var naturalWaiting, syntheticWaiting int
+	for _, tr := range report.Transitions {
+		if tr.PrevState != session.StateWorking || tr.NewState != session.StateWaiting {
+			continue
+		}
+		switch tr.Reason {
+		case "user-blocking tool open → waiting":
+			naturalWaiting++
+		case services.SyntheticWaitingReason:
+			syntheticWaiting++
+		}
+	}
+
+	const wantAskUserQuestionCount = 6
+	got := naturalWaiting + syntheticWaiting
+	if got != wantAskUserQuestionCount {
+		t.Errorf("waiting episodes for AskUserQuestion: got %d (natural=%d, synthetic=%d), want %d",
+			got, naturalWaiting, syntheticWaiting, wantAskUserQuestionCount)
+	}
+	// At least one synthetic must fire — the fixture was chosen because it
+	// contains a same-pass collapse that triggers the fix path. If future
+	// parser changes eliminate the collapse, this guard flags that the
+	// fixture no longer exercises issue #150.
+	if syntheticWaiting == 0 {
+		t.Error("expected at least one synthetic waiting transition; fixture may no longer exercise same-pass collapse")
 	}
 }
 

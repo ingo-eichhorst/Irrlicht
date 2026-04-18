@@ -84,6 +84,13 @@ type SessionMetrics struct {
 	// corresponding PostToolUse/PostToolUseFailure has cleared it. Transient —
 	// set by the hook receiver in processActivity, not derived from transcript.
 	PermissionPending bool `json:"-"`
+
+	// SawUserBlockingToolClosedThisPass reflects the last tailer pass: true
+	// when an AskUserQuestion / ExitPlanMode tool_use and its tool_result
+	// were processed together in one pass. Triggers the daemon's synthetic
+	// working→waiting emission so observers see the collapsed waiting
+	// episode (issue #150). Transient — per-pass, not persisted.
+	SawUserBlockingToolClosedThisPass bool `json:"-"`
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one

@@ -9,6 +9,7 @@ import (
 
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
 )
@@ -131,6 +132,182 @@ func TestSessionDetector_Activity_TransitionsToWaiting_WhenToolUseOpen(t *testin
 	state, _ := repo.Load("act1")
 	if state.State != session.StateWaiting {
 		t.Errorf("state: got %q, want waiting (open tool call blocks on user)", state.State)
+	}
+}
+
+// TestSessionDetector_Activity_SamePassUserBlocking_EmitsSyntheticWaiting
+// is the regression test for issue #150. When the tailer sees an
+// AskUserQuestion / ExitPlanMode tool_use and its matching tool_result
+// in a single pass (fswatcher coalesced the writes), HasOpenToolCall
+// is already false by the time the classifier runs and the brief
+// waiting episode is invisible. The daemon must emit a synthetic
+// working→waiting so observers (UI, replay) see the collapsed window.
+func TestSessionDetector_Activity_SamePassUserBlocking_EmitsSyntheticWaiting(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	rec := &mockRecorder{}
+	det := newDetector(tw, pw, repo)
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// Let seedFromDisk complete before injecting the session — otherwise
+	// seedFromDisk's own re-evaluation would apply rule 3 and transition
+	// the session to ready before our activity event arrives.
+	time.Sleep(20 * time.Millisecond)
+
+	// Metrics as if the tailer just processed tool_use(AskUserQuestion) +
+	// tool_result(is_error=true) + denial text in one pass. Denial flag is
+	// still set (the user text "[Request interrupted by user for tool use]"
+	// was the last user event in the batch), so the classifier's rule 3
+	// would return ready and skip waiting without the synthetic emit.
+	repo.Save(&session.SessionState{
+		SessionID:      "pass1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/pass1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     1,
+		Metrics: &session.SessionMetrics{
+			LastEventType:                     "user",
+			HasOpenToolCall:                   false,
+			LastWasToolDenial:                 true,
+			SawUserBlockingToolClosedThisPass: true,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "pass1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/pass1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("pass1")
+	if state.State != session.StateReady {
+		t.Errorf("final state: got %q, want ready (classifier's original ruling after synth)", state.State)
+	}
+
+	// Assert the lifecycle recorder saw a working→waiting→ready pair,
+	// not a direct working→ready.
+	var prevs, news []string
+	for _, ev := range rec.snapshot() {
+		if ev.Kind == lifecycle.KindStateTransition {
+			prevs = append(prevs, ev.PrevState)
+			news = append(news, ev.NewState)
+		}
+	}
+	wantPrevs := []string{session.StateWorking, session.StateWaiting}
+	wantNews := []string{session.StateWaiting, session.StateReady}
+	if len(prevs) != len(wantPrevs) {
+		t.Fatalf("state transitions: got %d (%v→%v), want %d (%v→%v)",
+			len(prevs), prevs, news, len(wantPrevs), wantPrevs, wantNews)
+	}
+	for i := range prevs {
+		if prevs[i] != wantPrevs[i] || news[i] != wantNews[i] {
+			t.Errorf("transition %d: got %s→%s, want %s→%s",
+				i, prevs[i], news[i], wantPrevs[i], wantNews[i])
+		}
+	}
+}
+
+// TestSessionDetector_Activity_SamePassUserBlocking_RespectsParentHold
+// guards the parent-hold invariant against the same-pass synthesis path
+// from issue #150. A parent with active children must stay working even
+// when its own metrics would otherwise classify ready (rule 3 denial).
+// Without the parentHeldWorking guard, the synth path would flip the
+// parent to waiting, reclassify, and let rule 3 fire → parent goes to
+// ready despite the child still running. This test locks down the fix.
+func TestSessionDetector_Activity_SamePassUserBlocking_RespectsParentHold(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	rec := &mockRecorder{}
+	det := newDetector(tw, pw, repo)
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// Let seedFromDisk complete before injecting sessions — otherwise
+	// it re-evaluates them and may transition the parent before our
+	// activity event arrives.
+	time.Sleep(20 * time.Millisecond)
+
+	// Active child: keeps the parent held working. HasOpenToolCall=true
+	// makes finishOrphanedChildren skip it without needing a real
+	// transcript file.
+	repo.Save(&session.SessionState{
+		SessionID:       "child1",
+		ParentSessionID: "parentA",
+		State:           session.StateWorking,
+		TranscriptPath:  "/home/.claude/projects/-Users-test/child1.jsonl",
+		FirstSeen:       time.Now().Unix(),
+		UpdatedAt:       time.Now().Unix(),
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant",
+			HasOpenToolCall: true,
+		},
+	})
+
+	// Parent session: metrics identical to
+	// TestSessionDetector_Activity_SamePassUserBlocking_EmitsSyntheticWaiting
+	// — same-pass collapse of AskUserQuestion with a sticky denial marker.
+	// Classifier rule 3 wants to return ready; parent-hold must veto that
+	// and the synth path must not fire.
+	repo.Save(&session.SessionState{
+		SessionID:      "parentA",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parentA.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     1,
+		Metrics: &session.SessionMetrics{
+			LastEventType:                     "user",
+			HasOpenToolCall:                   false,
+			LastWasToolDenial:                 true,
+			SawUserBlockingToolClosedThisPass: true,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parentA",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/parentA.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	parent, _ := repo.Load("parentA")
+	if parent.State != session.StateWorking {
+		t.Errorf("parent final state: got %q, want working (child still active)", parent.State)
+	}
+
+	// No lifecycle transition on the parent should mention the synthetic
+	// reason. The parent should stay in working throughout this event.
+	for _, ev := range rec.snapshot() {
+		if ev.Kind != lifecycle.KindStateTransition || ev.SessionID != "parentA" {
+			continue
+		}
+		if ev.Reason == services.SyntheticWaitingReason {
+			t.Errorf("synthesis fired on held parent: %+v", ev)
+		}
+		if ev.NewState == session.StateWaiting || ev.NewState == session.StateReady {
+			t.Errorf("parent transitioned to %q while child still active: %+v", ev.NewState, ev)
+		}
 	}
 }
 

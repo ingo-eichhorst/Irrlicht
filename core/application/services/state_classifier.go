@@ -89,3 +89,41 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 	return currentState, ""
 }
 
+// SyntheticWaitingReason is the reason string used for the working→waiting
+// transition synthesised when a user-blocking tool's tool_use and
+// tool_result are processed in the same tailer pass (issue #150).
+const SyntheticWaitingReason = "user-blocking tool opened and closed in one pass → synthetic waiting"
+
+// ShouldSynthesizeCollapsedWaiting reports whether the caller should emit
+// a synthetic working→waiting transition before applying the classifier's
+// result. This recovers the brief waiting episode that fswatcher collapsed
+// when it coalesced the tool_use and tool_result writes of a user-blocking
+// tool (AskUserQuestion / ExitPlanMode) into one event.
+//
+// Fires only when the session was already working (so the classifier has
+// no natural way to route through waiting) and the classifier is NOT
+// already transitioning to waiting on its own. Two concrete same-pass
+// collapse variants reach this:
+//
+//   - Case A: tool_result carries is_error=true AND a trailing user text
+//     "[Request interrupted by user for tool use]" sets LastWasToolDenial.
+//     Classifier returns ready via rule 3.
+//   - Case B: the denial user text is followed by another user event in
+//     the same pass, which clears LastWasToolDenial. Classifier then
+//     returns working via rule 4 default. Without this helper the user
+//     never sees the waiting episode at all.
+//
+// Callers (SessionDetector.processActivity and the replay harness) should,
+// on true: emit working→waiting with SyntheticWaitingReason, set the
+// effective current state to waiting, and re-run ClassifyState so the
+// next transition carries the correct "while waiting" phrasing.
+func ShouldSynthesizeCollapsedWaiting(currentState, newState string, metrics *session.SessionMetrics) bool {
+	if currentState != session.StateWorking || newState == session.StateWaiting {
+		return false
+	}
+	if metrics == nil {
+		return false
+	}
+	return metrics.SawUserBlockingToolClosedThisPass
+}
+

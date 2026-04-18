@@ -102,6 +102,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		LastCWD:                m.LastCWD,
 		LastAssistantText:      m.LastAssistantText,
 		PermissionMode:         m.PermissionMode,
+		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
 	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"

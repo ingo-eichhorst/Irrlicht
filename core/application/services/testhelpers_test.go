@@ -7,9 +7,33 @@ import (
 
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
 )
+
+// mockRecorder captures lifecycle events for assertions. Safe for
+// concurrent use — the detector records from multiple goroutines.
+type mockRecorder struct {
+	mu     sync.Mutex
+	events []lifecycle.Event
+}
+
+func (r *mockRecorder) Record(ev lifecycle.Event) {
+	r.mu.Lock()
+	r.events = append(r.events, ev)
+	r.mu.Unlock()
+}
+
+func (r *mockRecorder) Close() error { return nil }
+
+func (r *mockRecorder) snapshot() []lifecycle.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]lifecycle.Event, len(r.events))
+	copy(out, r.events)
+	return out
+}
 
 // --- shared mock implementations for tests -----------------------------------
 
