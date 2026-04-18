@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +28,7 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil))
 	mux.HandleFunc("GET /state", handleGetState(repo))
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
@@ -184,6 +187,127 @@ func TestGate_GetState(t *testing.T) {
 	}
 	if !found {
 		t.Error("state-gate-1 not found in GET /state response")
+	}
+}
+
+// TestHandleGetSessions_AttachesGroupCosts verifies that /api/v1/sessions
+// embeds per-timeframe cost totals on non-orchestrator groups when a
+// CostTracker is wired, and that it omits `costs` when the tracker is nil.
+func TestHandleGetSessions_AttachesGroupCosts(t *testing.T) {
+	repoDir := t.TempDir()
+	costDir := filepath.Join(t.TempDir(), "cost")
+	if err := os.MkdirAll(costDir, 0o700); err != nil {
+		t.Fatalf("mkdir cost dir: %v", err)
+	}
+
+	// Seed a cost JSONL for project "proj-a" with a pre-window baseline
+	// (10h ago, $1.00) and a current row (1h ago, $1.25). Trailing-window
+	// deltas should be $0.25 for day / week / month / year.
+	now := time.Now().Unix()
+	writeCostRow(t, costDir, "proj-a", now-10*3600, "sess-1", 1.00)
+	writeCostRow(t, costDir, "proj-a", now-1*3600, "sess-1", 1.25)
+
+	repo := filesystem.NewWithDir(repoDir)
+	tracker := filesystem.NewCostTrackerWithDir(costDir)
+
+	// Seed a session whose project name matches the cost file so
+	// BuildDashboard groups it under "proj-a".
+	if err := repo.Save(&session.SessionState{
+		SessionID:   "sess-1",
+		State:       session.StateReady,
+		ProjectName: "proj-a",
+		FirstSeen:   now - 10*3600,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	push := services.NewPushService()
+	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, tracker))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/sessions")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+
+	var groups []*session.AgentGroup
+	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	var projA *session.AgentGroup
+	for _, g := range groups {
+		if g.Name == "proj-a" {
+			projA = g
+			break
+		}
+	}
+	if projA == nil {
+		t.Fatalf("proj-a group missing from response: %+v", groups)
+	}
+	if projA.Costs == nil {
+		t.Fatalf("proj-a.Costs must not be nil")
+	}
+	for _, tf := range []string{"day", "week", "month", "year"} {
+		if v, ok := projA.Costs[tf]; !ok || v <= 0 {
+			t.Errorf("proj-a.Costs[%q]: want > 0, got %v (ok=%v)", tf, v, ok)
+		}
+	}
+	// The pre-window baseline $1.00 → max $1.25 ⇒ delta $0.25 for every
+	// window. Floating-point comparison tolerates tiny scanner artefacts.
+	if got := projA.Costs["day"]; got < 0.24 || got > 0.26 {
+		t.Errorf("proj-a.Costs[day]: want ≈0.25, got %v", got)
+	}
+}
+
+// TestHandleGetSessions_OmitsCostsWhenTrackerNil keeps the no-tracker path
+// honest: the response must parse cleanly and groups must not carry a
+// costs field.
+func TestHandleGetSessions_OmitsCostsWhenTrackerNil(t *testing.T) {
+	srv, repo := newTestStack(t)
+	defer srv.Close()
+	seedSession(t, repo, "no-cost-1", session.StateReady)
+
+	resp, err := http.Get(srv.URL + "/api/v1/sessions")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var groups []*session.AgentGroup
+	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, g := range groups {
+		if g.Costs != nil {
+			t.Errorf("group %q: Costs must be nil when tracker is nil, got %+v", g.Name, g.Costs)
+		}
+	}
+}
+
+// writeCostRow appends a raw JSONL row to <costDir>/<project>.jsonl matching
+// the CostTracker's on-disk schema. Used to seed historical rows that
+// RecordSnapshot (which stamps time.Now) cannot produce.
+func writeCostRow(t *testing.T, costDir, project string, ts int64, sessionID string, cost float64) {
+	t.Helper()
+	line := fmt.Sprintf(`{"ts":%d,"project":%q,"session":%q,"cost":%g}`+"\n", ts, project, sessionID, cost)
+	path := filepath.Join(costDir, project+".jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 }
 

@@ -189,89 +189,6 @@ struct SessionListView: View {
         }
     }
     
-    // MARK: - Session List
-
-    private var sessionGroups: [SessionGroup] {
-        // sessions = top-level only (no children in cycle)
-        // allSessions = includes children for badge counting
-        let topLevel: [SessionState]
-        if gasTownProvider.isAvailable {
-            topLevel = sessionManager.sessions.filter { !gasTownProvider.ownsSession($0) }
-        } else {
-            topLevel = sessionManager.sessions
-        }
-        let all = sessionManager.allSessions
-
-        return topLevel.map { parent in
-            let subagents = all.filter { $0.parentSessionId == parent.id }
-            return SessionGroup(parent: parent, subagents: subagents)
-        }
-    }
-
-    private var projectGroups: [ProjectGroup] {
-        let groups = sessionGroups
-
-        // Group session groups by project name (from git repo root) or full cwd path.
-        // Sessions in different worktrees of the same repo share the same project name.
-        var grouped: [String: [SessionGroup]] = [:]
-        for group in groups {
-            let key = group.parent.projectName ?? group.parent.cwd
-            grouped[key, default: []].append(group)
-        }
-
-        // Convert to ProjectGroup array, ordered by user preference
-        let unsorted = grouped.map { key, value in
-            let display = value.first?.parent.projectName
-                ?? URL(fileURLWithPath: key).lastPathComponent
-            return ProjectGroup(projectDirectory: key, displayName: display, sessionGroups: value)
-        }
-        return sessionManager.orderedProjectGroups(from: unsorted)
-    }
-
-    private var sessionListContent: some View {
-        let allProjectGroups = projectGroups
-        let isCompactMode = allProjectGroups.count > 5
-        // Pre-compute starting flat index for each project group (for drag/drop continuity)
-        var startIndices: [String: Int] = [:]
-        var runningIndex = 0
-        for pg in allProjectGroups {
-            startIndices[pg.id] = runningIndex
-            runningIndex += pg.sessionGroups.count
-        }
-        let totalGroups = runningIndex
-
-        let projectGroupCount = allProjectGroups.count
-
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 1) {
-                ForEach(Array(allProjectGroups.enumerated()), id: \.element.id) { pgIndex, projectGroup in
-                    ProjectGroupSectionView(
-                        projectGroup: projectGroup,
-                        startingGroupIndex: startIndices[projectGroup.id] ?? 0,
-                        isCompact: isCompactMode,
-                        projectGroupIndex: pgIndex,
-                        totalProjectGroups: projectGroupCount
-                    )
-                    .onDrop(of: [.text], delegate: ProjectGroupDropDelegate(
-                        sessionManager: sessionManager,
-                        targetProjectGroupIndex: pgIndex,
-                        allProjectDirectories: Set(allProjectGroups.map(\.projectDirectory))
-                    ))
-                }
-
-                // Drop zone at the end of the list (for sessions)
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(height: 20)
-                    .onDrop(of: [.text], delegate: SessionGroupDropDelegate(
-                        sessionManager: sessionManager,
-                        targetGroupIndex: totalGroups
-                    ))
-            }
-        }
-        .frame(maxHeight: 400)
-    }
-    
     // MARK: - Error View
     
     private func errorView(_ error: String) -> some View {
@@ -576,6 +493,10 @@ struct GroupView: View {
     let group: SessionManager.AgentGroup
     var depth: Int = 0
     @State private var isExpanded = true
+    @AppStorage("projectCostTimeframe") private var costTimeframeRaw: String = CostTimeframe.day.rawValue
+    @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+
+    private var costTimeframe: CostTimeframe { CostTimeframe.from(costTimeframeRaw) }
 
     private var agentCount: Int {
         let direct = group.agents?.count ?? 0
@@ -585,39 +506,68 @@ struct GroupView: View {
 
     private var isTopLevel: Bool { depth == 0 }
 
+    /// Formatted cost for this group in the currently-selected time frame,
+    /// or nil if no data.
+    private var formattedCost: String? {
+        guard showCostDisplay, isTopLevel, !group.isGasTown else { return nil }
+        guard let v = group.costs?[costTimeframe.rawValue], v > 0 else { return nil }
+        let formatted: String
+        if v < 0.01 { formatted = "<$0.01" }
+        else if v < 10 { formatted = String(format: "$%.2f", v) }
+        else { formatted = String(format: "$%.0f", v) }
+        return formatted + costTimeframe.suffix
+    }
+
+    private func cycleCostTimeframe() {
+        costTimeframeRaw = costTimeframe.next().rawValue
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary)
-                        .frame(width: 10)
-
-                    if isTopLevel && group.isGasTown {
-                        Text("\u{26FD}")
-                            .font(.system(size: 10))
+            HStack(spacing: 6) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isExpanded.toggle()
                     }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary)
+                            .frame(width: 10)
 
-                    Text(group.name)
-                        .font(.system(isTopLevel ? .caption : .caption2, design: .monospaced))
-                        .fontWeight(isTopLevel ? .semibold : .medium)
-                        .foregroundColor(isTopLevel ? .primary : .secondary)
+                        if isTopLevel && group.isGasTown {
+                            Text("\u{26FD}")
+                                .font(.system(size: 10))
+                        }
 
-                    Spacer()
-
-                    let count = isTopLevel ? agentCount : (group.agents?.count ?? 0)
-                    Text(isTopLevel ? "\(count) \(count == 1 ? "session" : "sessions")" : "\(count)")
-                        .font(.caption2)
-                        .foregroundColor(.secondary.opacity(isTopLevel ? 0.7 : 0.5))
+                        Text(group.name)
+                            .font(.system(isTopLevel ? .caption : .caption2, design: .monospaced))
+                            .fontWeight(isTopLevel ? .semibold : .medium)
+                            .foregroundColor(isTopLevel ? .primary : .secondary)
+                    }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                if let cost = formattedCost {
+                    Button(action: cycleCostTimeframe) {
+                        Text(cost)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Click to cycle time frame (day → week → month → year)")
+                }
+
+                Spacer()
+
+                let count = isTopLevel ? agentCount : (group.agents?.count ?? 0)
+                Text(isTopLevel ? "\(count) \(count == 1 ? "session" : "sessions")" : "\(count)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary.opacity(isTopLevel ? 0.7 : 0.5))
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, isTopLevel ? 12 : 20)
             .padding(.vertical, isTopLevel ? 4 : 3)
 
@@ -639,276 +589,28 @@ struct GroupView: View {
     }
 }
 
-// MARK: - Session Group
+// MARK: - Cost Timeframe
 
-struct SessionGroup: Identifiable {
-    let parent: SessionState
-    let subagents: [SessionState]
+enum CostTimeframe: String, CaseIterable {
+    case day, week, month, year
 
-    var id: String { parent.id }
-    var allSessions: [SessionState] { [parent] + subagents }
-}
-
-struct ProjectGroup: Identifiable {
-    let projectDirectory: String   // full path or project name (grouping key)
-    let displayName: String        // short name shown in UI
-    let sessionGroups: [SessionGroup]
-
-    var id: String { projectDirectory }
-
-    /// States in display order (maps left-to-right dots to top-to-bottom sessions).
-    var sessionStates: [SessionState.State] {
-        sessionGroups.map { $0.parent.state }
-    }
-
-    /// Highest-priority state across all sessions (waiting > working > ready).
-    var dominantState: SessionState.State {
-        .dominant(in: sessionStates)
-    }
-}
-
-struct SessionStateDots: View {
-    let projectGroup: ProjectGroup
-    let isCompact: Bool
-
-    private var stateCounts: (waiting: Int, working: Int, ready: Int) {
-        var w = 0, k = 0, r = 0
-        for s in projectGroup.sessionStates {
-            switch s {
-            case .waiting: w += 1
-            case .working: k += 1
-            case .ready:   r += 1
-            }
-        }
-        return (w, k, r)
-    }
-
-    var body: some View {
-        if isCompact {
-            compactDot
-        } else if projectGroup.sessionStates.count > 4 {
-            overflowCounts
-        } else {
-            normalDots
+    var suffix: String {
+        switch self {
+        case .day:   return " / day"
+        case .week:  return " / week"
+        case .month: return " / month"
+        case .year:  return " / year"
         }
     }
 
-    // MARK: Normal mode (≤4 sessions): individual dots
-
-    private var normalDots: some View {
-        HStack(spacing: 3) {
-            ForEach(Array(projectGroup.sessionStates.enumerated()), id: \.offset) { _, state in
-                dotForState(state)
-            }
-        }
-        .tooltip(tooltipText)
+    static func from(_ raw: String) -> CostTimeframe {
+        CostTimeframe(rawValue: raw) ?? .day
     }
 
-    private func dotForState(_ state: SessionState.State) -> some View {
-        Circle()
-            .fill(Color(hex: state.color))
-            .frame(width: 6, height: 6)
-    }
-
-    // MARK: Overflow mode (>4 sessions): state counts
-
-    private var overflowCounts: some View {
-        let c = stateCounts
-        return HStack(spacing: 4) {
-            if c.waiting > 0 {
-                stateCountLabel("●", count: c.waiting, color: Color(hex: SessionState.State.waiting.color))
-            }
-            if c.working > 0 {
-                stateCountLabel("●", count: c.working, color: Color(hex: SessionState.State.working.color))
-            }
-            if c.ready > 0 {
-                stateCountLabel("●", count: c.ready, color: Color(hex: SessionState.State.ready.color))
-            }
-        }
-        .tooltip(tooltipText)
-    }
-
-    private func stateCountLabel(_ symbol: String, count: Int, color: Color) -> some View {
-        HStack(spacing: 1) {
-            Text(symbol)
-                .font(.system(size: 8))
-                .foregroundColor(color)
-            Text("\(count)")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundColor(color)
-        }
-    }
-
-    // MARK: Compact mode (many groups): single dominant dot
-
-    private var compactDot: some View {
-        Circle()
-            .fill(Color(hex: projectGroup.dominantState.color))
-            .frame(width: 6, height: 6)
-            .tooltip(tooltipText)
-    }
-
-    private var tooltipText: String {
-        let c = stateCounts
-        var parts: [String] = []
-        if c.waiting > 0 { parts.append("\(c.waiting) waiting") }
-        if c.working > 0 { parts.append("\(c.working) working") }
-        if c.ready > 0 { parts.append("\(c.ready) ready") }
-        return parts.joined(separator: ", ")
-    }
-}
-
-// MARK: - Project Group Section View
-
-struct ProjectGroupSectionView: View {
-    let projectGroup: ProjectGroup
-    let startingGroupIndex: Int
-    let isCompact: Bool
-    let projectGroupIndex: Int
-    let totalProjectGroups: Int
-    @EnvironmentObject var sessionManager: SessionManager
-    @AppStorage("debugMode") private var debugMode: Bool = false
-    @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
-    @State private var isExpanded = true
-
-    /// Combined cost of all sessions in the group
-    private var totalCost: Double {
-        projectGroup.sessionGroups.reduce(0) { sum, group in
-            sum + (group.parent.metrics?.estimatedCostUSD ?? 0)
-                + group.subagents.reduce(0) { $0 + ($1.metrics?.estimatedCostUSD ?? 0) }
-        }
-    }
-
-    /// Maximum context utilization across all sessions in the group
-    private var maxContextUtilization: Double {
-        projectGroup.sessionGroups.flatMap { [$0.parent] + $0.subagents }
-            .compactMap { $0.metrics?.contextUtilization }
-            .max() ?? 0
-    }
-
-    /// Color for the project name based on max context utilization
-    private var projectNameColor: Color {
-        if maxContextUtilization > 90 { return Color(hex: "#FF3B30") }   // red
-        if maxContextUtilization > 75 { return Color(hex: "#FF9500") }   // orange
-        if maxContextUtilization > 50 { return Color(hex: "#FFCC00") }   // yellow
-        return Color(hex: "#34C759")                                      // green
-    }
-
-    private var formattedTotalCost: String? {
-        guard totalCost > 0 else { return nil }
-        if totalCost < 0.01 { return "<$0.01" }
-        if totalCost < 10 { return String(format: "$%.2f", totalCost) }
-        return String(format: "$%.0f", totalCost)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Collapsible project header with reorder arrows
-            HStack(spacing: 0) {
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        isExpanded.toggle()
-                    }
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary)
-                            .frame(width: 10)
-
-                        Text(projectGroup.displayName)
-                            .font(.system(.caption, design: .monospaced))
-                            .fontWeight(.semibold)
-                            .foregroundColor(projectNameColor)
-
-                        if showCostDisplay, let cost = formattedTotalCost {
-                            Text(cost)
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundColor(.secondary)
-                        }
-
-                        SessionStateDots(projectGroup: projectGroup, isCompact: isCompact)
-
-                        Spacer()
-
-                        let count = projectGroup.sessionGroups.count
-                        Text("\(count) \(count == 1 ? "session" : "sessions")")
-                            .font(.caption2)
-                            .foregroundColor(.secondary.opacity(0.7))
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                if totalProjectGroups > 1 {
-                    HStack(spacing: 0) {
-                        Button(action: {
-                            sessionManager.moveProjectGroupUp(projectDirectory: projectGroup.projectDirectory)
-                        }) {
-                            Image(systemName: "chevron.up")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                                .frame(width: 14, height: 20)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(projectGroupIndex == 0)
-                        .opacity(projectGroupIndex == 0 ? 0.3 : 1.0)
-
-                        Button(action: {
-                            sessionManager.moveProjectGroupDown(projectDirectory: projectGroup.projectDirectory)
-                        }) {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                                .frame(width: 14, height: 20)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(projectGroupIndex == totalProjectGroups - 1)
-                        .opacity(projectGroupIndex == totalProjectGroups - 1 ? 0.3 : 1.0)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .onDrag {
-                NSItemProvider(object: projectGroup.projectDirectory as NSString)
-            }
-
-            // Session rows (indented under the project header)
-            if isExpanded {
-                ForEach(Array(projectGroup.sessionGroups.enumerated()), id: \.element.id) { localIndex, group in
-                    // The daemon publishes a unified subagent summary (in-process
-                    // from the adapter plus file-based children) on both REST and
-                    // WebSocket paths; see ComputeSubagentSummary in core.
-                    let activeCount = (group.parent.subagents?.working ?? 0)
-                        + (group.parent.subagents?.waiting ?? 0)
-                    SessionRowView(session: group.parent, agentNumber: localIndex + 1, activeSubagentCount: activeCount)
-                        .padding(.leading, 8)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            print("Selected session: \(group.parent.id)")
-                        }
-                        .onDrag {
-                            NSItemProvider(object: group.parent.id as NSString)
-                        }
-                        .onDrop(of: [.text], delegate: SessionGroupDropDelegate(
-                            sessionManager: sessionManager,
-                            targetGroupIndex: startingGroupIndex + localIndex
-                        ))
-
-                    // Subagent rows (indented, compact) — debug mode only
-                    if debugMode {
-                        ForEach(group.subagents) { subagent in
-                            SubagentRowView(session: subagent)
-                                .padding(.leading, 8)
-                        }
-                    }
-                }
-            }
-        }
-        .accessibilityIdentifier("project-group-\(projectGroup.projectDirectory)")
+    func next() -> CostTimeframe {
+        let all = Self.allCases
+        let idx = all.firstIndex(of: self) ?? 0
+        return all[(idx + 1) % all.count]
     }
 }
 
@@ -938,71 +640,6 @@ extension Color {
             blue:  Double(b) / 255,
             opacity: Double(a) / 255
         )
-    }
-}
-
-// MARK: - Drag and Drop Support
-
-struct SessionGroupDropDelegate: DropDelegate {
-    let sessionManager: SessionManager
-    let targetGroupIndex: Int
-
-    func validateDrop(info: DropInfo) -> Bool {
-        return info.hasItemsConforming(to: [.text])
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        guard let itemProvider = info.itemProviders(for: [.text]).first else {
-            return false
-        }
-
-        itemProvider.loadObject(ofClass: NSString.self) { item, error in
-            guard let parentId = item as? String else { return }
-            DispatchQueue.main.async {
-                sessionManager.reorderGroup(parentId: parentId, to: targetGroupIndex)
-            }
-        }
-
-        return true
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        return DropProposal(operation: .move)
-    }
-}
-
-// MARK: - Project Group Drag and Drop
-
-struct ProjectGroupDropDelegate: DropDelegate {
-    let sessionManager: SessionManager
-    let targetProjectGroupIndex: Int
-    let allProjectDirectories: Set<String>
-
-    func validateDrop(info: DropInfo) -> Bool {
-        return info.hasItemsConforming(to: [.text])
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        guard let itemProvider = info.itemProviders(for: [.text]).first else {
-            return false
-        }
-
-        itemProvider.loadObject(ofClass: NSString.self) { item, error in
-            guard let projectDirectory = item as? String,
-                  allProjectDirectories.contains(projectDirectory) else { return }
-            DispatchQueue.main.async {
-                sessionManager.reorderProjectGroup(
-                    projectDirectory: projectDirectory,
-                    to: targetProjectGroupIndex
-                )
-            }
-        }
-
-        return true
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        return DropProposal(operation: .move)
     }
 }
 
