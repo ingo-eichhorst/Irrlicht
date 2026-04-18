@@ -182,6 +182,26 @@ func main() {
 	// directory scans from the many concurrent ListAll() callers.
 	cachedRepo := filesystem.NewCachedSessionRepository(fsRepo, 3*time.Second)
 
+	// Cost tracker: append-only per-project JSONL files for trailing-window
+	// cost queries. Prune rows older than 400 days on startup so "per year"
+	// windows stay fast and files don't grow unbounded.
+	costTracker, err := filesystem.NewCostTracker()
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to init cost tracker: %v", err))
+	} else {
+		if err := costTracker.Prune(400); err != nil {
+			logger.LogError("startup", "", fmt.Sprintf("cost tracker prune failed: %v", err))
+		}
+		if allSessions, err := fsRepo.ListAll(); err == nil {
+			for _, s := range allSessions {
+				if err := costTracker.RecordBaseline(s); err != nil {
+					logger.LogError("startup", s.SessionID,
+						fmt.Sprintf("cost tracker baseline failed: %v", err))
+				}
+			}
+		}
+	}
+
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
 
@@ -317,7 +337,7 @@ func main() {
 	}
 
 	// Register API endpoints (after orchMonitor is available).
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker))
 
 	// Inbound adapters: watch agent transcript directories for session files.
 	claudeCodeWatcher := claudecode.New(cfg.MaxSessionAge)
@@ -379,6 +399,9 @@ func main() {
 		Version, cfg.ReadySessionTTL,
 		pidDiscovers,
 	)
+	if costTracker != nil {
+		detector.SetCostTracker(costTracker)
+	}
 
 	// Hook receiver: Claude Code PermissionRequest/PostToolUse events.
 	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.
@@ -446,16 +469,58 @@ func socketPath() string {
 	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichd.sock")
 }
 
-func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor) http.HandlerFunc {
+// costTimeframeSeconds maps the four supported time-frame keys to their
+// trailing-window duration in seconds. These are embedded under each
+// project group's "costs" field in the /api/v1/sessions response.
+var costTimeframeSeconds = map[string]int64{
+	"day":   24 * 3600,
+	"week":  7 * 24 * 3600,
+	"month": 30 * 24 * 3600,
+	"year":  365 * 24 * 3600,
+}
+
+func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker *filesystem.CostTracker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
 		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
+		if tracker != nil {
+			attachGroupCosts(resp, tracker)
+		}
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// attachGroupCosts populates each top-level group's Costs map with the
+// trailing-window cost for day/week/month/year. Orchestrator groups are
+// skipped — their agents span projects, so group-level aggregation is
+// ambiguous.
+func attachGroupCosts(groups []*session.AgentGroup, tracker *filesystem.CostTracker) {
+	byTf := make(map[string]map[string]float64, len(costTimeframeSeconds))
+	for tf, secs := range costTimeframeSeconds {
+		m, err := tracker.ProjectCostsInWindow(secs)
+		if err != nil {
+			continue
+		}
+		byTf[tf] = m
+	}
+	for _, g := range groups {
+		if g == nil || g.Type == "gastown" {
+			continue
+		}
+		costs := make(map[string]float64, len(costTimeframeSeconds))
+		for tf := range costTimeframeSeconds {
+			if v, ok := byTf[tf][g.Name]; ok {
+				costs[tf] = v
+			}
+		}
+		if len(costs) > 0 {
+			g.Costs = costs
+		}
 	}
 }
 

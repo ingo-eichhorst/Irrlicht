@@ -14,6 +14,13 @@ type AgentGroup struct {
 	Status string        `json:"status,omitempty"` // codebase status (e.g. "operational")
 	Agents []*Agent      `json:"agents,omitempty"`
 	Groups []*AgentGroup `json:"groups,omitempty"` // nested sub-groups (e.g. rigs)
+
+	// Costs holds per-time-frame cost totals (USD) accrued within the
+	// trailing window for each key. Keys: "day", "week", "month", "year".
+	// Populated by the HTTP handler from the CostTracker; zero values are
+	// omitted by the tracker but present keys may still be 0 when no data
+	// exists in the window.
+	Costs map[string]float64 `json:"costs,omitempty"`
 }
 
 // Agent is a session with optional orchestrator role and nested children.

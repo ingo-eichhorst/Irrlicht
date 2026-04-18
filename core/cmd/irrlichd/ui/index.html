@@ -260,6 +260,12 @@
       font-size: 9px;
       color: var(--muted);
       margin-left: 4px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .group-cost:hover {
+      color: var(--text-bright);
     }
 
     .group-count {
@@ -738,6 +744,16 @@
     let sessionIndex = new Map();
     let collapsedGroups = new Set();
 
+    // --- Cost timeframes ---
+    const COST_TIMEFRAMES = [
+      { key: 'day',   suffix: '/d'  },
+      { key: 'week',  suffix: '/w'  },
+      { key: 'month', suffix: '/mo' },
+      { key: 'year',  suffix: '/yr' },
+    ];
+    let currentTimeframe = localStorage.getItem('irrlicht_costTimeframe') || 'day';
+    if (!COST_TIMEFRAMES.find(t => t.key === currentTimeframe)) currentTimeframe = 'day';
+
     // --- Timeline history ---
     const TIMELINE_MAX_TICKS = 150;
     const TIMELINE_TICK_MS = 2000;
@@ -1041,7 +1057,7 @@
       el.innerHTML = '<span class="group-chevron">\u25BE</span>' +
         '<span class="group-dot"></span>' +
         '<span class="group-name"></span>' +
-        '<span class="group-cost"></span>' +
+        '<span class="group-cost" title="Click to cycle time frame"></span>' +
         '<span class="group-count"></span>';
       el.addEventListener('click', () => {
         if (collapsedGroups.has(group.name)) {
@@ -1051,14 +1067,36 @@
         }
         render();
       });
+      const costEl = el.querySelector('.group-cost');
+      costEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        cycleCostTimeframe();
+      });
       updateGroupHeader(el, group);
       return el;
     }
 
+    function cycleCostTimeframe() {
+      const idx = COST_TIMEFRAMES.findIndex(t => t.key === currentTimeframe);
+      currentTimeframe = COST_TIMEFRAMES[(idx + 1) % COST_TIMEFRAMES.length].key;
+      localStorage.setItem('irrlicht_costTimeframe', currentTimeframe);
+      render();
+    }
+
     function updateGroupHeader(el, group) {
       el.querySelector('.group-name').textContent = group.name;
-      const cost = groupTotalCost(group);
-      el.querySelector('.group-cost').textContent = cost > 0 ? formatCost(cost) : '';
+      const tf = COST_TIMEFRAMES.find(t => t.key === currentTimeframe) || COST_TIMEFRAMES[0];
+      const windowed = group.costs ? group.costs[currentTimeframe] : undefined;
+      let costText = '';
+      if (typeof windowed === 'number' && windowed > 0) {
+        costText = formatCost(windowed) + tf.suffix;
+      } else {
+        // Fallback to cumulative sum when the daemon hasn't recorded any
+        // window data yet for this project.
+        const fallback = groupTotalCost(group);
+        if (fallback > 0) costText = formatCost(fallback);
+      }
+      el.querySelector('.group-cost').textContent = costText;
       const totalAgents = group.agents.length + group.agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
       el.querySelector('.group-count').textContent = totalAgents + (totalAgents === 1 ? ' agent' : ' agents');
 
@@ -1445,6 +1483,17 @@
       render();
       timelineTick(); // First tick immediately
     });
+    // Periodic re-hydration so trailing-window costs (carried on each group
+    // under `costs`) don't go stale between WebSocket deltas, which only
+    // carry individual session updates.
+    setInterval(() => {
+      fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
+        if (!resp) return;
+        dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || dashboardGroups);
+        rebuildIndex();
+        render();
+      });
+    }, 30000);
     // Secondary fetch for full orchestrator hierarchy (global_agents, codebases).
     // The initial /api/v1/sessions response only carries an OrchestratorSummary;
     // the full state is needed to render the Gas Town hierarchy view.

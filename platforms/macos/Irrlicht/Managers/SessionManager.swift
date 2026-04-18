@@ -19,6 +19,15 @@ class SessionManager: ObservableObject {
     @Published var lastError: String?
     @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
 
+    /// Trailing-window costs per project, keyed by project name, then by
+    /// timeframe ("day"/"week"/"month"/"year" → USD). Populated from the
+    /// /api/v1/sessions response each time groups are hydrated.
+    @Published var projectCosts: [String: [String: Double]] = [:]
+    /// Timer that periodically re-hydrates sessions so group-level cost
+    /// values (which only ride the /api/v1/sessions response) stay fresh.
+    private var projectCostsTimer: Timer?
+    private let projectCostsRefreshInterval: TimeInterval = 30.0
+
     private let instancesPath: URL
     private let orderFilePath: URL
     private var sessionOrder: [String] = []
@@ -83,6 +92,7 @@ class SessionManager: ObservableObject {
             } else {
                 self.startWebSocket()
             }
+            self.startProjectCostsPolling()
         }
     }
 
@@ -97,6 +107,8 @@ class SessionManager: ObservableObject {
         debounceTimer = nil
         periodicUpdateTimer?.invalidate()
         periodicUpdateTimer = nil
+        projectCostsTimer?.invalidate()
+        projectCostsTimer = nil
     }
 
     // MARK: - WebSocket
@@ -175,16 +187,21 @@ class SessionManager: ObservableObject {
         let status: String?
         let agents: [SessionState]?
         let groups: [AgentGroup]?
+        /// Trailing-window cost totals (USD) keyed by timeframe string
+        /// ("day", "week", "month", "year"). Present on non-orchestrator
+        /// top-level groups.
+        let costs: [String: Double]?
 
         var id: String { name }
         var isGasTown: Bool { type == "gastown" }
 
-        init(name: String, type: String? = nil, status: String? = nil, agents: [SessionState]? = nil, groups: [AgentGroup]? = nil) {
+        init(name: String, type: String? = nil, status: String? = nil, agents: [SessionState]? = nil, groups: [AgentGroup]? = nil, costs: [String: Double]? = nil) {
             self.name = name
             self.type = type
             self.status = status
             self.agents = agents
             self.groups = groups
+            self.costs = costs
         }
     }
 
@@ -209,6 +226,18 @@ class SessionManager: ObservableObject {
         return result
     }
 
+    /// Starts periodic re-hydration so group-level cost values (which arrive
+    /// as part of /api/v1/sessions and are not pushed via WebSocket deltas)
+    /// stay fresh. Idempotent.
+    func startProjectCostsPolling() {
+        projectCostsTimer?.invalidate()
+        projectCostsTimer = Timer.scheduledTimer(withTimeInterval: projectCostsRefreshInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.hydrateSessions()
+            }
+        }
+    }
+
     private func hydrateSessions() async {
         guard let url = URL(string: "http://localhost:7837/api/v1/sessions") else { return }
         do {
@@ -220,6 +249,13 @@ class SessionManager: ObservableObject {
             // Store the recursive group structure for the UI.
             apiGroups = topGroups
             groupedSessionIds = Set(topGroups.flatMap { collectSessionIds(from: $0) })
+
+            // Update project-level cost totals from the group payload.
+            var costs: [String: [String: Double]] = [:]
+            for group in topGroups {
+                if let c = group.costs { costs[group.name] = c }
+            }
+            projectCosts = costs
 
             // Flatten all groups → sessions (including nested sub-groups and children).
             var states: [SessionState] = []
@@ -307,7 +343,8 @@ class SessionManager: ObservableObject {
             type: group.type,
             status: group.status,
             agents: patchedAgents,
-            groups: patchedGroups
+            groups: patchedGroups,
+            costs: group.costs
         )
     }
 

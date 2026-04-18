@@ -77,6 +77,27 @@ type EventRecorder interface {
 	Close() error
 }
 
+// CostTracker persists per-session cost/token snapshots so clients can query
+// project-level cost totals over a trailing time window (last day/week/…).
+// Implementations must be safe for concurrent use.
+type CostTracker interface {
+	// RecordSnapshot appends a snapshot row for the session if either
+	// estimated cost or any cumulative token count has changed since the
+	// last stored row for that session, and at least a minimum debounce
+	// interval has elapsed. Implementations may no-op when state lacks
+	// metrics or a project name.
+	RecordSnapshot(state *session.SessionState) error
+
+	// ProjectCostsInWindow returns the cost (USD) accrued within the
+	// trailing window for every project that has snapshots in that window.
+	// Keyed by project name (matches SessionState.ProjectName).
+	ProjectCostsInWindow(windowSeconds int64) (map[string]float64, error)
+
+	// Prune drops snapshot rows older than the given number of days.
+	// Safe to call periodically (e.g. daemon startup).
+	Prune(olderThanDays int) error
+}
+
 // ProcessWatcher monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT and
 // invokes a callback when a watched process exits.
 type ProcessWatcher interface {

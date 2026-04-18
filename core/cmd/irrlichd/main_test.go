@@ -25,7 +25,7 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil))
 	mux.HandleFunc("GET /state", handleGetState(repo))
 	hub := wshub.NewHub(push)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)

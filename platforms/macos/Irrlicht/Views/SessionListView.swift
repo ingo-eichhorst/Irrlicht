@@ -576,6 +576,9 @@ struct GroupView: View {
     let group: SessionManager.AgentGroup
     var depth: Int = 0
     @State private var isExpanded = true
+    @AppStorage("projectCostTimeframe") private var costTimeframeRaw: String = CostTimeframe.day.rawValue
+
+    private var costTimeframe: CostTimeframe { CostTimeframe.from(costTimeframeRaw) }
 
     private var agentCount: Int {
         let direct = group.agents?.count ?? 0
@@ -585,39 +588,68 @@ struct GroupView: View {
 
     private var isTopLevel: Bool { depth == 0 }
 
+    /// Formatted cost for this group in the currently-selected time frame,
+    /// or nil if no data.
+    private var formattedCost: String? {
+        guard isTopLevel, !group.isGasTown else { return nil }
+        guard let v = group.costs?[costTimeframe.rawValue], v > 0 else { return nil }
+        let formatted: String
+        if v < 0.01 { formatted = "<$0.01" }
+        else if v < 10 { formatted = String(format: "$%.2f", v) }
+        else { formatted = String(format: "$%.0f", v) }
+        return formatted + costTimeframe.suffix
+    }
+
+    private func cycleCostTimeframe() {
+        costTimeframeRaw = costTimeframe.next().rawValue
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
-                }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary)
-                        .frame(width: 10)
-
-                    if isTopLevel && group.isGasTown {
-                        Text("\u{26FD}")
-                            .font(.system(size: 10))
+            HStack(spacing: 6) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isExpanded.toggle()
                     }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary)
+                            .frame(width: 10)
 
-                    Text(group.name)
-                        .font(.system(isTopLevel ? .caption : .caption2, design: .monospaced))
-                        .fontWeight(isTopLevel ? .semibold : .medium)
-                        .foregroundColor(isTopLevel ? .primary : .secondary)
+                        if isTopLevel && group.isGasTown {
+                            Text("\u{26FD}")
+                                .font(.system(size: 10))
+                        }
 
-                    Spacer()
-
-                    let count = isTopLevel ? agentCount : (group.agents?.count ?? 0)
-                    Text(isTopLevel ? "\(count) \(count == 1 ? "session" : "sessions")" : "\(count)")
-                        .font(.caption2)
-                        .foregroundColor(.secondary.opacity(isTopLevel ? 0.7 : 0.5))
+                        Text(group.name)
+                            .font(.system(isTopLevel ? .caption : .caption2, design: .monospaced))
+                            .fontWeight(isTopLevel ? .semibold : .medium)
+                            .foregroundColor(isTopLevel ? .primary : .secondary)
+                    }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                if let cost = formattedCost {
+                    Button(action: cycleCostTimeframe) {
+                        Text(cost)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Click to cycle time frame (day → week → month → year)")
+                }
+
+                Spacer()
+
+                let count = isTopLevel ? agentCount : (group.agents?.count ?? 0)
+                Text(isTopLevel ? "\(count) \(count == 1 ? "session" : "sessions")" : "\(count)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary.opacity(isTopLevel ? 0.7 : 0.5))
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, isTopLevel ? 12 : 20)
             .padding(.vertical, isTopLevel ? 4 : 3)
 
@@ -760,6 +792,29 @@ struct SessionStateDots: View {
 
 // MARK: - Project Group Section View
 
+enum CostTimeframe: String, CaseIterable {
+    case day, week, month, year
+
+    var suffix: String {
+        switch self {
+        case .day:   return " / day"
+        case .week:  return " / week"
+        case .month: return " / month"
+        case .year:  return " / year"
+        }
+    }
+
+    static func from(_ raw: String) -> CostTimeframe {
+        CostTimeframe(rawValue: raw) ?? .day
+    }
+
+    func next() -> CostTimeframe {
+        let all = Self.allCases
+        let idx = all.firstIndex(of: self) ?? 0
+        return all[(idx + 1) % all.count]
+    }
+}
+
 struct ProjectGroupSectionView: View {
     let projectGroup: ProjectGroup
     let startingGroupIndex: Int
@@ -769,9 +824,23 @@ struct ProjectGroupSectionView: View {
     @EnvironmentObject var sessionManager: SessionManager
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+    @AppStorage("projectCostTimeframe") private var costTimeframeRaw: String = CostTimeframe.day.rawValue
     @State private var isExpanded = true
 
-    /// Combined cost of all sessions in the group
+    private var costTimeframe: CostTimeframe { CostTimeframe.from(costTimeframeRaw) }
+
+    /// Trailing-window cost for this project in the selected time frame, or
+    /// nil if the daemon has not yet reported a value. Falls back to the
+    /// project directory key for project names with unusual characters.
+    private var windowedCost: Double? {
+        let tf = costTimeframe.rawValue
+        if let c = sessionManager.projectCosts[projectGroup.displayName]?[tf], c > 0 { return c }
+        if let c = sessionManager.projectCosts[projectGroup.projectDirectory]?[tf], c > 0 { return c }
+        return nil
+    }
+
+    /// Combined cost of all sessions in the group (cumulative fallback while
+    /// the windowed value is still loading).
     private var totalCost: Double {
         projectGroup.sessionGroups.reduce(0) { sum, group in
             sum + (group.parent.metrics?.estimatedCostUSD ?? 0)
@@ -795,50 +864,67 @@ struct ProjectGroupSectionView: View {
     }
 
     private var formattedTotalCost: String? {
-        guard totalCost > 0 else { return nil }
-        if totalCost < 0.01 { return "<$0.01" }
-        if totalCost < 10 { return String(format: "$%.2f", totalCost) }
-        return String(format: "$%.0f", totalCost)
+        // Only show when we have a trailing-window number so the timespan
+        // suffix always matches the value the user sees.
+        guard let w = windowedCost else { return nil }
+        return formatCostValue(w) + costTimeframe.suffix
+    }
+
+    private func formatCostValue(_ c: Double) -> String {
+        if c < 0.01 { return "<$0.01" }
+        if c < 10 { return String(format: "$%.2f", c) }
+        return String(format: "$%.0f", c)
+    }
+
+    private func cycleCostTimeframe() {
+        costTimeframeRaw = costTimeframe.next().rawValue
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Collapsible project header with reorder arrows
             HStack(spacing: 0) {
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        isExpanded.toggle()
+                HStack(spacing: 6) {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            isExpanded.toggle()
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 8))
+                                .foregroundColor(.secondary)
+                                .frame(width: 10)
+
+                            Text(projectGroup.displayName)
+                                .font(.system(.caption, design: .monospaced))
+                                .fontWeight(.semibold)
+                                .foregroundColor(projectNameColor)
+                        }
+                        .contentShape(Rectangle())
                     }
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary)
-                            .frame(width: 10)
+                    .buttonStyle(.plain)
 
-                        Text(projectGroup.displayName)
-                            .font(.system(.caption, design: .monospaced))
-                            .fontWeight(.semibold)
-                            .foregroundColor(projectNameColor)
-
-                        if showCostDisplay, let cost = formattedTotalCost {
+                    if let cost = formattedTotalCost {
+                        Button(action: cycleCostTimeframe) {
                             Text(cost)
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundColor(.secondary)
+                                .contentShape(Rectangle())
                         }
-
-                        SessionStateDots(projectGroup: projectGroup, isCompact: isCompact)
-
-                        Spacer()
-
-                        let count = projectGroup.sessionGroups.count
-                        Text("\(count) \(count == 1 ? "session" : "sessions")")
-                            .font(.caption2)
-                            .foregroundColor(.secondary.opacity(0.7))
+                        .buttonStyle(.plain)
+                        .help("Click to cycle time frame (day → week → month → year)")
                     }
-                    .contentShape(Rectangle())
+
+                    SessionStateDots(projectGroup: projectGroup, isCompact: isCompact)
+
+                    Spacer()
+
+                    let count = projectGroup.sessionGroups.count
+                    Text("\(count) \(count == 1 ? "session" : "sessions")")
+                        .font(.caption2)
+                        .foregroundColor(.secondary.opacity(0.7))
                 }
-                .buttonStyle(.plain)
 
                 if totalProjectGroups > 1 {
                     HStack(spacing: 0) {
