@@ -209,7 +209,29 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 // for every project that has data in that window. Keyed by the raw project
 // name (SessionState.ProjectName), not the sanitized filename.
 func (t *CostTracker) ProjectCostsInWindow(windowSeconds int64) (map[string]float64, error) {
-	out := make(map[string]float64)
+	all, err := t.ProjectCostsInWindows(map[string]int64{"_": windowSeconds})
+	if err != nil {
+		return nil, err
+	}
+	if out, ok := all["_"]; ok {
+		return out, nil
+	}
+	return make(map[string]float64), nil
+}
+
+// ProjectCostsInWindows returns per-timeframe cost maps in a single pass over
+// each project file. The returned map keys mirror the keys of windowSeconds;
+// each inner map is projectName → USD for that window. O(files × rows) once,
+// regardless of how many windows are requested — the per-row aggregator
+// maintains one `windowAgg` tuple per requested window.
+func (t *CostTracker) ProjectCostsInWindows(windowSeconds map[string]int64) (map[string]map[string]float64, error) {
+	out := make(map[string]map[string]float64, len(windowSeconds))
+	for k := range windowSeconds {
+		out[k] = make(map[string]float64)
+	}
+	if len(windowSeconds) == 0 {
+		return out, nil
+	}
 	entries, err := os.ReadDir(t.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -217,7 +239,11 @@ func (t *CostTracker) ProjectCostsInWindow(windowSeconds int64) (map[string]floa
 		}
 		return nil, err
 	}
-	cutoff := time.Now().Unix() - windowSeconds
+	now := time.Now().Unix()
+	cutoffs := make(map[string]int64, len(windowSeconds))
+	for k, secs := range windowSeconds {
+		cutoffs[k] = now - secs
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -227,21 +253,20 @@ func (t *CostTracker) ProjectCostsInWindow(windowSeconds int64) (map[string]floa
 			continue
 		}
 		fallback := strings.TrimSuffix(name, ".jsonl")
-		if err := t.sumProjectWindow(filepath.Join(t.dir, name), cutoff, fallback, out); err != nil {
+		if err := t.sumProjectWindows(filepath.Join(t.dir, name), cutoffs, fallback, out); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
 }
 
-// sumProjectWindow streams a project file and adds each session's cost delta
-// to out, keyed by the raw project name carried on each row (falling back to
-// fallbackName when a row was written before the Project field was added).
-// Per session:
+// sumProjectWindows streams a project file once and, per session, maintains
+// a window-agg tuple per timeframe. Each timeframe's contribution follows
+// the same rules as the single-window case:
 //   - baseline = cost at the row just before cutoff if one exists, otherwise
 //     the minimum cost observed inside the window.
 //   - contribution = max(0, MAX(cost) − baseline).
-func (t *CostTracker) sumProjectWindow(path string, cutoff int64, fallbackName string, out map[string]float64) error {
+func (t *CostTracker) sumProjectWindows(path string, cutoffs map[string]int64, fallbackName string, out map[string]map[string]float64) error {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -251,13 +276,16 @@ func (t *CostTracker) sumProjectWindow(path string, cutoff int64, fallbackName s
 	}
 	defer f.Close()
 
-	type perSession struct {
-		project        string
+	type windowAgg struct {
 		baseline       float64
 		hasBaseline    bool
 		baselineInside bool
 		max            float64
 		hasMax         bool
+	}
+	type perSession struct {
+		project string
+		windows map[string]*windowAgg
 	}
 	agg := make(map[string]*perSession)
 
@@ -274,28 +302,34 @@ func (t *CostTracker) sumProjectWindow(path string, cutoff int64, fallbackName s
 		}
 		s := agg[r.Session]
 		if s == nil {
-			s = &perSession{}
+			s = &perSession{windows: make(map[string]*windowAgg, len(cutoffs))}
+			for k := range cutoffs {
+				s.windows[k] = &windowAgg{}
+			}
 			agg[r.Session] = s
 		}
 		if r.Project != "" {
 			s.project = r.Project
 		}
-		if r.TS < cutoff {
-			s.baseline = r.Cost
-			s.hasBaseline = true
-			s.baselineInside = false
-			continue
-		}
-		if !s.hasBaseline {
-			s.baseline = r.Cost
-			s.hasBaseline = true
-			s.baselineInside = true
-		} else if s.baselineInside && r.Cost < s.baseline {
-			s.baseline = r.Cost
-		}
-		if !s.hasMax || r.Cost > s.max {
-			s.max = r.Cost
-			s.hasMax = true
+		for k, cutoff := range cutoffs {
+			w := s.windows[k]
+			if r.TS < cutoff {
+				w.baseline = r.Cost
+				w.hasBaseline = true
+				w.baselineInside = false
+				continue
+			}
+			if !w.hasBaseline {
+				w.baseline = r.Cost
+				w.hasBaseline = true
+				w.baselineInside = true
+			} else if w.baselineInside && r.Cost < w.baseline {
+				w.baseline = r.Cost
+			}
+			if !w.hasMax || r.Cost > w.max {
+				w.max = r.Cost
+				w.hasMax = true
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil && err != io.EOF {
@@ -303,18 +337,20 @@ func (t *CostTracker) sumProjectWindow(path string, cutoff int64, fallbackName s
 	}
 
 	for _, s := range agg {
-		if !s.hasMax {
-			continue
-		}
-		d := s.max - s.baseline
-		if d <= 0 {
-			continue
-		}
 		key := s.project
 		if key == "" {
 			key = fallbackName
 		}
-		out[key] += d
+		for tf, w := range s.windows {
+			if !w.hasMax {
+				continue
+			}
+			d := w.max - w.baseline
+			if d <= 0 {
+				continue
+			}
+			out[tf][key] += d
+		}
 	}
 	return nil
 }
@@ -333,19 +369,30 @@ func (t *CostTracker) Prune(olderThanDays int) error {
 		return err
 	}
 	cutoff := time.Now().Add(-time.Duration(olderThanDays) * 24 * time.Hour).Unix()
+	// Collect session IDs that survive pruning so we can opportunistically
+	// drop lastWrite entries for sessions that no longer appear in any
+	// file (e.g. whose baseline row was older than olderThanDays).
+	survivors := make(map[string]struct{})
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
 		project := strings.TrimSuffix(e.Name(), ".jsonl")
-		if err := t.pruneFile(filepath.Join(t.dir, e.Name()), project, cutoff); err != nil {
+		if err := t.pruneFile(filepath.Join(t.dir, e.Name()), project, cutoff, survivors); err != nil {
 			return err
 		}
 	}
+	t.mu.Lock()
+	for sid := range t.lastWrite {
+		if _, ok := survivors[sid]; !ok {
+			delete(t.lastWrite, sid)
+		}
+	}
+	t.mu.Unlock()
 	return nil
 }
 
-func (t *CostTracker) pruneFile(path, project string, cutoff int64) error {
+func (t *CostTracker) pruneFile(path, project string, cutoff int64, survivors map[string]struct{}) error {
 	t.mu.Lock()
 	fm, ok := t.fileMus[project]
 	if !ok {
@@ -396,6 +443,9 @@ func (t *CostTracker) pruneFile(path, project string, cutoff int64) error {
 			out.Close()
 			os.Remove(tmpPath)
 			return err
+		}
+		if r.Session != "" {
+			survivors[r.Session] = struct{}{}
 		}
 		kept++
 	}

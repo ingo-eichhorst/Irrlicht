@@ -19,12 +19,9 @@ class SessionManager: ObservableObject {
     @Published var lastError: String?
     @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
 
-    /// Trailing-window costs per project, keyed by project name, then by
-    /// timeframe ("day"/"week"/"month"/"year" → USD). Populated from the
-    /// /api/v1/sessions response each time groups are hydrated.
-    @Published var projectCosts: [String: [String: Double]] = [:]
     /// Timer that periodically re-hydrates sessions so group-level cost
-    /// values (which only ride the /api/v1/sessions response) stay fresh.
+    /// values (which only ride the /api/v1/sessions response) stay fresh —
+    /// WebSocket deltas only carry individual session updates.
     private var projectCostsTimer: Timer?
     private let projectCostsRefreshInterval: TimeInterval = 30.0
 
@@ -249,13 +246,6 @@ class SessionManager: ObservableObject {
             // Store the recursive group structure for the UI.
             apiGroups = topGroups
             groupedSessionIds = Set(topGroups.flatMap { collectSessionIds(from: $0) })
-
-            // Update project-level cost totals from the group payload.
-            var costs: [String: [String: Double]] = [:]
-            for group in topGroups {
-                if let c = group.costs { costs[group.name] = c }
-            }
-            projectCosts = costs
 
             // Flatten all groups → sessions (including nested sub-groups and children).
             var states: [SessionState] = []
@@ -784,45 +774,6 @@ class SessionManager: ObservableObject {
         }
     }
 
-    func reorderGroup(parentId: String, to destinationGroupIndex: Int) {
-        let allSessions = sessions
-        let sessionIds = Set(allSessions.map { $0.id })
-
-        // Identify subagent sessions
-        let subagentIds: Set<String> = Set(allSessions.compactMap { session in
-            guard let pid = session.parentSessionId, sessionIds.contains(pid) else { return nil }
-            return session.id
-        })
-
-        // Build ordered list of top-level session IDs (one per group)
-        var groupParentIds = allSessions.filter { !subagentIds.contains($0.id) }.map { $0.id }
-
-        guard destinationGroupIndex >= 0, destinationGroupIndex <= groupParentIds.count else { return }
-        guard let sourceIndex = groupParentIds.firstIndex(of: parentId) else { return }
-        guard sourceIndex != destinationGroupIndex else { return }
-
-        // Reorder group parent IDs
-        groupParentIds.remove(at: sourceIndex)
-        let adjustedDest = destinationGroupIndex > sourceIndex ? destinationGroupIndex - 1 : destinationGroupIndex
-        groupParentIds.insert(parentId, at: adjustedDest)
-
-        // Build new flat sessions array from reordered groups (parent followed by subagents)
-        let sessionMap = Dictionary(uniqueKeysWithValues: allSessions.map { ($0.id, $0) })
-        var newSessions: [SessionState] = []
-        for gParentId in groupParentIds {
-            guard let parentSession = sessionMap[gParentId] else { continue }
-            newSessions.append(parentSession)
-            let subagents = allSessions.filter { $0.parentSessionId == gParentId }
-            newSessions.append(contentsOf: subagents)
-        }
-
-        sessions = newSessions
-        sessionOrder = sessions.map { $0.id }
-        saveSessionOrder()
-
-        print("🔄 Reordered group \(String(parentId.suffix(6))) from group index \(sourceIndex) to \(adjustedDest)")
-    }
-
     func reorderSession(from sourceIndex: Int, to destinationIndex: Int) {
         guard sourceIndex != destinationIndex,
               sourceIndex >= 0, sourceIndex < sessions.count,
@@ -852,59 +803,6 @@ class SessionManager: ObservableObject {
     private func saveProjectGroupOrder() {
         UserDefaults.standard.set(projectGroupOrder, forKey: projectGroupOrderKey)
         print("💾 Saved project group order with \(projectGroupOrder.count) groups")
-    }
-
-    func orderedProjectGroups(from groups: [ProjectGroup]) -> [ProjectGroup] {
-        let groupMap = Dictionary(uniqueKeysWithValues: groups.map { ($0.projectDirectory, $0) })
-        var ordered: [ProjectGroup] = []
-
-        // Groups in saved order first
-        for key in projectGroupOrder {
-            if let group = groupMap[key] {
-                ordered.append(group)
-            }
-        }
-
-        // New groups not in saved order, sorted alphabetically
-        let orderedKeys = Set(projectGroupOrder)
-        let newGroups = groups.filter { !orderedKeys.contains($0.projectDirectory) }
-            .sorted { $0.displayName < $1.displayName }
-        ordered.append(contentsOf: newGroups)
-
-        // Prune stale entries and persist if changed
-        let newOrder = ordered.map { $0.projectDirectory }
-        if newOrder != projectGroupOrder {
-            projectGroupOrder = newOrder
-            saveProjectGroupOrder()
-        }
-
-        return ordered
-    }
-
-    func reorderProjectGroup(projectDirectory: String, to destinationIndex: Int) {
-        guard let sourceIndex = projectGroupOrder.firstIndex(of: projectDirectory) else { return }
-        guard destinationIndex >= 0, destinationIndex <= projectGroupOrder.count else { return }
-        guard sourceIndex != destinationIndex else { return }
-
-        projectGroupOrder.remove(at: sourceIndex)
-        let adjusted = destinationIndex > sourceIndex ? destinationIndex - 1 : destinationIndex
-        projectGroupOrder.insert(projectDirectory, at: adjusted)
-        saveProjectGroupOrder()
-
-        print("🔄 Reordered project group \(projectDirectory) from \(sourceIndex) to \(adjusted)")
-    }
-
-    func moveProjectGroupUp(projectDirectory: String) {
-        guard let index = projectGroupOrder.firstIndex(of: projectDirectory), index > 0 else { return }
-        projectGroupOrder.swapAt(index, index - 1)
-        saveProjectGroupOrder()
-    }
-
-    func moveProjectGroupDown(projectDirectory: String) {
-        guard let index = projectGroupOrder.firstIndex(of: projectDirectory),
-              index < projectGroupOrder.count - 1 else { return }
-        projectGroupOrder.swapAt(index, index + 1)
-        saveProjectGroupOrder()
     }
 
     // MARK: - Duplicate Session Handling

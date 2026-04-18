@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -470,8 +471,9 @@ func socketPath() string {
 }
 
 // costTimeframeSeconds maps the four supported time-frame keys to their
-// trailing-window duration in seconds. These are embedded under each
-// project group's "costs" field in the /api/v1/sessions response.
+// trailing-window duration in seconds. These are rolling windows (not
+// calendar-aligned) and are embedded under each project group's "costs"
+// field in the /api/v1/sessions response.
 var costTimeframeSeconds = map[string]int64{
 	"day":   24 * 3600,
 	"week":  7 * 24 * 3600,
@@ -479,7 +481,38 @@ var costTimeframeSeconds = map[string]int64{
 	"year":  365 * 24 * 3600,
 }
 
+// costAttachTTL bounds how stale the cached per-project cost maps may be
+// before the handler recomputes them. Well below either client's 30 s
+// poll cadence, short enough to keep the dashboard feeling live.
+const costAttachTTL = 5 * time.Second
+
+// costAttachCache caches the last ProjectCostsInWindows result so successive
+// /api/v1/sessions hits within costAttachTTL reuse one scan. Shared across
+// requests; the zero value is an empty cache.
+type costAttachCache struct {
+	mu          sync.RWMutex
+	generatedAt time.Time
+	byTimeframe map[string]map[string]float64
+}
+
+func (c *costAttachCache) get(now time.Time) (map[string]map[string]float64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.byTimeframe == nil || now.Sub(c.generatedAt) > costAttachTTL {
+		return nil, false
+	}
+	return c.byTimeframe, true
+}
+
+func (c *costAttachCache) put(now time.Time, v map[string]map[string]float64) {
+	c.mu.Lock()
+	c.generatedAt = now
+	c.byTimeframe = v
+	c.mu.Unlock()
+}
+
 func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker *filesystem.CostTracker) http.HandlerFunc {
+	cache := &costAttachCache{}
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
@@ -488,7 +521,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		}
 		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
 		if tracker != nil {
-			attachGroupCosts(resp, tracker)
+			attachGroupCosts(resp, tracker, cache)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -498,15 +531,18 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 // attachGroupCosts populates each top-level group's Costs map with the
 // trailing-window cost for day/week/month/year. Orchestrator groups are
 // skipped — their agents span projects, so group-level aggregation is
-// ambiguous.
-func attachGroupCosts(groups []*session.AgentGroup, tracker *filesystem.CostTracker) {
-	byTf := make(map[string]map[string]float64, len(costTimeframeSeconds))
-	for tf, secs := range costTimeframeSeconds {
-		m, err := tracker.ProjectCostsInWindow(secs)
+// ambiguous. Uses a single per-file scan (ProjectCostsInWindows) + a small
+// per-handler TTL cache to keep I/O bounded under concurrent polling.
+func attachGroupCosts(groups []*session.AgentGroup, tracker *filesystem.CostTracker, cache *costAttachCache) {
+	now := time.Now()
+	byTf, ok := cache.get(now)
+	if !ok {
+		m, err := tracker.ProjectCostsInWindows(costTimeframeSeconds)
 		if err != nil {
-			continue
+			return
 		}
-		byTf[tf] = m
+		cache.put(now, m)
+		byTf = m
 	}
 	for _, g := range groups {
 		if g == nil || g.Type == "gastown" {

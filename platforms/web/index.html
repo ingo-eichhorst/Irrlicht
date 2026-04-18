@@ -1087,15 +1087,12 @@
       el.querySelector('.group-name').textContent = group.name;
       const tf = COST_TIMEFRAMES.find(t => t.key === currentTimeframe) || COST_TIMEFRAMES[0];
       const windowed = group.costs ? group.costs[currentTimeframe] : undefined;
-      let costText = '';
-      if (typeof windowed === 'number' && windowed > 0) {
-        costText = formatCost(windowed) + tf.suffix;
-      } else {
-        // Fallback to cumulative sum when the daemon hasn't recorded any
-        // window data yet for this project.
-        const fallback = groupTotalCost(group);
-        if (fallback > 0) costText = formatCost(fallback);
-      }
+      // Hide the cost until the daemon has windowed data for this project —
+      // mixing a cumulative lifetime number with a per-window suffix would
+      // misrepresent the value. macOS does the same.
+      const costText = (typeof windowed === 'number' && windowed > 0)
+        ? formatCost(windowed) + tf.suffix
+        : '';
       el.querySelector('.group-cost').textContent = costText;
       const totalAgents = group.agents.length + group.agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
       el.querySelector('.group-count').textContent = totalAgents + (totalAgents === 1 ? ' agent' : ' agents');
