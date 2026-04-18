@@ -497,6 +497,12 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 		}
 
 		newState, reason := services.ClassifyState(state, domainMetrics)
+		if services.ShouldSynthesizeCollapsedWaiting(state, newState, domainMetrics) {
+			emit(transitionFromMetrics(batch[len(batch)-1].Index, nextEventTime, cause,
+				state, session.StateWaiting, services.SyntheticWaitingReason, domainMetrics))
+			state = session.StateWaiting
+			newState, reason = services.ClassifyState(state, domainMetrics)
+		}
 		if newState != state {
 			emit(transitionFromMetrics(batch[len(batch)-1].Index, nextEventTime, cause,
 				state, newState, reason, domainMetrics))
@@ -722,6 +728,12 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		}
 
 		newState, reason := services.ClassifyState(state, domainMetrics)
+		if services.ShouldSynthesizeCollapsedWaiting(state, newState, domainMetrics) {
+			emit(transitionFromMetrics(eventIdx, virtTime, cause,
+				state, session.StateWaiting, services.SyntheticWaitingReason, domainMetrics))
+			state = session.StateWaiting
+			newState, reason = services.ClassifyState(state, domainMetrics)
+		}
 		if newState != state {
 			emit(transitionFromMetrics(eventIdx, virtTime, cause,
 				state, newState, reason, domainMetrics))
@@ -1031,6 +1043,7 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		CumCacheCreationTokens: m.CumCacheCreationTokens,
 		LastAssistantText:      m.LastAssistantText,
 		PermissionMode:         m.PermissionMode,
+		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
 	}
 }
 

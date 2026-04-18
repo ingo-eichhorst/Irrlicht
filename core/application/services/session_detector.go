@@ -543,6 +543,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// in-process subagents). Since the parent's own turn is done,
 	// those subagents' work is definitionally complete: the parent's
 	// final assistant message already incorporated their results.
+	parentHeldWorking := false
 	if newState == session.StateReady && state.ParentSessionID == "" {
 		d.finishOrphanedChildren(state.SessionID)
 		if d.hasActiveChildren(state.SessionID) {
@@ -550,7 +551,33 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 				"holding parent working — active children still running")
 			newState = session.StateWorking
 			reason = ""
+			parentHeldWorking = true
 		}
+	}
+
+	// Same-pass user-blocking tool collapse (issue #150): when fswatcher
+	// coalesces the AskUserQuestion / ExitPlanMode tool_use with its
+	// tool_result, the tailer observes both in one pass and HasOpenToolCall
+	// is already false by the time the classifier runs — the brief waiting
+	// episode collapses and observers never see it. Emit a synthetic
+	// working→waiting, then reclassify from waiting so the next transition
+	// carries the correct "while waiting" phrasing.
+	//
+	// Skip when the parent-hold branch above rewrote newState: that parent
+	// has active children and must stay working. Running the synth path
+	// would reclassify from waiting, let rule 3 fire, and transition the
+	// parent to ready despite children still running — undoing the hold.
+	if !parentHeldWorking && ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
+		d.log.LogInfo("session-detector", ev.SessionID, SyntheticWaitingReason)
+		d.record(lifecycle.Event{
+			Kind:      lifecycle.KindStateTransition,
+			SessionID: ev.SessionID,
+			PrevState: session.StateWorking,
+			NewState:  session.StateWaiting,
+			Reason:    SyntheticWaitingReason,
+		})
+		state.State = session.StateWaiting
+		newState, reason = ClassifyState(state.State, state.Metrics)
 	}
 
 	if newState != state.State {

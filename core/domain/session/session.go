@@ -85,6 +85,13 @@ type SessionMetrics struct {
 	// set by the hook receiver in processActivity, not derived from transcript.
 	PermissionPending bool `json:"-"`
 
+	// SawUserBlockingToolClosedThisPass reflects the last tailer pass: true
+	// when an AskUserQuestion / ExitPlanMode tool_use and its tool_result
+	// were processed together in one pass. Triggers the daemon's synthetic
+	// working→waiting emission so observers see the collapsed waiting
+	// episode (issue #150). Transient — per-pass, not persisted.
+	SawUserBlockingToolClosedThisPass bool `json:"-"`
+
 	// SubagentCompletions surfaces parent-side "subagent done" signals
 	// from the most recent transcript scan (origin.kind="task-notification"
 	// lines parsed by the Claude Code adapter). Per-pass and transient —

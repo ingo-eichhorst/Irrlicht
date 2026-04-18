@@ -307,3 +307,77 @@ func TestClassifyState(t *testing.T) {
 	}
 }
 
+// TestShouldSynthesizeCollapsedWaiting covers issue #150: a user-blocking
+// tool (AskUserQuestion / ExitPlanMode) whose tool_use and tool_result
+// land in the same tailer pass skips the natural working→waiting
+// transition. The helper decides whether the caller should emit a
+// synthetic one.
+func TestShouldSynthesizeCollapsedWaiting(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		newS    string
+		metrics *session.SessionMetrics
+		want    bool
+	}{
+		{
+			name:    "Case A: collapsed + denial → rule 3 returns ready",
+			current: session.StateWorking,
+			newS:    session.StateReady,
+			metrics: &session.SessionMetrics{SawUserBlockingToolClosedThisPass: true},
+			want:    true,
+		},
+		{
+			name:    "Case B: collapsed with cleared denial → rule 4 returns working",
+			current: session.StateWorking,
+			newS:    session.StateWorking,
+			metrics: &session.SessionMetrics{SawUserBlockingToolClosedThisPass: true},
+			want:    true,
+		},
+		{
+			name:    "no synthesis when classifier already returns waiting (natural path)",
+			current: session.StateWorking,
+			newS:    session.StateWaiting,
+			metrics: &session.SessionMetrics{SawUserBlockingToolClosedThisPass: true},
+			want:    false,
+		},
+		{
+			name:    "no synthesis when no user-blocking tool closed",
+			current: session.StateWorking,
+			newS:    session.StateReady,
+			metrics: &session.SessionMetrics{SawUserBlockingToolClosedThisPass: false},
+			want:    false,
+		},
+		{
+			name:    "no synthesis from waiting state (cross-pass tool_result — waiting already emitted)",
+			current: session.StateWaiting,
+			newS:    session.StateReady,
+			metrics: &session.SessionMetrics{SawUserBlockingToolClosedThisPass: true},
+			want:    false,
+		},
+		{
+			name:    "no synthesis from ready state (force-r2w flips ready to working BEFORE this check)",
+			current: session.StateReady,
+			newS:    session.StateReady,
+			metrics: &session.SessionMetrics{SawUserBlockingToolClosedThisPass: true},
+			want:    false,
+		},
+		{
+			name:    "nil metrics — no synthesis",
+			current: session.StateWorking,
+			newS:    session.StateReady,
+			metrics: nil,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShouldSynthesizeCollapsedWaiting(tt.current, tt.newS, tt.metrics); got != tt.want {
+				t.Errorf("ShouldSynthesizeCollapsedWaiting(%q, %q) = %v, want %v",
+					tt.current, tt.newS, got, tt.want)
+			}
+		})
+	}
+}
+

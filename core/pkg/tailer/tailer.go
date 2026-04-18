@@ -101,6 +101,14 @@ type SessionMetrics struct {
 	// PermissionMode is the session's permission mode (e.g. "default",
 	// "plan", "bypassPermissions"). Extracted from "permission-mode" events.
 	PermissionMode string `json:"permission_mode,omitempty"`
+
+	// SawUserBlockingToolClosedThisPass is true when an AskUserQuestion or
+	// ExitPlanMode tool opened and closed within a single TailAndProcess
+	// call — the fswatcher-coalesce case where HasOpenToolCall is already
+	// false by the time the classifier runs, collapsing the waiting
+	// episode. Per-pass transient; daemon uses it to synthesise the
+	// missing working→waiting step (issue #150).
+	SawUserBlockingToolClosedThisPass bool `json:"-"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -219,6 +227,11 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	}
 	fileSize := stat.Size()
 
+	// Reset per-pass flag. Set below when a user-blocking tool is observed
+	// both open and close within this single pass (the collapsed-window
+	// case from issue #150).
+	sawUserBlockingClosedThisPass := false
+
 	// Per-pass signals must be cleared so the detector only drains events
 	// discovered in this scan (see issue #134).
 	t.metrics.SubagentCompletions = nil
@@ -324,6 +337,9 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			}
 		}
 		for _, id := range parsed.ToolResultIDs {
+			if name, ok := t.openToolCalls[id]; ok && isUserBlockingToolName(name) {
+				sawUserBlockingClosedThisPass = true
+			}
 			delete(t.openToolCalls, id)
 		}
 		if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
@@ -390,6 +406,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 
 	// Compute current metrics.
 	t.computeMetrics()
+	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
 
 	// Model config fallback.
 	if t.metrics.ModelName == "" {
@@ -689,6 +706,20 @@ func (t *TranscriptTailer) computeContextUtilization() {
 func surviveTurnDone(name string) bool {
 	switch name {
 	case "Agent", "AskUserQuestion", "ExitPlanMode":
+		return true
+	}
+	return false
+}
+
+// isUserBlockingToolName returns true for tools that always block the agent
+// until the user responds: AskUserQuestion and ExitPlanMode. Used by
+// TailAndProcess to flag same-pass open+close of these tools so the daemon
+// can synthesise the collapsed working→waiting transition (issue #150).
+// Kept local to the tailer to avoid a domain-package import; the canonical
+// list also lives at session.isUserBlockingTool.
+func isUserBlockingToolName(name string) bool {
+	switch name {
+	case "AskUserQuestion", "ExitPlanMode":
 		return true
 	}
 	return false
