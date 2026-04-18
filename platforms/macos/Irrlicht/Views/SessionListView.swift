@@ -577,6 +577,7 @@ struct GroupView: View {
     var depth: Int = 0
     @State private var isExpanded = true
     @AppStorage("projectCostTimeframe") private var costTimeframeRaw: String = CostTimeframe.day.rawValue
+    @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
 
     private var costTimeframe: CostTimeframe { CostTimeframe.from(costTimeframeRaw) }
 
@@ -591,7 +592,7 @@ struct GroupView: View {
     /// Formatted cost for this group in the currently-selected time frame,
     /// or nil if no data.
     private var formattedCost: String? {
-        guard isTopLevel, !group.isGasTown else { return nil }
+        guard showCostDisplay, isTopLevel, !group.isGasTown else { return nil }
         guard let v = group.costs?[costTimeframe.rawValue], v > 0 else { return nil }
         let formatted: String
         if v < 0.01 { formatted = "<$0.01" }
