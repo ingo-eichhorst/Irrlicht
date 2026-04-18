@@ -520,3 +520,56 @@ func TestSessionFilter(t *testing.T) {
 		t.Error("expected at least init transition")
 	}
 }
+
+// TestReplayWithSidecar_SessionFilterNoBirthMarker guards against a
+// regression from the #144 fix: when --session targets a session that
+// has fs events but no transcript_new and no session-creation
+// state_transition in the sidecar (e.g. a subagent whose birth marker
+// belongs to the parent), the alive-gate must not silently drop every
+// fs event. Absent any lifecycle-start marker, replay should treat the
+// sidecar as a single open lifetime.
+func TestReplayWithSidecar_SessionFilterNoBirthMarker(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "session.jsonl")
+	sidecar := filepath.Join(dir, "session.events.jsonl")
+
+	transcriptBody := `{"type":"user","timestamp":"2026-04-11T10:00:00Z","message":{"role":"user","content":"hi"}}
+{"type":"assistant","timestamp":"2026-04-11T10:00:01Z","message":{"role":"assistant","content":"hello"}}
+`
+	if err := os.WriteFile(transcript, []byte(transcriptBody), 0644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	// Parent session sess-A has the transcript_new; sess-B (our target)
+	// has only fs events — no birth marker of its own.
+	sidecarBody := `{"seq":1,"ts":"2026-04-11T10:00:00Z","kind":"transcript_new","session_id":"sess-A","adapter":"claude-code"}
+{"seq":2,"ts":"2026-04-11T10:00:00.500Z","kind":"transcript_activity","session_id":"sess-B","file_size":93}
+{"seq":3,"ts":"2026-04-11T10:00:01Z","kind":"transcript_activity","session_id":"sess-B","file_size":192}
+`
+	if err := os.WriteFile(sidecar, []byte(sidecarBody), 0644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+
+	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+		Adapter:            claudecode.AdapterName,
+		SessionFilter:      "sess-B",
+		DebounceWindow:     2 * time.Second,
+		FlickerMaxDuration: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("ReplayWithSidecar with session filter: %v", err)
+	}
+
+	// A ready→working must fire off the first fs event; the alive-gate
+	// would have suppressed it before the fallback.
+	var sawReadyToWorking bool
+	for _, tr := range report.Transitions {
+		if tr.PrevState == "ready" && tr.NewState == "working" {
+			sawReadyToWorking = true
+			break
+		}
+	}
+	if !sawReadyToWorking {
+		t.Errorf("expected ready→working transition; got transitions: %+v", report.Transitions)
+	}
+}

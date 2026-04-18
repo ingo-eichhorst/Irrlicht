@@ -826,7 +826,13 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	// session. fs/hook events arriving between process_exited and the next
 	// lifecycle-start were never processed by a live daemon and must be
 	// skipped.
-	alive := false
+	//
+	// When the primary session has no lifecycle-start markers at all
+	// (e.g. --session filter targeting a subagent or a synthetic session
+	// whose birth isn't in the sidecar), there's no boundary to gate
+	// against — start alive so the replay behaves like a single lifetime
+	// rather than silently dropping every fs event.
+	alive := len(lifecycleStarts) == 0
 	for _, entry := range timeline {
 		switch entry.kind {
 		case timelineLifecycleStart:
