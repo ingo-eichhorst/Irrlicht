@@ -63,6 +63,28 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			ev.Skip = true
 			return ev
 		}
+		// Task-notification events are Claude Code's authoritative "subagent
+		// done" signal on the parent transcript (origin.kind="task-notification"
+		// with an XML payload as message.content string). The subagent's own
+		// JSONL is structurally ambiguous when --continue kills the parent
+		// mid-stream, so this parent-side event is the only reliable signal
+		// without timing heuristics. Skip=true so the line does not feed
+		// LastEventType / interrupt flags. See issue #134.
+		if origin, ok := raw["origin"].(map[string]interface{}); ok {
+			if kind, _ := origin["kind"].(string); kind == "task-notification" {
+				if msg, ok := raw["message"].(map[string]interface{}); ok {
+					if content, ok := msg["content"].(string); ok {
+						ev.SubagentCompletions = append(ev.SubagentCompletions, tailer.SubagentCompletion{
+							AgentID:   extractXMLField(content, "task-id"),
+							ToolUseID: extractXMLField(content, "tool-use-id"),
+							Status:    extractXMLField(content, "status"),
+						})
+					}
+				}
+				ev.Skip = true
+				return ev
+			}
+		}
 		if msg, ok := raw["message"].(map[string]interface{}); ok {
 			if content, ok := msg["content"].(string); ok {
 				if strings.HasPrefix(content, "<local-command") ||
@@ -299,6 +321,24 @@ func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
 // subagents that don't create transcripts, we only need to change this file.
 func CountOpenSubagents(m *tailer.SessionMetrics) int {
 	return 0
+}
+
+// extractXMLField pulls the inner text of <tag>...</tag> from a flat XML blob.
+// Used to read task-id, tool-use-id, and status from task-notification events.
+// Returns "" if the tag is missing or malformed.
+func extractXMLField(xml, tag string) string {
+	open := "<" + tag + ">"
+	close := "</" + tag + ">"
+	start := strings.Index(xml, open)
+	if start < 0 {
+		return ""
+	}
+	start += len(open)
+	end := strings.Index(xml[start:], close)
+	if end < 0 {
+		return ""
+	}
+	return xml[start : start+end]
 }
 
 // isClaudeCodeMessageEvent returns true for event types that count as messages.

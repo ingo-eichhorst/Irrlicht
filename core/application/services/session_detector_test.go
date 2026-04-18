@@ -1958,3 +1958,76 @@ func TestSessionDetector_ParentNotAffected_WhenNoChildren(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// TestSessionDetector_Activity_SubagentCompletion_TransitionsChildToReady is
+// the issue #134 regression: a parent activity event whose metrics carry a
+// SubagentCompletion (parsed from origin.kind="task-notification") must
+// transition the matching child session to ready immediately, without
+// depending on the time-gated finishOrphanedChildren fallback.
+func TestSessionDetector_Activity_SubagentCompletion_TransitionsChildToReady(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	const parentID = "8a525d27-37a4-4a12-8523-a3ea345290cf"
+	const childID = "child-af7bf8be"
+	const agentID = "af7bf8be5a1b511e4"
+	parentTranscript := "/home/.claude/projects/-Users-test/" + parentID + ".jsonl"
+	childTranscript := "/home/.claude/projects/-Users-test/" + parentID + "/subagents/agent-" + agentID + ".jsonl"
+
+	// Parent: turn still in flight (working). Pre-populate the completion
+	// signal on metrics — the mock metrics collector returns nil from
+	// ComputeMetrics, so MergeMetrics(nil, oldM) keeps these values.
+	repo.states[parentID] = &session.SessionState{
+		SessionID:      parentID,
+		State:          session.StateWorking,
+		TranscriptPath: parentTranscript,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant_streaming",
+			HasOpenToolCall: false,
+			SubagentCompletions: []session.SubagentCompletion{
+				{AgentID: agentID, ToolUseID: "toolu_01Wf", Status: "completed"},
+			},
+		},
+	}
+
+	// Child: stuck in working with stop_reason=null (the bug condition).
+	repo.states[childID] = &session.SessionState{
+		SessionID:       childID,
+		ParentSessionID: parentID,
+		State:           session.StateWorking,
+		TranscriptPath:  childTranscript,
+		FirstSeen:       time.Now().Unix(),
+		UpdatedAt:       time.Now().Unix(),
+		EventCount:      8,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "assistant_streaming",
+			HasOpenToolCall: false,
+		},
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      parentID,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: parentTranscript,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	child, _ := repo.Load(childID)
+	if child.State != session.StateReady {
+		t.Errorf("child state: got %q, want ready (parent task-notification should transition child)", child.State)
+	}
+}
