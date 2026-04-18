@@ -149,10 +149,10 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 		prevState string
 		newState  string
 	}{
-		{"2026-04-11T21:11:45.046448+02:00", "ready", "working"},
-		{"2026-04-11T21:11:47.76431+02:00", "working", "ready"},
-		{"2026-04-11T21:11:50.310406+02:00", "ready", "working"},
-		{"2026-04-11T21:11:50.310406+02:00", "working", "ready"},
+		{"2026-04-11T21:11:45.046448+02:00", session.StateReady, session.StateWorking},
+		{"2026-04-11T21:11:47.76431+02:00", session.StateWorking, session.StateReady},
+		{"2026-04-11T21:11:50.310406+02:00", session.StateReady, session.StateWorking},
+		{"2026-04-11T21:11:50.310406+02:00", session.StateWorking, session.StateReady},
 	}
 	var lifetime2Got []Transition
 	for _, tr := range report.Transitions {
@@ -564,7 +564,7 @@ func TestReplayWithSidecar_SessionFilterNoBirthMarker(t *testing.T) {
 	// would have suppressed it before the fallback.
 	var sawReadyToWorking bool
 	for _, tr := range report.Transitions {
-		if tr.PrevState == "ready" && tr.NewState == "working" {
+		if tr.PrevState == session.StateReady && tr.NewState == session.StateWorking {
 			sawReadyToWorking = true
 			break
 		}
