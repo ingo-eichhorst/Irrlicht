@@ -24,7 +24,7 @@ jobs:
           cache: false
 
       - name: Install ARS CLI
-        run: go install github.com/ingo-eichhorst/agent-readyness/cmd/ars@latest
+        run: GOPROXY=direct go install github.com/ingo-eichhorst/agent-readyness/cmd/ars@v0.0.9
 
       - name: Run ARS scan
         run: |
