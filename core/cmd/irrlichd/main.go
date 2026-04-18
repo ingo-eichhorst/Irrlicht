@@ -511,7 +511,7 @@ func (c *costAttachCache) put(now time.Time, v map[string]map[string]float64) {
 	c.mu.Unlock()
 }
 
-func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker *filesystem.CostTracker) http.HandlerFunc {
+func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker) http.HandlerFunc {
 	cache := &costAttachCache{}
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
@@ -533,7 +533,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 // skipped — their agents span projects, so group-level aggregation is
 // ambiguous. Uses a single per-file scan (ProjectCostsInWindows) + a small
 // per-handler TTL cache to keep I/O bounded under concurrent polling.
-func attachGroupCosts(groups []*session.AgentGroup, tracker *filesystem.CostTracker, cache *costAttachCache) {
+func attachGroupCosts(groups []*session.AgentGroup, tracker outbound.CostTracker, cache *costAttachCache) {
 	now := time.Now()
 	byTf, ok := cache.get(now)
 	if !ok {

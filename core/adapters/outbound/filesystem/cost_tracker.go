@@ -205,18 +205,16 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 	return err
 }
 
-// ProjectCostsInWindow returns the sum of cost deltas in the trailing window
-// for every project that has data in that window. Keyed by the raw project
-// name (SessionState.ProjectName), not the sanitized filename.
+// ProjectCostsInWindow is a test convenience around ProjectCostsInWindows
+// for a single trailing window. Not part of the CostTracker port — the
+// handler uses the plural form directly.
 func (t *CostTracker) ProjectCostsInWindow(windowSeconds int64) (map[string]float64, error) {
-	all, err := t.ProjectCostsInWindows(map[string]int64{"_": windowSeconds})
+	const k = "w"
+	all, err := t.ProjectCostsInWindows(map[string]int64{k: windowSeconds})
 	if err != nil {
 		return nil, err
 	}
-	if out, ok := all["_"]; ok {
-		return out, nil
-	}
-	return make(map[string]float64), nil
+	return all[k], nil
 }
 
 // ProjectCostsInWindows returns per-timeframe cost maps in a single pass over

@@ -88,17 +88,10 @@ type CostTracker interface {
 	// metrics or a project name.
 	RecordSnapshot(state *session.SessionState) error
 
-	// ProjectCostsInWindow returns the cost (USD) accrued within the
-	// trailing window for every project that has snapshots in that window.
-	// Keyed by project name (matches SessionState.ProjectName).
-	ProjectCostsInWindow(windowSeconds int64) (map[string]float64, error)
-
 	// ProjectCostsInWindows returns per-timeframe cost maps in a single
-	// pass over each project file — cheaper than calling
-	// ProjectCostsInWindow once per timeframe when the caller needs
-	// several windows at once (e.g. the /api/v1/sessions handler). The
-	// returned map keys mirror the caller-supplied windowSeconds keys;
-	// each inner map is projectName → USD for that window.
+	// pass over each project file. The returned map keys mirror the
+	// caller-supplied windowSeconds keys; each inner map is projectName
+	// → USD for that window.
 	ProjectCostsInWindows(windowSeconds map[string]int64) (map[string]map[string]float64, error)
 
 	// Prune drops snapshot rows older than the given number of days.
