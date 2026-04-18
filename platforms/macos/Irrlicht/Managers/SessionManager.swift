@@ -268,7 +268,7 @@ class SessionManager: ObservableObject {
                     rebuildSessionsFromMap()
                     patchApiGroups(session: session)
                     if let old = oldState, old != session.state {
-                        checkStateTransitionNotification(session: session)
+                        checkStateTransitionNotification(session: session, previousState: old)
                     }
                 }
             case "session_deleted":
@@ -628,7 +628,7 @@ class SessionManager: ObservableObject {
 
     // MARK: - State Transition Notifications
 
-    private func checkStateTransitionNotification(session: SessionState) {
+    private func checkStateTransitionNotification(session: SessionState, previousState: SessionState.State) {
         // Skip subagent sessions to avoid notification noise
         if session.parentSessionId != nil { return }
 
@@ -637,9 +637,9 @@ class SessionManager: ObservableObject {
 
         let title: String
         switch session.state {
-        case .ready where notifyReady:
+        case .ready where notifyReady && previousState == .working:
             title = "Agent ready"
-        case .waiting where notifyWaiting:
+        case .waiting where notifyWaiting && previousState == .working:
             title = "Agent waiting for input"
         default:
             return
