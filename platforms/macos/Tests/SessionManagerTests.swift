@@ -75,15 +75,25 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(SessionState.self, from: invalidJSON))
     }
     
-    func testMissingFieldsHandling() {
+    func testMissingFieldsHandling() throws {
+        // Only session_id and state are required; every other field is
+        // optional via decodeIfPresent (see SessionState.init(from:)).
+        // Decoding must succeed and fill missing fields with defaults.
         let incompleteJSON = """
         {
             "session_id": "sess_incomplete",
             "state": "working"
         }
         """.data(using: .utf8)!
-        
-        XCTAssertThrowsError(try JSONDecoder().decode(SessionState.self, from: incompleteJSON))
+
+        let session = try JSONDecoder().decode(SessionState.self, from: incompleteJSON)
+        XCTAssertEqual(session.id, "sess_incomplete")
+        XCTAssertEqual(session.state, .working)
+        XCTAssertEqual(session.model, "unknown")
+        XCTAssertEqual(session.cwd, "")
+        XCTAssertNil(session.transcriptPath)
+        XCTAssertNil(session.eventCount)
+        XCTAssertNil(session.metrics)
     }
     
     // MARK: - State Glyph Tests
@@ -135,7 +145,7 @@ final class SessionManagerTests: XCTestCase {
             lastEvent: "SessionStart"
         )
         
-        XCTAssertEqual(session.shortId, "hi789")  // Last 6 characters
+        XCTAssertEqual(session.shortId, "ghi789")  // Last 6 characters
     }
     
     func testTimeAgoFormatting() {
@@ -151,9 +161,13 @@ final class SessionManagerTests: XCTestCase {
             eventCount: 1,
             lastEvent: "SessionStart"
         )
-        
-        // Should show something like "1m ago"
-        XCTAssertTrue(session.timeAgo.contains("ago"))
+
+        // RelativeDateTimeFormatter with .abbreviated style is locale-dependent
+        // (e.g. "1m ago", "1 min. ago", "1m" — varies by OS/locale). Just verify
+        // we got a non-empty string that mentions the one-minute delta.
+        let s = session.timeAgo
+        XCTAssertFalse(s.isEmpty)
+        XCTAssertTrue(s.contains("1"), "timeAgo = \(s), expected to contain '1'")
     }
     
     // MARK: - Session Manager Tests
