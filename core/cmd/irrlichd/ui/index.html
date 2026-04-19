@@ -729,7 +729,6 @@
       <div class="raw-toolbar">
         <span class="raw-label">Endpoint:</span>
         <button class="active" data-raw-src="sessions">/api/v1/sessions</button>
-        <button data-raw-src="gastown">/api/v1/orchestrators/gastown</button>
         <button id="raw-refresh" title="Refresh">refresh</button>
       </div>
       <pre id="raw-output">Loading…</pre>
@@ -1473,9 +1472,9 @@
     setInterval(timelineTick, TIMELINE_TICK_MS);
 
     // --- Initial load ---
-    fetch('/api/v1/sessions').then(r => r.json()).catch(() => ({})).then(resp => {
-      dashboardGroups = resp.groups || [];
-      orchestrator = resp.orchestrator || null;
+    fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
+      if (!resp) return;
+      dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       rebuildIndex();
       render();
       timelineTick(); // First tick immediately
@@ -1491,12 +1490,6 @@
         render();
       });
     }, 30000);
-    // Secondary fetch for full orchestrator hierarchy (global_agents, codebases).
-    // The initial /api/v1/sessions response only carries an OrchestratorSummary;
-    // the full state is needed to render the Gas Town hierarchy view.
-    fetch('/api/v1/orchestrators/gastown').then(r => r.json()).catch(() => ({})).then(data => {
-      if (data && data.running) { orchFull = data; render(); }
-    });
 
     // --- WebSocket ---
     let ws = null;
@@ -1567,7 +1560,6 @@
     // --- Raw panel ---
     const rawEndpoints = {
       sessions: '/api/v1/sessions',
-      gastown: '/api/v1/orchestrators/gastown',
     };
 
     for (const btn of document.querySelectorAll('[data-raw-src]')) {
