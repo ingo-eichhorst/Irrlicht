@@ -9,6 +9,54 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-04-19
+
+### Added
+- Per-group cost display with switchable time frames — project group headers
+  now surface day / week / month / year cost totals via a timeframe toggle
+  instead of a single hard-coded window (#83, #162).
+- `curl | sh` installer at `irrlicht.io/install.sh` — one-line install pulls
+  the latest release zip, verifies the sha256, and registers the app with
+  LaunchServices. Rerunning removes any previous install cleanly.
+- Raw tab in the web UI for inspecting the `/api/v1/sessions` JSON payload
+  live.
+
+### Changed
+- Capacity data: LiteLLM is now the single source of truth for model
+  context windows and pricing. The hand-maintained
+  `core/pkg/capacity/model-capacity.json` table is removed; lookups go
+  through a process-wide singleton that hot-reloads the LiteLLM cache
+  when it's refreshed, so the daemon no longer needs a restart to see
+  a new model. Fixes the 200K/1M flip on Claude Opus 4.7 and enables
+  1M context for Sonnet 4.6 (#165).
+
+### Fixed
+- macOS: state-transition notifications only fire on `working → waiting`
+  and `working → ready`. Previously a `waiting → ready` transition also
+  fired a redundant "ready" notification (#161).
+- Detector: sessions that ended on a user-blocking tool whose start was
+  collapsed out of the transcript now get a synthetic `waiting` emitted
+  so they don't linger as `working` forever (#150, #160).
+- Replay: sidecar timelines now split at `process_exited` boundaries so
+  `/continue` sessions with multiple process lifetimes don't report
+  spurious extra transitions (#144, #163).
+- Detector: subagents stop getting stuck when their parent session emits a
+  task-notification (#134, #156).
+- Installer: preserves extended attributes and registers with LaunchServices
+  so the first launch isn't quarantined (#158).
+- Security: `irrlichd` now binds to localhost only and rejects cross-origin
+  WebSocket upgrades (#94, #155).
+- Site: `curl | sh` install command wraps on narrow screens; hero spacing
+  cleaned up.
+- Tests: three stale `SessionManagerTests` unit tests updated to match
+  the current `SessionState` decoder and the abbreviated
+  `RelativeDateTimeFormatter` behavior (#166).
+
+### Distribution / CI
+- ARS badge workflow pinned to v0.0.9; `GOPROXY=direct` no longer required.
+- `ir:release` skill guards against stale Swift binaries and missing SwiftPM
+  resource bundles — the two root causes of the broken v0.3.4 bundle.
+
 ## [0.3.4] — 2026-04-14
 
 ### Added
@@ -350,7 +398,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.5
 [0.3.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.4
 [0.3.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.3
 [0.3.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.2

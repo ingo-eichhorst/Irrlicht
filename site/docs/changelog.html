@@ -78,6 +78,42 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.5 <small>(2026-04-19)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Per-group cost display with switchable time frames</strong> (#83, #162) &mdash; Project group headers now surface day / week / month / year cost totals via a timeframe toggle instead of a single hard-coded window</li>
+        <li><strong><code>curl | sh</code> installer at <code>irrlicht.io/install.sh</code></strong> &mdash; One-line install pulls the latest release zip, verifies the sha256, and registers the app with LaunchServices. Rerunning removes any previous install cleanly</li>
+        <li><strong>Raw tab in the web UI</strong> &mdash; Inspect the <code>/api/v1/sessions</code> JSON payload live</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>Capacity: LiteLLM is now the single source of truth</strong> (#165) &mdash; The hand-maintained <code>core/pkg/capacity/model-capacity.json</code> table is removed; lookups go through a process-wide singleton that hot-reloads the LiteLLM cache when it's refreshed, so the daemon no longer needs a restart to see a new model. Fixes the 200K/1M flip on Claude Opus 4.7 and enables 1M context for Sonnet 4.6</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>macOS: only notify on transitions from <code>working</code></strong> (#161) &mdash; State-transition notifications fire on <code>working → waiting</code> and <code>working → ready</code> only. A <code>waiting → ready</code> transition no longer fires a redundant "ready" notification</li>
+        <li><strong>Detector: synthetic <code>waiting</code> for collapsed user-blocking tools</strong> (#150, #160) &mdash; Sessions that ended on a user-blocking tool whose start was collapsed out of the transcript no longer linger as <code>working</code></li>
+        <li><strong>Replay: split sidecar timelines at <code>process_exited</code> boundaries</strong> (#144, #163) &mdash; <code>/continue</code> sessions with multiple process lifetimes no longer report spurious extra transitions</li>
+        <li><strong>Detector: unstick subagents via parent task-notification</strong> (#134, #156)</li>
+        <li><strong>Installer: preserve provenance and register with LaunchServices</strong> (#158) &mdash; First launch is no longer quarantined</li>
+        <li><strong>Security: lock down <code>irrlichd</code> network exposure</strong> (#94, #155) &mdash; Binds to localhost only and rejects cross-origin WebSocket upgrades</li>
+        <li><strong>Site: <code>curl | sh</code> install command wraps on narrow screens</strong>; hero spacing cleaned up</li>
+        <li><strong>Tests: three stale <code>SessionManagerTests</code> updated</strong> (#166) &mdash; Match the current <code>SessionState</code> decoder and abbreviated <code>RelativeDateTimeFormatter</code> behavior</li>
+      </ul>
+
+      <h3>Distribution / CI</h3>
+
+      <ul>
+        <li>ARS badge workflow pinned to v0.0.9; <code>GOPROXY=direct</code> no longer required</li>
+        <li><code>ir:release</code> skill guards against stale Swift binaries and missing SwiftPM resource bundles &mdash; the two root causes of the broken v0.3.4 bundle</li>
+      </ul>
+
       <h2>v0.3.4 <small>(2026-04-14)</small></h2>
 
       <h3>Added</h3>
