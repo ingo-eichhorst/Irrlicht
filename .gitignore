@@ -65,8 +65,6 @@ tools/copilot-hooks-merger/copilot-hooks-merger
 # Dependency directories
 vendor/
 
-# Go workspace file
-go.work
 
 # App bundles and installers
 *.app/
