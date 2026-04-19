@@ -379,4 +379,33 @@ final class SessionManagerTests: XCTestCase {
         let titles = ["README.md — some-other-project", "", "main.swift — another"]
         XCTAssertNil(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd))
     }
+
+    // MARK: - iTerm UUID extraction
+
+    func testITermUUIDExtractsFromLegacyFormat() {
+        // Older iTerm2 ITERM_SESSION_ID: "w0t0p0:UUID"
+        XCTAssertEqual(
+            SessionLauncher.iTermUUID(from: "w4t0p0:1FFEA6B4-1EA4-4A3C-86B6-B80027B5690F"),
+            "1FFEA6B4-1EA4-4A3C-86B6-B80027B5690F")
+    }
+
+    func testITermUUIDExtractsFromCurrentFormat() {
+        // Newer format: "w0:t0:p0:UUID"
+        XCTAssertEqual(
+            SessionLauncher.iTermUUID(from: "w0:t0:p0:ABCD-1234"),
+            "ABCD-1234")
+    }
+
+    func testITermUUIDWithoutColonReturnsInput() {
+        // If the env value has no colon at all, treat the whole thing as a
+        // UUID — best-effort, still lets the AppleScript try a match.
+        XCTAssertEqual(SessionLauncher.iTermUUID(from: "BARE-UUID"), "BARE-UUID")
+    }
+
+    func testITermUUIDEmptyOrNil() {
+        XCTAssertNil(SessionLauncher.iTermUUID(from: nil))
+        XCTAssertNil(SessionLauncher.iTermUUID(from: ""))
+        // Trailing colon → empty tail → nil (no usable UUID to target).
+        XCTAssertNil(SessionLauncher.iTermUUID(from: "w0t0p0:"))
+    }
 }

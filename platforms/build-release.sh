@@ -114,6 +114,8 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
     <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Irrlicht uses AppleScript to bring the correct iTerm2 window and tab to the front when you click a session row.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2024 Anthropic. All rights reserved.</string>
     <key>NSPrincipalClass</key>

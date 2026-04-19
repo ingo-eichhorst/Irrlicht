@@ -7,14 +7,17 @@ import OSLog
 /// foreground. Used by the session-row tap gesture and the notification
 /// click handler.
 ///
-/// Two-step dispatch:
-///   1. `NSWorkspace.openApplication` — activate the host app (no permission).
-///   2. Accessibility API — raise the specific window whose title matches
-///      the session's cwd. Silently no-ops if AX permission isn't granted.
+/// Dispatch:
+///   1. `NSWorkspace.openApplication` — activate the host app.
+///   2. iTerm2 only: AppleScript `select` by session UUID — works across
+///      screens/spaces and uses a stable ID, not title guesswork.
+///   3. Everything else: Accessibility API, raise the window whose title's
+///      deepest matching ancestor segment of cwd wins. Silently no-ops if
+///      AX permission isn't granted.
 ///
 /// It works (right window) or it degrades to app activation (right app, last
-/// used window). No Finder-reveal, no URL schemes that would open a new
-/// editor window and clobber the worktree's existing window.
+/// used window). No Finder-reveal, no URL schemes that would clobber a
+/// worktree's existing editor window.
 enum SessionLauncher {
     private static let logger = Logger(subsystem: "io.irrlicht.app", category: "SessionLauncher")
 
@@ -44,6 +47,7 @@ enum SessionLauncher {
             logger.info("no installed app for bundle id \(bundleID, privacy: .public)")
             return
         }
+        let launcher = session.launcher
         let cwd = session.cwd
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
@@ -52,10 +56,69 @@ enum SessionLauncher {
                 logger.error("openApplication failed: \(error.localizedDescription, privacy: .public)")
                 return
             }
+            // iTerm2 fast path: select the exact session by UUID — only
+            // reliable cross-space/screen target we have for iTerm.
+            if launcher?.termProgram == "iTerm.app",
+               let uuid = iTermUUID(from: launcher?.itermSessionID),
+               selectITermSession(uuid: uuid) {
+                return
+            }
+            // Everything else: AX + cwd-ancestor title match.
             if !cwd.isEmpty {
                 raiseMatchingWindow(bundleID: bundleID, cwd: cwd)
             }
         }
+    }
+
+    // MARK: - iTerm2 AppleScript
+
+    /// Extracts the UUID portion from an `$ITERM_SESSION_ID` value. Accepts
+    /// both legacy `w0t0p0:UUID` and current `w0:t0:p0:UUID` formats by
+    /// taking the substring after the *last* colon.
+    static func iTermUUID(from sessionID: String?) -> String? {
+        guard let sid = sessionID, !sid.isEmpty else { return nil }
+        guard let r = sid.range(of: ":", options: .backwards) else { return sid }
+        let tail = String(sid[r.upperBound...])
+        return tail.isEmpty ? nil : tail
+    }
+
+    /// Runs iTerm2 AppleScript to `select` the session with the given
+    /// `unique id`. Returns true on a real match, false on AppleScript
+    /// error (permission denied) or no-match (window/session closed).
+    private static func selectITermSession(uuid: String) -> Bool {
+        let safe = uuid
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let source = """
+        tell application "iTerm"
+            activate
+            repeat with w in windows
+                repeat with t in tabs of w
+                    repeat with s in sessions of t
+                        if (unique id of s) is "\(safe)" then
+                            select w
+                            tell t to select
+                            tell s to select
+                            return "1"
+                        end if
+                    end repeat
+                end repeat
+            end repeat
+            return "0"
+        end tell
+        """
+        var err: NSDictionary?
+        guard let script = NSAppleScript(source: source) else { return false }
+        let descriptor = script.executeAndReturnError(&err)
+        if let err {
+            logger.error("iTerm AppleScript failed: \(err, privacy: .public)")
+            return false
+        }
+        let matched = descriptor.stringValue == "1"
+        if !matched {
+            logger.info("iTerm AppleScript: no session matched uuid \(uuid, privacy: .public)")
+        }
+        return matched
     }
 
     // MARK: - AX window selection
