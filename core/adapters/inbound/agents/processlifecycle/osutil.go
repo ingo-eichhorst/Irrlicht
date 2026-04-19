@@ -117,10 +117,11 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	if pid <= 0 {
 		return nil
 	}
-	env, err := readProcessEnv(pid)
-	if err != nil || len(env) == 0 {
-		return nil
-	}
+	// Env may be empty — hardened-runtime processes hide it from sysctl.
+	// Don't bail here: the ancestry fallback below is the only signal we
+	// have in that case.
+	env, _ := readProcessEnv(pid)
+
 	l := &session.Launcher{
 		TermProgram:    env["TERM_PROGRAM"],
 		ITermSessionID: env["ITERM_SESSION_ID"],
@@ -145,6 +146,13 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// terminal sets VSCODE_PID but not always TERM_PROGRAM=vscode).
 	if l.TermProgram == "" && l.VSCodePID > 0 {
 		l.TermProgram = "vscode"
+	}
+	// Hardened-runtime processes (e.g. Anthropic's signed `claude` binary)
+	// hide env from sysctl. Fall back to process-ancestry walking so the UI
+	// can at least bring the host app to the front. Darwin-only; other
+	// platforms return "" and this is a no-op.
+	if l.TermProgram == "" {
+		l.TermProgram = resolveTermProgramFromAncestry(pid)
 	}
 	if l.IsEmpty() {
 		return nil

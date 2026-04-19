@@ -505,6 +505,19 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 						fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
 				}
 			}
+			// Best-effort backfill: pre-existing sessions from a previous
+			// daemon build may have Launcher=nil. Re-attempt capture so
+			// row/notification clicks work without requiring the user to
+			// start a new session. Guard on state.Launcher != nil prevents
+			// re-reads when the field is already populated; we persist the
+			// result so the new field is visible via the API immediately.
+			if state.Launcher == nil {
+				pm.captureLauncher(state, state.PID)
+				if state.Launcher != nil {
+					state.UpdatedAt = time.Now().Unix()
+					_ = pm.repo.Save(state)
+				}
+			}
 
 			// Track newest non-subagent session per PID for dedup below.
 			if state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-") {

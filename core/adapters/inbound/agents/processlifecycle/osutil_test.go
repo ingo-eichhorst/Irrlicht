@@ -188,8 +188,16 @@ func TestReadLauncherEnv_Subprocess_NoRelevantEnv(t *testing.T) {
 		t.Skip()
 	}
 	pid := spawnSleeperWithEnv(t, []string{"PATH=/usr/bin:/bin"})
-	if l := ReadLauncherEnv(pid); l != nil {
-		t.Errorf("expected nil launcher, got %+v", l)
+	// With the ancestry fallback, an empty relevant env no longer guarantees
+	// nil — if the test process's host terminal/IDE is on the recognized
+	// list, we'll populate TermProgram from ppid walk. The invariant that
+	// still holds: env-derived fields must be empty (we only set PATH).
+	l := ReadLauncherEnv(pid)
+	if l == nil {
+		return // legitimate on unknown hosts
+	}
+	if l.ITermSessionID != "" || l.TermSessionID != "" || l.TmuxPane != "" || l.VSCodePID != 0 {
+		t.Errorf("expected only ancestry-derived TermProgram, got %+v", l)
 	}
 }
 
@@ -213,4 +221,61 @@ func TestReadLauncherEnv_Subprocess_Tmux(t *testing.T) {
 	if l.TmuxPane != "%17" {
 		t.Errorf("TmuxPane: got %q", l.TmuxPane)
 	}
+}
+
+func TestTermProgramForAppPath(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-only helper")
+	}
+	tests := []struct {
+		in, want string
+	}{
+		{"/Applications/Visual Studio Code.app/Contents/MacOS/Code", "vscode"},
+		{"/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper", "vscode"},
+		{"/Applications/iTerm.app/Contents/MacOS/iTerm2", "iTerm.app"},
+		{"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", "Apple_Terminal"},
+		{"/Applications/Cursor.app/Contents/MacOS/Cursor", "cursor"},
+		{"/Applications/Ghostty.app/Contents/MacOS/ghostty", "ghostty"},
+		{"/Applications/Warp.app/Contents/MacOS/stable", "Warp"},
+		{"/Applications/WezTerm.app/Contents/MacOS/wezterm-gui", "WezTerm"},
+		{"/Applications/Hyper.app/Contents/MacOS/Hyper", "Hyper"},
+		{"/Applications/Windsurf.app/Contents/MacOS/Windsurf", "windsurf"},
+		// No .app segment: not a host we know.
+		{"/bin/zsh", ""},
+		{"/Users/ingo/.local/share/claude/versions/2.1.114", ""},
+		{"/usr/bin/tmux", ""},
+		// .app appears in a path fragment but not as a bundle boundary.
+		{"/tmp/not.appended/bin/thing", ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		if got := termProgramForAppPath(tc.in); got != tc.want {
+			t.Errorf("termProgramForAppPath(%q): got %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestResolveTermProgramFromAncestry_Self walks the ancestry of the running
+// test binary. We don't know what terminal launched the developer's `go test`
+// invocation, so we only assert that the helper either finds a supported host
+// (non-empty) or returns "" cleanly — never errors or panics.
+func TestResolveTermProgramFromAncestry_Self(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-only helper")
+	}
+	got := resolveTermProgramFromAncestry(os.Getpid())
+	if got != "" {
+		if _, known := termProgramByAppName[reverseLookup(got)]; !known {
+			t.Errorf("resolveTermProgramFromAncestry returned unknown TermProgram %q", got)
+		}
+	}
+}
+
+func reverseLookup(termProgram string) string {
+	for k, v := range termProgramByAppName {
+		if v == termProgram {
+			return k
+		}
+	}
+	return ""
 }

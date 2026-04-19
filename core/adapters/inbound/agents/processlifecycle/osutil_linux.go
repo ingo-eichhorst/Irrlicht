@@ -29,3 +29,8 @@ func readProcessEnv(pid int) (map[string]string, error) {
 	}
 	return out, nil
 }
+
+// resolveTermProgramFromAncestry is a darwin-only fallback for hardened-
+// runtime processes that hide env from sysctl. Linux reads /proc/<pid>/environ
+// directly, so this stub is unused on linux.
+func resolveTermProgramFromAncestry(pid int) string { return "" }
