@@ -1475,7 +1475,7 @@
     fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
       if (!resp) return;
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
-      orchestrator = (!Array.isArray(resp) && resp.orchestrator) || null;
+      orchestrator = resp.orchestrator || null;
       rebuildIndex();
       render();
       timelineTick(); // First tick immediately
