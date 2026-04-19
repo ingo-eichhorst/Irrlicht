@@ -301,7 +301,7 @@ final class SessionManagerTests: XCTestCase {
         // ancestor match.
         let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
         XCTAssertEqual(
-            SessionLauncher.titleMatchScore(
+            AXTitleMatchActivator.titleMatchScore(
                 title: "ingo@mac: /Users/ingo/projects/irrlicht/.claude/worktrees/170 — zsh",
                 cwd: cwd),
             1_000)
@@ -316,17 +316,17 @@ final class SessionManagerTests: XCTestCase {
         // parts index: Users(0) ingo(1) projects(2) irrlicht(3) .claude(4) worktrees(5) 170(6)
         //   Basename "170" — score 7.
         XCTAssertEqual(
-            SessionLauncher.titleMatchScore(title: "SessionLauncher.swift — 170", cwd: cwd),
+            AXTitleMatchActivator.titleMatchScore(title: "SessionLauncher.swift — 170", cwd: cwd),
             7)
 
         //   "worktrees" at depth 5 → score 6 (basename "170" missing).
         XCTAssertEqual(
-            SessionLauncher.titleMatchScore(title: "Edit.swift — worktrees", cwd: cwd),
+            AXTitleMatchActivator.titleMatchScore(title: "Edit.swift — worktrees", cwd: cwd),
             6)
 
         //   VS Code workspace is the repo root: "irrlicht" at depth 3 → score 4.
         XCTAssertEqual(
-            SessionLauncher.titleMatchScore(title: "2.1.114 — irrlicht", cwd: cwd),
+            AXTitleMatchActivator.titleMatchScore(title: "2.1.114 — irrlicht", cwd: cwd),
             4)
     }
 
@@ -336,18 +336,18 @@ final class SessionManagerTests: XCTestCase {
         let cwd = "/Users/ingo/projects/irrlicht"
         // Title matches "ingo" only — must score 0 (skipped).
         XCTAssertEqual(
-            SessionLauncher.titleMatchScore(title: "ingo@mac: ~ — zsh", cwd: cwd),
+            AXTitleMatchActivator.titleMatchScore(title: "ingo@mac: ~ — zsh", cwd: cwd),
             0)
         // Title matches "Users" only — must score 0.
         XCTAssertEqual(
-            SessionLauncher.titleMatchScore(title: "Users directory", cwd: cwd),
+            AXTitleMatchActivator.titleMatchScore(title: "Users directory", cwd: cwd),
             0)
     }
 
     func testTitleMatchScoreEmptyInputs() {
         let cwd = "/Users/ingo/projects/irrlicht"
-        XCTAssertEqual(SessionLauncher.titleMatchScore(title: "", cwd: cwd), 0)
-        XCTAssertEqual(SessionLauncher.titleMatchScore(title: "anything", cwd: ""), 0)
+        XCTAssertEqual(AXTitleMatchActivator.titleMatchScore(title: "", cwd: cwd), 0)
+        XCTAssertEqual(AXTitleMatchActivator.titleMatchScore(title: "anything", cwd: ""), 0)
     }
 
     func testBestMatchIndexPicksDeepestAncestor() {
@@ -360,7 +360,7 @@ final class SessionManagerTests: XCTestCase {
             "index.html — opencode-test",        // 1: unrelated
             "benchmark.md — agent-readyness",    // 2: unrelated
         ]
-        XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 0)
+        XCTAssertEqual(AXTitleMatchActivator.bestMatchIndex(titles: titles, cwd: cwd), 0)
     }
 
     func testBestMatchIndexPrefersDeeperMatchWhenBothPresent() {
@@ -371,13 +371,13 @@ final class SessionManagerTests: XCTestCase {
             "README.md — irrlicht",     // ancestor at depth 3 → score 4
             "main.go — core",           // basename at depth 4 → score 5 (wins)
         ]
-        XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 1)
+        XCTAssertEqual(AXTitleMatchActivator.bestMatchIndex(titles: titles, cwd: cwd), 1)
     }
 
     func testBestMatchIndexReturnsNilWhenNoMatch() {
         let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
         let titles = ["README.md — some-other-project", "", "main.swift — another"]
-        XCTAssertNil(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd))
+        XCTAssertNil(AXTitleMatchActivator.bestMatchIndex(titles: titles, cwd: cwd))
     }
 
     // MARK: - iTerm UUID extraction
@@ -385,27 +385,27 @@ final class SessionManagerTests: XCTestCase {
     func testITermUUIDExtractsFromLegacyFormat() {
         // Older iTerm2 ITERM_SESSION_ID: "w0t0p0:UUID"
         XCTAssertEqual(
-            SessionLauncher.iTermUUID(from: "w4t0p0:1FFEA6B4-1EA4-4A3C-86B6-B80027B5690F"),
+            ITermActivator.iTermUUID(from: "w4t0p0:1FFEA6B4-1EA4-4A3C-86B6-B80027B5690F"),
             "1FFEA6B4-1EA4-4A3C-86B6-B80027B5690F")
     }
 
     func testITermUUIDExtractsFromCurrentFormat() {
         // Newer format: "w0:t0:p0:UUID"
         XCTAssertEqual(
-            SessionLauncher.iTermUUID(from: "w0:t0:p0:ABCD-1234"),
+            ITermActivator.iTermUUID(from: "w0:t0:p0:ABCD-1234"),
             "ABCD-1234")
     }
 
     func testITermUUIDWithoutColonReturnsInput() {
         // If the env value has no colon at all, treat the whole thing as a
         // UUID — best-effort, still lets the AppleScript try a match.
-        XCTAssertEqual(SessionLauncher.iTermUUID(from: "BARE-UUID"), "BARE-UUID")
+        XCTAssertEqual(ITermActivator.iTermUUID(from: "BARE-UUID"), "BARE-UUID")
     }
 
     func testITermUUIDEmptyOrNil() {
-        XCTAssertNil(SessionLauncher.iTermUUID(from: nil))
-        XCTAssertNil(SessionLauncher.iTermUUID(from: ""))
+        XCTAssertNil(ITermActivator.iTermUUID(from: nil))
+        XCTAssertNil(ITermActivator.iTermUUID(from: ""))
         // Trailing colon → empty tail → nil (no usable UUID to target).
-        XCTAssertNil(SessionLauncher.iTermUUID(from: "w0t0p0:"))
+        XCTAssertNil(ITermActivator.iTermUUID(from: "w0t0p0:"))
     }
 }
