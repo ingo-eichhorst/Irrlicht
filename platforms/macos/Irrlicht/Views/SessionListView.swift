@@ -366,13 +366,19 @@ struct SessionRowView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .background(isHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+        .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovered = hovering
             }
         }
+        .onTapGesture {
+            SessionLauncher.jump(session)
+        }
         .accessibilityIdentifier("session-card-\(session.id)")
         .accessibilityLabel("\(session.projectName ?? "unknown") \(session.state.rawValue) \(session.shortModelName)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Brings the session's terminal or editor to the foreground")
     }
 
     private func elapsedString(from date: Date, now: Date) -> String {

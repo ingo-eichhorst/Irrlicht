@@ -179,6 +179,12 @@ func (d *SessionDetector) SetCostTracker(c outbound.CostTracker) {
 	d.costTracker = c
 }
 
+// SetLauncherEnvReader installs a reader that captures terminal/IDE identity
+// from a session's PID when the PID is first assigned.
+func (d *SessionDetector) SetLauncherEnvReader(fn LauncherEnvReader) {
+	d.pidMgr.SetLauncherEnvReader(fn)
+}
+
 // recordCost is a helper that calls the optional CostTracker and logs but
 // does not propagate errors — cost tracking must never block the detector.
 func (d *SessionDetector) recordCost(state *session.SessionState) {
@@ -500,6 +506,10 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 			d.log.LogInfo("session-detector", ev.SessionID,
 				fmt.Sprintf("applied deferred pid %d", pid))
 		}
+		// Capture launcher identity idempotently — HandlePIDAssigned
+		// normally populates it, but this path runs first in startup
+		// races where the pending PID is applied before the direct save.
+		d.pidMgr.captureLauncher(state, pid)
 	}
 
 	// Retry PID discovery if not yet known.

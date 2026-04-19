@@ -24,6 +24,13 @@ import (
 // candidates match.
 type PIDDiscoverFunc func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error)
 
+// LauncherEnvReader captures the terminal/IDE identity from the process env
+// of pid. Returns nil when env cannot be read or no launcher is identifiable.
+// Implementations must never block longer than a couple of seconds and must
+// never prompt the user (no TCC). The real implementation lives in the
+// processlifecycle adapter and is injected to preserve the hexagonal layering.
+type LauncherEnvReader func(pid int) *session.Launcher
+
 // PIDManager manages the process lifecycle for sessions. It discovers PIDs,
 // registers them with ProcessWatcher, handles exits, and sweeps dead processes.
 type PIDManager struct {
@@ -36,6 +43,9 @@ type PIDManager struct {
 	// pidDiscovers maps adapter name → PID discovery function.
 	// Nil or missing entry means no PID discovery for that adapter.
 	pidDiscovers map[string]PIDDiscoverFunc
+
+	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
+	launcherEnv LauncherEnvReader
 
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
@@ -98,6 +108,25 @@ func (pm *PIDManager) SetRecorder(r outbound.EventRecorder, seq *int64) {
 // `working` solely because of that child.
 func (pm *PIDManager) SetChildDeletedHandler(fn func(parentID string)) {
 	pm.onChildDeleted = fn
+}
+
+// SetLauncherEnvReader installs a reader that captures launcher identity
+// (terminal/IDE env vars) from a session's PID. Called once at startup.
+// Nil disables launcher capture.
+func (pm *PIDManager) SetLauncherEnvReader(fn LauncherEnvReader) {
+	pm.launcherEnv = fn
+}
+
+// captureLauncher invokes the launcher-env reader if one is installed and
+// the session does not yet have a launcher recorded. Safe to call multiple
+// times; only populates on the first successful read.
+func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
+	if pm.launcherEnv == nil || state == nil || state.Launcher != nil || pid <= 0 {
+		return
+	}
+	if l := pm.launcherEnv(pid); l != nil {
+		state.Launcher = l
+	}
 }
 
 // record emits a lifecycle event if recording is enabled.
@@ -192,6 +221,7 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	}
 
 	state.PID = pid
+	pm.captureLauncher(state, pid)
 	state.UpdatedAt = time.Now().Unix()
 	_ = pm.repo.Save(state)
 
@@ -473,6 +503,28 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 				if err := pm.pw.Watch(state.PID, state.SessionID); err != nil {
 					pm.log.LogError("session-detector-seed", state.SessionID,
 						fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
+				}
+			}
+			// Best-effort backfill: pre-existing sessions from a previous
+			// daemon build may have Launcher=nil, or a Launcher struct from
+			// before newer fields (e.g. TTY) existed. Re-attempt capture so
+			// row/notification clicks work without requiring the user to
+			// start a new session.
+			if state.Launcher == nil {
+				pm.captureLauncher(state, state.PID)
+				if state.Launcher != nil {
+					state.UpdatedAt = time.Now().Unix()
+					_ = pm.repo.Save(state)
+				}
+			} else if state.Launcher.TTY == "" && pm.launcherEnv != nil {
+				// Targeted TTY backfill. Keep the stable env-based identity
+				// (iterm_session_id, vscode_pid, ...) and only fill in what's
+				// missing — avoids clobbering known-good data in the rare
+				// case where a PID got recycled.
+				if fresh := pm.launcherEnv(state.PID); fresh != nil && fresh.TTY != "" {
+					state.Launcher.TTY = fresh.TTY
+					state.UpdatedAt = time.Now().Unix()
+					_ = pm.repo.Save(state)
 				}
 			}
 

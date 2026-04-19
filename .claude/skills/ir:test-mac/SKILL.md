@@ -57,10 +57,19 @@ Build the irrlicht daemon and Swift app, then replace all running instances with
        <string>dev</string>
        <key>LSUIElement</key>
        <true/>
+       <key>NSAppleEventsUsageDescription</key>
+       <string>Irrlicht uses AppleScript to bring the correct iTerm2 or Terminal.app window and tab to the front when you click a session row.</string>
    </dict>
    </plist>
    PLIST
-   codesign --force --deep --sign - "$DEV_APP" 2>&1
+   # Sign with the persistent "Irrlicht Dev" identity if it exists; otherwise
+   # fall back to ad-hoc (TCC permissions will need to be re-granted each
+   # rebuild). Run scripts/dev-sign-setup.sh once to install the identity.
+   if security find-identity -v -p codesigning 2>/dev/null | grep -q "Irrlicht Dev"; then
+       codesign --force --deep --sign "Irrlicht Dev" "$DEV_APP" 2>&1
+   else
+       codesign --force --deep --sign - "$DEV_APP" 2>&1
+   fi
    ```
 
 3. **Kill all running irrlicht processes** (production app, production daemon, debug app, debug daemon)
@@ -101,3 +110,4 @@ Build the irrlicht daemon and Swift app, then replace all running instances with
 - The production Irrlicht.app (from DMG) bundles its own daemon. It MUST be killed before starting the dev daemon, otherwise port 7837 will be occupied.
 - Daemon logs: `/tmp/irrlichd-dev.log`
 - Swift app logs: `/tmp/irrlicht-app-dev.log`
+- **TCC stability**: run `scripts/dev-sign-setup.sh` once to install the `"Irrlicht Dev"` self-signed code signing identity. The skill automatically signs with it when present, giving the app a stable designated requirement so Accessibility/Automation grants persist across rebuilds. Without it, every rebuild invalidates TCC and requires re-granting in System Settings.

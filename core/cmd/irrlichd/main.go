@@ -403,6 +403,9 @@ func main() {
 	if costTracker != nil {
 		detector.SetCostTracker(costTracker)
 	}
+	// Capture terminal/IDE identity at first PID assignment so the menu-bar
+	// app can jump back to the launching terminal on row/notification click.
+	detector.SetLauncherEnvReader(processlifecycle.ReadLauncherEnv)
 
 	// Hook receiver: Claude Code PermissionRequest/PostToolUse events.
 	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.

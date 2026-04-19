@@ -26,6 +26,8 @@
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Irrlicht uses AppleScript to bring the correct iTerm2 or Terminal.app window and tab to the front when you click a session row.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2024 Anthropic. All rights reserved.</string>
     <key>NSPrincipalClass</key>

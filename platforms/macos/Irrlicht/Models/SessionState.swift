@@ -146,6 +146,27 @@ struct SubagentSummary: Codable {
     let ready: Int
 }
 
+/// Launcher identifies the terminal or IDE that spawned the session's agent.
+/// Captured by the daemon when the PID is first assigned. All fields optional —
+/// clients must fall back to the session CWD when nothing identifies the host.
+struct Launcher: Codable, Hashable {
+    let termProgram: String?
+    let itermSessionID: String?
+    let termSessionID: String?
+    let tmuxPane: String?
+    let tmuxSocket: String?
+    let tty: String?
+
+    enum CodingKeys: String, CodingKey {
+        case termProgram    = "term_program"
+        case itermSessionID = "iterm_session_id"
+        case termSessionID  = "term_session_id"
+        case tmuxPane       = "tmux_pane"
+        case tmuxSocket     = "tmux_socket"
+        case tty            = "tty"
+    }
+}
+
 struct SessionState: Identifiable, Codable {
     let id: String              // session_id
     let state: State            // working, waiting, ready
@@ -170,6 +191,7 @@ struct SessionState: Identifiable, Codable {
     var workerName: String?     // orchestrator worker name
     var workerID: String?       // orchestrator worker/bead ID
     let children: [SessionState]? // nested child sessions from API (optional)
+    let launcher: Launcher?     // terminal/IDE that spawned this session (optional)
 
     // For duplicate handling (not stored in JSON, computed by SessionManager)
     var duplicateIndex: Int? = nil
@@ -198,6 +220,7 @@ struct SessionState: Identifiable, Codable {
         case workerName = "worker_name"
         case workerID = "worker_id"
         case children
+        case launcher
     }
     
     // Custom decoder to handle multiple date formats and missing fields
@@ -231,6 +254,7 @@ struct SessionState: Identifiable, Codable {
         workerName = try container.decodeIfPresent(String.self, forKey: .workerName)
         workerID = try container.decodeIfPresent(String.self, forKey: .workerID)
         children = try container.decodeIfPresent([SessionState].self, forKey: .children)
+        launcher = try container.decodeIfPresent(Launcher.self, forKey: .launcher)
 
         // Handle firstSeen date (unix timestamp format)
         if let timestamp = try? container.decode(Double.self, forKey: .firstSeen) {
@@ -278,7 +302,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, roleIcon: String? = nil, roleDescription: String? = nil, workerName: String? = nil, workerID: String? = nil, children: [SessionState]? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, roleIcon: String? = nil, roleDescription: String? = nil, workerName: String? = nil, workerID: String? = nil, children: [SessionState]? = nil, launcher: Launcher? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -302,6 +326,7 @@ struct SessionState: Identifiable, Codable {
         self.workerName = workerName
         self.workerID = workerID
         self.children = children
+        self.launcher = launcher
     }
     
     enum State: String, CaseIterable, Codable {
