@@ -14,7 +14,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        // Add any external dependencies here if needed
+        .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", from: "1.17.0"),
     ],
     targets: [
         .executableTarget(
@@ -25,7 +25,10 @@ let package = Package(
         ),
         .testTarget(
             name: "IrrlichtTests",
-            dependencies: ["Irrlicht"],
+            dependencies: [
+                "Irrlicht",
+                .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
+            ],
             path: "Tests"
         )
     ]
