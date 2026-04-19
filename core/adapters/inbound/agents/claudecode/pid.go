@@ -6,9 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 )
+
+// staleMetaSlack is the margin by which a ~/.claude/sessions/<pid>.json mtime
+// must trail the caller's transcript mtime before we treat the metadata as
+// stale and stop using it as a negative filter (issue #169). Must be larger
+// than filesystem-time jitter (APFS: ns, HFS+: 1s) and small compared to the
+// ~2 min window during which Claude may leave stale metadata after /clear.
+const staleMetaSlack = 2 * time.Second
 
 // sessionsDir is the directory Claude Code writes per-process metadata files to.
 // Each live Claude process owns ~/.claude/sessions/<pid>.json containing
@@ -45,10 +53,26 @@ type claudeSessionMeta struct {
 func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
 	wantSessionID := sessionIDFromTranscript(transcriptPath)
 
+	// Transcript mtime is used to detect stale metadata (issue #169): after a
+	// /clear, ~/.claude/sessions/<pid>.json can still point at the previous
+	// sessionId for up to ~2 min, which would wrongly exclude the live PID
+	// from the fallback. A new transcript written after /clear will have a
+	// fresher mtime than the stale metadata, so we can safely ignore such
+	// entries as negative filters. Zero on error → gate inert (current
+	// behavior preserved).
+	var wantMTime time.Time
+	if transcriptPath != "" {
+		if info, err := os.Stat(transcriptPath); err == nil {
+			wantMTime = info.ModTime()
+		}
+	}
+
 	// Layer 1: authoritative metadata lookup.
 	// Scan ~/.claude/sessions/*.json once, collecting PIDs that some metadata
 	// file owns (for negative-filtering the fallback) and looking for an
-	// exact sessionId match.
+	// exact sessionId match. Entries whose mtime is older than the caller's
+	// transcript by more than staleMetaSlack are treated as positive-only
+	// signals (their PID is NOT added to claimedByOthers) — see issue #169.
 	claimedByOthers := make(map[int]bool)
 	if wantSessionID != "" && sessionsDir != "" {
 		entries, err := os.ReadDir(sessionsDir)
@@ -67,9 +91,15 @@ func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int,
 				if meta.SessionID == wantSessionID {
 					return meta.PID, nil
 				}
-				// A live Claude process owns this PID for a different sessionId;
-				// exclude it from the cwd fallback below.
-				claimedByOthers[meta.PID] = true
+				// A live Claude process owns this PID for a different sessionId.
+				// Exclude it from the cwd fallback — unless the metadata is
+				// demonstrably older than the caller's transcript, which
+				// indicates a stale post-/clear entry that would otherwise
+				// strand the new session at PID=0 (issue #169).
+				metaMTime := metaFileMTime(e)
+				if wantMTime.IsZero() || metaMTime.IsZero() || !metaMTime.Before(wantMTime.Add(-staleMetaSlack)) {
+					claimedByOthers[meta.PID] = true
+				}
 			}
 		}
 	}
@@ -118,6 +148,18 @@ func sessionIDFromTranscript(path string) string {
 		return ""
 	}
 	return strings.TrimSuffix(base, ".jsonl")
+}
+
+// metaFileMTime returns the modification time of a metadata directory entry,
+// or zero on any error. Prefers os.DirEntry.Info() (uses the already-cached
+// stat from ReadDir on most platforms, avoiding a syscall) and falls back to
+// zero on failure — callers must treat zero as "unknown".
+func metaFileMTime(e os.DirEntry) time.Time {
+	info, err := e.Info()
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 // readSessionMeta reads and parses a single ~/.claude/sessions/<pid>.json file.
