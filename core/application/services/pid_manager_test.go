@@ -87,3 +87,49 @@ func TestCheckPIDLiveness_StaleTranscript_Deleted(t *testing.T) {
 		t.Fatal("session should be deleted (stale transcript + ready + pid=0 + >30s)")
 	}
 }
+
+// TestHandlePIDAssigned_LauncherCaptureIsIdempotent verifies the reader runs
+// exactly once when a session first gets a launcher, and is never invoked
+// again even if a different PID later arrives.
+func TestHandlePIDAssigned_LauncherCaptureIsIdempotent(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	pm := newPIDManagerForTest(repo)
+	var calls int
+	pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
+		calls++
+		return &session.Launcher{TermProgram: "iTerm.app"}
+	})
+
+	pm.HandlePIDAssigned(42, "s")
+	if calls != 1 {
+		t.Fatalf("first assign: reader calls = %d, want 1", calls)
+	}
+	if repo.states["s"].Launcher == nil {
+		t.Fatal("first assign: launcher not captured")
+	}
+
+	// Same PID, same session: HandlePIDAssigned early-returns at the
+	// `state.PID == pid` guard before reaching captureLauncher.
+	pm.HandlePIDAssigned(42, "s")
+	if calls != 1 {
+		t.Errorf("repeat same PID: reader re-invoked (%d calls)", calls)
+	}
+
+	// Different PID on a session that already has a launcher: state.PID
+	// changes, but captureLauncher's `state.Launcher != nil` guard prevents
+	// a re-read — preserving the original launcher identity even across
+	// process restarts / /clear scenarios.
+	pm.HandlePIDAssigned(99, "s")
+	if calls != 1 {
+		t.Errorf("new PID with existing launcher: reader re-invoked (%d calls)", calls)
+	}
+	if repo.states["s"].Launcher == nil || repo.states["s"].Launcher.TermProgram != "iTerm.app" {
+		t.Errorf("launcher clobbered by later PID assignment: %+v", repo.states["s"].Launcher)
+	}
+}

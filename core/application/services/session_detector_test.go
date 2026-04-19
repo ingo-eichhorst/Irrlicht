@@ -1142,6 +1142,52 @@ func TestSessionDetector_PIDAssigned_CleansUpOldSession(t *testing.T) {
 	}
 }
 
+func TestSessionDetector_PIDAssigned_CapturesLauncher(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	now := time.Now().Unix()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		FirstSeen: now,
+		UpdatedAt: now,
+	}
+
+	det := newDetector(tw, pw, repo)
+	var calledPID int
+	det.SetLauncherEnvReader(func(pid int) *session.Launcher {
+		calledPID = pid
+		return &session.Launcher{
+			TermProgram:    "iTerm.app",
+			ITermSessionID: "w0t0p0",
+		}
+	})
+
+	det.HandlePIDAssigned(4242, "s")
+
+	if calledPID != 4242 {
+		t.Errorf("LauncherEnvReader pid: got %d, want 4242", calledPID)
+	}
+	state, _ := repo.Load("s")
+	if state == nil || state.Launcher == nil {
+		t.Fatal("expected Launcher to be set after HandlePIDAssigned")
+	}
+	if state.Launcher.TermProgram != "iTerm.app" {
+		t.Errorf("Launcher.TermProgram: got %q, want iTerm.app", state.Launcher.TermProgram)
+	}
+
+	// Subsequent PID assignment with the same PID must not clobber — the
+	// guard `state.PID == pid` bails before we re-read env, so the reader
+	// should not even be invoked again.
+	calledPID = 0
+	det.HandlePIDAssigned(4242, "s")
+	if calledPID != 0 {
+		t.Errorf("LauncherEnvReader invoked again for same PID: got %d", calledPID)
+	}
+}
+
 func TestSessionDetector_PIDAssigned_SkipsSubagents(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()

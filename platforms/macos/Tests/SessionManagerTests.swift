@@ -243,4 +243,110 @@ final class SessionManagerTests: XCTestCase {
         let data = try JSONEncoder().encode(session)
         try data.write(to: url)
     }
+
+    // MARK: - Launcher
+
+    func testLauncherDecodes() throws {
+        let jsonData = """
+        {
+            "session_id": "sess_l",
+            "state": "working",
+            "model": "claude-opus-4-7",
+            "cwd": "/Users/test/projects/app",
+            "updated_at": 1700000000,
+            "launcher": {
+                "term_program": "iTerm.app",
+                "iterm_session_id": "w0t0p0-ABC"
+            }
+        }
+        """.data(using: .utf8)!
+
+        let session = try JSONDecoder().decode(SessionState.self, from: jsonData)
+        XCTAssertNotNil(session.launcher)
+        XCTAssertEqual(session.launcher?.termProgram, "iTerm.app")
+        XCTAssertEqual(session.launcher?.itermSessionID, "w0t0p0-ABC")
+        XCTAssertNil(session.launcher?.tmuxPane)
+    }
+
+    func testLauncherMissingIsNil() throws {
+        // Session JSON without a launcher key must still decode cleanly for
+        // backwards compatibility with older daemon builds.
+        let jsonData = """
+        {
+            "session_id": "sess_legacy",
+            "state": "ready",
+            "model": "claude-opus-4-7",
+            "cwd": "/tmp",
+            "updated_at": 1700000000
+        }
+        """.data(using: .utf8)!
+        let session = try JSONDecoder().decode(SessionState.self, from: jsonData)
+        XCTAssertNil(session.launcher)
+    }
+
+    // MARK: - SessionLauncher helpers
+
+    func testSessionLauncherBundleIDDerivation() {
+        // The map lives client-side so the daemon's domain model stays
+        // platform-neutral. Unknown / unsupported programs return nil so
+        // dispatch can fall through to Finder-reveal.
+        XCTAssertEqual(SessionLauncher.bundleID(for: "iTerm.app"), "com.googlecode.iterm2")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "Apple_Terminal"), "com.apple.Terminal")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "vscode"), "com.microsoft.VSCode")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "ghostty"), "com.mitchellh.ghostty")
+        XCTAssertNil(SessionLauncher.bundleID(for: "tmux"))
+        XCTAssertNil(SessionLauncher.bundleID(for: nil))
+        XCTAssertNil(SessionLauncher.bundleID(for: "unknown-terminal"))
+    }
+
+    func testSessionLauncherEditorURLScheme() {
+        XCTAssertEqual(SessionLauncher.editorURLScheme(for: "vscode"), "vscode")
+        XCTAssertEqual(SessionLauncher.editorURLScheme(for: "cursor"), "cursor")
+        XCTAssertEqual(SessionLauncher.editorURLScheme(for: "windsurf"), "windsurf")
+        XCTAssertNil(SessionLauncher.editorURLScheme(for: "iTerm.app"))
+        XCTAssertNil(SessionLauncher.editorURLScheme(for: nil))
+        XCTAssertNil(SessionLauncher.editorURLScheme(for: ""))
+    }
+
+    func testSessionLauncherEditorFolderURL() {
+        let simple = SessionLauncher.editorFolderURL(scheme: "vscode", cwd: "/Users/alice/projects/app")
+        XCTAssertEqual(simple?.absoluteString, "vscode://file/Users/alice/projects/app")
+
+        let spaced = SessionLauncher.editorFolderURL(scheme: "cursor", cwd: "/Users/alice/my projects/app")
+        XCTAssertEqual(spaced?.absoluteString, "cursor://file/Users/alice/my%20projects/app")
+
+        // Non-absolute cwd yields no host-relative URL we want to hand to the OS.
+        let relative = SessionLauncher.editorFolderURL(scheme: "vscode", cwd: "relative/path")
+        // URLComponents builds *something*, but it must not crash; only assert it's not our expected absolute form.
+        XCTAssertNotEqual(relative?.absoluteString, "vscode://file/relative/path")
+    }
+
+    func testSessionLauncherAppleScriptEscape() {
+        XCTAssertEqual(SessionLauncher.appleScriptEscape("w0t0p0"), "w0t0p0")
+        XCTAssertEqual(SessionLauncher.appleScriptEscape("a\"b"), "a\\\"b")
+        // Backslash escapes before quotes — otherwise the quote's escape gets re-escaped.
+        XCTAssertEqual(SessionLauncher.appleScriptEscape("a\\b"), "a\\\\b")
+        XCTAssertEqual(SessionLauncher.appleScriptEscape("a\\\"b"), "a\\\\\\\"b")
+    }
+
+    func testSessionLauncherITerm2ScriptReturnsBoolean() {
+        // The iTerm2 script must include both "return \"1\"" (match) and
+        // "return \"0\"" (no-match) so runAppleScriptMatching can detect
+        // when to fall through to the bundle-ID activator.
+        let script = SessionLauncher.iterm2SelectScript(sessionID: "w0t0p0-ABC")
+        XCTAssertTrue(script.contains("return \"1\""),
+                      "script must signal match with \"1\": \(script)")
+        XCTAssertTrue(script.contains("return \"0\""),
+                      "script must signal no-match with \"0\": \(script)")
+        XCTAssertTrue(script.contains("\"w0t0p0-ABC\""),
+                      "script must embed the escaped session id: \(script)")
+    }
+
+    func testSessionLauncherITerm2ScriptEscapesQuotes() {
+        // Defensive: if a future env source ever produces a quoted ID, the
+        // script literal must still parse.
+        let script = SessionLauncher.iterm2SelectScript(sessionID: "a\"b")
+        XCTAssertTrue(script.contains("\"a\\\"b\""),
+                      "quote must be backslash-escaped: \(script)")
+    }
 }

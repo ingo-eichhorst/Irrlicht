@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -28,5 +29,42 @@ func TestIsStale(t *testing.T) {
 				t.Errorf("IsStale(%v) = %v, want %v", tt.maxAge, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSessionState_LauncherJSONRoundTrip(t *testing.T) {
+	// With Launcher present.
+	in := &SessionState{
+		SessionID: "abc",
+		State:     StateWorking,
+		PID:       1234,
+		Launcher: &Launcher{
+			TermProgram:    "iTerm.app",
+			ITermSessionID: "w0t0p0",
+		},
+	}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out SessionState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Launcher == nil {
+		t.Fatal("Launcher lost in round-trip")
+	}
+	if out.Launcher.TermProgram != "iTerm.app" || out.Launcher.ITermSessionID != "w0t0p0" {
+		t.Errorf("launcher round-trip mismatch: %+v", out.Launcher)
+	}
+
+	// Without Launcher — backwards compat with pre-170 session JSON files.
+	legacy := []byte(`{"session_id":"xyz","state":"ready","pid":99}`)
+	var legacyOut SessionState
+	if err := json.Unmarshal(legacy, &legacyOut); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+	if legacyOut.Launcher != nil {
+		t.Errorf("legacy session should have nil Launcher, got %+v", legacyOut.Launcher)
 	}
 }

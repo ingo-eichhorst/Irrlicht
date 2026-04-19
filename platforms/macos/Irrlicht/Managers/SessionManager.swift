@@ -63,6 +63,12 @@ class SessionManager: ObservableObject {
     /// Tracks whether any group has type == "gastown" from the last hydration.
     private var hasGasTownGroups = false
 
+    /// Forwards notification-tap events back to the manager so clicked
+    /// notifications can bring the originating terminal/IDE to the front.
+    /// Held strongly so UNUserNotificationCenter's weak delegate reference
+    /// stays alive.
+    private var notificationForwarder: NotificationClickForwarder?
+
     // MARK: - Mode selection
 
     private var useFilePolling: Bool {
@@ -567,6 +573,16 @@ class SessionManager: ObservableObject {
             return
         }
         let center = UNUserNotificationCenter.current()
+
+        // Register the click-forwarder delegate before the first notification
+        // is scheduled, otherwise macOS drops notification taps silently.
+        if notificationForwarder == nil {
+            let forwarder = NotificationClickForwarder { [weak self] sessionID in
+                self?.handleNotificationTap(sessionID: sessionID)
+            }
+            notificationForwarder = forwarder
+            center.delegate = forwarder
+        }
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
             case .notDetermined:
@@ -649,7 +665,8 @@ class SessionManager: ObservableObject {
         sendNotification(
             identifier: "irrlicht-context-\(session.id)-\(threshold)",
             title: "Context pressure: \(threshold)% threshold reached",
-            body: "\(label) is at \(String(format: "%.1f%%", utilization)) context. Consider switching to a fresh session."
+            body: "\(label) is at \(String(format: "%.1f%%", utilization)) context. Consider switching to a fresh session.",
+            sessionID: session.id
         )
     }
 
@@ -678,16 +695,20 @@ class SessionManager: ObservableObject {
         sendNotification(
             identifier: "irrlicht-state-\(session.id)",
             title: title,
-            body: "\(label)\(branch)"
+            body: "\(label)\(branch)",
+            sessionID: session.id
         )
     }
 
-    private func sendNotification(identifier: String, title: String, body: String) {
+    private func sendNotification(identifier: String, title: String, body: String, sessionID: String) {
         guard canUseUserNotifications else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        // Round-trip the session ID so the click-forwarder can look up
+        // the session and jump back to its launching terminal/IDE.
+        content.userInfo = [NotificationUserInfoKey.sessionID: sessionID]
 
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
@@ -695,6 +716,14 @@ class SessionManager: ObservableObject {
                 print("⚠️ Failed to send notification: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// Invoked by `NotificationClickForwarder` on the main actor when the user
+    /// taps a notification. Silently no-ops for unknown IDs (e.g. a stale
+    /// notification for a session that's since been deleted).
+    fileprivate func handleNotificationTap(sessionID: String) {
+        guard let session = sessionMap[sessionID] else { return }
+        SessionLauncher.jump(session)
     }
 
     // MARK: - Session Order Management
@@ -1019,4 +1048,45 @@ private struct DebugState: Codable {
 private struct SessionOrderData: Codable {
     let version: Int
     let order: [String]
+}
+
+/// Keys used in UNNotificationContent.userInfo so notification click-handlers
+/// can identify the originating session.
+enum NotificationUserInfoKey {
+    static let sessionID = "sessionID"
+}
+
+/// NSObject-based forwarder that receives `UNUserNotificationCenterDelegate`
+/// callbacks and hands them off to a closure on the main actor. Used instead
+/// of making `SessionManager` itself inherit from NSObject.
+final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelegate {
+    private let onTap: @MainActor (String) -> Void
+
+    init(onTap: @escaping @MainActor (String) -> Void) {
+        self.onTap = onTap
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let sessionID = response.notification.request.content.userInfo[NotificationUserInfoKey.sessionID] as? String
+        if let sessionID {
+            Task { @MainActor in
+                onTap(sessionID)
+            }
+        }
+        completionHandler()
+    }
+
+    // Show banners for notifications delivered while the app is foregrounded
+    // — without this, in-app notifications are silently suppressed on macOS.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
 }

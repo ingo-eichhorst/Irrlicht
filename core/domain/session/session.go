@@ -187,6 +187,33 @@ type SubagentSummary struct {
 	Ready   int `json:"ready"`
 }
 
+// Launcher identifies the terminal emulator or IDE that spawned the session's
+// agent process. Captured once from the process env when the PID is first
+// known (see processlifecycle.ReadLauncherEnv). Fields are best-effort —
+// clients must treat every field as optional and fall back to the session
+// CWD when nothing identifies the host.
+//
+// TermProgram is the primary identifier; clients map it to a platform-native
+// activator (e.g. the macOS menu-bar app derives an app bundle ID from it).
+// Keeping that derivation client-side avoids persisting redundant state.
+type Launcher struct {
+	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
+	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID
+	TermSessionID  string `json:"term_session_id,omitempty"`  // $TERM_SESSION_ID (Terminal.app)
+	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE
+	TmuxSocket     string `json:"tmux_socket,omitempty"`      // first `,`-field of $TMUX
+	VSCodePID      int    `json:"vscode_pid,omitempty"`       // $VSCODE_PID (vscode/cursor/windsurf)
+}
+
+// IsEmpty reports whether the launcher carries no identifying information
+// — i.e. every field is zero. Capture helpers use this to decide whether to
+// return nil rather than attach a meaningless struct to the session.
+func (l *Launcher) IsEmpty() bool {
+	return l == nil || (l.TermProgram == "" && l.ITermSessionID == "" &&
+		l.TermSessionID == "" && l.TmuxPane == "" &&
+		l.TmuxSocket == "" && l.VSCodePID == 0)
+}
+
 // SessionState represents the current state of a Claude Code or Copilot session.
 type SessionState struct {
 	Version         int             `json:"version"`
@@ -211,6 +238,11 @@ type SessionState struct {
 
 	// PID of the Claude Code process that owns this session (set on SessionStart).
 	PID int `json:"pid,omitempty"`
+
+	// Launcher identifies the terminal/IDE that spawned the agent process.
+	// Captured once when PID is first assigned; nil if env capture failed
+	// or no recognized env vars were present.
+	Launcher *Launcher `json:"launcher,omitempty"`
 
 	// ParentSessionID links a subagent session to its spawning parent session.
 	// Derived from file path or heuristic matching in SessionDetector.
