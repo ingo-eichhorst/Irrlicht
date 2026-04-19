@@ -110,11 +110,10 @@ func parseLiteLLMData(data []byte) (*CapacityConfig, error) {
 		}
 
 		mc := ModelCapacity{
-			ContextWindow:    entry.MaxInputTokens,
-			MaxOutput:        entry.MaxOutputTokens,
-			CharToTokenRatio: 3.5,
-			DisplayName:      key,
-			Family:           deriveFamilyFromLiteLLM(key, entry.LiteLLMProvider),
+			ContextWindow: entry.MaxInputTokens,
+			MaxOutput:     entry.MaxOutputTokens,
+			DisplayName:   key,
+			Family:        deriveFamilyFromLiteLLM(key, entry.LiteLLMProvider),
 		}
 
 		// Convert per-token pricing to per-million-token pricing.

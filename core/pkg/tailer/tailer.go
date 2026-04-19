@@ -415,31 +415,6 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		}
 	}
 
-	// Estimate tokens from content chars when no explicit token data exists.
-	if t.metrics.TotalTokens == 0 && t.contentChars > 0 && t.capacityMgr != nil && t.metrics.ModelName != "" {
-		cap := t.capacityMgr.GetModelCapacity(t.metrics.ModelName)
-		ratio := cap.CharToTokenRatio
-		if ratio <= 0 {
-			ratio = 4.0
-		}
-		t.metrics.TotalTokens = int64(float64(t.contentChars) / ratio)
-		if t.inputTokens == 0 && t.outputTokens == 0 {
-			t.inputTokens = t.metrics.TotalTokens * 9 / 10
-			t.outputTokens = t.metrics.TotalTokens - t.inputTokens
-		}
-	}
-
-	// Recompute cost if token estimation filled in the breakdown but no
-	// cumulative data is available yet (char-based fallback only).
-	if t.metrics.EstimatedCostUSD == 0 && t.inputTokens > 0 &&
-		t.cumInputTokens == 0 && t.cumOutputTokens == 0 && t.pendingSnapshot == nil &&
-		t.capacityMgr != nil && t.metrics.ModelName != "" {
-		t.metrics.InputTokens = t.inputTokens
-		t.metrics.OutputTokens = t.outputTokens
-		t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
-			t.metrics.ModelName, t.inputTokens, t.outputTokens, t.cacheReadTokens, t.cacheCreationTokens)
-	}
-
 	t.computeContextUtilization()
 
 	return t.metrics, scanner.Err()
@@ -664,12 +639,7 @@ func (t *TranscriptTailer) computeContextUtilization() {
 	}
 
 	if effectiveContextWindow <= 0 && t.capacityMgr != nil {
-		cap := t.capacityMgr.GetModelCapacity(t.metrics.ModelName)
-		if ctx1m, ok := cap.BetaFeatures["context_1m"]; ok && ctx1m > 0 {
-			effectiveContextWindow = ctx1m
-		} else if cap.ContextWindow > 0 {
-			effectiveContextWindow = cap.ContextWindow
-		}
+		effectiveContextWindow = t.capacityMgr.GetModelCapacity(t.metrics.ModelName).ContextWindow
 	}
 
 	// Unknown model: no context window data available — report raw tokens only.

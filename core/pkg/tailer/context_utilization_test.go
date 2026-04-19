@@ -17,7 +17,7 @@ func assertPressure(t *testing.T, m *SessionMetrics, wantPressure string, wantUt
 }
 
 func TestContextUtilization_KnownModel_Sonnet45(t *testing.T) {
-	// claude-sonnet-4-5 has beta_features.context_1m → 1M effective window
+	// claude-sonnet-4-5 → 1M effective window (per LiteLLM).
 	// 600K tokens / 1M = 60% → "caution"
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{
@@ -43,7 +43,7 @@ func TestContextUtilization_KnownModel_Sonnet45(t *testing.T) {
 }
 
 func TestContextUtilization_KnownModel_Opus46(t *testing.T) {
-	// claude-opus-4-6 has beta_features.context_1m → 1M effective window
+	// claude-opus-4-6 → 1M effective window (per LiteLLM).
 	// 900K tokens / 1M = 90% → "critical"
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{
@@ -137,8 +137,8 @@ func TestContextUtilization_Codex53_Uses256KContextWindow(t *testing.T) {
 	assertPressure(t, m, "safe", 13.93)
 }
 
-func TestContextUtilization_GPT5FamilyDefault_Uses256KContextWindow(t *testing.T) {
-	// Unknown gpt-5 variant should resolve through family_defaults.gpt-5.
+func TestContextUtilization_GPT5Preview_Uses256KContextWindow(t *testing.T) {
+	// gpt-5.9-codex-preview resolves via the LiteLLM-sourced 256K window.
 	// 102,400 / 256,000 = 40% → "safe"
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{
@@ -225,7 +225,7 @@ func TestContextUtilization_TranscriptContextWindow(t *testing.T) {
 }
 
 func TestContextUtilization_PressureLevels(t *testing.T) {
-	// claude-sonnet-4-5 has beta_features.context_1m → 1M effective window
+	// claude-sonnet-4-5 → 1M effective window (per LiteLLM).
 	tests := []struct {
 		name         string
 		inputTokens  float64

@@ -1,11 +1,8 @@
 package capacity
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -18,249 +15,107 @@ type ModelPricing struct {
 	CacheCreationPerMTok float64 `json:"cache_creation_per_mtok"`
 }
 
-// ModelCapacity represents the capacity configuration for a specific model
+// ModelCapacity represents the capacity configuration for a specific model.
 type ModelCapacity struct {
-	ContextWindow    int64             `json:"context_window"`
-	MaxOutput        int64             `json:"max_output"`
-	CharToTokenRatio float64           `json:"char_to_token_ratio"`
-	Family           string            `json:"family"`
-	DisplayName      string            `json:"display_name"`
-	Notes            string            `json:"notes,omitempty"`
-	BetaFeatures     map[string]int64  `json:"beta_features,omitempty"`
-	Pricing          *ModelPricing     `json:"pricing,omitempty"`
+	ContextWindow int64         `json:"context_window"`
+	MaxOutput     int64         `json:"max_output"`
+	Family        string        `json:"family"`
+	DisplayName   string        `json:"display_name"`
+	Pricing       *ModelPricing `json:"pricing,omitempty"`
 }
 
-// CapacityConfig represents the entire model capacity configuration
+// CapacityConfig is a pure LiteLLM-sourced model table.
 type CapacityConfig struct {
-	Version        string                    `json:"version"`
-	LastUpdated    string                    `json:"last_updated"`
-	Models         map[string]ModelCapacity  `json:"models"`
-	FamilyDefaults map[string]ModelCapacity  `json:"family_defaults"`
-	Fallback       ModelCapacity             `json:"fallback"`
-	EstimationNotes map[string]string        `json:"estimation_notes"`
+	Version     string                   `json:"version"`
+	LastUpdated string                   `json:"last_updated"`
+	Models      map[string]ModelCapacity `json:"models"`
 }
 
-// CapacityManager handles model capacity loading and caching
+// CapacityManager serves model capacity lookups from the LiteLLM cache,
+// reloading transparently when the cache file's mtime advances.
 type CapacityManager struct {
-	config     *CapacityConfig
-	configPath string
+	mu           sync.RWMutex
+	config       *CapacityConfig
+	cachePath    string
 	lastModified time.Time
-	mu         sync.RWMutex
 }
 
-// TokenEstimation represents estimated or actual token usage
-type TokenEstimation struct {
-	Tokens     int64   `json:"tokens"`
-	IsEstimated bool   `json:"is_estimated"`
-	Method     string  `json:"method"` // "exact", "char_estimation", "fallback"
-	Confidence float64 `json:"confidence"` // 0.0-1.0
-}
-
-// ContextUtilization represents context usage metrics
-type ContextUtilization struct {
-	TokensUsed              int64   `json:"tokens_used"`
-	ContextCapacity         int64   `json:"context_capacity"`
-	UtilizationPercentage   float64 `json:"utilization_percentage"`
-	EstimatedTokensRemaining int64  `json:"estimated_tokens_remaining"`
-	IsEstimated             bool    `json:"is_estimated"`
-	ModelName               string  `json:"model_name"`
-	ModelFamily             string  `json:"model_family"`
-	LastTokenCount          int64   `json:"last_token_count"`
-	PressureLevel           string  `json:"pressure_level"` // "safe", "caution", "warning", "critical"
-}
-
-// NewCapacityManager creates a new capacity manager
-func NewCapacityManager(configPath string) (*CapacityManager, error) {
-	cm := &CapacityManager{
-		configPath: configPath,
+// NewForTest constructs a CapacityManager backed by an in-memory model map.
+// Tests use this to inject synthetic LiteLLM-style entries without touching disk.
+func NewForTest(models map[string]ModelCapacity) *CapacityManager {
+	copied := make(map[string]ModelCapacity, len(models))
+	for k, v := range models {
+		copied[k] = v
 	}
-	
-	if err := cm.LoadConfig(); err != nil {
-		return nil, fmt.Errorf("failed to load initial config: %w", err)
+	return &CapacityManager{
+		config: &CapacityConfig{Models: copied},
 	}
-	
-	return cm, nil
 }
 
-// LoadConfig loads or reloads the model capacity configuration
-func (cm *CapacityManager) LoadConfig() error {
+// maybeReload re-reads the cache file when its mtime is newer than the
+// last load. Silent on error — missing or corrupt cache leaves the current
+// config in place. Returns true if models were refreshed.
+func (cm *CapacityManager) maybeReload() bool {
+	if cm.cachePath == "" {
+		return false
+	}
+	info, err := os.Stat(cm.cachePath)
+	if err != nil {
+		return false
+	}
+	cm.mu.RLock()
+	unchanged := !cm.lastModified.IsZero() && !info.ModTime().After(cm.lastModified)
+	cm.mu.RUnlock()
+	if unchanged {
+		return false
+	}
+
+	remote := LoadCachedRemoteData()
+	if remote == nil {
+		return false
+	}
+
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	
-	// Check if file has been modified since last load
-	info, err := os.Stat(cm.configPath)
-	if err != nil {
-		return fmt.Errorf("config file not found: %w", err)
-	}
-	
-	if !cm.lastModified.IsZero() && !info.ModTime().After(cm.lastModified) {
-		// File hasn't changed, no need to reload
-		return nil
-	}
-	
-	file, err := os.Open(cm.configPath)
-	if err != nil {
-		return fmt.Errorf("failed to open config file: %w", err)
-	}
-	defer file.Close()
-	
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return fmt.Errorf("failed to read config file: %w", err)
-	}
-	
-	var config CapacityConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return fmt.Errorf("failed to parse config file: %w", err)
-	}
-	
-	cm.config = &config
+	cm.config = remote
 	cm.lastModified = info.ModTime()
-	
-	return nil
+	cm.mu.Unlock()
+	return true
 }
 
-// GetModelCapacity retrieves capacity info for a specific model
+// GetModelCapacity looks up a model by exact name. Returns a zero value when
+// the model is not in the cache (or the cache is absent): no context window,
+// no pricing. Callers must treat zero ContextWindow as "unknown".
 func (cm *CapacityManager) GetModelCapacity(modelName string) ModelCapacity {
-	// Try to reload config if it's been modified (this needs write lock)
-	cm.LoadConfig()
-	
+	cm.maybeReload()
+
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
-	
-	// Direct model lookup
-	if capacity, exists := cm.config.Models[modelName]; exists {
-		return capacity
+
+	if cm.config == nil {
+		return ModelCapacity{}
 	}
-	
-	// Try fuzzy matching for common variations
-	modelLower := strings.ToLower(modelName)
-	
-	// Handle specific pattern matches first
-	if strings.Contains(modelLower, "opus") && strings.Contains(modelLower, "4") {
-		if capacity, exists := cm.config.Models["claude-4.1-opus"]; exists {
-			capacity.DisplayName = fmt.Sprintf("%s (matched: claude-4.1-opus)", modelName)
-			return capacity
-		}
-	}
-	
-	if strings.Contains(modelLower, "sonnet") && strings.Contains(modelLower, "4") {
-		if capacity, exists := cm.config.Models["claude-4-sonnet"]; exists {
-			capacity.DisplayName = fmt.Sprintf("%s (matched: claude-4-sonnet)", modelName)
-			return capacity
-		}
-	}
-	
-	if strings.Contains(modelLower, "3.5") && strings.Contains(modelLower, "sonnet") {
-		if capacity, exists := cm.config.Models["claude-3.5-sonnet"]; exists {
-			capacity.DisplayName = fmt.Sprintf("%s (matched: claude-3.5-sonnet)", modelName)
-			return capacity
-		}
-	}
-	
-	// Try family-based lookup
-	for family, defaultCapacity := range cm.config.FamilyDefaults {
-		if strings.Contains(strings.ToLower(modelName), strings.ToLower(family)) {
-			// Create a capacity based on family defaults
-			capacity := defaultCapacity
-			capacity.DisplayName = fmt.Sprintf("%s (family: %s)", modelName, family)
-			capacity.Family = family
-			return capacity
-		}
-	}
-	
-	// Fallback to default capacity
-	fallback := cm.config.Fallback
-	fallback.DisplayName = fmt.Sprintf("%s (unknown)", modelName)
-	fallback.Family = "unknown"
-	return fallback
+	return cm.config.Models[modelName]
 }
 
-// MergeRemoteModels adds models from remote data that don't already exist
-// in the current config. Existing (hand-tuned) entries are preserved.
+// MergeRemoteModels replaces the model table with the given remote config.
+// Retained for tests and for one-shot population after a synchronous fetch.
 func (cm *CapacityManager) MergeRemoteModels(remote *CapacityConfig) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	if remote == nil || cm.config == nil {
+	if remote == nil {
 		return
 	}
-
-	for name, remoteCap := range remote.Models {
-		if _, exists := cm.config.Models[name]; !exists {
-			cm.config.Models[name] = remoteCap
-		}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.config == nil {
+		cm.config = &CapacityConfig{Models: make(map[string]ModelCapacity)}
+	}
+	for name, cap := range remote.Models {
+		cm.config.Models[name] = cap
 	}
 }
 
-// EstimateTokensFromContent estimates token count from text content
-func (cm *CapacityManager) EstimateTokensFromContent(content string, modelName string) TokenEstimation {
-	capacity := cm.GetModelCapacity(modelName)
-	
-	if capacity.CharToTokenRatio == 0 {
-		capacity.CharToTokenRatio = cm.config.Fallback.CharToTokenRatio
-	}
-	
-	tokens := int64(float64(len(content)) / capacity.CharToTokenRatio)
-	
-	// Confidence based on known model vs fallback
-	confidence := 0.8
-	if capacity.Family == "unknown" {
-		confidence = 0.5
-	}
-	
-	return TokenEstimation{
-		Tokens:     tokens,
-		IsEstimated: true,
-		Method:     "char_estimation",
-		Confidence: confidence,
-	}
-}
-
-// CalculateContextUtilization computes context utilization metrics
-func (cm *CapacityManager) CalculateContextUtilization(tokensUsed int64, modelName string, isEstimated bool) ContextUtilization {
-	cap := cm.GetModelCapacity(modelName)
-
-	// Unknown model: no context window — report raw tokens only.
-	if cap.ContextWindow <= 0 {
-		return ContextUtilization{
-			TokensUsed:    tokensUsed,
-			IsEstimated:   isEstimated,
-			ModelName:     modelName,
-			ModelFamily:   cap.Family,
-			LastTokenCount: tokensUsed,
-			PressureLevel: "unknown",
-		}
-	}
-
-	utilizationPercentage := (float64(tokensUsed) / float64(cap.ContextWindow)) * 100
-	remainingTokens := cap.ContextWindow - tokensUsed
-
-	// Determine pressure level
-	pressureLevel := "safe"
-	if utilizationPercentage >= 96 {
-		pressureLevel = "critical"
-	} else if utilizationPercentage >= 81 {
-		pressureLevel = "warning"
-	} else if utilizationPercentage >= 51 {
-		pressureLevel = "caution"
-	}
-
-	return ContextUtilization{
-		TokensUsed:               tokensUsed,
-		ContextCapacity:          cap.ContextWindow,
-		UtilizationPercentage:    utilizationPercentage,
-		EstimatedTokensRemaining: remainingTokens,
-		IsEstimated:              isEstimated,
-		ModelName:                modelName,
-		ModelFamily:              cap.Family,
-		LastTokenCount:           tokensUsed,
-		PressureLevel:            pressureLevel,
-	}
-}
-
-// EstimateCostUSD calculates the estimated cost in USD from token breakdowns.
-// Returns 0 when pricing data is unavailable for the model.
+// EstimateCostUSD calculates the cost in USD from token breakdowns.
+// Returns 0 when pricing data is unavailable (model missing from LiteLLM,
+// or cache not yet fetched).
 func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) float64 {
 	cap := cm.GetModelCapacity(modelName)
 	if cap.Pricing == nil {
@@ -274,23 +129,22 @@ func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, output
 	return cost / 1_000_000
 }
 
-// FormatTokenCount returns human-readable token count
+// FormatTokenCount returns human-readable token count.
 func FormatTokenCount(tokens int64) string {
 	if tokens < 1000 {
 		return fmt.Sprintf("%d", tokens)
 	} else if tokens < 1000000 {
 		return fmt.Sprintf("%.1fK", float64(tokens)/1000)
-	} else {
-		return fmt.Sprintf("%.1fM", float64(tokens)/1000000)
 	}
+	return fmt.Sprintf("%.1fM", float64(tokens)/1000000)
 }
 
-// FormatUtilizationPercentage returns formatted percentage string
+// FormatUtilizationPercentage returns formatted percentage string.
 func FormatUtilizationPercentage(percentage float64) string {
 	return fmt.Sprintf("%.1f%%", percentage)
 }
 
-// GetPressureLevelIcon returns an appropriate icon for pressure level
+// GetPressureLevelIcon returns an icon for the pressure level.
 func GetPressureLevelIcon(level string) string {
 	switch level {
 	case "safe":

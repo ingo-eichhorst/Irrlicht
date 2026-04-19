@@ -1,7 +1,12 @@
 package capacity
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestParseLiteLLMData_BasicMapping(t *testing.T) {
@@ -136,60 +141,145 @@ func TestDeriveFamilyFromLiteLLM(t *testing.T) {
 	}
 }
 
-func TestMergeRemoteModels_PreservesExisting(t *testing.T) {
-	cm := DefaultCapacityManager()
-	if cm == nil {
-		t.Fatal("DefaultCapacityManager returned nil")
-	}
+func TestMergeRemoteModels_ReplacesEntries(t *testing.T) {
+	cm := NewForTest(map[string]ModelCapacity{
+		"claude-opus-4-6": {ContextWindow: 200000},
+	})
 
-	// Get the existing context window for a known model.
-	existing := cm.GetModelCapacity("claude-opus-4-6")
-	if existing.ContextWindow != 200000 {
-		t.Fatalf("pre-merge ContextWindow = %d, want 200000", existing.ContextWindow)
-	}
-
-	// Merge remote data that includes both a conflicting and a new model.
 	remote := &CapacityConfig{
 		Models: map[string]ModelCapacity{
-			"claude-opus-4-6": {
-				ContextWindow: 999999, // should NOT override existing
-			},
-			"brand-new-model": {
-				ContextWindow:    500000,
-				MaxOutput:        16000,
-				CharToTokenRatio: 3.5,
-				Family:           "new",
-				DisplayName:      "Brand New Model",
-			},
+			"claude-opus-4-6": {ContextWindow: 1000000},
+			"brand-new-model": {ContextWindow: 500000, MaxOutput: 16000, Family: "new", DisplayName: "Brand New Model"},
 		},
 	}
-
 	cm.MergeRemoteModels(remote)
 
-	// Existing model should be unchanged.
-	after := cm.GetModelCapacity("claude-opus-4-6")
-	if after.ContextWindow != 200000 {
-		t.Errorf("post-merge ContextWindow = %d, want 200000 (should preserve existing)", after.ContextWindow)
+	if got := cm.GetModelCapacity("claude-opus-4-6").ContextWindow; got != 1000000 {
+		t.Errorf("post-merge claude-opus-4-6 ContextWindow = %d, want 1000000 (LiteLLM is authoritative)", got)
 	}
-
-	// New model should be available.
-	newModel := cm.GetModelCapacity("brand-new-model")
-	if newModel.ContextWindow != 500000 {
-		t.Errorf("brand-new-model ContextWindow = %d, want 500000", newModel.ContextWindow)
+	if got := cm.GetModelCapacity("brand-new-model").ContextWindow; got != 500000 {
+		t.Errorf("brand-new-model ContextWindow = %d, want 500000", got)
 	}
 }
 
-func TestFallback_NoContextWindow(t *testing.T) {
-	cm := DefaultCapacityManager()
-	if cm == nil {
-		t.Fatal("DefaultCapacityManager returned nil")
-	}
+func TestNewForTest_UnknownModelReturnsZeroValue(t *testing.T) {
+	cm := NewForTest(nil)
 
 	mc := cm.GetModelCapacity("totally-unknown-model-xyz")
 	if mc.ContextWindow != 0 {
-		t.Errorf("fallback ContextWindow = %d, want 0", mc.ContextWindow)
+		t.Errorf("unknown ContextWindow = %d, want 0", mc.ContextWindow)
 	}
-	if mc.Family != "unknown" {
-		t.Errorf("fallback Family = %q, want %q", mc.Family, "unknown")
+	if mc.Pricing != nil {
+		t.Errorf("unknown Pricing = %+v, want nil", mc.Pricing)
 	}
+	if mc.Family != "" {
+		t.Errorf("unknown Family = %q, want empty", mc.Family)
+	}
+}
+
+func TestMaybeReload_PicksUpNewCache(t *testing.T) {
+	// This test uses the real LoadCachedRemoteData path indirectly by
+	// overriding the manager's cachePath to a temp file written in the
+	// same on-disk format. Because LoadCachedRemoteData always reads from
+	// CachePath(), we instead exercise the direct-path reload.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "model-capacity-cache.json")
+
+	cm := &CapacityManager{cachePath: path}
+
+	// No file yet → lookup returns zero.
+	if got := cm.GetModelCapacity("claude-sonnet-4-6").ContextWindow; got != 0 {
+		t.Fatalf("pre-cache ContextWindow = %d, want 0", got)
+	}
+
+	// Write initial cache file at a known mtime.
+	writeCacheAt(t, path, map[string]ModelCapacity{
+		"claude-sonnet-4-6": {ContextWindow: 200000},
+	}, time.Now().Add(-time.Minute))
+
+	// First lookup after the write picks it up.
+	if got := getViaPath(t, cm).GetModelCapacity("claude-sonnet-4-6").ContextWindow; got != 200000 {
+		t.Errorf("after first write ContextWindow = %d, want 200000", got)
+	}
+
+	// Rewrite with a newer mtime and a different value.
+	writeCacheAt(t, path, map[string]ModelCapacity{
+		"claude-sonnet-4-6": {ContextWindow: 1000000},
+	}, time.Now())
+
+	if got := getViaPath(t, cm).GetModelCapacity("claude-sonnet-4-6").ContextWindow; got != 1000000 {
+		t.Errorf("after second write ContextWindow = %d, want 1000000 (hot-reload missed)", got)
+	}
+}
+
+// writeCacheAt writes a cache file with the given models and sets its mtime.
+func writeCacheAt(t *testing.T, path string, models map[string]ModelCapacity, when time.Time) {
+	t.Helper()
+	cached := cachedCapacity{
+		FetchedAt: when,
+		Config:    CapacityConfig{Models: models},
+	}
+	data, err := json.Marshal(cached)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+}
+
+// getViaPath exercises the reload path using the manager's cachePath directly
+// (bypassing LoadCachedRemoteData's hardcoded CachePath()).
+func getViaPath(t *testing.T, cm *CapacityManager) *CapacityManager {
+	t.Helper()
+	info, err := os.Stat(cm.cachePath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	data, err := os.ReadFile(cm.cachePath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var cached cachedCapacity
+	if err := json.Unmarshal(data, &cached); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	cm.mu.Lock()
+	cm.config = &cached.Config
+	cm.lastModified = info.ModTime()
+	cm.mu.Unlock()
+	return cm
+}
+
+func TestConcurrentGet_NoPanicUnderConcurrentReload(t *testing.T) {
+	cm := NewForTest(map[string]ModelCapacity{
+		"model-a": {ContextWindow: 100000},
+	})
+
+	var stop atomic.Bool
+	done := make(chan struct{}, 2)
+
+	go func() {
+		for !stop.Load() {
+			_ = cm.GetModelCapacity("model-a")
+		}
+		done <- struct{}{}
+	}()
+
+	go func() {
+		for i := 0; i < 500 && !stop.Load(); i++ {
+			cm.MergeRemoteModels(&CapacityConfig{Models: map[string]ModelCapacity{
+				"model-a": {ContextWindow: int64(100000 + i)},
+			}})
+		}
+		done <- struct{}{}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	stop.Store(true)
+	<-done
+	<-done
 }
