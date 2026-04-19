@@ -6,12 +6,33 @@ import SnapshotTesting
 @MainActor
 final class GroupViewSnapshotTests: XCTestCase {
     private var sessionManager: SessionManager!
+    private var originalShowCostDisplay: Any?
+    private var originalProjectCostTimeframe: Any?
 
     override func setUp() async throws {
         try await super.setUp()
+        // GroupView uses @AppStorage (UserDefaults.standard), so we can't isolate
+        // via suiteName. Snapshot the real keys and restore them in tearDown so
+        // the developer's defaults aren't mutated by test runs.
+        originalShowCostDisplay = UserDefaults.standard.object(forKey: "showCostDisplay")
+        originalProjectCostTimeframe = UserDefaults.standard.object(forKey: "projectCostTimeframe")
         UserDefaults.standard.set(false, forKey: "showCostDisplay")
         UserDefaults.standard.set("day", forKey: "projectCostTimeframe")
         sessionManager = SessionManager()
+    }
+
+    override func tearDown() async throws {
+        if let value = originalShowCostDisplay {
+            UserDefaults.standard.set(value, forKey: "showCostDisplay")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "showCostDisplay")
+        }
+        if let value = originalProjectCostTimeframe {
+            UserDefaults.standard.set(value, forKey: "projectCostTimeframe")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "projectCostTimeframe")
+        }
+        try await super.tearDown()
     }
 
     private func makeSession(id: String) -> SessionState {
