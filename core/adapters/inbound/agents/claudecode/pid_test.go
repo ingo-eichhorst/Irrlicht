@@ -67,10 +67,8 @@ func transcriptFor(sessionID string) string {
 // entries left behind after a /clear.
 func writeMetaAt(t *testing.T, dir string, pid int, sessionID string, mtime time.Time) {
 	t.Helper()
-	writeMeta(t, dir, pid, sessionID)
-	path := filepath.Join(dir, strconv.Itoa(pid)+".json")
-	if err := os.Chtimes(path, mtime, mtime); err != nil {
-		t.Fatalf("chtimes: %v", err)
+	if err := WriteSessionMetaForTest(dir, pid, sessionID, mtime); err != nil {
+		t.Fatalf("write meta at: %v", err)
 	}
 }
 

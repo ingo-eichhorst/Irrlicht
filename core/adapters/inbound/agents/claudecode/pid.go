@@ -53,13 +53,8 @@ type claudeSessionMeta struct {
 func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
 	wantSessionID := sessionIDFromTranscript(transcriptPath)
 
-	// Transcript mtime is used to detect stale metadata (issue #169): after a
-	// /clear, ~/.claude/sessions/<pid>.json can still point at the previous
-	// sessionId for up to ~2 min, which would wrongly exclude the live PID
-	// from the fallback. A new transcript written after /clear will have a
-	// fresher mtime than the stale metadata, so we can safely ignore such
-	// entries as negative filters. Zero on error → gate inert (current
-	// behavior preserved).
+	// Transcript mtime anchors the mtime gate below. Zero on error keeps
+	// the gate inert so behavior falls back to strict negative filtering.
 	var wantMTime time.Time
 	if transcriptPath != "" {
 		if info, err := os.Stat(transcriptPath); err == nil {
@@ -151,9 +146,9 @@ func sessionIDFromTranscript(path string) string {
 }
 
 // metaFileMTime returns the modification time of a metadata directory entry,
-// or zero on any error. Prefers os.DirEntry.Info() (uses the already-cached
-// stat from ReadDir on most platforms, avoiding a syscall) and falls back to
-// zero on failure — callers must treat zero as "unknown".
+// or zero on any error. Callers must treat zero as "unknown". Note: on
+// Linux/Darwin, os.DirEntry.Info() issues a fresh Lstat — acceptable here
+// because ~/.claude/sessions/ typically holds a handful of entries.
 func metaFileMTime(e os.DirEntry) time.Time {
 	info, err := e.Info()
 	if err != nil {

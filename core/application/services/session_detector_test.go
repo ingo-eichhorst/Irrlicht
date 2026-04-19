@@ -2,10 +2,8 @@ package services_test
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -1341,15 +1339,8 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 	// the OLD sessionId — simulating Claude's post-/clear behaviour where
 	// <pid>.json lingers on the previous session for up to ~2 min.
 	sessionsDir := t.TempDir()
-	staleMeta := map[string]any{"pid": myPID, "sessionId": "sess-old"}
-	data, _ := json.Marshal(staleMeta)
-	metaPath := filepath.Join(sessionsDir, strconv.Itoa(myPID)+".json")
-	if err := os.WriteFile(metaPath, data, 0o644); err != nil {
+	if err := claudecode.WriteSessionMetaForTest(sessionsDir, myPID, "sess-old", time.Now().Add(-30*time.Second)); err != nil {
 		t.Fatalf("write stale meta: %v", err)
-	}
-	past := time.Now().Add(-30 * time.Second)
-	if err := os.Chtimes(metaPath, past, past); err != nil {
-		t.Fatalf("chtimes: %v", err)
 	}
 
 	// Real transcript file so DiscoverPID can stat its mtime (fresh, > stale
@@ -1421,7 +1412,9 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 		TranscriptPath: newTranscript,
 	}
 
-	// Allow retries (500ms + 1s + 2s = 3.5s window).
+	// 300ms covers the immediate synchronous discovery attempt; retries at
+	// 500ms/1s/2s aren't needed — DiscoverPID must succeed on the first try
+	// once the mtime gate lets it past the stale metadata.
 	time.Sleep(300 * time.Millisecond)
 	cancel()
 	<-done
