@@ -89,8 +89,9 @@ struct SessionListView: View {
     private var groupListContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(sessionManager.apiGroups) { group in
-                    GroupView(group: group)
+                let groups = sessionManager.apiGroups
+                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                    GroupView(group: group, groupIndex: index, totalGroups: groups.count)
                 }
             }
         }
@@ -492,6 +493,9 @@ struct SubagentRowView: View {
 struct GroupView: View {
     let group: SessionManager.AgentGroup
     var depth: Int = 0
+    var groupIndex: Int = 0
+    var totalGroups: Int = 1
+    @EnvironmentObject var sessionManager: SessionManager
     @State private var isExpanded = true
     @AppStorage("projectCostTimeframe") private var costTimeframeRaw: String = CostTimeframe.day.rawValue
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
@@ -567,6 +571,17 @@ struct GroupView: View {
                 Text(isTopLevel ? "\(count) \(count == 1 ? "session" : "sessions")" : "\(count)")
                     .font(.caption2)
                     .foregroundColor(.secondary.opacity(isTopLevel ? 0.7 : 0.5))
+
+                if isTopLevel && totalGroups > 1 {
+                    HStack(spacing: 0) {
+                        reorderButton(icon: "chevron.up", disabled: groupIndex == 0) {
+                            sessionManager.moveProjectGroupUp(name: group.name)
+                        }
+                        reorderButton(icon: "chevron.down", disabled: groupIndex == totalGroups - 1) {
+                            sessionManager.moveProjectGroupDown(name: group.name)
+                        }
+                    }
+                }
             }
             .padding(.horizontal, isTopLevel ? 12 : 20)
             .padding(.vertical, isTopLevel ? 4 : 3)
@@ -586,6 +601,21 @@ struct GroupView: View {
                 }
             }
         }
+    }
+
+    private func reorderButton(icon: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.22)) { action() }
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .frame(width: 14, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.3 : 1.0)
     }
 }
 

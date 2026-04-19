@@ -243,8 +243,7 @@ class SessionManager: ObservableObject {
             let decoder = JSONDecoder()
             let topGroups = try decoder.decode([AgentGroup].self, from: data)
 
-            // Store the recursive group structure for the UI.
-            apiGroups = topGroups
+            apiGroups = orderedGroups(topGroups)
             groupedSessionIds = Set(topGroups.flatMap { collectSessionIds(from: $0) })
 
             // Flatten all groups → sessions (including nested sub-groups and children).
@@ -803,6 +802,41 @@ class SessionManager: ObservableObject {
     private func saveProjectGroupOrder() {
         UserDefaults.standard.set(projectGroupOrder, forKey: projectGroupOrderKey)
         print("💾 Saved project group order with \(projectGroupOrder.count) groups")
+    }
+
+    /// Syncs `projectGroupOrder` with incoming names (appends new, drops gone)
+    /// and returns the groups sorted by that order.
+    private func orderedGroups(_ groups: [AgentGroup]) -> [AgentGroup] {
+        let incomingNames = groups.map(\.name)
+        let currentNames = Set(incomingNames)
+        let known = Set(projectGroupOrder)
+
+        var updated = projectGroupOrder.filter { currentNames.contains($0) }
+        let newNames = incomingNames.filter { !known.contains($0) }
+        updated.append(contentsOf: newNames)
+
+        if updated != projectGroupOrder {
+            projectGroupOrder = updated
+            saveProjectGroupOrder()
+        }
+
+        let index = Dictionary(uniqueKeysWithValues: projectGroupOrder.enumerated().map { ($1, $0) })
+        return groups.sorted { (index[$0.name] ?? Int.max) < (index[$1.name] ?? Int.max) }
+    }
+
+    func moveProjectGroupUp(name: String) {
+        guard let i = projectGroupOrder.firstIndex(of: name), i > 0 else { return }
+        projectGroupOrder.swapAt(i, i - 1)
+        saveProjectGroupOrder()
+        apiGroups = orderedGroups(apiGroups)
+    }
+
+    func moveProjectGroupDown(name: String) {
+        guard let i = projectGroupOrder.firstIndex(of: name),
+              i < projectGroupOrder.count - 1 else { return }
+        projectGroupOrder.swapAt(i, i + 1)
+        saveProjectGroupOrder()
+        apiGroups = orderedGroups(apiGroups)
     }
 
     // MARK: - Duplicate Session Handling
