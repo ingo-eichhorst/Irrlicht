@@ -9,6 +9,65 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.3.6] — 2026-04-19
+
+### Added
+- Jump to the launching terminal or IDE on session click (#170) — clicking
+  a session row (or a delivered desktop notification) now brings the
+  originating iTerm2 tab, Terminal.app window, or AXTitle-matched editor
+  to the front. Host resolution walks the session's ppid chain; iTerm2
+  sessions are matched by UUID, Terminal tabs by tty, and generic apps by
+  scoring window titles against the session CWD's deepest ancestor
+  segment. Daemon captures the launcher env on first PID assignment
+  (`$TERM_PROGRAM`, `$ITERM_SESSION_ID`, tty) so the lookup works even
+  after the agent has been running for hours.
+
+### Fixed
+- `claude-code`: gate the PID negative filter on transcript mtime (#169)
+  — after `/clear`, Claude leaves `~/.claude/sessions/<pid>.json`
+  pointing at the old session for up to two minutes. The detector no
+  longer holds onto the dead session; once the new transcript's mtime
+  exceeds the stale metadata, the PID is reassigned and the old session
+  is cleaned up immediately.
+- Web UI: render sessions on initial load and drop the dead gastown
+  endpoint (#167) — the initial-load handler now reads the bare-array
+  response from `GET /api/v1/sessions` (previously it expected a
+  `groups`/`orchestrator` wrapper, so the dashboard stayed empty until
+  the 30s rehydrator or a WebSocket delta arrived). Also removes three
+  stale references to the removed `/api/v1/orchestrators/gastown`
+  endpoint.
+- macOS: restore project-group reorder chevrons (#172) — the up/down
+  chevrons in top-level project group headers came back; ordering is
+  derived from `apiGroups` directly so the UI state stays in sync with
+  persisted order.
+- CLI: `irrlicht-ls` now `go run`s from the repo root via `--workspace`
+  so the command works from any subdirectory (#175, carried forward from
+  v0.3.5 mid-release).
+
+### Changed
+- macOS Launcher refactored into per-host activators behind a
+  `HostActivator` protocol — `iTerm`, `Terminal.app`, and an
+  `AXTitleMatchActivator` for generic apps each live in their own file.
+  Window raising goes through the Accessibility API to raise a *specific*
+  window rather than the frontmost one.
+- Web UI initial-load path dropped a dead orchestrator assignment and a
+  redundant array guard now that `/api/v1/sessions` returns an array
+  directly.
+
+### Tests
+- End-to-end regression for #169: drives the real
+  `claudecode.DiscoverPID` with a stale `~/.claude/sessions/<pid>.json`
+  and asserts the full pipeline cleans up the old session inside the
+  retry window.
+- Snapshot tests for the project-group reorder chevrons; developer
+  defaults are restored after the snapshot run.
+
+### Distribution / Dev
+- Persistent self-signed `"Irrlicht Dev"` identity — `ir:test-mac` now
+  signs dev builds with a stable designated requirement so Accessibility
+  and Automation grants survive rebuilds. Run
+  `scripts/dev-sign-setup.sh` once to install it.
+
 ## [0.3.5] — 2026-04-19
 
 ### Added
@@ -398,7 +457,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.6
 [0.3.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.5
 [0.3.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.4
 [0.3.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.3

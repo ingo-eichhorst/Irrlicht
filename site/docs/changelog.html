@@ -78,6 +78,35 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.6 <small>(2026-04-19)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Jump to launching terminal or IDE on session click</strong> (#170) &mdash; Clicking a session row or delivered desktop notification brings the originating iTerm2 tab, Terminal.app window, or AXTitle-matched editor to the front. Host resolution walks the session's ppid chain; iTerm2 sessions are matched by UUID, Terminal tabs by tty, and generic apps by scoring window titles against the session CWD's deepest ancestor segment. The daemon captures the launcher env (<code>$TERM_PROGRAM</code>, <code>$ITERM_SESSION_ID</code>, tty) on first PID assignment so the lookup works even after the agent has been running for hours</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>claude-code: gate PID negative filter on metadata mtime</strong> (#169) &mdash; After <code>/clear</code>, Claude leaves <code>~/.claude/sessions/&lt;pid&gt;.json</code> pointing at the old session for up to two minutes. The detector no longer holds onto the dead session; once the new transcript's mtime exceeds the stale metadata, the PID is reassigned and the old session is cleaned up immediately</li>
+        <li><strong>Web UI: render sessions on initial load</strong> (#167) &mdash; Initial-load handler now reads the bare-array response from <code>GET /api/v1/sessions</code> (previously expected a <code>groups</code>/<code>orchestrator</code> wrapper, so the dashboard stayed empty until the 30s rehydrator or a WebSocket delta arrived). Also removed three stale references to the removed <code>/api/v1/orchestrators/gastown</code> endpoint</li>
+        <li><strong>macOS: restore project-group reorder chevrons</strong> (#172) &mdash; The up/down chevrons in top-level project group headers came back; ordering is derived from <code>apiGroups</code> directly so the UI state stays in sync with persisted order</li>
+        <li><strong>CLI: <code>irrlicht-ls</code> runs from any subdirectory</strong> (#175) &mdash; <code>go run</code> now invoked from the repo root via <code>--workspace</code></li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>macOS Launcher split into per-host activators</strong> behind a <code>HostActivator</code> protocol &mdash; <code>iTerm</code>, <code>Terminal.app</code>, and an <code>AXTitleMatchActivator</code> for generic apps each live in their own file. Window raising uses the Accessibility API to raise a <em>specific</em> window rather than the frontmost one</li>
+      </ul>
+
+      <h3>Distribution / Dev</h3>
+
+      <ul>
+        <li><strong>Persistent self-signed "Irrlicht Dev" identity</strong> &mdash; <code>ir:test-mac</code> now signs dev builds with a stable designated requirement so Accessibility and Automation TCC grants survive rebuilds. Run <code>scripts/dev-sign-setup.sh</code> once to install it</li>
+      </ul>
+
       <h2>v0.3.5 <small>(2026-04-19)</small></h2>
 
       <h3>Added</h3>
