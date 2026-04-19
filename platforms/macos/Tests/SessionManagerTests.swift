@@ -295,4 +295,77 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertNil(SessionLauncher.bundleID(for: nil))
         XCTAssertNil(SessionLauncher.bundleID(for: "unknown-terminal"))
     }
+
+    func testTitleMatchScore() {
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+
+        // 3: full absolute cwd in title (iTerm2/Terminal tab title style).
+        XCTAssertEqual(
+            SessionLauncher.titleMatchScore(
+                title: "ingo@mac: /Users/ingo/projects/irrlicht/.claude/worktrees/170 — zsh",
+                cwd: cwd),
+            3)
+
+        // 2: last two components match (VS Code shows "file — worktrees/170" rarely
+        //    but terminals do: "~/…/worktrees/170").
+        XCTAssertEqual(
+            SessionLauncher.titleMatchScore(
+                title: "Edit.swift — worktrees/170",
+                cwd: cwd),
+            2)
+
+        // 1: basename only — weakest, still wins when unique.
+        XCTAssertEqual(
+            SessionLauncher.titleMatchScore(
+                title: "SessionLauncher.swift — 170",
+                cwd: cwd),
+            1)
+
+        // 0: unrelated title.
+        XCTAssertEqual(
+            SessionLauncher.titleMatchScore(
+                title: "main.swift — irrlicht",
+                cwd: cwd),
+            0)
+
+        // Empty inputs are safe.
+        XCTAssertEqual(SessionLauncher.titleMatchScore(title: "", cwd: cwd), 0)
+        XCTAssertEqual(SessionLauncher.titleMatchScore(title: "anything", cwd: ""), 0)
+    }
+
+    func testBestMatchIndexPicksHighestScoring() {
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+        let titles = [
+            "main.swift — irrlicht",             // 0: main repo window
+            "SessionLauncher.swift — 170",       // 1: basename-only match
+            "Edit.swift — worktrees/170",        // 2: last-two match, should win
+        ]
+        XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 2)
+    }
+
+    func testBestMatchIndexDisambiguatesWorktreeVsMainRepo() {
+        // Realistic collision: both windows have "irrlicht" in the title. The
+        // worktree session's cwd has its own basename ("170"), so only the
+        // worktree window should match.
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+        let titles = [
+            "README.md — irrlicht",                     // main repo (basename=irrlicht)
+            "SessionLauncher.swift — 170",              // worktree (basename=170)
+        ]
+        XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 1)
+    }
+
+    func testBestMatchIndexReturnsNilWhenNoMatch() {
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+        let titles = ["README.md — some-other-project", "", "main.swift — another"]
+        XCTAssertNil(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd))
+    }
+
+    func testBestMatchIndexTiesBreakByFirstOccurrence() {
+        // AX returns windows in z-order (frontmost first). On equal scores we
+        // prefer the frontmost, which is the first element.
+        let cwd = "/tmp/foo"
+        let titles = ["edit foo — bar", "view foo — baz"]
+        XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 0)
+    }
 }
