@@ -2,11 +2,14 @@ package services_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/lifecycle"
@@ -1318,6 +1321,120 @@ func TestSessionDetector_CWDFallback_CleansUpOldSessionOnClear(t *testing.T) {
 	}
 	if stateB.PID != myPID {
 		t.Errorf("sess-b PID: got %d, want %d", stateB.PID, myPID)
+	}
+}
+
+// TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately is the
+// end-to-end regression for #169. It drives the real claudecode.DiscoverPID
+// with a stale ~/.claude/sessions/<pid>.json pointing at the old session and
+// asserts the full pipeline — DiscoverPIDWithRetry → HandlePIDAssigned →
+// same-PID cleanup — deletes the old session within the retry window.
+func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	// Use our own PID so seedFromDisk doesn't delete sess-old as a dead process.
+	myPID := os.Getpid()
+
+	// Install a fake sessionsDir with a stale metadata file that points at
+	// the OLD sessionId — simulating Claude's post-/clear behaviour where
+	// <pid>.json lingers on the previous session for up to ~2 min.
+	sessionsDir := t.TempDir()
+	staleMeta := map[string]any{"pid": myPID, "sessionId": "sess-old"}
+	data, _ := json.Marshal(staleMeta)
+	metaPath := filepath.Join(sessionsDir, strconv.Itoa(myPID)+".json")
+	if err := os.WriteFile(metaPath, data, 0o644); err != nil {
+		t.Fatalf("write stale meta: %v", err)
+	}
+	past := time.Now().Add(-30 * time.Second)
+	if err := os.Chtimes(metaPath, past, past); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	// Real transcript file so DiscoverPID can stat its mtime (fresh, > stale
+	// metadata + staleMetaSlack). Without a real file, the mtime gate would
+	// be inert and current negative-filter behaviour would keep applying.
+	transcriptDir := t.TempDir()
+	newTranscript := filepath.Join(transcriptDir, "sess-new.jsonl")
+	if err := os.WriteFile(newTranscript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	restore := claudecode.ReplaceTestDeps(
+		sessionsDir,
+		func(pid int) bool { return pid == myPID },
+		func(_ string, _ string, disambiguate func([]int) int) (int, error) {
+			return disambiguate([]int{myPID}), nil
+		},
+	)
+	defer restore()
+
+	discovers := map[string]services.PIDDiscoverFunc{
+		"claude-code": claudecode.DiscoverPID,
+	}
+	det := services.NewSessionDetector(
+		[]inbound.AgentWatcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
+		"test", 0, discovers,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// Wait for seedFromDisk before injecting state.
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Old session from before /clear — holds the live PID.
+	repo.Save(&session.SessionState{
+		SessionID:      "sess-old",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		PID:            myPID,
+		TranscriptPath: "/home/.claude/projects/-Users-test/sess-old.jsonl",
+		CWD:            "/Users/test/project",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	})
+
+	// New session from after /clear — PID not yet discovered, fresh transcript.
+	repo.Save(&session.SessionState{
+		SessionID:      "sess-new",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		TranscriptPath: newTranscript,
+		CWD:            "/Users/test/project",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	})
+
+	// Activity on sess-new triggers PID discovery. The real DiscoverPID must
+	// see the stale metadata, skip the negative filter (mtime gate), return
+	// myPID via the CWD stub, and fire HandlePIDAssigned's same-PID cleanup.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "sess-new",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: newTranscript,
+	}
+
+	// Allow retries (500ms + 1s + 2s = 3.5s window).
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	<-done
+
+	if stateOld, _ := repo.Load("sess-old"); stateOld != nil {
+		t.Error("sess-old should be deleted (stale metadata must not block /clear cleanup)")
+	}
+	stateNew, _ := repo.Load("sess-new")
+	if stateNew == nil {
+		t.Fatal("sess-new should exist")
+	}
+	if stateNew.PID != myPID {
+		t.Errorf("sess-new PID: got %d, want %d", stateNew.PID, myPID)
 	}
 }
 
