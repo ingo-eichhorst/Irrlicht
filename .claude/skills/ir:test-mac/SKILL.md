@@ -58,7 +58,7 @@ Build the irrlicht daemon and Swift app, then replace all running instances with
        <key>LSUIElement</key>
        <true/>
        <key>NSAppleEventsUsageDescription</key>
-       <string>Irrlicht uses AppleScript to bring the correct iTerm2 window and tab to the front when you click a session row.</string>
+       <string>Irrlicht uses AppleScript to bring the correct iTerm2 or Terminal.app window and tab to the front when you click a session row.</string>
    </dict>
    </plist>
    PLIST

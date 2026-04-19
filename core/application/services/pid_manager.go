@@ -506,14 +506,23 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 				}
 			}
 			// Best-effort backfill: pre-existing sessions from a previous
-			// daemon build may have Launcher=nil. Re-attempt capture so
+			// daemon build may have Launcher=nil, or a Launcher struct from
+			// before newer fields (e.g. TTY) existed. Re-attempt capture so
 			// row/notification clicks work without requiring the user to
-			// start a new session. Guard on state.Launcher != nil prevents
-			// re-reads when the field is already populated; we persist the
-			// result so the new field is visible via the API immediately.
+			// start a new session.
 			if state.Launcher == nil {
 				pm.captureLauncher(state, state.PID)
 				if state.Launcher != nil {
+					state.UpdatedAt = time.Now().Unix()
+					_ = pm.repo.Save(state)
+				}
+			} else if state.Launcher.TTY == "" && pm.launcherEnv != nil {
+				// Targeted TTY backfill. Keep the stable env-based identity
+				// (iterm_session_id, vscode_pid, ...) and only fill in what's
+				// missing — avoids clobbering known-good data in the rare
+				// case where a PID got recycled.
+				if fresh := pm.launcherEnv(state.PID); fresh != nil && fresh.TTY != "" {
+					state.Launcher.TTY = fresh.TTY
 					state.UpdatedAt = time.Now().Unix()
 					_ = pm.repo.Save(state)
 				}

@@ -156,6 +156,7 @@ struct Launcher: Codable, Hashable {
     let tmuxPane: String?
     let tmuxSocket: String?
     let vscodePID: Int?
+    let tty: String?
 
     enum CodingKeys: String, CodingKey {
         case termProgram    = "term_program"
@@ -164,6 +165,7 @@ struct Launcher: Codable, Hashable {
         case tmuxPane       = "tmux_pane"
         case tmuxSocket     = "tmux_socket"
         case vscodePID      = "vscode_pid"
+        case tty            = "tty"
     }
 }
 

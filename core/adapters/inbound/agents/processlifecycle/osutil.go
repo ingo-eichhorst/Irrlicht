@@ -154,10 +154,39 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	if l.TermProgram == "" {
 		l.TermProgram = resolveTermProgramFromAncestry(pid)
 	}
+	// Capture the controlling TTY so Terminal.app (and potentially others)
+	// can target the exact tab — Terminal.app's AppleScript dictionary
+	// matches tabs by `tty` but has no session-UUID analog.
+	l.TTY = processTTY(pid)
 	if l.IsEmpty() {
 		return nil
 	}
 	return l
+}
+
+// processTTY returns the controlling TTY of pid in the form "/dev/ttysNNN",
+// or "" if the process has no controlling terminal (hardened-runtime
+// children often don't) or the ps lookup fails. The result is normalized
+// to match Terminal.app's AppleScript `tty` property format — `ps -o tty=`
+// on macOS omits the "/dev/" prefix that AppleScript returns.
+func processTTY(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	tty := strings.TrimSpace(string(out))
+	if tty == "" || tty == "?" || tty == "??" || tty == "-" {
+		return ""
+	}
+	if !strings.HasPrefix(tty, "/dev/") {
+		tty = "/dev/" + tty
+	}
+	return tty
 }
 
 // readProcessEnv is implemented per-platform (osutil_darwin.go,

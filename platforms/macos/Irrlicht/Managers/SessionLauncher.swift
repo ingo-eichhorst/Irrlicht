@@ -9,14 +9,15 @@ import OSLog
 ///
 /// Dispatch:
 ///   1. `NSWorkspace.openApplication` — activate the host app.
-///   2. iTerm2 only: AppleScript `select` by session UUID — works across
-///      screens/spaces and uses a stable ID, not title guesswork.
-///   3. Everything else: Accessibility API, raise the window whose title's
+///   2. iTerm2: AppleScript `select` by session UUID.
+///   3. Terminal.app: AppleScript select the tab whose `tty` matches
+///      the captured controlling TTY of the agent process.
+///   4. Everything else: Accessibility API, raise the window whose title's
 ///      deepest matching ancestor segment of cwd wins. Silently no-ops if
 ///      AX permission isn't granted.
 ///
-/// It works (right window) or it degrades to app activation (right app, last
-/// used window). No Finder-reveal, no URL schemes that would clobber a
+/// It works (right window/tab) or it degrades to app activation (right app,
+/// last used window). No Finder-reveal, no URL schemes that would clobber a
 /// worktree's existing editor window.
 enum SessionLauncher {
     private static let logger = Logger(subsystem: "io.irrlicht.app", category: "SessionLauncher")
@@ -61,6 +62,12 @@ enum SessionLauncher {
             if launcher?.termProgram == "iTerm.app",
                let uuid = iTermUUID(from: launcher?.itermSessionID),
                selectITermSession(uuid: uuid) {
+                return
+            }
+            // Terminal.app: select the tab whose tty matches the session's.
+            if launcher?.termProgram == "Apple_Terminal",
+               let tty = launcher?.tty, !tty.isEmpty,
+               selectTerminalTab(tty: tty) {
                 return
             }
             // Everything else: AX + cwd-ancestor title match.
@@ -117,6 +124,50 @@ enum SessionLauncher {
         let matched = descriptor.stringValue == "1"
         if !matched {
             logger.info("iTerm AppleScript: no session matched uuid \(uuid, privacy: .public)")
+        }
+        return matched
+    }
+
+    // MARK: - Terminal.app AppleScript
+
+    /// Selects the Terminal.app tab whose `tty` property matches the given
+    /// device path (e.g. `/dev/ttys021`). Returns true on a match, false on
+    /// AppleScript error (permission denied) or no-match (tab closed).
+    ///
+    /// Terminal.app's dictionary has no session UUID on tabs, but it does
+    /// expose `tty` — and every process in a tab shares the same controlling
+    /// TTY, so this is a stable selector for as long as the tab lives.
+    /// Deliberately uses `select` and `set index` only — no `do script`,
+    /// which would type into the user's live shell.
+    private static func selectTerminalTab(tty: String) -> Bool {
+        let safe = tty
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let source = """
+        tell application "Terminal"
+            activate
+            repeat with w in windows
+                repeat with t in tabs of w
+                    if tty of t is "\(safe)" then
+                        set selected of t to true
+                        set index of w to 1
+                        return "1"
+                    end if
+                end repeat
+            end repeat
+            return "0"
+        end tell
+        """
+        var err: NSDictionary?
+        guard let script = NSAppleScript(source: source) else { return false }
+        let descriptor = script.executeAndReturnError(&err)
+        if let err {
+            logger.error("Terminal AppleScript failed: \(err, privacy: .public)")
+            return false
+        }
+        let matched = descriptor.stringValue == "1"
+        if !matched {
+            logger.info("Terminal AppleScript: no tab matched tty \(tty, privacy: .public)")
         }
         return matched
     }

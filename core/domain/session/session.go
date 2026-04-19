@@ -203,6 +203,7 @@ type Launcher struct {
 	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE
 	TmuxSocket     string `json:"tmux_socket,omitempty"`      // first `,`-field of $TMUX
 	VSCodePID      int    `json:"vscode_pid,omitempty"`       // $VSCODE_PID (vscode/cursor/windsurf)
+	TTY            string `json:"tty,omitempty"`              // controlling TTY of the agent process, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this
 }
 
 // IsEmpty reports whether the launcher carries no identifying information
@@ -211,7 +212,7 @@ type Launcher struct {
 func (l *Launcher) IsEmpty() bool {
 	return l == nil || (l.TermProgram == "" && l.ITermSessionID == "" &&
 		l.TermSessionID == "" && l.TmuxPane == "" &&
-		l.TmuxSocket == "" && l.VSCodePID == 0)
+		l.TmuxSocket == "" && l.VSCodePID == 0 && l.TTY == "")
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.
