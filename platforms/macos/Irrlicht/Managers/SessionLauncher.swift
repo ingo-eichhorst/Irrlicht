@@ -44,12 +44,39 @@ enum SessionLauncher {
             logger.info("no launcher for session \(session.id, privacy: .public)")
             return
         }
+        let launcher = session.launcher
+        let cwd = session.cwd
+
+        // iTerm2 / Terminal.app: AppleScript handles activation AND window
+        // selection in a single event. Running NSWorkspace.openApplication
+        // *and* AppleScript's `activate` creates a race — on a cold click
+        // the openApplication activation is still in flight when the script
+        // reorders windows, so the wrong window comes forward and the user
+        // has to click again. Let the AppleScript own it.
+        //
+        // Dispatch off the main thread so NSAppleScript doesn't block the
+        // UI; the script itself is synchronous and takes tens of ms.
+        if launcher?.termProgram == "iTerm.app",
+           let uuid = iTermUUID(from: launcher?.itermSessionID) {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = selectITermSession(uuid: uuid)
+            }
+            return
+        }
+        if launcher?.termProgram == "Apple_Terminal",
+           let tty = launcher?.tty, !tty.isEmpty {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = selectTerminalTab(tty: tty)
+            }
+            return
+        }
+
+        // Everything else: activate app via LaunchServices, then raise the
+        // matching window via AX.
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
             logger.info("no installed app for bundle id \(bundleID, privacy: .public)")
             return
         }
-        let launcher = session.launcher
-        let cwd = session.cwd
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
@@ -57,20 +84,6 @@ enum SessionLauncher {
                 logger.error("openApplication failed: \(error.localizedDescription, privacy: .public)")
                 return
             }
-            // iTerm2 fast path: select the exact session by UUID — only
-            // reliable cross-space/screen target we have for iTerm.
-            if launcher?.termProgram == "iTerm.app",
-               let uuid = iTermUUID(from: launcher?.itermSessionID),
-               selectITermSession(uuid: uuid) {
-                return
-            }
-            // Terminal.app: select the tab whose tty matches the session's.
-            if launcher?.termProgram == "Apple_Terminal",
-               let tty = launcher?.tty, !tty.isEmpty,
-               selectTerminalTab(tty: tty) {
-                return
-            }
-            // Everything else: AX + cwd-ancestor title match.
             if !cwd.isEmpty {
                 raiseMatchingWindow(bundleID: bundleID, cwd: cwd)
             }
@@ -143,18 +156,23 @@ enum SessionLauncher {
         let safe = tty
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+        // `activate` LAST, after the window is already at index 1 and the
+        // tab is selected — if we activate first, Terminal races to the
+        // foreground while we're still reordering, and the previously
+        // frontmost window shows through until the next click.
         let source = """
         tell application "Terminal"
-            activate
             repeat with w in windows
                 repeat with t in tabs of w
                     if tty of t is "\(safe)" then
-                        set selected of t to true
+                        set selected tab of w to t
                         set index of w to 1
+                        activate
                         return "1"
                     end if
                 end repeat
             end repeat
+            activate
             return "0"
         end tell
         """
