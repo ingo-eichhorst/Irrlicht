@@ -7,7 +7,92 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"irrlicht/core/pkg/capacity"
 )
+
+// testCapacityFixture is the synthetic LiteLLM-like model table used by all
+// tailer tests. It is intentionally deterministic (no dependency on the
+// on-disk LiteLLM cache) and contains every model referenced by tests.
+var testCapacityFixture = map[string]capacity.ModelCapacity{
+	"claude-sonnet-4-5": {
+		ContextWindow: 1_000_000,
+		MaxOutput:     64_000,
+		Family:        "claude-4",
+		DisplayName:   "Claude Sonnet 4.5",
+		Pricing: &capacity.ModelPricing{
+			InputPerMTok: 3.0, OutputPerMTok: 15.0,
+			CacheReadPerMTok: 0.30, CacheCreationPerMTok: 3.75,
+		},
+	},
+	"claude-opus-4-6": {
+		ContextWindow: 1_000_000,
+		MaxOutput:     64_000,
+		Family:        "claude-4",
+		DisplayName:   "Claude Opus 4.6",
+		Pricing: &capacity.ModelPricing{
+			InputPerMTok: 15.0, OutputPerMTok: 75.0,
+			CacheReadPerMTok: 1.875, CacheCreationPerMTok: 18.75,
+		},
+	},
+	"claude-sonnet-4-6": {
+		ContextWindow: 1_000_000,
+		MaxOutput:     64_000,
+		Family:        "claude-4",
+		DisplayName:   "Claude Sonnet 4.6",
+		Pricing: &capacity.ModelPricing{
+			InputPerMTok: 3.0, OutputPerMTok: 15.0,
+			CacheReadPerMTok: 0.30, CacheCreationPerMTok: 3.75,
+		},
+	},
+	"claude-haiku-4-5": {
+		ContextWindow: 200_000,
+		MaxOutput:     64_000,
+		Family:        "claude-4",
+		DisplayName:   "Claude Haiku 4.5",
+		Pricing: &capacity.ModelPricing{
+			InputPerMTok: 0.80, OutputPerMTok: 4.0,
+			CacheReadPerMTok: 0.08, CacheCreationPerMTok: 1.0,
+		},
+	},
+	"claude-opus-4-1": {
+		ContextWindow: 200_000,
+		MaxOutput:     64_000,
+		Family:        "claude-4",
+		DisplayName:   "Claude Opus 4.1",
+		Pricing: &capacity.ModelPricing{
+			InputPerMTok: 15.0, OutputPerMTok: 75.0,
+			CacheReadPerMTok: 1.875, CacheCreationPerMTok: 18.75,
+		},
+	},
+	"gpt-5.3-codex": {
+		ContextWindow: 256_000,
+		MaxOutput:     32_768,
+		Family:        "gpt-5",
+		DisplayName:   "GPT-5.3 Codex",
+		Pricing: &capacity.ModelPricing{
+			InputPerMTok: 2.0, OutputPerMTok: 8.0,
+		},
+	},
+	"gpt-5.4": {
+		ContextWindow: 258_400,
+		MaxOutput:     32_768,
+		Family:        "gpt-5",
+		DisplayName:   "GPT-5.4",
+		Pricing: &capacity.ModelPricing{
+			InputPerMTok: 2.0, OutputPerMTok: 8.0,
+		},
+	},
+	"gpt-5.9-codex-preview": {
+		ContextWindow: 256_000,
+		MaxOutput:     32_768,
+		Family:        "gpt-5",
+		DisplayName:   "GPT-5.9 Codex Preview",
+		Pricing: &capacity.ModelPricing{
+			InputPerMTok: 2.0, OutputPerMTok: 8.0,
+		},
+	},
+}
 
 // testParser is a minimal TranscriptParser for tests. It handles the basic
 // event types used in test fixtures (Claude Code-like format).
@@ -159,9 +244,13 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	return ev
 }
 
-// newTestTailer creates a TranscriptTailer with the testParser for unit tests.
+// newTestTailer creates a TranscriptTailer with the testParser and the
+// deterministic testCapacityFixture capacity manager. Tests must not depend
+// on the real on-disk LiteLLM cache.
 func newTestTailer(path string) *TranscriptTailer {
-	return NewTranscriptTailer(path, &testParser{}, "claude-code")
+	t := NewTranscriptTailer(path, &testParser{}, "claude-code")
+	t.capacityMgr = capacity.NewForTest(testCapacityFixture)
+	return t
 }
 
 // writeTranscriptLines writes JSONL entries to a temp file and returns the path.

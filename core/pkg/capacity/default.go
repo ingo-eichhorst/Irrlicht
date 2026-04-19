@@ -1,40 +1,31 @@
 package capacity
 
-import (
-	_ "embed"
-	"encoding/json"
-	"fmt"
+import "sync"
+
+var (
+	defaultOnce    sync.Once
+	defaultManager *CapacityManager
 )
 
-//go:embed model-capacity.json
-var defaultConfigData []byte
-
-// NewCapacityManagerFromData creates a CapacityManager from raw JSON data
-// instead of reading from a file path.
-func NewCapacityManagerFromData(data []byte) (*CapacityManager, error) {
-	var config CapacityConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse capacity config data: %w", err)
-	}
-
-	return &CapacityManager{
-		config: &config,
-	}, nil
-}
-
-// DefaultCapacityManager returns a CapacityManager initialized with the
-// embedded model-capacity.json, merged with any cached remote data.
-// Returns nil if parsing fails.
+// DefaultCapacityManager returns a process-wide CapacityManager backed by the
+// LiteLLM cache at CachePath(). The first caller builds the singleton; all
+// later callers share it. Subsequent GetModelCapacity calls transparently
+// reload the cache when its mtime advances (e.g. after the daemon's daily
+// RefreshRemoteDataIfStale tick).
+//
+// If the cache is missing or corrupt, the manager serves zero-value lookups
+// until the cache becomes readable.
 func DefaultCapacityManager() *CapacityManager {
-	cm, err := NewCapacityManagerFromData(defaultConfigData)
-	if err != nil {
-		return nil
-	}
+	defaultOnce.Do(func() {
+		cachePath, _ := CachePath()
 
-	// Merge cached remote data (fills in models not in embedded JSON).
-	if remote := LoadCachedRemoteData(); remote != nil {
-		cm.MergeRemoteModels(remote)
-	}
-
-	return cm
+		cm := &CapacityManager{
+			cachePath: cachePath,
+			config:    &CapacityConfig{Models: map[string]ModelCapacity{}},
+		}
+		// Prime from cache if available; missing cache is not fatal.
+		cm.maybeReload()
+		defaultManager = cm
+	})
+	return defaultManager
 }
