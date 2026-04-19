@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // withTestDeps swaps sessionsDir, pidAlive, and discoverByCWD for the duration
@@ -59,6 +60,27 @@ func writeMeta(t *testing.T, dir string, pid int, sessionID string) {
 
 func transcriptFor(sessionID string) string {
 	return "/Users/x/.claude/projects/foo/" + sessionID + ".jsonl"
+}
+
+// writeMetaAt writes a metadata file and then sets its mtime to the given time.
+// Used by #169 regression tests to simulate stale ~/.claude/sessions/<pid>.json
+// entries left behind after a /clear.
+func writeMetaAt(t *testing.T, dir string, pid int, sessionID string, mtime time.Time) {
+	t.Helper()
+	if err := WriteSessionMetaForTest(dir, pid, sessionID, mtime); err != nil {
+		t.Fatalf("write meta at: %v", err)
+	}
+}
+
+// transcriptForWithFile creates a real transcript file in t.TempDir so that
+// os.Stat returns a meaningful mtime. Returns the absolute path.
+func transcriptForWithFile(t *testing.T, sessionID string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), sessionID+".jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	return path
 }
 
 func TestDiscoverPID_StrongMatchByMetadata(t *testing.T) {
@@ -184,6 +206,64 @@ func TestDiscoverPID_EmptyTranscriptFallsBackToCWD(t *testing.T) {
 	}
 	if pid != 42 {
 		t.Fatalf("got pid=%d, want 42", pid)
+	}
+}
+
+func TestDiscoverPID_StaleMetadataDoesNotBlockCWDFallback(t *testing.T) {
+	// Regression for #169. After /clear, Claude keeps the same PID (62896)
+	// but ~/.claude/sessions/62896.json still points at the OLD sessionId.
+	// The new session's transcript was written after /clear, so it is newer
+	// than the stale metadata; DiscoverPID must NOT treat the stale entry
+	// as a hard negative filter, and must return 62896 via the CWD fallback.
+	dir := withTestDeps(t, map[int]bool{62896: true}, []int{62896})
+	writeMetaAt(t, dir, 62896, "old-session", time.Now().Add(-30*time.Second))
+	transcript := transcriptForWithFile(t, "new-session")
+
+	pid, err := DiscoverPID("/repo", transcript, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pid != 62896 {
+		t.Fatalf("got pid=%d, want 62896 (stale metadata must not block fallback)", pid)
+	}
+}
+
+func TestDiscoverPID_FreshMetadataStillBlocksConcurrentSession(t *testing.T) {
+	// #109 protection regression guard: two concurrent Claude processes in
+	// the same CWD, both with fresh metadata. The one whose metadata points
+	// at a different sessionId must still be filtered out.
+	dir := withTestDeps(t,
+		map[int]bool{100: true, 200: true},
+		[]int{100, 200},
+	)
+	writeMetaAt(t, dir, 200, "other-session", time.Now())
+	transcript := transcriptForWithFile(t, "new-sid")
+
+	pid, err := DiscoverPID("/repo", transcript, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pid != 100 {
+		t.Fatalf("got pid=%d, want 100 (fresh metadata must still exclude 200)", pid)
+	}
+}
+
+func TestDiscoverPID_NoTranscriptFileFallsBackSafely(t *testing.T) {
+	// When the transcript file doesn't exist on disk (os.Stat fails),
+	// wantMTime is zero and the mtime gate must be inert — current
+	// negative-filtering behavior must be preserved.
+	dir := withTestDeps(t,
+		map[int]bool{100: true, 200: true},
+		[]int{100, 200},
+	)
+	writeMeta(t, dir, 200, "other-session")
+
+	pid, err := DiscoverPID("/repo", transcriptFor("new-sid"), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pid != 100 {
+		t.Fatalf("got pid=%d, want 100 (gate must be inert without transcript mtime)", pid)
 	}
 }
 
