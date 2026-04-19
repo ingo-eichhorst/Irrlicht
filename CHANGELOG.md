@@ -9,48 +9,6 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
-## [0.3.5] — 2026-04-19
-
-### Fixed
-- Replay: sidecar timeline for `/continue` sessions that span multiple
-  daemon lifetimes is now split at `process_exited` boundaries instead
-  of sharing one debounce state machine across both lifetimes. A gap fs
-  event at the lifetime boundary no longer drives a ghost lifetime-2
-  transition, and the single captured `processExitAt` no longer
-  silences legitimate lifetime-2 coalesce fires (#144).
-- macOS: desktop notifications now only fire on transitions *from*
-  `working`, eliminating the brief waiting→ready notification noise that
-  accompanied some same-turn user-blocking tool flows (#161).
-- Detector: synthetic `working→waiting` emitted when fswatcher collapses
-  a user-blocking tool's `tool_use` and `tool_result` into the same
-  tailer pass, so the brief waiting episode is no longer lost (#150).
-- Installer: curl install preserves provenance metadata and registers
-  the app with LaunchServices so Finder opens work out of the box
-  (#158).
-- Detector: subagents no longer get stuck on the parent's
-  task-notification path; the parent's authoritative completion signal
-  now unsticks orphaned children deterministically (#134).
-- Security: `irrlichd` network exposure locked down — the daemon binds
-  loopback-only by default (#94).
-
-### Added
-- Install: curl installer at `irrlicht.io/install.sh` — one-liner
-  installs the app, daemon, and LaunchAgent on macOS.
-- Install: rerunning the installer cleanly removes the previous install
-  before laying down the new bits.
-- Web: "Raw" tab in the session inspector surfaces the underlying API
-  response for debugging detector behavior.
-
-### Changed
-- Site: hero spacing tightened and the curl install command moved into
-  the primary CTA slot.
-
-### Distribution
-- Skill `ir:release` now guards against stale Swift binaries and missing
-  SwiftPM resource bundles — the two regressions that shipped a
-  10-day-old / crash-at-launch build in v0.3.4 can no longer happen
-  silently.
-
 ## [0.3.4] — 2026-04-14
 
 ### Added
@@ -392,8 +350,7 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.5...HEAD
-[0.3.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.5
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.4...HEAD
 [0.3.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.4
 [0.3.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.3
 [0.3.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.2
