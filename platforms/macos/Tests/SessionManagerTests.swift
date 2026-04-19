@@ -296,61 +296,80 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertNil(SessionLauncher.bundleID(for: "unknown-terminal"))
     }
 
-    func testTitleMatchScore() {
+    func testTitleMatchScoreFullCwdDominates() {
+        // Full cwd in title (iTerm2/Terminal tab title style) dominates any
+        // ancestor match.
         let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
-
-        // 3: full absolute cwd in title (iTerm2/Terminal tab title style).
         XCTAssertEqual(
             SessionLauncher.titleMatchScore(
                 title: "ingo@mac: /Users/ingo/projects/irrlicht/.claude/worktrees/170 — zsh",
                 cwd: cwd),
-            3)
+            1_000)
+    }
 
-        // 2: last two components match (VS Code shows "file — worktrees/170" rarely
-        //    but terminals do: "~/…/worktrees/170").
-        XCTAssertEqual(
-            SessionLauncher.titleMatchScore(
-                title: "Edit.swift — worktrees/170",
-                cwd: cwd),
-            2)
+    func testTitleMatchScoreDeepestAncestorWins() {
+        // cwd is several levels below the VS Code workspace root.
+        // VS Code's window title shows only the workspace folder name
+        // ("irrlicht"). The matcher must still find that as an ancestor.
+        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
 
-        // 1: basename only — weakest, still wins when unique.
+        // parts index: Users(0) ingo(1) projects(2) irrlicht(3) .claude(4) worktrees(5) 170(6)
+        //   Basename "170" — score 7.
         XCTAssertEqual(
-            SessionLauncher.titleMatchScore(
-                title: "SessionLauncher.swift — 170",
-                cwd: cwd),
-            1)
+            SessionLauncher.titleMatchScore(title: "SessionLauncher.swift — 170", cwd: cwd),
+            7)
 
-        // 0: unrelated title.
+        //   "worktrees" at depth 5 → score 6 (basename "170" missing).
         XCTAssertEqual(
-            SessionLauncher.titleMatchScore(
-                title: "main.swift — irrlicht",
-                cwd: cwd),
+            SessionLauncher.titleMatchScore(title: "Edit.swift — worktrees", cwd: cwd),
+            6)
+
+        //   VS Code workspace is the repo root: "irrlicht" at depth 3 → score 4.
+        XCTAssertEqual(
+            SessionLauncher.titleMatchScore(title: "2.1.114 — irrlicht", cwd: cwd),
+            4)
+    }
+
+    func testTitleMatchScoreSkipsGenericTopsAndHomeBasename() {
+        // "Users" and the user's home basename must never match alone —
+        // otherwise every title string containing "ingo" would win.
+        let cwd = "/Users/ingo/projects/irrlicht"
+        // Title matches "ingo" only — must score 0 (skipped).
+        XCTAssertEqual(
+            SessionLauncher.titleMatchScore(title: "ingo@mac: ~ — zsh", cwd: cwd),
             0)
+        // Title matches "Users" only — must score 0.
+        XCTAssertEqual(
+            SessionLauncher.titleMatchScore(title: "Users directory", cwd: cwd),
+            0)
+    }
 
-        // Empty inputs are safe.
+    func testTitleMatchScoreEmptyInputs() {
+        let cwd = "/Users/ingo/projects/irrlicht"
         XCTAssertEqual(SessionLauncher.titleMatchScore(title: "", cwd: cwd), 0)
         XCTAssertEqual(SessionLauncher.titleMatchScore(title: "anything", cwd: ""), 0)
     }
 
-    func testBestMatchIndexPicksHighestScoring() {
+    func testBestMatchIndexPicksDeepestAncestor() {
+        // Worktree session, three VS Code windows open. Only one window
+        // (the main repo) is an ancestor of the cwd — that one wins, even
+        // though the cwd basename itself doesn't appear anywhere.
         let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
         let titles = [
-            "main.swift — irrlicht",             // 0: main repo window
-            "SessionLauncher.swift — 170",       // 1: basename-only match
-            "Edit.swift — worktrees/170",        // 2: last-two match, should win
+            "2.1.114 — irrlicht",                // 0: main repo, ancestor depth 3 → score 4
+            "index.html — opencode-test",        // 1: unrelated
+            "benchmark.md — agent-readyness",    // 2: unrelated
         ]
-        XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 2)
+        XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 0)
     }
 
-    func testBestMatchIndexDisambiguatesWorktreeVsMainRepo() {
-        // Realistic collision: both windows have "irrlicht" in the title. The
-        // worktree session's cwd has its own basename ("170"), so only the
-        // worktree window should match.
-        let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
+    func testBestMatchIndexPrefersDeeperMatchWhenBothPresent() {
+        // If both a deeper subfolder window ("core") and the repo root ("irrlicht")
+        // are open, a cwd inside core should pick the core window.
+        let cwd = "/Users/ingo/projects/irrlicht/core"
         let titles = [
-            "README.md — irrlicht",                     // main repo (basename=irrlicht)
-            "SessionLauncher.swift — 170",              // worktree (basename=170)
+            "README.md — irrlicht",     // ancestor at depth 3 → score 4
+            "main.go — core",           // basename at depth 4 → score 5 (wins)
         ]
         XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 1)
     }
@@ -359,13 +378,5 @@ final class SessionManagerTests: XCTestCase {
         let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
         let titles = ["README.md — some-other-project", "", "main.swift — another"]
         XCTAssertNil(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd))
-    }
-
-    func testBestMatchIndexTiesBreakByFirstOccurrence() {
-        // AX returns windows in z-order (frontmost first). On equal scores we
-        // prefer the frontmost, which is the first element.
-        let cwd = "/tmp/foo"
-        let titles = ["edit foo — bar", "view foo — baz"]
-        XCTAssertEqual(SessionLauncher.bestMatchIndex(titles: titles, cwd: cwd), 0)
     }
 }

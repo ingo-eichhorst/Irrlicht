@@ -75,7 +75,7 @@ enum SessionLauncher {
 
         let titles = windows.map { windowTitle($0) }
         guard let idx = bestMatchIndex(titles: titles, cwd: cwd) else {
-            logger.info("no window title matched cwd \(cwd, privacy: .public)")
+            logger.info("no window title matched cwd \(cwd, privacy: .public); candidates=\(titles, privacy: .public)")
             return
         }
         let target = windows[idx]
@@ -97,25 +97,44 @@ enum SessionLauncher {
 
     // MARK: - Title match (pure, testable)
 
+    /// Generic root-level path segments that must never serve as a match
+    /// signal — they appear in virtually every home-directory path string.
+    private static let genericTopSegments: Set<String> = [
+        "Users", "home", "tmp", "var", "private", "opt", "mnt", "root"
+    ]
+
     /// Scores a window title against a cwd. Higher score = better match.
-    /// 0 means no match — caller should skip this window.
+    /// Returns 0 when the title shares no meaningful path segment with cwd.
     ///
-    ///   3 — title contains the full absolute cwd (iTerm2/Terminal tab titles often do)
-    ///   2 — title contains the last two cwd components joined by "/"
-    ///       (disambiguates common basenames like "src" or "170")
-    ///   1 — title contains just the cwd basename
-    ///   0 — no match
+    /// - Tier A (score 1000): title contains the full absolute cwd — common
+    ///   for terminal tab titles, and the only signal that should beat an
+    ///   ancestor match regardless of depth.
+    /// - Tier B (score = depth index + 1): deepest path segment of cwd that
+    ///   appears in the title wins. This handles VS Code, whose window title
+    ///   shows only the *workspace folder* name (e.g. `"2.1.114 — irrlicht"`)
+    ///   even when the Claude Code session's cwd is a subdirectory several
+    ///   levels below (`.../irrlicht/.claude/worktrees/170`). The deeper the
+    ///   matching ancestor, the more specific the signal.
+    ///
+    /// Generic top segments (`Users`, user home basename, `tmp`, etc.) are
+    /// skipped because they occur in nearly every string and would cause
+    /// false matches.
     static func titleMatchScore(title: String, cwd: String) -> Int {
         if title.isEmpty || cwd.isEmpty { return 0 }
-        if title.contains(cwd) { return 3 }
+        if title.contains(cwd) { return 1_000 }
+
         let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
         let parts = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        if parts.count >= 2 {
-            let lastTwo = parts.suffix(2).joined(separator: "/")
-            if title.contains(lastTwo) { return 2 }
-        }
-        if let base = parts.last, !base.isEmpty, title.contains(base) {
-            return 1
+
+        let homeBasename = (ProcessInfo.processInfo.environment["HOME"] ?? "")
+            .split(separator: "/").last.map(String.init) ?? ""
+
+        for i in (0..<parts.count).reversed() {
+            let p = parts[i]
+            if p.isEmpty { continue }
+            if genericTopSegments.contains(p) { continue }
+            if !homeBasename.isEmpty && p == homeBasename { continue }
+            if title.contains(p) { return i + 1 }
         }
         return 0
     }
