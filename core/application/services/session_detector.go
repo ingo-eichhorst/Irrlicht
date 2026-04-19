@@ -73,8 +73,9 @@ type SessionDetector struct {
 	broadcaster outbound.PushBroadcaster // optional
 	version     string                   // daemon version stamped on new sessions
 
-	enricher *MetadataEnricher
-	pidMgr   *PIDManager
+	enricher    *MetadataEnricher
+	pidMgr      *PIDManager
+	costTracker outbound.CostTracker // optional; nil = disabled
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
@@ -169,6 +170,24 @@ func (d *SessionDetector) RunPIDLivenessSweepForTest() {
 func (d *SessionDetector) SetRecorder(r outbound.EventRecorder) {
 	d.recorder = r
 	d.pidMgr.SetRecorder(r, &d.recorderSeq)
+}
+
+// SetCostTracker wires an optional CostTracker; after each successful
+// repo.Save the detector records a snapshot for downstream cost-window
+// queries. Pass nil to disable.
+func (d *SessionDetector) SetCostTracker(c outbound.CostTracker) {
+	d.costTracker = c
+}
+
+// recordCost is a helper that calls the optional CostTracker and logs but
+// does not propagate errors — cost tracking must never block the detector.
+func (d *SessionDetector) recordCost(state *session.SessionState) {
+	if d.costTracker == nil || state == nil {
+		return
+	}
+	if err := d.costTracker.RecordSnapshot(state); err != nil {
+		d.log.LogError("cost-tracker", state.SessionID, err.Error())
+	}
 }
 
 // record emits a lifecycle event if recording is enabled. It assigns a
@@ -348,6 +367,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 				fmt.Sprintf("failed to save new session: %v", err))
 			return
 		}
+		d.recordCost(state)
 
 		// Record pre-session detection (proc-* IDs only — real transcript
 		// sessions are already covered by KindTranscriptNew above).
@@ -610,6 +630,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 			fmt.Sprintf("failed to save activity update: %v", err))
 		return
 	}
+	d.recordCost(state)
 
 	d.broadcast(outbound.PushTypeUpdated, state)
 
