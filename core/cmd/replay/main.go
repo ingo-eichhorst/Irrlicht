@@ -618,10 +618,19 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		return nil, fmt.Errorf("sidecar %s has no transcript_new event — cannot identify the primary session", sidecarPath)
 	}
 
-	// Single walk: collect fswatcher events, hook events, and first process exit.
+	// Single walk: collect fswatcher events, hook events, process exits, and
+	// lifecycle-start markers. For /continue sessions the same session ID
+	// spans multiple daemon lifetimes — the daemon is deaf between a
+	// process_exited and the next lifecycle birth, so fs events arriving in
+	// that gap were never classified by the live daemon and must be
+	// skipped during replay (issue #144). A lifecycle birth is either a
+	// transcript_new (fresh session) or a state_transition with empty
+	// prev_state (resumed session — the "new session created" marker the
+	// daemon writes when it re-attaches).
 	var fswatches []lifecycle.Event
 	var hookEvents []lifecycle.Event
-	var processExitAt time.Time
+	var processExits []lifecycle.Event
+	var lifecycleStarts []lifecycle.Event
 	for _, ev := range sidecarEvents {
 		if ev.SessionID != primarySessionID {
 			continue
@@ -632,11 +641,15 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 				fswatches = append(fswatches, ev)
 			}
 		case lifecycle.KindProcessExited:
-			if processExitAt.IsZero() {
-				processExitAt = ev.Timestamp
-			}
+			processExits = append(processExits, ev)
 		case lifecycle.KindHookReceived:
 			hookEvents = append(hookEvents, ev)
+		case lifecycle.KindTranscriptNew:
+			lifecycleStarts = append(lifecycleStarts, ev)
+		case lifecycle.KindStateTransition:
+			if ev.PrevState == "" {
+				lifecycleStarts = append(lifecycleStarts, ev)
+			}
 		}
 	}
 	if len(fswatches) == 0 {
@@ -761,20 +774,35 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		state = session.StateWaiting
 	}
 
-	// Build a merged timeline of fswatcher events and hook events, ordered
-	// by sidecar sequence number.
+	// Build a merged timeline of fswatcher events, hook events,
+	// process_exited boundaries, and lifecycle-start markers, ordered by
+	// sidecar sequence number. process_exited entries mark the end of a
+	// daemon lifetime (reset debounce, mark dead); lifecycle-start entries
+	// mark the beginning of the next lifetime (mark alive). fs and hook
+	// events are only processed while alive.
+	const (
+		timelineFS = iota
+		timelineHook
+		timelineProcessExit
+		timelineLifecycleStart
+	)
 	type timelineEntry struct {
-		isHook  bool
-		fsIdx   int
-		hookIdx int
-		seq     int64
+		kind int
+		idx  int
+		seq  int64
 	}
-	timeline := make([]timelineEntry, 0, len(fswatches)+len(hookEvents))
+	timeline := make([]timelineEntry, 0, len(fswatches)+len(hookEvents)+len(processExits)+len(lifecycleStarts))
 	for i, ev := range fswatches {
-		timeline = append(timeline, timelineEntry{fsIdx: i, seq: ev.Seq})
+		timeline = append(timeline, timelineEntry{kind: timelineFS, idx: i, seq: ev.Seq})
 	}
 	for i, ev := range hookEvents {
-		timeline = append(timeline, timelineEntry{isHook: true, hookIdx: i, seq: ev.Seq})
+		timeline = append(timeline, timelineEntry{kind: timelineHook, idx: i, seq: ev.Seq})
+	}
+	for i, ev := range processExits {
+		timeline = append(timeline, timelineEntry{kind: timelineProcessExit, idx: i, seq: ev.Seq})
+	}
+	for i, ev := range lifecycleStarts {
+		timeline = append(timeline, timelineEntry{kind: timelineLifecycleStart, idx: i, seq: ev.Seq})
 	}
 	sort.SliceStable(timeline, func(i, j int) bool {
 		return timeline[i].seq < timeline[j].seq
@@ -794,21 +822,53 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	var pendingSize int64
 	var pendingIdx int
 
+	// alive tracks whether a daemon lifetime is currently attached to this
+	// session. fs/hook events arriving between process_exited and the next
+	// lifecycle-start were never processed by a live daemon and must be
+	// skipped.
+	//
+	// When the primary session has no lifecycle-start markers at all
+	// (e.g. --session filter targeting a subagent or a synthetic session
+	// whose birth isn't in the sidecar), there's no boundary to gate
+	// against — start alive so the replay behaves like a single lifetime
+	// rather than silently dropping every fs event.
+	alive := len(lifecycleStarts) == 0
 	for _, entry := range timeline {
-		if entry.isHook {
-			applyHookEvent(hookEvents[entry.hookIdx])
+		switch entry.kind {
+		case timelineLifecycleStart:
+			alive = true
+			continue
+		case timelineProcessExit:
+			// Daemon torn down: pending debounce timer is cancelled (not
+			// fired), and the next lifetime will create a fresh session
+			// that starts in ready. Reset state so lifetime-2 events
+			// don't coalesce with lifetime-1 debounce state.
+			debouncePending = false
+			coalescedSinceFire = false
+			windowDeadline = time.Time{}
+			pendingSize = 0
+			pendingIdx = 0
+			state = session.StateReady
+			alive = false
+			continue
+		case timelineHook:
+			if !alive {
+				continue
+			}
+			applyHookEvent(hookEvents[entry.idx])
 			continue
 		}
 
-		i := entry.fsIdx
+		if !alive {
+			continue
+		}
+		i := entry.idx
 		fsev := fswatches[i]
 
 		if debouncePending && !fsev.Timestamp.Before(windowDeadline) {
 			if coalescedSinceFire {
-				if processExitAt.IsZero() || windowDeadline.Before(processExitAt) {
-					if err := classifyAtSidecar(pendingSize, windowDeadline, pendingIdx, CauseDebounceCoalesce); err != nil {
-						return nil, fmt.Errorf("flush timer at fsev %d: %w", i, err)
-					}
+				if err := classifyAtSidecar(pendingSize, windowDeadline, pendingIdx, CauseDebounceCoalesce); err != nil {
+					return nil, fmt.Errorf("flush timer at fsev %d: %w", i, err)
 				}
 			}
 			debouncePending = false
@@ -833,10 +893,8 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	if debouncePending && coalescedSinceFire {
 		lastFs := fswatches[len(fswatches)-1]
 		fireTime := lastFs.Timestamp.Add(debounce)
-		if processExitAt.IsZero() || fireTime.Before(processExitAt) {
-			if err := classifyAtSidecar(pendingSize, fireTime, pendingIdx, CauseDebounceCoalesce); err != nil {
-				return nil, fmt.Errorf("final flush: %w", err)
-			}
+		if err := classifyAtSidecar(pendingSize, fireTime, pendingIdx, CauseDebounceCoalesce); err != nil {
+			return nil, fmt.Errorf("final flush: %w", err)
 		}
 	}
 	addDuration(state, report.Summary.LastEventTime.Sub(prevTransitionAt))

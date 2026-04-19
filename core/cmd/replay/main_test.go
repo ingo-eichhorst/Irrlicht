@@ -94,6 +94,113 @@ func TestReplayWithSidecar_GoldenFixture(t *testing.T) {
 	}
 }
 
+// TestReplayWithSidecar_ContinueFixture is the regression test for issue
+// #144. Fixture 13 is a /continue session whose session ID spans two
+// daemon process lifetimes: process_exited at seq 673 (20:56:47), then
+// lifecycle restart at seq 715 (21:11:40.970), then process_exited at
+// seq 728. Before the fix, the single captured processExitAt silenced
+// legitimate lifetime-2 debounce fires and let a gap fs event at
+// seq 714 (21:11:40.931, before the lifecycle restart) drive the first
+// lifetime-2 transition — a ghost moment when no daemon was attached.
+//
+// After the fix, no transition falls inside the process-exit gap and
+// lifetime 2 replays exactly the four transitions the daemon recorded
+// (seq 720/722/724/725) at their recorded wall-clock timestamps.
+//
+// Lifetime 1 still has spurious flicker extras from a separate detector
+// feature the replay does not yet model (parent-hold while subagents
+// are active, subagent-completion-driven parent re-evaluation). Those
+// are out of scope for this issue; this test deliberately does not
+// assert on them.
+func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
+	transcript := fixturePath(t, "claudecode/13-full-lifecycle-continue-8a525d27.jsonl")
+	sidecar := fixturePath(t, "claudecode/13-full-lifecycle-continue-8a525d27.events.jsonl")
+
+	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+		Adapter:            claudecode.AdapterName,
+		DebounceWindow:     2 * time.Second,
+		FlickerMaxDuration: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("ReplayWithSidecar: %v", err)
+	}
+
+	// No replayed transition may fall inside the process-exit gap
+	// (between lifetime-1 exit at 20:56:47.276 and lifetime-2 restart
+	// at 21:11:40.970) — no daemon was attached then.
+	gapStart := mustParseRFC3339(t, "2026-04-11T20:56:47.276869+02:00")
+	gapEnd := mustParseRFC3339(t, "2026-04-11T21:11:40.970771+02:00")
+	for _, tr := range report.Transitions {
+		if tr.VirtualTime.After(gapStart) && tr.VirtualTime.Before(gapEnd) {
+			t.Errorf("ghost transition inside process-exit gap: idx=%d %s→%s at %s",
+				tr.Index, tr.PrevState, tr.NewState,
+				tr.VirtualTime.Format(time.RFC3339Nano))
+		}
+	}
+
+	// Lifetime 2 must produce exactly the four recorded transitions, at
+	// the four lifetime-2 fs-event timestamps (seq 719/721/723/726).
+	// Each fires slightly before the recorded state_transition (seq
+	// 720/722/724/725) because the daemon emits the state_transition
+	// after classify completes — microsecond skew, not a semantic
+	// difference.
+	lifetime2Want := []struct {
+		ts        string
+		prevState string
+		newState  string
+	}{
+		{"2026-04-11T21:11:45.046448+02:00", session.StateReady, session.StateWorking},
+		{"2026-04-11T21:11:47.76431+02:00", session.StateWorking, session.StateReady},
+		{"2026-04-11T21:11:50.310406+02:00", session.StateReady, session.StateWorking},
+		{"2026-04-11T21:11:50.310406+02:00", session.StateWorking, session.StateReady},
+	}
+	var lifetime2Got []Transition
+	for _, tr := range report.Transitions {
+		if tr.VirtualTime.After(gapEnd) {
+			lifetime2Got = append(lifetime2Got, tr)
+		}
+	}
+	if len(lifetime2Got) != len(lifetime2Want) {
+		t.Fatalf("lifetime 2 transitions: got %d, want %d — %+v",
+			len(lifetime2Got), len(lifetime2Want), lifetime2Got)
+	}
+	for i, w := range lifetime2Want {
+		wantTime := mustParseRFC3339(t, w.ts)
+		got := lifetime2Got[i]
+		if !got.VirtualTime.Equal(wantTime) {
+			t.Errorf("lifetime 2 transition[%d] time: got %s, want %s",
+				i, got.VirtualTime.Format(time.RFC3339Nano),
+				wantTime.Format(time.RFC3339Nano))
+		}
+		if got.PrevState != w.prevState || got.NewState != w.newState {
+			t.Errorf("lifetime 2 transition[%d] states: got %s→%s, want %s→%s",
+				i, got.PrevState, got.NewState, w.prevState, w.newState)
+		}
+	}
+
+	// The 10 recorded transitions must still be seen and the first 10
+	// replayed transitions must ordered-match them by state.
+	check, err := runExtendedCheck(sidecar, report.Transitions)
+	if err != nil {
+		t.Fatalf("runExtendedCheck: %v", err)
+	}
+	if check.RecordedCount != 10 {
+		t.Errorf("recorded transitions: got %d, want 10", check.RecordedCount)
+	}
+	if check.OrderedMatches != 10 {
+		t.Errorf("ordered matches: got %d, want 10", check.OrderedMatches)
+	}
+}
+
+func mustParseRFC3339(t *testing.T, s string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return ts
+}
+
 // TestReplayWithSidecar_NoTranscriptNew verifies that a sidecar with no
 // transcript_new events (and thus no identifiable primary session) errors.
 func TestReplayWithSidecar_NoTranscriptNew(t *testing.T) {
@@ -411,5 +518,58 @@ func TestSessionFilter(t *testing.T) {
 
 	if len(report.Transitions) == 0 {
 		t.Error("expected at least init transition")
+	}
+}
+
+// TestReplayWithSidecar_SessionFilterNoBirthMarker guards against a
+// regression from the #144 fix: when --session targets a session that
+// has fs events but no transcript_new and no session-creation
+// state_transition in the sidecar (e.g. a subagent whose birth marker
+// belongs to the parent), the alive-gate must not silently drop every
+// fs event. Absent any lifecycle-start marker, replay should treat the
+// sidecar as a single open lifetime.
+func TestReplayWithSidecar_SessionFilterNoBirthMarker(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "session.jsonl")
+	sidecar := filepath.Join(dir, "session.events.jsonl")
+
+	transcriptBody := `{"type":"user","timestamp":"2026-04-11T10:00:00Z","message":{"role":"user","content":"hi"}}
+{"type":"assistant","timestamp":"2026-04-11T10:00:01Z","message":{"role":"assistant","content":"hello"}}
+`
+	if err := os.WriteFile(transcript, []byte(transcriptBody), 0644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	// Parent session sess-A has the transcript_new; sess-B (our target)
+	// has only fs events — no birth marker of its own.
+	sidecarBody := `{"seq":1,"ts":"2026-04-11T10:00:00Z","kind":"transcript_new","session_id":"sess-A","adapter":"claude-code"}
+{"seq":2,"ts":"2026-04-11T10:00:00.500Z","kind":"transcript_activity","session_id":"sess-B","file_size":93}
+{"seq":3,"ts":"2026-04-11T10:00:01Z","kind":"transcript_activity","session_id":"sess-B","file_size":192}
+`
+	if err := os.WriteFile(sidecar, []byte(sidecarBody), 0644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+
+	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+		Adapter:            claudecode.AdapterName,
+		SessionFilter:      "sess-B",
+		DebounceWindow:     2 * time.Second,
+		FlickerMaxDuration: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("ReplayWithSidecar with session filter: %v", err)
+	}
+
+	// A ready→working must fire off the first fs event; the alive-gate
+	// would have suppressed it before the fallback.
+	var sawReadyToWorking bool
+	for _, tr := range report.Transitions {
+		if tr.PrevState == session.StateReady && tr.NewState == session.StateWorking {
+			sawReadyToWorking = true
+			break
+		}
+	}
+	if !sawReadyToWorking {
+		t.Errorf("expected ready→working transition; got transitions: %+v", report.Transitions)
 	}
 }
