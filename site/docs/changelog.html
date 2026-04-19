@@ -78,6 +78,38 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.5 <small>(2026-04-19)</small></h2>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>Replay: split sidecar timeline at <code>process_exited</code> boundaries</strong> (#144) &mdash; A <code>/continue</code> session whose ID spans multiple daemon lifetimes no longer shares one debounce state machine across both; a gap fs event at the lifetime boundary no longer drives a ghost lifetime-2 transition</li>
+        <li><strong>macOS: only notify on transitions from <code>working</code></strong> (#161) &mdash; Eliminates the brief waiting&rarr;ready notification noise on some same-turn user-blocking tool flows</li>
+        <li><strong>Detector: synthesize working&rarr;waiting for collapsed user-blocking tools</strong> (#150) &mdash; When fswatcher coalesces <code>tool_use</code> and <code>tool_result</code> into one tailer pass, the brief waiting episode is no longer lost</li>
+        <li><strong>Installer: preserve provenance, register with LaunchServices</strong> (#158) &mdash; Curl-installed app opens cleanly from Finder out of the box</li>
+        <li><strong>Detector: unstick subagents via parent task-notification</strong> (#134) &mdash; Parent's authoritative completion signal unsticks orphaned children deterministically</li>
+        <li><strong>Security: lock down <code>irrlichd</code> network exposure</strong> (#94) &mdash; Daemon binds loopback-only by default</li>
+      </ul>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Curl installer</strong> &mdash; One-liner install via <code>irrlicht.io/install.sh</code>; reruns cleanly remove the previous install first</li>
+        <li><strong>Web: Raw tab in the session inspector</strong> &mdash; Surface the underlying API response for debugging detector behavior</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li>Site: hero spacing tightened and the curl install command moved into the primary CTA slot</li>
+      </ul>
+
+      <h3>Distribution</h3>
+
+      <ul>
+        <li>Skill <code>ir:release</code> now guards against stale Swift binaries and missing SwiftPM resource bundles &mdash; the two regressions that shipped a 10-day-old / crash-at-launch build in v0.3.4 can no longer happen silently</li>
+      </ul>
+
       <h2>v0.3.4 <small>(2026-04-14)</small></h2>
 
       <h3>Added</h3>
