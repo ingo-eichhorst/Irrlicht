@@ -69,38 +69,40 @@ final class GroupViewSnapshotTests: XCTestCase {
         return hosting
     }
 
+    private func seedThreeGroups() -> [SessionManager.AgentGroup] {
+        let groups = [makeGroup(name: "alpha"), makeGroup(name: "beta"), makeGroup(name: "gamma")]
+        sessionManager.apiGroups = groups
+        return groups
+    }
+
     func testFirstOfThree_UpChevronDisabled() {
-        let view = host(GroupView(
-            group: makeGroup(name: "alpha"), depth: 0, groupIndex: 0, totalGroups: 3
-        ))
+        let groups = seedThreeGroups()
+        let view = host(GroupView(group: groups[0]))
         assertSnapshot(of: view, as: .image)
     }
 
     func testMiddleOfThree_BothChevronsEnabled() {
-        let view = host(GroupView(
-            group: makeGroup(name: "beta"), depth: 0, groupIndex: 1, totalGroups: 3
-        ))
+        let groups = seedThreeGroups()
+        let view = host(GroupView(group: groups[1]))
         assertSnapshot(of: view, as: .image)
     }
 
     func testLastOfThree_DownChevronDisabled() {
-        let view = host(GroupView(
-            group: makeGroup(name: "gamma"), depth: 0, groupIndex: 2, totalGroups: 3
-        ))
+        let groups = seedThreeGroups()
+        let view = host(GroupView(group: groups[2]))
         assertSnapshot(of: view, as: .image)
     }
 
     func testSingleGroup_NoChevrons() {
-        let view = host(GroupView(
-            group: makeGroup(name: "solo"), depth: 0, groupIndex: 0, totalGroups: 1
-        ))
+        let solo = makeGroup(name: "solo")
+        sessionManager.apiGroups = [solo]
+        let view = host(GroupView(group: solo))
         assertSnapshot(of: view, as: .image)
     }
 
     func testSubGroup_NoChevrons() {
-        let view = host(GroupView(
-            group: makeGroup(name: "nested"), depth: 1, groupIndex: 0, totalGroups: 3
-        ))
+        _ = seedThreeGroups()
+        let view = host(GroupView(group: makeGroup(name: "nested"), depth: 1))
         assertSnapshot(of: view, as: .image)
     }
 }

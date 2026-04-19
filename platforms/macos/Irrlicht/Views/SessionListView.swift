@@ -89,9 +89,8 @@ struct SessionListView: View {
     private var groupListContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                let groups = sessionManager.apiGroups
-                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                    GroupView(group: group, groupIndex: index, totalGroups: groups.count)
+                ForEach(sessionManager.apiGroups) { group in
+                    GroupView(group: group)
                 }
             }
         }
@@ -493,8 +492,6 @@ struct SubagentRowView: View {
 struct GroupView: View {
     let group: SessionManager.AgentGroup
     var depth: Int = 0
-    var groupIndex: Int = 0
-    var totalGroups: Int = 1
     @EnvironmentObject var sessionManager: SessionManager
     @State private var isExpanded = true
     @AppStorage("projectCostTimeframe") private var costTimeframeRaw: String = CostTimeframe.day.rawValue
@@ -572,12 +569,13 @@ struct GroupView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary.opacity(isTopLevel ? 0.7 : 0.5))
 
-                if isTopLevel && totalGroups > 1 {
+                if isTopLevel, sessionManager.apiGroups.count > 1,
+                   let idx = sessionManager.apiGroups.firstIndex(where: { $0.name == group.name }) {
                     HStack(spacing: 0) {
-                        reorderButton(icon: "chevron.up", disabled: groupIndex == 0) {
+                        reorderButton(icon: "chevron.up", disabled: idx == 0) {
                             sessionManager.moveProjectGroupUp(name: group.name)
                         }
-                        reorderButton(icon: "chevron.down", disabled: groupIndex == totalGroups - 1) {
+                        reorderButton(icon: "chevron.down", disabled: idx == sessionManager.apiGroups.count - 1) {
                             sessionManager.moveProjectGroupDown(name: group.name)
                         }
                     }
