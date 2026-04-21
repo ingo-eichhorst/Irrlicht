@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/capacity"
 )
 
 func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository) {
@@ -309,6 +313,95 @@ func writeCostRow(t *testing.T, costDir, project string, ts int64, sessionID str
 	if _, err := f.WriteString(line); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+}
+
+// TestRunCapacityRefreshLoop_RetriesUntilSuccess verifies that a server
+// failing the first few requests is retried with backoff until it recovers,
+// after which the cache file is written.
+func TestRunCapacityRefreshLoop_RetriesUntilSuccess(t *testing.T) {
+	var hits atomic.Int32
+	const failUntil = 3
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		if n <= failUntil {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"claude-sonnet-4-6": {
+				"max_input_tokens": 200000,
+				"max_output_tokens": 64000,
+				"input_cost_per_token": 0.000003,
+				"output_cost_per_token": 0.000015,
+				"litellm_provider": "anthropic",
+				"mode": "chat"
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	capacity.SetLiteLLMURLForTest(t, srv.URL)
+	t.Setenv("HOME", t.TempDir())
+
+	logger := &capturingLogger{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		runCapacityRefreshLoop(ctx, logger, 5*time.Millisecond, 50*time.Millisecond, time.Hour)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !logger.hasInfo() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !logger.hasInfo() {
+		t.Fatalf("expected success log within 5s; errors=%d", logger.errorCount())
+	}
+	if got := logger.errorCount(); got < failUntil {
+		t.Errorf("expected at least %d error logs before success, got %d", failUntil, got)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("loop did not exit after context cancel")
+	}
+}
+
+type capturingLogger struct {
+	mu     sync.Mutex
+	infos  []string
+	errors []string
+}
+
+func (l *capturingLogger) LogInfo(eventType, sessionID, message string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.infos = append(l.infos, message)
+}
+func (l *capturingLogger) LogError(eventType, sessionID, errorMsg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, errorMsg)
+}
+func (l *capturingLogger) LogProcessingTime(string, string, int64, int, string) {}
+func (l *capturingLogger) Close() error                                         { return nil }
+
+func (l *capturingLogger) hasInfo() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.infos) > 0
+}
+func (l *capturingLogger) errorCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.errors)
 }
 
 // TestGate_UIServed verifies that GET / returns 200 with HTML content.

@@ -12,10 +12,22 @@ import (
 )
 
 const (
-	liteLLMURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-	cacheTTL   = 24 * time.Hour
-	cacheFile  = "model-capacity-cache.json"
+	cacheTTL  = 24 * time.Hour
+	cacheFile = "model-capacity-cache.json"
 )
+
+// liteLLMURL is a var (not const) so tests can redirect fetches to an
+// httptest.Server. Production callers must not mutate it.
+var liteLLMURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+
+// SetLiteLLMURLForTest redirects the LiteLLM fetch URL for the duration of
+// the test, restoring it on cleanup. Exists because cross-package tests
+// (e.g. the irrlichd refresh loop) need to stub the endpoint.
+func SetLiteLLMURLForTest(t interface{ Cleanup(func()) }, url string) {
+	orig := liteLLMURL
+	liteLLMURL = url
+	t.Cleanup(func() { liteLLMURL = orig })
+}
 
 // liteLLMEntry represents a single model entry from LiteLLM's JSON.
 type liteLLMEntry struct {
