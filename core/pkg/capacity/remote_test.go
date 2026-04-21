@@ -2,6 +2,8 @@ package capacity
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -252,6 +254,82 @@ func getViaPath(t *testing.T, cm *CapacityManager) *CapacityManager {
 	cm.lastModified = info.ModTime()
 	cm.mu.Unlock()
 	return cm
+}
+
+// TestFetchAndCacheLiteLLMData_WritesCache verifies the end-to-end fetch +
+// cache-to-disk path against a stubbed LiteLLM endpoint. This is the success
+// leg of the retry loop.
+func TestFetchAndCacheLiteLLMData_WritesCache(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"claude-sonnet-4-6": {
+				"max_input_tokens": 200000,
+				"max_output_tokens": 64000,
+				"input_cost_per_token": 0.000003,
+				"output_cost_per_token": 0.000015,
+				"litellm_provider": "anthropic",
+				"mode": "chat"
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	SetLiteLLMURLForTest(t, srv.URL)
+	withTempHome(t)
+
+	config, err := FetchAndCacheLiteLLMData()
+	if err != nil {
+		t.Fatalf("FetchAndCacheLiteLLMData: %v", err)
+	}
+	if _, ok := config.Models["claude-sonnet-4-6"]; !ok {
+		t.Fatalf("expected claude-sonnet-4-6 in returned config")
+	}
+
+	path, _ := CachePath()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("cache file not written: %v", err)
+	}
+}
+
+// TestLoadCachedRemoteData_OfflineFallback verifies that a previously
+// written cache file is returned by LoadCachedRemoteData — the path the
+// daemon relies on when starting without network connectivity.
+func TestLoadCachedRemoteData_OfflineFallback(t *testing.T) {
+	withTempHome(t)
+
+	path, _ := CachePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cached := cachedCapacity{
+		FetchedAt: time.Now(),
+		Config: CapacityConfig{
+			Models: map[string]ModelCapacity{
+				"claude-sonnet-4-6": {ContextWindow: 200000},
+			},
+		},
+	}
+	data, _ := json.Marshal(cached)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+
+	got := LoadCachedRemoteData()
+	if got == nil {
+		t.Fatal("LoadCachedRemoteData returned nil despite a fresh cache file")
+	}
+	if got.Models["claude-sonnet-4-6"].ContextWindow != 200000 {
+		t.Errorf("cached ContextWindow = %d, want 200000", got.Models["claude-sonnet-4-6"].ContextWindow)
+	}
+}
+
+// withTempHome points os.UserHomeDir() at a tempdir so CachePath() writes
+// are isolated per test.
+func withTempHome(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 }
 
 func TestConcurrentGet_NoPanicUnderConcurrentReload(t *testing.T) {

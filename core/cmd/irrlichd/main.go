@@ -121,24 +121,7 @@ func main() {
 	}
 	logger.LogInfo("startup", "", fmt.Sprintf("max session age: %s", cfg.MaxSessionAge))
 
-	// Background model capacity refresh from LiteLLM.
-	go func() {
-		if n, err := capacity.RefreshRemoteDataIfStale(); err != nil {
-			logger.LogError("capacity", "", fmt.Sprintf("remote refresh failed: %v", err))
-		} else if n > 0 {
-			logger.LogInfo("capacity", "", fmt.Sprintf("cached %d remote models from LiteLLM", n))
-		}
-
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			if n, err := capacity.RefreshRemoteDataIfStale(); err != nil {
-				logger.LogError("capacity", "", fmt.Sprintf("remote refresh failed: %v", err))
-			} else if n > 0 {
-				logger.LogInfo("capacity", "", fmt.Sprintf("cached %d remote models from LiteLLM", n))
-			}
-		}
-	}()
+	go runCapacityRefreshLoop(context.Background(), logger, 30*time.Second, 256*time.Minute, 24*time.Hour)
 
 	// Resolve the gt binary path (GT_BIN env → common paths → which gt).
 	gtResolver := gtbin.New()
@@ -461,6 +444,47 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.LogError("shutdown", "", fmt.Sprintf("graceful shutdown error: %v", err))
+	}
+}
+
+// runCapacityRefreshLoop keeps the LiteLLM model-capacity cache current,
+// retrying failed fetches with exponential backoff so a daemon started
+// offline recovers as soon as connectivity returns (rather than waiting
+// the full successInterval for the next attempt).
+func runCapacityRefreshLoop(ctx context.Context, logger outbound.Logger, initialBackoff, maxBackoff, successInterval time.Duration) {
+	backoff := initialBackoff
+	for {
+		if !capacity.IsCacheStale() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(successInterval):
+			}
+			continue
+		}
+
+		config, err := capacity.FetchAndCacheLiteLLMData()
+		if err != nil {
+			logger.LogError("capacity", "", fmt.Sprintf("remote refresh failed (retry in %s): %v", backoff, err))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+
+		logger.LogInfo("capacity", "", fmt.Sprintf("cached %d remote models from LiteLLM", len(config.Models)))
+		backoff = initialBackoff
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(successInterval):
+		}
 	}
 }
 
