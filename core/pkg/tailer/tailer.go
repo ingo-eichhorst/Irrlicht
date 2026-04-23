@@ -400,8 +400,6 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
 			t.openToolCalls = make(map[string]string)
 		}
-		// Fold task deltas from the parser (Claude Code only — other adapters
-		// emit no TaskDeltas so this loop is a no-op for them).
 		for _, d := range parsed.TaskDeltas {
 			switch d.Op {
 			case "create":
@@ -411,7 +409,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 					Subject:     d.Subject,
 					Description: d.Description,
 					ActiveForm:  d.ActiveForm,
-					Status:      "pending",
+					Status:      TaskStatusPending,
 				})
 			case "update":
 				for i := range t.tasks {

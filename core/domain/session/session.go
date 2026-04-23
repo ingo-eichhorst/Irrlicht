@@ -363,8 +363,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	if merged.CumCacheCreationTokens == 0 && oldM.CumCacheCreationTokens > 0 {
 		merged.CumCacheCreationTokens = oldM.CumCacheCreationTokens
 	}
-	// Preserve tasks from old metrics when new metrics carry none. A non-nil
-	// empty slice from the tailer is a real "no tasks" state and must overwrite.
+	// nil Tasks = "no data yet"; non-nil empty slice = "no tasks" — overwrite only for the latter.
 	if merged.Tasks == nil && oldM.Tasks != nil {
 		merged.Tasks = oldM.Tasks
 	}

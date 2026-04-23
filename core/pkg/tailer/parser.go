@@ -26,6 +26,13 @@ type SubagentCompletion struct {
 	Status    string // <status> — "completed", etc.
 }
 
+// Task status values used in TaskCreate / TaskUpdate tool_use events.
+const (
+	TaskStatusPending    = "pending"
+	TaskStatusInProgress = "in_progress"
+	TaskStatusCompleted  = "completed"
+)
+
 // Task represents a single item in the session's Claude Code task list,
 // accumulated from TaskCreate / TaskUpdate tool_use events in the transcript.
 type Task struct {
@@ -33,7 +40,7 @@ type Task struct {
 	Subject     string `json:"subject"`
 	Description string `json:"description,omitempty"`
 	ActiveForm  string `json:"active_form,omitempty"`
-	Status      string `json:"status"` // "pending" | "in_progress" | "completed"
+	Status      string `json:"status"` // TaskStatusPending | TaskStatusInProgress | TaskStatusCompleted
 }
 
 // TaskDelta is emitted by the Claude Code parser for each TaskCreate or
