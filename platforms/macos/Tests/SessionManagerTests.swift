@@ -310,11 +310,15 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertNil(SessionLauncher.bundleID(for: "unknown-terminal"))
     }
 
-    func testJetBrainsActivatorRunningBundleIDIsNilInCI() {
-        // In CI no JetBrains IDE is running — runningBundleID() must return nil
-        // rather than crash.
+    func testJetBrainsActivatorRunningBundleIDIsNilOrKnown() {
         let bid = JetBrainsActivator.runningBundleID()
-        XCTAssertNil(bid, "expected nil when no JetBrains IDE is running")
+        guard let bid else { return } // no IDE running — nothing to assert
+        let known: Set<String> = [
+            "com.jetbrains.goland", "com.jetbrains.intellij", "com.jetbrains.intellij.ce",
+            "com.jetbrains.pycharm", "com.jetbrains.pycharm.ce", "com.jetbrains.WebStorm",
+            "com.jetbrains.rider", "com.jetbrains.CLion", "com.jetbrains.rustrover",
+        ]
+        XCTAssertTrue(known.contains(bid), "unexpected JetBrains bundle ID: \(bid)")
     }
 
     func testTitleMatchScoreFullCwdDominates() {

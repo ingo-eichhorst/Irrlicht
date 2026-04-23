@@ -84,19 +84,6 @@ final class LauncherHarnessTests: XCTestCase {
         return launched
     }
 
-    /// Reads the frontmost window title of a running app via AX.
-    private func frontmostWindowTitle(bundleID: String) -> String? {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else { return nil }
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
-        var windowsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let windows = windowsRef as? [AXUIElement],
-              let first = windows.first else { return nil }
-        var titleRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(first, kAXTitleAttribute as CFString, &titleRef)
-        return titleRef as? String
-    }
-
     // MARK: - Tests
 
     func testGhosttyActivation() throws {

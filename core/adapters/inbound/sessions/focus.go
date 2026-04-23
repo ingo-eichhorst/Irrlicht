@@ -2,8 +2,10 @@
 package sessions
 
 import (
+	"errors"
 	"net/http"
 
+	services "irrlicht/core/application/services"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -35,7 +37,14 @@ func NewFocusHandler(target FocusTarget, log outbound.Logger) http.HandlerFunc {
 		}
 		if err := target.RequestFocus(sessionID); err != nil {
 			log.LogError("focus", sessionID, err.Error())
-			http.Error(w, err.Error(), http.StatusNotFound)
+			switch {
+			case errors.Is(err, services.ErrSessionNotFound):
+				http.Error(w, err.Error(), http.StatusNotFound)
+			case errors.Is(err, services.ErrNoLauncher):
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			default:
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
 			return
 		}
 		w.WriteHeader(http.StatusOK)

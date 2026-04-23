@@ -53,8 +53,14 @@ struct AXTitleMatchActivator: HostActivator {
             return
         }
         let target = windows[idx]
-        AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+        // Set main first so the subsequent activate() knows which Space to switch to.
         AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+        // Re-activate the app after designating the target window as main. This
+        // triggers a macOS Space switch when the target is a fullscreen window on
+        // another Space — kAXRaiseAction alone does not cross Space boundaries.
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .first?.activate(options: [])
     }
 
     private static func windowTitle(_ window: AXUIElement) -> String {

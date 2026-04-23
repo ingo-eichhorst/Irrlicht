@@ -1,12 +1,12 @@
 package sessions_test
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	sessions "irrlicht/core/adapters/inbound/sessions"
+	services "irrlicht/core/application/services"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -37,13 +37,24 @@ func TestFocusHandler_OK(t *testing.T) {
 }
 
 func TestFocusHandler_NotFound(t *testing.T) {
-	h := sessions.NewFocusHandler(&stubTarget{err: errors.New("session not found")}, stubLogger{})
+	h := sessions.NewFocusHandler(&stubTarget{err: services.ErrSessionNotFound}, stubLogger{})
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/missing/focus", nil)
 	r.SetPathValue("id", "missing")
 	w := httptest.NewRecorder()
 	h(w, r)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("want 404, got %d", w.Code)
+	}
+}
+
+func TestFocusHandler_NoLauncher(t *testing.T) {
+	h := sessions.NewFocusHandler(&stubTarget{err: services.ErrNoLauncher}, stubLogger{})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/abc/focus", nil)
+	r.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("want 422, got %d", w.Code)
 	}
 }
 

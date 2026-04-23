@@ -1,9 +1,16 @@
 package services
 
 import (
-	"fmt"
+	"errors"
 
 	"irrlicht/core/ports/outbound"
+)
+
+// Sentinel errors returned by FocusService.RequestFocus. Callers (e.g. the
+// HTTP handler) use errors.Is to map them to appropriate status codes.
+var (
+	ErrSessionNotFound = errors.New("session not found")
+	ErrNoLauncher      = errors.New("session has no launcher information")
 )
 
 // FocusService handles requests to bring a session's host terminal/IDE window
@@ -28,10 +35,10 @@ func NewFocusService(repo outbound.SessionRepository, push outbound.PushBroadcas
 func (s *FocusService) RequestFocus(sessionID string) error {
 	state, err := s.repo.Load(sessionID)
 	if err != nil {
-		return fmt.Errorf("session not found")
+		return ErrSessionNotFound
 	}
 	if state.Launcher == nil {
-		return fmt.Errorf("session has no launcher information")
+		return ErrNoLauncher
 	}
 	s.push.Broadcast(outbound.PushMessage{
 		Type:    outbound.PushTypeFocusRequested,
