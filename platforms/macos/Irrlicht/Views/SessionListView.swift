@@ -489,22 +489,19 @@ struct SessionRowView: View {
 struct TaskListView: View {
     let tasks: [SessionTask]
 
-    private func dotColor(for task: SessionTask) -> Color {
-        switch task.status {
-        case "completed":   return Color.accentColor.opacity(0.5)
-        case "in_progress": return Color.accentColor
-        default:            return Color.secondary.opacity(0.3)
-        }
-    }
-
     var body: some View {
-        let done = tasks.filter { $0.isCompleted || $0.isInProgress }.count
+        let done = tasks.filter(\.isCompleted).count
         HStack(spacing: 4) {
             ForEach(tasks, id: \.id) { task in
-                Circle()
-                    .fill(dotColor(for: task))
-                    .frame(width: 7, height: 7)
-                    .help(task.displayLabel)
+                Group {
+                    if task.isCompleted {
+                        Circle().fill(Color.green.opacity(0.85))
+                    } else {
+                        Circle().strokeBorder(Color.accentColor, lineWidth: 1.5)
+                    }
+                }
+                .frame(width: 7, height: 7)
+                .help(task.displayLabel)
             }
             Text("\(done) / \(tasks.count)")
                 .font(.system(size: 9))

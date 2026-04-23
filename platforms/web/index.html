@@ -500,9 +500,9 @@
       flex-shrink: 0;
       cursor: default;
     }
-    .task-dot.task-pending    { background: rgba(128,128,128,0.3); }
-    .task-dot.task-in_progress { background: var(--working); }
-    .task-dot.task-completed  { background: rgba(139,92,246,0.45); }
+    .task-dot.task-pending    { background: transparent; border: 1.5px solid var(--working); }
+    .task-dot.task-in_progress { background: transparent; border: 1.5px solid var(--working); }
+    .task-dot.task-completed  { background: var(--ready); border: 1.5px solid var(--ready); }
     .row-task-count {
       font-size: 9px;
       color: var(--text-secondary);
