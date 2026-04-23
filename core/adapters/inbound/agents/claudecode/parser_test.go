@@ -263,6 +263,83 @@ func TestParser_AssistantText(t *testing.T) {
 	}
 }
 
+func TestParser_AskUserQuestion_FallsBackWhenNoText(t *testing.T) {
+	// Assistant message with only a tool_use block for AskUserQuestion and no
+	// text block: parser should fall back to questions[0].question so the
+	// waiting-state UI has something to display.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role":        "assistant",
+			"stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type": "tool_use",
+					"id":   "tu_1",
+					"name": "AskUserQuestion",
+					"input": map[string]interface{}{
+						"questions": []interface{}{
+							map[string]interface{}{"question": "Proceed?"},
+						},
+					},
+				},
+			},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.AssistantText != "Proceed?" {
+		t.Errorf("AssistantText = %q, want %q", ev.AssistantText, "Proceed?")
+	}
+}
+
+func TestParser_AskUserQuestion_LongQuestionStoresTail(t *testing.T) {
+	// 250-rune question exceeds the 200-rune cap. Fallback must keep the tail
+	// (so the '?' at the end survives) with a leading ellipsis.
+	longQ := ""
+	for i := 0; i < 249; i++ {
+		longQ += "x"
+	}
+	longQ += "?"
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role":        "assistant",
+			"stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type": "tool_use",
+					"name": "AskUserQuestion",
+					"input": map[string]interface{}{
+						"questions": []interface{}{
+							map[string]interface{}{"question": longQ},
+						},
+					},
+				},
+			},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	got := ev.AssistantText
+	runes := []rune(got)
+	if len(runes) == 0 || runes[0] != '…' {
+		t.Errorf("AssistantText should start with '…', got %q", got)
+	}
+	if len(runes) > 201 {
+		t.Errorf("AssistantText too long: %d runes (want ≤201)", len(runes))
+	}
+	if runes[len(runes)-1] != '?' {
+		t.Errorf("AssistantText should end with '?' (tail-preserving), got last rune %q", string(runes[len(runes)-1]))
+	}
+}
+
 func TestParser_AssistantStreaming_ThinkingBlock(t *testing.T) {
 	// Thinking blocks are always intermediate regardless of ID.
 	p := &Parser{}

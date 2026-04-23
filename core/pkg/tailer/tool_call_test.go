@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
 )
 
@@ -634,6 +635,76 @@ func TestLastAssistantText_ClearedOnUserMessage(t *testing.T) {
 	}
 	if m.LastAssistantText != "Done." {
 		t.Errorf("LastAssistantText = %q, want 'Done.' (previous question should be cleared)", m.LastAssistantText)
+	}
+}
+
+// --- ExtractAssistantText tail-storage tests ---
+
+func TestExtractAssistantText_LongText_StoredAsTail(t *testing.T) {
+	// 300-rune text: first 100 are 'A', last 200 are 'B…B?'
+	// After the change, only the last 200 runes are kept (prefixed with "…").
+	prefix := strings.Repeat("A", 100)
+	suffix := strings.Repeat("B", 199) + "?"
+	longText := prefix + suffix // 300 runes total
+	raw := map[string]interface{}{
+		"message": map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": longText},
+			},
+		},
+	}
+	got := ExtractAssistantText(raw)
+	if !strings.HasPrefix(got, "…") {
+		t.Errorf("expected leading '…', got %q", got[:min(10, len(got))])
+	}
+	if !strings.HasSuffix(got, "?") {
+		t.Errorf("expected trailing '?', got suffix %q", got[max(0, len(got)-5):])
+	}
+	if strings.ContainsRune(got, 'A') {
+		t.Errorf("expected head (all-A prefix) to be cut, but 'A' found in %q", got[:min(30, len(got))])
+	}
+}
+
+func TestExtractAssistantText_ShortText_NoEllipsis(t *testing.T) {
+	raw := map[string]interface{}{
+		"message": map[string]interface{}{
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "Should I proceed?"},
+			},
+		},
+	}
+	got := ExtractAssistantText(raw)
+	if got != "Should I proceed?" {
+		t.Errorf("got %q, want exact text unchanged", got)
+	}
+}
+
+func TestLastAssistantText_LongQuestion_TailDetectedAsWaiting(t *testing.T) {
+	// 251-rune question: exceeds 200-rune limit, but ends with '?'.
+	// The tail-storage fix ensures IsWaitingForUserInput() sees the '?'.
+	longQuestion := strings.Repeat("x", 250) + "?"
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{"type": "assistant", "timestamp": ts(1), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": "end_turn",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": longQuestion},
+			},
+		}},
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(2)},
+	})
+	m, err := newTestTailer(path).TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(m.LastAssistantText, "?") {
+		t.Errorf("LastAssistantText %q does not end with '?'", m.LastAssistantText)
+	}
+	// Downstream state classification reads LastAssistantText via the domain
+	// helper; verify the tail-storage fix still trips waiting detection.
+	dm := &session.SessionMetrics{LastAssistantText: m.LastAssistantText}
+	if !dm.IsWaitingForUserInput() {
+		t.Error("IsWaitingForUserInput() = false, want true for long question ending with '?'")
 	}
 }
 

@@ -170,6 +170,37 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertTrue(s.contains("1"), "timeAgo = \(s), expected to contain '1'")
     }
     
+    // MARK: - SessionMetrics.formattedCost
+
+    private func makeMetrics(cost: Double?) -> SessionMetrics {
+        SessionMetrics(
+            elapsedSeconds: 0,
+            totalTokens: 0,
+            modelName: "",
+            contextWindow: nil,
+            contextUtilization: 0,
+            pressureLevel: "unknown",
+            estimatedCostUSD: cost,
+            lastAssistantText: nil,
+            tasks: nil
+        )
+    }
+
+    func testFormattedCost_AlwaysTwoDecimalsAboveOneDollar() {
+        // Regression: old code switched to "$%.0f" for cost >= $10, hiding the
+        // cents. Now every non-trivial cost uses two decimals.
+        XCTAssertEqual(makeMetrics(cost: 12.5).formattedCost, "$12.50")
+        XCTAssertEqual(makeMetrics(cost: 105.0).formattedCost, "$105.00")
+        XCTAssertEqual(makeMetrics(cost: 9.99).formattedCost, "$9.99")
+    }
+
+    func testFormattedCost_SmallAndZero() {
+        XCTAssertNil(makeMetrics(cost: nil).formattedCost)
+        XCTAssertNil(makeMetrics(cost: 0).formattedCost)
+        XCTAssertEqual(makeMetrics(cost: 0.005).formattedCost, "<$0.01")
+        XCTAssertEqual(makeMetrics(cost: 0.01).formattedCost, "$0.01")
+    }
+
     // MARK: - Session Manager Tests
     
     func testEmptyGlyphStrip() {

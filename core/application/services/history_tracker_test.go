@@ -1,6 +1,8 @@
 package services
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -124,6 +126,94 @@ func TestHistoryTracker_GranularityVariants(t *testing.T) {
 			t.Errorf("granularity %d: got %q, want waiting", g, snap[len(snap)-1])
 		}
 	}
+}
+
+func TestHistoryTracker_SaveLoadRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	ht := NewHistoryTrackerWithDir(dir)
+	sid := "round-trip"
+
+	// Seal three 1s buckets: ready, working, waiting.
+	for _, s := range []string{"ready", "working", "waiting"} {
+		ht.OnTransition(sid, s, epoch)
+		ht.tick()
+	}
+
+	ht.save()
+
+	// history.json exists on disk.
+	if _, err := os.Stat(filepath.Join(dir, "history.json")); err != nil {
+		t.Fatalf("history.json not written: %v", err)
+	}
+
+	// Fresh tracker pointed at same dir reconstructs identical 1s snapshot.
+	ht2 := NewHistoryTrackerWithDir(dir)
+	ht2.Load()
+
+	snap, ok := ht2.Snapshot(sid, 1)
+	if !ok {
+		t.Fatal("snapshot missing after Load")
+	}
+	// Each transition+tick seals one bucket, then a trailing carry-forward
+	// bucket is opened — same shape as TestHistoryTracker_SnapshotOldestNewest.
+	want := []string{"ready", "working", "waiting"}
+	if len(snap) < len(want) {
+		t.Fatalf("len(snap) = %d, want ≥%d (%v)", len(snap), len(want), snap)
+	}
+	for i, w := range want {
+		if snap[i] != w {
+			t.Errorf("snap[%d] = %q, want %q", i, snap[i], w)
+		}
+	}
+
+	// Every granularity that had data must also round-trip.
+	for _, g := range []int{10, 60} {
+		if _, ok := ht2.Snapshot(sid, g); !ok {
+			t.Errorf("granularity %d: snapshot missing after Load", g)
+		}
+	}
+}
+
+func TestHistoryTracker_LoadMissingFile(t *testing.T) {
+	// Empty dir — Load is silent, tracker stays empty.
+	ht := NewHistoryTrackerWithDir(t.TempDir())
+	ht.Load()
+	if _, ok := ht.Snapshot("any", 1); ok {
+		t.Error("snapshot should not exist for unseen session")
+	}
+}
+
+func TestHistoryTracker_LoadCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte("not-json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ht := NewHistoryTrackerWithDir(dir)
+	ht.Load() // must not panic
+	if _, ok := ht.Snapshot("any", 1); ok {
+		t.Error("corrupt file should yield empty tracker")
+	}
+}
+
+func TestHistoryTracker_LoadVersionMismatch(t *testing.T) {
+	dir := t.TempDir()
+	// Valid JSON, but schema version we don't support.
+	payload := `{"version":2,"sessions":{"s":{"1":["working"]}}}`
+	if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ht := NewHistoryTrackerWithDir(dir)
+	ht.Load()
+	if _, ok := ht.Snapshot("s", 1); ok {
+		t.Error("v2 file should be ignored, not imported")
+	}
+}
+
+func TestHistoryTracker_NoSaveWithoutDir(t *testing.T) {
+	// Baseline tracker has no saveDir — save() is a silent no-op.
+	ht := NewHistoryTracker()
+	ht.OnTransition("s", "working", epoch)
+	ht.save() // must not panic, must not create any file
 }
 
 func TestValidGranularity(t *testing.T) {
