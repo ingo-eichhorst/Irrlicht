@@ -322,6 +322,8 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		t.pendingSnapshot = nil
 		t.cumByModel = make(map[string]*UsageBreakdown)
 		t.cumProviderCostUSD = 0
+		t.tasks = nil
+		t.taskSeq = 0
 	case t.lastOffset > 0:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
