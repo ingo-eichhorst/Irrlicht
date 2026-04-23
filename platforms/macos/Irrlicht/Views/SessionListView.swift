@@ -481,7 +481,7 @@ struct TaskListView: View {
                     }
                 }
                 .frame(width: 7, height: 7)
-                .help(task.displayLabel)
+                .tooltip(task.displayLabel)
             }
             Text("\(done) / \(tasks.count)")
                 .font(.system(size: 9))
