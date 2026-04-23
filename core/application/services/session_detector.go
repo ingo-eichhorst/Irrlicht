@@ -75,7 +75,8 @@ type SessionDetector struct {
 
 	enricher    *MetadataEnricher
 	pidMgr      *PIDManager
-	costTracker outbound.CostTracker // optional; nil = disabled
+	costTracker    outbound.CostTracker    // optional; nil = disabled
+	historyTracker outbound.HistoryTracker // optional; nil = disabled
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
 	mu              sync.Mutex
@@ -179,6 +180,12 @@ func (d *SessionDetector) SetCostTracker(c outbound.CostTracker) {
 	d.costTracker = c
 }
 
+// SetHistoryTracker wires an optional HistoryTracker that records per-session
+// state-transition timelines in memory. Pass nil to disable.
+func (d *SessionDetector) SetHistoryTracker(h outbound.HistoryTracker) {
+	d.historyTracker = h
+}
+
 // SetLauncherEnvReader installs a reader that captures terminal/IDE identity
 // from a session's PID when the PID is first assigned.
 func (d *SessionDetector) SetLauncherEnvReader(fn LauncherEnvReader) {
@@ -199,6 +206,13 @@ func (d *SessionDetector) recordCost(state *session.SessionState) {
 // record emits a lifecycle event if recording is enabled. It assigns a
 // monotonic sequence number and fills in the timestamp if missing.
 func (d *SessionDetector) record(ev lifecycle.Event) {
+	if ev.Kind == lifecycle.KindStateTransition && ev.NewState != "" && d.historyTracker != nil {
+		ts := ev.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		d.historyTracker.OnTransition(ev.SessionID, ev.NewState, ts)
+	}
 	if d.recorder == nil {
 		return
 	}
@@ -735,6 +749,10 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	}
 
 	d.broadcast(outbound.PushTypeUpdated, state)
+
+	if d.historyTracker != nil {
+		d.historyTracker.Remove(ev.SessionID)
+	}
 }
 
 // HandleProcessExit deletes a session when its process exits.
@@ -871,6 +889,9 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	delete(d.projectSessions, sessionID)
 	d.deletedSessions[sessionID] = time.Now().Unix()
 	d.mu.Unlock()
+	if d.historyTracker != nil {
+		d.historyTracker.Remove(sessionID)
+	}
 }
 
 // broadcast sends a push notification if a broadcaster is configured. For
