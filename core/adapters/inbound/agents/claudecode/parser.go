@@ -18,13 +18,12 @@ const eventTypeAssistantStreaming = "assistant_streaming"
 // The parser is stateful: it tracks the last requestId to deduplicate streaming
 // events within one API turn and expose the pending contribution to the tailer.
 type Parser struct {
-	lastAssistantMsgID string
 	// Cost deduplication state: Claude Code emits multiple streaming events with
 	// the same requestId per turn (partial output, then final with full tokens).
 	// We keep the latest usage for the current requestId as pendingContrib;
 	// when the requestId changes we emit it as a completed Contribution.
-	lastRequestID   string
-	pendingContrib  *tailer.PerTurnContribution
+	lastRequestID  string
+	pendingContrib *tailer.PerTurnContribution
 }
 
 // ParseLine parses a Claude Code JSONL line into a normalized ParsedEvent.
@@ -206,17 +205,12 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	if eventType == "assistant" {
 		if msg, ok := raw["message"].(map[string]interface{}); ok {
 			stopReason, _ := msg["stop_reason"].(string)
-			msgID, _ := msg["id"].(string)
 
 			switch stopReason {
 			case "end_turn", "stop_sequence", "refusal", "tool_use":
 				// Terminal for this message — keep eventType as "assistant".
 			default:
 				eventType = eventTypeAssistantStreaming
-			}
-
-			if msgID != "" {
-				p.lastAssistantMsgID = msgID
 			}
 		}
 	}
@@ -382,8 +376,11 @@ func extractAnthropicUsageBreakdown(raw map[string]interface{}) tailer.UsageBrea
 		bd.CacheRead = int64(v)
 	}
 
-	// Anthropic ephemeral cache writes: prefer nested sub-rates when present.
-	// Fallback: treat the flat cache_creation_input_tokens as 5m writes.
+	// Anthropic ephemeral cache writes come in two formats:
+	//   New: usage.cache_creation.ephemeral_5m_input_tokens / ephemeral_1h_input_tokens
+	//   Old: usage.cache_creation_input_tokens (flat, treated as 5m)
+	// The nested path wins when present; the flat fallback only fires when both
+	// nested buckets are absent, so there is no double-counting.
 	if cc, ok := usage["cache_creation"].(map[string]interface{}); ok {
 		if v, ok := cc["ephemeral_5m_input_tokens"].(float64); ok {
 			bd.CacheCreation5m = int64(v)

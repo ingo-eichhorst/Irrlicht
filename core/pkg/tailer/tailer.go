@@ -221,7 +221,16 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		CumProviderCostUSD: t.cumProviderCostUSD,
 	}
 	if len(t.cumByModel) > 0 {
-		s.CumByModel = t.cumByModel
+		// Deep-copy so the returned state is not aliased to the live map.
+		// The caller (metrics adapter) serialises this to JSON immediately,
+		// but a defensive copy ensures correctness if the pattern ever changes.
+		s.CumByModel = make(map[string]*UsageBreakdown, len(t.cumByModel))
+		for k, v := range t.cumByModel {
+			if v != nil {
+				copied := *v
+				s.CumByModel[k] = &copied
+			}
+		}
 	}
 	if pp, ok := t.parser.(ParserStateProvider); ok {
 		pl := pp.GetParserLedger()
@@ -263,7 +272,8 @@ func (t *TranscriptTailer) SetSessionStartTime(startTime time.Time) {
 	}
 }
 
-// TailAndProcess reads the last ~64KB of transcript and processes new entries
+// TailAndProcess reads new transcript content from the last offset (or from the
+// beginning on first open) and processes each JSONL line via the parser.
 func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	file, err := os.Open(t.path)
 	if err != nil {
