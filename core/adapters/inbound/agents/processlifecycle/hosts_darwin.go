@@ -28,6 +28,25 @@ var termProgramByAppName = map[string]string{
 	"WezTerm":            "WezTerm",
 	"Hyper":              "Hyper",
 	"Warp":               "Warp",
+	// JetBrains IDEs — all embed JediTerm; shared Swift activator fans out to
+	// whichever IDE bundle is currently running.
+	"GoLand":           "jetbrains",
+	"IntelliJ IDEA":    "jetbrains",
+	"IntelliJ IDEA CE": "jetbrains",
+	"PyCharm":          "jetbrains",
+	"PyCharm CE":       "jetbrains",
+	"WebStorm":         "jetbrains",
+	"Rider":            "jetbrains",
+	"CLion":            "jetbrains",
+	"RustRover":        "jetbrains",
+	"Zed":       "zed",
+	"kitty":     "kitty",
+	"Rio":       "rio",
+	"Tabby":     "tabby",
+	"Wave":      "waveterm",
+	"Alacritty": "alacritty",
+	"Nova":      "nova",
+	"cmux":      "cmux",
 }
 
 // termProgramForAppPath extracts the host app's canonical TERM_PROGRAM

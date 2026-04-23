@@ -30,6 +30,14 @@ let package = Package(
                 .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
             ],
             path: "Tests"
+        ),
+        // Integration test harness that launches real apps and verifies focus.
+        // All tests gate on TEST_HARNESS=1 — they are skipped in CI (no display).
+        // Run manually with: TEST_HARNESS=1 swift test --filter LauncherTestHarness
+        .testTarget(
+            name: "LauncherTestHarness",
+            dependencies: ["Irrlicht"],
+            path: "TestsHarness"
         )
     ]
 )

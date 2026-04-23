@@ -34,7 +34,7 @@ struct AXTitleMatchActivator: HostActivator {
 
     // MARK: - AX window selection
 
-    private static func raiseMatchingWindow(bundleID: String, cwd: String) {
+    static func raiseMatchingWindow(bundleID: String, cwd: String) {
         guard AccessibilityPermission.ensureTrusted() else {
             logger.info("AX permission not granted — staying on app-level activation")
             return
@@ -53,8 +53,14 @@ struct AXTitleMatchActivator: HostActivator {
             return
         }
         let target = windows[idx]
-        AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+        // Set main first so the subsequent activate() knows which Space to switch to.
         AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+        // Re-activate the app after designating the target window as main. This
+        // triggers a macOS Space switch when the target is a fullscreen window on
+        // another Space — kAXRaiseAction alone does not cross Space boundaries.
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .first?.activate(options: [])
     }
 
     private static func windowTitle(_ window: AXUIElement) -> String {
@@ -70,6 +76,10 @@ struct AXTitleMatchActivator: HostActivator {
     private static let genericTopSegments: Set<String> = [
         "Users", "home", "tmp", "var", "private", "opt", "mnt", "root"
     ]
+    private static let homeBasename: String = {
+        (ProcessInfo.processInfo.environment["HOME"] ?? "")
+            .split(separator: "/").last.map(String.init) ?? ""
+    }()
 
     /// Scores a window title against a cwd. Higher score = better match.
     /// Returns 0 when the title shares no meaningful path segment with cwd.
@@ -94,9 +104,6 @@ struct AXTitleMatchActivator: HostActivator {
         let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
         let parts = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
-        let homeBasename = (ProcessInfo.processInfo.environment["HOME"] ?? "")
-            .split(separator: "/").last.map(String.init) ?? ""
-
         for i in (0..<parts.count).reversed() {
             let p = parts[i]
             if p.isEmpty { continue }
@@ -108,17 +115,41 @@ struct AXTitleMatchActivator: HostActivator {
     }
 
     /// Index of the highest-scoring title, or nil when all scores are 0.
-    /// Ties break by first occurrence (AX returns windows in z-order; the
-    /// topmost matching window wins).
+    ///
+    /// Primary sort: `titleMatchScore` (higher is better). Tie-break: count of
+    /// meaningful CWD path segments that appear in the title — handles the case
+    /// where two windows share the same leaf folder name (e.g. two repos both
+    /// called `irrlicht`) and one of them also contains the grandparent segment
+    /// (e.g. `a/irrlicht` vs `b/irrlicht`). AX returns windows in z-order, so
+    /// first occurrence wins within the same (score, prefixLen) bucket.
     static func bestMatchIndex(titles: [String], cwd: String) -> Int? {
-        var best: (idx: Int, score: Int)?
+        var best: (idx: Int, score: Int, prefixLen: Int)?
         for (i, t) in titles.enumerated() {
             let s = titleMatchScore(title: t, cwd: cwd)
             if s == 0 { continue }
-            if best == nil || s > best!.score {
-                best = (i, s)
+            let p = cwdSegmentMatchCount(title: t, cwd: cwd)
+            if best == nil || s > best!.score || (s == best!.score && p > best!.prefixLen) {
+                best = (i, s, p)
             }
         }
         return best?.idx
+    }
+
+    /// Counts how many non-generic CWD path segments appear anywhere in the
+    /// title. Used as a tie-breaker when two titles share the same primary
+    /// score — a title mentioning both `irrlicht` and `a` beats one that
+    /// mentions only `irrlicht`.
+    static func cwdSegmentMatchCount(title: String, cwd: String) -> Int {
+        if title.isEmpty || cwd.isEmpty { return 0 }
+        let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
+        let segments = trimmed
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+            .filter { p in
+                !p.isEmpty &&
+                !genericTopSegments.contains(p) &&
+                (homeBasename.isEmpty || p != homeBasename)
+            }
+        return segments.filter { title.contains($0) }.count
     }
 }
