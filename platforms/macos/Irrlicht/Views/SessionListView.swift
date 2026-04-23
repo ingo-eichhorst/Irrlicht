@@ -465,13 +465,55 @@ struct SessionRowView: View {
 
 // MARK: - Task Progress
 
-/// Compact dot-progress row: one circle per task (filled = done/active, empty = pending) + "4 / 6" count.
+/// Wraps children left-to-right, starting a new row when the available width is exhausted.
+private struct FlowLayout: Layout {
+    var hSpacing: CGFloat = 4
+    var vSpacing: CGFloat = 3
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth && x > 0 {
+                y += rowHeight + vSpacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + hSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: maxWidth, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX && x > bounds.minX {
+                y += rowHeight + vSpacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            sub.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += size.width + hSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+/// Compact dot-progress row: one circle per task (filled = done, empty = pending) + "4 / 6" count.
+/// Dots wrap to the next line when the row is full.
 struct TaskListView: View {
     let tasks: [SessionTask]
 
     var body: some View {
         let done = tasks.filter(\.isCompleted).count
-        HStack(spacing: 4) {
+        FlowLayout(hSpacing: 4, vSpacing: 3) {
             ForEach(tasks, id: \.id) { task in
                 Group {
                     if task.isCompleted {
