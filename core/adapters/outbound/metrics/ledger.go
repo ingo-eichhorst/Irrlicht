@@ -11,7 +11,7 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
-const ledgerSchemaVersion = 1
+const ledgerSchemaVersion = 2 // bumped to force re-scan for task support
 
 var ledgerDirOnce sync.Once
 

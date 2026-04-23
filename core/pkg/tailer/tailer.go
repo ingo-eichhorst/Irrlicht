@@ -227,7 +227,7 @@ func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *
 // can be persisted to disk and rehydrated after a daemon restart.
 func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s := LedgerState{
-		SchemaVersion:      1,
+		SchemaVersion:      2,
 		LastOffset:         t.lastOffset,
 		CumProviderCostUSD: t.cumProviderCostUSD,
 	}
