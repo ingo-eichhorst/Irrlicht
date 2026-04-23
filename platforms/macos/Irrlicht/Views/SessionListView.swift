@@ -477,7 +477,7 @@ struct TaskListView: View {
                     if task.isCompleted {
                         Circle().fill(Color.green.opacity(0.85))
                     } else {
-                        Circle().strokeBorder(Color.accentColor, lineWidth: 1.5)
+                        Circle().strokeBorder(Color(hex: "#8B5CF6"), lineWidth: 1.5)
                     }
                 }
                 .frame(width: 7, height: 7)
