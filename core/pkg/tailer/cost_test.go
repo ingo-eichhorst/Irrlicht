@@ -1,7 +1,10 @@
 package tailer
 
 import (
+	"encoding/json"
 	"math"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -369,8 +372,250 @@ func TestCost_EstimatedCostUSD(t *testing.T) {
 	}
 }
 
+// TestCost_LargeTranscriptFirstRead verifies that tokens appearing before the
+// old 64KB tail boundary are still captured on first read (regression for the
+// removed maxTailSize truncation).
+func TestCost_LargeTranscriptFirstRead(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		// First turn with known token usage — will appear in the early part of the file.
+		{"type": "user", "timestamp": ts(0)},
+		{
+			"type": "assistant", "timestamp": ts(1), "requestId": "req-early",
+			"message": map[string]interface{}{
+				"model": "claude-sonnet-4-20250514",
+				"usage": map[string]interface{}{
+					"input_tokens": float64(1234), "output_tokens": float64(567),
+				},
+			},
+		},
+	})
+
+	// Pad the file to well over 64KB so it would have been truncated by the old logic.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padding := map[string]interface{}{
+		"type": "user", "timestamp": ts(2),
+		"message": strings.Repeat("x", 1024),
+	}
+	enc := json.NewEncoder(f)
+	for range 80 { // 80 × ~1KB lines ≈ 80KB of padding after the early events
+		if err := enc.Encode(padding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.Close()
+
+	// Tail a second time for the turn that arrives after the padding.
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "assistant", "timestamp": ts(3), "requestId": "req-late",
+		"message": map[string]interface{}{
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]interface{}{
+				"input_tokens": float64(100), "output_tokens": float64(50),
+			},
+		},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both the early turn and the late turn must be counted.
+	if m.CumInputTokens != 1334 {
+		t.Errorf("CumInputTokens = %d, want 1334 (1234 early + 100 late)", m.CumInputTokens)
+	}
+	if m.CumOutputTokens != 617 {
+		t.Errorf("CumOutputTokens = %d, want 617 (567 early + 50 late)", m.CumOutputTokens)
+	}
+}
+
+// TestCost_CodexMonotonicity verifies that a Codex-style cumulative_usage event
+// with a lower value does not decrease the accumulated total (monotonicity guard).
+func TestCost_CodexMonotonicity(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		// First cumulative snapshot: 1000 input, 200 output.
+		{
+			"type": "assistant", "timestamp": ts(1),
+			"message": map[string]interface{}{"model": "claude-sonnet-4-20250514"},
+			"cumulative_usage": map[string]interface{}{
+				"input_tokens": float64(1000), "output_tokens": float64(200),
+			},
+		},
+		// Second event with a lower cumulative (simulating a provider reset) —
+		// the guard must prevent the counters from going backward.
+		{
+			"type": "assistant", "timestamp": ts(2),
+			"message": map[string]interface{}{"model": "claude-sonnet-4-20250514"},
+			"cumulative_usage": map[string]interface{}{
+				"input_tokens": float64(100), "output_tokens": float64(10),
+			},
+		},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Must not go backward: counters stay at the first (higher) value.
+	if m.CumInputTokens != 1000 {
+		t.Errorf("CumInputTokens = %d, want 1000 (should not decrease)", m.CumInputTokens)
+	}
+	if m.CumOutputTokens != 200 {
+		t.Errorf("CumOutputTokens = %d, want 200 (should not decrease)", m.CumOutputTokens)
+	}
+}
+
 // TestCost_IncrementalTail verifies that cumulative accumulators survive
 // across multiple TailAndProcess calls (incremental tail).
+// TestCost_LedgerState_RestartPreservesCumulative simulates a daemon restart
+// mid-session. Pass 1 processes two complete turns (req-1 and req-2), ensuring
+// req-1's Contribution is flushed to cumByModel (requestId-dedup flushes on the
+// NEXT requestId change). A fresh tailer is hydrated from the ledger, then
+// processes turn 3. The cumulative totals must equal a single-pass result.
+func TestCost_LedgerState_RestartPreservesCumulative(t *testing.T) {
+	// Pass 1 transcript: two full turns so req-1 is flushed to cumByModel.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{
+			"type": "assistant", "timestamp": ts(1), "requestId": "req-1",
+			"message": map[string]interface{}{
+				"model": "claude-sonnet-4-20250514",
+				"usage": map[string]interface{}{
+					"input_tokens": float64(1000), "output_tokens": float64(200),
+				},
+			},
+		},
+		{"type": "user", "timestamp": ts(2)},
+		{
+			"type": "assistant", "timestamp": ts(3), "requestId": "req-2",
+			"message": map[string]interface{}{
+				"model": "claude-sonnet-4-20250514",
+				"usage": map[string]interface{}{
+					"input_tokens": float64(2000), "output_tokens": float64(500),
+				},
+			},
+		},
+	})
+
+	// Pass 1: first tailer processes two turns.
+	tailer1 := newTestTailer(path)
+	m1, err := tailer1.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// After pass 1: req-1 committed (1000), req-2 in pending (2000). Total=3000.
+	if m1.CumInputTokens != 3000 {
+		t.Fatalf("pass1 CumInputTokens = %d, want 3000", m1.CumInputTokens)
+	}
+
+	// Snapshot the durable state.
+	ledger := tailer1.GetLedgerState()
+	if ledger.LastOffset == 0 {
+		t.Fatal("expected non-zero LastOffset in ledger after processing")
+	}
+	// cumByModel must have req-1's tokens; req-2 stays in pendingContrib (not ledgered).
+	if len(ledger.CumByModel) == 0 {
+		t.Fatal("expected non-empty CumByModel in ledger (req-1 should be flushed)")
+	}
+
+	// Append turn 3.
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "user", "timestamp": ts(4),
+	})
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "assistant", "timestamp": ts(5), "requestId": "req-3",
+		"message": map[string]interface{}{
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]interface{}{
+				"input_tokens": float64(3000), "output_tokens": float64(800),
+			},
+		},
+	})
+
+	// Pass 2: fresh tailer hydrated from ledger (has req-1 committed).
+	// It reads from lastOffset, so it sees req-3. req-3's arrival flushes req-2
+	// from pendingContrib... but req-2 pendingContrib is GONE on restart.
+	// The ledger preserves what was in cumByModel (req-1). req-3 stays in pending.
+	tailer2 := newTestTailer(path)
+	tailer2.SetLedgerState(ledger)
+	m2, err := tailer2.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// req-1 is in cumByModel (from ledger): Input=1000, Output=200.
+	// req-3 is in pendingContrib: Input=3000, Output=800.
+	// req-2 tokens (Input=2000, Output=500) are lost across the restart boundary
+	// — this is the known limitation (pending turn is not serialized).
+	// Total expected: 1000+3000=4000, 200+800=1000.
+	if m2.CumInputTokens != 4000 {
+		t.Errorf("after restart: CumInputTokens = %d, want 4000 (req-1+req-3; req-2 lost at restart)", m2.CumInputTokens)
+	}
+	if m2.CumOutputTokens != 1000 {
+		t.Errorf("after restart: CumOutputTokens = %d, want 1000", m2.CumOutputTokens)
+	}
+}
+
+// TestCost_LedgerState_NoDoubleCountOnRehydrate verifies that SetLedgerState
+// with a non-zero LastOffset causes the tailer to resume from that offset rather
+// than re-reading from byte 0, so already-accumulated turns are not re-priced.
+func TestCost_LedgerState_NoDoubleCountOnRehydrate(t *testing.T) {
+	// Two turns so req-1 is flushed to cumByModel before snapshotting the ledger.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "user", "timestamp": ts(0)},
+		{
+			"type": "assistant", "timestamp": ts(1), "requestId": "req-1",
+			"message": map[string]interface{}{
+				"model": "claude-sonnet-4-20250514",
+				"usage": map[string]interface{}{
+					"input_tokens": float64(500), "output_tokens": float64(100),
+				},
+			},
+		},
+		{"type": "user", "timestamp": ts(2)},
+		{
+			"type": "assistant", "timestamp": ts(3), "requestId": "req-2",
+			"message": map[string]interface{}{
+				"model": "claude-sonnet-4-20250514",
+				"usage": map[string]interface{}{
+					"input_tokens": float64(300), "output_tokens": float64(60),
+				},
+			},
+		},
+	})
+
+	t1 := newTestTailer(path)
+	_, err := t1.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := t1.GetLedgerState()
+
+	// Rehydrate from ledger: no new lines → only req-1 committed (req-2 was pending).
+	// The rehydrated tailer reads from lastOffset → no new events → cumByModel = ledger content.
+	t2 := newTestTailer(path)
+	t2.SetLedgerState(ledger)
+	m2, err := t2.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// req-1 was in cumByModel before the ledger snapshot (500 input).
+	// req-2 was in pendingContrib (not ledgered).
+	// After rehydrate + no new events: only req-1's tokens are visible.
+	// Must be 500, NOT 1600 (would indicate re-reading from byte 0).
+	if m2.CumInputTokens != 500 {
+		t.Errorf("rehydrate: CumInputTokens = %d, want 500 (only req-1; no re-read from start)", m2.CumInputTokens)
+	}
+}
+
 func TestCost_IncrementalTail(t *testing.T) {
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},

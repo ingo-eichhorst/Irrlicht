@@ -63,24 +63,54 @@ type ParsedEvent struct {
 	SubagentCompletions []SubagentCompletion
 
 	// Metadata extracted by the parser.
-	ModelName        string
-	ContextWindow    int64
-	Tokens           *TokenSnapshot // nil = no token data in this event
-	CumulativeTokens *TokenSnapshot // cumulative totals (set by Codex); tailer uses directly for cost
-	RequestID        string         // unique API call ID — deduplicates streaming events for cost accumulation
-	AssistantText    string         // ≤200 chars, for waiting-state display
-	ContentChars     int64          // character count for token estimation
-	CWD              string         // working directory if found
-	PermissionMode   string         // Claude Code only
+	ModelName     string
+	ContextWindow int64
+	// Tokens is the latest-turn snapshot used for context-utilization display.
+	// It is NOT used for cost accumulation — use Contribution for that.
+	Tokens *TokenSnapshot
+	// Contribution, when non-nil, signals that the adapter has completed a
+	// billable turn. The tailer sums these per-model instead of the old
+	// scalar cum* accumulators.
+	Contribution *PerTurnContribution
+	// CumulativeTokens and RequestID are retained for the legacy tailer code
+	// path and the testParser. They will be removed once all adapters emit
+	// Contribution and the old 3-way branch in tailer.go is deleted.
+	CumulativeTokens *TokenSnapshot
+	RequestID        string
+	AssistantText    string // ≤200 chars, for waiting-state display
+	ContentChars     int64  // character count for token estimation
+	CWD              string // working directory if found
+	PermissionMode   string // Claude Code only
 }
 
 // TokenSnapshot holds a token breakdown from a single event.
+// Used for context-utilization display (latest-turn snapshot).
+// For cost accumulation, adapters emit PerTurnContribution instead.
 type TokenSnapshot struct {
 	Input         int64
 	Output        int64
 	CacheRead     int64
 	CacheCreation int64
 	Total         int64
+}
+
+// UsageBreakdown is the format-neutral per-turn token count produced by each
+// adapter after deduplication and provider-specific field mapping.
+// Unused fields stay zero; the tailer sums them across turns per model.
+type UsageBreakdown struct {
+	Input           int64
+	Output          int64
+	CacheRead       int64 // Anthropic cache hit OR OpenAI cached_tokens
+	CacheCreation5m int64 // Anthropic ephemeral 5-minute write
+	CacheCreation1h int64 // Anthropic ephemeral 1-hour write
+}
+
+// PerTurnContribution is what an adapter emits for one completed billable turn.
+// The tailer accumulates these into cumByModel for cost calculation.
+type PerTurnContribution struct {
+	Model           string
+	Usage           UsageBreakdown
+	ProviderCostUSD *float64 // set when the provider reports an authoritative cost (Pi)
 }
 
 // TranscriptParser parses a single JSONL line from a specific transcript format
@@ -90,6 +120,43 @@ type TranscriptParser interface {
 	// ParseLine parses a raw JSON map and returns a normalized event.
 	// Returns nil for lines that should be silently ignored (no event emitted).
 	ParseLine(raw map[string]interface{}) *ParsedEvent
+}
+
+// PendingContributor is an optional interface that stateful parsers implement
+// (currently Claude Code) to expose the in-progress turn's cost contribution.
+// The tailer queries this at metrics-computation time to include the latest
+// streaming turn in the live cost display even before the turn is complete.
+type PendingContributor interface {
+	PendingContribution() *PerTurnContribution
+}
+
+// ParserLedger holds the durable state a stateful parser checkpoints across
+// daemon restarts. Fields are parser-specific; unused ones stay zero.
+type ParserLedger struct {
+	// LastRequestID is the last requestId seen by the Claude Code parser.
+	// Restored so the dedup cursor resumes at the right turn boundary.
+	LastRequestID string `json:"last_request_id,omitempty"`
+	// CumCursor is the last committed total_token_usage seen by the Codex parser.
+	// Restored so per-turn deltas after a restart are computed correctly.
+	CumCursor *UsageBreakdown `json:"cum_cursor,omitempty"`
+}
+
+// ParserStateProvider is an optional interface for stateful parsers that can
+// checkpoint and restore their per-turn accumulation state across tailer restarts.
+type ParserStateProvider interface {
+	GetParserLedger() ParserLedger
+	SetParserLedger(ParserLedger)
+}
+
+// LedgerState is the durable portion of a tailer's accumulation state, written
+// to disk after every TailAndProcess pass so that daemon restarts don't reset
+// cumulative cost to zero for in-flight sessions.
+type LedgerState struct {
+	SchemaVersion      int                        `json:"schema_version"`
+	LastOffset         int64                      `json:"last_offset"`
+	CumByModel         map[string]*UsageBreakdown `json:"cum_by_model,omitempty"`
+	CumProviderCostUSD float64                    `json:"cum_provider_cost_usd,omitempty"`
+	ParserState        *ParserLedger              `json:"parser_state,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---

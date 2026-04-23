@@ -157,16 +157,21 @@ type TranscriptTailer struct {
 
 	// Cumulative token accumulators for cost calculation.
 	// These sum the FINAL usage from each unique API turn (requestId).
+	// Preserved for the legacy fallback path (testParser, non-Contribution events).
 	cumInputTokens         int64
 	cumOutputTokens        int64
 	cumCacheReadTokens     int64
 	cumCacheCreationTokens int64
 
 	// Deduplication: track requestId to avoid double-counting streaming events
-	// within a single API turn. When the requestId changes, the previous turn's
-	// final snapshot is flushed to the cumulative accumulators.
+	// within a single API turn. Used by the legacy fallback path.
 	lastRequestID   string
 	pendingSnapshot *TokenSnapshot // latest snapshot for current requestId; flushed on ID change
+
+	// New accumulation path: per-model usage breakdown from PerTurnContribution.
+	// Populated when adapters emit Contribution on ParsedEvent (Phase 2+).
+	cumByModel        map[string]*UsageBreakdown
+	cumProviderCostUSD float64 // sum of provider-reported per-turn costs (Pi)
 
 	// lastWasUserInterrupt tracks whether the most recent user event was
 	// an ESC cancellation (the exact "[Request interrupted by user]" text
@@ -198,11 +203,59 @@ func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *
 		parser:        parser,
 		adapter:       adapter,
 		openToolCalls: make(map[string]string),
+		cumByModel:    make(map[string]*UsageBreakdown),
 		metrics: &SessionMetrics{
 			MessageHistory: make([]MessageEvent, 0),
 			SessionStartAt: time.Time{},
 		},
 		windowSize: 60 * time.Second,
+	}
+}
+
+// GetLedgerState returns the durable accumulation state of the tailer so it
+// can be persisted to disk and rehydrated after a daemon restart.
+func (t *TranscriptTailer) GetLedgerState() LedgerState {
+	s := LedgerState{
+		SchemaVersion:      1,
+		LastOffset:         t.lastOffset,
+		CumProviderCostUSD: t.cumProviderCostUSD,
+	}
+	if len(t.cumByModel) > 0 {
+		// Direct assignment is safe: the caller JSON-marshals immediately
+		// while holding the per-tailer lock, so TailAndProcess cannot run
+		// concurrently and mutate the map during the marshal.
+		s.CumByModel = t.cumByModel
+	}
+	if pp, ok := t.parser.(ParserStateProvider); ok {
+		pl := pp.GetParserLedger()
+		s.ParserState = &pl
+	}
+	return s
+}
+
+// SetLedgerState rehydrates accumulation state from a previously persisted
+// ledger. Must be called before the first TailAndProcess; a no-op if the
+// tailer has already processed any lines.
+func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
+	if t.lastOffset != 0 {
+		return
+	}
+	t.lastOffset = s.LastOffset
+	if len(s.CumByModel) > 0 {
+		// Deep-copy so the caller's map doesn't alias the tailer's.
+		t.cumByModel = make(map[string]*UsageBreakdown, len(s.CumByModel))
+		for k, v := range s.CumByModel {
+			if v != nil {
+				copied := *v
+				t.cumByModel[k] = &copied
+			}
+		}
+	}
+	t.cumProviderCostUSD = s.CumProviderCostUSD
+	if s.ParserState != nil {
+		if pp, ok := t.parser.(ParserStateProvider); ok {
+			pp.SetParserLedger(*s.ParserState)
+		}
 	}
 }
 
@@ -213,7 +266,8 @@ func (t *TranscriptTailer) SetSessionStartTime(startTime time.Time) {
 	}
 }
 
-// TailAndProcess reads the last ~64KB of transcript and processes new entries
+// TailAndProcess reads new transcript content from the last offset (or from the
+// beginning on first open) and processes each JSONL line via the parser.
 func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	file, err := os.Open(t.path)
 	if err != nil {
@@ -236,7 +290,6 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// discovered in this scan (see issue #134).
 	t.metrics.SubagentCompletions = nil
 
-	const maxTailSize = 64 * 1024
 	startPos := int64(0)
 	switch {
 	case fileSize < t.lastOffset:
@@ -249,12 +302,11 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		t.cumCacheCreationTokens = 0
 		t.lastRequestID = ""
 		t.pendingSnapshot = nil
+		t.cumByModel = make(map[string]*UsageBreakdown)
+		t.cumProviderCostUSD = 0
 	case t.lastOffset > 0:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
-	case fileSize > maxTailSize:
-		// Initial read for large files: only tail the latest window.
-		startPos = fileSize - maxTailSize
 	}
 
 	_, err = file.Seek(startPos, io.SeekStart)
@@ -263,25 +315,8 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	}
 
 	currentOffset := startPos
-	var reader io.Reader = file
 
-	// On the initial truncated read of a large file, we may start in the
-	// middle of a JSON line. If so, discard the partial line to align scanner
-	// to a full JSONL entry boundary.
-	if t.lastOffset == 0 && startPos > 0 {
-		prev := []byte{0}
-		if _, err := file.ReadAt(prev, startPos-1); err == nil && prev[0] != '\n' {
-			br := bufio.NewReader(file)
-			if discarded, err := br.ReadString('\n'); err == nil {
-				currentOffset += int64(len(discarded))
-			} else {
-				return nil, fmt.Errorf("failed to align transcript boundary: %w", err)
-			}
-			reader = br
-		}
-	}
-
-	scanner := bufio.NewScanner(reader)
+	scanner := bufio.NewScanner(file)
 	// Large tool results (especially from Pi/Codex read/bash output) can exceed
 	// bufio.Scanner's 64KB default token size.
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
@@ -445,19 +480,44 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 	}
 
 	// Cumulative token accumulation for cost calculation.
-	if parsed.CumulativeTokens != nil {
-		// Codex-style: authoritative cumulative total provided directly.
-		t.cumInputTokens = parsed.CumulativeTokens.Input
-		t.cumOutputTokens = parsed.CumulativeTokens.Output
-		t.cumCacheReadTokens = parsed.CumulativeTokens.CacheRead
-		t.cumCacheCreationTokens = parsed.CumulativeTokens.CacheCreation
+	if parsed.Contribution != nil {
+		// New path (Phase 2+): adapter already handled dedup; we just accumulate.
+		c := parsed.Contribution
+		if c.ProviderCostUSD != nil {
+			// Provider-reported cost: use directly, don't add tokens to cumByModel.
+			t.cumProviderCostUSD += *c.ProviderCostUSD
+		} else if c.Model != "" || c.Usage.Input > 0 || c.Usage.Output > 0 {
+			bd := t.cumByModel[c.Model]
+			if bd == nil {
+				bd = &UsageBreakdown{}
+				t.cumByModel[c.Model] = bd
+			}
+			bd.Input += c.Usage.Input
+			bd.Output += c.Usage.Output
+			bd.CacheRead += c.Usage.CacheRead
+			bd.CacheCreation5m += c.Usage.CacheCreation5m
+			bd.CacheCreation1h += c.Usage.CacheCreation1h
+		}
+	} else if parsed.CumulativeTokens != nil {
+		// Legacy path: Codex-style authoritative cumulative total.
+		// Monotonicity guard: only advance each bucket forward.
+		ct := parsed.CumulativeTokens
+		if ct.Input > t.cumInputTokens {
+			t.cumInputTokens = ct.Input
+		}
+		if ct.Output > t.cumOutputTokens {
+			t.cumOutputTokens = ct.Output
+		}
+		if ct.CacheRead > t.cumCacheReadTokens {
+			t.cumCacheReadTokens = ct.CacheRead
+		}
+		if ct.CacheCreation > t.cumCacheCreationTokens {
+			t.cumCacheCreationTokens = ct.CacheCreation
+		}
 		t.pendingSnapshot = nil
 	} else if parsed.Tokens != nil && parsed.RequestID != "" {
-		// Claude Code-style: deduplicate by requestId — multiple streaming
-		// events share the same requestId within one API turn; only the final
-		// event's tokens should be counted.
+		// Legacy path: Claude Code-style dedup by requestId.
 		if parsed.RequestID != t.lastRequestID && t.lastRequestID != "" && t.pendingSnapshot != nil {
-			// Flush previous turn's final snapshot to accumulators.
 			t.cumInputTokens += t.pendingSnapshot.Input
 			t.cumOutputTokens += t.pendingSnapshot.Output
 			t.cumCacheReadTokens += t.pendingSnapshot.CacheRead
@@ -466,7 +526,7 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 		t.pendingSnapshot = parsed.Tokens
 		t.lastRequestID = parsed.RequestID
 	} else if parsed.Tokens != nil && (parsed.Tokens.Input > 0 || parsed.Tokens.Output > 0) {
-		// No requestId (Pi-style): accumulate directly, no dedup needed.
+		// Legacy path: Pi-style direct accumulate.
 		t.cumInputTokens += parsed.Tokens.Input
 		t.cumOutputTokens += parsed.Tokens.Output
 		t.cumCacheReadTokens += parsed.Tokens.CacheRead
@@ -493,8 +553,78 @@ func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
 	}
 }
 
+// computeCumulativeTokens aggregates per-model token counts and estimated cost.
+// It must run on every TailAndProcess pass — even when no new events were
+// processed — so that ledger-rehydrated state is reflected immediately.
+func (t *TranscriptTailer) computeCumulativeTokens() {
+	if len(t.cumByModel) > 0 || t.cumProviderCostUSD > 0 {
+		// New path: price per-model, sum provider-reported costs.
+		var totalInput, totalOutput, totalCacheRead, totalCacheCreate int64
+		var pricedCost float64
+		for modelName, bd := range t.cumByModel {
+			totalInput += bd.Input
+			totalOutput += bd.Output
+			totalCacheRead += bd.CacheRead
+			totalCacheCreate += bd.CacheCreation5m + bd.CacheCreation1h
+			if t.capacityMgr != nil {
+				pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
+					modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
+			}
+		}
+		// Include the pending contribution from stateful parsers (Claude Code).
+		if pc, ok := t.parser.(PendingContributor); ok {
+			if pending := pc.PendingContribution(); pending != nil {
+				totalInput += pending.Usage.Input
+				totalOutput += pending.Usage.Output
+				totalCacheRead += pending.Usage.CacheRead
+				totalCacheCreate += pending.Usage.CacheCreation5m + pending.Usage.CacheCreation1h
+				if t.capacityMgr != nil && pending.Model != "" {
+					pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
+						pending.Model,
+						pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
+						pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
+				}
+			}
+		}
+		t.metrics.CumInputTokens = totalInput
+		t.metrics.CumOutputTokens = totalOutput
+		t.metrics.CumCacheReadTokens = totalCacheRead
+		t.metrics.CumCacheCreationTokens = totalCacheCreate
+		t.metrics.EstimatedCostUSD = pricedCost + t.cumProviderCostUSD
+	} else {
+		// Legacy path: scalar accumulators (testParser and pre-Contribution adapters).
+		effectiveCumInput := t.cumInputTokens
+		effectiveCumOutput := t.cumOutputTokens
+		effectiveCumCacheRead := t.cumCacheReadTokens
+		effectiveCumCacheCreate := t.cumCacheCreationTokens
+		if t.pendingSnapshot != nil {
+			effectiveCumInput += t.pendingSnapshot.Input
+			effectiveCumOutput += t.pendingSnapshot.Output
+			effectiveCumCacheRead += t.pendingSnapshot.CacheRead
+			effectiveCumCacheCreate += t.pendingSnapshot.CacheCreation
+		}
+		t.metrics.CumInputTokens = effectiveCumInput
+		t.metrics.CumOutputTokens = effectiveCumOutput
+		t.metrics.CumCacheReadTokens = effectiveCumCacheRead
+		t.metrics.CumCacheCreationTokens = effectiveCumCacheCreate
+
+		if t.capacityMgr != nil && t.metrics.ModelName != "" {
+			t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
+				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
+				effectiveCumCacheRead, effectiveCumCacheCreate)
+		}
+	}
+}
+
 // computeMetrics calculates messages per minute and elapsed time
 func (t *TranscriptTailer) computeMetrics() {
+	// Cumulative cost/token aggregation must run regardless of whether any new
+	// events were processed this pass — the tailer may have been rehydrated from
+	// a ledger with a non-zero cumByModel and then polled with no new transcript
+	// content (e.g., immediately after daemon restart before the agent produces
+	// more output). Skipping this would return CumInputTokens=0 in that window.
+	t.computeCumulativeTokens()
+
 	if len(t.metrics.MessageHistory) == 0 {
 		t.metrics.MessagesPerMinute = 0
 		t.metrics.ElapsedSeconds = 0
@@ -553,28 +683,6 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.CacheReadTokens = t.cacheReadTokens
 	t.metrics.CacheCreationTokens = t.cacheCreationTokens
 
-	// Cumulative tokens (sum of all turns — for cost calculation).
-	// Include the unflushed pendingSnapshot from the current/final requestId.
-	effectiveCumInput := t.cumInputTokens
-	effectiveCumOutput := t.cumOutputTokens
-	effectiveCumCacheRead := t.cumCacheReadTokens
-	effectiveCumCacheCreate := t.cumCacheCreationTokens
-	if t.pendingSnapshot != nil {
-		effectiveCumInput += t.pendingSnapshot.Input
-		effectiveCumOutput += t.pendingSnapshot.Output
-		effectiveCumCacheRead += t.pendingSnapshot.CacheRead
-		effectiveCumCacheCreate += t.pendingSnapshot.CacheCreation
-	}
-	t.metrics.CumInputTokens = effectiveCumInput
-	t.metrics.CumOutputTokens = effectiveCumOutput
-	t.metrics.CumCacheReadTokens = effectiveCumCacheRead
-	t.metrics.CumCacheCreationTokens = effectiveCumCacheCreate
-
-	if t.capacityMgr != nil && t.metrics.ModelName != "" {
-		t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
-			t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
-			effectiveCumCacheRead, effectiveCumCacheCreate)
-	}
 
 	// Sliding window for messages per minute.
 	legacyWindowStart := latestTime.Add(-t.windowSize)
@@ -622,6 +730,8 @@ func (t *TranscriptTailer) ResetOffset() {
 	t.cumCacheCreationTokens = 0
 	t.lastRequestID = ""
 	t.pendingSnapshot = nil
+	t.cumByModel = make(map[string]*UsageBreakdown)
+	t.cumProviderCostUSD = 0
 }
 
 // computeContextUtilization calculates context utilization percentage and pressure level.

@@ -16,6 +16,7 @@ import (
 type lockedTailer struct {
 	mu sync.Mutex
 	t  *tailer.TranscriptTailer
+	lp string // path to the session ledger file; empty when ledger dir is unavailable
 }
 
 // Adapter implements ports/outbound.MetricsCollector using the transcript-tailer package.
@@ -67,7 +68,12 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	a.mu.Lock()
 	lt, ok := a.tailers[transcriptPath]
 	if !ok {
-		lt = &lockedTailer{t: tailer.NewTranscriptTailer(transcriptPath, parserFor(adapter), adapter)}
+		t := tailer.NewTranscriptTailer(transcriptPath, parserFor(adapter), adapter)
+		lp := ledgerPath(transcriptPath)
+		if s := loadLedger(lp); s != nil {
+			t.SetLedgerState(*s)
+		}
+		lt = &lockedTailer{t: t, lp: lp}
 		a.tailers[transcriptPath] = lt
 	}
 	a.mu.Unlock()
@@ -76,6 +82,9 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	// different sessions to process concurrently.
 	lt.mu.Lock()
 	m, err := lt.t.TailAndProcess()
+	if err == nil && m != nil {
+		saveLedger(lt.lp, lt.t.GetLedgerState())
+	}
 	lt.mu.Unlock()
 	if err != nil || m == nil {
 		return nil, nil //nolint:nilerr — absent transcript is not an error

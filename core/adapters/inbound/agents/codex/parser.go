@@ -8,7 +8,14 @@ import (
 // Parser implements tailer.TranscriptParser for OpenAI Codex transcripts.
 // Codex uses top-level "role" fields on "message" events and separate
 // "function_call" / "function_call_output" events for tool calls.
-type Parser struct{}
+//
+// The parser is stateful: it tracks the last seen total_token_usage so it can
+// emit per-turn delta contributions rather than cumulative totals.
+type Parser struct {
+	// cursor tracks the last committed cumulative total from total_token_usage.
+	// Deltas (current − cursor) are emitted as PerTurnContribution.
+	cursor tailer.UsageBreakdown
+}
 
 // ParseLine parses a Codex JSONL line into a normalized ParsedEvent.
 func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
@@ -42,7 +49,25 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev.CWD = transcript.ExtractCWDFromLine(raw)
 
 	// Model/token extraction from payload-wrapped events.
-	ev.ModelName, ev.ContextWindow, ev.Tokens, ev.CumulativeTokens = extractCodexMetadata(raw)
+	var cumBreakdown *tailer.UsageBreakdown
+	ev.ModelName, ev.ContextWindow, ev.Tokens, cumBreakdown = extractCodexMetadata(raw)
+
+	// Emit a Contribution when cumulative usage advances (monotonic delta).
+	if cumBreakdown != nil {
+		delta := tailer.UsageBreakdown{
+			Input:     max(0, cumBreakdown.Input-p.cursor.Input),
+			Output:    max(0, cumBreakdown.Output-p.cursor.Output),
+			CacheRead: max(0, cumBreakdown.CacheRead-p.cursor.CacheRead),
+		}
+		if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
+			ev.Contribution = &tailer.PerTurnContribution{
+				Model: ev.ModelName,
+				Usage: delta,
+			}
+			p.cursor = *cumBreakdown
+		}
+		ev.CumulativeTokens = ev.Tokens
+	}
 
 	// Content character count.
 	ev.ContentChars = extractCodexContentChars(raw)
@@ -172,14 +197,14 @@ func extractCodexContentChars(raw map[string]interface{}) int64 {
 }
 
 // extractCodexMetadata extracts model, context window, and token info from Codex events.
-// Returns (modelName, contextWindow, lastTurnTokens, cumulativeTokens).
-// lastTurnTokens = last_token_usage (for context utilization);
-// cumulativeTokens = total_token_usage (for cost calculation).
-func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.TokenSnapshot, *tailer.TokenSnapshot) {
+// Returns (modelName, contextWindow, lastTurnTokens, cumulativeBreakdown).
+// lastTurnTokens = last_token_usage (for context utilization display);
+// cumulativeBreakdown = total_token_usage as UsageBreakdown (for cost delta calculation).
+func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.TokenSnapshot, *tailer.UsageBreakdown) {
 	var modelName string
 	var contextWindow int64
 	var tokens *tailer.TokenSnapshot
-	var cumTokens *tailer.TokenSnapshot
+	var cumBreakdown *tailer.UsageBreakdown
 
 	// Direct model field.
 	if model, ok := raw["model"].(string); ok && model != "" {
@@ -207,7 +232,7 @@ func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.To
 				tokens = tailer.ExtractUsage(usage)
 			}
 			if usage, ok := info["total_token_usage"].(map[string]interface{}); ok {
-				cumTokens = tailer.ExtractUsage(usage)
+				cumBreakdown = extractOpenAIUsageBreakdown(usage)
 			}
 			if cw, ok := info["model_context_window"].(float64); ok && cw > 0 {
 				contextWindow = int64(cw)
@@ -230,5 +255,62 @@ func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.To
 		tokens = tailer.ExtractUsage(usage)
 	}
 
-	return modelName, contextWindow, tokens, cumTokens
+	return modelName, contextWindow, tokens, cumBreakdown
+}
+
+// GetParserLedger implements tailer.ParserStateProvider. Saves the cumulative
+// total_token_usage cursor so per-turn deltas are computed correctly after restart.
+func (p *Parser) GetParserLedger() tailer.ParserLedger {
+	return tailer.ParserLedger{CumCursor: &p.cursor}
+}
+
+// SetParserLedger implements tailer.ParserStateProvider. Restores the cursor
+// so the first delta after restart is relative to the last committed total.
+func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
+	if l.CumCursor != nil {
+		p.cursor = *l.CumCursor
+	}
+}
+
+// extractOpenAIUsageBreakdown parses an OpenAI-style usage map into a UsageBreakdown,
+// including nested input_tokens_details.cached_tokens for accurate cache-hit pricing.
+func extractOpenAIUsageBreakdown(usage map[string]interface{}) *tailer.UsageBreakdown {
+	bd := &tailer.UsageBreakdown{}
+	hasData := false
+
+	if v, ok := usage["input_tokens"].(float64); ok {
+		bd.Input = int64(v)
+		hasData = true
+	}
+	if v, ok := usage["output_tokens"].(float64); ok {
+		bd.Output = int64(v)
+		hasData = true
+	}
+
+	// OpenAI Responses API: cached tokens are nested inside input_tokens_details.
+	// Prefer that over flat cache_read_input_tokens (which OpenAI doesn't use).
+	if details, ok := usage["input_tokens_details"].(map[string]interface{}); ok {
+		if v, ok := details["cached_tokens"].(float64); ok && v > 0 {
+			bd.CacheRead = int64(v)
+			// Deduct from Input to avoid double-counting (cached tokens are
+			// already included in input_tokens by OpenAI).
+			bd.Input -= bd.CacheRead
+			if bd.Input < 0 {
+				bd.Input = 0
+			}
+		}
+	}
+	// Fallback for older Codex format.
+	if bd.CacheRead == 0 {
+		if details, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
+			if v, ok := details["cached_tokens"].(float64); ok {
+				bd.CacheRead = int64(v)
+			}
+		}
+	}
+
+	if !hasData {
+		return nil
+	}
+	return bd
 }
