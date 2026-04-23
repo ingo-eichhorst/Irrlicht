@@ -1477,7 +1477,21 @@
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       rebuildIndex();
       render();
-      timelineTick(); // First tick immediately
+      // Seed timeline from persisted daemon history before first live tick
+      fetch('/api/v1/sessions/history?granularity=1')
+        .then(r => r.json()).catch(() => null)
+        .then(hist => {
+          if (hist && hist.sessions) {
+            for (const [sid, states] of Object.entries(hist.sessions)) {
+              const entry = sessionIndex.get(sid);
+              const label = entry
+                ? (entry.agent.project_name || '').slice(0, 10) + ' ' + shortID(sid)
+                : shortID(sid);
+              timelineHistory.set(sid, { label, states: states.slice(-TIMELINE_MAX_TICKS) });
+            }
+          }
+          timelineTick(); // First live tick immediately after seeding
+        });
     });
     // Periodic re-hydration so trailing-window costs (carried on each group
     // under `costs`) don't go stale between WebSocket deltas, which only
