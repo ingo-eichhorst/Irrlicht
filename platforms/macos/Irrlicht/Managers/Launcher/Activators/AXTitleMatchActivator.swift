@@ -34,7 +34,7 @@ struct AXTitleMatchActivator: HostActivator {
 
     // MARK: - AX window selection
 
-    private static func raiseMatchingWindow(bundleID: String, cwd: String) {
+    static func raiseMatchingWindow(bundleID: String, cwd: String) {
         guard AccessibilityPermission.ensureTrusted() else {
             logger.info("AX permission not granted — staying on app-level activation")
             return
@@ -108,17 +108,43 @@ struct AXTitleMatchActivator: HostActivator {
     }
 
     /// Index of the highest-scoring title, or nil when all scores are 0.
-    /// Ties break by first occurrence (AX returns windows in z-order; the
-    /// topmost matching window wins).
+    ///
+    /// Primary sort: `titleMatchScore` (higher is better). Tie-break: count of
+    /// meaningful CWD path segments that appear in the title — handles the case
+    /// where two windows share the same leaf folder name (e.g. two repos both
+    /// called `irrlicht`) and one of them also contains the grandparent segment
+    /// (e.g. `a/irrlicht` vs `b/irrlicht`). AX returns windows in z-order, so
+    /// first occurrence wins within the same (score, prefixLen) bucket.
     static func bestMatchIndex(titles: [String], cwd: String) -> Int? {
-        var best: (idx: Int, score: Int)?
+        var best: (idx: Int, score: Int, prefixLen: Int)?
         for (i, t) in titles.enumerated() {
             let s = titleMatchScore(title: t, cwd: cwd)
             if s == 0 { continue }
-            if best == nil || s > best!.score {
-                best = (i, s)
+            let p = cwdSegmentMatchCount(title: t, cwd: cwd)
+            if best == nil || s > best!.score || (s == best!.score && p > best!.prefixLen) {
+                best = (i, s, p)
             }
         }
         return best?.idx
+    }
+
+    /// Counts how many non-generic CWD path segments appear anywhere in the
+    /// title. Used as a tie-breaker when two titles share the same primary
+    /// score — a title mentioning both `irrlicht` and `a` beats one that
+    /// mentions only `irrlicht`.
+    static func cwdSegmentMatchCount(title: String, cwd: String) -> Int {
+        if title.isEmpty || cwd.isEmpty { return 0 }
+        let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
+        let homeBasename = (ProcessInfo.processInfo.environment["HOME"] ?? "")
+            .split(separator: "/").last.map(String.init) ?? ""
+        let segments = trimmed
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map(String.init)
+            .filter { p in
+                !p.isEmpty &&
+                !genericTopSegments.contains(p) &&
+                (homeBasename.isEmpty || p != homeBasename)
+            }
+        return segments.filter { title.contains($0) }.count
     }
 }

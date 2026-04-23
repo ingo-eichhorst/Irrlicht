@@ -15,9 +15,10 @@ type PushMessage struct {
 
 // Valid PushMessage type constants.
 const (
-	PushTypeCreated = "session_created"
-	PushTypeUpdated = "session_updated"
-	PushTypeDeleted = "session_deleted"
+	PushTypeCreated        = "session_created"
+	PushTypeUpdated        = "session_updated"
+	PushTypeDeleted        = "session_deleted"
+	PushTypeFocusRequested = "focus_requested"
 )
 
 // SessionRepository loads, saves, and deletes session state files.

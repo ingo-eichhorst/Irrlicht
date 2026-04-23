@@ -104,6 +104,9 @@ var launcherEnvKeys = map[string]struct{}{
 	"TMUX":             {},
 	"TMUX_PANE":        {},
 	"VSCODE_PID":       {},
+	"TERMINAL_EMULATOR": {}, // JetBrains JediTerm sets this to "JetBrains-JediTerm"
+	"KITTY_LISTEN_ON":   {}, // kitty remote-control socket path (e.g. "unix:/tmp/kitty-NNN/sock")
+	"KITTY_WINDOW_ID":   {}, // kitty window ID for precise window targeting
 }
 
 // ReadLauncherEnv returns the launcher identity captured from the process env
@@ -127,6 +130,8 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 		ITermSessionID: env["ITERM_SESSION_ID"],
 		TermSessionID:  env["TERM_SESSION_ID"],
 		TmuxPane:       env["TMUX_PANE"],
+		KittyListenOn:  env["KITTY_LISTEN_ON"],
+		KittyWindowID:  env["KITTY_WINDOW_ID"],
 	}
 	if tmux := env["TMUX"]; tmux != "" {
 		// $TMUX is "/path/to/socket,pid,session" — first field is the socket.
@@ -146,6 +151,12 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// terminal sets VSCODE_PID but not always TERM_PROGRAM=vscode).
 	if l.TermProgram == "" && l.VSCodePID > 0 {
 		l.TermProgram = "vscode"
+	}
+	// JetBrains IDEs embed JediTerm which sets TERMINAL_EMULATOR but not
+	// TERM_PROGRAM. Map it to the shared "jetbrains" term_program key that
+	// the Swift registry routes to JetBrainsActivator.
+	if l.TermProgram == "" && env["TERMINAL_EMULATOR"] == "JetBrains-JediTerm" {
+		l.TermProgram = "jetbrains"
 	}
 	// Hardened-runtime processes (e.g. Anthropic's signed `claude` binary)
 	// hide env from sysctl. Fall back to process-ancestry walking so the UI

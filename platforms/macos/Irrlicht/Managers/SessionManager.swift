@@ -309,6 +309,16 @@ class SessionManager: ObservableObject {
                     rebuildSessionsFromMap()
                     scheduleRehydration()
                 }
+            case "focus_requested":
+                // A client (irrlicht-focus CLI or third-party integration) has
+                // asked the daemon to bring this session's host window forward.
+                // The daemon always includes the full session in this envelope.
+                // Must dispatch to main — SessionLauncher is @MainActor-adjacent.
+                if let session = envelope.session {
+                    DispatchQueue.main.async {
+                        SessionLauncher.jump(session)
+                    }
+                }
             default:
                 break
             }

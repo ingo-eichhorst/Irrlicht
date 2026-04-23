@@ -291,9 +291,30 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(SessionLauncher.bundleID(for: "Apple_Terminal"), "com.apple.Terminal")
         XCTAssertEqual(SessionLauncher.bundleID(for: "vscode"), "com.microsoft.VSCode")
         XCTAssertEqual(SessionLauncher.bundleID(for: "ghostty"), "com.mitchellh.ghostty")
+        // JetBrainsActivator uses dynamic bundle resolution; bundleID field is ""
+        // but the activator IS registered (non-nil return).
+        XCTAssertEqual(SessionLauncher.bundleID(for: "jetbrains"), "")
+        // Kitty: KittyActivator (socket-based, bundle ID is still registered)
+        XCTAssertEqual(SessionLauncher.bundleID(for: "kitty"),     "net.kovidgoyal.kitty")
+        // New title-match hosts
+        XCTAssertEqual(SessionLauncher.bundleID(for: "zed"),       "dev.zed.Zed")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "rio"),       "com.raphaelamorim.rio")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "tabby"),     "org.tabby")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "waveterm"),  "dev.commandline.waveterm")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "alacritty"), "org.alacritty")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "nova"),      "com.panic.Nova")
+        XCTAssertEqual(SessionLauncher.bundleID(for: "cmux"),      "com.cmuxterm.app")
+        // tmux is a decorator, not a standalone term_program — no registry entry.
         XCTAssertNil(SessionLauncher.bundleID(for: "tmux"))
         XCTAssertNil(SessionLauncher.bundleID(for: nil))
         XCTAssertNil(SessionLauncher.bundleID(for: "unknown-terminal"))
+    }
+
+    func testJetBrainsActivatorRunningBundleIDIsNilInCI() {
+        // In CI no JetBrains IDE is running — runningBundleID() must return nil
+        // rather than crash.
+        let bid = JetBrainsActivator.runningBundleID()
+        XCTAssertNil(bid, "expected nil when no JetBrains IDE is running")
     }
 
     func testTitleMatchScoreFullCwdDominates() {
@@ -378,6 +399,53 @@ final class SessionManagerTests: XCTestCase {
         let cwd = "/Users/ingo/projects/irrlicht/.claude/worktrees/170"
         let titles = ["README.md — some-other-project", "", "main.swift — another"]
         XCTAssertNil(AXTitleMatchActivator.bestMatchIndex(titles: titles, cwd: cwd))
+    }
+
+    func testBestMatchIndexTieBreakByCWDPrefix() {
+        // Two windows whose titles both contain "irrlicht" (same leaf depth = tie
+        // on primary score). The second window also contains "a", the grandparent
+        // segment of the actual cwd, so it should win the tie-break.
+        let cwd = "/Users/ingo/a/irrlicht"
+        let titles = [
+            "README.md — irrlicht",   // 0: leaf match, prefix count 1 (irrlicht)
+            "main.go — irrlicht — a", // 1: leaf match, prefix count 2 (irrlicht + a)
+        ]
+        XCTAssertEqual(AXTitleMatchActivator.bestMatchIndex(titles: titles, cwd: cwd), 1)
+    }
+
+    func testBestMatchIndexTmuxStyleTitleParsed() {
+        // tmux window titles often embed full paths like "[0] 1:zsh /Users/.../irrlicht".
+        // The Tier A score (1000) fires because the full cwd substring is present.
+        let cwd = "/Users/ingo/projects/irrlicht"
+        let titles = [
+            "README.md — other-project",
+            "[0] 1:zsh /Users/ingo/projects/irrlicht",  // full cwd → Tier A
+        ]
+        XCTAssertEqual(AXTitleMatchActivator.bestMatchIndex(titles: titles, cwd: cwd), 1)
+    }
+
+    func testCWDSegmentMatchCountBasic() {
+        let cwd = "/Users/ingo/a/irrlicht"
+        // Title contains both "irrlicht" and "a"
+        XCTAssertEqual(
+            AXTitleMatchActivator.cwdSegmentMatchCount(title: "main.go — irrlicht — a", cwd: cwd),
+            2)
+        // Title contains only "irrlicht"
+        XCTAssertEqual(
+            AXTitleMatchActivator.cwdSegmentMatchCount(title: "README.md — irrlicht", cwd: cwd),
+            1)
+        // Title contains neither — score 0
+        XCTAssertEqual(
+            AXTitleMatchActivator.cwdSegmentMatchCount(title: "index.html — other", cwd: cwd),
+            0)
+    }
+
+    func testCWDSegmentMatchCountSkipsGenericSegments() {
+        // "Users" and "home" are generic and must not inflate the count.
+        let cwd = "/Users/ingo/irrlicht"
+        XCTAssertEqual(
+            AXTitleMatchActivator.cwdSegmentMatchCount(title: "Users — home — irrlicht", cwd: cwd),
+            1) // only "irrlicht" counts; Users/ingo filtered out
     }
 
     // MARK: - iTerm UUID extraction

@@ -223,6 +223,23 @@ func TestReadLauncherEnv_Subprocess_Tmux(t *testing.T) {
 	}
 }
 
+func TestReadLauncherEnv_Subprocess_JetBrainsImpliesTermProgram(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip()
+	}
+	pid := spawnSleeperWithEnv(t, []string{
+		"PATH=/usr/bin:/bin",
+		"TERMINAL_EMULATOR=JetBrains-JediTerm",
+	})
+	l := ReadLauncherEnv(pid)
+	if l == nil {
+		t.Fatal("expected non-nil launcher when TERMINAL_EMULATOR=JetBrains-JediTerm")
+	}
+	if l.TermProgram != "jetbrains" {
+		t.Errorf("TermProgram: expected implicit 'jetbrains', got %q", l.TermProgram)
+	}
+}
+
 func TestTermProgramForAppPath(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("darwin-only helper")
@@ -240,6 +257,25 @@ func TestTermProgramForAppPath(t *testing.T) {
 		{"/Applications/WezTerm.app/Contents/MacOS/wezterm-gui", "WezTerm"},
 		{"/Applications/Hyper.app/Contents/MacOS/Hyper", "Hyper"},
 		{"/Applications/Windsurf.app/Contents/MacOS/Windsurf", "windsurf"},
+		// JetBrains IDEs
+		{"/Users/ingo/Applications/GoLand.app/Contents/MacOS/goland", "jetbrains"},
+		{"/Applications/IntelliJ IDEA.app/Contents/MacOS/idea", "jetbrains"},
+		{"/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea", "jetbrains"},
+		{"/Applications/PyCharm.app/Contents/MacOS/pycharm", "jetbrains"},
+		{"/Applications/PyCharm CE.app/Contents/MacOS/pycharm", "jetbrains"},
+		{"/Applications/WebStorm.app/Contents/MacOS/webstorm", "jetbrains"},
+		{"/Applications/Rider.app/Contents/MacOS/rider", "jetbrains"},
+		{"/Applications/CLion.app/Contents/MacOS/clion", "jetbrains"},
+		{"/Applications/RustRover.app/Contents/MacOS/rustrover", "jetbrains"},
+		// Additional hosts
+		{"/Applications/Zed.app/Contents/MacOS/zed", "zed"},
+		{"/Applications/kitty.app/Contents/MacOS/kitty", "kitty"},
+		{"/Applications/Rio.app/Contents/MacOS/rio", "rio"},
+		{"/Applications/Tabby.app/Contents/MacOS/tabby", "tabby"},
+		{"/Applications/Wave.app/Contents/MacOS/wave", "waveterm"},
+		{"/Applications/Alacritty.app/Contents/MacOS/alacritty", "alacritty"},
+		{"/Applications/Nova.app/Contents/MacOS/nova", "nova"},
+		{"/Applications/cmux.app/Contents/MacOS/cmux", "cmux"},
 		// No .app segment: not a host we know.
 		{"/bin/zsh", ""},
 		{"/Users/ingo/.local/share/claude/versions/2.1.114", ""},
