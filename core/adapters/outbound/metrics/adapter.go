@@ -123,6 +123,18 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 			}
 		}
 	}
+	if len(m.Tasks) > 0 {
+		result.Tasks = make([]session.Task, len(m.Tasks))
+		for i, t := range m.Tasks {
+			result.Tasks[i] = session.Task{
+				ID:          t.ID,
+				Subject:     t.Subject,
+				Description: t.Description,
+				ActiveForm:  t.ActiveForm,
+				Status:      t.Status,
+			}
+		}
+	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"
 	}

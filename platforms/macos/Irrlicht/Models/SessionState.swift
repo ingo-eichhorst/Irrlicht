@@ -2,16 +2,41 @@ import AppKit
 import Foundation
 import os
 
+/// A single item in the Claude Code task list, derived from TaskCreate / TaskUpdate tool calls.
+struct Task: Codable, Hashable {
+    let id: String
+    let subject: String
+    let description: String?
+    let activeForm: String?
+    let status: String  // "pending" | "in_progress" | "completed"
+
+    enum CodingKeys: String, CodingKey {
+        case id, subject, description, status
+        case activeForm = "active_form"
+    }
+
+    var isCompleted: Bool { status == "completed" }
+    var isInProgress: Bool { status == "in_progress" }
+
+    var displayLabel: String {
+        if isInProgress, let form = activeForm, !form.isEmpty {
+            return form
+        }
+        return subject
+    }
+}
+
 // Performance metrics from transcript analysis
 struct SessionMetrics: Codable {
     let elapsedSeconds: Int64       // elapsed time when metrics were computed (for ready sessions)
     let totalTokens: Int64          // total token count from transcript (0 if not available)
-    let modelName: String           // model name extracted from transcript ("" if not available) 
+    let modelName: String           // model name extracted from transcript ("" if not available)
     let contextWindow: Int64?       // model context window size (nil/0 if unknown)
     let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
     let lastAssistantText: String?  // last assistant message text, truncated (~200 chars)
+    let tasks: [Task]?              // Claude Code task list (nil when TaskCreate never called)
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -22,6 +47,7 @@ struct SessionMetrics: Codable {
         case pressureLevel = "pressure_level"
         case estimatedCostUSD = "estimated_cost_usd"
         case lastAssistantText = "last_assistant_text"
+        case tasks
     }
     
     // Computed properties for UI display

@@ -425,6 +425,12 @@ struct SessionRowView: View {
                 .padding(.top, 2)
             }
 
+            // Task list (Claude Code TaskCreate / TaskUpdate)
+            if let tasks = session.metrics?.tasks, !tasks.isEmpty {
+                TaskListView(tasks: tasks)
+                    .padding(.top, 2)
+            }
+
             // Debug info
             if debugMode {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -475,6 +481,44 @@ struct SessionRowView: View {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
         return String(format: "%d:%02d", m, s)
+    }
+}
+
+// MARK: - Task List
+
+/// Compact task list rendered inside a session row when tasks are present.
+struct TaskListView: View {
+    let tasks: [Task]
+
+    private func icon(for task: Task) -> (String, Color) {
+        switch task.status {
+        case "completed":  return ("checkmark", Color.secondary.opacity(0.5))
+        case "in_progress": return ("square.fill", Color.accentColor)
+        default:           return ("square", Color.secondary.opacity(0.4))
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(tasks, id: \.id) { task in
+                HStack(spacing: 4) {
+                    let (glyph, color) = icon(for: task)
+                    Image(systemName: glyph)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundColor(color)
+                        .frame(width: 10)
+                    Text(task.displayLabel)
+                        .font(.system(size: 9))
+                        .foregroundColor(task.isInProgress ? .primary : .secondary)
+                        .strikethrough(task.isCompleted, color: .secondary.opacity(0.5))
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .background(Color.secondary.opacity(0.05))
+        .cornerRadius(4)
     }
 }
 

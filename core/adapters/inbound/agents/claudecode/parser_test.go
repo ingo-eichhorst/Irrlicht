@@ -1202,3 +1202,145 @@ func TestTailer_TaskNotification_SurfacedThroughMetrics(t *testing.T) {
 		t.Fatalf("expected SubagentCompletion for af7bf8be5a1b511e4 in metrics; got %+v", m.SubagentCompletions)
 	}
 }
+
+// --- Task list tests ---
+
+func makeToolUseEvent(id, name string, input map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"type":      "assistant",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"message": map[string]interface{}{
+			"role":        "assistant",
+			"stop_reason": "tool_use",
+			"content": []interface{}{
+				map[string]interface{}{
+					"type":  "tool_use",
+					"id":    id,
+					"name":  name,
+					"input": input,
+				},
+			},
+		},
+	}
+}
+
+func TestParser_TaskCreate_EmitsTaskDelta(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
+		"subject":     "Write tests",
+		"description": "Add unit tests for the parser",
+		"activeForm":  "Writing tests",
+	}))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("TaskDeltas len = %d, want 1", len(ev.TaskDeltas))
+	}
+	d := ev.TaskDeltas[0]
+	if d.Op != "create" {
+		t.Errorf("Op = %q, want create", d.Op)
+	}
+	if d.Subject != "Write tests" {
+		t.Errorf("Subject = %q, want Write tests", d.Subject)
+	}
+	if d.Description != "Add unit tests for the parser" {
+		t.Errorf("Description = %q", d.Description)
+	}
+	if d.ActiveForm != "Writing tests" {
+		t.Errorf("ActiveForm = %q", d.ActiveForm)
+	}
+	// ID is empty on create — the tailer assigns it sequentially.
+	if d.ID != "" {
+		t.Errorf("ID should be empty on create, got %q", d.ID)
+	}
+}
+
+func TestParser_TaskUpdate_EmitsTaskDelta(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(makeToolUseEvent("tu_2", "TaskUpdate", map[string]interface{}{
+		"taskId": "1",
+		"status": "in_progress",
+	}))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("TaskDeltas len = %d, want 1", len(ev.TaskDeltas))
+	}
+	d := ev.TaskDeltas[0]
+	if d.Op != "update" {
+		t.Errorf("Op = %q, want update", d.Op)
+	}
+	if d.ID != "1" {
+		t.Errorf("ID = %q, want 1", d.ID)
+	}
+	if d.Status != "in_progress" {
+		t.Errorf("Status = %q, want in_progress", d.Status)
+	}
+}
+
+func TestParser_TaskList_NoTaskDelta(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(makeToolUseEvent("tu_3", "TaskList", map[string]interface{}{}))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if len(ev.TaskDeltas) != 0 {
+		t.Errorf("TaskDeltas len = %d, want 0 for TaskList", len(ev.TaskDeltas))
+	}
+}
+
+func TestTailer_TaskAccumulation(t *testing.T) {
+	// Build a tiny transcript with TaskCreate × 3 then TaskUpdate × 2.
+	events := []map[string]interface{}{
+		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
+			"subject": "Step one", "activeForm": "Doing step one",
+		}),
+		makeToolUseEvent("tu_2", "TaskCreate", map[string]interface{}{
+			"subject": "Step two", "activeForm": "Doing step two",
+		}),
+		makeToolUseEvent("tu_3", "TaskCreate", map[string]interface{}{
+			"subject": "Step three", "activeForm": "Doing step three",
+		}),
+		makeToolUseEvent("tu_4", "TaskUpdate", map[string]interface{}{
+			"taskId": "1", "status": "completed",
+		}),
+		makeToolUseEvent("tu_5", "TaskUpdate", map[string]interface{}{
+			"taskId": "2", "status": "in_progress",
+		}),
+	}
+
+	// Write to a temp file.
+	dir := t.TempDir()
+	path := dir + "/tasks.jsonl"
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := json.NewEncoder(f)
+	for _, e := range events {
+		if err := enc.Encode(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.Close()
+
+	tr := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
+	m, err := tr.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if len(m.Tasks) != 3 {
+		t.Fatalf("Tasks len = %d, want 3", len(m.Tasks))
+	}
+	if m.Tasks[0].ID != "1" || m.Tasks[0].Subject != "Step one" || m.Tasks[0].Status != "completed" {
+		t.Errorf("task 0 = %+v", m.Tasks[0])
+	}
+	if m.Tasks[1].ID != "2" || m.Tasks[1].Status != "in_progress" {
+		t.Errorf("task 1 = %+v", m.Tasks[1])
+	}
+	if m.Tasks[2].ID != "3" || m.Tasks[2].Status != "pending" {
+		t.Errorf("task 2 = %+v", m.Tasks[2])
+	}
+}
