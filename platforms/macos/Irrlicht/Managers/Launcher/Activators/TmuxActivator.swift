@@ -28,17 +28,21 @@ struct TmuxActivator: HostActivator {
             return inner.activate(session)
         }
 
-        // Select the pane first so it's active when the host terminal window
-        // comes to the foreground.
-        let result = ProcessRunner.run(
-            "/usr/bin/env",
-            args: ["tmux", "-S", socket, "select-pane", "-t", pane],
-            timeout: 2.0
-        )
-        if result.status != 0 {
-            Self.logger.info("tmux select-pane failed (status \(result.status)): \(result.stderr, privacy: .public)")
+        // Dispatch to a background queue: ProcessRunner.run blocks for up to
+        // `timeout` seconds and must not freeze the main run loop.
+        DispatchQueue.global(qos: .userInitiated).async { [inner] in
+            // Select the pane first so it's active when the host terminal
+            // window comes to the foreground.
+            let result = ProcessRunner.run(
+                "/usr/bin/env",
+                args: ["tmux", "-S", socket, "select-pane", "-t", pane],
+                timeout: 2.0
+            )
+            if result.status != 0 {
+                Self.logger.info("tmux select-pane failed (status \(result.status)): \(result.stderr, privacy: .public)")
+            }
+            _ = inner.activate(session)
         }
-
-        return inner.activate(session)
+        return true
     }
 }

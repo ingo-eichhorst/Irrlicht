@@ -20,21 +20,26 @@ struct KittyActivator: HostActivator {
         // Prefer socket-based remote control when KITTY_LISTEN_ON is present.
         if let socket = session.launcher?.kittyListenOn, !socket.isEmpty,
            let windowID = session.launcher?.kittyWindowID, !windowID.isEmpty {
-            return focusViaSocket(socket: socket, windowID: windowID)
+            // Dispatch to background: ProcessRunner.run blocks up to `timeout`
+            // seconds and must not freeze the main run loop.
+            DispatchQueue.global(qos: .userInitiated).async {
+                self.focusViaSocket(socket: socket, windowID: windowID)
+            }
+            return true
         }
         // Fallback: app-level activation (no tab/window precision).
         Self.logger.info("kitty: no socket/windowID — falling back to app-level activation")
         return AppActivator.activate(bundleID: bundleID) { _ in }
     }
 
+    @discardableResult
     private func focusViaSocket(socket: String, windowID: String) -> Bool {
         // $KITTY_LISTEN_ON is in the form "unix:/path/to/socket" or "tcp:host:port".
         // `kitten @` accepts the value directly via --to.
         let kitten = findKitten()
         guard let kitten else {
             Self.logger.info("kitten not found; falling back to app-level activation")
-            _ = AppActivator.activate(bundleID: bundleID) { _ in }
-            return false
+            return AppActivator.activate(bundleID: bundleID) { _ in }
         }
         let result = ProcessRunner.run(kitten,
             args: ["@", "--to", socket, "focus-window", "--match", "id:\(windowID)"],
