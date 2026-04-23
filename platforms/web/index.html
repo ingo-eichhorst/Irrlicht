@@ -1572,13 +1572,13 @@
     }
 
     // Kick off server history polling — poll at granularity * 1000ms.
+    // Started by applyGranularity() below after DOM buttons are wired up.
     let historyPollTimer = null;
     function startHistoryPoll() {
       if (historyPollTimer) clearInterval(historyPollTimer);
       pollHistory();
       historyPollTimer = setInterval(pollHistory, currentGranularity * 1000);
     }
-    startHistoryPoll();
 
     // --- Initial load ---
     fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
@@ -1706,6 +1706,9 @@
         const mode = this.dataset.mode;
         document.querySelectorAll('.view-mode-btn').forEach(b => b.classList.toggle('active', b === this));
         document.body.classList.toggle('view-history', mode === 'history');
+        // Repaint row bars immediately so there's no flash of empty canvases
+        // when switching to history mode (offsetWidth is now non-zero).
+        if (mode === 'history') pollHistory();
       });
     }
 

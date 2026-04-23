@@ -189,11 +189,9 @@ func main() {
 	// History tracker: per-session rolling ring buffers for 1s/10s/60s
 	// granularity, kept in memory while the daemon runs.
 	historyTracker := services.NewHistoryTracker()
-	{
-		histCtx, histCancel := context.WithCancel(context.Background())
-		defer histCancel()
-		go historyTracker.Run(histCtx)
-	}
+	histCtx, histCancel := context.WithCancel(context.Background())
+	defer histCancel()
+	go historyTracker.Run(histCtx)
 
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
@@ -608,7 +606,7 @@ func handleGetSessionsHistory(repo outbound.SessionRepository, ht outbound.Histo
 
 		resp := historyResponse{
 			GranularitySec: granularity,
-			BucketCount:    150,
+			BucketCount:    services.HistoryBucketCount,
 			Sessions:       out,
 		}
 		w.Header().Set("Content-Type", "application/json")

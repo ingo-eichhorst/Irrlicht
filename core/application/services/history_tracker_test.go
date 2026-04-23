@@ -65,8 +65,11 @@ func TestHistoryTracker_SnapshotOldestNewest(t *testing.T) {
 	ht := NewHistoryTracker()
 	sid := "order"
 
-	states := []string{"ready", "working", "waiting"}
-	for _, s := range states {
+	// Transition, then tick to seal each bucket before the next transition.
+	// Bucket 0: "ready" (only transition), sealed by tick.
+	// Bucket 1: starts with carry-forward "ready", then "working" upgrades it → "working", sealed.
+	// Bucket 2: starts with carry-forward "working", then "waiting" upgrades it → "waiting", open.
+	for _, s := range []string{"ready", "working", "waiting"} {
 		ht.OnTransition(sid, s, epoch)
 		ht.tick()
 	}
@@ -75,11 +78,16 @@ func TestHistoryTracker_SnapshotOldestNewest(t *testing.T) {
 	if !ok {
 		t.Fatal("snapshot not found")
 	}
-	// The sequence must be oldest→newest. Because carry-forward within each
-	// bucket wins and we transitioned: ready → working → waiting, the last
-	// finalised bucket should be the highest across those ticks.
 	if len(snap) < 3 {
 		t.Fatalf("expected ≥3 entries, got %d", len(snap))
+	}
+
+	// oldest → newest: ready, working, waiting
+	want := []string{"ready", "working", "waiting"}
+	for i, w := range want {
+		if snap[i] != w {
+			t.Errorf("snap[%d] = %q, want %q", i, snap[i], w)
+		}
 	}
 }
 
@@ -120,12 +128,12 @@ func TestHistoryTracker_GranularityVariants(t *testing.T) {
 
 func TestValidGranularity(t *testing.T) {
 	for _, g := range []int{1, 10, 60} {
-		if !ValidGranularity(g) {
+		if !validGranularity(g) {
 			t.Errorf("expected %d to be valid", g)
 		}
 	}
 	for _, g := range []int{0, 2, 5, 30, 100} {
-		if ValidGranularity(g) {
+		if validGranularity(g) {
 			t.Errorf("expected %d to be invalid", g)
 		}
 	}

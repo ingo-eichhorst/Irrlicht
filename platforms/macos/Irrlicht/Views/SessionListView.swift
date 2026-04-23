@@ -210,6 +210,9 @@ struct SessionListView: View {
                 sessionManager.startHistoryPolling(granularitySec: granularitySec)
             }
         }
+        .onDisappear {
+            sessionManager.stopHistoryPolling()
+        }
     }
     
     private var sessionIconsView: some View {

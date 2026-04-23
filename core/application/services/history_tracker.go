@@ -9,7 +9,9 @@ import (
 )
 
 const (
-	historyBucketCount = 150
+	// HistoryBucketCount is the number of buckets retained per granularity per
+	// session. At 1s granularity this is 2.5 min; at 60s it is 2.5 h.
+	HistoryBucketCount = 150
 
 	// statePriority maps state names to an integer so we can apply
 	// waiting > working > ready aggregation within a bucket.
@@ -19,6 +21,16 @@ const (
 )
 
 var validGranularities = []int{1, 10, 60}
+
+// validGranularity reports whether sec is an accepted granularity value (1, 10, or 60).
+func validGranularity(sec int) bool {
+	for _, g := range validGranularities {
+		if g == sec {
+			return true
+		}
+	}
+	return false
+}
 
 func statePriority(s string) int {
 	switch s {
@@ -33,7 +45,7 @@ func statePriority(s string) int {
 
 // ringBuffer is a fixed-size circular buffer of state strings.
 type ringBuffer struct {
-	buckets  [historyBucketCount]int8 // encoded priority; -1 = empty
+	buckets  [HistoryBucketCount]int8 // encoded priority; -1 = empty
 	head     int                      // next-write index
 	size     int                      // number of valid entries
 	tickMod  int                      // advance every tickMod global 1-s ticks
@@ -54,7 +66,7 @@ func (rb *ringBuffer) current() int {
 	if rb.size == 0 {
 		return -1
 	}
-	return (rb.head - 1 + historyBucketCount) % historyBucketCount
+	return (rb.head - 1 + HistoryBucketCount) % HistoryBucketCount
 }
 
 // upgrade writes the highest-priority state into the current open bucket.
@@ -63,7 +75,7 @@ func (rb *ringBuffer) upgrade(newState string) {
 	if rb.size == 0 {
 		// Initialise first bucket.
 		rb.buckets[rb.head] = p
-		rb.head = (rb.head + 1) % historyBucketCount
+		rb.head = (rb.head + 1) % HistoryBucketCount
 		rb.size = 1
 	} else {
 		cur := rb.current()
@@ -85,8 +97,8 @@ func (rb *ringBuffer) tick() {
 	// Carry forward the last known state into the new bucket.
 	p := int8(statePriority(rb.lastState))
 	rb.buckets[rb.head] = p
-	rb.head = (rb.head + 1) % historyBucketCount
-	if rb.size < historyBucketCount {
+	rb.head = (rb.head + 1) % HistoryBucketCount
+	if rb.size < HistoryBucketCount {
 		rb.size++
 	}
 }
@@ -97,9 +109,9 @@ func (rb *ringBuffer) snapshot() []string {
 		return nil
 	}
 	out := make([]string, rb.size)
-	start := (rb.head - rb.size + historyBucketCount) % historyBucketCount
+	start := (rb.head - rb.size + HistoryBucketCount) % HistoryBucketCount
 	for i := 0; i < rb.size; i++ {
-		out[i] = priorityToState(rb.buckets[(start+i)%historyBucketCount])
+		out[i] = priorityToState(rb.buckets[(start+i)%HistoryBucketCount])
 	}
 	return out
 }
@@ -233,12 +245,3 @@ func (h *HistoryTracker) tick() {
 	}
 }
 
-// ValidGranularity reports whether sec is an accepted granularity value.
-func ValidGranularity(sec int) bool {
-	for _, g := range validGranularities {
-		if g == sec {
-			return true
-		}
-	}
-	return false
-}

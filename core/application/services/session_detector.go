@@ -890,6 +890,9 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	delete(d.projectSessions, sessionID)
 	d.deletedSessions[sessionID] = time.Now().Unix()
 	d.mu.Unlock()
+	if d.historyTracker != nil {
+		d.historyTracker.Remove(sessionID)
+	}
 }
 
 // broadcast sends a push notification if a broadcaster is configured. For

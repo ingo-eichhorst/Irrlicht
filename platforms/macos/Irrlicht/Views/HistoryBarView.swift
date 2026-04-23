@@ -13,27 +13,22 @@ struct HistoryBarView: View {
     let states: [String]  // oldest → newest
 
     var body: some View {
-        GeometryReader { geo in
-            if states.isEmpty {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.secondary.opacity(0.12))
-            } else {
-                Canvas { context, size in
-                    let count = states.count
-                    let colW = size.width / CGFloat(count)
-                    for (i, state) in states.enumerated() {
-                        let color = stateColors[state] ?? stateColors["ready"]!
-                        let rect = CGRect(
-                            x: CGFloat(i) * colW,
-                            y: 0,
-                            width: max(colW - 0.5, 0.5),
-                            height: size.height
-                        )
-                        context.fill(Path(rect), with: .color(color))
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 2))
+        Canvas { context, size in
+            guard !states.isEmpty else { return }
+            let count = states.count
+            let colW = size.width / CGFloat(count)
+            for (i, state) in states.enumerated() {
+                let color = stateColors[state] ?? stateColors["ready"]!
+                let rect = CGRect(
+                    x: CGFloat(i) * colW,
+                    y: 0,
+                    width: max(colW - 0.5, 0.5),
+                    height: size.height
+                )
+                context.fill(Path(rect), with: .color(color))
             }
         }
+        .background(states.isEmpty ? Color.secondary.opacity(0.12) : .clear)
+        .clipShape(RoundedRectangle(cornerRadius: 2))
     }
 }
