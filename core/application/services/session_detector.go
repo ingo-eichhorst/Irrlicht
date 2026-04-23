@@ -205,7 +205,6 @@ func (d *SessionDetector) recordCost(state *session.SessionState) {
 
 // record emits a lifecycle event if recording is enabled. It assigns a
 // monotonic sequence number and fills in the timestamp if missing.
-// As a side-effect, state transitions are fed to the optional HistoryTracker.
 func (d *SessionDetector) record(ev lifecycle.Event) {
 	if ev.Kind == lifecycle.KindStateTransition && ev.NewState != "" && d.historyTracker != nil {
 		ts := ev.Timestamp

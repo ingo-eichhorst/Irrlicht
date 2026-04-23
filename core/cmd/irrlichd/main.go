@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -578,17 +579,12 @@ func handleGetSessionsHistory(repo outbound.SessionRepository, ht outbound.Histo
 	return func(w http.ResponseWriter, r *http.Request) {
 		granularity := 1
 		if g := r.URL.Query().Get("granularity"); g != "" {
-			switch g {
-			case "10":
-				granularity = 10
-			case "60":
-				granularity = 60
-			case "1":
-				// default
-			default:
+			n, err := strconv.Atoi(g)
+			if err != nil || (n != 1 && n != 10 && n != 60) {
 				http.Error(w, "granularity must be 1, 10, or 60", http.StatusBadRequest)
 				return
 			}
+			granularity = n
 		}
 
 		sessions, err := repo.ListAll()

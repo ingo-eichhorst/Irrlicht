@@ -598,11 +598,15 @@ struct GroupView: View {
 
     private var isTopLevel: Bool { depth == 0 }
 
-    /// Formatted cost for this group in the currently-selected time frame,
-    /// or nil if no data.
+    /// Formatted cost for this group in the currently-selected time frame.
+    /// Returns nil only when there is no cost data at all (hides the toggle).
+    /// Returns "$0 / <frame>" when data exists for other frames but not this one,
+    /// so the toggle remains visible and clickable.
     private var formattedCost: String? {
         guard showCostDisplay, isTopLevel, !group.isGasTown else { return nil }
-        guard let v = group.costs?[costTimeframe.rawValue], v > 0 else { return nil }
+        guard let costs = group.costs, !costs.isEmpty else { return nil }
+        let v = costs[costTimeframe.rawValue] ?? 0
+        guard v > 0 else { return "$0" + costTimeframe.suffix }
         let formatted: String
         if v < 0.01 { formatted = "<$0.01" }
         else if v < 10 { formatted = String(format: "$%.2f", v) }
