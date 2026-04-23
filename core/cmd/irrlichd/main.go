@@ -189,8 +189,14 @@ func main() {
 	}
 
 	// History tracker: per-session rolling ring buffers for 1s/10s/60s
-	// granularity, kept in memory while the daemon runs.
-	historyTracker := services.NewHistoryTracker()
+	// granularity. State is persisted to ~/.local/share/irrlicht/history.json
+	// and restored on startup so history survives daemon restarts.
+	histDir := func() string {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".local", "share", "irrlicht")
+	}()
+	historyTracker := services.NewHistoryTrackerWithDir(histDir)
+	historyTracker.Load()
 	histCtx, histCancel := context.WithCancel(context.Background())
 	defer histCancel()
 	go historyTracker.Run(histCtx)

@@ -2,6 +2,10 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -10,11 +14,9 @@ import (
 
 const (
 	// HistoryBucketCount is the number of buckets retained per granularity per
-	// session. At 1s granularity this is 2.5 min; at 60s it is 2.5 h.
-	HistoryBucketCount = 150
+	// session. At 1s granularity this is 60 s; at 60s it is 1 h.
+	HistoryBucketCount = 60
 
-	// statePriority maps state names to an integer so we can apply
-	// waiting > working > ready aggregation within a bucket.
 	statePriorityReady   = 0
 	statePriorityWorking = 1
 	statePriorityWaiting = 2
@@ -22,7 +24,6 @@ const (
 
 var validGranularities = []int{1, 10, 60}
 
-// validGranularity reports whether sec is an accepted granularity value (1, 10, or 60).
 func validGranularity(sec int) bool {
 	for _, g := range validGranularities {
 		if g == sec {
@@ -45,12 +46,12 @@ func statePriority(s string) int {
 
 // ringBuffer is a fixed-size circular buffer of state strings.
 type ringBuffer struct {
-	buckets  [HistoryBucketCount]int8 // encoded priority; -1 = empty
-	head     int                      // next-write index
-	size     int                      // number of valid entries
-	tickMod  int                      // advance every tickMod global 1-s ticks
-	tickAcc  int                      // accumulator towards tickMod
-	lastState string                  // carry-forward: last state before current open bucket
+	buckets   [HistoryBucketCount]int8
+	head      int
+	size      int
+	tickMod   int
+	tickAcc   int
+	lastState string
 }
 
 func newRingBuffer(granularitySec int) *ringBuffer {
@@ -61,7 +62,6 @@ func newRingBuffer(granularitySec int) *ringBuffer {
 	return rb
 }
 
-// current returns the index of the currently open (not yet finalised) bucket.
 func (rb *ringBuffer) current() int {
 	if rb.size == 0 {
 		return -1
@@ -69,11 +69,9 @@ func (rb *ringBuffer) current() int {
 	return (rb.head - 1 + HistoryBucketCount) % HistoryBucketCount
 }
 
-// upgrade writes the highest-priority state into the current open bucket.
 func (rb *ringBuffer) upgrade(newState string) {
 	p := int8(statePriority(newState))
 	if rb.size == 0 {
-		// Initialise first bucket.
 		rb.buckets[rb.head] = p
 		rb.head = (rb.head + 1) % HistoryBucketCount
 		rb.size = 1
@@ -86,7 +84,6 @@ func (rb *ringBuffer) upgrade(newState string) {
 	rb.lastState = newState
 }
 
-// tick advances the buffer by one global 1-second tick.
 func (rb *ringBuffer) tick() {
 	rb.tickAcc++
 	if rb.tickAcc < rb.tickMod {
@@ -94,7 +91,6 @@ func (rb *ringBuffer) tick() {
 	}
 	rb.tickAcc = 0
 
-	// Carry forward the last known state into the new bucket.
 	p := int8(statePriority(rb.lastState))
 	rb.buckets[rb.head] = p
 	rb.head = (rb.head + 1) % HistoryBucketCount
@@ -103,7 +99,6 @@ func (rb *ringBuffer) tick() {
 	}
 }
 
-// snapshot returns all valid entries oldest→newest as state strings.
 func (rb *ringBuffer) snapshot() []string {
 	if rb.size == 0 {
 		return nil
@@ -114,6 +109,26 @@ func (rb *ringBuffer) snapshot() []string {
 		out[i] = priorityToState(rb.buckets[(start+i)%HistoryBucketCount])
 	}
 	return out
+}
+
+// restore pre-populates the buffer from a saved snapshot (oldest→newest).
+func (rb *ringBuffer) restore(states []string) {
+	if len(states) == 0 {
+		return
+	}
+	if len(states) > HistoryBucketCount {
+		states = states[len(states)-HistoryBucketCount:]
+	}
+	for i := range rb.buckets {
+		rb.buckets[i] = -1
+	}
+	for i, s := range states {
+		rb.buckets[i] = int8(statePriority(s))
+	}
+	n := len(states)
+	rb.head = n % HistoryBucketCount
+	rb.size = n
+	rb.lastState = states[n-1]
 }
 
 func priorityToState(p int8) string {
@@ -127,9 +142,8 @@ func priorityToState(p int8) string {
 	}
 }
 
-// sessionBuffers holds one ring buffer per supported granularity.
 type sessionBuffers struct {
-	mu  sync.Mutex
+	mu   sync.Mutex
 	bufs [3]*ringBuffer // index 0=1s, 1=10s, 2=60s
 }
 
@@ -154,25 +168,31 @@ func granularityIndex(sec int) int {
 	}
 }
 
-// HistoryTracker maintains per-session rolling state buffers in memory for as
-// long as the daemon runs. Three granularities (1 s / 10 s / 60 s) are kept in
-// parallel; within each bucket, priority aggregation (waiting > working > ready)
-// determines the displayed state.
+// HistoryTracker maintains per-session rolling state buffers in memory.
+// Three granularities (1 s / 10 s / 60 s) are kept in parallel; within each
+// bucket priority aggregation (waiting > working > ready) determines the state.
+// When saveDir is non-empty the tracker persists state to history.json in that
+// directory so history survives daemon restarts.
 type HistoryTracker struct {
 	mu       sync.Mutex
 	sessions map[string]*sessionBuffers
+	saveDir  string
 }
 
-// NewHistoryTracker creates a HistoryTracker ready for use. Call Run(ctx) to
-// start the internal 1-second ticker.
+// NewHistoryTracker creates a HistoryTracker without persistence.
 func NewHistoryTracker() *HistoryTracker {
+	return &HistoryTracker{sessions: make(map[string]*sessionBuffers)}
+}
+
+// NewHistoryTrackerWithDir creates a HistoryTracker that persists state to
+// saveDir/history.json. Call Load() to restore a previous run's state.
+func NewHistoryTrackerWithDir(saveDir string) *HistoryTracker {
 	return &HistoryTracker{
 		sessions: make(map[string]*sessionBuffers),
+		saveDir:  saveDir,
 	}
 }
 
-// OnTransition records a state transition, upgrading all three buffers' current
-// open buckets if the new state has higher priority.
 func (h *HistoryTracker) OnTransition(sessionID, newState string, _ time.Time) {
 	h.mu.Lock()
 	sb, ok := h.sessions[sessionID]
@@ -189,9 +209,6 @@ func (h *HistoryTracker) OnTransition(sessionID, newState string, _ time.Time) {
 	}
 }
 
-// Snapshot returns the ring-buffer contents for a session at the given
-// granularity (1, 10, or 60 seconds), oldest→newest. Returns nil, false when
-// the session is unknown.
 func (h *HistoryTracker) Snapshot(sessionID string, granularitySec int) ([]string, bool) {
 	h.mu.Lock()
 	sb, ok := h.sessions[sessionID]
@@ -206,24 +223,29 @@ func (h *HistoryTracker) Snapshot(sessionID string, granularitySec int) ([]strin
 	return sb.bufs[idx].snapshot(), true
 }
 
-// Remove drops all buffers for a session when it is deleted.
 func (h *HistoryTracker) Remove(sessionID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.sessions, sessionID)
 }
 
-// Run starts the internal 1-second ticker that advances all ring buffers.
-// Blocks until ctx is cancelled.
+// Run starts the internal 1-second ticker. Saves state every 60 ticks and on
+// shutdown. Blocks until ctx is cancelled.
 func (h *HistoryTracker) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	tickCount := 0
 	for {
 		select {
 		case <-ctx.Done():
+			h.save()
 			return
 		case <-ticker.C:
 			h.tick()
+			tickCount++
+			if tickCount%60 == 0 {
+				h.save()
+			}
 		}
 	}
 }
@@ -245,3 +267,71 @@ func (h *HistoryTracker) tick() {
 	}
 }
 
+type historyFile struct {
+	Version  int                            `json:"version"`
+	Sessions map[string]map[string][]string `json:"sessions"`
+}
+
+// Load restores state from saveDir/history.json. Silent on missing or corrupt
+// files — the tracker just starts empty.
+func (h *HistoryTracker) Load() {
+	if h.saveDir == "" {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(h.saveDir, "history.json"))
+	if err != nil {
+		return
+	}
+	var hf historyFile
+	if err := json.Unmarshal(b, &hf); err != nil || hf.Version != 1 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for sid, granMap := range hf.Sessions {
+		sb := newSessionBuffers()
+		for gStr, states := range granMap {
+			g, err := strconv.Atoi(gStr)
+			if err != nil || !validGranularity(g) {
+				continue
+			}
+			sb.bufs[granularityIndex(g)].restore(states)
+		}
+		h.sessions[sid] = sb
+	}
+}
+
+func (h *HistoryTracker) save() {
+	if h.saveDir == "" {
+		return
+	}
+	h.mu.Lock()
+	data := make(map[string]map[string][]string, len(h.sessions))
+	for sid, sb := range h.sessions {
+		sb.mu.Lock()
+		m := make(map[string][]string, 3)
+		for _, g := range validGranularities {
+			if snap := sb.bufs[granularityIndex(g)].snapshot(); len(snap) > 0 {
+				m[strconv.Itoa(g)] = snap
+			}
+		}
+		sb.mu.Unlock()
+		if len(m) > 0 {
+			data[sid] = m
+		}
+	}
+	h.mu.Unlock()
+
+	b, err := json.Marshal(historyFile{Version: 1, Sessions: data})
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(h.saveDir, 0700); err != nil {
+		return
+	}
+	tmp := filepath.Join(h.saveDir, "history.json.tmp")
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, filepath.Join(h.saveDir, "history.json"))
+}

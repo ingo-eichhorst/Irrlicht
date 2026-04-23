@@ -179,6 +179,8 @@ struct SessionListView: View {
             .background(displayMode.isHistory ? Color.accentColor.opacity(0.15) : Color.clear)
             .cornerRadius(4)
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
+            .contentShape(Rectangle())
+            .id("mode-cycle-btn")
 
             statusIndicator
         }
