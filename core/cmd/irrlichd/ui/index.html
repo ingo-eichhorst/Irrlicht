@@ -1426,8 +1426,9 @@
 
       const dpr = window.devicePixelRatio || 1;
       const rows = Array.from(timelineHistory.values());
-      const maxTicks = rows.reduce((m, r) => Math.max(m, r.states.length), 0);
-      const canvasW = TIMELINE_LABEL_W + maxTicks * TIMELINE_COL_W;
+      // Fixed-width canvas — empty slots stay on the LEFT so new ticks always
+      // land at the rightmost column and older buckets shift leftward.
+      const canvasW = TIMELINE_LABEL_W + TIMELINE_MAX_TICKS * TIMELINE_COL_W;
       const canvasH = rows.length * (TIMELINE_ROW_H + TIMELINE_GAP);
 
       canvas.width = canvasW * dpr;
@@ -1457,8 +1458,9 @@
         ctx.textBaseline = 'middle';
         ctx.fillText(rec.label, 2, y + TIMELINE_ROW_H / 2);
 
-        // State columns — right-aligned so newest is at right
-        const startCol = maxTicks - rec.states.length;
+        // State columns — right-aligned within the fixed TIMELINE_MAX_TICKS
+        // window so every row's newest tick sits at the same right edge.
+        const startCol = TIMELINE_MAX_TICKS - rec.states.length;
         for (let t = 0; t < rec.states.length; t++) {
           const state = rec.states[t];
           if (!state) continue;
