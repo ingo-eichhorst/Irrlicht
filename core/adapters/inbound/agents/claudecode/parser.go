@@ -155,7 +155,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// when the turn changes. Claude Code streams multiple events per API turn;
 	// only the final event's token counts are authoritative.
 	if reqID, ok := raw["requestId"].(string); ok && reqID != "" {
-		ev.RequestID = reqID // retain for legacy path during transition
+		ev.RequestID = reqID
 		if reqID != p.lastRequestID {
 			// New turn started — emit the previous turn's contribution.
 			if p.lastRequestID != "" && p.pendingContrib != nil {
@@ -304,24 +304,31 @@ func extractClaudeCodeModel(raw map[string]interface{}) (string, int64) {
 	return modelName, contextWindow
 }
 
+// findUsageMap returns the first usage block found in a Claude Code event.
+// Claude Code places it at raw["usage"], raw["message"]["usage"], or
+// raw["response"]["usage"] depending on event type.
+func findUsageMap(raw map[string]interface{}) map[string]interface{} {
+	if u, ok := raw["usage"].(map[string]interface{}); ok {
+		return u
+	}
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if u, ok := msg["usage"].(map[string]interface{}); ok {
+			return u
+		}
+	}
+	if resp, ok := raw["response"].(map[string]interface{}); ok {
+		if u, ok := resp["usage"].(map[string]interface{}); ok {
+			return u
+		}
+	}
+	return nil
+}
+
 // extractClaudeCodeTokens extracts token info from a Claude Code event.
 // Used for context-utilization display (Tokens field on ParsedEvent).
 func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
-	// Check usage field (Claude API format).
-	if usage, ok := raw["usage"].(map[string]interface{}); ok {
+	if usage := findUsageMap(raw); usage != nil {
 		return tailer.ExtractUsage(usage)
-	}
-	// Check message.usage (Claude Code format).
-	if message, ok := raw["message"].(map[string]interface{}); ok {
-		if usage, ok := message["usage"].(map[string]interface{}); ok {
-			return tailer.ExtractUsage(usage)
-		}
-	}
-	// Check response.usage.
-	if response, ok := raw["response"].(map[string]interface{}); ok {
-		if usage, ok := response["usage"].(map[string]interface{}); ok {
-			return tailer.ExtractUsage(usage)
-		}
 	}
 	return nil
 }
@@ -348,19 +355,7 @@ func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
 // extractAnthropicUsageBreakdown builds a UsageBreakdown from a Claude Code
 // event, including Anthropic's nested 5m/1h cache-write sub-rates when present.
 func extractAnthropicUsageBreakdown(raw map[string]interface{}) tailer.UsageBreakdown {
-	// Find the usage map (same search order as extractClaudeCodeTokens).
-	var usage map[string]interface{}
-	if u, ok := raw["usage"].(map[string]interface{}); ok {
-		usage = u
-	} else if msg, ok := raw["message"].(map[string]interface{}); ok {
-		if u, ok := msg["usage"].(map[string]interface{}); ok {
-			usage = u
-		}
-	} else if resp, ok := raw["response"].(map[string]interface{}); ok {
-		if u, ok := resp["usage"].(map[string]interface{}); ok {
-			usage = u
-		}
-	}
+	usage := findUsageMap(raw)
 	if usage == nil {
 		return tailer.UsageBreakdown{}
 	}

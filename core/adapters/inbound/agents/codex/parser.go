@@ -66,7 +66,6 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			}
 			p.cursor = *cumBreakdown
 		}
-		// Keep ev.CumulativeTokens for the legacy tailer path during transition.
 		ev.CumulativeTokens = ev.Tokens
 	}
 

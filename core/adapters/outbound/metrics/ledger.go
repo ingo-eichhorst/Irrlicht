@@ -6,11 +6,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"irrlicht/core/pkg/tailer"
 )
 
 const ledgerSchemaVersion = 1
+
+var ledgerDirOnce sync.Once
+
+// ensureLedgerDir creates the ledger directory on the first call; subsequent
+// calls are no-ops. Silent on error — a missing dir causes saveLedger to fail
+// silently, which is acceptable.
+func ensureLedgerDir() {
+	ledgerDirOnce.Do(func() {
+		dir, err := ledgerDir()
+		if err != nil {
+			return
+		}
+		_ = os.MkdirAll(dir, 0o755)
+	})
+}
 
 // ledgerDir returns the directory where per-session ledger files are stored.
 func ledgerDir() (string, error) {
@@ -59,9 +75,7 @@ func saveLedger(path string, state tailer.LedgerState) {
 	if path == "" {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
+	ensureLedgerDir()
 	data, err := json.Marshal(state)
 	if err != nil {
 		return

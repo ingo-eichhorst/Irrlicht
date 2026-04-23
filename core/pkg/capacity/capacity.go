@@ -127,6 +127,22 @@ func (cm *CapacityManager) MergeRemoteModels(remote *CapacityConfig) {
 	}
 }
 
+// logPricingMiss emits a one-per-model warning when pricing is absent.
+func (cm *CapacityManager) logPricingMiss(modelName string) {
+	if modelName == "" {
+		return
+	}
+	cm.loggedMissesMu.Lock()
+	if cm.loggedMisses == nil {
+		cm.loggedMisses = make(map[string]bool)
+	}
+	if !cm.loggedMisses[modelName] {
+		cm.loggedMisses[modelName] = true
+		log.Printf("irrlicht/capacity: no pricing for model %q — cost will be 0 until LiteLLM cache is refreshed", modelName)
+	}
+	cm.loggedMissesMu.Unlock()
+}
+
 // EstimateCostUSD calculates the cost in USD from token breakdowns.
 // Returns 0 when pricing data is unavailable (model missing from LiteLLM,
 // or cache not yet fetched). Logs a one-per-model warning on miss so silent
@@ -134,17 +150,7 @@ func (cm *CapacityManager) MergeRemoteModels(remote *CapacityConfig) {
 func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) float64 {
 	cap := cm.GetModelCapacity(modelName)
 	if cap.Pricing == nil {
-		if modelName != "" {
-			cm.loggedMissesMu.Lock()
-			if cm.loggedMisses == nil {
-				cm.loggedMisses = make(map[string]bool)
-			}
-			if !cm.loggedMisses[modelName] {
-				cm.loggedMisses[modelName] = true
-				log.Printf("irrlicht/capacity: no pricing for model %q — cost will be 0 until LiteLLM cache is refreshed", modelName)
-			}
-			cm.loggedMissesMu.Unlock()
-		}
+		cm.logPricingMiss(modelName)
 		return 0
 	}
 	p := cap.Pricing
@@ -161,17 +167,7 @@ func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, output
 func (cm *CapacityManager) EstimateCostFromBreakdown(modelName string, input, output, cacheRead, cacheCreate5m, cacheCreate1h int64) float64 {
 	cap := cm.GetModelCapacity(modelName)
 	if cap.Pricing == nil {
-		if modelName != "" {
-			cm.loggedMissesMu.Lock()
-			if cm.loggedMisses == nil {
-				cm.loggedMisses = make(map[string]bool)
-			}
-			if !cm.loggedMisses[modelName] {
-				cm.loggedMisses[modelName] = true
-				log.Printf("irrlicht/capacity: no pricing for model %q — cost will be 0 until LiteLLM cache is refreshed", modelName)
-			}
-			cm.loggedMissesMu.Unlock()
-		}
+		cm.logPricingMiss(modelName)
 		return 0
 	}
 	p := cap.Pricing

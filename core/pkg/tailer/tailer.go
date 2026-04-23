@@ -221,16 +221,10 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		CumProviderCostUSD: t.cumProviderCostUSD,
 	}
 	if len(t.cumByModel) > 0 {
-		// Deep-copy so the returned state is not aliased to the live map.
-		// The caller (metrics adapter) serialises this to JSON immediately,
-		// but a defensive copy ensures correctness if the pattern ever changes.
-		s.CumByModel = make(map[string]*UsageBreakdown, len(t.cumByModel))
-		for k, v := range t.cumByModel {
-			if v != nil {
-				copied := *v
-				s.CumByModel[k] = &copied
-			}
-		}
+		// Direct assignment is safe: the caller JSON-marshals immediately
+		// while holding the per-tailer lock, so TailAndProcess cannot run
+		// concurrently and mutate the map during the marshal.
+		s.CumByModel = t.cumByModel
 	}
 	if pp, ok := t.parser.(ParserStateProvider); ok {
 		pl := pp.GetParserLedger()
@@ -493,9 +487,6 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 			// Provider-reported cost: use directly, don't add tokens to cumByModel.
 			t.cumProviderCostUSD += *c.ProviderCostUSD
 		} else if c.Model != "" || c.Usage.Input > 0 || c.Usage.Output > 0 {
-			if t.cumByModel == nil {
-				t.cumByModel = make(map[string]*UsageBreakdown)
-			}
 			bd := t.cumByModel[c.Model]
 			if bd == nil {
 				bd = &UsageBreakdown{}
