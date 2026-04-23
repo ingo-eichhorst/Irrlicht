@@ -21,13 +21,24 @@ enum SessionLauncher {
     private static let activators: [HostActivator] = [
         ITermActivator(),
         TerminalAppActivator(),
-        AXTitleMatchActivator(termProgram: "vscode",   bundleID: "com.microsoft.VSCode"),
-        AXTitleMatchActivator(termProgram: "cursor",   bundleID: "com.todesktop.230313mzl4w4u92"),
-        AXTitleMatchActivator(termProgram: "windsurf", bundleID: "com.exafunction.windsurf"),
-        AXTitleMatchActivator(termProgram: "ghostty",  bundleID: "com.mitchellh.ghostty"),
-        AXTitleMatchActivator(termProgram: "WezTerm",  bundleID: "com.github.wez.wezterm"),
-        AXTitleMatchActivator(termProgram: "Hyper",    bundleID: "co.zeit.hyper"),
-        AXTitleMatchActivator(termProgram: "Warp",     bundleID: "dev.warp.Warp-Stable"),
+        AXTitleMatchActivator(termProgram: "vscode",    bundleID: "com.microsoft.VSCode"),
+        AXTitleMatchActivator(termProgram: "cursor",    bundleID: "com.todesktop.230313mzl4w4u92"),
+        AXTitleMatchActivator(termProgram: "windsurf",  bundleID: "com.exafunction.windsurf"),
+        AXTitleMatchActivator(termProgram: "ghostty",   bundleID: "com.mitchellh.ghostty"),
+        AXTitleMatchActivator(termProgram: "WezTerm",   bundleID: "com.github.wez.wezterm"),
+        AXTitleMatchActivator(termProgram: "Hyper",     bundleID: "co.zeit.hyper"),
+        AXTitleMatchActivator(termProgram: "Warp",      bundleID: "dev.warp.Warp-Stable"),
+        // JetBrains IDEs — fan-out activator resolves which IDE is running.
+        JetBrainsActivator(),
+        // Additional terminals and IDEs
+        AXTitleMatchActivator(termProgram: "zed",       bundleID: "dev.zed.Zed"),
+        KittyActivator(),
+        AXTitleMatchActivator(termProgram: "rio",       bundleID: "com.raphaelamorim.rio"),
+        AXTitleMatchActivator(termProgram: "tabby",     bundleID: "org.tabby"),
+        AXTitleMatchActivator(termProgram: "waveterm",  bundleID: "dev.commandline.waveterm"),
+        AXTitleMatchActivator(termProgram: "alacritty", bundleID: "org.alacritty"),
+        AXTitleMatchActivator(termProgram: "nova",      bundleID: "com.panic.Nova"),
+        AXTitleMatchActivator(termProgram: "cmux",      bundleID: "com.cmuxterm.app"),
     ]
 
     /// Brings the session's originating terminal/IDE window to the front.
@@ -38,10 +49,15 @@ enum SessionLauncher {
             logger.info("no launcher for session \(session.id, privacy: .public)")
             return
         }
-        guard let activator = activators.first(where: { $0.termProgram == tp }) else {
+        guard let base = activators.first(where: { $0.termProgram == tp }) else {
             logger.info("no activator for term program \(tp, privacy: .public)")
             return
         }
+        // Wrap with TmuxActivator when the session lives inside a tmux pane
+        // so the correct pane is selected before the host window is raised.
+        let activator: HostActivator = session.launcher?.tmuxPane != nil
+            ? TmuxActivator(inner: base)
+            : base
         _ = activator.activate(session)
     }
 

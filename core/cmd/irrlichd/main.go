@@ -24,6 +24,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
+	sessionshandler "irrlicht/core/adapters/inbound/sessions"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
@@ -331,6 +332,9 @@ func main() {
 	// Register API endpoints (after orchMonitor is available).
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker))
 	mux.HandleFunc("GET /api/v1/sessions/history", handleGetSessionsHistory(cachedRepo, historyTracker))
+
+	focusService := services.NewFocusService(cachedRepo, push, logger)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
 
 	// Inbound adapters: watch agent transcript directories for session files.
 	claudeCodeWatcher := claudecode.New(cfg.MaxSessionAge)

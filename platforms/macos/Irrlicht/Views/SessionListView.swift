@@ -23,22 +23,25 @@ extension View {
     }
 }
 
-enum SessionViewMode: String {
-    case meta    // Context / Money / Model (default)
-    case history // Historical activity bar
-}
+enum DisplayMode: String, CaseIterable {
+    case context   = "Context"
+    case history1s  = "1s"
+    case history10s = "10s"
+    case history60s = "60s"
 
-enum HistoryGranularity: Int, CaseIterable {
-    case oneSecond = 1
-    case tenSeconds = 10
-    case sixtySeconds = 60
+    var isHistory: Bool { self != .context }
 
-    var label: String {
+    var granularitySec: Int {
         switch self {
-        case .oneSecond:   return "1s"
-        case .tenSeconds:  return "10s"
-        case .sixtySeconds: return "60s"
+        case .context, .history1s:  return 1
+        case .history10s:           return 10
+        case .history60s:           return 60
         }
+    }
+
+    func next() -> DisplayMode {
+        let all = Self.allCases
+        return all[((all.firstIndex(of: self) ?? 0) + 1) % all.count]
     }
 }
 
@@ -48,11 +51,9 @@ struct SessionListView: View {
     @State private var isQuitButtonHovered = false
     @State private var isSettingsButtonHovered = false
     @State private var showSettings = false
-    @AppStorage("sessionViewMode") private var viewModeRaw: String = SessionViewMode.meta.rawValue
-    @AppStorage("historyGranularitySec") private var granularitySec: Int = 1
+    @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
 
-    private var viewMode: SessionViewMode { SessionViewMode(rawValue: viewModeRaw) ?? .meta }
-    private var granularity: HistoryGranularity { HistoryGranularity(rawValue: granularitySec) ?? .oneSecond }
+    private var displayMode: DisplayMode { DisplayMode(rawValue: displayModeRaw) ?? .context }
 
     var body: some View {
         if showSettings {
@@ -145,69 +146,47 @@ struct SessionListView: View {
     // MARK: - Session Header
 
     private var sessionHeaderView: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                HStack(spacing: 4) {
-                    Text("Irrlicht v\(appVersion)")
-                        .font(.headline)
-                        .foregroundColor(.primary)
+        HStack {
+            HStack(spacing: 4) {
+                Text("Irrlicht v\(appVersion)")
+                    .font(.headline)
+                    .foregroundColor(.primary)
 
-                    Text("—")
-                        .foregroundColor(.secondary)
+                Text("—")
+                    .foregroundColor(.secondary)
 
-                    sessionIconsView
-                }
-
-                Spacer()
-
-                // View-mode toggle
-                Picker("", selection: Binding(
-                    get: { viewMode },
-                    set: { newMode in
-                        viewModeRaw = newMode.rawValue
-                        if newMode == .history {
-                            sessionManager.startHistoryPolling(granularitySec: granularitySec)
-                        } else {
-                            sessionManager.stopHistoryPolling()
-                        }
-                    }
-                )) {
-                    Text("Meta").tag(SessionViewMode.meta)
-                    Text("History").tag(SessionViewMode.history)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 130)
-
-                statusIndicator
+                sessionIconsView
             }
 
-            // Granularity picker — only visible in history mode
-            if viewMode == .history {
-                HStack(spacing: 4) {
-                    Text("Interval:")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(.secondary)
-                    ForEach(HistoryGranularity.allCases, id: \.rawValue) { g in
-                        Button(g.label) {
-                            granularitySec = g.rawValue
-                            sessionManager.startHistoryPolling(granularitySec: g.rawValue)
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 9, design: .monospaced))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(granularitySec == g.rawValue ? Color.accentColor.opacity(0.2) : Color.clear)
-                        .cornerRadius(3)
-                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.3)))
-                    }
+            Spacer()
+
+            Button {
+                let next = displayMode.next()
+                displayModeRaw = next.rawValue
+                if next.isHistory {
+                    sessionManager.startHistoryPolling(granularitySec: next.granularitySec)
+                } else {
+                    sessionManager.stopHistoryPolling()
                 }
+            } label: {
+                Text(displayMode.rawValue)
+                    .font(.system(size: 10, design: .monospaced))
+                    .frame(width: 44)
             }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(displayMode.isHistory ? Color.accentColor.opacity(0.15) : Color.clear)
+            .cornerRadius(4)
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
+
+            statusIndicator
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .onAppear {
-            if viewMode == .history {
-                sessionManager.startHistoryPolling(granularitySec: granularitySec)
+            if displayMode.isHistory {
+                sessionManager.startHistoryPolling(granularitySec: displayMode.granularitySec)
             }
         }
         .onDisappear {
@@ -308,11 +287,11 @@ struct SessionRowView: View {
     var activeSubagentCount: Int = 0
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
-    @AppStorage("sessionViewMode") private var viewModeRaw: String = SessionViewMode.meta.rawValue
+    @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
     @EnvironmentObject var sessionManager: SessionManager
     @State private var isHovered = false
 
-    private var viewMode: SessionViewMode { SessionViewMode(rawValue: viewModeRaw) ?? .meta }
+    private var displayMode: DisplayMode { DisplayMode(rawValue: displayModeRaw) ?? .context }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -355,7 +334,7 @@ struct SessionRowView: View {
                     .lineLimit(1)
                     .tooltip(session.gitBranch ?? "—")
 
-                if viewMode == .meta {
+                if displayMode == .context {
                     // Context utilization bar
                     if let metrics = session.metrics, metrics.hasContextData {
                         ContextBar(utilization: metrics.contextUtilization,
@@ -380,8 +359,9 @@ struct SessionRowView: View {
 
                 Spacer()
 
-                if viewMode == .history {
-                    HistoryBarView(states: sessionManager.stateHistory[session.id] ?? [])
+                if displayMode.isHistory {
+                    HistoryBarView(states: sessionManager.stateHistory[session.id] ?? [],
+                                   bucketCount: sessionManager.historyBucketCount)
                         .frame(width: 120, height: 6)
                 } else {
                     // Short model name + adapter icon

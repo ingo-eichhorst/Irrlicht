@@ -19,6 +19,7 @@ class SessionManager: ObservableObject {
     @Published var lastError: String?
     @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
     @Published var stateHistory: [String: [String]] = [:]  // session_id → oldest→newest state strings
+    @Published var historyBucketCount: Int = 150
 
     /// Timer that periodically re-hydrates sessions so group-level cost
     /// values (which only ride the /api/v1/sessions response) stay fresh —
@@ -268,9 +269,13 @@ class SessionManager: ObservableObject {
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             struct HistoryResponse: Decodable {
                 let sessions: [String: [String]]
+                let bucketCount: Int
             }
-            let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let decoded = try decoder.decode(HistoryResponse.self, from: data)
             stateHistory = decoded.sessions
+            historyBucketCount = decoded.bucketCount
         } catch {
             // Non-fatal: history is optional.
         }
@@ -343,6 +348,16 @@ class SessionManager: ObservableObject {
                     sessionOrder.removeAll { $0 == session.id }
                     rebuildSessionsFromMap()
                     scheduleRehydration()
+                }
+            case "focus_requested":
+                // A client (irrlicht-focus CLI or third-party integration) has
+                // asked the daemon to bring this session's host window forward.
+                // The daemon always includes the full session in this envelope.
+                // Must dispatch to main — SessionLauncher is @MainActor-adjacent.
+                if let session = envelope.session {
+                    DispatchQueue.main.async {
+                        SessionLauncher.jump(session)
+                    }
                 }
             default:
                 break

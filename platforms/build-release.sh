@@ -29,27 +29,29 @@ echo "Syncing web frontend..."
 mkdir -p core/cmd/irrlichd/ui
 cp platforms/web/index.html core/cmd/irrlichd/ui/index.html
 
-# ── 2. Build Go daemon (universal binary) ─────────────────────────────
+# ── 2. Build Go binaries (universal) ─────────────────────────────────
 echo ""
-echo "Building daemon..."
+echo "Building Go binaries..."
 
-echo "  arm64..."
+build_universal() {
+    local pkg="$1"
+    local out="$2"
+    echo "  Building $out..."
+    GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" \
+        -o "../$BUILD_DIR/${out}-darwin-arm64" "$pkg"
+    GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" \
+        -o "../$BUILD_DIR/${out}-darwin-amd64" "$pkg"
+    lipo -create -output "../$BUILD_DIR/${out}-darwin-universal" \
+        "../$BUILD_DIR/${out}-darwin-arm64" \
+        "../$BUILD_DIR/${out}-darwin-amd64"
+}
+
 cd core
-GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" \
-    -o "../$BUILD_DIR/${DAEMON_NAME}-darwin-arm64" ./cmd/irrlichd/
-
-echo "  amd64..."
-GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" \
-    -o "../$BUILD_DIR/${DAEMON_NAME}-darwin-amd64" ./cmd/irrlichd/
-
+build_universal "./cmd/irrlichd/"       "$DAEMON_NAME"
+build_universal "./cmd/irrlicht-focus/" "irrlicht-focus"
 cd ..
 
-echo "  Creating universal binary..."
-lipo -create -output "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" \
-    "$BUILD_DIR/${DAEMON_NAME}-darwin-arm64" \
-    "$BUILD_DIR/${DAEMON_NAME}-darwin-amd64"
-
-echo "  Testing..."
+echo "  Testing daemon..."
 "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" --version
 
 # ── 3. Build Swift macOS app (.app bundle) ─────────────────────────────
@@ -79,10 +81,12 @@ mkdir -p "$APP_CONTENTS/Resources"
 
 cp "$SWIFT_BIN" "$APP_CONTENTS/MacOS/${APP_NAME}"
 
-# Embed daemon inside the app bundle (single-artifact distribution)
+# Embed daemon and CLI tools inside the app bundle (single-artifact distribution)
 cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
 chmod 755 "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
-echo "  Embedded daemon in app bundle"
+cp "$BUILD_DIR/irrlicht-focus-darwin-universal" "$APP_CONTENTS/MacOS/irrlicht-focus"
+chmod 755 "$APP_CONTENTS/MacOS/irrlicht-focus"
+echo "  Embedded daemon and irrlicht-focus in app bundle"
 
 # Generate Info.plist with resolved variables
 cat > "$APP_CONTENTS/Info.plist" <<PLIST

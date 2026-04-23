@@ -764,7 +764,7 @@ section {
 
 .supported-columns {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 1.5rem;
   margin-top: 4rem;
 }
@@ -801,6 +801,7 @@ section {
 .col-purple h3 { color: var(--working); }
 .col-orange h3 { color: var(--waiting); }
 .col-green  h3 { color: var(--ready); }
+.col-blue   h3 { color: #60a5fa; }
 
 .supported-item {
   display: flex;
@@ -822,6 +823,7 @@ section {
 .col-purple .si-dot { background: var(--working); box-shadow: 0 0 6px var(--working); }
 .col-orange .si-dot { background: var(--waiting); box-shadow: 0 0 6px var(--waiting); }
 .col-green  .si-dot { background: var(--ready); box-shadow: 0 0 6px var(--ready); }
+.col-blue   .si-dot { background: #60a5fa; box-shadow: 0 0 6px #60a5fa; }
 
 .supported-item .si-name {
   font-size: 0.9rem;
@@ -1371,6 +1373,60 @@ footer {
         </div>
       </div>
 
+      <div class="supported-col col-blue">
+        <h3>Terminals &amp; IDEs</h3>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">iTerm2</span>
+          <span class="si-tag tag-live">exact tab</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Apple Terminal</span>
+          <span class="si-tag tag-live">exact tab</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">VS Code / Cursor / Windsurf</span>
+          <span class="si-tag tag-live">best window</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Ghostty / WezTerm / Warp / Hyper</span>
+          <span class="si-tag tag-live">best window</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">JetBrains IDEs (GoLand, IntelliJ…)</span>
+          <span class="si-tag tag-live">best window</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Zed</span>
+          <span class="si-tag tag-live">best window</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">kitty</span>
+          <span class="si-tag tag-live">exact window</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Rio / Tabby / Wave / Alacritty</span>
+          <span class="si-tag tag-live">best window</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Nova / cmux</span>
+          <span class="si-tag tag-live">best window</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">tmux (inside any host)</span>
+          <span class="si-tag tag-live">exact pane</span>
+        </div>
+      </div>
+
       <div class="supported-col col-green">
         <h3>Platforms</h3>
         <div class="supported-item">
@@ -1385,7 +1441,7 @@ footer {
         </div>
         <div class="supported-item">
           <div class="si-dot"></div>
-          <span class="si-name">CLI (irrlicht-ls)</span>
+          <span class="si-name">CLI (irrlicht-ls, irrlicht-focus)</span>
           <span class="si-tag tag-live">live</span>
         </div>
         <div class="supported-item">
