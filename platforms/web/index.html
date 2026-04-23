@@ -836,6 +836,7 @@
     let timelineHistory = new Map(); // session_id -> {label, states: string[]}
     let currentGranularity = parseInt(localStorage.getItem('irrlicht_granularity') || '1', 10);
     if (![1, 10, 60].includes(currentGranularity)) currentGranularity = 1;
+    let currentBucketCount = 150;
 
     // --- SVG Icons (compact 12px) ---
     const svgIcons = {
@@ -1484,10 +1485,10 @@
       ctx.clearRect(0, 0, w, h);
       if (!rec || !rec.states.length) return;
       const states = rec.states;
-      const colW = w / states.length;
+      const colW = w / currentBucketCount;
       for (let i = 0; i < states.length; i++) {
         ctx.fillStyle = stateColors[states[i]] || '#1a2340';
-        ctx.fillRect(i * colW, 0, colW - 0.5, h);
+        ctx.fillRect(i * colW, 0, Math.max(colW, 0.5), h);
       }
     }
 
@@ -1497,6 +1498,7 @@
         .then(r => r.json()).catch(() => null)
         .then(resp => {
           if (!resp) return;
+          if (resp.bucket_count) currentBucketCount = resp.bucket_count;
           const newMap = new Map();
           for (const [sid, states] of Object.entries(resp.sessions || {})) {
             const entry = sessionIndex.get(sid);

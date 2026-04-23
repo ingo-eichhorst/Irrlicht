@@ -850,6 +850,9 @@ func (d *SessionDetector) seedFromDisk() {
 		// for idle sessions that never get another transcript_activity
 		// event to trigger RefreshOnActivity + Save.
 		_ = d.repo.Save(state)
+		if d.historyTracker != nil {
+			d.historyTracker.OnTransition(state.SessionID, state.State, time.Now())
+		}
 	}
 
 	// Backfill ProjectName / CWD / GitBranch for sessions that were saved
