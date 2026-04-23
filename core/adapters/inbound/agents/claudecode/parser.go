@@ -242,7 +242,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 								desc, _ := input["description"].(string)
 								activeForm, _ := input["activeForm"].(string)
 								ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-									Op:          "create",
+									Op:          tailer.TaskOpCreate,
 									Subject:     subject,
 									Description: desc,
 									ActiveForm:  activeForm,
@@ -253,7 +253,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 								taskID, _ := input["taskId"].(string)
 								status, _ := input["status"].(string)
 								ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-									Op:     "update",
+									Op:     tailer.TaskOpUpdate,
 									ID:     taskID,
 									Status: status,
 								})

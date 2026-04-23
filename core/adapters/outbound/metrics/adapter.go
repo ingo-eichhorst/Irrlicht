@@ -123,18 +123,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 			}
 		}
 	}
-	if len(m.Tasks) > 0 {
-		result.Tasks = make([]session.Task, len(m.Tasks))
-		for i, t := range m.Tasks {
-			result.Tasks[i] = session.Task{
-				ID:          t.ID,
-				Subject:     t.Subject,
-				Description: t.Description,
-				ActiveForm:  t.ActiveForm,
-				Status:      t.Status,
-			}
-		}
-	}
+	result.Tasks = tailerTasksToDomain(m.Tasks)
 	if result.ModelName == "" {
 		result.ModelName = "unknown"
 	}
@@ -142,4 +131,22 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		result.PressureLevel = "unknown"
 	}
 	return result, nil
+}
+
+// tailerTasksToDomain converts a tailer task slice to the domain mirror type.
+func tailerTasksToDomain(src []tailer.Task) []session.Task {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]session.Task, len(src))
+	for i, t := range src {
+		dst[i] = session.Task{
+			ID:          t.ID,
+			Subject:     t.Subject,
+			Description: t.Description,
+			ActiveForm:  t.ActiveForm,
+			Status:      t.Status,
+		}
+	}
+	return dst
 }

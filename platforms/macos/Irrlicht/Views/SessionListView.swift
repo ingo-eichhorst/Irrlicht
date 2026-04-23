@@ -508,7 +508,7 @@ private struct FlowLayout: Layout {
 
 /// Compact dot-progress row: one circle per task (filled = done, empty = pending) + "4 / 6" count.
 /// Dots wrap to the next line when the row is full.
-struct TaskListView: View {
+private struct TaskListView: View {
     let tasks: [SessionTask]
 
     var body: some View {

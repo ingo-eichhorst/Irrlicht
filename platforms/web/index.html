@@ -506,7 +506,7 @@
     .task-dot.task-completed  { background: var(--ready); border: 1.5px solid var(--ready); }
     .row-task-count {
       font-size: 9px;
-      color: var(--text-secondary);
+      color: var(--muted);
       margin-left: 2px;
       font-family: var(--font-mono);
     }
@@ -1298,7 +1298,7 @@
       const allDone = tasks && tasks.length > 0 && tasks.every(t => t.status === 'completed');
       if (tasks && tasks.length > 0 && !allDone) {
         tasksEl.style.display = '';
-        const done = tasks.filter(t => t.status === 'completed' || t.status === 'in_progress').length;
+        const done = tasks.filter(t => t.status === 'completed').length;
         const taskLabel = (t) => (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
         const newHtml = tasks.map(t => {
           const tip = taskLabel(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');

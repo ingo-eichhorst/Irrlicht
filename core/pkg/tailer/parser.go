@@ -26,11 +26,14 @@ type SubagentCompletion struct {
 	Status    string // <status> — "completed", etc.
 }
 
-// Task status values used in TaskCreate / TaskUpdate tool_use events.
+// Task status and operation constants for TaskCreate / TaskUpdate tool_use events.
 const (
 	TaskStatusPending    = "pending"
 	TaskStatusInProgress = "in_progress"
 	TaskStatusCompleted  = "completed"
+
+	TaskOpCreate = "create"
+	TaskOpUpdate = "update"
 )
 
 // Task represents a single item in the session's Claude Code task list,

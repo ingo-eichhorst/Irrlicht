@@ -200,7 +200,9 @@ type TranscriptTailer struct {
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
 	tasks   []Task
-	taskSeq int // counter: next id to assign on TaskCreate
+	// taskSeq is the next sequential ID to assign on TaskCreate.
+	// Invariant: taskSeq == len(tasks) always (tasks are never removed).
+	taskSeq int
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path.
@@ -402,7 +404,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		}
 		for _, d := range parsed.TaskDeltas {
 			switch d.Op {
-			case "create":
+			case TaskOpCreate:
 				t.taskSeq++
 				t.tasks = append(t.tasks, Task{
 					ID:          strconv.Itoa(t.taskSeq),
@@ -411,7 +413,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 					ActiveForm:  d.ActiveForm,
 					Status:      TaskStatusPending,
 				})
-			case "update":
+			case TaskOpUpdate:
 				for i := range t.tasks {
 					if t.tasks[i].ID == d.ID {
 						if d.Status != "" {
