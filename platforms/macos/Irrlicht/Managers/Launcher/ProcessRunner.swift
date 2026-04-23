@@ -33,11 +33,10 @@ enum ProcessRunner {
             return Result(status: -1, stdout: "", stderr: error.localizedDescription)
         }
 
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        while proc.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        if proc.isRunning {
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global().async { proc.waitUntilExit(); group.leave() }
+        if group.wait(timeout: .now() + timeout) == .timedOut {
             proc.terminate()
             logger.info("ProcessRunner timed out after \(timeout)s: \(launchPath, privacy: .public)")
             return Result(status: -1, stdout: "", stderr: "timeout")

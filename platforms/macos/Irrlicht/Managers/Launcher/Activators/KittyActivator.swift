@@ -34,10 +34,7 @@ struct KittyActivator: HostActivator {
 
     @discardableResult
     private func focusViaSocket(socket: String, windowID: String) -> Bool {
-        // $KITTY_LISTEN_ON is in the form "unix:/path/to/socket" or "tcp:host:port".
-        // `kitten @` accepts the value directly via --to.
-        let kitten = findKitten()
-        guard let kitten else {
+        guard let kitten = Self.kittenPath else {
             Self.logger.info("kitten not found; falling back to app-level activation")
             return AppActivator.activate(bundleID: bundleID) { _ in }
         }
@@ -55,15 +52,14 @@ struct KittyActivator: HostActivator {
         return false
     }
 
-    /// Resolves the `kitten` binary. Tries the kitty app bundle first, then
-    /// the default Homebrew / user-local paths.
-    private func findKitten() -> String? {
+    private static let kittenPath: String? = {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
         let candidates = [
             "/Applications/kitty.app/Contents/MacOS/kitten",
             "/usr/local/bin/kitten",
             "/opt/homebrew/bin/kitten",
-            (ProcessInfo.processInfo.environment["HOME"] ?? "") + "/.local/bin/kitten",
+            home + "/.local/bin/kitten",
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-    }
+    }()
 }

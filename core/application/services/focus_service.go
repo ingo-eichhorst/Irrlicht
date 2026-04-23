@@ -26,9 +26,6 @@ func NewFocusService(repo outbound.SessionRepository, push outbound.PushBroadcas
 // and broadcasts a focus_requested push message. Returns an error that callers
 // can map to an HTTP status code.
 func (s *FocusService) RequestFocus(sessionID string) error {
-	if sessionID == "" {
-		return fmt.Errorf("session id required")
-	}
 	state, err := s.repo.Load(sessionID)
 	if err != nil {
 		return fmt.Errorf("session not found")

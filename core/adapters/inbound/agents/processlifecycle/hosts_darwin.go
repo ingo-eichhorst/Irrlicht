@@ -39,7 +39,6 @@ var termProgramByAppName = map[string]string{
 	"Rider":            "jetbrains",
 	"CLion":            "jetbrains",
 	"RustRover":        "jetbrains",
-	// Additional terminals and IDEs
 	"Zed":       "zed",
 	"kitty":     "kitty",
 	"Rio":       "rio",

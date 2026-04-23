@@ -70,6 +70,10 @@ struct AXTitleMatchActivator: HostActivator {
     private static let genericTopSegments: Set<String> = [
         "Users", "home", "tmp", "var", "private", "opt", "mnt", "root"
     ]
+    private static let homeBasename: String = {
+        (ProcessInfo.processInfo.environment["HOME"] ?? "")
+            .split(separator: "/").last.map(String.init) ?? ""
+    }()
 
     /// Scores a window title against a cwd. Higher score = better match.
     /// Returns 0 when the title shares no meaningful path segment with cwd.
@@ -93,9 +97,6 @@ struct AXTitleMatchActivator: HostActivator {
 
         let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
         let parts = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-
-        let homeBasename = (ProcessInfo.processInfo.environment["HOME"] ?? "")
-            .split(separator: "/").last.map(String.init) ?? ""
 
         for i in (0..<parts.count).reversed() {
             let p = parts[i]
@@ -135,8 +136,6 @@ struct AXTitleMatchActivator: HostActivator {
     static func cwdSegmentMatchCount(title: String, cwd: String) -> Int {
         if title.isEmpty || cwd.isEmpty { return 0 }
         let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
-        let homeBasename = (ProcessInfo.processInfo.environment["HOME"] ?? "")
-            .split(separator: "/").last.map(String.init) ?? ""
         let segments = trimmed
             .split(separator: "/", omittingEmptySubsequences: true)
             .map(String.init)
