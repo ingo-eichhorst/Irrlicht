@@ -288,23 +288,27 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		return newM
 	}
 	merged := &SessionMetrics{
-		ElapsedSeconds:       newM.ElapsedSeconds,
-		TotalTokens:          newM.TotalTokens,
-		ModelName:            newM.ModelName,
-		ContextWindow:        newM.ContextWindow,
-		ContextUtilization:   newM.ContextUtilization,
-		PressureLevel:        newM.PressureLevel,
-		HasOpenToolCall:      newM.HasOpenToolCall,
-		OpenToolCallCount:    newM.OpenToolCallCount,
-		OpenSubagents:        newM.OpenSubagents,
-		LastEventType:        newM.LastEventType,
-		LastOpenToolNames:    newM.LastOpenToolNames,
-		LastWasUserInterrupt: newM.LastWasUserInterrupt,
-		LastWasToolDenial:    newM.LastWasToolDenial,
-		EstimatedCostUSD:     newM.EstimatedCostUSD,
-		LastAssistantText:    newM.LastAssistantText,
-		PermissionMode:       newM.PermissionMode,
-		SubagentCompletions:  newM.SubagentCompletions,
+		ElapsedSeconds:         newM.ElapsedSeconds,
+		TotalTokens:            newM.TotalTokens,
+		ModelName:              newM.ModelName,
+		ContextWindow:          newM.ContextWindow,
+		ContextUtilization:     newM.ContextUtilization,
+		PressureLevel:          newM.PressureLevel,
+		HasOpenToolCall:        newM.HasOpenToolCall,
+		OpenToolCallCount:      newM.OpenToolCallCount,
+		OpenSubagents:          newM.OpenSubagents,
+		LastEventType:          newM.LastEventType,
+		LastOpenToolNames:      newM.LastOpenToolNames,
+		LastWasUserInterrupt:   newM.LastWasUserInterrupt,
+		LastWasToolDenial:      newM.LastWasToolDenial,
+		EstimatedCostUSD:       newM.EstimatedCostUSD,
+		LastAssistantText:      newM.LastAssistantText,
+		PermissionMode:         newM.PermissionMode,
+		SubagentCompletions:    newM.SubagentCompletions,
+		CumInputTokens:         newM.CumInputTokens,
+		CumOutputTokens:        newM.CumOutputTokens,
+		CumCacheReadTokens:     newM.CumCacheReadTokens,
+		CumCacheCreationTokens: newM.CumCacheCreationTokens,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
@@ -329,6 +333,18 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	}
 	if merged.PermissionMode == "" && oldM.PermissionMode != "" {
 		merged.PermissionMode = oldM.PermissionMode
+	}
+	if merged.CumInputTokens == 0 && oldM.CumInputTokens > 0 {
+		merged.CumInputTokens = oldM.CumInputTokens
+	}
+	if merged.CumOutputTokens == 0 && oldM.CumOutputTokens > 0 {
+		merged.CumOutputTokens = oldM.CumOutputTokens
+	}
+	if merged.CumCacheReadTokens == 0 && oldM.CumCacheReadTokens > 0 {
+		merged.CumCacheReadTokens = oldM.CumCacheReadTokens
+	}
+	if merged.CumCacheCreationTokens == 0 && oldM.CumCacheCreationTokens > 0 {
+		merged.CumCacheCreationTokens = oldM.CumCacheCreationTokens
 	}
 	return merged
 }

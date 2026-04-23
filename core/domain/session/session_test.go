@@ -32,6 +32,54 @@ func TestIsStale(t *testing.T) {
 	}
 }
 
+func TestMergeMetrics_CumFields(t *testing.T) {
+	oldM := &SessionMetrics{
+		CumInputTokens:         1000,
+		CumOutputTokens:        500,
+		CumCacheReadTokens:     200,
+		CumCacheCreationTokens: 100,
+		EstimatedCostUSD:       0.05,
+	}
+	// newM has zero Cum* and zero cost (e.g. after MergeMetrics dropped them).
+	newM := &SessionMetrics{
+		TotalTokens: 1500,
+		ModelName:   "claude-sonnet-4-6",
+	}
+	got := MergeMetrics(newM, oldM)
+
+	if got.CumInputTokens != 1000 {
+		t.Errorf("CumInputTokens = %d, want 1000", got.CumInputTokens)
+	}
+	if got.CumOutputTokens != 500 {
+		t.Errorf("CumOutputTokens = %d, want 500", got.CumOutputTokens)
+	}
+	if got.CumCacheReadTokens != 200 {
+		t.Errorf("CumCacheReadTokens = %d, want 200", got.CumCacheReadTokens)
+	}
+	if got.CumCacheCreationTokens != 100 {
+		t.Errorf("CumCacheCreationTokens = %d, want 100", got.CumCacheCreationTokens)
+	}
+	if got.EstimatedCostUSD != 0.05 {
+		t.Errorf("EstimatedCostUSD = %f, want 0.05", got.EstimatedCostUSD)
+	}
+
+	// When newM has non-zero Cum* they should win over old.
+	newM2 := &SessionMetrics{
+		CumInputTokens:         2000,
+		CumOutputTokens:        800,
+		CumCacheReadTokens:     300,
+		CumCacheCreationTokens: 50,
+		EstimatedCostUSD:       0.10,
+	}
+	got2 := MergeMetrics(newM2, oldM)
+	if got2.CumInputTokens != 2000 {
+		t.Errorf("CumInputTokens = %d, want 2000", got2.CumInputTokens)
+	}
+	if got2.EstimatedCostUSD != 0.10 {
+		t.Errorf("EstimatedCostUSD = %f, want 0.10", got2.EstimatedCostUSD)
+	}
+}
+
 func TestSessionState_LauncherJSONRoundTrip(t *testing.T) {
 	// With Launcher present.
 	in := &SessionState{

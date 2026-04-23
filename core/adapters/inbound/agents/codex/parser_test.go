@@ -573,6 +573,104 @@ func TestParser_TurnCompleteEmitsTurnDone(t *testing.T) {
 	}
 }
 
+// TestParser_Contribution_CachedTokensDeductedFromInput verifies that
+// input_tokens_details.cached_tokens is used for CacheRead and deducted from
+// Input so cost isn't double-counted (OpenAI includes cached in input_tokens).
+func TestParser_Contribution_CachedTokensDeductedFromInput(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"timestamp": ts(0),
+		"type":      "event_msg",
+		"payload": map[string]interface{}{
+			"type": "token_count",
+			"info": map[string]interface{}{
+				"model_context_window": float64(258400),
+				"last_token_usage": map[string]interface{}{
+					"input_tokens":  float64(5000),
+					"output_tokens": float64(200),
+					"total_tokens":  float64(5200),
+				},
+				"total_token_usage": map[string]interface{}{
+					"input_tokens":  float64(10000),
+					"output_tokens": float64(500),
+					"input_tokens_details": map[string]interface{}{
+						"cached_tokens": float64(2000),
+					},
+				},
+			},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution to be set from cumulative usage")
+	}
+	// Input = 10000 − 2000 (cached deducted) = 8000.
+	if ev.Contribution.Usage.Input != 8000 {
+		t.Errorf("Input = %d, want 8000 (gross 10000 minus 2000 cached)", ev.Contribution.Usage.Input)
+	}
+	if ev.Contribution.Usage.CacheRead != 2000 {
+		t.Errorf("CacheRead = %d, want 2000", ev.Contribution.Usage.CacheRead)
+	}
+	if ev.Contribution.Usage.Output != 500 {
+		t.Errorf("Output = %d, want 500", ev.Contribution.Usage.Output)
+	}
+}
+
+// TestParser_Contribution_Monotonic confirms the cursor prevents a decrease in
+// cumulative usage from lowering the accumulated cost.
+func TestParser_Contribution_Monotonic(t *testing.T) {
+	p := &Parser{}
+
+	mkEvent := func(input, output float64) *tailer.ParsedEvent {
+		return p.ParseLine(map[string]interface{}{
+			"timestamp": ts(0),
+			"type":      "event_msg",
+			"payload": map[string]interface{}{
+				"type": "token_count",
+				"info": map[string]interface{}{
+					"model_context_window": float64(258400),
+					"last_token_usage": map[string]interface{}{
+						"input_tokens": input, "output_tokens": output,
+					},
+					"total_token_usage": map[string]interface{}{
+						"input_tokens": input, "output_tokens": output,
+					},
+				},
+			},
+		})
+	}
+
+	// First event: 1000 input, 100 output.
+	ev1 := mkEvent(1000, 100)
+	if ev1.Contribution == nil {
+		t.Fatal("expected first Contribution")
+	}
+	if ev1.Contribution.Usage.Input != 1000 || ev1.Contribution.Usage.Output != 100 {
+		t.Errorf("first delta = {%d,%d}, want {1000,100}",
+			ev1.Contribution.Usage.Input, ev1.Contribution.Usage.Output)
+	}
+
+	// Second event: cumulative drops below first (would happen if parser restarts).
+	// Delta must be zero → no Contribution emitted.
+	ev2 := mkEvent(500, 50)
+	if ev2.Contribution != nil {
+		t.Errorf("expected no Contribution when cumulative decreases, got %+v", ev2.Contribution)
+	}
+
+	// Third event: advances again from first high-water mark.
+	ev3 := mkEvent(1500, 150)
+	if ev3.Contribution == nil {
+		t.Fatal("expected Contribution after cumulative advances again")
+	}
+	// Delta should be 1500−1000=500 input, 150−100=50 output.
+	if ev3.Contribution.Usage.Input != 500 || ev3.Contribution.Usage.Output != 50 {
+		t.Errorf("third delta = {%d,%d}, want {500,50}",
+			ev3.Contribution.Usage.Input, ev3.Contribution.Usage.Output)
+	}
+}
+
 // TestParser_EventMsgNonTaskCompleteSkipped confirms the carve-out is narrow:
 // token_count, task_started, exec_command_*, and friends must still be
 // skipped, otherwise we'd leak spurious LastEventType values that the

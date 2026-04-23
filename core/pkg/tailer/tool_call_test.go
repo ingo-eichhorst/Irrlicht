@@ -95,8 +95,13 @@ var testCapacityFixture = map[string]capacity.ModelCapacity{
 }
 
 // testParser is a minimal TranscriptParser for tests. It handles the basic
-// event types used in test fixtures (Claude Code-like format).
-type testParser struct{}
+// event types used in test fixtures (Claude Code-like format) and emits
+// PerTurnContribution to exercise the new cumByModel cost accumulation path.
+type testParser struct {
+	lastRequestID  string
+	pendingContrib *PerTurnContribution
+	cumCursor      UsageBreakdown // for Codex-style cumulative_usage dedup
+}
 
 func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	ev := &ParsedEvent{Timestamp: ParseTimestamp(raw)}
@@ -148,21 +153,64 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	}
 
 	// Model/token extraction.
+	var modelName string
 	if message, ok := raw["message"].(map[string]interface{}); ok {
 		if model, ok := message["model"].(string); ok && model != "" {
+			modelName = model
 			ev.ModelName = model
 		}
 		if usage, ok := message["usage"].(map[string]interface{}); ok {
 			ev.Tokens = ExtractUsage(usage)
 		}
 	}
-	// RequestID for cost deduplication.
-	if reqID, ok := raw["requestId"].(string); ok {
-		ev.RequestID = reqID
+
+	// Claude Code-style requestId dedup — emit Contribution when turn changes.
+	if reqID, ok := raw["requestId"].(string); ok && reqID != "" {
+		ev.RequestID = reqID // kept for context-util snapshot
+		if reqID != p.lastRequestID {
+			if p.lastRequestID != "" && p.pendingContrib != nil {
+				ev.Contribution = p.pendingContrib
+			}
+			p.lastRequestID = reqID
+			p.pendingContrib = nil
+		}
+		if ev.Tokens != nil {
+			p.pendingContrib = &PerTurnContribution{
+				Model: modelName,
+				Usage: UsageBreakdown{
+					Input:     ev.Tokens.Input,
+					Output:    ev.Tokens.Output,
+					CacheRead: ev.Tokens.CacheRead,
+					// Treat single bucket as 5m cache writes.
+					CacheCreation5m: ev.Tokens.CacheCreation,
+				},
+			}
+		}
 	}
-	// CumulativeTokens (Codex-style).
+
+	// Codex-style cumulative_usage — emit delta as Contribution.
 	if cumUsage, ok := raw["cumulative_usage"].(map[string]interface{}); ok {
-		ev.CumulativeTokens = ExtractUsage(cumUsage)
+		cum := ExtractUsage(cumUsage)
+		ev.CumulativeTokens = cum // keep for legacy compat during transition
+		if cum != nil {
+			cur := UsageBreakdown{
+				Input:     cum.Input,
+				Output:    cum.Output,
+				CacheRead: cum.CacheRead,
+			}
+			delta := UsageBreakdown{
+				Input:     max(0, cur.Input-p.cumCursor.Input),
+				Output:    max(0, cur.Output-p.cumCursor.Output),
+				CacheRead: max(0, cur.CacheRead-p.cumCursor.CacheRead),
+			}
+			if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
+				ev.Contribution = &PerTurnContribution{
+					Model: modelName,
+					Usage: delta,
+				}
+				p.cumCursor = cur
+			}
+		}
 	}
 	if cm, ok := raw["context_management"].(map[string]interface{}); ok {
 		if cw, ok := cm["context_window"].(float64); ok && cw > 0 {
@@ -242,6 +290,11 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	}
 
 	return ev
+}
+
+// PendingContribution exposes the in-progress turn to the tailer (implements PendingContributor).
+func (p *testParser) PendingContribution() *PerTurnContribution {
+	return p.pendingContrib
 }
 
 // newTestTailer creates a TranscriptTailer with the testParser and the

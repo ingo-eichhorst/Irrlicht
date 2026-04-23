@@ -15,10 +15,16 @@ const eventTypeAssistantStreaming = "assistant_streaming"
 // Claude Code events use top-level "type" fields ("user", "assistant", "system")
 // and embed tool calls inside message.content[] arrays.
 //
-// The parser is stateful: it tracks the last assistant message ID to detect
-// intermediate streaming chunks within the same API response.
+// The parser is stateful: it tracks the last requestId to deduplicate streaming
+// events within one API turn and expose the pending contribution to the tailer.
 type Parser struct {
 	lastAssistantMsgID string
+	// Cost deduplication state: Claude Code emits multiple streaming events with
+	// the same requestId per turn (partial output, then final with full tokens).
+	// We keep the latest usage for the current requestId as pendingContrib;
+	// when the requestId changes we emit it as a completed Contribution.
+	lastRequestID   string
+	pendingContrib  *tailer.PerTurnContribution
 }
 
 // ParseLine parses a Claude Code JSONL line into a normalized ParsedEvent.
@@ -143,12 +149,29 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// Model extraction.
 	ev.ModelName, ev.ContextWindow = extractClaudeCodeModel(raw)
 
-	// Token extraction.
+	// Token extraction — set Tokens for context-utilization display.
 	ev.Tokens = extractClaudeCodeTokens(raw)
 
-	// Request ID for deduplicating streaming events within one API turn.
-	if reqID, ok := raw["requestId"].(string); ok {
-		ev.RequestID = reqID
+	// Cost contribution: deduplicate by requestId and emit a PerTurnContribution
+	// when the turn changes. Claude Code streams multiple events per API turn;
+	// only the final event's token counts are authoritative.
+	if reqID, ok := raw["requestId"].(string); ok && reqID != "" {
+		ev.RequestID = reqID // retain for legacy path during transition
+		if reqID != p.lastRequestID {
+			// New turn started — emit the previous turn's contribution.
+			if p.lastRequestID != "" && p.pendingContrib != nil {
+				ev.Contribution = p.pendingContrib
+			}
+			p.lastRequestID = reqID
+			p.pendingContrib = nil
+		}
+		// Update pending with latest usage for this turn.
+		if ev.Tokens != nil {
+			p.pendingContrib = &tailer.PerTurnContribution{
+				Model: ev.ModelName,
+				Usage: extractAnthropicUsageBreakdown(raw),
+			}
+		}
 	}
 
 	// Content character count for token estimation.
@@ -288,6 +311,7 @@ func extractClaudeCodeModel(raw map[string]interface{}) (string, int64) {
 }
 
 // extractClaudeCodeTokens extracts token info from a Claude Code event.
+// Used for context-utilization display (Tokens field on ParsedEvent).
 func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
 	// Check usage field (Claude API format).
 	if usage, ok := raw["usage"].(map[string]interface{}); ok {
@@ -306,6 +330,74 @@ func extractClaudeCodeTokens(raw map[string]interface{}) *tailer.TokenSnapshot {
 		}
 	}
 	return nil
+}
+
+// PendingContribution returns the in-progress turn's contribution so the tailer
+// can include it in the live cost display before the next turn begins.
+func (p *Parser) PendingContribution() *tailer.PerTurnContribution {
+	return p.pendingContrib
+}
+
+// GetParserLedger implements tailer.ParserStateProvider. Saves lastRequestID so
+// the dedup cursor resumes at the correct turn boundary after a daemon restart.
+func (p *Parser) GetParserLedger() tailer.ParserLedger {
+	return tailer.ParserLedger{LastRequestID: p.lastRequestID}
+}
+
+// SetParserLedger implements tailer.ParserStateProvider. Restores the dedup
+// cursor; pendingContrib is intentionally not restored because the partial turn
+// will be re-emitted as a new Contribution when the next requestId arrives.
+func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
+	p.lastRequestID = l.LastRequestID
+}
+
+// extractAnthropicUsageBreakdown builds a UsageBreakdown from a Claude Code
+// event, including Anthropic's nested 5m/1h cache-write sub-rates when present.
+func extractAnthropicUsageBreakdown(raw map[string]interface{}) tailer.UsageBreakdown {
+	// Find the usage map (same search order as extractClaudeCodeTokens).
+	var usage map[string]interface{}
+	if u, ok := raw["usage"].(map[string]interface{}); ok {
+		usage = u
+	} else if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if u, ok := msg["usage"].(map[string]interface{}); ok {
+			usage = u
+		}
+	} else if resp, ok := raw["response"].(map[string]interface{}); ok {
+		if u, ok := resp["usage"].(map[string]interface{}); ok {
+			usage = u
+		}
+	}
+	if usage == nil {
+		return tailer.UsageBreakdown{}
+	}
+
+	bd := tailer.UsageBreakdown{}
+	if v, ok := usage["input_tokens"].(float64); ok {
+		bd.Input = int64(v)
+	}
+	if v, ok := usage["output_tokens"].(float64); ok {
+		bd.Output = int64(v)
+	}
+	if v, ok := usage["cache_read_input_tokens"].(float64); ok {
+		bd.CacheRead = int64(v)
+	}
+
+	// Anthropic ephemeral cache writes: prefer nested sub-rates when present.
+	// Fallback: treat the flat cache_creation_input_tokens as 5m writes.
+	if cc, ok := usage["cache_creation"].(map[string]interface{}); ok {
+		if v, ok := cc["ephemeral_5m_input_tokens"].(float64); ok {
+			bd.CacheCreation5m = int64(v)
+		}
+		if v, ok := cc["ephemeral_1h_input_tokens"].(float64); ok {
+			bd.CacheCreation1h = int64(v)
+		}
+	}
+	if bd.CacheCreation5m == 0 && bd.CacheCreation1h == 0 {
+		if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
+			bd.CacheCreation5m = int64(v)
+		}
+	}
+	return bd
 }
 
 // CountOpenSubagents returns the number of in-process Claude Code sub-agents

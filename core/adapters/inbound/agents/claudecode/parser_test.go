@@ -10,6 +10,128 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
+// --- Contribution / cost tests ---
+
+func TestParser_Contribution_RequestIDDedup(t *testing.T) {
+	p := &Parser{}
+
+	usage := map[string]interface{}{
+		"input_tokens": float64(1000), "output_tokens": float64(50),
+	}
+	line1 := map[string]interface{}{
+		"type": "assistant", "requestId": "req-1",
+		"message": map[string]interface{}{"model": "claude-sonnet-4-6", "usage": usage},
+	}
+	line2 := map[string]interface{}{
+		"type": "assistant", "requestId": "req-1",
+		"message": map[string]interface{}{"model": "claude-sonnet-4-6", "usage": map[string]interface{}{
+			"input_tokens": float64(1000), "output_tokens": float64(300),
+		}},
+	}
+	line3 := map[string]interface{}{
+		"type": "assistant", "requestId": "req-2",
+		"message": map[string]interface{}{"model": "claude-sonnet-4-6", "usage": map[string]interface{}{
+			"input_tokens": float64(500), "output_tokens": float64(100),
+		}},
+	}
+
+	_ = p.ParseLine(line1) // pending turn 1
+	ev2 := p.ParseLine(line2) // same requestId — update pending, no Contribution yet
+	if ev2.Contribution != nil {
+		t.Error("same requestId should not emit Contribution yet")
+	}
+	ev3 := p.ParseLine(line3) // new requestId — flush turn 1
+	if ev3.Contribution == nil {
+		t.Fatal("new requestId should emit Contribution for the completed turn")
+	}
+	// Turn 1's final snapshot had output=300 (from line2).
+	if ev3.Contribution.Usage.Output != 300 {
+		t.Errorf("Output = %d, want 300 (latest snapshot for req-1)", ev3.Contribution.Usage.Output)
+	}
+	if ev3.Contribution.Usage.Input != 1000 {
+		t.Errorf("Input = %d, want 1000", ev3.Contribution.Usage.Input)
+	}
+	// PendingContribution should reflect the in-progress turn 2.
+	if p.PendingContribution() == nil {
+		t.Fatal("PendingContribution should hold turn 2 after line3")
+	}
+	if p.PendingContribution().Usage.Input != 500 {
+		t.Errorf("pending Input = %d, want 500", p.PendingContribution().Usage.Input)
+	}
+}
+
+func TestParser_Contribution_AnthropicCacheSubRates(t *testing.T) {
+	p := &Parser{}
+
+	// Anthropic nested cache_creation sub-rates.
+	line := map[string]interface{}{
+		"type": "assistant", "requestId": "req-1",
+		"message": map[string]interface{}{
+			"model": "claude-sonnet-4-6",
+			"usage": map[string]interface{}{
+				"input_tokens":  float64(1000),
+				"output_tokens": float64(200),
+				"cache_creation": map[string]interface{}{
+					"ephemeral_5m_input_tokens": float64(300),
+					"ephemeral_1h_input_tokens": float64(100),
+				},
+			},
+		},
+	}
+	line2 := map[string]interface{}{
+		"type": "assistant", "requestId": "req-2",
+		"message": map[string]interface{}{"model": "claude-sonnet-4-6", "usage": map[string]interface{}{
+			"input_tokens": float64(10),
+		}},
+	}
+	_ = p.ParseLine(line)
+	ev := p.ParseLine(line2) // flush req-1
+
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution on turn change")
+	}
+	if ev.Contribution.Usage.CacheCreation5m != 300 {
+		t.Errorf("CacheCreation5m = %d, want 300", ev.Contribution.Usage.CacheCreation5m)
+	}
+	if ev.Contribution.Usage.CacheCreation1h != 100 {
+		t.Errorf("CacheCreation1h = %d, want 100", ev.Contribution.Usage.CacheCreation1h)
+	}
+}
+
+func TestParser_Contribution_FlatCacheCreationFallback(t *testing.T) {
+	p := &Parser{}
+
+	// No nested cache_creation — flat field should map to 5m.
+	line := map[string]interface{}{
+		"type": "assistant", "requestId": "req-1",
+		"message": map[string]interface{}{
+			"model": "claude-sonnet-4-6",
+			"usage": map[string]interface{}{
+				"input_tokens":                     float64(500),
+				"cache_creation_input_tokens":       float64(200),
+			},
+		},
+	}
+	line2 := map[string]interface{}{
+		"type": "assistant", "requestId": "req-2",
+		"message": map[string]interface{}{"model": "claude-sonnet-4-6", "usage": map[string]interface{}{
+			"input_tokens": float64(1),
+		}},
+	}
+	_ = p.ParseLine(line)
+	ev := p.ParseLine(line2)
+
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution")
+	}
+	if ev.Contribution.Usage.CacheCreation5m != 200 {
+		t.Errorf("CacheCreation5m = %d, want 200 (flat fallback)", ev.Contribution.Usage.CacheCreation5m)
+	}
+	if ev.Contribution.Usage.CacheCreation1h != 0 {
+		t.Errorf("CacheCreation1h = %d, want 0", ev.Contribution.Usage.CacheCreation1h)
+	}
+}
+
 func TestParser_SystemEvent_TurnDone(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{

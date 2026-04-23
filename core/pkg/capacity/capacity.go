@@ -2,6 +2,7 @@ package capacity
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -9,10 +10,21 @@ import (
 
 // ModelPricing holds per-token pricing in USD per million tokens.
 type ModelPricing struct {
-	InputPerMTok         float64 `json:"input_per_mtok"`
-	OutputPerMTok        float64 `json:"output_per_mtok"`
-	CacheReadPerMTok     float64 `json:"cache_read_per_mtok"`
+	InputPerMTok float64 `json:"input_per_mtok"`
+	OutputPerMTok float64 `json:"output_per_mtok"`
+	// CacheReadPerMTok covers both Anthropic cache hits and OpenAI cached input.
+	CacheReadPerMTok float64 `json:"cache_read_per_mtok"`
+	// CacheCreationPerMTok is the 5-minute (default) cache-write rate.
+	// Kept populated even when 5m/1h sub-rates are available, for callers
+	// that pass a single cache-creation bucket.
 	CacheCreationPerMTok float64 `json:"cache_creation_per_mtok"`
+	// CacheCreation5mPerMTok is the Anthropic ephemeral 5-minute cache-write rate.
+	// Zero means use CacheCreationPerMTok as fallback.
+	CacheCreation5mPerMTok float64 `json:"cache_creation_5m_per_mtok,omitempty"`
+	// CacheCreation1hPerMTok is the Anthropic ephemeral 1-hour cache-write rate
+	// (~2× the 5m rate per Anthropic docs).
+	// Zero means fall back to CacheCreation5mPerMTok or CacheCreationPerMTok.
+	CacheCreation1hPerMTok float64 `json:"cache_creation_1h_per_mtok,omitempty"`
 }
 
 // ModelCapacity represents the capacity configuration for a specific model.
@@ -34,10 +46,12 @@ type CapacityConfig struct {
 // CapacityManager serves model capacity lookups from the LiteLLM cache,
 // reloading transparently when the cache file's mtime advances.
 type CapacityManager struct {
-	mu           sync.RWMutex
-	config       *CapacityConfig
-	cachePath    string
-	lastModified time.Time
+	mu              sync.RWMutex
+	config          *CapacityConfig
+	cachePath       string
+	lastModified    time.Time
+	loggedMisses    map[string]bool // tracks models already warned about missing pricing
+	loggedMissesMu  sync.Mutex
 }
 
 // NewForTest constructs a CapacityManager backed by an in-memory model map.
@@ -115,10 +129,22 @@ func (cm *CapacityManager) MergeRemoteModels(remote *CapacityConfig) {
 
 // EstimateCostUSD calculates the cost in USD from token breakdowns.
 // Returns 0 when pricing data is unavailable (model missing from LiteLLM,
-// or cache not yet fetched).
+// or cache not yet fetched). Logs a one-per-model warning on miss so silent
+// zero-pricing is observable in daemon logs.
 func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64) float64 {
 	cap := cm.GetModelCapacity(modelName)
 	if cap.Pricing == nil {
+		if modelName != "" {
+			cm.loggedMissesMu.Lock()
+			if cm.loggedMisses == nil {
+				cm.loggedMisses = make(map[string]bool)
+			}
+			if !cm.loggedMisses[modelName] {
+				cm.loggedMisses[modelName] = true
+				log.Printf("irrlicht/capacity: no pricing for model %q — cost will be 0 until LiteLLM cache is refreshed", modelName)
+			}
+			cm.loggedMissesMu.Unlock()
+		}
 		return 0
 	}
 	p := cap.Pricing
@@ -126,6 +152,43 @@ func (cm *CapacityManager) EstimateCostUSD(modelName string, inputTokens, output
 		float64(outputTokens)*p.OutputPerMTok +
 		float64(cacheReadTokens)*p.CacheReadPerMTok +
 		float64(cacheCreationTokens)*p.CacheCreationPerMTok
+	return cost / 1_000_000
+}
+
+// EstimateCostFromBreakdown calculates USD cost using per-bucket token counts
+// including separate 5m and 1h Anthropic cache-write rates. Falls back to the
+// legacy single-bucket CacheCreationPerMTok when sub-rates are not populated.
+func (cm *CapacityManager) EstimateCostFromBreakdown(modelName string, input, output, cacheRead, cacheCreate5m, cacheCreate1h int64) float64 {
+	cap := cm.GetModelCapacity(modelName)
+	if cap.Pricing == nil {
+		if modelName != "" {
+			cm.loggedMissesMu.Lock()
+			if cm.loggedMisses == nil {
+				cm.loggedMisses = make(map[string]bool)
+			}
+			if !cm.loggedMisses[modelName] {
+				cm.loggedMisses[modelName] = true
+				log.Printf("irrlicht/capacity: no pricing for model %q — cost will be 0 until LiteLLM cache is refreshed", modelName)
+			}
+			cm.loggedMissesMu.Unlock()
+		}
+		return 0
+	}
+	p := cap.Pricing
+
+	// Choose cache-creation rate: prefer sub-rates when populated.
+	var cacheCreateCost float64
+	if p.CacheCreation5mPerMTok > 0 || p.CacheCreation1hPerMTok > 0 {
+		cacheCreateCost = float64(cacheCreate5m)*p.CacheCreation5mPerMTok +
+			float64(cacheCreate1h)*p.CacheCreation1hPerMTok
+	} else {
+		cacheCreateCost = float64(cacheCreate5m+cacheCreate1h) * p.CacheCreationPerMTok
+	}
+
+	cost := float64(input)*p.InputPerMTok +
+		float64(output)*p.OutputPerMTok +
+		float64(cacheRead)*p.CacheReadPerMTok +
+		cacheCreateCost
 	return cost / 1_000_000
 }
 

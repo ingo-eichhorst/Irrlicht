@@ -336,6 +336,148 @@ func TestParser_Compaction_SetsLastEventToAssistant(t *testing.T) {
 	}
 }
 
+func TestParser_Contribution_TokenFields(t *testing.T) {
+	// Pi uses short field names: input, output, cacheRead, cacheWrite.
+	// All four must map to the correct UsageBreakdown buckets.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"timestamp": ts(0),
+		"message": map[string]interface{}{
+			"role":       "assistant",
+			"stopReason": "stop",
+			"model":      "claude-sonnet-4-5",
+			"usage": map[string]interface{}{
+				"input":      float64(1000),
+				"output":     float64(200),
+				"cacheRead":  float64(300),
+				"cacheWrite": float64(50),
+			},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution to be set")
+	}
+	c := ev.Contribution
+	if c.Usage.Input != 1000 {
+		t.Errorf("Input = %d, want 1000", c.Usage.Input)
+	}
+	if c.Usage.Output != 200 {
+		t.Errorf("Output = %d, want 200", c.Usage.Output)
+	}
+	if c.Usage.CacheRead != 300 {
+		t.Errorf("CacheRead = %d, want 300", c.Usage.CacheRead)
+	}
+	if c.Usage.CacheCreation5m != 50 {
+		t.Errorf("CacheCreation5m = %d, want 50 (mapped from cacheWrite)", c.Usage.CacheCreation5m)
+	}
+	if c.ProviderCostUSD != nil {
+		t.Errorf("ProviderCostUSD = %v, want nil (no cost field present)", c.ProviderCostUSD)
+	}
+}
+
+func TestParser_Contribution_ProviderCostWins(t *testing.T) {
+	// When usage.cost is present, ProviderCostUSD is set and takes precedence
+	// over token-based pricing in the tailer.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"timestamp": ts(0),
+		"message": map[string]interface{}{
+			"role":       "assistant",
+			"stopReason": "stop",
+			"model":      "claude-sonnet-4-5",
+			"usage": map[string]interface{}{
+				"input":  float64(500),
+				"output": float64(100),
+				"cost":   float64(0.00123),
+			},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution to be set")
+	}
+	c := ev.Contribution
+	if c.ProviderCostUSD == nil {
+		t.Fatal("expected ProviderCostUSD to be set when cost field present")
+	}
+	if *c.ProviderCostUSD != 0.00123 {
+		t.Errorf("ProviderCostUSD = %v, want 0.00123", *c.ProviderCostUSD)
+	}
+	// Token fields still populated (tailer uses them as fallback when cost is nil).
+	if c.Usage.Input != 500 {
+		t.Errorf("Input = %d, want 500", c.Usage.Input)
+	}
+}
+
+func TestParser_Contribution_MidTurnNoContribution(t *testing.T) {
+	// Mid-turn assistant events (stopReason != "stop") have no usage block in
+	// typical Pi transcripts. Contribution should be nil in that case.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"timestamp": ts(0),
+		"message": map[string]interface{}{
+			"role":       "assistant",
+			"stopReason": "toolUse",
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.Contribution != nil {
+		t.Errorf("expected no Contribution for mid-turn event with no usage, got %+v", ev.Contribution)
+	}
+}
+
+func TestParser_Contribution_AccumulatesViaTailer(t *testing.T) {
+	// Full transcript: two assistant end-of-turns, each with usage.
+	// The tailer must accumulate both contributions into EstimatedCostUSD.
+	path := writeLines(t, []map[string]interface{}{
+		{"type": "session", "version": float64(3), "cwd": "/tmp"},
+		{"type": "message", "timestamp": ts(0), "message": map[string]interface{}{
+			"role": "user", "content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "go"},
+			},
+		}},
+		{"type": "message", "timestamp": ts(1), "message": map[string]interface{}{
+			"role":       "assistant",
+			"stopReason": "stop",
+			"model":      "claude-sonnet-4-5",
+			"usage":      map[string]interface{}{"input": float64(1000), "output": float64(200), "cost": float64(0.005)},
+		}},
+		{"type": "message", "timestamp": ts(2), "message": map[string]interface{}{
+			"role": "user", "content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "more"},
+			},
+		}},
+		{"type": "message", "timestamp": ts(3), "message": map[string]interface{}{
+			"role":       "assistant",
+			"stopReason": "stop",
+			"model":      "claude-sonnet-4-5",
+			"usage":      map[string]interface{}{"input": float64(1200), "output": float64(300), "cost": float64(0.007)},
+		}},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "pi")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two provider-reported costs should accumulate: 0.005 + 0.007 = 0.012.
+	const wantCost = 0.012
+	const epsilon = 1e-9
+	if m.EstimatedCostUSD < wantCost-epsilon || m.EstimatedCostUSD > wantCost+epsilon {
+		t.Errorf("EstimatedCostUSD = %v, want %v (sum of two provider costs)", m.EstimatedCostUSD, wantCost)
+	}
+}
+
 func TestParser_BashExecutionSkipped_PreservesLastEvent(t *testing.T) {
 	// After an assistant end-of-turn, a bashExecution event should be skipped
 	// and not change LastEventType.

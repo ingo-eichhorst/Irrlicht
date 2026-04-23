@@ -37,8 +37,11 @@ type liteLLMEntry struct {
 	OutputCostPerToken          float64 `json:"output_cost_per_token"`
 	CacheReadInputTokenCost     float64 `json:"cache_read_input_token_cost"`
 	CacheCreationInputTokenCost float64 `json:"cache_creation_input_token_cost"`
-	LiteLLMProvider             string  `json:"litellm_provider"`
-	Mode                        string  `json:"mode"`
+	// CacheCreation1hInputTokenCost is the Anthropic ephemeral 1-hour cache write
+	// rate. Absent from most LiteLLM entries; zero means fall back to the 5m rate.
+	CacheCreation1hInputTokenCost float64 `json:"cache_creation_input_token_cost_above_1hr"`
+	LiteLLMProvider               string  `json:"litellm_provider"`
+	Mode                          string  `json:"mode"`
 }
 
 // cachedCapacity wraps CapacityConfig with cache metadata.
@@ -95,7 +98,7 @@ func parseLiteLLMData(data []byte) (*CapacityConfig, error) {
 	}
 
 	config := &CapacityConfig{
-		Version:     "remote",
+		Version:     "remote-v2",
 		LastUpdated: time.Now().Format("2006-01-02"),
 		Models:      make(map[string]ModelCapacity),
 	}
@@ -130,12 +133,19 @@ func parseLiteLLMData(data []byte) (*CapacityConfig, error) {
 
 		// Convert per-token pricing to per-million-token pricing.
 		if entry.InputCostPerToken > 0 || entry.OutputCostPerToken > 0 {
-			mc.Pricing = &ModelPricing{
+			p := &ModelPricing{
 				InputPerMTok:         entry.InputCostPerToken * 1_000_000,
 				OutputPerMTok:        entry.OutputCostPerToken * 1_000_000,
 				CacheReadPerMTok:     entry.CacheReadInputTokenCost * 1_000_000,
 				CacheCreationPerMTok: entry.CacheCreationInputTokenCost * 1_000_000,
 			}
+			// When LiteLLM publishes the 1h rate, populate both sub-rates.
+			// CacheCreationPerMTok stays equal to the 5m rate as the legacy fallback.
+			if entry.CacheCreation1hInputTokenCost > 0 {
+				p.CacheCreation5mPerMTok = entry.CacheCreationInputTokenCost * 1_000_000
+				p.CacheCreation1hPerMTok = entry.CacheCreation1hInputTokenCost * 1_000_000
+			}
+			mc.Pricing = p
 		}
 
 		config.Models[key] = mc

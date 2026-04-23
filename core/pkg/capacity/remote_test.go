@@ -116,6 +116,83 @@ func TestParseLiteLLMData_SkipsNoContextWindow(t *testing.T) {
 	}
 }
 
+func TestParseLiteLLMData_CacheCreation1hSubRate(t *testing.T) {
+	// When LiteLLM provides the 1h cache-write rate, both sub-rates must be
+	// populated and CacheCreationPerMTok must equal the 5m rate.
+	data := []byte(`{
+		"claude-opus-4-7": {
+			"max_input_tokens": 200000,
+			"max_output_tokens": 32000,
+			"input_cost_per_token": 0.000015,
+			"output_cost_per_token": 0.000075,
+			"cache_read_input_token_cost": 0.000001875,
+			"cache_creation_input_token_cost": 0.00001875,
+			"cache_creation_input_token_cost_above_1hr": 0.0000375,
+			"litellm_provider": "anthropic",
+			"mode": "chat"
+		}
+	}`)
+
+	config, err := parseLiteLLMData(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mc, ok := config.Models["claude-opus-4-7"]
+	if !ok {
+		t.Fatal("missing claude-opus-4-7")
+	}
+	if mc.Pricing == nil {
+		t.Fatal("Pricing is nil")
+	}
+
+	const wantCacheCreate5m = 18.75
+	const wantCacheCreate1h = 37.5
+
+	if mc.Pricing.CacheCreation5mPerMTok != wantCacheCreate5m {
+		t.Errorf("CacheCreation5mPerMTok = %f, want %f", mc.Pricing.CacheCreation5mPerMTok, wantCacheCreate5m)
+	}
+	if mc.Pricing.CacheCreation1hPerMTok != wantCacheCreate1h {
+		t.Errorf("CacheCreation1hPerMTok = %f, want %f", mc.Pricing.CacheCreation1hPerMTok, wantCacheCreate1h)
+	}
+	// CacheCreationPerMTok stays equal to the 5m rate as legacy fallback.
+	if mc.Pricing.CacheCreationPerMTok != wantCacheCreate5m {
+		t.Errorf("CacheCreationPerMTok (legacy) = %f, want %f (should equal 5m rate)", mc.Pricing.CacheCreationPerMTok, wantCacheCreate5m)
+	}
+}
+
+func TestParseLiteLLMData_No1hRate_SubRatesZero(t *testing.T) {
+	// When LiteLLM only has the base cache-creation rate, the sub-rate fields
+	// should be zero (signaling the caller to fall back to CacheCreationPerMTok).
+	data := []byte(`{
+		"claude-sonnet-4-6": {
+			"max_input_tokens": 200000,
+			"max_output_tokens": 64000,
+			"input_cost_per_token": 0.000003,
+			"output_cost_per_token": 0.000015,
+			"cache_read_input_token_cost": 0.0000003,
+			"cache_creation_input_token_cost": 0.00000375,
+			"litellm_provider": "anthropic",
+			"mode": "chat"
+		}
+	}`)
+
+	config, err := parseLiteLLMData(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := config.Models["claude-sonnet-4-6"]
+	if mc.Pricing == nil {
+		t.Fatal("Pricing is nil")
+	}
+	if mc.Pricing.CacheCreation5mPerMTok != 0 {
+		t.Errorf("CacheCreation5mPerMTok should be 0 when no 1h rate, got %f", mc.Pricing.CacheCreation5mPerMTok)
+	}
+	if mc.Pricing.CacheCreation1hPerMTok != 0 {
+		t.Errorf("CacheCreation1hPerMTok should be 0 when not in LiteLLM, got %f", mc.Pricing.CacheCreation1hPerMTok)
+	}
+}
+
 func TestDeriveFamilyFromLiteLLM(t *testing.T) {
 	tests := []struct {
 		modelID  string

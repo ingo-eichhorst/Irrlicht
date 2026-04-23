@@ -105,7 +105,11 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			ev.ModelName = tailer.NormalizeModelName(model)
 		}
 		if usage, ok := piMsg["usage"].(map[string]interface{}); ok {
+			// Tokens for context-utilization display.
 			ev.Tokens = tailer.ExtractUsage(usage)
+			// Contribution for cost accumulation — uses Pi-specific field names
+			// and prefers provider-reported cost when present.
+			ev.Contribution = extractPiContribution(ev.ModelName, usage)
 		}
 
 	case "user":
@@ -135,6 +139,40 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev.ContentChars = tailer.ExtractContentChars(raw)
 
 	return ev
+}
+
+// extractPiContribution builds a PerTurnContribution from Pi's usage object.
+// Pi uses short field names (input/output/cacheRead/cacheWrite) and may also
+// include a direct per-turn cost under "cost". When cost is present, it is
+// used as the authoritative ProviderCostUSD and token pricing is skipped.
+func extractPiContribution(modelName string, usage map[string]interface{}) *tailer.PerTurnContribution {
+	contrib := &tailer.PerTurnContribution{Model: modelName}
+
+	// Pi token fields.
+	if v, ok := usage["input"].(float64); ok {
+		contrib.Usage.Input = int64(v)
+	}
+	if v, ok := usage["output"].(float64); ok {
+		contrib.Usage.Output = int64(v)
+	}
+	if v, ok := usage["cacheRead"].(float64); ok {
+		contrib.Usage.CacheRead = int64(v)
+	}
+	if v, ok := usage["cacheWrite"].(float64); ok {
+		// Pi calls them cacheWrite; map to CacheCreation5m (5m is the default).
+		contrib.Usage.CacheCreation5m = int64(v)
+	}
+
+	// Provider-reported cost wins over token×price calculation.
+	if cost, ok := usage["cost"].(float64); ok && cost > 0 {
+		c := cost
+		contrib.ProviderCostUSD = &c
+	}
+
+	if contrib.Usage.Input == 0 && contrib.Usage.Output == 0 && contrib.ProviderCostUSD == nil {
+		return nil
+	}
+	return contrib
 }
 
 // extractPiAssistantText extracts text from Pi's nested message.content[] blocks.
