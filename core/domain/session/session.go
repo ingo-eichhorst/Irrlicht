@@ -97,6 +97,12 @@ type SessionMetrics struct {
 	// lines parsed by the Claude Code adapter). Per-pass and transient —
 	// drained by the detector each activity event. See issue #134.
 	SubagentCompletions []SubagentCompletion `json:"-"`
+
+	// Tasks is the current task list for this session, populated from
+	// TaskCreate / TaskUpdate tool calls in the Claude Code transcript.
+	// Nil for sessions that have not used TaskCreate (including non-Claude-Code
+	// adapters).
+	Tasks []Task `json:"tasks,omitempty"`
 }
 
 // SubagentCompletion is the domain mirror of tailer.SubagentCompletion. The
@@ -106,6 +112,16 @@ type SubagentCompletion struct {
 	AgentID   string
 	ToolUseID string
 	Status    string
+}
+
+// Task is the domain mirror of tailer.Task. It represents one item in the
+// Claude Code task list, accumulated from TaskCreate / TaskUpdate tool calls.
+type Task struct {
+	ID          string `json:"id"`
+	Subject     string `json:"subject"`
+	Description string `json:"description,omitempty"`
+	ActiveForm  string `json:"active_form,omitempty"`
+	Status      string `json:"status"` // "pending" | "in_progress" | "completed"
 }
 
 // NeedsUserAttention returns true when a user-blocking tool is open — one
@@ -312,6 +328,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		CumOutputTokens:        newM.CumOutputTokens,
 		CumCacheReadTokens:     newM.CumCacheReadTokens,
 		CumCacheCreationTokens: newM.CumCacheCreationTokens,
+		Tasks:                  newM.Tasks,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
@@ -348,6 +365,10 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	}
 	if merged.CumCacheCreationTokens == 0 && oldM.CumCacheCreationTokens > 0 {
 		merged.CumCacheCreationTokens = oldM.CumCacheCreationTokens
+	}
+	// nil Tasks = "no data yet"; non-nil empty slice = "no tasks" — overwrite only for the latter.
+	if merged.Tasks == nil && oldM.Tasks != nil {
+		merged.Tasks = oldM.Tasks
 	}
 	return merged
 }

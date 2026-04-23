@@ -343,6 +343,7 @@
     .session-row {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 6px;
       padding: 3px 10px;
       font-family: var(--font-mono);
@@ -484,6 +485,30 @@
       white-space: nowrap;
       max-width: 300px;
       padding: 0 4px;
+    }
+
+    /* Task progress dots */
+    .row-tasks {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 3px;
+    }
+    .task-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      cursor: default;
+    }
+    .task-dot.task-pending    { background: transparent; border: 1.5px solid var(--working); }
+    .task-dot.task-in_progress { background: transparent; border: 1.5px solid var(--working); }
+    .task-dot.task-completed  { background: var(--ready); border: 1.5px solid var(--ready); }
+    .row-task-count {
+      font-size: 9px;
+      color: var(--muted);
+      margin-left: 2px;
+      font-family: var(--font-mono);
     }
 
     /* Pressure alert row */
@@ -1205,6 +1230,7 @@
         '<span class="row-sub-badge" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-question" style="display:none"></span>' +
+        '<div class="row-tasks" style="display:none"></div>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span></span>' +
         '<span class="row-ctx-pct"></span>' +
         '<span class="row-cost"></span>' +
@@ -1264,6 +1290,23 @@
         }
       } else {
         questionEl.style.display = 'none';
+      }
+
+      // Task progress dots (Claude Code TaskCreate / TaskUpdate)
+      const tasksEl = el.querySelector('.row-tasks');
+      const tasks = metrics.tasks;
+      const allDone = tasks && tasks.length > 0 && tasks.every(t => t.status === 'completed');
+      if (tasks && tasks.length > 0 && !allDone) {
+        tasksEl.style.display = '';
+        const done = tasks.filter(t => t.status === 'completed').length;
+        const taskLabel = (t) => (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
+        const newHtml = tasks.map(t => {
+          const tip = taskLabel(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+          return '<span class="task-dot task-' + (t.status || 'pending') + '" title="' + tip + '"></span>';
+        }).join('') + '<span class="row-task-count">' + done + ' / ' + tasks.length + '</span>';
+        if (tasksEl.innerHTML !== newHtml) tasksEl.innerHTML = newHtml;
+      } else {
+        tasksEl.style.display = 'none';
       }
 
       // Context bar

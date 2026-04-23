@@ -26,6 +26,37 @@ type SubagentCompletion struct {
 	Status    string // <status> — "completed", etc.
 }
 
+// Task status and operation constants for TaskCreate / TaskUpdate tool_use events.
+const (
+	TaskStatusPending    = "pending"
+	TaskStatusInProgress = "in_progress"
+	TaskStatusCompleted  = "completed"
+
+	TaskOpCreate = "create"
+	TaskOpUpdate = "update"
+)
+
+// Task represents a single item in the session's Claude Code task list,
+// accumulated from TaskCreate / TaskUpdate tool_use events in the transcript.
+type Task struct {
+	ID          string `json:"id"`
+	Subject     string `json:"subject"`
+	Description string `json:"description,omitempty"`
+	ActiveForm  string `json:"active_form,omitempty"`
+	Status      string `json:"status"` // TaskStatusPending | TaskStatusInProgress | TaskStatusCompleted
+}
+
+// TaskDelta is emitted by the Claude Code parser for each TaskCreate or
+// TaskUpdate tool_use block. The tailer folds deltas into its tasks slice.
+type TaskDelta struct {
+	Op          string // "create" | "update"
+	ID          string // set on update (matches taskId input); empty on create
+	Subject     string // TaskCreate only
+	Description string // TaskCreate only
+	ActiveForm  string // TaskCreate only
+	Status      string // TaskUpdate only; "pending" on create is applied by tailer
+}
+
 // ParsedEvent is the normalized output from a format-specific transcript parser.
 // Each parser maps its native event structure into these fields.
 type ParsedEvent struct {
@@ -61,6 +92,10 @@ type ParsedEvent struct {
 	// detector drains these on the parent path to transition children to
 	// ready without depending on the subagent's own ambiguous final line.
 	SubagentCompletions []SubagentCompletion
+
+	// TaskDeltas are TaskCreate / TaskUpdate events from the Claude Code
+	// transcript. The tailer folds them into a running tasks slice.
+	TaskDeltas []TaskDelta
 
 	// Metadata extracted by the parser.
 	ModelName     string
@@ -157,6 +192,7 @@ type LedgerState struct {
 	CumByModel         map[string]*UsageBreakdown `json:"cum_by_model,omitempty"`
 	CumProviderCostUSD float64                    `json:"cum_provider_cost_usd,omitempty"`
 	ParserState        *ParserLedger              `json:"parser_state,omitempty"`
+	Tasks              []Task                     `json:"tasks,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---

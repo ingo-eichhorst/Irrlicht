@@ -405,6 +405,11 @@ struct SessionRowView: View {
                 .padding(.top, 2)
             }
 
+            // Task list (Claude Code TaskCreate / TaskUpdate)
+            if let tasks = session.metrics?.tasks, !tasks.isEmpty, !tasks.allSatisfy(\.isCompleted) {
+                TaskListView(tasks: tasks)
+            }
+
             // Debug info
             if debugMode {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -455,6 +460,76 @@ struct SessionRowView: View {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
         return String(format: "%d:%02d", m, s)
+    }
+}
+
+// MARK: - Task Progress
+
+/// Wraps children left-to-right, starting a new row when the available width is exhausted.
+private struct FlowLayout: Layout {
+    var hSpacing: CGFloat = 4
+    var vSpacing: CGFloat = 3
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth && x > 0 {
+                y += rowHeight + vSpacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + hSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: maxWidth, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX && x > bounds.minX {
+                y += rowHeight + vSpacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            sub.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += size.width + hSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+/// Compact dot-progress row: one circle per task (filled = done, empty = pending) + "4 / 6" count.
+/// Dots wrap to the next line when the row is full.
+private struct TaskListView: View {
+    let tasks: [SessionTask]
+
+    var body: some View {
+        let done = tasks.filter(\.isCompleted).count
+        FlowLayout(hSpacing: 4, vSpacing: 3) {
+            ForEach(tasks, id: \.id) { task in
+                Group {
+                    if task.isCompleted {
+                        Circle().fill(Color.green.opacity(0.85))
+                    } else {
+                        Circle().strokeBorder(Color(hex: "#8B5CF6"), lineWidth: 1.5)
+                    }
+                }
+                .frame(width: 7, height: 7)
+                .tooltip(task.displayLabel)
+            }
+            Text("\(done) / \(tasks.count)")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+                .padding(.leading, 2)
+        }
     }
 }
 
@@ -774,7 +849,8 @@ struct SessionListView_Previews: PreviewProvider {
                             contextUtilization: 7.5,
                             pressureLevel: "safe",
                             estimatedCostUSD: nil,
-                            lastAssistantText: nil
+                            lastAssistantText: nil,
+                            tasks: nil
                         )
                     )
                 ]

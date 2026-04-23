@@ -235,6 +235,30 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 						if name != "" {
 							ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: id, Name: name})
 						}
+						switch name {
+						case "TaskCreate":
+							if input, ok := block["input"].(map[string]interface{}); ok {
+								subject, _ := input["subject"].(string)
+								desc, _ := input["description"].(string)
+								activeForm, _ := input["activeForm"].(string)
+								ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+									Op:          tailer.TaskOpCreate,
+									Subject:     subject,
+									Description: desc,
+									ActiveForm:  activeForm,
+								})
+							}
+						case "TaskUpdate":
+							if input, ok := block["input"].(map[string]interface{}); ok {
+								taskID, _ := input["taskId"].(string)
+								status, _ := input["status"].(string)
+								ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+									Op:     tailer.TaskOpUpdate,
+									ID:     taskID,
+									Status: status,
+								})
+							}
+						}
 					case "tool_result":
 						if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
 							ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)

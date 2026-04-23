@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,6 +110,11 @@ type SessionMetrics struct {
 	// episode. Per-pass transient; daemon uses it to synthesise the
 	// missing working→waiting step (issue #150).
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
+
+	// Tasks is the current task list for this session, accumulated from
+	// TaskCreate / TaskUpdate tool_use events in the Claude Code transcript.
+	// Nil for sessions that have not called TaskCreate.
+	Tasks []Task `json:"tasks,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -190,6 +196,13 @@ type TranscriptTailer struct {
 	// lastAssistantText holds the text content of the most recent assistant
 	// message, truncated to ~200 characters.
 	lastAssistantText string
+
+	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
+	// tool_use events parsed by the Claude Code adapter.
+	tasks   []Task
+	// taskSeq is the next sequential ID to assign on TaskCreate.
+	// Invariant: taskSeq == len(tasks) always (tasks are never removed).
+	taskSeq int
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path.
@@ -216,7 +229,7 @@ func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *
 // can be persisted to disk and rehydrated after a daemon restart.
 func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s := LedgerState{
-		SchemaVersion:      1,
+		SchemaVersion:      2,
 		LastOffset:         t.lastOffset,
 		CumProviderCostUSD: t.cumProviderCostUSD,
 	}
@@ -229,6 +242,9 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	if pp, ok := t.parser.(ParserStateProvider); ok {
 		pl := pp.GetParserLedger()
 		s.ParserState = &pl
+	}
+	if len(t.tasks) > 0 {
+		s.Tasks = append([]Task(nil), t.tasks...)
 	}
 	return s
 }
@@ -256,6 +272,10 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		if pp, ok := t.parser.(ParserStateProvider); ok {
 			pp.SetParserLedger(*s.ParserState)
 		}
+	}
+	if len(s.Tasks) > 0 {
+		t.tasks = append([]Task(nil), s.Tasks...)
+		t.taskSeq = len(t.tasks)
 	}
 }
 
@@ -304,6 +324,8 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		t.pendingSnapshot = nil
 		t.cumByModel = make(map[string]*UsageBreakdown)
 		t.cumProviderCostUSD = 0
+		t.tasks = nil
+		t.taskSeq = 0
 	case t.lastOffset > 0:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
@@ -380,6 +402,29 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
 			t.openToolCalls = make(map[string]string)
 		}
+		for _, d := range parsed.TaskDeltas {
+			switch d.Op {
+			case TaskOpCreate:
+				t.taskSeq++
+				t.tasks = append(t.tasks, Task{
+					ID:          strconv.Itoa(t.taskSeq),
+					Subject:     d.Subject,
+					Description: d.Description,
+					ActiveForm:  d.ActiveForm,
+					Status:      TaskStatusPending,
+				})
+			case TaskOpUpdate:
+				for i := range t.tasks {
+					if t.tasks[i].ID == d.ID {
+						if d.Status != "" {
+							t.tasks[i].Status = d.Status
+						}
+						break
+					}
+				}
+			}
+		}
+
 		// turn_done is Claude Code's authoritative end-of-turn signal. By
 		// definition most tool_use events opened during the turn have
 		// already received their tool_result, so anything still in
@@ -676,6 +721,11 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.LastWasToolDenial = t.lastWasToolDenial
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText
+	if len(t.tasks) > 0 {
+		t.metrics.Tasks = append([]Task(nil), t.tasks...)
+	} else {
+		t.metrics.Tasks = nil
+	}
 
 	// Token snapshot (latest turn — for context utilization display).
 	t.metrics.InputTokens = t.inputTokens
