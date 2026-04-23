@@ -3,7 +3,7 @@ import Foundation
 import os
 
 /// A single item in the Claude Code task list, derived from TaskCreate / TaskUpdate tool calls.
-struct Task: Codable, Hashable {
+struct SessionTask: Codable, Hashable {
     let id: String
     let subject: String
     let description: String?
@@ -36,7 +36,7 @@ struct SessionMetrics: Codable {
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
     let lastAssistantText: String?  // last assistant message text, truncated (~200 chars)
-    let tasks: [Task]?              // Claude Code task list (nil when TaskCreate never called)
+    let tasks: [SessionTask]?              // Claude Code task list (nil when TaskCreate never called)
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"

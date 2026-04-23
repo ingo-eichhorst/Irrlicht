@@ -488,9 +488,9 @@ struct SessionRowView: View {
 
 /// Compact task list rendered inside a session row when tasks are present.
 struct TaskListView: View {
-    let tasks: [Task]
+    let tasks: [SessionTask]
 
-    private func icon(for task: Task) -> (String, Color) {
+    private func icon(for task: SessionTask) -> (String, Color) {
         switch task.status {
         case "completed":  return ("checkmark", Color.secondary.opacity(0.5))
         case "in_progress": return ("square.fill", Color.accentColor)
@@ -838,7 +838,8 @@ struct SessionListView_Previews: PreviewProvider {
                             contextUtilization: 7.5,
                             pressureLevel: "safe",
                             estimatedCostUSD: nil,
-                            lastAssistantText: nil
+                            lastAssistantText: nil,
+                            tasks: nil
                         )
                     )
                 ]
