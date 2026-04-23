@@ -426,9 +426,8 @@ struct SessionRowView: View {
             }
 
             // Task list (Claude Code TaskCreate / TaskUpdate)
-            if let tasks = session.metrics?.tasks, !tasks.isEmpty {
+            if let tasks = session.metrics?.tasks, !tasks.isEmpty, !tasks.allSatisfy(\.isCompleted) {
                 TaskListView(tasks: tasks)
-                    .padding(.top, 2)
             }
 
             // Debug info
@@ -484,41 +483,34 @@ struct SessionRowView: View {
     }
 }
 
-// MARK: - Task List
+// MARK: - Task Progress
 
-/// Compact task list rendered inside a session row when tasks are present.
+/// Compact dot-progress row: one circle per task (filled = done/active, empty = pending) + "4 / 6" count.
 struct TaskListView: View {
     let tasks: [SessionTask]
 
-    private func icon(for task: SessionTask) -> (String, Color) {
+    private func dotColor(for task: SessionTask) -> Color {
         switch task.status {
-        case "completed":  return ("checkmark", Color.secondary.opacity(0.5))
-        case "in_progress": return ("square.fill", Color.accentColor)
-        default:           return ("square", Color.secondary.opacity(0.4))
+        case "completed":   return Color.accentColor.opacity(0.5)
+        case "in_progress": return Color.accentColor
+        default:            return Color.secondary.opacity(0.3)
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        let done = tasks.filter { $0.isCompleted || $0.isInProgress }.count
+        HStack(spacing: 4) {
             ForEach(tasks, id: \.id) { task in
-                HStack(spacing: 4) {
-                    let (glyph, color) = icon(for: task)
-                    Image(systemName: glyph)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundColor(color)
-                        .frame(width: 10)
-                    Text(task.displayLabel)
-                        .font(.system(size: 9))
-                        .foregroundColor(task.isInProgress ? .primary : .secondary)
-                        .strikethrough(task.isCompleted, color: .secondary.opacity(0.5))
-                        .lineLimit(1)
-                }
+                Circle()
+                    .fill(dotColor(for: task))
+                    .frame(width: 7, height: 7)
+                    .help(task.displayLabel)
             }
+            Text("\(done) / \(tasks.count)")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+                .padding(.leading, 2)
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 3)
-        .background(Color.secondary.opacity(0.05))
-        .cornerRadius(4)
     }
 }
 

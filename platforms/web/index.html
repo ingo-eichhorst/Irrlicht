@@ -487,33 +487,27 @@
       padding: 0 4px;
     }
 
-    /* Task list */
+    /* Task progress dots */
     .row-tasks {
-      flex: 1 1 100%;
-      order: 10;
       display: flex;
-      flex-direction: column;
-      gap: 1px;
-      padding: 3px 4px;
-      background: rgba(128,128,128,0.05);
-      border-radius: 3px;
+      align-items: center;
+      gap: 3px;
+    }
+    .task-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      cursor: default;
+    }
+    .task-dot.task-pending    { background: rgba(128,128,128,0.3); }
+    .task-dot.task-in_progress { background: var(--working); }
+    .task-dot.task-completed  { background: rgba(139,92,246,0.45); }
+    .row-task-count {
       font-size: 9px;
-      font-family: var(--font-mono);
-      margin-top: -2px; /* compensate for row gap so it sits flush */
-    }
-    .task-item {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
       color: var(--text-secondary);
-    }
-    .task-item.task-in_progress {
-      color: var(--text-primary);
-      font-weight: 500;
-    }
-    .task-item.task-completed {
-      opacity: 0.45;
-      text-decoration: line-through;
+      margin-left: 2px;
+      font-family: var(--font-mono);
     }
 
     /* Pressure alert row */
@@ -1296,19 +1290,18 @@
         questionEl.style.display = 'none';
       }
 
-      // Task list (Claude Code TaskCreate / TaskUpdate)
+      // Task progress dots (Claude Code TaskCreate / TaskUpdate)
       const tasksEl = el.querySelector('.row-tasks');
       const tasks = metrics.tasks;
-      if (tasks && tasks.length > 0) {
+      const allDone = tasks && tasks.length > 0 && tasks.every(t => t.status === 'completed');
+      if (tasks && tasks.length > 0 && !allDone) {
         tasksEl.style.display = '';
-        const icons = { completed: '✓', in_progress: '■', pending: '□' };
+        const done = tasks.filter(t => t.status === 'completed' || t.status === 'in_progress').length;
+        const taskLabel = (t) => (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
         const newHtml = tasks.map(t => {
-          const icon = icons[t.status] || '□';
-          const label = (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
-          const cls = 'task-item task-' + (t.status || 'pending');
-          const escaped = label.replace(/&/g,'&amp;').replace(/</g,'&lt;');
-          return '<span class="' + cls + '">' + icon + ' ' + escaped + '</span>';
-        }).join('');
+          const tip = taskLabel(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+          return '<span class="task-dot task-' + (t.status || 'pending') + '" title="' + tip + '"></span>';
+        }).join('') + '<span class="row-task-count">' + done + ' / ' + tasks.length + '</span>';
         if (tasksEl.innerHTML !== newHtml) tasksEl.innerHTML = newHtml;
       } else {
         tasksEl.style.display = 'none';
