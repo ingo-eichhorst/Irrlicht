@@ -23,12 +23,36 @@ extension View {
     }
 }
 
+enum SessionViewMode: String {
+    case meta    // Context / Money / Model (default)
+    case history // Historical activity bar
+}
+
+enum HistoryGranularity: Int, CaseIterable {
+    case oneSecond = 1
+    case tenSeconds = 10
+    case sixtySeconds = 60
+
+    var label: String {
+        switch self {
+        case .oneSecond:   return "1s"
+        case .tenSeconds:  return "10s"
+        case .sixtySeconds: return "60s"
+        }
+    }
+}
+
 struct SessionListView: View {
     @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var gasTownProvider: GasTownProvider
     @State private var isQuitButtonHovered = false
     @State private var isSettingsButtonHovered = false
     @State private var showSettings = false
+    @AppStorage("sessionViewMode") private var viewModeRaw: String = SessionViewMode.meta.rawValue
+    @AppStorage("historyGranularitySec") private var granularitySec: Int = 1
+
+    private var viewMode: SessionViewMode { SessionViewMode(rawValue: viewModeRaw) ?? .meta }
+    private var granularity: HistoryGranularity { HistoryGranularity(rawValue: granularitySec) ?? .oneSecond }
 
     var body: some View {
         if showSettings {
@@ -119,26 +143,73 @@ struct SessionListView: View {
     }
 
     // MARK: - Session Header
-    
+
     private var sessionHeaderView: some View {
-        HStack {
-            HStack(spacing: 4) {
-                Text("Irrlicht v\(appVersion)")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                Text("—")
-                    .foregroundColor(.secondary)
-                
-                sessionIconsView
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                HStack(spacing: 4) {
+                    Text("Irrlicht v\(appVersion)")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    Text("—")
+                        .foregroundColor(.secondary)
+
+                    sessionIconsView
+                }
+
+                Spacer()
+
+                // View-mode toggle
+                Picker("", selection: Binding(
+                    get: { viewMode },
+                    set: { newMode in
+                        viewModeRaw = newMode.rawValue
+                        if newMode == .history {
+                            sessionManager.startHistoryPolling(granularitySec: granularitySec)
+                        } else {
+                            sessionManager.stopHistoryPolling()
+                        }
+                    }
+                )) {
+                    Text("Meta").tag(SessionViewMode.meta)
+                    Text("History").tag(SessionViewMode.history)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 130)
+
+                statusIndicator
             }
-            
-            Spacer()
-            
-            statusIndicator
+
+            // Granularity picker — only visible in history mode
+            if viewMode == .history {
+                HStack(spacing: 4) {
+                    Text("Interval:")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    ForEach(HistoryGranularity.allCases, id: \.rawValue) { g in
+                        Button(g.label) {
+                            granularitySec = g.rawValue
+                            sessionManager.startHistoryPolling(granularitySec: g.rawValue)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 9, design: .monospaced))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(granularitySec == g.rawValue ? Color.accentColor.opacity(0.2) : Color.clear)
+                        .cornerRadius(3)
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.3)))
+                    }
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .onAppear {
+            if viewMode == .history {
+                sessionManager.startHistoryPolling(granularitySec: granularitySec)
+            }
+        }
     }
     
     private var sessionIconsView: some View {
@@ -234,7 +305,11 @@ struct SessionRowView: View {
     var activeSubagentCount: Int = 0
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+    @AppStorage("sessionViewMode") private var viewModeRaw: String = SessionViewMode.meta.rawValue
+    @EnvironmentObject var sessionManager: SessionManager
     @State private var isHovered = false
+
+    private var viewMode: SessionViewMode { SessionViewMode(rawValue: viewModeRaw) ?? .meta }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -277,40 +352,47 @@ struct SessionRowView: View {
                     .lineLimit(1)
                     .tooltip(session.gitBranch ?? "—")
 
-                // Context utilization bar
-                if let metrics = session.metrics, metrics.hasContextData {
-                    ContextBar(utilization: metrics.contextUtilization,
-                               pressureColor: metrics.contextPressureColor)
-                        .frame(maxWidth: 80, maxHeight: 8)
-                    Text(metrics.formattedContextUtilization)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(Color(hex: metrics.contextPressureColor))
-                } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
-                    Text(metrics.formattedTokenUsage)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(Color(hex: "#8E8E93"))
-                }
+                if viewMode == .meta {
+                    // Context utilization bar
+                    if let metrics = session.metrics, metrics.hasContextData {
+                        ContextBar(utilization: metrics.contextUtilization,
+                                   pressureColor: metrics.contextPressureColor)
+                            .frame(maxWidth: 80, maxHeight: 8)
+                        Text(metrics.formattedContextUtilization)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(Color(hex: metrics.contextPressureColor))
+                    } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
+                        Text(metrics.formattedTokenUsage)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(Color(hex: "#8E8E93"))
+                    }
 
-                // Estimated cost
-                if showCostDisplay, let cost = session.metrics?.formattedCost {
-                    Text(cost)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.secondary)
+                    // Estimated cost
+                    if showCostDisplay, let cost = session.metrics?.formattedCost {
+                        Text(cost)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 Spacer()
 
-                // Short model name + adapter icon
-                Text(session.shortModelName)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .tooltip(session.effectiveModel)
-                    .accessibilityIdentifier("session-model-label-\(session.id)")
-                if let icon = session.adapterIcon {
-                    Image(nsImage: icon)
-                        .frame(width: 12, height: 12)
-                        .tooltip(session.adapterName)
+                if viewMode == .history {
+                    HistoryBarView(states: sessionManager.stateHistory[session.id] ?? [])
+                        .frame(width: 120, height: 6)
+                } else {
+                    // Short model name + adapter icon
+                    Text(session.shortModelName)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .tooltip(session.effectiveModel)
+                        .accessibilityIdentifier("session-model-label-\(session.id)")
+                    if let icon = session.adapterIcon {
+                        Image(nsImage: icon)
+                            .frame(width: 12, height: 12)
+                            .tooltip(session.adapterName)
+                    }
                 }
 
                 // Action buttons on hover

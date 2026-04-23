@@ -18,12 +18,15 @@ class SessionManager: ObservableObject {
     @Published var connectionState: ConnectionState = .disconnected
     @Published var lastError: String?
     @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
+    @Published var stateHistory: [String: [String]] = [:]  // session_id → oldest→newest state strings
 
     /// Timer that periodically re-hydrates sessions so group-level cost
     /// values (which only ride the /api/v1/sessions response) stay fresh —
     /// WebSocket deltas only carry individual session updates.
     private var projectCostsTimer: Timer?
     private let projectCostsRefreshInterval: TimeInterval = 30.0
+
+    private var historyTimer: Timer?
 
     private let instancesPath: URL
     private let orderFilePath: URL
@@ -238,6 +241,38 @@ class SessionManager: ObservableObject {
             Task { @MainActor [weak self] in
                 await self?.hydrateSessions()
             }
+        }
+    }
+
+    /// Starts periodic history polling at the specified granularity (1, 10, or 60 s).
+    func startHistoryPolling(granularitySec: Int) {
+        historyTimer?.invalidate()
+        let interval = TimeInterval(max(1, granularitySec))
+        Task { @MainActor [weak self] in await self?.fetchHistory(granularitySec: granularitySec) }
+        historyTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.fetchHistory(granularitySec: granularitySec)
+            }
+        }
+    }
+
+    func stopHistoryPolling() {
+        historyTimer?.invalidate()
+        historyTimer = nil
+    }
+
+    private func fetchHistory(granularitySec: Int) async {
+        guard let url = URL(string: "http://localhost:7837/api/v1/sessions/history?granularity=\(granularitySec)") else { return }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            struct HistoryResponse: Decodable {
+                let sessions: [String: [String]]
+            }
+            let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
+            stateHistory = decoded.sessions
+        } catch {
+            // Non-fatal: history is optional.
         }
     }
 

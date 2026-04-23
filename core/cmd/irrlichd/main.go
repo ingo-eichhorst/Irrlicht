@@ -186,6 +186,15 @@ func main() {
 		}
 	}
 
+	// History tracker: per-session rolling ring buffers for 1s/10s/60s
+	// granularity, kept in memory while the daemon runs.
+	historyTracker := services.NewHistoryTracker()
+	{
+		histCtx, histCancel := context.WithCancel(context.Background())
+		defer histCancel()
+		go historyTracker.Run(histCtx)
+	}
+
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
 
@@ -322,6 +331,7 @@ func main() {
 
 	// Register API endpoints (after orchMonitor is available).
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker))
+	mux.HandleFunc("GET /api/v1/sessions/history", handleGetSessionsHistory(cachedRepo, historyTracker))
 
 	// Inbound adapters: watch agent transcript directories for session files.
 	claudeCodeWatcher := claudecode.New(cfg.MaxSessionAge)
@@ -386,6 +396,7 @@ func main() {
 	if costTracker != nil {
 		detector.SetCostTracker(costTracker)
 	}
+	detector.SetHistoryTracker(historyTracker)
 	// Capture terminal/IDE identity at first PID assignment so the menu-bar
 	// app can jump back to the launching terminal on row/notification click.
 	detector.SetLauncherEnvReader(processlifecycle.ReadLauncherEnv)
@@ -549,6 +560,56 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
 		if tracker != nil {
 			attachGroupCosts(resp, tracker, cache)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// handleGetSessionsHistory serves pre-aggregated per-session state history at
+// a chosen granularity. Clients poll this endpoint at their own cadence to
+// populate history bars without bloating the WebSocket envelope.
+//
+// GET /api/v1/sessions/history?granularity=1|10|60
+func handleGetSessionsHistory(repo outbound.SessionRepository, ht outbound.HistoryTracker) http.HandlerFunc {
+	type historyResponse struct {
+		GranularitySec int                 `json:"granularity_sec"`
+		BucketCount    int                 `json:"bucket_count"`
+		Sessions       map[string][]string `json:"sessions"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		granularity := 1
+		if g := r.URL.Query().Get("granularity"); g != "" {
+			switch g {
+			case "10":
+				granularity = 10
+			case "60":
+				granularity = 60
+			case "1":
+				// default
+			default:
+				http.Error(w, "granularity must be 1, 10, or 60", http.StatusBadRequest)
+				return
+			}
+		}
+
+		sessions, err := repo.ListAll()
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		out := make(map[string][]string, len(sessions))
+		for _, s := range sessions {
+			if snap, ok := ht.Snapshot(s.SessionID, granularity); ok {
+				out[s.SessionID] = snap
+			}
+		}
+
+		resp := historyResponse{
+			GranularitySec: granularity,
+			BucketCount:    150,
+			Sessions:       out,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)

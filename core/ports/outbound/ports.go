@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"context"
+	"time"
 
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
@@ -97,6 +98,20 @@ type CostTracker interface {
 	// Prune drops snapshot rows older than the given number of days.
 	// Safe to call periodically (e.g. daemon startup).
 	Prune(olderThanDays int) error
+}
+
+// HistoryTracker maintains per-session rolling state buffers for three
+// granularities (1s, 10s, 60s), using priority aggregation waiting>working>ready.
+// Implementations must be safe for concurrent use.
+type HistoryTracker interface {
+	// OnTransition records a state transition for a session, upgrading the
+	// current bucket's priority if the new state outranks the stored one.
+	OnTransition(sessionID, newState string, ts time.Time)
+	// Snapshot returns the ring-buffer contents for a session at the given
+	// granularity (1, 10, or 60), oldest→newest. Returns nil, false if unknown.
+	Snapshot(sessionID string, granularitySec int) ([]string, bool)
+	// Remove drops all buffers for a session.
+	Remove(sessionID string)
 }
 
 // ProcessWatcher monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT and
