@@ -948,33 +948,18 @@ class SessionManager: ObservableObject {
     // MARK: - Session Management Actions
 
     func resetSessionState(sessionId: String) {
-        print("🔄 Resetting session state for \(sessionId) to ready")
-
         let sessionFilePath = instancesPath.appendingPathComponent("\(sessionId).json")
-
         do {
-            // Load existing session data
             guard let existingData = try? Data(contentsOf: sessionFilePath),
                   let existingJson = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any] else {
-                print("❌ Failed to load existing session data for reset")
                 lastError = "Failed to load session data for reset"
                 return
             }
-
-            // Update state to ready and timestamp
             var updatedJson = existingJson
             updatedJson["state"] = "ready"
             updatedJson["updated_at"] = Int64(Date().timeIntervalSince1970)
-
-            // Write back to file
             let updatedData = try JSONSerialization.data(withJSONObject: updatedJson, options: [])
             try updatedData.write(to: sessionFilePath)
-
-            print("✅ Successfully reset session \(sessionId) to ready state")
-
-            // In WebSocket mode, optimistically update the in-memory map so the
-            // UI reflects the change immediately (file change will sync to daemon
-            // on next daemon restart via SeedFromDisk).
             if !useFilePolling, var s = sessionMap[sessionId] {
                 s = SessionState(
                     id: s.id, state: .ready, model: s.model, cwd: s.cwd,
@@ -987,41 +972,28 @@ class SessionManager: ObservableObject {
                 sessionMap[sessionId] = s
                 rebuildSessionsFromMap()
             }
-
         } catch {
-            print("❌ Failed to reset session state: \(error)")
             lastError = "Failed to reset session: \(error.localizedDescription)"
         }
     }
 
     func deleteSession(sessionId: String) {
-        print("🗑️ Deleting session \(sessionId)")
         notifiedThresholds.removeValue(forKey: sessionId)
-
         let sessionFilePath = instancesPath.appendingPathComponent("\(sessionId).json")
-
-        // Remove session file if it exists on disk.
         if FileManager.default.fileExists(atPath: sessionFilePath.path) {
             do {
                 try FileManager.default.removeItem(at: sessionFilePath)
             } catch {
-                print("❌ Failed to delete session file: \(error)")
                 lastError = "Failed to delete session: \(error.localizedDescription)"
                 return
             }
         }
-
-        // Remove from session order
         sessionOrder.removeAll { $0 == sessionId }
         saveSessionOrder()
-
-        // In WebSocket mode, optimistically update the in-memory map.
         if !useFilePolling {
             sessionMap.removeValue(forKey: sessionId)
             rebuildSessionsFromMap()
         }
-
-        print("✅ Successfully deleted session \(sessionId)")
     }
 
     // MARK: - Debug State Dump (IRRLICHT_DEBUG=1)

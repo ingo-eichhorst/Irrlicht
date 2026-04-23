@@ -269,6 +269,7 @@ struct SessionListView: View {
 struct ContextBar: View {
     let utilization: Double
     let pressureColor: String
+    var label: String? = nil
 
     var body: some View {
         GeometryReader { geo in
@@ -278,6 +279,13 @@ struct ContextBar: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Color(hex: pressureColor))
                     .frame(width: geo.size.width * min(CGFloat(utilization) / 100, 1.0))
+                if let label {
+                    Text(label)
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary.opacity(0.8))
+                        .padding(.trailing, 4)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
         }
     }
@@ -329,61 +337,88 @@ struct SessionRowView: View {
                         .clipShape(Circle())
                 }
 
-                // Branch name (project name is in the group header)
+                // Branch name — fixed width so the bar column starts at the same x for every row
                 Text(session.gitBranch ?? "—")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: 64, alignment: .leading)
                     .tooltip(session.gitBranch ?? "—")
 
                 if displayMode == .context {
-                    // Context utilization bar
+                    // Fixed-width columns: [bar+tokens_inside 80][cost or % 40]
                     if let metrics = session.metrics, metrics.hasContextData {
                         ContextBar(utilization: metrics.contextUtilization,
-                                   pressureColor: metrics.contextPressureColor)
-                            .frame(maxWidth: 80, maxHeight: 8)
-                        Text(metrics.formattedContextUtilization)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Color(hex: metrics.contextPressureColor))
+                                   pressureColor: metrics.contextPressureColor,
+                                   label: metrics.formattedTokenCount)
+                            .frame(width: 80, height: 13)
+                        if showCostDisplay {
+                            Text(metrics.formattedCost ?? "")
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .frame(width: 40, alignment: .leading)
+                        } else {
+                            Text(metrics.formattedContextUtilization)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(Color(hex: metrics.contextPressureColor))
+                                .frame(width: 32, alignment: .leading)
+                        }
                     } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
+                        Color.clear.frame(width: 80, height: 13)
                         Text(metrics.formattedTokenUsage)
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundColor(Color(hex: "#8E8E93"))
-                    }
-
-                    // Estimated cost
-                    if showCostDisplay, let cost = session.metrics?.formattedCost {
-                        Text(cost)
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundColor(.secondary)
+                            .frame(width: 32, alignment: .leading)
+                    } else {
+                        Color.clear.frame(width: 112, height: 13)
                     }
                 }
 
                 Spacer()
+
+                if debugMode {
+                    SessionActionButtons(session: session)
+                }
 
                 if displayMode.isHistory {
                     HistoryBarView(states: sessionManager.stateHistory[session.id] ?? [],
                                    bucketCount: sessionManager.historyBucketCount)
                         .frame(width: 120, height: 6)
                 } else {
-                    // Short model name + adapter icon
-                    Text(session.shortModelName)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .tooltip(session.effectiveModel)
-                        .accessibilityIdentifier("session-model-label-\(session.id)")
-                    if let icon = session.adapterIcon {
-                        Image(nsImage: icon)
-                            .frame(width: 12, height: 12)
-                            .tooltip(session.adapterName)
+                    // Short model name + adapter icon — grouped so layoutPriority applies to both
+                    HStack(spacing: 6) {
+                        Text(session.shortModelName)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .tooltip(session.effectiveModel)
+                            .accessibilityIdentifier("session-model-label-\(session.id)")
+                        if let icon = session.adapterIcon {
+                            Image(nsImage: icon)
+                                .frame(width: 12, height: 12)
+                                .tooltip(session.adapterName)
+                        }
                     }
+                    .layoutPriority(1)
                 }
+            }
 
-                // Action buttons on hover
-                if isHovered {
-                    SessionActionButtons(session: session)
-                }
+            // Waiting question block
+            if session.state == .waiting,
+               let text = session.metrics?.lastAssistantText, !text.isEmpty {
+                Text(text)
+                    .font(.system(size: 9))
+                    .foregroundColor(.orange)
+                    .lineLimit(3)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.12))
+                    .cornerRadius(4)
+                    .padding(.top, 2)
             }
 
             // Context pressure alert (80%+, active sessions only)
@@ -540,10 +575,9 @@ private struct TaskListView: View {
 struct SessionActionButtons: View {
     let session: SessionState
     @EnvironmentObject var sessionManager: SessionManager
-    
+
     var body: some View {
         HStack(spacing: 4) {
-            // Reset button
             Button(action: {
                 sessionManager.resetSessionState(sessionId: session.id)
             }) {
@@ -553,8 +587,7 @@ struct SessionActionButtons: View {
             }
             .buttonStyle(.plain)
             .help("Reset to ready state")
-            
-            // Delete button
+
             Button(action: {
                 sessionManager.deleteSession(sessionId: session.id)
             }) {
@@ -666,8 +699,7 @@ struct GroupView: View {
         guard v > 0 else { return "$0" + costTimeframe.suffix }
         let formatted: String
         if v < 0.01 { formatted = "<$0.01" }
-        else if v < 10 { formatted = String(format: "$%.2f", v) }
-        else { formatted = String(format: "$%.0f", v) }
+        else { formatted = String(format: "$%.2f", v) }
         return formatted + costTimeframe.suffix
     }
 
