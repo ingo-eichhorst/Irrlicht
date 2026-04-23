@@ -224,6 +224,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev.EventType = eventType
 
 	// Scan message.content[] for embedded tool_use and tool_result blocks.
+	var askUserQuestion string
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if contentArr, ok := msg["content"].([]interface{}); ok {
 			for _, item := range contentArr {
@@ -258,6 +259,14 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 									Status: status,
 								})
 							}
+						case "AskUserQuestion":
+							if input, ok := block["input"].(map[string]interface{}); ok {
+								if qs, ok := input["questions"].([]interface{}); ok && len(qs) > 0 {
+									if q, ok := qs[0].(map[string]interface{}); ok {
+										askUserQuestion, _ = q["question"].(string)
+									}
+								}
+							}
 						}
 					case "tool_result":
 						if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
@@ -276,6 +285,15 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	switch eventType {
 	case "assistant", eventTypeAssistantStreaming, "assistant_message", "assistant_output":
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
+		// Fall back to AskUserQuestion text when the message has no text block.
+		if ev.AssistantText == "" && askUserQuestion != "" {
+			runes := []rune(askUserQuestion)
+			if len(runes) > 200 {
+				ev.AssistantText = "…" + string(runes[len(runes)-200:])
+			} else {
+				ev.AssistantText = askUserQuestion
+			}
+		}
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
 	}

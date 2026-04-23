@@ -295,7 +295,7 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 
 	runes := []rune(text)
 	if len(runes) > 200 {
-		return string(runes[:200])
+		return "…" + string(runes[len(runes)-200:])
 	}
 	return text
 }
