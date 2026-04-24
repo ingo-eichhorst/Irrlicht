@@ -6,9 +6,9 @@ import (
 )
 
 func TestBackoffConstants(t *testing.T) {
-	if BackoffInterval <= DefaultInterval {
-		t.Errorf("BackoffInterval (%v) should be greater than DefaultInterval (%v)",
-			BackoffInterval, DefaultInterval)
+	if backoffInterval <= defaultInterval {
+		t.Errorf("backoffInterval (%v) should be greater than defaultInterval (%v)",
+			backoffInterval, defaultInterval)
 	}
 	if stableThreshold <= 0 {
 		t.Errorf("stableThreshold (%d) should be positive", stableThreshold)
@@ -30,7 +30,7 @@ func TestScanner_BackoffFields(t *testing.T) {
 	}
 
 	// Simulate reaching the stable threshold: after stableThreshold consecutive
-	// polls with an unchanged PID count, the scanner should use BackoffInterval.
+	// polls with an unchanged PID count, the scanner should use backoffInterval.
 	s.stablePolls = stableThreshold
 	if s.stablePolls < stableThreshold {
 		t.Errorf("stablePolls (%d) should be >= stableThreshold (%d)", s.stablePolls, stableThreshold)
@@ -45,16 +45,16 @@ func TestScanner_BackoffFields(t *testing.T) {
 }
 
 func TestNewScanner_DefaultInterval(t *testing.T) {
-	// Passing 0 should use DefaultInterval.
+	// Passing 0 should use defaultInterval.
 	s := NewScanner("test", "adapter", 0)
-	if s.interval != DefaultInterval {
-		t.Errorf("interval = %v, want DefaultInterval (%v)", s.interval, DefaultInterval)
+	if s.interval != defaultInterval {
+		t.Errorf("interval = %v, want defaultInterval (%v)", s.interval, defaultInterval)
 	}
 
-	// Passing a negative value should also use DefaultInterval.
+	// Passing a negative value should also use defaultInterval.
 	s = NewScanner("test", "adapter", -1*time.Second)
-	if s.interval != DefaultInterval {
-		t.Errorf("interval = %v, want DefaultInterval (%v) for negative input", s.interval, DefaultInterval)
+	if s.interval != defaultInterval {
+		t.Errorf("interval = %v, want defaultInterval (%v) for negative input", s.interval, defaultInterval)
 	}
 
 	// Passing a positive value should use that value.

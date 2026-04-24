@@ -29,9 +29,9 @@ var roleMeta = map[string]struct{ Icon, Desc string }{
 }
 
 
-// DaemonState represents the Gas Town daemon's runtime state
+// daemonState represents the Gas Town daemon's runtime state
 // as read from $GT_ROOT/daemon/state.json.
-type DaemonState struct {
+type daemonState struct {
 	Running        bool      `json:"running"`
 	PID            int       `json:"pid"`
 	StartedAt      time.Time `json:"started_at"`
@@ -39,9 +39,9 @@ type DaemonState struct {
 	HeartbeatCount int       `json:"heartbeat_count"`
 }
 
-// RigState represents the status of a single Gas Town rig,
+// rigState represents the status of a single Gas Town rig,
 // as returned by `gt rig list --json`.
-type RigState struct {
+type rigState struct {
 	Name         string `json:"name"`
 	BeadsPrefix  string `json:"beads_prefix"`
 	Status       string `json:"status"`
@@ -51,9 +51,9 @@ type RigState struct {
 	CrewCount    int    `json:"crew"`
 }
 
-// PolecatState represents a single polecat worker,
+// polecatState represents a single polecat worker,
 // as returned by `gt polecat list --all --json`.
-type PolecatState struct {
+type polecatState struct {
 	Rig            string `json:"rig"`
 	Name           string `json:"name"`
 	State          string `json:"state"`
@@ -61,16 +61,16 @@ type PolecatState struct {
 	SessionRunning bool   `json:"session_running"`
 }
 
-// DogState represents a dog worker as returned by `gt dog list --json`.
-type DogState struct {
+// dogState represents a dog worker as returned by `gt dog list --json`.
+type dogState struct {
 	Name       string            `json:"name"`
 	State      string            `json:"state"`
 	LastActive string            `json:"last_active"`
 	Worktrees  map[string]string `json:"worktrees"` // rig name → worktree path
 }
 
-// BootStatus represents boot status as returned by `gt boot status --json`.
-type BootStatus struct {
+// bootStatus represents boot status as returned by `gt boot status --json`.
+type bootStatus struct {
 	BootDir      string `json:"boot_dir"`
 	Degraded     bool   `json:"degraded"`
 	Running      bool   `json:"running"`

@@ -12,28 +12,25 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// Collector detects Gas Town, resolves GT_ROOT, and watches daemon/state.json
+// collector detects Gas Town, resolves GT_ROOT, and watches daemon/state.json
 // and rigs.json for changes. It implements inbound.GasTownCollector.
-type Collector struct {
+type collector struct {
 	root     string // resolved GT_ROOT path ("" if not detected)
 	detected bool
 
 	mu    sync.RWMutex
-	state *DaemonState // latest parsed state
-	rigs  []RigState   // latest parsed rigs.json
+	state *daemonState // latest parsed state
+	rigs  []rigState   // latest parsed rigs.json
 
 	subMu sync.Mutex
-	subs  []chan DaemonState
-
-	rigSubMu sync.Mutex
-	rigSubs  []chan []RigState
+	subs  []chan daemonState
 }
 
-// New creates a Collector by probing for a Gas Town installation.
+// New creates a collector by probing for a Gas Town installation.
 // Detection order: GT_ROOT env var → ~/gt (default location).
 // A directory is accepted when it contains both daemon/ and rigs.json.
-func New() *Collector {
-	c := &Collector{}
+func New() *collector {
+	c := &collector{}
 
 	root := resolveRoot()
 	if root != "" && isGasTownRoot(root) {
@@ -53,30 +50,30 @@ func New() *Collector {
 }
 
 // Detected returns true if a valid Gas Town installation was found.
-func (c *Collector) Detected() bool { return c.detected }
+func (c *collector) Detected() bool { return c.detected }
 
 // Root returns the resolved GT_ROOT path, or "" if not detected.
-func (c *Collector) Root() string { return c.root }
+func (c *collector) Root() string { return c.root }
 
-// DaemonState returns the latest daemon state snapshot, or nil.
-func (c *Collector) DaemonState() *DaemonState {
+// daemonState returns the latest daemon state snapshot, or nil.
+func (c *collector) daemonState() *daemonState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.state
 }
 
 // Rigs returns the latest parsed rig definitions from rigs.json.
-func (c *Collector) Rigs() []RigState {
+func (c *collector) Rigs() []rigState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	result := make([]RigState, len(c.rigs))
+	result := make([]rigState, len(c.rigs))
 	copy(result, c.rigs)
 	return result
 }
 
 // Watch begins watching daemon/state.json and rigs.json for changes using
 // fsnotify (kqueue on macOS). It blocks until ctx is cancelled.
-func (c *Collector) Watch(ctx context.Context) error {
+func (c *collector) Watch(ctx context.Context) error {
 	if !c.detected {
 		// Nothing to watch — block until context is done.
 		<-ctx.Done()
@@ -133,8 +130,8 @@ func (c *Collector) Watch(ctx context.Context) error {
 // Subscribe returns a channel that receives a copy of the daemon state on
 // every file change. The channel is buffered (1) so a slow consumer doesn't
 // block the watcher.
-func (c *Collector) Subscribe() <-chan DaemonState {
-	ch := make(chan DaemonState, 1)
+func (c *collector) Subscribe() <-chan daemonState {
+	ch := make(chan daemonState, 1)
 	c.subMu.Lock()
 	c.subs = append(c.subs, ch)
 	c.subMu.Unlock()
@@ -142,7 +139,7 @@ func (c *Collector) Subscribe() <-chan DaemonState {
 }
 
 // Unsubscribe removes a previously subscribed channel and closes it.
-func (c *Collector) Unsubscribe(ch <-chan DaemonState) {
+func (c *collector) Unsubscribe(ch <-chan daemonState) {
 	c.subMu.Lock()
 	defer c.subMu.Unlock()
 	for i, s := range c.subs {
@@ -154,30 +151,8 @@ func (c *Collector) Unsubscribe(ch <-chan DaemonState) {
 	}
 }
 
-// SubscribeRigs returns a channel that receives updated rig lists when rigs.json changes.
-func (c *Collector) SubscribeRigs() <-chan []RigState {
-	ch := make(chan []RigState, 1)
-	c.rigSubMu.Lock()
-	c.rigSubs = append(c.rigSubs, ch)
-	c.rigSubMu.Unlock()
-	return ch
-}
-
-// UnsubscribeRigs removes a previously subscribed rigs channel.
-func (c *Collector) UnsubscribeRigs(ch <-chan []RigState) {
-	c.rigSubMu.Lock()
-	defer c.rigSubMu.Unlock()
-	for i, s := range c.rigSubs {
-		if s == ch {
-			c.rigSubs = append(c.rigSubs[:i], c.rigSubs[i+1:]...)
-			close(s)
-			return
-		}
-	}
-}
-
 // reload reads state.json and broadcasts the new state to subscribers.
-func (c *Collector) reload(path string) {
+func (c *collector) reload(path string) {
 	s, err := readStateFile(path)
 	if err != nil {
 		return // transient — file may be mid-write
@@ -199,8 +174,8 @@ func (c *Collector) reload(path string) {
 	c.subMu.Unlock()
 }
 
-// reloadRigs reads rigs.json and broadcasts the new rig list to subscribers.
-func (c *Collector) reloadRigs(path string) {
+// reloadRigs reads rigs.json and updates the latest rig snapshot.
+func (c *collector) reloadRigs(path string) {
 	rigs, err := readRigsFile(path)
 	if err != nil {
 		return // transient
@@ -209,17 +184,6 @@ func (c *Collector) reloadRigs(path string) {
 	c.mu.Lock()
 	c.rigs = rigs
 	c.mu.Unlock()
-
-	c.rigSubMu.Lock()
-	snapshot := make([]RigState, len(rigs))
-	copy(snapshot, rigs)
-	for _, ch := range c.rigSubs {
-		select {
-		case ch <- snapshot:
-		default:
-		}
-	}
-	c.rigSubMu.Unlock()
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -259,12 +223,12 @@ func rigsFilePath(root string) string {
 }
 
 // readStateFile reads and parses daemon/state.json.
-func readStateFile(path string) (*DaemonState, error) {
+func readStateFile(path string) (*daemonState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var s DaemonState
+	var s daemonState
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
@@ -275,14 +239,14 @@ func readStateFile(path string) (*DaemonState, error) {
 // rigs.json can be either:
 //   - an array of rig objects: [{"name": "irrlicht", ...}, ...]
 //   - an object with rig names as keys: {"irrlicht": {...}, ...}
-func readRigsFile(path string) ([]RigState, error) {
+func readRigsFile(path string) ([]rigState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	// Try array format first.
-	var rigs []RigState
+	var rigs []rigState
 	if err := json.Unmarshal(data, &rigs); err == nil {
 		return rigs, nil
 	}
@@ -293,9 +257,9 @@ func readRigsFile(path string) ([]RigState, error) {
 		return nil, err
 	}
 
-	rigs = make([]RigState, 0, len(rigMap))
+	rigs = make([]rigState, 0, len(rigMap))
 	for name, raw := range rigMap {
-		var rig RigState
+		var rig rigState
 		if err := json.Unmarshal(raw, &rig); err != nil {
 			continue
 		}

@@ -25,7 +25,7 @@ func setupFakeRoot(t *testing.T) string {
 		t.Fatal(err)
 	}
 
-	state := DaemonState{
+	state := daemonState{
 		Running:        true,
 		PID:            42,
 		StartedAt:      time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
@@ -53,9 +53,9 @@ func TestNew_DetectsValidRoot(t *testing.T) {
 		t.Fatalf("Root() = %q, want %q", c.Root(), root)
 	}
 
-	s := c.DaemonState()
+	s := c.daemonState()
 	if s == nil {
-		t.Fatal("DaemonState() returned nil")
+		t.Fatal("daemonState() returned nil")
 	}
 	if !s.Running {
 		t.Error("expected Running == true")
@@ -126,7 +126,7 @@ func TestWatch_NotifiesOnFileChange(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Write updated state to trigger the watcher.
-	updated := DaemonState{
+	updated := daemonState{
 		Running:        true,
 		PID:            99,
 		StartedAt:      time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC),
@@ -150,10 +150,10 @@ func TestWatch_NotifiesOnFileChange(t *testing.T) {
 		t.Fatal("timed out waiting for state change notification")
 	}
 
-	// Verify DaemonState() is updated too.
-	s := c.DaemonState()
+	// Verify daemonState() is updated too.
+	s := c.daemonState()
 	if s == nil || s.PID != 99 {
-		t.Errorf("DaemonState().PID = %v, want 99", s)
+		t.Errorf("daemonState().PID = %v, want 99", s)
 	}
 
 	cancel()

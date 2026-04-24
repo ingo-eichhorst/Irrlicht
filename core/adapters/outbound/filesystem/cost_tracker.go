@@ -205,10 +205,10 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 	return err
 }
 
-// ProjectCostsInWindow is a test convenience around ProjectCostsInWindows
+// projectCostsInWindow is a test convenience around ProjectCostsInWindows
 // for a single trailing window. Not part of the CostTracker port — the
 // handler uses the plural form directly.
-func (t *CostTracker) ProjectCostsInWindow(windowSeconds int64) (map[string]float64, error) {
+func (t *CostTracker) projectCostsInWindow(windowSeconds int64) (map[string]float64, error) {
 	const k = "w"
 	all, err := t.ProjectCostsInWindows(map[string]int64{k: windowSeconds})
 	if err != nil {

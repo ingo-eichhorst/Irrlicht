@@ -29,16 +29,16 @@ type logEntry struct {
 	Error            string `json:"error,omitempty"`
 }
 
-// StructuredLogger implements ports/outbound.Logger using a rotating JSON log file.
-type StructuredLogger struct {
+// structuredLogger implements ports/outbound.Logger using a rotating JSON log file.
+type structuredLogger struct {
 	logFile     *os.File
 	logPath     string
 	currentSize int64
 	mu          sync.Mutex
 }
 
-// New creates a StructuredLogger writing to the default Irrlicht log directory.
-func New() (*StructuredLogger, error) {
+// New creates a structuredLogger writing to the default Irrlicht log directory.
+func New() (*structuredLogger, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
@@ -50,12 +50,8 @@ func New() (*StructuredLogger, error) {
 	return newWithPath(filepath.Join(logsDir, "events.log"))
 }
 
-// NewWithPath creates a StructuredLogger writing to a specific path (useful for tests).
-func NewWithPath(path string) (*StructuredLogger, error) {
-	return newWithPath(path)
-}
-
-func newWithPath(logPath string) (*StructuredLogger, error) {
+// newWithPath creates a structuredLogger writing to a specific path (useful for tests).
+func newWithPath(logPath string) (*structuredLogger, error) {
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
@@ -65,7 +61,7 @@ func newWithPath(logPath string) (*StructuredLogger, error) {
 		file.Close()
 		return nil, fmt.Errorf("failed to stat log file: %w", err)
 	}
-	sl := &StructuredLogger{
+	sl := &structuredLogger{
 		logFile:     file,
 		logPath:     logPath,
 		currentSize: stat.Size(),
@@ -80,7 +76,7 @@ func newWithPath(logPath string) (*StructuredLogger, error) {
 }
 
 // Close closes the underlying log file.
-func (sl *StructuredLogger) Close() error {
+func (sl *structuredLogger) Close() error {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 	if sl.logFile != nil {
@@ -90,7 +86,7 @@ func (sl *StructuredLogger) Close() error {
 }
 
 // LogInfo logs an info-level entry.
-func (sl *StructuredLogger) LogInfo(eventType, sessionID, message string) {
+func (sl *structuredLogger) LogInfo(eventType, sessionID, message string) {
 	sl.writeEntry(logEntry{
 		Timestamp: time.Now().Format(time.RFC3339Nano),
 		Level:     "info",
@@ -102,7 +98,7 @@ func (sl *StructuredLogger) LogInfo(eventType, sessionID, message string) {
 }
 
 // LogError logs an error-level entry.
-func (sl *StructuredLogger) LogError(eventType, sessionID, errorMsg string) {
+func (sl *structuredLogger) LogError(eventType, sessionID, errorMsg string) {
 	sl.writeEntry(logEntry{
 		Timestamp: time.Now().Format(time.RFC3339Nano),
 		Level:     "error",
@@ -114,7 +110,7 @@ func (sl *StructuredLogger) LogError(eventType, sessionID, errorMsg string) {
 }
 
 // LogProcessingTime logs processing performance metrics.
-func (sl *StructuredLogger) LogProcessingTime(eventType, sessionID string, processingTimeMs int64, payloadSize int, result string) {
+func (sl *structuredLogger) LogProcessingTime(eventType, sessionID string, processingTimeMs int64, payloadSize int, result string) {
 	sl.writeEntry(logEntry{
 		Timestamp:        time.Now().Format(time.RFC3339Nano),
 		Level:            "info",
@@ -127,7 +123,7 @@ func (sl *StructuredLogger) LogProcessingTime(eventType, sessionID string, proce
 	})
 }
 
-func (sl *StructuredLogger) writeEntry(entry logEntry) {
+func (sl *structuredLogger) writeEntry(entry logEntry) {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 
@@ -152,7 +148,7 @@ func (sl *StructuredLogger) writeEntry(entry logEntry) {
 	sl.currentSize += int64(n)
 }
 
-func (sl *StructuredLogger) rotate() error {
+func (sl *structuredLogger) rotate() error {
 	if sl.logFile != nil {
 		sl.logFile.Close()
 	}

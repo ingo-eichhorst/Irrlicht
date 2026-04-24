@@ -14,9 +14,9 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// HookPayload is the JSON body sent by Claude Code hook events.
+// hookPayload is the JSON body sent by Claude Code hook events.
 // Only the fields used by the handler are decoded; the rest is ignored.
-type HookPayload struct {
+type hookPayload struct {
 	SessionID      string          `json:"session_id"`
 	TranscriptPath string          `json:"transcript_path"`
 	HookEventName  string          `json:"hook_event_name"`
@@ -33,11 +33,11 @@ type HookTarget interface {
 	HandlePermissionHook(sessionID, transcriptPath, hookEventName string)
 }
 
-// SessionIDFromTranscriptPath extracts irrlicht's session ID (the UUID
+// sessionIDFromTranscriptPath extracts irrlicht's session ID (the UUID
 // filename stem) from a Claude Code transcript path. The hook payload's
 // session_id may differ from the transcript filename, so we always derive
 // from the path — matching how fswatcher assigns session IDs.
-func SessionIDFromTranscriptPath(p string) string {
+func sessionIDFromTranscriptPath(p string) string {
 	if p == "" {
 		return ""
 	}
@@ -58,13 +58,13 @@ func NewHookHandler(target HookTarget, log outbound.Logger) http.HandlerFunc {
 			return
 		}
 
-		var payload HookPayload
+		var payload hookPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
 			return
 		}
 
-		sessionID := SessionIDFromTranscriptPath(payload.TranscriptPath)
+		sessionID := sessionIDFromTranscriptPath(payload.TranscriptPath)
 		if sessionID == "" {
 			http.Error(w, "bad request: missing transcript_path", http.StatusBadRequest)
 			return

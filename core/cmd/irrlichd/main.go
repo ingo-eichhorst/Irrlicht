@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -14,22 +13,18 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
-	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
-	sessionshandler "irrlicht/core/adapters/inbound/sessions"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
+	sessionshandler "irrlicht/core/adapters/inbound/sessions"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
-	"irrlicht/core/adapters/outbound/httputil"
 	"irrlicht/core/adapters/outbound/logging"
 	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/metrics"
@@ -37,7 +32,7 @@ import (
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/config"
-	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
@@ -133,73 +128,10 @@ func main() {
 		logger.LogError("startup", "", "gt binary not found (set GT_BIN or add gt to PATH)")
 	}
 
-	// Filesystem repository (persistent backing store).
-	fsRepo, err := filesystem.New()
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to init filesystem repo: %v", err))
-		os.Exit(1)
-	}
-
-	// Startup: prune stale session files from disk.
-	pruned, err := fsRepo.PruneStale(cfg.MaxSessionAge)
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to prune stale sessions: %v", err))
-	} else if pruned > 0 {
-		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d stale session files", pruned))
-	}
-
-	// Prune proc-<pid> sessions whose process is no longer alive.
-	// These can survive a daemon restart because the in-memory tracked map
-	// is lost, leaving orphaned proc session files on disk.
-	if allSessions, err := fsRepo.ListAll(); err == nil {
-		for _, s := range allSessions {
-			var pid int
-			if _, err := fmt.Sscanf(s.SessionID, "proc-%d", &pid); err != nil || pid <= 0 {
-				continue
-			}
-			if err := syscall.Kill(pid, 0); err != nil {
-				_ = fsRepo.Delete(s.SessionID)
-				logger.LogInfo("startup", s.SessionID, "pruned dead proc session")
-			}
-		}
-	}
-
-	// Wrap the filesystem repo with a caching layer to avoid redundant
-	// directory scans from the many concurrent ListAll() callers.
-	cachedRepo := filesystem.NewCachedSessionRepository(fsRepo, 3*time.Second)
-
-	// Cost tracker: append-only per-project JSONL files for trailing-window
-	// cost queries. Prune rows older than 400 days on startup so "per year"
-	// windows stay fast and files don't grow unbounded.
-	costTracker, err := filesystem.NewCostTracker()
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to init cost tracker: %v", err))
-	} else {
-		if err := costTracker.Prune(400); err != nil {
-			logger.LogError("startup", "", fmt.Sprintf("cost tracker prune failed: %v", err))
-		}
-		if allSessions, err := fsRepo.ListAll(); err == nil {
-			for _, s := range allSessions {
-				if err := costTracker.RecordBaseline(s); err != nil {
-					logger.LogError("startup", s.SessionID,
-						fmt.Sprintf("cost tracker baseline failed: %v", err))
-				}
-			}
-		}
-	}
-
-	// History tracker: per-session rolling ring buffers for 1s/10s/60s
-	// granularity. State is persisted to ~/.local/share/irrlicht/history.json
-	// and restored on startup so history survives daemon restarts.
-	histDir := func() string {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".local", "share", "irrlicht")
-	}()
-	historyTracker := services.NewHistoryTrackerWithDir(histDir)
-	historyTracker.Load()
-	histCtx, histCancel := context.WithCancel(context.Background())
-	defer histCancel()
-	go historyTracker.Run(histCtx)
+	fsRepo, cachedRepo := initSessionStorage(logger, cfg)
+	costTracker := initCostTracker(logger, fsRepo)
+	historyTracker, historyCancel := startHistoryTracker(logger)
+	defer historyCancel()
 
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
@@ -533,206 +465,87 @@ var costTimeframeSeconds = map[string]int64{
 // poll cadence, short enough to keep the dashboard feeling live.
 const costAttachTTL = 5 * time.Second
 
-// costAttachCache caches the last ProjectCostsInWindows result so successive
-// /api/v1/sessions hits within costAttachTTL reuse one scan. Shared across
-// requests; the zero value is an empty cache.
-type costAttachCache struct {
-	mu          sync.RWMutex
-	generatedAt time.Time
-	byTimeframe map[string]map[string]float64
+// initSessionStorage opens the filesystem session repository, prunes stale
+// session files and dead proc-<pid> entries left by prior daemon lifetimes,
+// and returns both the raw repo (for baseline scans) and a caching wrapper
+// (returned as the outbound.SessionRepository interface since the concrete
+// cached type is unexported).
+func initSessionStorage(logger outbound.Logger, cfg config.Config) (*filesystem.SessionRepository, outbound.SessionRepository) {
+	fsRepo, err := filesystem.New()
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to init filesystem repo: %v", err))
+		os.Exit(1)
+	}
+
+	pruned, err := fsRepo.PruneStale(cfg.MaxSessionAge)
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to prune stale sessions: %v", err))
+	} else if pruned > 0 {
+		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d stale session files", pruned))
+	}
+	pruneDeadProcSessions(fsRepo, logger)
+
+	cachedRepo := filesystem.NewCachedSessionRepository(fsRepo, 3*time.Second)
+	return fsRepo, cachedRepo
 }
 
-func (c *costAttachCache) get(now time.Time) (map[string]map[string]float64, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.byTimeframe == nil || now.Sub(c.generatedAt) > costAttachTTL {
-		return nil, false
+// pruneDeadProcSessions removes proc-<pid> session files whose backing
+// process is no longer alive. These survive a daemon restart because the
+// in-memory tracked map is lost, leaving orphaned proc files on disk.
+func pruneDeadProcSessions(fsRepo *filesystem.SessionRepository, logger outbound.Logger) {
+	allSessions, err := fsRepo.ListAll()
+	if err != nil {
+		return
 	}
-	return c.byTimeframe, true
-}
-
-func (c *costAttachCache) put(now time.Time, v map[string]map[string]float64) {
-	c.mu.Lock()
-	c.generatedAt = now
-	c.byTimeframe = v
-	c.mu.Unlock()
-}
-
-func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker) http.HandlerFunc {
-	cache := &costAttachCache{}
-	return func(w http.ResponseWriter, r *http.Request) {
-		sessions, err := repo.ListAll()
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
-		if tracker != nil {
-			attachGroupCosts(resp, tracker, cache)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}
-}
-
-// handleGetSessionsHistory serves pre-aggregated per-session state history at
-// a chosen granularity. Clients poll this endpoint at their own cadence to
-// populate history bars without bloating the WebSocket envelope.
-//
-// GET /api/v1/sessions/history?granularity=1|10|60
-func handleGetSessionsHistory(repo outbound.SessionRepository, ht outbound.HistoryTracker) http.HandlerFunc {
-	type historyResponse struct {
-		GranularitySec int                 `json:"granularity_sec"`
-		BucketCount    int                 `json:"bucket_count"`
-		Sessions       map[string][]string `json:"sessions"`
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		granularity := 1
-		if g := r.URL.Query().Get("granularity"); g != "" {
-			n, err := strconv.Atoi(g)
-			if err != nil || (n != 1 && n != 10 && n != 60) {
-				http.Error(w, "granularity must be 1, 10, or 60", http.StatusBadRequest)
-				return
-			}
-			granularity = n
-		}
-
-		sessions, err := repo.ListAll()
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-
-		out := make(map[string][]string, len(sessions))
-		for _, s := range sessions {
-			if snap, ok := ht.Snapshot(s.SessionID, granularity); ok {
-				out[s.SessionID] = snap
-			}
-		}
-
-		resp := historyResponse{
-			GranularitySec: granularity,
-			BucketCount:    services.HistoryBucketCount,
-			Sessions:       out,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}
-}
-
-// attachGroupCosts populates each top-level group's Costs map with the
-// trailing-window cost for day/week/month/year. Orchestrator groups are
-// skipped — their agents span projects, so group-level aggregation is
-// ambiguous. Uses a single per-file scan (ProjectCostsInWindows) + a small
-// per-handler TTL cache to keep I/O bounded under concurrent polling.
-func attachGroupCosts(groups []*session.AgentGroup, tracker outbound.CostTracker, cache *costAttachCache) {
-	now := time.Now()
-	byTf, ok := cache.get(now)
-	if !ok {
-		m, err := tracker.ProjectCostsInWindows(costTimeframeSeconds)
-		if err != nil {
-			return
-		}
-		cache.put(now, m)
-		byTf = m
-	}
-	for _, g := range groups {
-		if g == nil || g.Type == "gastown" {
+	for _, s := range allSessions {
+		var pid int
+		if _, err := fmt.Sscanf(s.SessionID, "proc-%d", &pid); err != nil || pid <= 0 {
 			continue
 		}
-		costs := make(map[string]float64, len(costTimeframeSeconds))
-		for tf := range costTimeframeSeconds {
-			if v, ok := byTf[tf][g.Name]; ok {
-				costs[tf] = v
-			}
-		}
-		if len(costs) > 0 {
-			g.Costs = costs
+		if err := syscall.Kill(pid, 0); err != nil {
+			_ = fsRepo.Delete(s.SessionID)
+			logger.LogInfo("startup", s.SessionID, "pruned dead proc session")
 		}
 	}
 }
 
-func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
-	type sessionEntry struct {
-		ID                 string  `json:"id"`
-		ProjectName        string  `json:"projectName,omitempty"`
-		State              string  `json:"state"`
-		Model              string  `json:"model,omitempty"`
-		ContextUtilization float64 `json:"contextUtilization"`
-		TotalTokens        int64   `json:"totalTokens"`
+// initCostTracker opens the append-only per-project cost JSONL store,
+// prunes rows older than 400 days (so per-year queries stay fast), and
+// records a baseline row for every existing session so rates are
+// computable without waiting for new activity.
+func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepository) outbound.CostTracker {
+	costTracker, err := filesystem.NewCostTracker()
+	if err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to init cost tracker: %v", err))
+		return nil
 	}
-
-	type stateResponse struct {
-		Sessions     []sessionEntry `json:"sessions"`
-		SessionCount int            `json:"sessionCount"`
-		WorkingCount int            `json:"workingCount"`
-		WaitingCount int            `json:"waitingCount"`
-		ReadyCount   int            `json:"readyCount"`
-		LastUpdated  string         `json:"lastUpdated"`
+	if err := costTracker.Prune(400); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("cost tracker prune failed: %v", err))
 	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		sessions, err := repo.ListAll()
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-
-		entries := make([]sessionEntry, 0, len(sessions))
-		var workingCount, waitingCount, readyCount int
-		for _, s := range sessions {
-			var ctxUtil float64
-			var totalTokens int64
-			if s.Metrics != nil {
-				ctxUtil = s.Metrics.ContextUtilization
-				totalTokens = s.Metrics.TotalTokens
-			}
-			model := s.Model
-			if s.Metrics != nil && s.Metrics.ModelName != "" && s.Metrics.ModelName != "unknown" {
-				model = s.Metrics.ModelName
-			}
-			entries = append(entries, sessionEntry{
-				ID:                 s.SessionID,
-				ProjectName:        s.ProjectName,
-				State:              s.State,
-				Model:              model,
-				ContextUtilization: ctxUtil,
-				TotalTokens:        totalTokens,
-			})
-			switch s.State {
-			case session.StateWorking:
-				workingCount++
-			case session.StateWaiting:
-				waitingCount++
-			case session.StateReady:
-				readyCount++
-			}
-		}
-
-		resp := stateResponse{
-			Sessions:     entries,
-			SessionCount: len(sessions),
-			WorkingCount: workingCount,
-			WaitingCount: waitingCount,
-			ReadyCount:   readyCount,
-			LastUpdated:  time.Now().UTC().Format(time.RFC3339),
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		enc.Encode(resp)
+	allSessions, err := fsRepo.ListAll()
+	if err != nil {
+		return costTracker
 	}
+	for _, s := range allSessions {
+		if err := costTracker.RecordBaseline(s); err != nil {
+			logger.LogError("startup", s.SessionID, fmt.Sprintf("cost tracker baseline failed: %v", err))
+		}
+	}
+	return costTracker
 }
 
-// localhostOnly wraps an HTTP handler to reject requests not originating from
-// localhost or Unix sockets. Used to protect sensitive endpoints like pprof.
-func localhostOnly(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !httputil.IsLoopbackRequest(r) {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		h(w, r)
-	}
+// startHistoryTracker brings up the per-session rolling ring buffers used by
+// the history endpoint and returns the tracker plus a cancel func. The
+// caller must defer the cancel — HistoryTracker.Run calls save() in its
+// ctx.Done branch, so skipping the cancel loses the final flush on clean
+// shutdown and history regresses to the last periodic tick.
+func startHistoryTracker(logger outbound.Logger) (*services.HistoryTracker, context.CancelFunc) {
+	home, _ := os.UserHomeDir()
+	histDir := filepath.Join(home, ".local", "share", "irrlicht")
+	ht := services.NewHistoryTrackerWithDir(histDir)
+	ht.Load()
+	ctx, cancel := context.WithCancel(context.Background())
+	go ht.Run(ctx)
+	logger.LogInfo("startup", "", "history tracker started")
+	return ht, cancel
 }

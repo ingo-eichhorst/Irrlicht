@@ -6,23 +6,23 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// PushService fans out session state changes to all subscribers.
+// pushService fans out session state changes to all subscribers.
 // It implements ports/outbound.PushBroadcaster.
-type PushService struct {
+type pushService struct {
 	mu   sync.Mutex
 	subs []chan outbound.PushMessage
 }
 
-// NewPushService creates a new PushService.
-func NewPushService() *PushService {
-	return &PushService{}
+// NewPushService creates a new pushService.
+func NewPushService() *pushService {
+	return &pushService{}
 }
 
 // Subscribe returns a new buffered channel that will receive state updates.
 // Buffer capacity matches the fswatcher subscriber channel (64) to avoid
 // silently dropping state transition broadcasts during bursts with concurrent
 // sessions and subagent transcripts. See issue #143 for the fswatcher fix.
-func (p *PushService) Subscribe() chan outbound.PushMessage {
+func (p *pushService) Subscribe() chan outbound.PushMessage {
 	ch := make(chan outbound.PushMessage, 64)
 	p.mu.Lock()
 	p.subs = append(p.subs, ch)
@@ -31,7 +31,7 @@ func (p *PushService) Subscribe() chan outbound.PushMessage {
 }
 
 // Unsubscribe removes a subscriber channel and closes it.
-func (p *PushService) Unsubscribe(ch chan outbound.PushMessage) {
+func (p *pushService) Unsubscribe(ch chan outbound.PushMessage) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i, sub := range p.subs {
@@ -44,7 +44,7 @@ func (p *PushService) Unsubscribe(ch chan outbound.PushMessage) {
 }
 
 // Broadcast sends the message to all subscribers. Slow subscribers are skipped.
-func (p *PushService) Broadcast(msg outbound.PushMessage) {
+func (p *pushService) Broadcast(msg outbound.PushMessage) {
 	p.mu.Lock()
 	subs := make([]chan outbound.PushMessage, len(p.subs))
 	copy(subs, p.subs)

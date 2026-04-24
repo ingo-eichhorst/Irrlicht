@@ -225,13 +225,13 @@ func TestMergeRemoteModels_ReplacesEntries(t *testing.T) {
 		"claude-opus-4-6": {ContextWindow: 200000},
 	})
 
-	remote := &CapacityConfig{
+	remote := &capacityConfig{
 		Models: map[string]ModelCapacity{
 			"claude-opus-4-6": {ContextWindow: 1000000},
 			"brand-new-model": {ContextWindow: 500000, MaxOutput: 16000, Family: "new", DisplayName: "Brand New Model"},
 		},
 	}
-	cm.MergeRemoteModels(remote)
+	cm.mergeRemoteModels(remote)
 
 	if got := cm.GetModelCapacity("claude-opus-4-6").ContextWindow; got != 1000000 {
 		t.Errorf("post-merge claude-opus-4-6 ContextWindow = %d, want 1000000 (LiteLLM is authoritative)", got)
@@ -257,10 +257,10 @@ func TestNewForTest_UnknownModelReturnsZeroValue(t *testing.T) {
 }
 
 func TestMaybeReload_PicksUpNewCache(t *testing.T) {
-	// This test uses the real LoadCachedRemoteData path indirectly by
+	// This test uses the real loadCachedRemoteData path indirectly by
 	// overriding the manager's cachePath to a temp file written in the
-	// same on-disk format. Because LoadCachedRemoteData always reads from
-	// CachePath(), we instead exercise the direct-path reload.
+	// same on-disk format. Because loadCachedRemoteData always reads from
+	// cachePath(), we instead exercise the direct-path reload.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "model-capacity-cache.json")
 
@@ -296,7 +296,7 @@ func writeCacheAt(t *testing.T, path string, models map[string]ModelCapacity, wh
 	t.Helper()
 	cached := cachedCapacity{
 		FetchedAt: when,
-		Config:    CapacityConfig{Models: models},
+		Config:    capacityConfig{Models: models},
 	}
 	data, err := json.Marshal(cached)
 	if err != nil {
@@ -311,7 +311,7 @@ func writeCacheAt(t *testing.T, path string, models map[string]ModelCapacity, wh
 }
 
 // getViaPath exercises the reload path using the manager's cachePath directly
-// (bypassing LoadCachedRemoteData's hardcoded CachePath()).
+// (bypassing loadCachedRemoteData's hardcoded cachePath()).
 func getViaPath(t *testing.T, cm *CapacityManager) *CapacityManager {
 	t.Helper()
 	info, err := os.Stat(cm.cachePath)
@@ -363,25 +363,25 @@ func TestFetchAndCacheLiteLLMData_WritesCache(t *testing.T) {
 		t.Fatalf("expected claude-sonnet-4-6 in returned config")
 	}
 
-	path, _ := CachePath()
+	path, _ := cachePath()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("cache file not written: %v", err)
 	}
 }
 
 // TestLoadCachedRemoteData_OfflineFallback verifies that a previously
-// written cache file is returned by LoadCachedRemoteData — the path the
+// written cache file is returned by loadCachedRemoteData — the path the
 // daemon relies on when starting without network connectivity.
 func TestLoadCachedRemoteData_OfflineFallback(t *testing.T) {
 	withTempHome(t)
 
-	path, _ := CachePath()
+	path, _ := cachePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	cached := cachedCapacity{
 		FetchedAt: time.Now(),
-		Config: CapacityConfig{
+		Config: capacityConfig{
 			Models: map[string]ModelCapacity{
 				"claude-sonnet-4-6": {ContextWindow: 200000},
 			},
@@ -392,16 +392,16 @@ func TestLoadCachedRemoteData_OfflineFallback(t *testing.T) {
 		t.Fatalf("write cache: %v", err)
 	}
 
-	got := LoadCachedRemoteData()
+	got := loadCachedRemoteData()
 	if got == nil {
-		t.Fatal("LoadCachedRemoteData returned nil despite a fresh cache file")
+		t.Fatal("loadCachedRemoteData returned nil despite a fresh cache file")
 	}
 	if got.Models["claude-sonnet-4-6"].ContextWindow != 200000 {
 		t.Errorf("cached ContextWindow = %d, want 200000", got.Models["claude-sonnet-4-6"].ContextWindow)
 	}
 }
 
-// withTempHome points os.UserHomeDir() at a tempdir so CachePath() writes
+// withTempHome points os.UserHomeDir() at a tempdir so cachePath() writes
 // are isolated per test.
 func withTempHome(t *testing.T) {
 	t.Helper()
@@ -426,7 +426,7 @@ func TestConcurrentGet_NoPanicUnderConcurrentReload(t *testing.T) {
 
 	go func() {
 		for i := 0; i < 500 && !stop.Load(); i++ {
-			cm.MergeRemoteModels(&CapacityConfig{Models: map[string]ModelCapacity{
+			cm.mergeRemoteModels(&capacityConfig{Models: map[string]ModelCapacity{
 				"model-a": {ContextWindow: int64(100000 + i)},
 			}})
 		}

@@ -50,9 +50,9 @@ func TestSessionIDFromTranscriptPath(t *testing.T) {
 		{"noext", "noext"},
 	}
 	for _, tt := range tests {
-		got := SessionIDFromTranscriptPath(tt.path)
+		got := sessionIDFromTranscriptPath(tt.path)
 		if got != tt.want {
-			t.Errorf("SessionIDFromTranscriptPath(%q) = %q, want %q", tt.path, got, tt.want)
+			t.Errorf("sessionIDFromTranscriptPath(%q) = %q, want %q", tt.path, got, tt.want)
 		}
 	}
 }
@@ -61,7 +61,7 @@ func TestHookHandler_PermissionRequest(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, mockLogger{})
 
-	payload := HookPayload{
+	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
 		HookEventName:  "PermissionRequest",
 		ToolName:       "Bash",
@@ -92,7 +92,7 @@ func TestHookHandler_PostToolUse(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, mockLogger{})
 
-	payload := HookPayload{
+	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-456.jsonl",
 		HookEventName:  "PostToolUse",
 		ToolName:       "Write",
@@ -117,7 +117,7 @@ func TestHookHandler_PostToolUseFailure(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, mockLogger{})
 
-	payload := HookPayload{
+	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess-789.jsonl",
 		HookEventName:  "PostToolUseFailure",
 		ToolName:       "Bash",
@@ -142,7 +142,7 @@ func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, mockLogger{})
 
-	payload := HookPayload{
+	payload := hookPayload{
 		TranscriptPath: "/Users/u/.claude/projects/p/sess.jsonl",
 		HookEventName:  "SessionStart",
 		ToolName:       "",
@@ -165,7 +165,7 @@ func TestHookHandler_MissingTranscriptPath(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, mockLogger{})
 
-	payload := HookPayload{
+	payload := hookPayload{
 		HookEventName: "PermissionRequest",
 		ToolName:      "Bash",
 	}

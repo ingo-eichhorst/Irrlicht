@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 )
 
-// Resolver locates the gt binary at construction time using a three-tier
+// gtbinResolver locates the gt binary at construction time using a three-tier
 // strategy: GT_BIN env var → common installation paths → exec.LookPath.
-type Resolver struct {
+type gtbinResolver struct {
 	path string
 }
 
@@ -18,21 +18,21 @@ var commonPaths = []string{
 	"/opt/homebrew/bin/gt",
 }
 
-// New creates a Resolver, resolving the gt binary path immediately.
+// New creates a gtbinResolver, resolving the gt binary path immediately.
 // The resolved path is stored for the lifetime of the process.
-func New() *Resolver {
-	r := &Resolver{}
+func New() *gtbinResolver {
+	r := &gtbinResolver{}
 	r.path = r.resolve()
 	return r
 }
 
 // Path returns the resolved absolute path, or "" if not found.
-func (r *Resolver) Path() string {
+func (r *gtbinResolver) Path() string {
 	return r.path
 }
 
 // resolve applies the three-tier lookup strategy.
-func (r *Resolver) resolve() string {
+func (r *gtbinResolver) resolve() string {
 	// Tier 1: GT_BIN environment variable.
 	if p := os.Getenv("GT_BIN"); p != "" {
 		if abs, err := filepath.Abs(p); err == nil {
