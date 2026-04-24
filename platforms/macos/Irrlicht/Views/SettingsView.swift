@@ -79,6 +79,7 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 320, height: 380)
+        .background(Color(NSColor.windowBackgroundColor))
     }
 
     private func checkNotificationAuth() {

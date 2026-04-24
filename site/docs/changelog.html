@@ -90,6 +90,7 @@
       <h3>Fixed</h3>
 
       <ul>
+        <li><strong>Settings overlay background no longer transparent</strong> &mdash; the <code>NSStatusItem</code> + <code>NSPanel</code> rewrite uses a transparent panel so the rounded-corner clip works, which meant every SwiftUI branch had to paint its own background. <code>SessionListView</code> did, but the Settings pane didn't &mdash; the desktop wallpaper bled through. <code>SettingsView</code> now paints the same <code>windowBackgroundColor</code>, and a new <code>SettingsViewTests</code> pixel-opacity assertion samples the four corners + center to catch any future regression</li>
         <li><strong>&quot;&hellip;&quot; overflow indicator beyond 5 menu-bar groups</strong> &mdash; when more than five project groups are active, the menu bar icon shows a trailing &quot;&hellip;&quot; so you know the list is truncated rather than silently dropping the extras</li>
         <li><strong>Replay harness mirrors daemon parent-hold, permission-pending, and orphan promotion</strong> &mdash; sidecar-driven replay was skipping three pieces of daemon logic (parent-child hold when subagents are active, permission-pending overlay from <code>PermissionRequest</code>/<code>PostToolUse</code> hooks, and stale-sweep promotion of children whose transcripts go quiet). Extended-check now passes on the subagent and permission-hook fixtures without regenerating their sidecars</li>
       </ul>
