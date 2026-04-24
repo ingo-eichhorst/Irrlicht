@@ -18,14 +18,40 @@ struct MenuBarStatusRenderer {
     private static let groupGap: CGFloat = 6
     private static let height: CGFloat = 18
     private static let fontSize: CGFloat = 10
+    private static let maxVisibleGroups = 5
+    private static let overflowFillHex = "8E8E93"
     private static let segmentOrder: [SessionState.State] = [.waiting, .working, .ready]
 
     static func buildStatusImage(
         sessions: [SessionState],
         projectGroupOrder: [String]
     ) -> NSImage? {
+        guard let (svg, totalWidth) = buildStatusSVG(
+            sessions: sessions,
+            projectGroupOrder: projectGroupOrder
+        ) else {
+            return nil
+        }
+
+        guard let data = svg.data(using: .utf8),
+              let image = NSImage(data: data) else {
+            return nil
+        }
+
+        image.isTemplate = false
+        image.size = NSSize(width: totalWidth, height: height)
+        return image
+    }
+
+    static func buildStatusSVG(
+        sessions: [SessionState],
+        projectGroupOrder: [String]
+    ) -> (svg: String, width: CGFloat)? {
         let groups = orderedProjectGroups(from: sessions, projectGroupOrder: projectGroupOrder)
-        let renders = groups.prefix(8).map { renderGroup($0.1) }
+        var renders = groups.prefix(maxVisibleGroups).map { renderGroup($0.1) }
+        if groups.count > maxVisibleGroups {
+            renders.append(renderOverflow())
+        }
         let totalWidth = totalRenderWidth(renders)
 
         guard totalWidth > 0 else { return nil }
@@ -44,14 +70,7 @@ struct MenuBarStatusRenderer {
         }
         svg += "</svg>"
 
-        guard let data = svg.data(using: .utf8),
-              let image = NSImage(data: data) else {
-            return nil
-        }
-
-        image.isTemplate = false
-        image.size = NSSize(width: totalWidth, height: height)
-        return image
+        return (svg, totalWidth)
     }
 
     static func stateSegments(for sessions: [SessionState]) -> [StateSegment] {
@@ -118,6 +137,14 @@ struct MenuBarStatusRenderer {
         let elements = aggregatedGroupSVG(for: sessions)
         let width = radius * 2 + 2 + countWidth
         return GroupRender(elements: elements, width: width)
+    }
+
+    private static func renderOverflow() -> GroupRender {
+        let textY = (height / 2) + fontSize * 0.35
+        let elements = """
+        <text x="0" y="\(svgNumber(textY))" font-family="Menlo,monospace" font-size="\(Int(fontSize))" font-weight="bold" fill="#\(overflowFillHex)">…</text>
+        """
+        return GroupRender(elements: elements, width: 10)
     }
 
     private static func renderCompactGroup(_ sessions: [SessionState]) -> GroupRender {
