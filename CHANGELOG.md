@@ -9,6 +9,40 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.3.7] — 2026-04-24
+
+### Added
+- **Agent history bar with 1s/10s/60s granularity** — server-side pre-aggregates per-session state buckets (`working`/`waiting`/`ready`) under `/api/v1/sessions/history`, so clients can plot state timelines without bloating the WebSocket envelope. A single cycling mode button in the menubar lets you switch between context display and the three history granularities.
+- **History persistence across daemon restarts** — history buffers are saved to `~/.local/share/irrlicht/history.json` every 60s and on shutdown, so the timeline survives a restart instead of resetting to empty.
+- **Waiting-state question block in the session row** — when a session goes to `waiting`, the menubar row now shows the last assistant question (or the AskUserQuestion text) in an orange block beneath the row so you can see what's being asked without clicking in.
+- **Claude Code task list progress** — `TaskCreate` / `TaskUpdate` tool calls are parsed and surfaced as a progress dot strip on the session card (purple outline for pending, purple filled for in-progress, green filled for completed) with a live "N/M" count.
+- **Click-to-focus across 17 terminal/IDE hosts** — extending v0.3.6's launcher work, the click-through now covers Zed, Rio, Tabby, WaveTerm, Alacritty, Nova, cmux, Kitty (socket-based) and the JetBrains family in addition to iTerm2/Terminal.app/VSCode.
+- **Web UI timeline seeded from persisted daemon history** — on page load the dashboard pulls `/api/v1/sessions/history?granularity=1` and paints the last 60 s immediately instead of starting empty and waiting for live ticks.
+
+### Fixed
+- **Accurate per-model cost estimation across all adapters and restarts** — the cost tracker now handles usage maps consistently for Claude Code, Codex, and the pi adapter, and survives daemon restarts without double-counting.
+- **Offline-at-startup: LiteLLM capacity fetch retries with backoff** — the capacity table used for context-window classification no longer stays empty when the laptop is offline at daemon boot.
+- **History timeline ticks flow right→left** — new ticks land in the rightmost bucket and older ones shift left as time passes; previously partial-fill bars grew left→right until they hit the cap. Applies to both the Swift `HistoryBarView` and the web dashboard canvas.
+- **Waiting-state detection survives long assistant messages** — `ExtractAssistantText` now keeps the tail of long messages (with a leading ellipsis) so a question-mark at the end still trips the waiting classifier. `AskUserQuestion` tool calls with no text block now fall back to `questions[0].question`.
+- **Menubar popover: dynamic height + collapse state survives apiGroups updates** — a single ScrollView with `.fixedSize(vertical:)` lets the popover size to content up to 560 pt; collapse state is lifted onto `SessionManager.collapsedGroupNames` so it persists across session-list refreshes.
+- **Tasks: state resets on transcript rotation, stable across schema bump** — the in-memory task list is cleared on file rotation, and the ledger schema is bumped to v2 to force a re-scan so task history is consistent.
+- **Menubar tooltips work inside MenuBarExtra panels** — switched from `.help()` (which silently drops inside MenuBarExtra) to an `NSView`-bridged `.tooltip(...)` modifier.
+- **Launcher: ProcessRunner calls dispatched off the main thread** — focus/open operations no longer stall the UI.
+- **Launcher: fullscreen Space handling** — correctly raises windows that live on a fullscreen Space.
+- **Swift: `Task` model renamed to `SessionTask`** so it stops shadowing Swift's built-in concurrency `Task`.
+
+### Changed
+- **Parsers split per-adapter** — format-specific transcript parsers (Claude Code `AskUserQuestion`, `TaskCreate`/`Update`) live under the agent adapter packages instead of the shared tailer.
+- Cost tracker usage-map extraction and ledger hot-path simplified; history granularity parsing cleaned up; `$0` cost toggle stays visible so the timeframe cycle button remains reachable.
+- Task parsing switch flattened; status constants lifted to one place.
+
+### Tests
+- History persistence round-trip (save/load/missing-file/corrupt-file/version-mismatch) on `HistoryTracker`.
+- `AskUserQuestion` text fallback (short message) and long-text tail storage on the Claude Code parser.
+- Integration test for `GET /api/v1/sessions/history` (response shape + bad-granularity 400).
+- `SessionMetrics.formattedCost` two-decimal regression (`$12.50`, `$105.00`).
+- New `SessionRowView` snapshot suite — waiting-question block and ContextBar token-count label; `NSHostingView.appearance` pinned to `.darkAqua` so snapshots are deterministic regardless of the tester's system appearance.
+
 ## [0.3.6] — 2026-04-19
 
 ### Added
@@ -457,7 +491,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.7
 [0.3.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.6
 [0.3.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.5
 [0.3.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.4

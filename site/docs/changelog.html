@@ -78,6 +78,52 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.7 <small>(2026-04-24)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Agent history bar with 1s/10s/60s granularity</strong> &mdash; server-side pre-aggregates per-session state buckets (<code>working</code>/<code>waiting</code>/<code>ready</code>) under <code>/api/v1/sessions/history</code>. A single cycling mode button in the menubar switches between context display and the three history granularities</li>
+        <li><strong>History persistence across daemon restarts</strong> &mdash; buffers saved to <code>~/.local/share/irrlicht/history.json</code> every 60s and on shutdown, so the timeline survives a restart instead of resetting to empty</li>
+        <li><strong>Waiting-state question block in the session row</strong> &mdash; when a session goes to <code>waiting</code>, the menubar row now shows the last assistant question (or the <code>AskUserQuestion</code> text) in an orange block beneath the row</li>
+        <li><strong>Claude Code task list progress</strong> &mdash; <code>TaskCreate</code> / <code>TaskUpdate</code> tool calls surface as a progress dot strip on the session card with a live "N/M" count</li>
+        <li><strong>Click-to-focus across 17 terminal/IDE hosts</strong> &mdash; extending v0.3.6's launcher work to Zed, Rio, Tabby, WaveTerm, Alacritty, Nova, cmux, Kitty (socket-based) and the JetBrains family</li>
+        <li><strong>Web UI timeline seeded from persisted daemon history</strong> &mdash; on page load the dashboard pulls <code>/api/v1/sessions/history?granularity=1</code> and paints the last 60s immediately instead of starting empty</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>Accurate per-model cost estimation across all adapters and restarts</strong> &mdash; the cost tracker now handles usage maps consistently for Claude Code, Codex, and the pi adapter, and survives daemon restarts without double-counting</li>
+        <li><strong>Offline-at-startup: LiteLLM capacity fetch retries with backoff</strong> &mdash; the capacity table no longer stays empty when the laptop is offline at daemon boot</li>
+        <li><strong>History timeline ticks flow right&rarr;left</strong> &mdash; new ticks land in the rightmost bucket and older ones shift left as time passes, in both the Swift <code>HistoryBarView</code> and the web dashboard canvas</li>
+        <li><strong>Waiting-state detection survives long assistant messages</strong> &mdash; <code>ExtractAssistantText</code> keeps the tail (with leading ellipsis) so a trailing question-mark still trips the waiting classifier; <code>AskUserQuestion</code> tool calls with no text block fall back to <code>questions[0].question</code></li>
+        <li><strong>Menubar popover: dynamic height + collapse state survives session refreshes</strong> &mdash; single ScrollView with <code>.fixedSize(vertical:)</code> lets the popover size to content up to 560pt; collapse state lifted onto <code>SessionManager.collapsedGroupNames</code></li>
+        <li><strong>Tasks: state resets on transcript rotation, stable across schema bump</strong> &mdash; in-memory task list cleared on file rotation; ledger schema bumped to v2 to force re-scan</li>
+        <li><strong>Menubar tooltips work inside MenuBarExtra panels</strong> &mdash; switched from <code>.help()</code> to an <code>NSView</code>-bridged <code>.tooltip(...)</code> modifier</li>
+        <li><strong>Launcher: ProcessRunner calls dispatched off the main thread</strong> &mdash; focus/open operations no longer stall the UI</li>
+        <li><strong>Launcher: fullscreen Space handling</strong> &mdash; correctly raises windows on a fullscreen Space</li>
+        <li><strong>Swift: <code>Task</code> model renamed to <code>SessionTask</code></strong> so it stops shadowing Swift's built-in concurrency <code>Task</code></li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>Parsers split per-adapter</strong> &mdash; format-specific transcript parsers (Claude Code <code>AskUserQuestion</code>, <code>TaskCreate</code>/<code>Update</code>) live under the agent adapter packages instead of the shared tailer</li>
+        <li>Cost tracker usage-map extraction and ledger hot-path simplified; history granularity parsing cleaned up; <code>$0</code> cost toggle stays visible so the timeframe cycle button remains reachable</li>
+        <li>Task parsing switch flattened; status constants lifted to one place</li>
+      </ul>
+
+      <h3>Tests</h3>
+
+      <ul>
+        <li>History persistence round-trip (save/load/missing-file/corrupt-file/version-mismatch) on <code>HistoryTracker</code></li>
+        <li><code>AskUserQuestion</code> text fallback (short message) and long-text tail storage on the Claude Code parser</li>
+        <li>Integration test for <code>GET /api/v1/sessions/history</code> (response shape + bad-granularity 400)</li>
+        <li><code>SessionMetrics.formattedCost</code> two-decimal regression</li>
+        <li>New <code>SessionRowView</code> snapshot suite (waiting-question block + ContextBar token-count label); <code>NSHostingView.appearance</code> pinned to <code>.darkAqua</code> so snapshots are deterministic</li>
+      </ul>
+
       <h2>v0.3.6 <small>(2026-04-19)</small></h2>
 
       <h3>Added</h3>
