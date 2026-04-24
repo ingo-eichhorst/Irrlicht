@@ -41,7 +41,7 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 		return nil, fmt.Errorf("sidecar has no transcript_activity events with file_size for primary session %s: %s", primarySessionID, sidecarPath)
 	}
 
-	r, cleanup, err := newSidecarReplayer(transcriptPath, srcBytes, cfg, buckets.fswatches)
+	r, cleanup, err := newSidecarReplayer(transcriptPath, srcBytes, cfg, buckets.fswatches, buckets.children)
 	if err != nil {
 		return nil, err
 	}
@@ -77,17 +77,50 @@ func resolvePrimarySession(cfg reportSettings, sidecarEvents []lifecycle.Event) 
 // with empty prev_state (resumed session — the "new session created" marker
 // the daemon writes when it re-attaches).
 type sidecarBuckets struct {
-	fswatches       []lifecycle.Event
-	hookEvents      []lifecycle.Event
-	processExits    []lifecycle.Event
-	lifecycleStarts []lifecycle.Event
+	fswatches        []lifecycle.Event
+	hookEvents       []lifecycle.Event
+	processExits     []lifecycle.Event
+	lifecycleStarts  []lifecycle.Event
+	childTransitions []lifecycle.Event
+	orphanTriggers   []orphanTrigger
+	// children is seeded with one entry per subagent discovered via
+	// parent_linked. finalState carries the last recorded state; state
+	// is the mutable field the timeline walk updates.
+	children map[string]*childInfo
+}
+
+// childInfo tracks a single subagent for the parent-hold check. finalState
+// is computed once from the sidecar (used to decide whether an orphan
+// trigger is synthesized); state is the mutable state that the timeline
+// walk updates as child transitions fire.
+type childInfo struct {
+	lastActivityAt time.Time
+	finalState     string
+	state          string
+}
+
+// orphanTrigger synthesizes the stale-sweep promotion that the live
+// daemon's finishOrphanedChildren would have emitted for a child whose
+// transcript went quiet while still working/waiting.
+type orphanTrigger struct {
+	sessionID string
+	at        time.Time
 }
 
 // bucketSidecarEvents walks sidecarEvents once and partitions those for the
-// primary session into the four streams the replay needs.
+// primary session into the streams the replay needs. It also discovers
+// subagent sessions linked to the primary and collects their transitions
+// and stale-sweep orphan triggers so the parent-hold check mirrors the
+// live daemon.
 func bucketSidecarEvents(sidecarEvents []lifecycle.Event, primarySessionID string) sidecarBuckets {
-	var b sidecarBuckets
+	b := sidecarBuckets{children: map[string]*childInfo{}}
+	// First pass on the primary's own events plus child discovery.
 	for _, ev := range sidecarEvents {
+		if ev.Kind == lifecycle.KindParentLinked && ev.ParentSessionID == primarySessionID {
+			if _, ok := b.children[ev.SessionID]; !ok {
+				b.children[ev.SessionID] = &childInfo{finalState: session.StateReady}
+			}
+		}
 		if ev.SessionID != primarySessionID {
 			continue
 		}
@@ -108,6 +141,35 @@ func bucketSidecarEvents(sidecarEvents []lifecycle.Event, primarySessionID strin
 			}
 		}
 	}
+	// Second pass over child sessions to gather transitions + last-activity.
+	for _, ev := range sidecarEvents {
+		ci, ok := b.children[ev.SessionID]
+		if !ok {
+			continue
+		}
+		if ev.Timestamp.After(ci.lastActivityAt) {
+			ci.lastActivityAt = ev.Timestamp
+		}
+		if ev.Kind == lifecycle.KindStateTransition {
+			b.childTransitions = append(b.childTransitions, ev)
+			if ev.NewState != "" {
+				ci.finalState = ev.NewState
+			}
+		}
+	}
+	// Any child whose final recorded state is working/waiting would have
+	// been fast-forwarded to ready by the daemon's stale-sweep once its
+	// transcript went quiet for SubagentQuietWindow. Fire a synthetic
+	// trigger at lastActivityAt + quiet window so the parent's held-
+	// working releases at roughly the virtual time the daemon would have.
+	for id, ci := range b.children {
+		if ci.finalState == session.StateWorking || ci.finalState == session.StateWaiting {
+			b.orphanTriggers = append(b.orphanTriggers, orphanTrigger{
+				sessionID: id,
+				at:        ci.lastActivityAt.Add(services.SubagentQuietWindow),
+			})
+		}
+	}
 	return b
 }
 
@@ -125,12 +187,26 @@ type sidecarReplayer struct {
 	prevTransitionAt time.Time
 	stateDurations   map[string]time.Duration
 	lastMetrics      *tailer.SessionMetrics
+
+	// permissionPending mirrors SessionDetector.permissionPending for the
+	// primary session. Set by PermissionRequest hooks and cleared by
+	// PostToolUse / PostToolUseFailure hooks, then overlaid onto metrics
+	// before ClassifyState so rule 0 can fire.
+	permissionPending bool
+
+	// children carries the subagents discovered via parent_linked. Each
+	// entry's state is updated as child transitions fire on the timeline;
+	// anyChildActive reads the map to decide whether to hold the parent
+	// in working when the classifier would transition it to ready.
+	children map[string]*childInfo
 }
 
 // newSidecarReplayer allocates the scratch transcript mirror, opens the
 // tailer, seeds the report summary from the fswatcher window, and emits the
 // initial-state transition. The returned cleanup closes the scratch files.
-func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettings, fswatches []lifecycle.Event) (*sidecarReplayer, func(), error) {
+// children is the set of subagents linked to the primary; their state
+// entries start at StateReady and are updated as child transitions fire.
+func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettings, fswatches []lifecycle.Event, children map[string]*childInfo) (*sidecarReplayer, func(), error) {
 	tmpDir, err := os.MkdirTemp("", "irrlicht-replay-sidecar-")
 	if err != nil {
 		return nil, nil, err
@@ -164,6 +240,11 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 	report.Summary.LastEventTime = fswatches[len(fswatches)-1].Timestamp
 	report.Summary.WallClockDuration = report.Summary.LastEventTime.Sub(report.Summary.FirstEventTime)
 
+	// children seeds with StateReady so anyChildActive returns false until
+	// a real child transition fires on the timeline.
+	for _, ci := range children {
+		ci.state = session.StateReady
+	}
 	r := &sidecarReplayer{
 		srcBytes:         srcBytes,
 		tmp:              tmp,
@@ -172,6 +253,7 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 		state:            session.StateReady,
 		prevTransitionAt: fswatches[0].Timestamp,
 		stateDurations:   map[string]time.Duration{},
+		children:         children,
 	}
 	r.emit(transition{
 		EventIndex:  -1,
@@ -202,6 +284,68 @@ func (r *sidecarReplayer) addDuration(s string, d time.Duration) {
 	}
 }
 
+// overlayPermissionPending mirrors SessionDetector's overlay step: set the
+// flag on metrics so ClassifyState's rule 0 fires. Tool-denial short-
+// circuits the flag — Claude Code doesn't emit PostToolUseFailure on
+// denial, so the denial text in the transcript is what clears it.
+func (r *sidecarReplayer) overlayPermissionPending(m *session.SessionMetrics) {
+	if m == nil || !r.permissionPending {
+		return
+	}
+	if m.LastWasToolDenial {
+		r.permissionPending = false
+		return
+	}
+	m.PermissionPending = true
+}
+
+// anyChildActive reports whether any subagent discovered via parent_linked
+// is still working or waiting. Used by runClassifier to hold the parent
+// in its current state when the classifier would otherwise return ready.
+func (r *sidecarReplayer) anyChildActive() bool {
+	for _, ci := range r.children {
+		if ci.state == session.StateWorking || ci.state == session.StateWaiting {
+			return true
+		}
+	}
+	return false
+}
+
+// runClassifier mirrors SessionDetector.processActivity's force/classify/
+// parent-hold/synth-waiting pipeline. Extracted so hook and orphan events
+// can re-run classification against the last-known metrics.
+func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, virtTime time.Time, eventIdx int, cause transitionCause) {
+	if r.state == session.StateReady && domainMetrics.LastEventType != "" {
+		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
+			r.state, session.StateWorking, services.ForceReadyToWorkingReason, domainMetrics))
+		r.state = session.StateWorking
+	}
+
+	newState, reason := services.ClassifyState(r.state, domainMetrics)
+
+	// Parent-child hold: if any child is still working/waiting, keep the
+	// parent in its current state rather than letting it transition to
+	// ready. Matches SessionDetector's behaviour when children are live.
+	parentHeldWorking := false
+	if newState == session.StateReady && r.anyChildActive() {
+		newState = r.state
+		reason = ""
+		parentHeldWorking = true
+	}
+
+	if !parentHeldWorking && services.ShouldSynthesizeCollapsedWaiting(r.state, newState, domainMetrics) {
+		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
+			r.state, session.StateWaiting, services.SyntheticWaitingReason, domainMetrics))
+		r.state = session.StateWaiting
+		newState, reason = services.ClassifyState(r.state, domainMetrics)
+	}
+	if newState != r.state {
+		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
+			r.state, newState, reason, domainMetrics))
+		r.state = newState
+	}
+}
+
 // classifyAt writes transcript bytes up to fileSize, runs the tailer +
 // classifier, and mirrors SessionDetector.processActivity's force-r→w +
 // ClassifyState pattern. Any emitted transition is added to the report.
@@ -220,44 +364,30 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, virtTime time.Time, eventId
 	}
 	r.lastMetrics = metrics
 	domainMetrics := tailerToDomain(metrics)
-
-	if r.state == session.StateReady && domainMetrics.LastEventType != "" {
-		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
-			r.state, session.StateWorking, "force ready→working on first activity", domainMetrics))
-		r.state = session.StateWorking
-	}
-
-	newState, reason := services.ClassifyState(r.state, domainMetrics)
-	if services.ShouldSynthesizeCollapsedWaiting(r.state, newState, domainMetrics) {
-		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
-			r.state, session.StateWaiting, services.SyntheticWaitingReason, domainMetrics))
-		r.state = session.StateWaiting
-		newState, reason = services.ClassifyState(r.state, domainMetrics)
-	}
-	if newState != r.state {
-		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
-			r.state, newState, reason, domainMetrics))
-		r.state = newState
-	}
+	r.overlayPermissionPending(domainMetrics)
+	r.runClassifier(domainMetrics, virtTime, eventIdx, cause)
 	return nil
 }
 
-// applyHookEvent processes a hook_received event. Permission-request hooks
-// (e.g. PreToolUse) pause the agent, producing a working→waiting transition.
-// The transcript doesn't change at hook time — only the state machine does.
+// applyHookEvent mirrors SessionDetector.HandlePermissionHook: update the
+// permission-pending flag based on hook type, then trigger a re-
+// classification using the last-known metrics. Hook events other than the
+// three recognized Claude Code hooks are ignored.
 func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
-	if r.state != session.StateWorking {
+	switch hookEv.HookName {
+	case claudecode.HookPermissionRequest:
+		r.permissionPending = true
+	case claudecode.HookPostToolUse, claudecode.HookPostToolUseFailure:
+		r.permissionPending = false
+	default:
 		return
 	}
-	r.emit(transition{
-		EventIndex:  -1,
-		VirtualTime: hookEv.Timestamp,
-		Cause:       causeHook,
-		PrevState:   r.state,
-		NewState:    session.StateWaiting,
-		Reason:      fmt.Sprintf("hook: %s (permission pending)", hookEv.HookName),
-	})
-	r.state = session.StateWaiting
+	if r.lastMetrics == nil {
+		return
+	}
+	domainMetrics := tailerToDomain(r.lastMetrics)
+	r.overlayPermissionPending(domainMetrics)
+	r.runClassifier(domainMetrics, hookEv.Timestamp, -1, causeHook)
 }
 
 // Timeline kinds for the merged event stream in runDebouncedTimeline.
@@ -266,32 +396,52 @@ const (
 	timelineHook
 	timelineProcessExit
 	timelineLifecycleStart
+	timelineChildTransition
+	timelineChildOrphan
 )
 
-// timelineEntry is one row in the merged, seq-ordered replay stream.
+// timelineEntry is one row in the merged, timestamp-ordered replay stream.
+// Synthetic orphan triggers carry no sidecar seq, so timestamp is the
+// primary sort key with seq as a tiebreak for real events.
 type timelineEntry struct {
 	kind int
 	idx  int
 	seq  int64
+	ts   time.Time
 }
 
-// buildTimeline interleaves the four sidecar streams and returns them sorted
-// by sidecar sequence number so the replay walks events in recorded order.
+// buildTimeline interleaves the sidecar streams (plus synthetic child
+// transitions and orphan triggers) and returns them sorted by timestamp,
+// with sidecar seq as tiebreak. For real events whose timestamps are
+// monotonic with their seqs this is equivalent to a seq-only sort; orphan
+// triggers need timestamp-primary ordering so they land at the right
+// moment in virtual time.
 func buildTimeline(b sidecarBuckets) []timelineEntry {
-	timeline := make([]timelineEntry, 0, len(b.fswatches)+len(b.hookEvents)+len(b.processExits)+len(b.lifecycleStarts))
+	cap := len(b.fswatches) + len(b.hookEvents) + len(b.processExits) +
+		len(b.lifecycleStarts) + len(b.childTransitions) + len(b.orphanTriggers)
+	timeline := make([]timelineEntry, 0, cap)
 	for i, ev := range b.fswatches {
-		timeline = append(timeline, timelineEntry{kind: timelineFS, idx: i, seq: ev.Seq})
+		timeline = append(timeline, timelineEntry{kind: timelineFS, idx: i, seq: ev.Seq, ts: ev.Timestamp})
 	}
 	for i, ev := range b.hookEvents {
-		timeline = append(timeline, timelineEntry{kind: timelineHook, idx: i, seq: ev.Seq})
+		timeline = append(timeline, timelineEntry{kind: timelineHook, idx: i, seq: ev.Seq, ts: ev.Timestamp})
 	}
 	for i, ev := range b.processExits {
-		timeline = append(timeline, timelineEntry{kind: timelineProcessExit, idx: i, seq: ev.Seq})
+		timeline = append(timeline, timelineEntry{kind: timelineProcessExit, idx: i, seq: ev.Seq, ts: ev.Timestamp})
 	}
 	for i, ev := range b.lifecycleStarts {
-		timeline = append(timeline, timelineEntry{kind: timelineLifecycleStart, idx: i, seq: ev.Seq})
+		timeline = append(timeline, timelineEntry{kind: timelineLifecycleStart, idx: i, seq: ev.Seq, ts: ev.Timestamp})
+	}
+	for i, ev := range b.childTransitions {
+		timeline = append(timeline, timelineEntry{kind: timelineChildTransition, idx: i, seq: ev.Seq, ts: ev.Timestamp})
+	}
+	for i, orphan := range b.orphanTriggers {
+		timeline = append(timeline, timelineEntry{kind: timelineChildOrphan, idx: i, ts: orphan.at})
 	}
 	sort.SliceStable(timeline, func(i, j int) bool {
+		if !timeline[i].ts.Equal(timeline[j].ts) {
+			return timeline[i].ts.Before(timeline[j].ts)
+		}
 		return timeline[i].seq < timeline[j].seq
 	})
 	return timeline
@@ -333,7 +483,11 @@ func (r *sidecarReplayer) runDebouncedTimeline(b sidecarBuckets, debounceCfg tim
 	}
 
 	for _, entry := range timeline {
-		if handled := r.applyTimelineControlEntry(entry, b, &d); handled {
+		handled, err := r.applyTimelineControlEntry(entry, b, &d)
+		if err != nil {
+			return err
+		}
+		if handled {
 			continue
 		}
 		if !d.alive {
@@ -346,29 +500,96 @@ func (r *sidecarReplayer) runDebouncedTimeline(b sidecarBuckets, debounceCfg tim
 	return r.flushPendingDebounce(b.fswatches, d)
 }
 
-// applyTimelineControlEntry handles lifecycle-start, process-exit, and hook
-// entries, which control the debounce state or short-circuit the fs walker.
-// Returns true when the entry was control-flow and the caller should skip
-// the fs processing branch.
-func (r *sidecarReplayer) applyTimelineControlEntry(entry timelineEntry, b sidecarBuckets, d *debounceState) bool {
+// flushDebounceIfExpired fires a pending debounce whose window has already
+// closed as of the given virtual time. Called before non-fs events (hooks,
+// orphan synth) whose virtual time may have overtaken the pending window —
+// the live daemon's debounce timer would have fired naturally, but the
+// replay only catches it on the next fs event. Catching up here prevents
+// the flush from smearing into a later fs event's output.
+func (r *sidecarReplayer) flushDebounceIfExpired(atTs time.Time, d *debounceState) error {
+	if !d.pending || atTs.Before(d.deadline) {
+		return nil
+	}
+	if d.coalesced {
+		if err := r.classifyAt(d.pendingSize, d.deadline, d.pendingIdx, causeDebounceCoalesce); err != nil {
+			return err
+		}
+	}
+	d.pending = false
+	d.coalesced = false
+	return nil
+}
+
+// applyTimelineControlEntry handles the non-fs timeline entries: lifecycle
+// starts, process exits, hooks, child state transitions, and synthetic
+// orphan promotions. Returns (handled, err) where handled=true means the
+// caller should skip the fs processing branch for this entry.
+func (r *sidecarReplayer) applyTimelineControlEntry(entry timelineEntry, b sidecarBuckets, d *debounceState) (bool, error) {
 	switch entry.kind {
 	case timelineLifecycleStart:
 		d.alive = true
-		return true
+		return true, nil
 	case timelineProcessExit:
 		// Daemon torn down: pending debounce timer is cancelled (not fired),
 		// and the next lifetime starts a fresh session in ready. Reset state
 		// so lifetime-2 events don't coalesce with lifetime-1 debounce.
 		*d = debounceState{debounceDelay: d.debounceDelay}
 		r.state = session.StateReady
-		return true
+		return true, nil
 	case timelineHook:
-		if d.alive {
-			r.applyHookEvent(b.hookEvents[entry.idx])
+		if !d.alive {
+			return true, nil
 		}
-		return true
+		if err := r.flushDebounceIfExpired(b.hookEvents[entry.idx].Timestamp, d); err != nil {
+			return true, fmt.Errorf("flush before hook: %w", err)
+		}
+		r.applyHookEvent(b.hookEvents[entry.idx])
+		return true, nil
+	case timelineChildTransition:
+		// Child state changes drive the parent-hold check. Apply regardless
+		// of the parent's alive flag — child transitions are recorded from
+		// their own daemon lifetime, which may not align with the parent.
+		ev := b.childTransitions[entry.idx]
+		if ci, ok := r.children[ev.SessionID]; ok {
+			ci.state = ev.NewState
+		}
+		return true, nil
+	case timelineChildOrphan:
+		return true, r.applyChildOrphan(b.orphanTriggers[entry.idx], d)
 	}
-	return false
+	return false, nil
+}
+
+// applyChildOrphan fires a synthetic orphan-promotion for a child whose
+// transcript went quiet while still working/waiting. Flushes any pending
+// debounce that's now expired, then re-runs the classifier so the parent's
+// working→ready transition fires at the virtual time the daemon would
+// have emitted it.
+func (r *sidecarReplayer) applyChildOrphan(orphan orphanTrigger, d *debounceState) error {
+	ci, ok := r.children[orphan.sessionID]
+	if !ok {
+		return nil
+	}
+	if ci.state != session.StateWorking && ci.state != session.StateWaiting {
+		return nil
+	}
+	ci.state = session.StateReady
+	if !d.alive || r.lastMetrics == nil {
+		return nil
+	}
+	if err := r.flushDebounceIfExpired(orphan.at, d); err != nil {
+		return fmt.Errorf("flush before orphan: %w", err)
+	}
+	// If the flush itself released the hold and transitioned the parent to
+	// ready, there's nothing left for the orphan to re-classify — skip to
+	// avoid a spurious force-back-to-working against stale metrics.
+	if r.state == session.StateReady {
+		return nil
+	}
+	domainMetrics := tailerToDomain(r.lastMetrics)
+	r.overlayPermissionPending(domainMetrics)
+	r.runClassifier(domainMetrics, orphan.at, -1, causeEvent)
+	return nil
 }
 
 // advanceFSEvent processes one fswatcher entry through the debounce state

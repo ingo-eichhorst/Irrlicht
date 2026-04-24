@@ -28,7 +28,7 @@ const installedHookCommand = "curl -fsS --max-time 1 -X POST --data-binary @- ht
 const hookMatcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*"
 
 // installedHookEvents are the Claude Code hook events we install handlers for.
-var installedHookEvents = []string{"PermissionRequest", "PostToolUse", "PostToolUseFailure"}
+var installedHookEvents = []string{HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure}
 
 // EnsureHooksInstalled adds irrlicht hook entries to ~/.claude/settings.json
 // if they are not already present. Creates the file if it doesn't exist.

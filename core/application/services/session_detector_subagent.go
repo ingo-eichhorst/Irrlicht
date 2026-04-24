@@ -55,7 +55,7 @@ func (d *SessionDetector) finishOrphanedChildren(parentID string) {
 			continue
 		}
 		// Safety: a child whose transcript has been written in the last
-		// subagentQuietWindow is a background agent still mid-run — we
+		// SubagentQuietWindow is a background agent still mid-run — we
 		// don't know whether the parent's "done" means "finished the
 		// subagents" or "kicked off async background work". Leaving active
 		// children alone avoids the bug where background agents are
@@ -66,7 +66,7 @@ func (d *SessionDetector) finishOrphanedChildren(parentID string) {
 		if err != nil {
 			continue
 		}
-		if time.Since(info.ModTime()) < subagentQuietWindow {
+		if time.Since(info.ModTime()) < SubagentQuietWindow {
 			continue
 		}
 

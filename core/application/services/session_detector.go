@@ -39,7 +39,7 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
-// subagentQuietWindow is how long a subagent's transcript must have been
+// SubagentQuietWindow is how long a subagent's transcript must have been
 // silent before finishOrphanedChildren will promote it to ready.
 //
 // The window has to survive the worst-case normal gap between transcript
@@ -50,7 +50,7 @@ const staleWorkingRefreshInterval = 5 * time.Second
 // the very next write. 30 seconds comfortably covers normal API latency
 // while still being 4× faster than the 2-minute stale-transcript sweep,
 // which is the fallback cleanup path for anything this function misses.
-const subagentQuietWindow = 30 * time.Second
+const SubagentQuietWindow = 30 * time.Second
 
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {

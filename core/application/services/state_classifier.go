@@ -94,6 +94,11 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 // tool_result are processed in the same tailer pass (issue #150).
 const SyntheticWaitingReason = "user-blocking tool opened and closed in one pass → synthetic waiting"
 
+// ForceReadyToWorkingReason is the reason string used when a ready session's
+// metrics show fresh activity — the classifier forces the working transition
+// so the next step can emit the eventual working→ready in the same pass.
+const ForceReadyToWorkingReason = "force ready→working on first activity"
+
 // ShouldSynthesizeCollapsedWaiting reports whether the caller should emit
 // a synthetic working→waiting transition before applying the classifier's
 // result. This recovers the brief waiting episode that fswatcher collapsed

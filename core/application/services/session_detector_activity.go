@@ -262,7 +262,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// already shows IsAgentDone()=true would stay ready with no transition
 	// broadcast — the UI would never see the "agent finished" event.
 	if state.State == session.StateReady && state.Metrics != nil && state.Metrics.LastEventType != "" {
-		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: "force ready→working on first activity"})
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: ForceReadyToWorkingReason})
 		state.State = session.StateWorking
 	}
 
