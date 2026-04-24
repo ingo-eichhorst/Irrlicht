@@ -13,23 +13,18 @@ import (
 	"syscall"
 	"time"
 
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
 
-// PIDDiscoverFunc discovers the PID owning a session. Each adapter provides
-// its own implementation (e.g. CWD-based for Claude Code, transcript-writer
-// for Codex/Pi). The disambiguate callback selects one PID when multiple
-// candidates match.
-type PIDDiscoverFunc func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error)
-
-// launcherEnvReader captures the terminal/IDE identity from the process env
+// LauncherEnvReader captures the terminal/IDE identity from the process env
 // of pid. Returns nil when env cannot be read or no launcher is identifiable.
 // Implementations must never block longer than a couple of seconds and must
 // never prompt the user (no TCC). The real implementation lives in the
 // processlifecycle adapter and is injected to preserve the hexagonal layering.
-type launcherEnvReader func(pid int) *session.Launcher
+type LauncherEnvReader func(pid int) *session.Launcher
 
 // PIDManager manages the process lifecycle for sessions. It discovers PIDs,
 // registers them with ProcessWatcher, handles exits, and sweeps dead processes.
@@ -42,10 +37,10 @@ type PIDManager struct {
 
 	// pidDiscovers maps adapter name → PID discovery function.
 	// Nil or missing entry means no PID discovery for that adapter.
-	pidDiscovers map[string]PIDDiscoverFunc
+	pidDiscovers map[string]agent.PIDDiscoverFunc
 
 	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
-	launcherEnv launcherEnvReader
+	launcherEnv LauncherEnvReader
 
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
@@ -79,7 +74,7 @@ func NewPIDManager(
 	log outbound.Logger,
 	broadcaster outbound.PushBroadcaster,
 	readyTTL time.Duration,
-	pidDiscovers map[string]PIDDiscoverFunc,
+	pidDiscovers map[string]agent.PIDDiscoverFunc,
 	onSessionDeleted func(sessionID string),
 ) *PIDManager {
 	return &PIDManager{
@@ -113,7 +108,7 @@ func (pm *PIDManager) SetChildDeletedHandler(fn func(parentID string)) {
 // SetLauncherEnvReader installs a reader that captures launcher identity
 // (terminal/IDE env vars) from a session's PID. Called once at startup.
 // Nil disables launcher capture.
-func (pm *PIDManager) SetLauncherEnvReader(fn launcherEnvReader) {
+func (pm *PIDManager) SetLauncherEnvReader(fn LauncherEnvReader) {
 	pm.launcherEnv = fn
 }
 

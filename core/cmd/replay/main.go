@@ -42,10 +42,32 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
+	"irrlicht/core/pkg/tailer"
 )
+
+// agentConfigs lists every inbound agent adapter the replay CLI knows about.
+// Kept local to main so this package isn't re-importing a shared registry —
+// the daemon's production wiring lives in cmd/irrlichd/main.go.
+var agentConfigs = []agents.Config{
+	claudecode.Config(),
+	codex.Config(),
+	pi.Config(),
+}
+
+var parserFactories = agents.ParserMap(agentConfigs)
+
+// parserFor returns a fresh TranscriptParser for the given adapter name,
+// falling back to Claude Code for unknown names (preserves prior behavior).
+func parserFor(name string) tailer.TranscriptParser {
+	if f, ok := parserFactories[name]; ok {
+		return f()
+	}
+	return &claudecode.Parser{}
+}
 
 // detectAdapter infers the adapter name from a transcript path by matching
 // either the canonical session-storage root for each supported format or the

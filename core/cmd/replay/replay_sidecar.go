@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/lifecycle"
@@ -226,7 +225,7 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 	if adapterName == "" {
 		adapterName = claudecode.AdapterName
 	}
-	parser := agents.ParserFor(adapterName)
+	parser := parserFor(adapterName)
 	t := tailer.NewTranscriptTailer(tmpPath, parser, adapterName)
 
 	report := &replayReport{

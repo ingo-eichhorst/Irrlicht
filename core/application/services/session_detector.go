@@ -126,7 +126,7 @@ func NewSessionDetector(
 	broadcaster outbound.PushBroadcaster,
 	version string,
 	readyTTL time.Duration,
-	pidDiscovers map[string]PIDDiscoverFunc,
+	pidDiscovers map[string]agent.PIDDiscoverFunc,
 ) *SessionDetector {
 	det := &SessionDetector{
 		watchers:          watchers,
@@ -185,7 +185,7 @@ func (d *SessionDetector) SetHistoryTracker(h outbound.HistoryTracker) {
 
 // SetLauncherEnvReader installs a reader that captures terminal/IDE identity
 // from a session's PID when the PID is first assigned.
-func (d *SessionDetector) SetLauncherEnvReader(fn launcherEnvReader) {
+func (d *SessionDetector) SetLauncherEnvReader(fn LauncherEnvReader) {
 	d.pidMgr.SetLauncherEnvReader(fn)
 }
 

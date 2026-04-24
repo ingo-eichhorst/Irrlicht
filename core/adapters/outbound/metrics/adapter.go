@@ -3,9 +3,7 @@ package metrics
 import (
 	"sync"
 
-	"irrlicht/core/adapters/inbound/agents/claudecode"
-	"irrlicht/core/adapters/inbound/agents/codex"
-	"irrlicht/core/adapters/inbound/agents/pi"
+	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
@@ -23,37 +21,55 @@ type lockedTailer struct {
 // It caches TranscriptTailer instances per path so that lastOffset-based
 // incremental reads work across calls, avoiding re-parsing the full 64KB tail.
 type Adapter struct {
-	mu      sync.Mutex // protects the map only
-	tailers map[string]*lockedTailer
+	mu          sync.Mutex // protects the tailers map only
+	tailers     map[string]*lockedTailer
+	parsers     map[string]agents.ParserFactory
+	subagents   map[string]agents.SubagentCounter
+	fallback    agents.ParserFactory // used for unknown adapter names
 }
 
-// New returns a new metrics Adapter.
-func New() *Adapter {
-	return &Adapter{tailers: make(map[string]*lockedTailer)}
-}
-
-// parserFor returns the format-specific TranscriptParser for the given adapter name.
-func parserFor(adapter string) tailer.TranscriptParser {
-	switch adapter {
-	case codex.AdapterName:
-		return &codex.Parser{}
-	case pi.AdapterName:
-		return &pi.Parser{}
-	default:
-		return &claudecode.Parser{}
+// New returns a new metrics Adapter configured from the given agent
+// registrations. The adapter uses cfgs[0].NewParser as the fallback parser for
+// unknown adapter names to preserve the historical "default to Claude Code"
+// behavior; callers should pass the Claude Code config first.
+func New(cfgs []agents.Config) *Adapter {
+	parsers := make(map[string]agents.ParserFactory, len(cfgs))
+	subs := make(map[string]agents.SubagentCounter, len(cfgs))
+	var fallback agents.ParserFactory
+	for i, c := range cfgs {
+		parsers[c.Name] = c.NewParser
+		if c.CountOpenSubagents != nil {
+			subs[c.Name] = c.CountOpenSubagents
+		}
+		if i == 0 {
+			fallback = c.NewParser
+		}
+	}
+	return &Adapter{
+		tailers:   make(map[string]*lockedTailer),
+		parsers:   parsers,
+		subagents: subs,
+		fallback:  fallback,
 	}
 }
 
+// parserFor returns a fresh TranscriptParser for the given adapter name,
+// falling back to the first registered adapter's parser for unknown names.
+func (a *Adapter) parserFor(name string) tailer.TranscriptParser {
+	if f, ok := a.parsers[name]; ok {
+		return f()
+	}
+	if a.fallback != nil {
+		return a.fallback()
+	}
+	return nil
+}
+
 // countOpenSubagents returns the adapter-specific count of in-process child
-// agents currently running. Each adapter decides how to recognize subagents
-// in its own transcript format; codex and pi currently report subagents as
-// separate transcript sessions (tracked via ParentSessionID), so they return
-// zero here and the domain-level ComputeSubagentSummary picks them up by
-// walking file-based children.
-func countOpenSubagents(adapter string, m *tailer.SessionMetrics) int {
-	switch adapter {
-	case claudecode.AdapterName:
-		return claudecode.CountOpenSubagents(m)
+// agents currently running, or zero when the adapter did not register a counter.
+func (a *Adapter) countOpenSubagents(name string, m *tailer.SessionMetrics) int {
+	if f, ok := a.subagents[name]; ok {
+		return f(m)
 	}
 	return 0
 }
@@ -68,7 +84,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	a.mu.Lock()
 	lt, ok := a.tailers[transcriptPath]
 	if !ok {
-		t := tailer.NewTranscriptTailer(transcriptPath, parserFor(adapter), adapter)
+		t := tailer.NewTranscriptTailer(transcriptPath, a.parserFor(adapter), adapter)
 		lp := ledgerPath(transcriptPath)
 		if s := loadLedger(lp); s != nil {
 			t.SetLedgerState(*s)
@@ -98,7 +114,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		PressureLevel:          m.PressureLevel,
 		HasOpenToolCall:        m.HasOpenToolCall,
 		OpenToolCallCount:      m.OpenToolCallCount,
-		OpenSubagents:          countOpenSubagents(adapter, m),
+		OpenSubagents:          a.countOpenSubagents(adapter, m),
 		LastEventType:          m.LastEventType,
 		LastOpenToolNames:      m.LastOpenToolNames,
 		LastWasUserInterrupt:   m.LastWasUserInterrupt,

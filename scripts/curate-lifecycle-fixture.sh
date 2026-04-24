@@ -11,8 +11,12 @@
 # full parent-with-subagents lifecycle.
 #
 # Usage:
-#   scripts/curate-lifecycle-fixture.sh \
+#   scripts/curate-lifecycle-fixture.sh [-d <testdata-root>] \
 #     <recording.jsonl> <session-id> <transcript.jsonl> <adapter> <fixture-name>
+#
+# -d <testdata-root> overrides the default ($REPO_ROOT/testdata/replay).
+# Used by the ir:onboard-agent skill to stage fixtures under .build/refresh/
+# before a human reviews and copies them into the real testdata/ tree.
 #
 # Example:
 #   scripts/curate-lifecycle-fixture.sh \
@@ -23,18 +27,46 @@
 #     11-background-agents-b27fdaef
 #
 # Writes:
-#   testdata/replay/<adapter>/<fixture-name>.jsonl
+#   <testdata-root>/<adapter>/<fixture-name>.jsonl
 #       — parent transcript (unchanged)
-#   testdata/replay/<adapter>/<fixture-name>.events.jsonl
+#   <testdata-root>/<adapter>/<fixture-name>.events.jsonl
 #       — lifecycle events for the parent AND every detected subagent,
 #         sorted by seq
-#   testdata/replay/<adapter>/<fixture-name>.subagents/agent-*.jsonl
+#   <testdata-root>/<adapter>/<fixture-name>.subagents/agent-*.jsonl
 #       — each subagent transcript found under <parent>/subagents/
 
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TESTDATA_ROOT="$REPO_ROOT/testdata/replay"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -d)
+      [[ $# -ge 2 ]] || { echo "-d requires a <testdata-root> argument" >&2; exit 2; }
+      TESTDATA_ROOT="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -h|--help)
+      sed -n '2,35p' "$0"
+      exit 0
+      ;;
+    -*)
+      echo "unknown flag: $1" >&2
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
 if [[ $# -ne 5 ]]; then
-  sed -n '2,32p' "$0"
+  sed -n '2,35p' "$0"
   exit 2
 fi
 
@@ -44,8 +76,8 @@ TRANSCRIPT="$3"
 ADAPTER="$4"
 FIXTURE_NAME="$5"
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FIXTURES_DIR="$REPO_ROOT/testdata/replay/$ADAPTER"
+FIXTURES_DIR="$TESTDATA_ROOT/$ADAPTER"
+mkdir -p "$FIXTURES_DIR"
 
 if [[ ! -f "$RECORDING" ]]; then
   echo "recording not found: $RECORDING" >&2
@@ -53,10 +85,6 @@ if [[ ! -f "$RECORDING" ]]; then
 fi
 if [[ ! -f "$TRANSCRIPT" ]]; then
   echo "transcript not found: $TRANSCRIPT" >&2
-  exit 1
-fi
-if [[ ! -d "$FIXTURES_DIR" ]]; then
-  echo "adapter fixtures dir not found: $FIXTURES_DIR" >&2
   exit 1
 fi
 

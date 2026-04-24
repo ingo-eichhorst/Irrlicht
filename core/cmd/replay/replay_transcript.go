@@ -9,7 +9,6 @@ import (
 	"sort"
 	"time"
 
-	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
@@ -88,7 +87,7 @@ func newTranscriptReplayer(src string, cfg reportSettings, events []rawEvent) (*
 	if adapterName == "" {
 		adapterName = claudecode.AdapterName
 	}
-	parser := agents.ParserFor(adapterName)
+	parser := parserFor(adapterName)
 	t := tailer.NewTranscriptTailer(tmpPath, parser, adapterName)
 
 	report := &replayReport{
