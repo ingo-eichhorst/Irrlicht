@@ -1,0 +1,64 @@
+{
+  "$schema_notes": "Canonical scenario catalogue for the ir:onboard-agent skill. Scenarios are agent-agnostic — each declares 'requires' capabilities, and 'by_adapter' holds the per-adapter prompt/settings that elicit the behavior. An adapter whose Capabilities (declared in core/adapters/inbound/agents/*/config.go) do not satisfy 'requires' is excluded from that scenario (matrix cell = N/A). If the capabilities match but no 'by_adapter' entry exists, the matrix cell is 'missing-prompt' — actionable by adding one here.",
+
+  "min_versions": {
+    "claudecode": "2.0.0",
+    "codex": "0.50.0",
+    "pi": "1.0.0"
+  },
+
+  "scenarios": [
+    {
+      "name": "baseline-hello",
+      "description": "Smallest possible round-trip. Verifies session detection and a clean ready→working→ready cycle.",
+      "requires": ["headless_mode"],
+      "verify": {
+        "transitions_topology": ["ready", "working", "ready"],
+        "tool_calls_max": 0,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "prompt": "Reply with exactly the word: ok",
+          "settings": {},
+          "timeout_seconds": 60
+        }
+      }
+    },
+
+    {
+      "name": "full-lifecycle-toolcall",
+      "description": "Tool use triggers a working↔waiting cycle via the PostToolUse hook. Mirrors the shape of the committed 10-full-lifecycle-* fixture. The session ends in waiting (not ready) because the hook keeps the session permission-pending after the tool completes; that's the behavior we want to lock down.",
+      "requires": ["headless_mode", "tool_calls"],
+      "verify": {
+        "contains_tool_call": true,
+        "has_waiting_state": true
+      },
+      "by_adapter": {
+        "claudecode": {
+          "prompt": "Run bash 'echo hello' using the Bash tool, then reply 'done'.",
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+
+    {
+      "name": "permission-hook-denial",
+      "description": "A failing Bash invocation fires the PostToolUseFailure hook, which drives a working→waiting→working→ready transition arc. Mirrors the committed 15-permission-hooks-* fixture. Uses a runtime failure (cat on a nonexistent file), not settings-based denial — settings-based deny just removes the tool from claude's toolset and no hook fires at all.",
+      "requires": ["headless_mode", "tool_calls", "permission_hooks"],
+      "verify": {
+        "contains_hook": "PostToolUseFailure",
+        "tool_call_failed": true,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "prompt": "Use the Bash tool to run: cat /tmp/irrlicht-nonexistent-xyz-123. If it fails, just tell me the error.",
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    }
+  ]
+}
