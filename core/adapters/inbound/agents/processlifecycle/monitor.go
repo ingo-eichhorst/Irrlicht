@@ -8,26 +8,26 @@ import (
 	"time"
 )
 
-// ExitHandler is called when a watched process exits.
-type ExitHandler func(pid int, sessionID string)
+// exitHandler is called when a watched process exits.
+type exitHandler func(pid int, sessionID string)
 
-// Monitor monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT.
+// pidMonitor monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT.
 // It implements outbound.ProcessWatcher.
-type Monitor struct {
+type pidMonitor struct {
 	kqfd    int
 	mu      sync.Mutex
 	watched map[int]string // pid → sessionID
-	handler ExitHandler
+	handler exitHandler
 }
 
-// NewMonitor creates a Monitor backed by a kqueue file descriptor.
+// NewMonitor creates a pidMonitor backed by a kqueue file descriptor.
 // The handler is invoked (in a goroutine) whenever a watched process exits.
-func NewMonitor(handler ExitHandler) (*Monitor, error) {
+func NewMonitor(handler exitHandler) (*pidMonitor, error) {
 	kqfd, err := syscall.Kqueue()
 	if err != nil {
 		return nil, fmt.Errorf("kqueue: %w", err)
 	}
-	return &Monitor{
+	return &pidMonitor{
 		kqfd:    kqfd,
 		watched: make(map[int]string),
 		handler: handler,
@@ -36,7 +36,7 @@ func NewMonitor(handler ExitHandler) (*Monitor, error) {
 
 // Watch registers a PID for exit monitoring associated with a sessionID.
 // If the process has already exited, the handler fires asynchronously.
-func (m *Monitor) Watch(pid int, sessionID string) error {
+func (m *pidMonitor) Watch(pid int, sessionID string) error {
 	if pid <= 0 {
 		return fmt.Errorf("invalid pid %d", pid)
 	}
@@ -66,7 +66,7 @@ func (m *Monitor) Watch(pid int, sessionID string) error {
 }
 
 // Unwatch stops monitoring the given PID.
-func (m *Monitor) Unwatch(pid int) {
+func (m *pidMonitor) Unwatch(pid int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -85,7 +85,7 @@ func (m *Monitor) Unwatch(pid int) {
 }
 
 // Run starts the kqueue event loop. It blocks until ctx is cancelled.
-func (m *Monitor) Run(ctx context.Context) error {
+func (m *pidMonitor) Run(ctx context.Context) error {
 	events := make([]syscall.Kevent_t, 8)
 	for {
 		select {
@@ -122,6 +122,6 @@ func (m *Monitor) Run(ctx context.Context) error {
 }
 
 // Close releases the kqueue file descriptor.
-func (m *Monitor) Close() error {
+func (m *pidMonitor) Close() error {
 	return syscall.Close(m.kqfd)
 }

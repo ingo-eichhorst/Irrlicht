@@ -19,12 +19,12 @@ const (
 	writeTimeout = 10 * time.Second
 )
 
-// LoopbackCheckOrigin accepts WebSocket handshakes only from loopback origins
+// loopbackCheckOrigin accepts WebSocket handshakes only from loopback origins
 // (or requests with no Origin header, which native clients like URLSession do
 // not send). It blocks cross-site WebSocket connections from arbitrary web
 // pages. The RemoteAddr check is a second line of defence in case the daemon
 // is bound to a non-loopback interface.
-func LoopbackCheckOrigin(r *http.Request) bool {
+func loopbackCheckOrigin(r *http.Request) bool {
 	if !httputil.IsLoopbackRequest(r) {
 		return false
 	}
@@ -44,25 +44,25 @@ func LoopbackCheckOrigin(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// Hub manages WebSocket connections and fans out session state updates.
-type Hub struct {
+// hub manages WebSocket connections and fans out session state updates.
+type hub struct {
 	push     outbound.PushBroadcaster
 	upgrader websocket.Upgrader
 }
 
-// NewHub creates a Hub backed by the provided PushBroadcaster. The upgrader
+// NewHub creates a hub backed by the provided PushBroadcaster. The upgrader
 // enforces a loopback-only origin policy.
-func NewHub(push outbound.PushBroadcaster) *Hub {
-	return &Hub{
+func NewHub(push outbound.PushBroadcaster) *hub {
+	return &hub{
 		push:     push,
-		upgrader: websocket.Upgrader{CheckOrigin: LoopbackCheckOrigin},
+		upgrader: websocket.Upgrader{CheckOrigin: loopbackCheckOrigin},
 	}
 }
 
 // ServeWS upgrades the HTTP connection to WebSocket and streams typed session
 // state update messages until the client disconnects.
 // Register on GET /api/v1/sessions/stream.
-func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return

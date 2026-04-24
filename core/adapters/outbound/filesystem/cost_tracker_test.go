@@ -125,7 +125,7 @@ func TestProjectCostsInWindow_SingleSessionInsideWindow(t *testing.T) {
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 120, Session: "s1", Cost: 0.25})
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 60, Session: "s1", Cost: 0.40})
 
-	m, err := tr.ProjectCostsInWindow(3600)
+	m, err := tr.projectCostsInWindow(3600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestProjectCostsInWindow_StraddleUsesPreWindowBaseline(t *testing.T) {
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 1800, Session: "s1", Cost: 1.25})
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 600, Session: "s1", Cost: 1.60})
 
-	m, err := tr.ProjectCostsInWindow(3600) // 1h window
+	m, err := tr.projectCostsInWindow(3600) // 1h window
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestProjectCostsInWindow_SessionOutsideWindowIgnored(t *testing.T) {
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 7200, Session: "s1", Cost: 1.00})
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 5000, Session: "s1", Cost: 2.00})
 
-	m, err := tr.ProjectCostsInWindow(3600)
+	m, err := tr.projectCostsInWindow(3600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestProjectCostsInWindow_MultipleSessionsSum(t *testing.T) {
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 400, Session: "s2", Cost: 5.00})
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 50, Session: "s2", Cost: 5.25})
 
-	m, err := tr.ProjectCostsInWindow(3600)
+	m, err := tr.projectCostsInWindow(3600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestProjectCostsInWindow_NegativeDeltaClamped(t *testing.T) {
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 7200, Session: "s1", Cost: 10.00})
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 100, Session: "s1", Cost: 1.00})
 
-	m, err := tr.ProjectCostsInWindow(3600)
+	m, err := tr.projectCostsInWindow(3600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,11 +289,11 @@ func TestProjectCostsInWindows_SinglePassMatchesSingleWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	day, err := tr.ProjectCostsInWindow(24 * 3600)
+	day, err := tr.projectCostsInWindow(24 * 3600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	week, err := tr.ProjectCostsInWindow(7 * 24 * 3600)
+	week, err := tr.projectCostsInWindow(7 * 24 * 3600)
 	if err != nil {
 		t.Fatal(err)
 	}

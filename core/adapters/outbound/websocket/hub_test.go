@@ -38,8 +38,8 @@ func TestLoopbackCheckOrigin(t *testing.T) {
 			if tt.origin != "" {
 				r.Header.Set("Origin", tt.origin)
 			}
-			if got := LoopbackCheckOrigin(r); got != tt.want {
-				t.Errorf("LoopbackCheckOrigin(origin=%q remote=%q) = %v, want %v",
+			if got := loopbackCheckOrigin(r); got != tt.want {
+				t.Errorf("loopbackCheckOrigin(origin=%q remote=%q) = %v, want %v",
 					tt.origin, tt.remoteAddr, got, tt.want)
 			}
 		})

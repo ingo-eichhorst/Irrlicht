@@ -18,7 +18,7 @@ func (stubLogger) LogError(_, _, _ string)                         {}
 func (stubLogger) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
 func (stubLogger) Close() error                                    { return nil }
 
-// stubTarget implements FocusTarget.
+// stubTarget implements focusTarget.
 type stubTarget struct {
 	err error
 }

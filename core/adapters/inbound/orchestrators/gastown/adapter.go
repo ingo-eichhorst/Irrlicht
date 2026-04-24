@@ -1,7 +1,7 @@
 // Package gastown implements the OrchestratorWatcher for Gas Town.
 //
-// It wraps the Collector (filesystem detection + daemon state watching) and
-// Poller (gt CLI queries for rigs, polecats, convoys) into a single adapter
+// It wraps the collector (filesystem detection + daemon state watching) and
+// poller (gt CLI queries for rigs, polecats, convoys) into a single adapter
 // that produces standardised orchestrator.State snapshots.
 package gastown
 
@@ -16,10 +16,10 @@ import (
 
 // Adapter implements inbound.OrchestratorWatcher for Gas Town.
 type Adapter struct {
-	collector *Collector
+	collector *collector
 	gtBin     string
 	interval  time.Duration
-	sessions  SessionLister
+	sessions  sessionLister
 
 	mu    sync.RWMutex
 	state *orchestrator.State
@@ -32,7 +32,7 @@ type Adapter struct {
 // gtBin is the resolved path to the gt binary (may be empty).
 // interval is how often the poller queries gt CLI.
 // sessions provides active session data for CWD matching (may be nil).
-func NewAdapter(gtBin string, interval time.Duration, sessions SessionLister) *Adapter {
+func NewAdapter(gtBin string, interval time.Duration, sessions sessionLister) *Adapter {
 	return &Adapter{
 		collector: New(),
 		gtBin:     gtBin,
@@ -49,10 +49,6 @@ func (a *Adapter) Detected() bool { return a.collector.Detected() }
 
 // Root returns the resolved GT_ROOT path, or "" if not detected.
 func (a *Adapter) Root() string { return a.collector.Root() }
-
-// Collector returns the underlying Collector (needed for legacy REST handler
-// until fully migrated).
-func (a *Adapter) Collector() *Collector { return a.collector }
 
 // State returns the latest orchestrator state snapshot, or nil.
 func (a *Adapter) State() *orchestrator.State {
@@ -83,7 +79,7 @@ func (a *Adapter) Watch(ctx context.Context) error {
 	}
 
 	// Run poller loop.
-	poller := NewPoller(a.collector, a.gtBin, a.interval, a.sessions)
+	poller := newPoller(a.collector, a.gtBin, a.interval, a.sessions)
 	return a.runPoller(ctx, poller)
 }
 
@@ -143,7 +139,7 @@ func (a *Adapter) watchDaemonOnly(ctx context.Context) error {
 				return nil
 			}
 			now := time.Now().UTC()
-			daemon := a.collector.DaemonState()
+			daemon := a.collector.daemonState()
 			running := daemon != nil && daemon.Running
 			a.setState(&orchestrator.State{
 				Adapter:   "gastown",
@@ -157,7 +153,7 @@ func (a *Adapter) watchDaemonOnly(ctx context.Context) error {
 
 // runPoller runs the gt CLI poller and converts its output to orchestrator.State.
 // It backs off from the base interval to 3× when the state is stable.
-func (a *Adapter) runPoller(ctx context.Context, p *Poller) error {
+func (a *Adapter) runPoller(ctx context.Context, p *poller) error {
 	// Initial poll.
 	a.setState(p.BuildOrchestratorState(ctx))
 

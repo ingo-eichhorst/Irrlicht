@@ -8,9 +8,9 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// CachedSessionRepository wraps a SessionRepository with a short-lived cache
+// cachedSessionRepository wraps a SessionRepository with a short-lived cache
 // for ListAll() to avoid redundant filesystem scans from concurrent callers.
-type CachedSessionRepository struct {
+type cachedSessionRepository struct {
 	inner    *SessionRepository
 	mu       sync.Mutex
 	cache    []*session.SessionState
@@ -20,30 +20,30 @@ type CachedSessionRepository struct {
 
 // NewCachedSessionRepository returns a caching decorator around inner with the
 // given TTL for ListAll() results.
-func NewCachedSessionRepository(inner *SessionRepository, ttl time.Duration) *CachedSessionRepository {
-	return &CachedSessionRepository{inner: inner, ttl: ttl}
+func NewCachedSessionRepository(inner *SessionRepository, ttl time.Duration) *cachedSessionRepository {
+	return &cachedSessionRepository{inner: inner, ttl: ttl}
 }
 
 // Load delegates directly — single file reads are cheap.
-func (c *CachedSessionRepository) Load(sessionID string) (*session.SessionState, error) {
+func (c *cachedSessionRepository) Load(sessionID string) (*session.SessionState, error) {
 	return c.inner.Load(sessionID)
 }
 
 // Save invalidates the cache then delegates to avoid stale reads.
-func (c *CachedSessionRepository) Save(state *session.SessionState) error {
+func (c *cachedSessionRepository) Save(state *session.SessionState) error {
 	c.invalidate()
 	return c.inner.Save(state)
 }
 
 // Delete invalidates the cache then delegates to avoid stale reads.
-func (c *CachedSessionRepository) Delete(sessionID string) error {
+func (c *cachedSessionRepository) Delete(sessionID string) error {
 	c.invalidate()
 	return c.inner.Delete(sessionID)
 }
 
 // ListAll returns cached results if fresh, otherwise performs the filesystem
 // scan and caches the result. Returns deep copies so callers can safely mutate.
-func (c *CachedSessionRepository) ListAll() ([]*session.SessionState, error) {
+func (c *cachedSessionRepository) ListAll() ([]*session.SessionState, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -61,12 +61,12 @@ func (c *CachedSessionRepository) ListAll() ([]*session.SessionState, error) {
 }
 
 // InstancesDir exposes the underlying directory path.
-func (c *CachedSessionRepository) InstancesDir() string {
+func (c *cachedSessionRepository) InstancesDir() string {
 	return c.inner.InstancesDir()
 }
 
 // PruneStale delegates to inner and invalidates cache.
-func (c *CachedSessionRepository) PruneStale(maxAge time.Duration) (int, error) {
+func (c *cachedSessionRepository) PruneStale(maxAge time.Duration) (int, error) {
 	n, err := c.inner.PruneStale(maxAge)
 	if n > 0 {
 		c.invalidate()
@@ -74,7 +74,7 @@ func (c *CachedSessionRepository) PruneStale(maxAge time.Duration) (int, error) 
 	return n, err
 }
 
-func (c *CachedSessionRepository) invalidate() {
+func (c *cachedSessionRepository) invalidate() {
 	c.mu.Lock()
 	c.cache = nil
 	c.cachedAt = time.Time{}

@@ -198,7 +198,7 @@ func unifySubagents(a *Agent) {
 // parent.Metrics.OpenSubagents (e.g. claudecode counts open Agent tool calls);
 // the "file-based" component comes from child sessions in childSessions whose
 // ParentSessionID matches the parent. Returns nil when there are no subagents.
-func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState) *SubagentSummary {
+func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState) *subagentSummary {
 	inProcess := 0
 	if parent != nil && parent.Metrics != nil {
 		inProcess = parent.Metrics.OpenSubagents
@@ -217,7 +217,7 @@ func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState)
 		return nil
 	}
 
-	summary := &SubagentSummary{
+	summary := &subagentSummary{
 		Total:   inProcess + len(fileChildren),
 		Working: inProcess,
 	}

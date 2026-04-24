@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -38,11 +37,11 @@ type SessionMetrics struct {
 	CumOutputTokens        int64   `json:"cum_output_tokens,omitempty"`
 	CumCacheReadTokens     int64   `json:"cum_cache_read_tokens,omitempty"`
 	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens,omitempty"`
-	EstimatedCostUSD    float64        `json:"estimated_cost_usd,omitempty"`
-	ModelName           string         `json:"model_name,omitempty"`
-	ContextWindow       int64          `json:"context_window,omitempty"`
-	ContextUtilization  float64        `json:"context_utilization_percentage,omitempty"`
-	PressureLevel       string         `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
+	EstimatedCostUSD       float64 `json:"estimated_cost_usd,omitempty"`
+	ModelName              string  `json:"model_name,omitempty"`
+	ContextWindow          int64   `json:"context_window,omitempty"`
+	ContextUtilization     float64 `json:"context_utilization_percentage,omitempty"`
+	PressureLevel          string  `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
 
 	// Raw event data for real-time client-side calculations
 	TotalEventCount        int64     `json:"total_event_count,omitempty"`
@@ -176,7 +175,7 @@ type TranscriptTailer struct {
 
 	// New accumulation path: per-model usage breakdown from PerTurnContribution.
 	// Populated when adapters emit Contribution on ParsedEvent (Phase 2+).
-	cumByModel        map[string]*UsageBreakdown
+	cumByModel         map[string]*UsageBreakdown
 	cumProviderCostUSD float64 // sum of provider-reported per-turn costs (Pi)
 
 	// lastWasUserInterrupt tracks whether the most recent user event was
@@ -199,7 +198,7 @@ type TranscriptTailer struct {
 
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
-	tasks   []Task
+	tasks []Task
 	// taskSeq is the next sequential ID to assign on TaskCreate.
 	// Invariant: taskSeq == len(tasks) always (tasks are never removed).
 	taskSeq int
@@ -276,13 +275,6 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	if len(s.Tasks) > 0 {
 		t.tasks = append([]Task(nil), s.Tasks...)
 		t.taskSeq = len(t.tasks)
-	}
-}
-
-// SetSessionStartTime allows preserving the session start time across multiple invocations
-func (t *TranscriptTailer) SetSessionStartTime(startTime time.Time) {
-	if t.metrics != nil {
-		t.metrics.SessionStartAt = startTime
 	}
 }
 
@@ -453,12 +445,12 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		// classifier, so we don't track it.
 		if parsed.IsUserInterrupt {
 			t.lastWasUserInterrupt = true
-		} else if IsUserEventType(parsed.EventType) {
+		} else if isUserEventType(parsed.EventType) {
 			t.lastWasUserInterrupt = false
 		}
 		if parsed.IsToolDenial {
 			t.lastWasToolDenial = true
-		} else if IsUserEventType(parsed.EventType) {
+		} else if isUserEventType(parsed.EventType) {
 			t.lastWasToolDenial = false
 		}
 
@@ -498,428 +490,4 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	t.computeContextUtilization()
 
 	return t.metrics, scanner.Err()
-}
-
-// applyMetadata applies model/token/CWD/permission metadata from a parsed event.
-func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
-	if parsed.ModelName != "" {
-		if strings.Contains(parsed.ModelName, "[1m]") {
-			t.contextWindowOverride = 1000000
-		}
-		t.metrics.ModelName = NormalizeModelName(parsed.ModelName)
-	}
-	if parsed.ContextWindow > 0 {
-		t.contextWindowOverride = parsed.ContextWindow
-	}
-	if parsed.Tokens != nil {
-		if parsed.Tokens.Total > 0 {
-			t.metrics.TotalTokens = parsed.Tokens.Total
-		}
-		// Snapshot fields — always overwritten with latest turn for context utilization.
-		if parsed.Tokens.Input > 0 || parsed.Tokens.Output > 0 {
-			t.inputTokens = parsed.Tokens.Input
-			t.outputTokens = parsed.Tokens.Output
-			t.cacheReadTokens = parsed.Tokens.CacheRead
-			t.cacheCreationTokens = parsed.Tokens.CacheCreation
-		}
-	}
-
-	// Cumulative token accumulation for cost calculation.
-	if parsed.Contribution != nil {
-		// New path (Phase 2+): adapter already handled dedup; we just accumulate.
-		c := parsed.Contribution
-		if c.ProviderCostUSD != nil {
-			// Provider-reported cost: use directly, don't add tokens to cumByModel.
-			t.cumProviderCostUSD += *c.ProviderCostUSD
-		} else if c.Model != "" || c.Usage.Input > 0 || c.Usage.Output > 0 {
-			bd := t.cumByModel[c.Model]
-			if bd == nil {
-				bd = &UsageBreakdown{}
-				t.cumByModel[c.Model] = bd
-			}
-			bd.Input += c.Usage.Input
-			bd.Output += c.Usage.Output
-			bd.CacheRead += c.Usage.CacheRead
-			bd.CacheCreation5m += c.Usage.CacheCreation5m
-			bd.CacheCreation1h += c.Usage.CacheCreation1h
-		}
-	} else if parsed.CumulativeTokens != nil {
-		// Legacy path: Codex-style authoritative cumulative total.
-		// Monotonicity guard: only advance each bucket forward.
-		ct := parsed.CumulativeTokens
-		if ct.Input > t.cumInputTokens {
-			t.cumInputTokens = ct.Input
-		}
-		if ct.Output > t.cumOutputTokens {
-			t.cumOutputTokens = ct.Output
-		}
-		if ct.CacheRead > t.cumCacheReadTokens {
-			t.cumCacheReadTokens = ct.CacheRead
-		}
-		if ct.CacheCreation > t.cumCacheCreationTokens {
-			t.cumCacheCreationTokens = ct.CacheCreation
-		}
-		t.pendingSnapshot = nil
-	} else if parsed.Tokens != nil && parsed.RequestID != "" {
-		// Legacy path: Claude Code-style dedup by requestId.
-		if parsed.RequestID != t.lastRequestID && t.lastRequestID != "" && t.pendingSnapshot != nil {
-			t.cumInputTokens += t.pendingSnapshot.Input
-			t.cumOutputTokens += t.pendingSnapshot.Output
-			t.cumCacheReadTokens += t.pendingSnapshot.CacheRead
-			t.cumCacheCreationTokens += t.pendingSnapshot.CacheCreation
-		}
-		t.pendingSnapshot = parsed.Tokens
-		t.lastRequestID = parsed.RequestID
-	} else if parsed.Tokens != nil && (parsed.Tokens.Input > 0 || parsed.Tokens.Output > 0) {
-		// Legacy path: Pi-style direct accumulate.
-		t.cumInputTokens += parsed.Tokens.Input
-		t.cumOutputTokens += parsed.Tokens.Output
-		t.cumCacheReadTokens += parsed.Tokens.CacheRead
-		t.cumCacheCreationTokens += parsed.Tokens.CacheCreation
-	}
-	if parsed.CWD != "" {
-		t.lastCWD = parsed.CWD
-	}
-	if parsed.PermissionMode != "" {
-		t.metrics.PermissionMode = parsed.PermissionMode
-	}
-}
-
-// addMessageEvent adds a new message event and maintains sliding window.
-// Tool call counting is NOT done here — it's handled from ParsedEvent deltas
-// in TailAndProcess to avoid double-counting.
-func (t *TranscriptTailer) addMessageEvent(event MessageEvent) {
-	t.metrics.MessageHistory = append(t.metrics.MessageHistory, event)
-	t.metrics.LastMessageAt = event.Timestamp
-	t.metrics.LastEventType = event.EventType
-
-	if t.metrics.SessionStartAt.IsZero() || event.Timestamp.Before(t.metrics.SessionStartAt) {
-		t.metrics.SessionStartAt = event.Timestamp
-	}
-}
-
-// computeCumulativeTokens aggregates per-model token counts and estimated cost.
-// It must run on every TailAndProcess pass — even when no new events were
-// processed — so that ledger-rehydrated state is reflected immediately.
-func (t *TranscriptTailer) computeCumulativeTokens() {
-	if len(t.cumByModel) > 0 || t.cumProviderCostUSD > 0 {
-		// New path: price per-model, sum provider-reported costs.
-		var totalInput, totalOutput, totalCacheRead, totalCacheCreate int64
-		var pricedCost float64
-		for modelName, bd := range t.cumByModel {
-			totalInput += bd.Input
-			totalOutput += bd.Output
-			totalCacheRead += bd.CacheRead
-			totalCacheCreate += bd.CacheCreation5m + bd.CacheCreation1h
-			if t.capacityMgr != nil {
-				pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
-					modelName, bd.Input, bd.Output, bd.CacheRead, bd.CacheCreation5m, bd.CacheCreation1h)
-			}
-		}
-		// Include the pending contribution from stateful parsers (Claude Code).
-		if pc, ok := t.parser.(PendingContributor); ok {
-			if pending := pc.PendingContribution(); pending != nil {
-				totalInput += pending.Usage.Input
-				totalOutput += pending.Usage.Output
-				totalCacheRead += pending.Usage.CacheRead
-				totalCacheCreate += pending.Usage.CacheCreation5m + pending.Usage.CacheCreation1h
-				if t.capacityMgr != nil && pending.Model != "" {
-					pricedCost += t.capacityMgr.EstimateCostFromBreakdown(
-						pending.Model,
-						pending.Usage.Input, pending.Usage.Output, pending.Usage.CacheRead,
-						pending.Usage.CacheCreation5m, pending.Usage.CacheCreation1h)
-				}
-			}
-		}
-		t.metrics.CumInputTokens = totalInput
-		t.metrics.CumOutputTokens = totalOutput
-		t.metrics.CumCacheReadTokens = totalCacheRead
-		t.metrics.CumCacheCreationTokens = totalCacheCreate
-		t.metrics.EstimatedCostUSD = pricedCost + t.cumProviderCostUSD
-	} else {
-		// Legacy path: scalar accumulators (testParser and pre-Contribution adapters).
-		effectiveCumInput := t.cumInputTokens
-		effectiveCumOutput := t.cumOutputTokens
-		effectiveCumCacheRead := t.cumCacheReadTokens
-		effectiveCumCacheCreate := t.cumCacheCreationTokens
-		if t.pendingSnapshot != nil {
-			effectiveCumInput += t.pendingSnapshot.Input
-			effectiveCumOutput += t.pendingSnapshot.Output
-			effectiveCumCacheRead += t.pendingSnapshot.CacheRead
-			effectiveCumCacheCreate += t.pendingSnapshot.CacheCreation
-		}
-		t.metrics.CumInputTokens = effectiveCumInput
-		t.metrics.CumOutputTokens = effectiveCumOutput
-		t.metrics.CumCacheReadTokens = effectiveCumCacheRead
-		t.metrics.CumCacheCreationTokens = effectiveCumCacheCreate
-
-		if t.capacityMgr != nil && t.metrics.ModelName != "" {
-			t.metrics.EstimatedCostUSD = t.capacityMgr.EstimateCostUSD(
-				t.metrics.ModelName, effectiveCumInput, effectiveCumOutput,
-				effectiveCumCacheRead, effectiveCumCacheCreate)
-		}
-	}
-}
-
-// computeMetrics calculates messages per minute and elapsed time
-func (t *TranscriptTailer) computeMetrics() {
-	// Cumulative cost/token aggregation must run regardless of whether any new
-	// events were processed this pass — the tailer may have been rehydrated from
-	// a ledger with a non-zero cumByModel and then polled with no new transcript
-	// content (e.g., immediately after daemon restart before the agent produces
-	// more output). Skipping this would return CumInputTokens=0 in that window.
-	t.computeCumulativeTokens()
-
-	if len(t.metrics.MessageHistory) == 0 {
-		t.metrics.MessagesPerMinute = 0
-		t.metrics.ElapsedSeconds = 0
-		t.metrics.TotalEventCount = 0
-		t.metrics.RecentEventCount = 0
-		t.metrics.RecentEventWindowStart = time.Time{}
-		return
-	}
-
-	currentTime := time.Now()
-	latestTime := t.metrics.LastMessageAt
-	if latestTime.IsZero() {
-		latestTime = currentTime
-	}
-
-	if !t.metrics.SessionStartAt.IsZero() {
-		t.metrics.ElapsedSeconds = int64(latestTime.Sub(t.metrics.SessionStartAt).Seconds())
-	}
-
-	t.metrics.TotalEventCount = int64(len(t.metrics.MessageHistory))
-
-	fiveMinutesAgo := currentTime.Add(-5 * time.Minute)
-	windowStart := fiveMinutesAgo
-	if t.metrics.SessionStartAt.After(fiveMinutesAgo) {
-		windowStart = t.metrics.SessionStartAt
-	}
-	t.metrics.RecentEventWindowStart = windowStart
-
-	recentEventCount := int64(0)
-	for _, msg := range t.metrics.MessageHistory {
-		if msg.Timestamp.After(windowStart) || msg.Timestamp.Equal(windowStart) {
-			recentEventCount++
-		}
-	}
-	t.metrics.RecentEventCount = recentEventCount
-
-	// Open tool calls are derived directly from the id-keyed map — the only
-	// source of truth. See the openToolCalls field comment for history (#102,
-	// #114, #117).
-	openCalls := len(t.openToolCalls)
-	t.metrics.OpenToolCallCount = openCalls
-	t.metrics.HasOpenToolCall = openCalls > 0
-	names := make([]string, 0, openCalls)
-	for _, name := range t.openToolCalls {
-		names = append(names, name)
-	}
-	t.metrics.LastOpenToolNames = names
-	t.metrics.LastWasUserInterrupt = t.lastWasUserInterrupt
-	t.metrics.LastWasToolDenial = t.lastWasToolDenial
-	t.metrics.LastCWD = t.lastCWD
-	t.metrics.LastAssistantText = t.lastAssistantText
-	if len(t.tasks) > 0 {
-		t.metrics.Tasks = append([]Task(nil), t.tasks...)
-	} else {
-		t.metrics.Tasks = nil
-	}
-
-	// Token snapshot (latest turn — for context utilization display).
-	t.metrics.InputTokens = t.inputTokens
-	t.metrics.OutputTokens = t.outputTokens
-	t.metrics.CacheReadTokens = t.cacheReadTokens
-	t.metrics.CacheCreationTokens = t.cacheCreationTokens
-
-
-	// Sliding window for messages per minute.
-	legacyWindowStart := latestTime.Add(-t.windowSize)
-	messageCount := 0
-	filteredHistory := make([]MessageEvent, 0, len(t.metrics.MessageHistory))
-	for _, msg := range t.metrics.MessageHistory {
-		if msg.Timestamp.After(legacyWindowStart) || msg.Timestamp.Equal(legacyWindowStart) {
-			filteredHistory = append(filteredHistory, msg)
-			messageCount++
-		}
-	}
-	t.metrics.MessageHistory = filteredHistory
-
-	if messageCount > 0 {
-		if len(filteredHistory) > 1 {
-			timeSpan := latestTime.Sub(filteredHistory[0].Timestamp)
-			if timeSpan > 0 {
-				t.metrics.MessagesPerMinute = float64(messageCount) / timeSpan.Minutes()
-			} else {
-				t.metrics.MessagesPerMinute = float64(messageCount)
-			}
-		} else {
-			t.metrics.MessagesPerMinute = float64(messageCount) / t.windowSize.Minutes()
-		}
-	} else {
-		t.metrics.MessagesPerMinute = 0
-	}
-}
-
-// GetMetrics returns current computed metrics
-func (t *TranscriptTailer) GetMetrics() *SessionMetrics {
-	if t.metrics == nil {
-		return &SessionMetrics{}
-	}
-	return t.metrics
-}
-
-// ResetOffset resets the file offset and cumulative cost accumulators
-// (useful for testing or file rotation).
-func (t *TranscriptTailer) ResetOffset() {
-	t.lastOffset = 0
-	t.cumInputTokens = 0
-	t.cumOutputTokens = 0
-	t.cumCacheReadTokens = 0
-	t.cumCacheCreationTokens = 0
-	t.lastRequestID = ""
-	t.pendingSnapshot = nil
-	t.cumByModel = make(map[string]*UsageBreakdown)
-	t.cumProviderCostUSD = 0
-}
-
-// computeContextUtilization calculates context utilization percentage and pressure level.
-func (t *TranscriptTailer) computeContextUtilization() {
-	if t.metrics.TotalTokens == 0 || t.metrics.ModelName == "" {
-		t.metrics.ContextUtilization = 0.0
-		t.metrics.PressureLevel = "unknown"
-		return
-	}
-
-	var effectiveContextWindow int64
-
-	if t.contextWindowOverride > 0 {
-		effectiveContextWindow = t.contextWindowOverride
-	}
-
-	if effectiveContextWindow <= 0 && t.capacityMgr != nil {
-		effectiveContextWindow = t.capacityMgr.GetModelCapacity(t.metrics.ModelName).ContextWindow
-	}
-
-	// Unknown model: no context window data available — report raw tokens only.
-	if effectiveContextWindow <= 0 {
-		t.metrics.ContextWindow = 0
-		t.metrics.ContextUtilization = 0
-		t.metrics.PressureLevel = "unknown"
-		return
-	}
-
-	utilizationPercentage := (float64(t.metrics.TotalTokens) / float64(effectiveContextWindow)) * 100
-
-	pressureLevel := "safe"
-	if utilizationPercentage >= 90 {
-		pressureLevel = "critical"
-	} else if utilizationPercentage >= 80 {
-		pressureLevel = "warning"
-	} else if utilizationPercentage >= 60 {
-		pressureLevel = "caution"
-	}
-
-	t.metrics.ContextWindow = effectiveContextWindow
-	t.metrics.ContextUtilization = utilizationPercentage
-	t.metrics.PressureLevel = pressureLevel
-}
-
-// surviveTurnDone returns true for tools whose tool_result arrives after the
-// turn_done event. These must not be swept from openToolCalls:
-//
-//   - Agent: sub-agents can still be running when the parent's turn ends.
-//   - AskUserQuestion, ExitPlanMode: user-blocking tools whose result only
-//     arrives after the user responds. Also listed in session.isUserBlockingTool;
-//     the overlap is intentional — the two predicates serve different purposes.
-func surviveTurnDone(name string) bool {
-	switch name {
-	case "Agent", "AskUserQuestion", "ExitPlanMode":
-		return true
-	}
-	return false
-}
-
-// isUserBlockingToolName returns true for tools that always block the agent
-// until the user responds: AskUserQuestion and ExitPlanMode. Used by
-// TailAndProcess to flag same-pass open+close of these tools so the daemon
-// can synthesise the collapsed working→waiting transition (issue #150).
-// Kept local to the tailer to avoid a domain-package import; the canonical
-// list also lives at session.isUserBlockingTool.
-func isUserBlockingToolName(name string) bool {
-	switch name {
-	case "AskUserQuestion", "ExitPlanMode":
-		return true
-	}
-	return false
-}
-
-// --- Model config fallback ---
-
-// getDefaultModelFromConfig reads the default model from the appropriate config
-// based on adapter name.
-func getDefaultModelFromConfig(adapter string) string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	switch adapter {
-	case "pi":
-		return getPiModel(homeDir)
-	case "codex":
-		return getCodexModel(homeDir)
-	default:
-		return getClaudeModel(homeDir)
-	}
-}
-
-func getClaudeModel(homeDir string) string {
-	data, err := os.ReadFile(filepath.Join(homeDir, ".claude", "settings.json"))
-	if err != nil {
-		return ""
-	}
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return ""
-	}
-	if model, ok := settings["model"].(string); ok {
-		return NormalizeModelName(model)
-	}
-	return ""
-}
-
-func getCodexModel(homeDir string) string {
-	data, err := os.ReadFile(filepath.Join(homeDir, ".codex", "config.toml"))
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "model") && strings.Contains(line, "=") {
-			parts := strings.SplitN(line, "=", 2)
-			if strings.TrimSpace(parts[0]) == "model" {
-				model := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
-				if model != "" {
-					return model
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func getPiModel(homeDir string) string {
-	data, err := os.ReadFile(filepath.Join(homeDir, ".pi", "agent", "settings.json"))
-	if err != nil {
-		return ""
-	}
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return ""
-	}
-	if model, ok := settings["defaultModel"].(string); ok {
-		return NormalizeModelName(model)
-	}
-	return ""
 }

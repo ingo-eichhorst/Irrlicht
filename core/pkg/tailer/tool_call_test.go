@@ -293,7 +293,7 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	return ev
 }
 
-// PendingContribution exposes the in-progress turn to the tailer (implements PendingContributor).
+// PendingContribution exposes the in-progress turn to the tailer (implements pendingContributor).
 func (p *testParser) PendingContribution() *PerTurnContribution {
 	return p.pendingContrib
 }

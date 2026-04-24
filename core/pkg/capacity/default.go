@@ -8,20 +8,19 @@ var (
 )
 
 // DefaultCapacityManager returns a process-wide CapacityManager backed by the
-// LiteLLM cache at CachePath(). The first caller builds the singleton; all
+// LiteLLM cache at cachePath(). The first caller builds the singleton; all
 // later callers share it. Subsequent GetModelCapacity calls transparently
-// reload the cache when its mtime advances (e.g. after the daemon's daily
-// RefreshRemoteDataIfStale tick).
+// reload the cache when its mtime advances.
 //
 // If the cache is missing or corrupt, the manager serves zero-value lookups
 // until the cache becomes readable.
 func DefaultCapacityManager() *CapacityManager {
 	defaultOnce.Do(func() {
-		cachePath, _ := CachePath()
+		cachePath, _ := cachePath()
 
 		cm := &CapacityManager{
 			cachePath: cachePath,
-			config:    &CapacityConfig{Models: map[string]ModelCapacity{}},
+			config:    &capacityConfig{Models: map[string]ModelCapacity{}},
 		}
 		// Prime from cache if available; missing cache is not fatal.
 		cm.maybeReload()
