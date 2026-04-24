@@ -419,6 +419,25 @@ struct SessionState: Identifiable, Codable {
         return copy
     }
 
+    /// Return a copy with a replacement children list. Used when the incremental
+    /// WS patch path updates a single agent inside `apiGroups` — WS payloads
+    /// don't carry `children`, so the patch has to reattach them.
+    func withChildren(_ newChildren: [SessionState]?) -> SessionState {
+        var copy = SessionState(
+            id: id, state: state, model: model, cwd: cwd,
+            transcriptPath: transcriptPath, gitBranch: gitBranch,
+            projectName: projectName, firstSeen: firstSeen, updatedAt: updatedAt,
+            eventCount: eventCount, lastEvent: lastEvent, metrics: metrics,
+            pid: pid, parentSessionId: parentSessionId, subagents: subagents,
+            adapter: adapter, daemonVersion: daemonVersion,
+            role: role, roleIcon: roleIcon, roleDescription: roleDescription,
+            workerName: workerName, workerID: workerID,
+            children: newChildren, launcher: launcher
+        )
+        copy.duplicateIndex = duplicateIndex
+        return copy
+    }
+
     var activeSubagentCount: Int {
         (subagents?.working ?? 0) + (subagents?.waiting ?? 0)
     }

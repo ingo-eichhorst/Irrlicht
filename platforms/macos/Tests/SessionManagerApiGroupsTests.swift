@@ -1,0 +1,208 @@
+import XCTest
+@testable import Irrlicht
+import Foundation
+
+/// Regression coverage for the WebSocket → apiGroups patch path.
+///
+/// Background: the menu-bar list renders from `apiGroups`, not from the flat
+/// `sessions` array fed by `sessionMap`. Updates only reach the UI tree via
+/// `patchApiGroups`, and that path used to drop silently when a session id
+/// wasn't in `groupedSessionIds` and never walked `agent.children`. That left
+/// sessions visibly stuck on stale context/cost values (see fix alongside
+/// 0.3.8). These tests pin the corrected behavior.
+@MainActor
+final class SessionManagerApiGroupsTests: XCTestCase {
+    typealias AgentGroup = SessionManager.AgentGroup
+
+    private var sut: SessionManager!
+
+    override func setUp() async throws {
+        try await super.setUp()
+        sut = SessionManager()
+    }
+
+    override func tearDown() async throws {
+        sut = nil
+        try await super.tearDown()
+    }
+
+    // MARK: - collectSessionIds
+
+    func testCollectSessionIds_includesTopLevelAgents() {
+        let group = AgentGroup(
+            name: "articles",
+            agents: [makeSession(id: "a1"), makeSession(id: "a2")]
+        )
+        XCTAssertEqual(Set(sut.collectSessionIds(from: group)), ["a1", "a2"])
+    }
+
+    func testCollectSessionIds_includesChildren() {
+        // Regression: children were structurally unreachable — the set built
+        // from `collectSessionIds` never contained child ids, so the guard in
+        // `patchApiGroups` dropped every WS update for subagents.
+        let parent = makeSession(
+            id: "parent",
+            children: [makeSession(id: "child1"), makeSession(id: "child2")]
+        )
+        let group = AgentGroup(name: "proj", agents: [parent])
+        XCTAssertEqual(
+            Set(sut.collectSessionIds(from: group)),
+            ["parent", "child1", "child2"]
+        )
+    }
+
+    func testCollectSessionIds_descendsIntoNestedGroups() {
+        let nested = AgentGroup(name: "sub", agents: [makeSession(id: "n1")])
+        let top = AgentGroup(
+            name: "top",
+            agents: [makeSession(id: "t1")],
+            groups: [nested]
+        )
+        XCTAssertEqual(Set(sut.collectSessionIds(from: top)), ["t1", "n1"])
+    }
+
+    // MARK: - patchGroup
+
+    func testPatchGroup_patchesTopLevelAgentMetrics() {
+        let before = makeSession(id: "s1", cost: 1.00)
+        let sibling = makeSession(id: "s2", cost: 3.00)
+        let group = AgentGroup(name: "proj", agents: [before, sibling])
+
+        let updated = makeSession(id: "s1", cost: 2.50)
+        let patched = sut.patchGroup(group, with: updated)
+
+        XCTAssertEqual(patched.agents?.first(where: { $0.id == "s1" })?.metrics?.estimatedCostUSD, 2.50)
+        // Siblings untouched.
+        XCTAssertEqual(patched.agents?.first(where: { $0.id == "s2" })?.metrics?.estimatedCostUSD, 3.00)
+    }
+
+    func testPatchGroup_patchesChildInsideAgent() {
+        // Regression: `patchGroup` used to only patch `group.agents` and
+        // `group.groups`; child sessions buried in `agent.children` were
+        // unreachable and their rows never ticked until the 30 s hydration.
+        let child = makeSession(id: "child", cost: 0.10)
+        let parent = makeSession(id: "parent", cost: 5.00, children: [child])
+        let group = AgentGroup(name: "proj", agents: [parent])
+
+        let updatedChild = makeSession(id: "child", cost: 0.50)
+        let patched = sut.patchGroup(group, with: updatedChild)
+
+        let patchedParent = patched.agents?.first { $0.id == "parent" }
+        XCTAssertEqual(patchedParent?.metrics?.estimatedCostUSD, 5.00,
+                       "parent metrics must be untouched when patching a child")
+        XCTAssertEqual(patchedParent?.children?.first?.metrics?.estimatedCostUSD, 0.50)
+    }
+
+    func testPatchGroup_preservesChildrenWhenPatchingParent() {
+        // Regression: WS payloads don't carry `children`, so naively
+        // substituting the matched agent with the incoming session would
+        // drop every subagent row. `withChildren` on the patched copy
+        // reattaches them.
+        let childA = makeSession(id: "childA")
+        let childB = makeSession(id: "childB")
+        let parent = makeSession(id: "parent", cost: 1.00, children: [childA, childB])
+        let group = AgentGroup(name: "proj", agents: [parent])
+
+        // Incoming update with no children field — mirrors how the daemon
+        // serializes WS deltas.
+        let wsUpdate = makeSession(id: "parent", cost: 3.00, children: nil)
+        let patched = sut.patchGroup(group, with: wsUpdate)
+
+        let patchedParent = patched.agents?.first { $0.id == "parent" }
+        XCTAssertEqual(patchedParent?.metrics?.estimatedCostUSD, 3.00)
+        XCTAssertEqual(patchedParent?.children?.map(\.id), ["childA", "childB"])
+    }
+
+    func testPatchGroup_returnsUnchangedWhenNoMatch() {
+        let group = AgentGroup(name: "proj", agents: [makeSession(id: "only")])
+        let unrelated = makeSession(id: "unrelated", cost: 999)
+        let patched = sut.patchGroup(group, with: unrelated)
+        XCTAssertEqual(patched.agents?.map(\.id), ["only"])
+        XCTAssertEqual(patched.agents?.first?.metrics?.estimatedCostUSD, 0)
+    }
+
+    // MARK: - patchApiGroups (end-to-end through SessionManager state)
+
+    func testPatchApiGroups_updatesAgentMetricsWhenIdKnown() {
+        let original = makeSession(id: "live", cost: 1.00)
+        sut.apiGroups = [AgentGroup(name: "proj", agents: [original])]
+        sut.groupedSessionIds = ["live"]
+
+        let update = makeSession(id: "live", cost: 7.77)
+        sut.patchApiGroups(session: update)
+
+        XCTAssertEqual(
+            sut.apiGroups.first?.agents?.first?.metrics?.estimatedCostUSD,
+            7.77,
+            "WS update for a known session must be reflected in apiGroups"
+        )
+    }
+
+    func testPatchApiGroups_leavesApiGroupsUnchangedOnMiss() {
+        // When the guard drops, we rely on the debounced rehydration (tested
+        // indirectly by the fact that we don't crash / mutate). The important
+        // invariant here is that an unknown session id never corrupts
+        // apiGroups by emitting a bogus agent row.
+        let original = makeSession(id: "known", cost: 1.00)
+        sut.apiGroups = [AgentGroup(name: "proj", agents: [original])]
+        sut.groupedSessionIds = ["known"]
+
+        let ghost = makeSession(id: "unknown", cost: 999)
+        sut.patchApiGroups(session: ghost)
+
+        XCTAssertEqual(sut.apiGroups.first?.agents?.map(\.id), ["known"])
+        XCTAssertEqual(sut.apiGroups.first?.agents?.first?.metrics?.estimatedCostUSD, 1.00)
+    }
+
+    // MARK: - SessionState.withChildren
+
+    func testWithChildren_preservesIdentityAndMetrics() {
+        let child = makeSession(id: "child")
+        let original = makeSession(id: "parent", cost: 4.20, children: nil)
+        let replaced = original.withChildren([child])
+
+        XCTAssertEqual(replaced.id, original.id)
+        XCTAssertEqual(replaced.metrics?.estimatedCostUSD, 4.20)
+        XCTAssertEqual(replaced.children?.map(\.id), ["child"])
+    }
+
+    func testWithChildren_allowsClearingChildren() {
+        let original = makeSession(
+            id: "parent",
+            cost: 1.00,
+            children: [makeSession(id: "ghost")]
+        )
+        let cleared = original.withChildren(nil)
+        XCTAssertNil(cleared.children)
+        XCTAssertEqual(cleared.metrics?.estimatedCostUSD, 1.00)
+    }
+
+    // MARK: - Helpers
+
+    private func makeSession(
+        id: String,
+        cost: Double = 0,
+        children: [SessionState]? = nil
+    ) -> SessionState {
+        SessionState(
+            id: id,
+            state: .working,
+            model: "test-model",
+            cwd: "/tmp",
+            firstSeen: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0),
+            metrics: SessionMetrics(
+                elapsedSeconds: 0,
+                totalTokens: 0,
+                modelName: "test-model",
+                contextWindow: nil,
+                contextUtilization: 0,
+                pressureLevel: "safe",
+                estimatedCostUSD: cost,
+                lastAssistantText: nil,
+                tasks: nil
+            ),
+            children: children
+        )
+    }
+}
