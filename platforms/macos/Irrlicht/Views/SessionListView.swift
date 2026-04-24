@@ -104,7 +104,7 @@ struct SessionListView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .frame(width: 350)
+            .frame(width: 380)
             .background(Color(NSColor.windowBackgroundColor))
         }
     }
@@ -352,27 +352,30 @@ struct SessionRowView: View {
                         .clipShape(Circle())
                 }
 
-                // Branch name — fixed width so the bar column starts at the same x for every row
+                // Branch name — column shrinks when a subagent badge is present so
+                // the context-bar column downstream starts at the same x on every row.
+                // Badge occupies 14pt + 6pt spacing = 20pt, which is exactly the amount
+                // we drop from the branch column here.
                 Text(session.gitBranch ?? "—")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(width: 64, alignment: .leading)
+                    .frame(width: activeSubagentCount > 0 ? 44 : 64, alignment: .leading)
                     .tooltip(session.gitBranch ?? "—")
 
                 if displayMode == .context {
-                    // Fixed-width columns: [bar+tokens_inside 80][cost or % 40]
+                    // Fixed-width columns: [bar+tokens_inside 100][cost 36 or % 32]
                     if let metrics = session.metrics, metrics.hasContextData {
                         ContextBar(utilization: metrics.contextUtilization,
                                    pressureColor: metrics.contextPressureColor,
                                    label: metrics.formattedTokenCount)
-                            .frame(width: 80, height: 13)
+                            .frame(width: 100, height: 13)
                         if showCostDisplay {
                             Text(metrics.formattedCost ?? "")
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundColor(.secondary)
-                                .frame(width: 40, alignment: .leading)
+                                .frame(width: 36, alignment: .leading)
                         } else {
                             Text(metrics.formattedContextUtilization)
                                 .font(.system(size: 9, design: .monospaced))
@@ -380,13 +383,13 @@ struct SessionRowView: View {
                                 .frame(width: 32, alignment: .leading)
                         }
                     } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
-                        Color.clear.frame(width: 80, height: 13)
+                        Color.clear.frame(width: 100, height: 13)
                         Text(metrics.formattedTokenUsage)
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundColor(Color(hex: "#8E8E93"))
                             .frame(width: 32, alignment: .leading)
                     } else {
-                        Color.clear.frame(width: 112, height: 13)
+                        Color.clear.frame(width: 132, height: 13)
                     }
                 }
 
@@ -541,19 +544,33 @@ private struct FlowLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
+        // First pass: group subviews into rows so we know each row's
+        // height before placing items. Second pass: place items with
+        // their vertical center aligned to the row center, so tiny
+        // circles and the taller "done/total" label line up.
+        var rows: [[(sub: LayoutSubview, size: CGSize)]] = [[]]
+        var currentRowWidth: CGFloat = 0
         for sub in subviews {
             let size = sub.sizeThatFits(.unspecified)
-            if x + size.width > bounds.maxX && x > bounds.minX {
-                y += rowHeight + vSpacing
-                x = bounds.minX
-                rowHeight = 0
+            let needsWrap = currentRowWidth + size.width > bounds.width && !rows[rows.count - 1].isEmpty
+            if needsWrap {
+                rows.append([])
+                currentRowWidth = 0
             }
-            sub.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
-            x += size.width + hSpacing
-            rowHeight = max(rowHeight, size.height)
+            rows[rows.count - 1].append((sub, size))
+            currentRowWidth += size.width + hSpacing
+        }
+
+        var y = bounds.minY
+        for row in rows {
+            let rowHeight = row.map(\.size.height).max() ?? 0
+            var x = bounds.minX
+            for (sub, size) in row {
+                let yCentered = y + (rowHeight - size.height) / 2
+                sub.place(at: CGPoint(x: x, y: yCentered), proposal: .unspecified)
+                x += size.width + hSpacing
+            }
+            y += rowHeight + vSpacing
         }
     }
 }
