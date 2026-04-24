@@ -111,15 +111,30 @@ struct SessionListView: View {
 
     // MARK: - Group List (renders apiGroups directly)
 
+    // Cap for the session-list area. Below this, the panel grows with content.
+    // Above this, the panel locks at 560pt and the list scrolls internally.
+    private static let groupListMaxHeight: CGFloat = 560
+
     private var groupListContent: some View {
+        // Single ScrollView with .fixedSize(vertical:) — reports its
+        // content's ideal height up to the parent, so the MenuBarExtra
+        // popover sizes itself to exactly that (capped at 560pt).
+        // Collapsing a group shrinks the ideal height, which propagates
+        // dynamically with no branch-switching (the source of flicker
+        // the user saw).
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(sessionManager.apiGroups) { group in
                     GroupView(group: group)
                 }
             }
         }
-        .frame(maxHeight: 400)
+        .frame(maxHeight: Self.groupListMaxHeight)
+        .fixedSize(horizontal: false, vertical: true)
+        // Kill any inherited animation on this subtree — any fade/slide
+        // transition on collapse races the popover's own resize and
+        // produces a flash.
+        .transaction { $0.disablesAnimations = true }
     }
     
     // MARK: - Empty State
@@ -674,9 +689,22 @@ struct GroupView: View {
     let group: SessionManager.AgentGroup
     var depth: Int = 0
     @EnvironmentObject var sessionManager: SessionManager
-    @State private var isExpanded = true
     @AppStorage("projectCostTimeframe") private var costTimeframeRaw: String = CostTimeframe.day.rawValue
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+
+    // Source-of-truth for expansion lives on SessionManager so
+    // SessionListView's height estimator can see it too.
+    private var isExpanded: Bool {
+        !sessionManager.collapsedGroupNames.contains(group.name)
+    }
+
+    private func toggleExpansion() {
+        if sessionManager.collapsedGroupNames.contains(group.name) {
+            sessionManager.collapsedGroupNames.remove(group.name)
+        } else {
+            sessionManager.collapsedGroupNames.insert(group.name)
+        }
+    }
 
     private var costTimeframe: CostTimeframe { CostTimeframe.from(costTimeframeRaw) }
 
@@ -711,9 +739,10 @@ struct GroupView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Button(action: {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        isExpanded.toggle()
-                    }
+                    // Instant toggle — any withAnimation here fights the
+                    // popover's own resize timing and produces visible
+                    // flicker on both expand and collapse.
+                    toggleExpansion()
                 }) {
                     HStack(spacing: 6) {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.right")

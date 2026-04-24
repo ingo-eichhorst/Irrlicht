@@ -21,6 +21,11 @@ class SessionManager: ObservableObject {
     @Published var stateHistory: [String: [String]] = [:]  // session_id → oldest→newest state strings
     @Published var historyBucketCount: Int = 150
 
+    /// Group names the user has collapsed. Lifted out of GroupView's local
+    /// state so (a) SessionListView's size estimator can skip collapsed
+    /// groups, and (b) collapse state survives apiGroups re-assignments.
+    @Published var collapsedGroupNames: Set<String> = []
+
     /// Timer that periodically re-hydrates sessions so group-level cost
     /// values (which only ride the /api/v1/sessions response) stay fresh —
     /// WebSocket deltas only carry individual session updates.
