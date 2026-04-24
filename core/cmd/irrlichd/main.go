@@ -15,15 +15,18 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
-	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/fswatcher"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
+	"irrlicht/core/pkg/capacity"
 	sessionshandler "irrlicht/core/adapters/inbound/sessions"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	"irrlicht/core/adapters/outbound/filesystem"
@@ -204,9 +207,20 @@ func main() {
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
 
+	// Unified registration for every inbound agent adapter. Wiring below
+	// (fswatchers, process scanners, metrics parser map, PID discovery map)
+	// derives from this single slice — the only place new agents need to be
+	// listed. Order matters: the metrics collector uses the first entry's
+	// parser as the fallback for unknown adapter names.
+	agentCfgs := []agents.Config{
+		claudecode.Config(),
+		codex.Config(),
+		pi.Config(),
+	}
+
 	// Shared adapters for SessionDetector.
 	gitResolver := git.New()
-	metricsCollector := metrics.New()
+	metricsCollector := metrics.New(agentCfgs)
 
 	// --- File-based SessionDetector (primary detection path) ---
 	// Forward-reference: detector is assigned before any callbacks can fire,
@@ -342,11 +356,6 @@ func main() {
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
 
-	// Inbound adapters: watch agent transcript directories for session files.
-	claudeCodeWatcher := claudecode.New(cfg.MaxSessionAge)
-	codexWatcher := codex.New(cfg.MaxSessionAge)
-	piWatcher := pi.New(cfg.MaxSessionAge)
-
 	// Suppress ghost proc pre-sessions for live processes whose real session
 	// is already persisted. The PID discriminator in HasRealSessionForPID
 	// prevents historical sessions on disk (GH #113, within MaxSessionAge)
@@ -359,41 +368,22 @@ func main() {
 		return processlifecycle.HasRealSessionForPID(sessions, projectDir, pid)
 	}
 
-	// Process scanners: detect agent processes before they create a
-	// transcript, so the session appears as ready from the moment the app opens.
-	procScanner := processlifecycle.NewScanner(
-		claudecode.ProcessName,
-		claudecode.AdapterName,
-		0, // use default interval
-	)
-	procScanner.WithSessionChecker(realSessionCheck)
+	// Per-adapter inbound wiring: one transcript watcher + one process scanner
+	// per AgentConfig. Scanners detect agent processes before they create a
+	// transcript so the session appears as ready from the moment the app opens.
+	var watchers []inbound.AgentWatcher
+	watcherRoots := make([]string, 0, len(agentCfgs))
+	for _, c := range agentCfgs {
+		w := fswatcher.New(c.RootDir, c.Name, cfg.MaxSessionAge)
+		watchers = append(watchers, w)
+		watcherRoots = append(watcherRoots, fmt.Sprintf("%s (%s)", c.Name, w.Root()))
 
-	codexProcScanner := processlifecycle.NewScanner(
-		codex.ProcessName,
-		codex.AdapterName,
-		0,
-	)
-	codexProcScanner.WithSessionChecker(realSessionCheck)
-
-	piProcScanner := processlifecycle.NewScanner(
-		pi.ProcessName,
-		pi.AdapterName,
-		0,
-	)
-	piProcScanner.WithSessionChecker(realSessionCheck)
-
-	watchers := []inbound.AgentWatcher{
-		claudeCodeWatcher, codexWatcher, piWatcher,
-		procScanner, codexProcScanner, piProcScanner,
+		scanner := processlifecycle.NewScanner(c.ProcessName, c.Name, 0)
+		scanner.WithSessionChecker(realSessionCheck)
+		watchers = append(watchers, scanner)
 	}
 
-	// Per-adapter PID discovery: Claude Code uses CWD-based matching,
-	// Codex/Pi use transcript file writer detection.
-	pidDiscovers := map[string]services.PIDDiscoverFunc{
-		claudecode.AdapterName: claudecode.DiscoverPID,
-		codex.AdapterName:      codex.DiscoverPID,
-		pi.AdapterName:         pi.DiscoverPID,
-	}
+	pidDiscovers := agents.PIDDiscoverMap(agentCfgs)
 
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
@@ -416,8 +406,14 @@ func main() {
 		claudecode.NewHookHandler(detector, logger))
 
 	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
+	// IRRLICHT_RECORDINGS_DIR overrides the default directory so test
+	// harnesses (e.g. the ir:onboard-agent skill) can isolate recordings
+	// from the user's real ~/.local/share/irrlicht/recordings/.
 	if recordEnabled {
-		recordingsDir := filepath.Join(filepath.Dir(sockPath), "recordings")
+		recordingsDir := os.Getenv("IRRLICHT_RECORDINGS_DIR")
+		if recordingsDir == "" {
+			recordingsDir = filepath.Join(filepath.Dir(sockPath), "recordings")
+		}
 		rec, err := recorder.NewJSONLRecorder(recordingsDir)
 		if err != nil {
 			logger.LogError("startup", "", fmt.Sprintf("failed to init lifecycle recorder: %v", err))
@@ -430,8 +426,7 @@ func main() {
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()
-		logger.LogInfo("startup", "", fmt.Sprintf("watching Claude Code (%s), Codex (%s), Pi (%s)",
-			claudeCodeWatcher.Root(), codexWatcher.Root(), piWatcher.Root()))
+		logger.LogInfo("startup", "", fmt.Sprintf("watching %s", strings.Join(watcherRoots, ", ")))
 		for _, w := range watchers {
 			go func() {
 				if err := w.Watch(detectorCtx); err != nil && err != context.Canceled {

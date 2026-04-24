@@ -129,7 +129,7 @@ func NewSessionDetector(
 	broadcaster outbound.PushBroadcaster,
 	version string,
 	readyTTL time.Duration,
-	pidDiscovers map[string]PIDDiscoverFunc,
+	pidDiscovers map[string]agent.PIDDiscoverFunc,
 ) *SessionDetector {
 	det := &SessionDetector{
 		watchers:        watchers,

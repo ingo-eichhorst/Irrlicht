@@ -225,7 +225,7 @@ func newDetectorWithCWDDiscovery(
 	repo *mockRepo,
 	cwdFn func(string, func([]int) int) (int, error),
 ) *services.SessionDetector {
-	discovers := map[string]services.PIDDiscoverFunc{
+	discovers := map[string]agent.PIDDiscoverFunc{
 		"claude-code": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
 			return cwdFn(cwd, disambiguate)
 		},

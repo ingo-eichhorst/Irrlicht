@@ -13,16 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
-
-// PIDDiscoverFunc discovers the PID owning a session. Each adapter provides
-// its own implementation (e.g. CWD-based for Claude Code, transcript-writer
-// for Codex/Pi). The disambiguate callback selects one PID when multiple
-// candidates match.
-type PIDDiscoverFunc func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error)
 
 // LauncherEnvReader captures the terminal/IDE identity from the process env
 // of pid. Returns nil when env cannot be read or no launcher is identifiable.
@@ -42,7 +37,7 @@ type PIDManager struct {
 
 	// pidDiscovers maps adapter name → PID discovery function.
 	// Nil or missing entry means no PID discovery for that adapter.
-	pidDiscovers map[string]PIDDiscoverFunc
+	pidDiscovers map[string]agent.PIDDiscoverFunc
 
 	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
 	launcherEnv LauncherEnvReader
@@ -79,7 +74,7 @@ func NewPIDManager(
 	log outbound.Logger,
 	broadcaster outbound.PushBroadcaster,
 	readyTTL time.Duration,
-	pidDiscovers map[string]PIDDiscoverFunc,
+	pidDiscovers map[string]agent.PIDDiscoverFunc,
 	onSessionDeleted func(sessionID string),
 ) *PIDManager {
 	return &PIDManager{

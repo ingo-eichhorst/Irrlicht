@@ -1407,7 +1407,7 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 	)
 	defer restore()
 
-	discovers := map[string]services.PIDDiscoverFunc{
+	discovers := map[string]agent.PIDDiscoverFunc{
 		"claude-code": claudecode.DiscoverPID,
 	}
 	det := services.NewSessionDetector(

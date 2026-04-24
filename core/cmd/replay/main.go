@@ -54,6 +54,26 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
+// agentConfigs lists every inbound agent adapter the replay CLI knows about.
+// Kept local to main so this package isn't re-importing a shared registry —
+// the daemon's production wiring lives in cmd/irrlichd/main.go.
+var agentConfigs = []agents.Config{
+	claudecode.Config(),
+	codex.Config(),
+	pi.Config(),
+}
+
+// parserFor returns a fresh TranscriptParser for the given adapter name,
+// falling back to Claude Code for unknown names (preserves prior behavior).
+func parserFor(name string) tailer.TranscriptParser {
+	for _, c := range agentConfigs {
+		if c.Name == name {
+			return c.NewParser()
+		}
+	}
+	return &claudecode.Parser{}
+}
+
 // detectAdapter infers the adapter name from a transcript path by matching
 // either the canonical session-storage root for each supported format or the
 // repo-relative testdata/replay/<adapter>/ fixture layout.
@@ -425,7 +445,7 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 	if adapterName == "" {
 		adapterName = claudecode.AdapterName
 	}
-	parser := agents.ParserFor(adapterName)
+	parser := parserFor(adapterName)
 	t := tailer.NewTranscriptTailer(tmpPath, parser, adapterName)
 
 	report := &Report{
@@ -673,7 +693,7 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	if adapterName == "" {
 		adapterName = claudecode.AdapterName
 	}
-	parser := agents.ParserFor(adapterName)
+	parser := parserFor(adapterName)
 	t := tailer.NewTranscriptTailer(tmpPath, parser, adapterName)
 
 	report := &Report{
