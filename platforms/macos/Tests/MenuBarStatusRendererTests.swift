@@ -62,13 +62,50 @@ final class MenuBarStatusRendererTests: XCTestCase {
         XCTAssertNotNil(image)
     }
 
-    private func makeSession(id: String, state: SessionState.State) -> SessionState {
+    func testBuildStatusSVGOmitsOverflowGlyphAtOrBelowFiveGroups() {
+        let sessions = (1...5).map { makeSession(id: "\($0)", state: .working, project: "proj\($0)") }
+
+        let result = MenuBarStatusRenderer.buildStatusSVG(
+            sessions: sessions,
+            projectGroupOrder: []
+        )
+
+        XCTAssertNotNil(result)
+        XCTAssertFalse(result?.svg.contains(">…</text>") ?? true)
+    }
+
+    func testBuildStatusSVGAppendsOverflowGlyphBeyondFiveGroups() {
+        let sessions = (1...6).map { makeSession(id: "\($0)", state: .working, project: "proj\($0)") }
+
+        let result = MenuBarStatusRenderer.buildStatusSVG(
+            sessions: sessions,
+            projectGroupOrder: []
+        )
+
+        XCTAssertNotNil(result)
+        XCTAssertTrue(result?.svg.contains(">…</text>") ?? false)
+    }
+
+    func testBuildStatusSVGReturnsNilForNoSessions() {
+        let result = MenuBarStatusRenderer.buildStatusSVG(
+            sessions: [],
+            projectGroupOrder: []
+        )
+
+        XCTAssertNil(result)
+    }
+
+    private func makeSession(
+        id: String,
+        state: SessionState.State,
+        project: String = "test"
+    ) -> SessionState {
         SessionState(
             id: "sess_\(id)",
             state: state,
             model: "claude-3.7-sonnet",
-            cwd: "/Users/test/projects/test",
-            projectName: "test",
+            cwd: "/Users/test/projects/\(project)",
+            projectName: project,
             firstSeen: Date(),
             updatedAt: Date()
         )

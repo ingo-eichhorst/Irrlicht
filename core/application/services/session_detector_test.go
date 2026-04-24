@@ -1169,7 +1169,7 @@ func TestSessionDetector_PIDAssigned_CapturesLauncher(t *testing.T) {
 	det.HandlePIDAssigned(4242, "s")
 
 	if calledPID != 4242 {
-		t.Errorf("LauncherEnvReader pid: got %d, want 4242", calledPID)
+		t.Errorf("launcherEnvReader pid: got %d, want 4242", calledPID)
 	}
 	state, _ := repo.Load("s")
 	if state == nil || state.Launcher == nil {
@@ -1185,7 +1185,7 @@ func TestSessionDetector_PIDAssigned_CapturesLauncher(t *testing.T) {
 	calledPID = 0
 	det.HandlePIDAssigned(4242, "s")
 	if calledPID != 0 {
-		t.Errorf("LauncherEnvReader invoked again for same PID: got %d", calledPID)
+		t.Errorf("launcherEnvReader invoked again for same PID: got %d", calledPID)
 	}
 }
 
@@ -1802,7 +1802,7 @@ func TestSessionDetector_OrphanedSubagentsFinishWhenParentTurnDone(t *testing.T)
 // In that window the child may momentarily have HasOpenToolCall=false
 // (between tool calls) — the only safety signal is that its transcript
 // is still being written. finishOrphanedChildren must skip any child
-// whose transcript mtime is within subagentQuietWindow of now.
+// whose transcript mtime is within SubagentQuietWindow of now.
 //
 // Scenario: parent turn done, child has no open tools, but child's
 // transcript was just written. The child must stay in working and the

@@ -157,11 +157,11 @@ type TranscriptParser interface {
 	ParseLine(raw map[string]interface{}) *ParsedEvent
 }
 
-// PendingContributor is an optional interface that stateful parsers implement
+// pendingContributor is an optional interface that stateful parsers implement
 // (currently Claude Code) to expose the in-progress turn's cost contribution.
 // The tailer queries this at metrics-computation time to include the latest
 // streaming turn in the live cost display even before the turn is complete.
-type PendingContributor interface {
+type pendingContributor interface {
 	PendingContribution() *PerTurnContribution
 }
 
@@ -197,9 +197,9 @@ type LedgerState struct {
 
 // --- Shared helpers used by multiple parsers ---
 
-// IsUserEventType reports whether a ParsedEvent.EventType represents a user
+// isUserEventType reports whether a ParsedEvent.EventType represents a user
 // turn across any of the supported transcript formats.
-func IsUserEventType(eventType string) bool {
+func isUserEventType(eventType string) bool {
 	switch eventType {
 	case "user", "user_message", "user_input":
 		return true

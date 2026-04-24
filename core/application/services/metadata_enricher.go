@@ -1,4 +1,4 @@
-// MetadataEnricher resolves git metadata and computes transcript metrics for
+// metadataEnricher resolves git metadata and computes transcript metrics for
 // sessions. It consolidates all CWD/branch/project resolution and metrics
 // computation that was previously spread across SessionDetector event handlers.
 package services
@@ -11,23 +11,23 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// MetadataEnricher enriches session state with git metadata and transcript
+// metadataEnricher enriches session state with git metadata and transcript
 // metrics. It holds references to GitResolver and MetricsCollector, which were
 // previously fields on SessionDetector.
-type MetadataEnricher struct {
+type metadataEnricher struct {
 	git     outbound.GitResolver
 	metrics outbound.MetricsCollector
 }
 
-// NewMetadataEnricher creates a MetadataEnricher with the given dependencies.
-func NewMetadataEnricher(git outbound.GitResolver, metrics outbound.MetricsCollector) *MetadataEnricher {
-	return &MetadataEnricher{git: git, metrics: metrics}
+// newMetadataEnricher creates a metadataEnricher with the given dependencies.
+func newMetadataEnricher(git outbound.GitResolver, metrics outbound.MetricsCollector) *metadataEnricher {
+	return &metadataEnricher{git: git, metrics: metrics}
 }
 
 // EnrichNewSession resolves git metadata and computes initial metrics for a
 // newly created session. It prefers CWD from the event (set by process
 // scanner), falling back to transcript inspection for file-based sessions.
-func (e *MetadataEnricher) EnrichNewSession(state *session.SessionState, ev agent.Event) {
+func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agent.Event) {
 	// Resolve git metadata.
 	if ev.CWD != "" {
 		state.CWD = ev.CWD
@@ -53,7 +53,7 @@ func (e *MetadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 // content and recomputes metrics. A single transcript read serves both metrics
 // and CWD extraction, eliminating the redundant 32KB read that
 // GetCWDFromTranscript would perform.
-func (e *MetadataEnricher) RefreshOnActivity(state *session.SessionState, transcriptPath string) {
+func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transcriptPath string) {
 	// Refresh metrics first — the tailer now extracts LastCWD during parsing,
 	// so we get CWD for free without a separate file read.
 	var metricsCWD string
@@ -85,7 +85,7 @@ func (e *MetadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 
 // RefreshMetrics recomputes metrics from the transcript without touching
 // CWD/branch/project. Used during startup re-evaluation of persisted states.
-func (e *MetadataEnricher) RefreshMetrics(state *session.SessionState) {
+func (e *metadataEnricher) RefreshMetrics(state *session.SessionState) {
 	if state.TranscriptPath == "" {
 		return
 	}
@@ -98,7 +98,7 @@ func (e *MetadataEnricher) RefreshMetrics(state *session.SessionState) {
 // sessions saved before these fields were populated. Returns the list of
 // states that were updated (caller is responsible for persisting and
 // broadcasting).
-func (e *MetadataEnricher) BackfillMetadata(states []*session.SessionState) []*session.SessionState {
+func (e *metadataEnricher) BackfillMetadata(states []*session.SessionState) []*session.SessionState {
 	var changed []*session.SessionState
 	for _, state := range states {
 		if state.ProjectName != "" {

@@ -1,7 +1,6 @@
 package capacity
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -36,8 +35,8 @@ type ModelCapacity struct {
 	Pricing       *ModelPricing `json:"pricing,omitempty"`
 }
 
-// CapacityConfig is a pure LiteLLM-sourced model table.
-type CapacityConfig struct {
+// capacityConfig is a pure LiteLLM-sourced model table.
+type capacityConfig struct {
 	Version     string                   `json:"version"`
 	LastUpdated string                   `json:"last_updated"`
 	Models      map[string]ModelCapacity `json:"models"`
@@ -47,7 +46,7 @@ type CapacityConfig struct {
 // reloading transparently when the cache file's mtime advances.
 type CapacityManager struct {
 	mu              sync.RWMutex
-	config          *CapacityConfig
+	config          *capacityConfig
 	cachePath       string
 	lastModified    time.Time
 	loggedMisses    map[string]bool // tracks models already warned about missing pricing
@@ -62,7 +61,7 @@ func NewForTest(models map[string]ModelCapacity) *CapacityManager {
 		copied[k] = v
 	}
 	return &CapacityManager{
-		config: &CapacityConfig{Models: copied},
+		config: &capacityConfig{Models: copied},
 	}
 }
 
@@ -84,7 +83,7 @@ func (cm *CapacityManager) maybeReload() bool {
 		return false
 	}
 
-	remote := LoadCachedRemoteData()
+	remote := loadCachedRemoteData()
 	if remote == nil {
 		return false
 	}
@@ -111,16 +110,16 @@ func (cm *CapacityManager) GetModelCapacity(modelName string) ModelCapacity {
 	return cm.config.Models[modelName]
 }
 
-// MergeRemoteModels replaces the model table with the given remote config.
+// mergeRemoteModels replaces the model table with the given remote config.
 // Retained for tests and for one-shot population after a synchronous fetch.
-func (cm *CapacityManager) MergeRemoteModels(remote *CapacityConfig) {
+func (cm *CapacityManager) mergeRemoteModels(remote *capacityConfig) {
 	if remote == nil {
 		return
 	}
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	if cm.config == nil {
-		cm.config = &CapacityConfig{Models: make(map[string]ModelCapacity)}
+		cm.config = &capacityConfig{Models: make(map[string]ModelCapacity)}
 	}
 	for name, cap := range remote.Models {
 		cm.config.Models[name] = cap
@@ -188,33 +187,3 @@ func (cm *CapacityManager) EstimateCostFromBreakdown(modelName string, input, ou
 	return cost / 1_000_000
 }
 
-// FormatTokenCount returns human-readable token count.
-func FormatTokenCount(tokens int64) string {
-	if tokens < 1000 {
-		return fmt.Sprintf("%d", tokens)
-	} else if tokens < 1000000 {
-		return fmt.Sprintf("%.1fK", float64(tokens)/1000)
-	}
-	return fmt.Sprintf("%.1fM", float64(tokens)/1000000)
-}
-
-// FormatUtilizationPercentage returns formatted percentage string.
-func FormatUtilizationPercentage(percentage float64) string {
-	return fmt.Sprintf("%.1f%%", percentage)
-}
-
-// GetPressureLevelIcon returns an icon for the pressure level.
-func GetPressureLevelIcon(level string) string {
-	switch level {
-	case "safe":
-		return "🟢"
-	case "caution":
-		return "🟡"
-	case "warning":
-		return "🔴"
-	case "critical":
-		return "⚠️"
-	default:
-		return "❓"
-	}
-}

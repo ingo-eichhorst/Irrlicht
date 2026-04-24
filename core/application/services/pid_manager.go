@@ -482,81 +482,95 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 // SeedPIDs cleans up dead sessions and registers alive PIDs with ProcessWatcher
 // during startup. Called from SessionDetector.seedFromDisk.
 func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
-	// Track the newest session per PID for deduplication.
-	newestByPID := make(map[int]*session.SessionState)
+	newestByPID := pm.seedAlivePIDs(states)
+	pm.dedupeByPID(states, newestByPID)
+	pm.sweepSupersededPreSessions(states)
+}
 
+// seedAlivePIDs walks all seeded sessions, deletes dead ones, watches alive
+// PIDs, backfills missing launcher info, and records the newest non-subagent
+// session per PID for later dedup.
+func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*session.SessionState {
+	newestByPID := make(map[int]*session.SessionState)
 	for _, state := range states {
 		switch {
 		case state.PID > 0:
-			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-				pm.log.LogInfo("session-detector-seed", state.SessionID,
-					fmt.Sprintf("pid %d dead, deleting session", state.PID))
-				pm.deleteWithChildren(state)
-				continue
-			}
-			if pm.pw != nil {
-				if err := pm.pw.Watch(state.PID, state.SessionID); err != nil {
-					pm.log.LogError("session-detector-seed", state.SessionID,
-						fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
+			if pm.handleAlivePIDState(state) {
+				if state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-") {
+					if prev, ok := newestByPID[state.PID]; !ok || state.FirstSeen > prev.FirstSeen {
+						newestByPID[state.PID] = state
+					}
 				}
 			}
-			// Best-effort backfill: pre-existing sessions from a previous
-			// daemon build may have Launcher=nil, or a Launcher struct from
-			// before newer fields (e.g. TTY) existed. Re-attempt capture so
-			// row/notification clicks work without requiring the user to
-			// start a new session.
-			if state.Launcher == nil {
-				pm.captureLauncher(state, state.PID)
-				if state.Launcher != nil {
-					state.UpdatedAt = time.Now().Unix()
-					_ = pm.repo.Save(state)
-				}
-			} else if state.Launcher.TTY == "" && pm.launcherEnv != nil {
-				// Targeted TTY backfill. Keep the stable env-based identity
-				// (iterm_session_id, vscode_pid, ...) and only fill in what's
-				// missing — avoids clobbering known-good data in the rare
-				// case where a PID got recycled.
-				if fresh := pm.launcherEnv(state.PID); fresh != nil && fresh.TTY != "" {
-					state.Launcher.TTY = fresh.TTY
-					state.UpdatedAt = time.Now().Unix()
-					_ = pm.repo.Save(state)
-				}
-			}
-
-			// Track newest non-subagent session per PID for dedup below.
-			if state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-") {
-				if prev, ok := newestByPID[state.PID]; !ok || state.FirstSeen > prev.FirstSeen {
-					newestByPID[state.PID] = state
-				}
-			}
-
 		case state.PID == 0 && state.ParentSessionID == "" && isStaleTranscript(state.TranscriptPath):
 			// Orphan from exited process (PID discovery never succeeded).
 			// Child sessions (ParentSessionID set) are exempt — they run
 			// inside the parent process and never get their own PID.
-			pm.log.LogInfo("session-detector-seed", state.SessionID,
-				"deleting orphan session")
+			pm.log.LogInfo("session-detector-seed", state.SessionID, "deleting orphan session")
 			pm.deleteWithChildren(state)
 		}
 	}
+	return newestByPID
+}
 
-	// Deduplicate: when multiple non-subagent sessions share a PID (e.g.
-	// orphans left by /clear), keep only the newest one.
+// handleAlivePIDState processes a state whose PID > 0: deletes it when the
+// process is dead, otherwise watches it and backfills launcher metadata.
+// Returns true when the state remains alive after processing.
+func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
+	if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
+		pm.log.LogInfo("session-detector-seed", state.SessionID,
+			fmt.Sprintf("pid %d dead, deleting session", state.PID))
+		pm.deleteWithChildren(state)
+		return false
+	}
+	if pm.pw != nil {
+		if err := pm.pw.Watch(state.PID, state.SessionID); err != nil {
+			pm.log.LogError("session-detector-seed", state.SessionID,
+				fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
+		}
+	}
+	pm.backfillLauncher(state)
+	return true
+}
+
+// backfillLauncher reattempts Launcher capture for pre-existing sessions that
+// shipped before newer fields (e.g. TTY) existed, or retargets a TTY-only
+// refresh to avoid clobbering the stable env-based identity.
+func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
+	if state.Launcher == nil {
+		pm.captureLauncher(state, state.PID)
+		if state.Launcher != nil {
+			state.UpdatedAt = time.Now().Unix()
+			_ = pm.repo.Save(state)
+		}
+		return
+	}
+	if state.Launcher.TTY != "" || pm.launcherEnv == nil {
+		return
+	}
+	fresh := pm.launcherEnv(state.PID)
+	if fresh == nil || fresh.TTY == "" {
+		return
+	}
+	state.Launcher.TTY = fresh.TTY
+	state.UpdatedAt = time.Now().Unix()
+	_ = pm.repo.Save(state)
+}
+
+// dedupeByPID removes non-subagent sessions that share a PID with a newer
+// sibling (e.g. orphans left by /clear). Subagent and proc-* sessions are
+// exempt from the dedup.
+func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID map[int]*session.SessionState) {
 	for pid, newest := range newestByPID {
 		for _, state := range states {
-			if state.PID != pid || state.SessionID == newest.SessionID {
+			if !isDedupDeleteCandidate(state, pid, newest) {
 				continue
 			}
-			if state.ParentSessionID != "" || strings.HasPrefix(state.SessionID, "proc-") {
-				continue
-			}
-			// Verify session still exists (may have been deleted above).
 			if s, _ := pm.repo.Load(state.SessionID); s == nil {
 				continue
 			}
 			pm.log.LogInfo("session-detector-seed", state.SessionID,
 				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID))
-
 			if pm.onSessionDeleted != nil {
 				pm.onSessionDeleted(state.SessionID)
 			}
@@ -564,37 +578,55 @@ func (pm *PIDManager) SeedPIDs(states []*session.SessionState) {
 			pm.broadcast(outbound.PushTypeDeleted, state)
 		}
 	}
+}
 
-	// Clean up stale pre-sessions (proc-*) that have a corresponding real
-	// session. Match by PID (preferred) or by adapter + CWD (for adapters
-	// like Codex whose PID discovery may not have completed yet).
+// isDedupDeleteCandidate returns true when state is a non-subagent,
+// non-proc session sharing pid with newest but is not newest itself.
+func isDedupDeleteCandidate(state *session.SessionState, pid int, newest *session.SessionState) bool {
+	if state.PID != pid || state.SessionID == newest.SessionID {
+		return false
+	}
+	return state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-")
+}
+
+// sweepSupersededPreSessions deletes proc-* pre-sessions once a matching
+// real session exists. Match is by PID (preferred) or by adapter + CWD for
+// adapters like Codex whose PID discovery may not have completed yet.
+func (pm *PIDManager) sweepSupersededPreSessions(states []*session.SessionState) {
 	for _, proc := range states {
 		if !strings.HasPrefix(proc.SessionID, "proc-") {
 			continue
 		}
 		if s, _ := pm.repo.Load(proc.SessionID); s == nil {
-			continue // already deleted above
+			continue
 		}
-		for _, candidate := range states {
-			if strings.HasPrefix(candidate.SessionID, "proc-") || candidate.TranscriptPath == "" {
-				continue
+		if candidate := findSupersedingSession(proc, states); candidate != nil {
+			pm.log.LogInfo("session-detector-seed", proc.SessionID,
+				fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID))
+			if pm.onSessionDeleted != nil {
+				pm.onSessionDeleted(proc.SessionID)
 			}
-			matched := proc.PID > 0 && proc.PID == candidate.PID
-			if !matched && proc.CWD != "" && proc.Adapter == candidate.Adapter && proc.CWD == candidate.CWD {
-				matched = true
-			}
-			if matched {
-				pm.log.LogInfo("session-detector-seed", proc.SessionID,
-					fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID))
-				if pm.onSessionDeleted != nil {
-					pm.onSessionDeleted(proc.SessionID)
-				}
-				_ = pm.repo.Delete(proc.SessionID)
-				pm.broadcast(outbound.PushTypeDeleted, proc)
-				break
-			}
+			_ = pm.repo.Delete(proc.SessionID)
+			pm.broadcast(outbound.PushTypeDeleted, proc)
 		}
 	}
+}
+
+// findSupersedingSession returns the first real (non-proc) session that
+// matches proc by PID or adapter+CWD, or nil when no candidate matches.
+func findSupersedingSession(proc *session.SessionState, states []*session.SessionState) *session.SessionState {
+	for _, candidate := range states {
+		if strings.HasPrefix(candidate.SessionID, "proc-") || candidate.TranscriptPath == "" {
+			continue
+		}
+		if proc.PID > 0 && proc.PID == candidate.PID {
+			return candidate
+		}
+		if proc.CWD != "" && proc.Adapter == candidate.Adapter && proc.CWD == candidate.CWD {
+			return candidate
+		}
+	}
+	return nil
 }
 
 // broadcast sends a push notification if a broadcaster is configured.

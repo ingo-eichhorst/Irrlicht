@@ -7,7 +7,7 @@ import (
 )
 
 func TestNew_ImplementsInterface(t *testing.T) {
-	// Verify Resolver satisfies the outbound.GTBinResolver interface
+	// Verify gtbinResolver satisfies the outbound.GTBinResolver interface
 	// by calling Path() and checking it returns a string.
 	r := New()
 	_ = r.Path() // must compile — proves interface compatibility
@@ -43,7 +43,7 @@ func TestResolve_GTBINEnv_NonExecutable(t *testing.T) {
 
 	t.Setenv("GT_BIN", bin)
 
-	r := &Resolver{}
+	r := &gtbinResolver{}
 	// Call resolve directly — GT_BIN should be rejected, fallback may or may not find gt.
 	// The key assertion is that the non-executable GT_BIN is NOT returned.
 	got := r.resolve()
@@ -56,7 +56,7 @@ func TestResolve_GTBINEnv_Missing(t *testing.T) {
 	// GT_BIN pointing to a nonexistent path should be skipped.
 	t.Setenv("GT_BIN", "/nonexistent/path/to/gt")
 
-	r := &Resolver{}
+	r := &gtbinResolver{}
 	got := r.resolve()
 	if got == "/nonexistent/path/to/gt" {
 		t.Error("expected nonexistent GT_BIN to be rejected")

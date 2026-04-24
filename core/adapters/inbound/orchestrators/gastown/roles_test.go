@@ -106,17 +106,17 @@ func TestDeriveRole(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := DeriveRole(tt.cwd, gtRoot)
+			got := deriveRole(tt.cwd, gtRoot)
 
 			if tt.wantNil {
 				if got != nil {
-					t.Fatalf("DeriveRole(%q) = %+v, want nil", tt.cwd, got)
+					t.Fatalf("deriveRole(%q) = %+v, want nil", tt.cwd, got)
 				}
 				return
 			}
 
 			if got == nil {
-				t.Fatalf("DeriveRole(%q) = nil, want role=%q", tt.cwd, tt.wantRole)
+				t.Fatalf("deriveRole(%q) = nil, want role=%q", tt.cwd, tt.wantRole)
 			}
 
 			if got.Role != tt.wantRole {
@@ -133,8 +133,8 @@ func TestDeriveRole(t *testing.T) {
 }
 
 func TestDeriveRole_EmptyRoot(t *testing.T) {
-	got := DeriveRole("/some/path", "")
+	got := deriveRole("/some/path", "")
 	if got != nil {
-		t.Fatalf("DeriveRole with empty root = %+v, want nil", got)
+		t.Fatalf("deriveRole with empty root = %+v, want nil", got)
 	}
 }

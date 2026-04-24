@@ -17,7 +17,7 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 	if cwd == "" || processName == "" {
 		return 0, nil
 	}
-	pids, err := FindProcesses(processName)
+	pids, err := findProcesses(processName)
 	if err != nil {
 		return 0, fmt.Errorf("find %s processes: %w", processName, err)
 	}
@@ -28,7 +28,7 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 		if pid == myPID {
 			continue
 		}
-		dir, err := ProcessCWD(pid)
+		dir, err := processCWD(pid)
 		if err != nil {
 			continue
 		}
@@ -47,53 +47,6 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 			return disambiguate(matches), nil
 		}
 		// Default: highest PID (most recently started on macOS).
-		best := 0
-		for _, p := range matches {
-			if p > best {
-				best = p
-			}
-		}
-		return best, nil
-	}
-}
-
-// DiscoverPIDByCmdPattern finds a process whose command line matches a pattern
-// (pgrep -f) and whose CWD matches the given directory. This is needed for
-// agents that run as scripts (e.g. Pi runs as "node /path/to/pi" so pgrep -x
-// won't match "pi").
-func DiscoverPIDByCmdPattern(pattern, cwd string, disambiguate func([]int) int) (int, error) {
-	if cwd == "" || pattern == "" {
-		return 0, nil
-	}
-	pids, err := FindProcessesByPattern(pattern)
-	if err != nil {
-		return 0, fmt.Errorf("find processes matching %q: %w", pattern, err)
-	}
-
-	myPID := os.Getpid()
-	var matches []int
-	for _, pid := range pids {
-		if pid == myPID {
-			continue
-		}
-		dir, err := ProcessCWD(pid)
-		if err != nil {
-			continue
-		}
-		if dir == cwd {
-			matches = append(matches, pid)
-		}
-	}
-
-	switch len(matches) {
-	case 0:
-		return 0, nil
-	case 1:
-		return matches[0], nil
-	default:
-		if disambiguate != nil {
-			return disambiguate(matches), nil
-		}
 		best := 0
 		for _, p := range matches {
 			if p > best {

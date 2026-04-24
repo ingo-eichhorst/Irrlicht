@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.subagents/agent-a0ecfa598b8d3e4cb.jsonl",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 8,
+    "consumed_events": 8,
+    "total_transitions": 3,
+    "first_event_time": "2026-04-11T18:53:32.665Z",
+    "last_event_time": "2026-04-11T18:53:39.135Z",
+    "wall_clock_session_duration": 6470000000,
+    "state_durations": {
+      "ready": 2892000000,
+      "working": 3578000000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "estimated_cost_usd": 0.0516268,
+    "cum_input_tokens": 14,
+    "cum_output_tokens": 681,
+    "cum_cache_read_tokens": 15478,
+    "cum_cache_creation_tokens": 37328,
+    "model_name": "claude-haiku-4-5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-04-11T18:53:32.665Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 6,
+      "virtual_time": "2026-04-11T18:53:35.557Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 7,
+      "virtual_time": "2026-04-11T18:53:39.135Z",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…rs**: 23 files (claudecode, codex, pi, fswatcher, processlifecycle, registry)…"
+    }
+  ]
+}

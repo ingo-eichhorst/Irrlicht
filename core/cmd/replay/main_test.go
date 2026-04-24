@@ -32,13 +32,13 @@ func TestReplayWithSidecar_GoldenFixture(t *testing.T) {
 	transcript := fixturePath(t, "claudecode/10-full-lifecycle-839f0678.jsonl")
 	sidecar := fixturePath(t, "claudecode/10-full-lifecycle-839f0678.events.jsonl")
 
-	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("ReplayWithSidecar: %v", err)
+		t.Fatalf("replayWithSidecar: %v", err)
 	}
 
 	check, err := runExtendedCheck(sidecar, report.Transitions)
@@ -116,13 +116,13 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 	transcript := fixturePath(t, "claudecode/13-full-lifecycle-continue-8a525d27.jsonl")
 	sidecar := fixturePath(t, "claudecode/13-full-lifecycle-continue-8a525d27.events.jsonl")
 
-	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("ReplayWithSidecar: %v", err)
+		t.Fatalf("replayWithSidecar: %v", err)
 	}
 
 	// No replayed transition may fall inside the process-exit gap
@@ -154,7 +154,7 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 		{"2026-04-11T21:11:50.310406+02:00", session.StateReady, session.StateWorking},
 		{"2026-04-11T21:11:50.310406+02:00", session.StateWorking, session.StateReady},
 	}
-	var lifetime2Got []Transition
+	var lifetime2Got []transition
 	for _, tr := range report.Transitions {
 		if tr.VirtualTime.After(gapEnd) {
 			lifetime2Got = append(lifetime2Got, tr)
@@ -218,7 +218,7 @@ func TestReplayWithSidecar_NoTranscriptNew(t *testing.T) {
 		t.Fatalf("write sidecar: %v", err)
 	}
 
-	_, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+	_, err := replayWithSidecar(transcript, sidecar, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
@@ -243,8 +243,8 @@ func TestRunExtendedCheck_DetectsDrift(t *testing.T) {
 		t.Fatalf("write sidecar: %v", err)
 	}
 
-	replayed := []Transition{
-		{PrevState: "", NewState: "ready", Cause: CauseInit},
+	replayed := []transition{
+		{PrevState: "", NewState: "ready", Cause: causeInit},
 		{PrevState: "ready", NewState: "working"},
 		{PrevState: "working", NewState: "ready"},
 		{PrevState: "waiting", NewState: "working"},
@@ -283,13 +283,13 @@ func TestRunExtendedCheck_DetectsDrift(t *testing.T) {
 // TestReplay_GoldenFixture locks in the non-sidecar line-timestamp batching path.
 func TestReplay_GoldenFixture(t *testing.T) {
 	src := fixturePath(t, "claudecode/07-tool-denial-and-esc-db57d2ab.jsonl")
-	report, err := Replay(src, ReportSettings{
+	report, err := replay(src, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("Replay: %v", err)
+		t.Fatalf("replay: %v", err)
 	}
 
 	// Updated for #108: tool denial now triggers working→ready, adding 2
@@ -308,12 +308,12 @@ func TestReplay_GoldenFixture(t *testing.T) {
 	wantSequence := []string{
 		"→ready",
 		"ready→working",
-		"working→ready",   // tool denial → ready
-		"ready→working",   // agent continues
-		"working→ready",   // agent finished turn
-		"ready→working",   // next turn
-		"working→ready",   // ESC interrupt → ready
-		"ready→working",   // activity after ESC
+		"working→ready", // tool denial → ready
+		"ready→working", // agent continues
+		"working→ready", // agent finished turn
+		"ready→working", // next turn
+		"working→ready", // ESC interrupt → ready
+		"ready→working", // activity after ESC
 	}
 	if got, want := len(report.Transitions), len(wantSequence); got != want {
 		t.Fatalf("replay transitions: got %d, want %d", got, want)
@@ -343,13 +343,13 @@ func TestReplay_GoldenFixture(t *testing.T) {
 // tool_use, or synthetic on same-pass collapse).
 func TestReplay_Issue150_AskUserQuestion(t *testing.T) {
 	src := fixturePath(t, "claudecode/16-ask-user-question-issue-150.jsonl")
-	report, err := Replay(src, ReportSettings{
+	report, err := replay(src, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("Replay: %v", err)
+		t.Fatalf("replay: %v", err)
 	}
 
 	var naturalWaiting, syntheticWaiting int
@@ -457,24 +457,24 @@ func TestReplayWithSidecar_HookEvents(t *testing.T) {
 	sidecarBody := `{"seq":1,"ts":"2026-04-11T10:00:00Z","kind":"transcript_new","session_id":"sess-1","adapter":"claude-code"}
 {"seq":2,"ts":"2026-04-11T10:00:00.500Z","kind":"transcript_activity","session_id":"sess-1","file_size":93}
 {"seq":3,"ts":"2026-04-11T10:00:01Z","kind":"transcript_activity","session_id":"sess-1","file_size":192}
-{"seq":4,"ts":"2026-04-11T10:00:01.500Z","kind":"hook_received","session_id":"sess-1","hook_name":"PreToolUse"}
+{"seq":4,"ts":"2026-04-11T10:00:01.500Z","kind":"hook_received","session_id":"sess-1","hook_name":"PermissionRequest"}
 `
 	if err := os.WriteFile(sidecar, []byte(sidecarBody), 0644); err != nil {
 		t.Fatalf("write sidecar: %v", err)
 	}
 
-	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("ReplayWithSidecar: %v", err)
+		t.Fatalf("replayWithSidecar: %v", err)
 	}
 
 	var foundHookWaiting bool
 	for _, tr := range report.Transitions {
-		if tr.Cause == CauseHook && tr.NewState == "waiting" {
+		if tr.Cause == causeHook && tr.NewState == "waiting" {
 			foundHookWaiting = true
 			break
 		}
@@ -484,7 +484,7 @@ func TestReplayWithSidecar_HookEvents(t *testing.T) {
 	}
 }
 
-// TestSessionFilter verifies that SessionFilter in ReportSettings filters
+// TestSessionFilter verifies that SessionFilter in reportSettings filters
 // sidecar events to the specified session ID.
 func TestSessionFilter(t *testing.T) {
 	dir := t.TempDir()
@@ -506,14 +506,14 @@ func TestSessionFilter(t *testing.T) {
 		t.Fatalf("write sidecar: %v", err)
 	}
 
-	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		SessionFilter:      "sess-B",
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("ReplayWithSidecar with session filter: %v", err)
+		t.Fatalf("replayWithSidecar with session filter: %v", err)
 	}
 
 	if len(report.Transitions) == 0 {
@@ -550,14 +550,14 @@ func TestReplayWithSidecar_SessionFilterNoBirthMarker(t *testing.T) {
 		t.Fatalf("write sidecar: %v", err)
 	}
 
-	report, err := ReplayWithSidecar(transcript, sidecar, ReportSettings{
+	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		SessionFilter:      "sess-B",
 		DebounceWindow:     2 * time.Second,
 		FlickerMaxDuration: 10 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("ReplayWithSidecar with session filter: %v", err)
+		t.Fatalf("replayWithSidecar with session filter: %v", err)
 	}
 
 	// A ready→working must fire off the first fs event; the alive-gate

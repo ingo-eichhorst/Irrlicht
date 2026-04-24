@@ -18,10 +18,10 @@ import (
 
 const flushInterval = 5 * time.Second
 
-// JSONLRecorder writes lifecycle events as one JSON object per line to a
+// jsonlRecorder writes lifecycle events as one JSON object per line to a
 // single file. It is safe for concurrent use. One file per daemon run
 // captures all sessions (parent + children naturally interleaved).
-type JSONLRecorder struct {
+type jsonlRecorder struct {
 	mu     sync.Mutex
 	f      *os.File
 	w      *bufio.Writer
@@ -34,7 +34,7 @@ type JSONLRecorder struct {
 // in dir. The directory is created if it does not exist. The filename
 // includes a short random suffix so that sub-second daemon restarts don't
 // collide and overwrite a prior recording.
-func NewJSONLRecorder(dir string) (*JSONLRecorder, error) {
+func NewJSONLRecorder(dir string) (*jsonlRecorder, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create recordings dir: %w", err)
 	}
@@ -59,7 +59,7 @@ func NewJSONLRecorder(dir string) (*JSONLRecorder, error) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 
-	r := &JSONLRecorder{f: f, w: w, enc: enc, done: make(chan struct{})}
+	r := &jsonlRecorder{f: f, w: w, enc: enc, done: make(chan struct{})}
 	go r.periodicFlush()
 	return r, nil
 }
@@ -67,7 +67,7 @@ func NewJSONLRecorder(dir string) (*JSONLRecorder, error) {
 // periodicFlush flushes buffered data to disk every flushInterval so that
 // an ungraceful shutdown (SIGKILL, crash) loses at most a few seconds of
 // events rather than up to 64KB of buffered data.
-func (r *JSONLRecorder) periodicFlush() {
+func (r *jsonlRecorder) periodicFlush() {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 	for {
@@ -90,13 +90,13 @@ func (r *JSONLRecorder) periodicFlush() {
 }
 
 // Path returns the absolute path of the recording file.
-func (r *JSONLRecorder) Path() string {
+func (r *jsonlRecorder) Path() string {
 	return r.f.Name()
 }
 
 // Record writes a single lifecycle event as a JSON line. It is safe for
 // concurrent use.
-func (r *JSONLRecorder) Record(ev lifecycle.Event) {
+func (r *jsonlRecorder) Record(ev lifecycle.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -105,7 +105,7 @@ func (r *JSONLRecorder) Record(ev lifecycle.Event) {
 }
 
 // Close stops periodic flushing, flushes remaining data, and closes the file.
-func (r *JSONLRecorder) Close() error {
+func (r *jsonlRecorder) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
