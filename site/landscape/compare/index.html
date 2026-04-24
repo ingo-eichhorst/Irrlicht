@@ -122,749 +122,666 @@ footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: fle
   <a href="../" class="back-link">&larr; Back to Landscape</a>
   <div class="page-header">
     <h1>Agent Comparison</h1>
-    <div class="updated">Last updated: 2026-04-12</div>
-    <p class="intro">In-depth comparison of all tracked AI coding agents and orchestrators. Click any column header to sort. Growth measured relative to 2026-04-12. 1M: no snapshot within tolerance yet. 3M baseline: 2026-01-01 (where available).</p>
+    <div class="updated">Last updated: 2026-04-24</div>
+    <p class="intro">In-depth comparison of all tracked AI coding agents and orchestrators. Click any column header to sort. Growth figures are measured relative to today using snapshots taken at: today, ~1 month ago, and ~3 months ago.</p>
   </div>
 
   <p class="trend-note">Agents without a public GitHub repo show alternative popularity metrics where available (VS Code installs, funding, estimated users).</p>
 
   <div class="table-wrap">
     <table class="compare-table">
-<thead>
-<tr>
-<th>Name <span class="sort-arrow">&#x25B2;</span></th>
-<th>Cat. <span class="sort-arrow">&#x25B2;</span></th>
-<th>Stars <span class="sort-arrow">&#x25B2;</span></th>
-<th>1M <span class="sort-arrow">&#x25B2;</span></th>
-<th>3M <span class="sort-arrow">&#x25B2;</span></th>
-<th>OSS <span class="sort-arrow">&#x25B2;</span></th>
-<th>License* <span class="sort-arrow">&#x25B2;</span></th>
-<th>Lang <span class="sort-arrow">&#x25B2;</span></th>
-<th>Interface <span class="sort-arrow">&#x25B2;</span></th>
-<th>Pricing* <span class="sort-arrow">&#x25B2;</span></th>
-<th>Irrlicht <span class="sort-arrow">&#x25B2;</span></th>
-</tr>
-</thead>
+<thead><tr>
+<th>Name<span class="sort-arrow">▲</span></th>
+<th>Category<span class="sort-arrow">▲</span></th>
+<th>Stars / Metric<span class="sort-arrow">▲</span></th>
+<th class="growth-3m">Recent growth<span class="sort-arrow">▲</span></th>
+<th>Open Source<span class="sort-arrow">▲</span></th>
+<th>License*<span class="sort-arrow">▲</span></th>
+<th>Primary Language<span class="sort-arrow">▲</span></th>
+<th>Interface<span class="sort-arrow">▲</span></th>
+<th>Pricing*<span class="sort-arrow">▲</span></th>
+<th>Irrlicht<span class="sort-arrow">▲</span></th>
+</tr></thead>
 <tbody>
 <tr>
-<td class="name"><a href="https://claw-code.codes">Claw Code</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="182111">182,111</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Unknown</td>
-<td>Rust</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="claw code"><a href="https://github.com/ultraworkers/claw-code" target="_blank" rel="noopener">Claw Code</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="188050">188,050</td>
+  <td class="growth-3m"><span class="growth-up">+5,939 <span class="growth-pct">(+3.3%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>—</td>
+  <td>Rust</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://opencode.ai">OpenCode</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="141888">141,888</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="136388">+136,388 <span class="growth-pct">(2480.7%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>TypeScript</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-planned">Planned</span></td>
+  <td class="name" data-sort="opencode"><a href="https://opencode.ai" target="_blank" rel="noopener">OpenCode</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="148747">148,747</td>
+  <td class="growth-3m"><span class="growth-up">+6,859 <span class="growth-pct">(+4.8%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>TypeScript</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/anthropics/claude-code">Claude Code</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="112845">112,845</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="61145">+61,145 <span class="growth-pct">(118.3%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>ISC</td>
-<td>TypeScript</td>
-<td>CLI</td>
-<td>Paid (API)</td>
-<td><span class="badge badge-live">Live</span></td>
+  <td class="name" data-sort="claude code"><a href="https://www.anthropic.com/claude-code" target="_blank" rel="noopener">Claude Code</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="117553">117,553</td>
+  <td class="growth-3m"><span class="growth-up">+4,708 <span class="growth-pct">(+4.2%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>—</td>
+  <td>Shell</td>
+  <td>CLI</td>
+  <td>Paid (usage-based)</td>
+  <td><span class="badge badge-live">live</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="100994">100,994</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="11194">+11,194 <span class="growth-pct">(12.5%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>TypeScript</td>
-<td>CLI</td>
-<td>Free tier</td>
-<td><span class="badge badge-planned">Planned</span></td>
+  <td class="name" data-sort="gemini cli"><a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener">Gemini CLI</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="102304">102,304</td>
+  <td class="growth-3m"><span class="growth-up">+1,310 <span class="growth-pct">(+1.3%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>TypeScript</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/openai/codex">OpenAI Codex</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="74758">74,758</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="28758">+28,758 <span class="growth-pct">(62.5%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>Rust</td>
-<td>CLI</td>
-<td>Paid (API)</td>
-<td><span class="badge badge-live">Live</span></td>
+  <td class="name" data-sort="openai codex"><a href="https://github.com/openai/codex" target="_blank" rel="noopener">OpenAI Codex</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="77568">77,568</td>
+  <td class="growth-3m"><span class="growth-up">+2,810 <span class="growth-pct">(+3.8%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>Rust</td>
+  <td>CLI</td>
+  <td>Paid (usage-based)</td>
+  <td><span class="badge badge-live">live</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/All-Hands-AI/OpenHands">OpenHands</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="71060">71,060</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="19060">+19,060 <span class="growth-pct">(36.7%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>Python</td>
-<td>CLI, Web</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="openhands"><a href="https://github.com/OpenHands/OpenHands" target="_blank" rel="noopener">OpenHands</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="71985">71,985</td>
+  <td class="growth-3m"><span class="growth-up">+925 <span class="growth-pct">(+1.3%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>Python</td>
+  <td>CLI / Web</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/cline/cline">Cline</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="60178">60,178</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="24178">+24,178 <span class="growth-pct">(67.2%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>TypeScript</td>
-<td>IDE ext</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="cline"><a href="https://cline.bot" target="_blank" rel="noopener">Cline</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="60949">60,949</td>
+  <td class="growth-3m"><span class="growth-up">+771 <span class="growth-pct">(+1.3%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>TypeScript</td>
+  <td>IDE extension (VS Code)</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/gpt-engineer-org/gpt-engineer">GPT Engineer</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="55217">55,217</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="2217">+2,217 <span class="growth-pct">(4.2%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>Python</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="paperclip"><a href="https://paperclip.ing" target="_blank" rel="noopener">Paperclip</a><sup class="badge badge-new">NEW</sup></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="58383">58,383</td>
+  <td class="growth-3m"><span class="growth-up">+6,341 <span class="growth-pct">(+12.2%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>TypeScript</td>
+  <td>Web</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://paperclip.ing">Paperclip</a> <span class="badge badge-new">NEW</span></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="52042">52,042</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>TypeScript</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="aider"><a href="https://aider.chat" target="_blank" rel="noopener">Aider</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="43874">43,874</td>
+  <td class="growth-3m"><span class="growth-up">+672 <span class="growth-pct">(+1.6%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>Python</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://aider.chat">Aider</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="43202">43,202</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="7202">+7,202 <span class="growth-pct">(20.0%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>Python</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="goose"><a href="https://block.github.io/goose/" target="_blank" rel="noopener">Goose</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="43139">43,139</td>
+  <td class="growth-3m"><span class="growth-up">+1,827 <span class="growth-pct">(+4.4%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>Rust</td>
+  <td>CLI / Desktop app</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://block.github.io/goose/">Goose</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="41312">41,312</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="15212">+15,212 <span class="growth-pct">(58.3%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>Rust</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="agno"><a href="https://www.agno.com" target="_blank" rel="noopener">Agno</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="39648">39,648</td>
+  <td class="growth-3m"><span class="growth-up">+281 <span class="growth-pct">(+0.7%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>Python</td>
+  <td>SDK / Web</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.agno.com">Agno</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="39367">39,367</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="3367">+3,367 <span class="growth-pct">(9.4%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>Python</td>
-<td>Python SDK</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="pi"><a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener">Pi</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="39373">39,373</td>
+  <td class="growth-3m"><span class="growth-up">+4,684 <span class="growth-pct">(+13.5%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>TypeScript</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-live">live</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/badlogic/pi-mono">Pi</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="34689">34,689</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="16289">+16,289 <span class="growth-pct">(88.5%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>TypeScript</td>
-<td>CLI</td>
-<td>Paid (API)</td>
-<td><span class="badge badge-live">Live</span></td>
+  <td class="name" data-sort="ruflo"><a href="https://github.com/ruvnet/ruflo" target="_blank" rel="noopener">Ruflo</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="33079">33,079</td>
+  <td class="growth-3m"><span class="growth-up">+1,713 <span class="growth-pct">(+5.5%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>TypeScript</td>
+  <td>CLI / SDK</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/OpenBMB/ChatDev">ChatDev</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="32685">32,685</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="4685">+4,685 <span class="growth-pct">(16.7%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>Python</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="chatdev"><a href="https://github.com/OpenBMB/ChatDev" target="_blank" rel="noopener">ChatDev</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="32847">32,847</td>
+  <td class="growth-3m"><span class="growth-up">+162 <span class="growth-pct">(+0.5%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>Python</td>
+  <td>CLI / Web</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://cursor.com">Cursor</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="32624">32,624</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="7624">+7,624 <span class="growth-pct">(30.5%)</span></td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE</td>
-<td>Freemium ($20/mo)</td>
-<td><span class="badge badge-planned">Planned</span></td>
+  <td class="name" data-sort="continue"><a href="https://continue.dev" target="_blank" rel="noopener">Continue</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="32770">32,770</td>
+  <td class="growth-3m"><span class="growth-up">+271 <span class="growth-pct">(+0.8%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>TypeScript</td>
+  <td>IDE extension / CLI</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://continue.dev">Continue</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="32499">32,499</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="1499">+1,499 <span class="growth-pct">(4.8%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>TypeScript</td>
-<td>IDE ext</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="cursor"><a href="https://cursor.com" target="_blank" rel="noopener">Cursor</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="32693">32,693</td>
+  <td class="growth-3m"><span class="growth-up">+69 <span class="growth-pct">(+0.2%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>Desktop app (IDE)</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/ruvnet/ruflo">Ruflo</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="31366">31,366</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="1666">+1,666 <span class="growth-pct">(5.6%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>TypeScript</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="void"><a href="https://voideditor.com" target="_blank" rel="noopener">Void</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="28644">28,644</td>
+  <td class="growth-3m"><span class="growth-up">+91 <span class="growth-pct">(+0.3%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>TypeScript</td>
+  <td>Desktop app (IDE)</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/voideditor/void">Void</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="28553">28,553</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="5553">+5,553 <span class="growth-pct">(24.1%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>TypeScript</td>
-<td>IDE</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="warp"><a href="https://www.warp.dev" target="_blank" rel="noopener">Warp</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="26501">26,501</td>
+  <td class="growth-3m"><span class="growth-up">+129 <span class="growth-pct">(+0.5%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>Desktop app (Terminal)</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.warp.dev">Warp</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="26372">26,372</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="2372">+2,372 <span class="growth-pct">(9.9%)</span></td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>Terminal</td>
-<td>Freemium</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="qwen code"><a href="https://qwen.ai/qwencode" target="_blank" rel="noopener">Qwen Code</a><sup class="badge badge-new">NEW</sup></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="23813">23,813</td>
+  <td class="growth-3m"><span class="growth-up">+990 <span class="growth-pct">(+4.3%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>TypeScript</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/RooVetGit/Roo-Code">Roo Code</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="23088">23,088</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="5588">+5,588 <span class="growth-pct">(31.9%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>TypeScript</td>
-<td>IDE ext</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="crush"><a href="https://charm.land/crush" target="_blank" rel="noopener">Crush</a><sup class="badge badge-new">NEW</sup></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="23418">23,418</td>
+  <td class="growth-3m"><span class="growth-up">+529 <span class="growth-pct">(+2.3%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>Go</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://charm.land/crush">Crush</a> <span class="badge badge-new">NEW</span></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="22889">22,889</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Unknown</td>
-<td>Go</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="roo code"><a href="https://roocode.com" target="_blank" rel="noopener">Roo Code</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="23345">23,345</td>
+  <td class="growth-3m"><span class="growth-up">+257 <span class="growth-pct">(+1.1%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>TypeScript</td>
+  <td>IDE extension (VS Code)</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://qwen.ai/qwencode">Qwen Code</a> <span class="badge badge-new">NEW</span></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="22823">22,823</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>TypeScript</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="devika"><a href="https://github.com/stitionai/devika" target="_blank" rel="noopener">Devika</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="19502">19,502</td>
+  <td class="growth-3m"><span class="growth-up">+5 <span class="growth-pct">(+0.0%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>Python</td>
+  <td>Web</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/stitionai/devika">Devika</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="19497">19,497</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="997">+997 <span class="growth-pct">(5.4%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>Python</td>
-<td>Web</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="swe-agent"><a href="https://swe-agent.com" target="_blank" rel="noopener">SWE-agent</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="19050">19,050</td>
+  <td class="growth-3m"><span class="growth-up">+82 <span class="growth-pct">(+0.4%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>Python</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/princeton-nlp/SWE-agent">SWE-agent</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="18968">18,968</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="5968">+5,968 <span class="growth-pct">(45.9%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>Python</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="kilo code"><a href="https://kilo.ai" target="_blank" rel="noopener">Kilo Code</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="18505">18,505</td>
+  <td class="growth-3m"><span class="growth-up">+517 <span class="growth-pct">(+2.9%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>TypeScript</td>
+  <td>IDE extension / CLI</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://kilo.ai">Kilo Code</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="17988">17,988</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="6988">+6,988 <span class="growth-pct">(63.5%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>TypeScript</td>
-<td>IDE ext, CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="plandex"><a href="https://plandex.ai" target="_blank" rel="noopener">Plandex</a><sup class="badge badge-new">NEW</sup></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="15289">15,289</td>
+  <td class="growth-3m"><span class="growth-up">+58 <span class="growth-pct">(+0.4%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>Go</td>
+  <td>CLI</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://plandex.ai">Plandex</a> <span class="badge badge-new">NEW</span></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="15231">15,231</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>Go</td>
-<td>CLI</td>
-<td>Freemium</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="gas town"><a href="https://github.com/gastownhall/gastown" target="_blank" rel="noopener">Gas Town</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="14580">14,580</td>
+  <td class="growth-3m"><span class="growth-up">+682 <span class="growth-pct">(+4.9%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>Go</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-live">live</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/gastownhall/gastown">Gas Town</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="13898">13,898</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="12898">+12,898 <span class="growth-pct">(1289.8%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>Go</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-live">Live</span></td>
+  <td class="name" data-sort="open swe"><a href="https://github.com/langchain-ai/open-swe" target="_blank" rel="noopener">Open SWE</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="9642">9,642</td>
+  <td class="growth-3m"><span class="growth-up">+158 <span class="growth-pct">(+1.7%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>Python</td>
+  <td>Web</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/langchain-ai/open-swe">Open SWE</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="9484">9,484</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>Python</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="sweep"><a href="https://sweep.dev" target="_blank" rel="noopener">Sweep</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="7705">7,705</td>
+  <td class="growth-3m"><span class="growth-down">-4 <span class="growth-pct">(-0.1%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>—</td>
+  <td>Jupyter Notebook</td>
+  <td>IDE extension (JetBrains)</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://sweep.dev">Sweep</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="7709">7,709</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="509">+509 <span class="growth-pct">(7.1%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Unknown</td>
-<td>Python</td>
-<td>GitHub bot</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="claude squad"><a href="https://github.com/smtg-ai/claude-squad" target="_blank" rel="noopener">Claude Squad</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="7145">7,145</td>
+  <td class="growth-3m"><span class="growth-up">+184 <span class="growth-pct">(+2.6%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>AGPL-3.0</td>
+  <td>Go</td>
+  <td>CLI (tmux)</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/smtg-ai/claude-squad">Claude Squad</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="6961">6,961</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="1161">+1,161 <span class="growth-pct">(20.0%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>AGPL-3.0</td>
-<td>Go</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-planned">Planned</span></td>
+  <td class="name" data-sort="forge code"><a href="https://forgecode.dev" target="_blank" rel="noopener">Forge Code</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="6925">6,925</td>
+  <td class="growth-3m"><span class="growth-up">+459 <span class="growth-pct">(+7.1%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>Rust</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/antinomyhq/forgecode">Forge Code</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="6466">6,466</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>Rust</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="composio"><a href="https://composio.dev" target="_blank" rel="noopener">Composio</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="6474">6,474</td>
+  <td class="growth-3m"><span class="growth-up">+292 <span class="growth-pct">(+4.7%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>TypeScript</td>
+  <td>CLI / Web</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://composio.dev">Composio</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="6182">6,182</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>TypeScript</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="ra.aid"><a href="https://www.ra-aid.ai" target="_blank" rel="noopener">RA.Aid</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="2223">2,223</td>
+  <td class="growth-3m"><span class="growth-up">+5 <span class="growth-pct">(+0.2%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>Python</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.ra-aid.ai">RA.Aid</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="2218">2,218</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>Python</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="factory"><a href="https://www.factory.ai" target="_blank" rel="noopener">Factory</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="794">794</td>
+  <td class="growth-3m"><span class="growth-up">+38 <span class="growth-pct">(+5.0%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>Web / CLI</td>
+  <td>Paid</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.factory.ai">Factory</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="756">756</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>Web</td>
-<td>Paid</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="pear ai"><a href="https://trypear.ai" target="_blank" rel="noopener">Pear AI</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="676">676</td>
+  <td class="growth-3m"><span class="growth-up">+2 <span class="growth-pct">(+0.3%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>MIT</td>
+  <td>TypeScript</td>
+  <td>Desktop app (IDE)</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://trypear.ai">Pear AI</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="674">674</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-up" data-sort="174">+174 <span class="growth-pct">(34.8%)</span></td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>MIT</td>
-<td>TypeScript</td>
-<td>IDE</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="multiclaude"><a href="https://github.com/dlorenc/multiclaude" target="_blank" rel="noopener">Multiclaude</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="539">539</td>
+  <td class="growth-3m"><span class="growth-up">+10 <span class="growth-pct">(+1.9%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>—</td>
+  <td>Go</td>
+  <td>CLI (tmux)</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/dlorenc/multiclaude">Multiclaude</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="529">529</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Unknown</td>
-<td>Go</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="codegen"><a href="https://codegen.com" target="_blank" rel="noopener">Codegen</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="521">521</td>
+  <td class="growth-3m"><span class="growth-flat">0 <span class="growth-pct">(0.0%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>Python</td>
+  <td>SDK / Web</td>
+  <td>Paid</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://codegen.com">Codegen</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="521">521</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>Python</td>
-<td>CLI, Web</td>
-<td>Freemium</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="stoneforge"><a href="https://stoneforge.ai" target="_blank" rel="noopener">Stoneforge</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="130">130</td>
+  <td class="growth-3m"><span class="growth-up">+17 <span class="growth-pct">(+15.0%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>Apache-2.0</td>
+  <td>TypeScript</td>
+  <td>Web</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://stoneforge.ai">Stoneforge</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="113">113</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Apache-2.0</td>
-<td>TypeScript</td>
-<td>Web</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="forge orchestrator"><a href="https://forge.nxtg.ai" target="_blank" rel="noopener">Forge Orchestrator</a></td>
+  <td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
+  <td class="mono" data-sort="109">109</td>
+  <td class="growth-3m"><span class="growth-up">+1 <span class="growth-pct">(+0.9%)</span></span></td>
+  <td data-sort="1"><span class="badge-oss-yes">Yes</span></td>
+  <td>—</td>
+  <td>Rust</td>
+  <td>CLI</td>
+  <td>Free (open source)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://forge.nxtg.ai">Forge Orchestrator</a></td>
-<td><span class="badge badge-cat badge-orchestrator">Orchestrator</span></td>
-<td class="mono" data-sort="108">108</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-yes">&#x2713;</span></td>
-<td>Unknown</td>
-<td>Rust</td>
-<td>CLI</td>
-<td>Free</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="amazon q developer"><a href="https://aws.amazon.com/q/developer/" target="_blank" rel="noopener">Amazon Q Developer</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">—</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>IDE extension / CLI</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://github.com/features/copilot">GitHub Copilot</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Freemium ($10/mo)</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="amp"><a href="https://ampcode.com" target="_blank" rel="noopener">Amp</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">—</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>IDE extension / CLI</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-planned">planned</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://codeium.com/windsurf">Windsurf</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE</td>
-<td>Freemium ($15/mo)</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="augment code"><a href="https://www.augmentcode.com" target="_blank" rel="noopener">Augment Code</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">$252M raised</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>IDE extension</td>
+  <td>Paid</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://devin.ai">Devin</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>Web</td>
-<td>Paid ($500/mo)</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="codebuff"><a href="https://codebuff.com" target="_blank" rel="noopener">Codebuff</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">—</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>CLI</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://ampcode.com">Amp</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>CLI, IDE ext</td>
-<td>Freemium</td>
-<td><span class="badge badge-planned">Planned</span></td>
+  <td class="name" data-sort="codegpt"><a href="https://www.codegpt.co" target="_blank" rel="noopener">CodeGPT</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">—</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>IDE extension / Web</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://aws.amazon.com/q/developer/">Amazon Q Developer</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Freemium</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="cosine genie"><a href="https://cosine.sh" target="_blank" rel="noopener">Cosine Genie</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">—</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>Web</td>
+  <td>Paid</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.augmentcode.com">Augment Code</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Paid</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="devin"><a href="https://devin.ai" target="_blank" rel="noopener">Devin</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">$696M raised</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>Web</td>
+  <td>Paid (from $20/mo)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.poolside.ai">Poolside</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Paid</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="github copilot"><a href="https://github.com/features/copilot" target="_blank" rel="noopener">GitHub Copilot</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">20.0M users</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>IDE extension / Web</td>
+  <td>Paid (from $10/mo)</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.tabnine.com">Tabnine</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Freemium ($12/mo)</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="kiro"><a href="https://kiro.dev" target="_blank" rel="noopener">Kiro</a><sup class="badge badge-new">NEW</sup></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">—</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>Desktop app (IDE)</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.qodo.ai">Qodo</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Freemium</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="morphllm"><a href="https://www.morphllm.com" target="_blank" rel="noopener">MorphLLM</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">—</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>API / SDK</td>
+  <td>Paid</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://sourcegraph.com/cody">Sourcegraph Cody</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Freemium</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="poolside"><a href="https://www.poolside.ai" target="_blank" rel="noopener">Poolside</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">$626M raised</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>Enterprise SaaS</td>
+  <td>Enterprise</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://cosine.sh">Cosine Genie</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>Web</td>
-<td>Paid</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="qodo"><a href="https://www.qodo.ai" target="_blank" rel="noopener">Qodo</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">$120M raised</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>IDE extension / Web</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://zencoder.ai">Zencoder</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Paid</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="tabnine"><a href="https://www.tabnine.com" target="_blank" rel="noopener">Tabnine</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">$102M raised</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>IDE extension</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.codegpt.co">CodeGPT</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE ext</td>
-<td>Freemium</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="windsurf"><a href="https://windsurf.com" target="_blank" rel="noopener">Windsurf</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">$250M acquisition</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>Desktop app (IDE)</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
 <tr>
-<td class="name"><a href="https://www.morphllm.com">MorphLLM</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>API</td>
-<td>Paid</td>
-<td><span class="badge badge-none">None</span></td>
+  <td class="name" data-sort="zencoder"><a href="https://zencoder.ai" target="_blank" rel="noopener">Zencoder</a></td>
+  <td><span class="badge badge-cat badge-agent">Agent</span></td>
+  <td class="mono" data-sort="-1">—</td>
+  <td class="growth-3m"><span class="growth-na">—</span></td>
+  <td data-sort="0"><span class="badge-oss-no">No</span></td>
+  <td>—</td>
+  <td>—</td>
+  <td>IDE extension</td>
+  <td>Freemium</td>
+  <td><span class="badge badge-none">not tracked</span></td>
 </tr>
-<tr>
-<td class="name"><a href="https://codebuff.com">Codebuff</a></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>CLI</td>
-<td>Paid</td>
-<td><span class="badge badge-none">None</span></td>
-</tr>
-<tr>
-<td class="name"><a href="https://kiro.dev">Kiro</a> <span class="badge badge-new">NEW</span></td>
-<td><span class="badge badge-cat badge-agent">Agent</span></td>
-<td class="mono" data-sort="-1">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td class="mono growth-na" data-sort="-999999">&mdash;</td>
-<td><span class="badge-oss-no">&#x2717;</span></td>
-<td>Proprietary</td>
-<td>&mdash;</td>
-<td>IDE</td>
-<td>Freemium</td>
-<td><span class="badge badge-none">None</span></td>
-</tr>
-</tbody>
-</table>
+</tbody></table>
+<p style="font-size:0.72rem; color: var(--text-dim); margin-top: 0.8rem; font-style: italic;">* License and pricing are sourced from the GitHub API and public web pages. Verify on the project's own website before relying on them. "Recent growth" is the absolute change in stars since the last scan snapshot ({PRIOR_DATE}); it is not a monthly or quarterly figure.</p>
   </div>
-  <p class="trend-note">* License and pricing data sourced via web search and may not reflect the latest changes. Verify on the project's website.</p>
 </div>
 
 <footer>
@@ -879,11 +796,11 @@ footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: fle
 <script>
 // Column sorting
 document.addEventListener('DOMContentLoaded', function() {
-  var table = document.querySelector('.compare-table');
+  const table = document.querySelector('.compare-table');
   if (!table) return;
-  var headers = table.querySelectorAll('th');
-  var tbody = table.querySelector('tbody');
-  var sortCol = -1, sortAsc = true;
+  const headers = table.querySelectorAll('th');
+  const tbody = table.querySelector('tbody');
+  let sortCol = -1, sortAsc = true;
 
   headers.forEach(function(th, idx) {
     th.addEventListener('click', function() {
@@ -909,13 +826,6 @@ document.addEventListener('DOMContentLoaded', function() {
       rows.forEach(function(r) { tbody.appendChild(r); });
     });
   });
-
-  // Default sort: Stars descending (column index 2)
-  var starsHeader = headers[2];
-  sortCol = 2;
-  sortAsc = false;
-  starsHeader.classList.add('sorted');
-  starsHeader.querySelector('.sort-arrow').textContent = '\u25BC';
 });
 </script>
 </body>

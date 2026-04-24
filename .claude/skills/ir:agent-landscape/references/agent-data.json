@@ -1,51 +1,79 @@
 {
-  "last_updated": "2026-04-12",
+  "last_updated": "2026-04-24",
   "agents": [
+    {
+      "name": "Claw Code",
+      "github_repo": "ultraworkers/claw-code",
+      "category": "agent",
+      "website": "https://github.com/ultraworkers/claw-code",
+      "description": "Rust CLI agent harness that wraps Claude via the Anthropic API; star count inflated by viral self-promotion in the README.",
+      "stars": 188050,
+      "language": "Rust",
+      "license": null,
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-04-24",
+          "stars": 188050
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 182111
+        }
+      ]
+    },
     {
       "name": "OpenCode",
       "github_repo": "anomalyco/opencode",
       "category": "agent",
       "website": "https://opencode.ai",
-      "description": "The open source coding agent",
-      "stars": 141888,
+      "description": "Open-source coding agent (TypeScript CLI).",
+      "stars": 148747,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
       "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 141888},
-        {"date": "2026-04-01", "stars": 141121},
-        {"date": "2026-01-01", "stars": 5500}
-      ]
-    },
-    {
-      "name": "Claw Code",
-      "github_repo": "instructkr/claw-code",
-      "category": "agent",
-      "website": "https://claw-code.codes",
-      "description": "Clean-room Python/Rust rewrite of Claude Code architecture",
-      "stars": 182111,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {"date": "2026-04-12", "stars": 182111},
-        {"date": "2026-04-01", "stars": 180702}
+        {
+          "date": "2026-04-24",
+          "stars": 148747
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 141888
+        }
       ]
     },
     {
       "name": "Claude Code",
       "github_repo": "anthropics/claude-code",
       "category": "agent",
-      "website": "https://github.com/anthropics/claude-code",
-      "description": "Anthropic's terminal-based AI coding agent",
-      "stars": 112845,
+      "website": "https://www.anthropic.com/claude-code",
+      "description": "Anthropic's terminal-based coding agent.",
+      "stars": 117553,
+      "language": "Shell",
+      "license": null,
+      "interface": "CLI",
+      "pricing": "Paid (usage-based)",
       "irrlicht_support": "live",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 112845},
-        {"date": "2026-04-01", "stars": 112201},
-        {"date": "2026-01-01", "stars": 51700}
+        {
+          "date": "2026-04-24",
+          "stars": 117553
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 112845
+        }
       ]
     },
     {
@@ -53,15 +81,24 @@
       "github_repo": "google-gemini/gemini-cli",
       "category": "agent",
       "website": "https://github.com/google-gemini/gemini-cli",
-      "description": "Google's terminal AI coding agent",
-      "stars": 100994,
+      "description": "Google's open-source terminal coding agent for Gemini models.",
+      "stars": 102304,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
       "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 100994},
-        {"date": "2026-04-01", "stars": 100831},
-        {"date": "2026-01-01", "stars": 89800}
+        {
+          "date": "2026-04-24",
+          "stars": 102304
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 100994
+        }
       ]
     },
     {
@@ -69,79 +106,124 @@
       "github_repo": "openai/codex",
       "category": "agent",
       "website": "https://github.com/openai/codex",
-      "description": "OpenAI's terminal AI coding agent",
-      "stars": 74758,
+      "description": "OpenAI's lightweight terminal coding agent.",
+      "stars": 77568,
+      "language": "Rust",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Paid (usage-based)",
       "irrlicht_support": "live",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 74758},
-        {"date": "2026-04-01", "stars": 74416},
-        {"date": "2026-01-01", "stars": 46000}
+        {
+          "date": "2026-04-24",
+          "stars": 77568
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 74758
+        }
       ]
     },
     {
       "name": "OpenHands",
-      "github_repo": "All-Hands-AI/OpenHands",
+      "github_repo": "OpenHands/OpenHands",
       "category": "agent",
-      "website": "https://github.com/All-Hands-AI/OpenHands",
-      "description": "Open-source platform for autonomous AI software agents",
-      "stars": 71060,
+      "website": "https://github.com/OpenHands/OpenHands",
+      "description": "AI-driven development platform for autonomous software agents.",
+      "stars": 71985,
+      "language": "Python",
+      "license": "MIT",
+      "interface": "CLI / Web",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 71060},
-        {"date": "2026-04-01", "stars": 70983},
-        {"date": "2026-01-01", "stars": 52000}
+        {
+          "date": "2026-04-24",
+          "stars": 71985
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 71060
+        }
       ]
     },
     {
       "name": "Cline",
       "github_repo": "cline/cline",
       "category": "agent",
-      "website": "https://github.com/cline/cline",
-      "description": "Autonomous AI coding agent for VS Code",
-      "stars": 60178,
+      "website": "https://cline.bot",
+      "description": "Autonomous coding agent embedded in VS Code.",
+      "stars": 60949,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "IDE extension (VS Code)",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 60178},
-        {"date": "2026-04-01", "stars": 60138},
-        {"date": "2026-01-01", "stars": 36000}
+        {
+          "date": "2026-04-24",
+          "stars": 60949
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 60178
+        }
       ]
     },
     {
       "name": "Aider",
-      "github_repo": "paul-gauthier/aider",
+      "github_repo": "Aider-AI/aider",
       "category": "agent",
       "website": "https://aider.chat",
-      "description": "AI pair programming in your terminal",
-      "stars": 43202,
-      "irrlicht_support": "none",
+      "description": "AI pair-programming tool in your terminal.",
+      "stars": 43874,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 43202},
-        {"date": "2026-04-01", "stars": 43133},
-        {"date": "2026-01-01", "stars": 36000}
+        {
+          "date": "2026-04-24",
+          "stars": 43874
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 43202
+        }
       ]
     },
     {
       "name": "Goose",
-      "github_repo": "block/goose",
+      "github_repo": "aaif-goose/goose",
       "category": "agent",
       "website": "https://block.github.io/goose/",
-      "description": "Block's open-source extensible AI agent for full dev workflows",
-      "stars": 41312,
-      "irrlicht_support": "none",
+      "description": "Extensible open-source agent that can install, execute, edit, and test with any LLM (originated at Block).",
+      "stars": 43139,
+      "language": "Rust",
+      "license": "Apache-2.0",
+      "interface": "CLI / Desktop app",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 41312},
-        {"date": "2026-04-01", "stars": 40906},
-        {"date": "2026-01-01", "stars": 26100}
+        {
+          "date": "2026-04-24",
+          "stars": 43139
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 41312
+        }
       ]
     },
     {
@@ -149,31 +231,24 @@
       "github_repo": "badlogic/pi-mono",
       "category": "agent",
       "website": "https://github.com/badlogic/pi-mono",
-      "description": "Anthropic's lightweight coding agent",
-      "stars": 34689,
+      "description": "Mario Zechner's AI agent toolkit: coding agent CLI, unified LLM API, TUI/web libraries, Slack bot, vLLM pods.",
+      "stars": 39373,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
       "irrlicht_support": "live",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 34689},
-        {"date": "2026-04-01", "stars": 34165},
-        {"date": "2026-01-01", "stars": 18400}
-      ]
-    },
-    {
-      "name": "Cursor",
-      "github_repo": "getcursor/cursor",
-      "category": "agent",
-      "website": "https://cursor.com",
-      "description": "AI-first code editor with agent mode",
-      "stars": 32624,
-      "irrlicht_support": "planned",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {"date": "2026-04-12", "stars": 32624},
-        {"date": "2026-04-01", "stars": 32617},
-        {"date": "2026-01-01", "stars": 25000}
+        {
+          "date": "2026-04-24",
+          "stars": 39373
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 34689
+        }
       ]
     },
     {
@@ -181,31 +256,74 @@
       "github_repo": "continuedev/continue",
       "category": "agent",
       "website": "https://continue.dev",
-      "description": "Open-source AI code assistant for VS Code and JetBrains",
-      "stars": 32499,
-      "irrlicht_support": "none",
+      "description": "Source-controlled AI coding assistant and CI checks; VS Code / JetBrains / CLI.",
+      "stars": 32770,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "IDE extension / CLI",
+      "pricing": "Freemium",
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 32499},
-        {"date": "2026-04-01", "stars": 32469},
-        {"date": "2026-01-01", "stars": 31000}
+        {
+          "date": "2026-04-24",
+          "stars": 32770
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 32499
+        }
+      ]
+    },
+    {
+      "name": "Cursor",
+      "github_repo": "cursor/cursor",
+      "category": "agent",
+      "website": "https://cursor.com",
+      "description": "Proprietary AI-first code editor (the GitHub repo hosts issues only; editor source is closed).",
+      "stars": 32693,
+      "language": null,
+      "license": null,
+      "interface": "Desktop app (IDE)",
+      "pricing": "Freemium",
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-04-24",
+          "stars": 32693
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 32624
+        }
       ]
     },
     {
       "name": "Void",
       "github_repo": "voideditor/void",
       "category": "agent",
-      "website": "https://github.com/voideditor/void",
-      "description": "Open-source AI code editor",
-      "stars": 28553,
+      "website": "https://voideditor.com",
+      "description": "Open-source AI code editor (VS Code fork).",
+      "stars": 28644,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "Desktop app (IDE)",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 28553},
-        {"date": "2026-04-01", "stars": 28544},
-        {"date": "2026-01-01", "stars": 23000}
+        {
+          "date": "2026-04-24",
+          "stars": 28644
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 28553
+        }
       ]
     },
     {
@@ -213,46 +331,24 @@
       "github_repo": "warpdotdev/Warp",
       "category": "agent",
       "website": "https://www.warp.dev",
-      "description": "Agentic terminal with Oz cloud orchestration for parallel coding agents",
-      "stars": 26372,
+      "description": "Agentic development environment built on a modern terminal.",
+      "stars": 26501,
+      "language": null,
+      "license": null,
+      "interface": "Desktop app (Terminal)",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 26372},
-        {"date": "2026-04-01", "stars": 26362},
-        {"date": "2026-01-01", "stars": 24000}
-      ]
-    },
-    {
-      "name": "Roo Code",
-      "github_repo": "RooVetGit/Roo-Code",
-      "category": "agent",
-      "website": "https://github.com/RooVetGit/Roo-Code",
-      "description": "AI coding agent for VS Code with multi-mode support",
-      "stars": 23088,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {"date": "2026-04-12", "stars": 23088},
-        {"date": "2026-04-01", "stars": 23069},
-        {"date": "2026-01-01", "stars": 17500}
-      ]
-    },
-    {
-      "name": "Crush",
-      "github_repo": "charmbracelet/crush",
-      "category": "agent",
-      "website": "https://charm.land/crush",
-      "description": "Open-source terminal coding agent by Charmbracelet with multi-model support",
-      "stars": 22889,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-10",
-      "alternative_metrics": null,
-      "stars_history": [
-        {"date": "2026-04-12", "stars": 22889},
-        {"date": "2026-04-01", "stars": 22815}
+        {
+          "date": "2026-04-24",
+          "stars": 26501
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 26372
+        }
       ]
     },
     {
@@ -260,30 +356,99 @@
       "github_repo": "QwenLM/qwen-code",
       "category": "agent",
       "website": "https://qwen.ai/qwencode",
-      "description": "Alibaba's open-source terminal coding agent optimized for the Qwen3-Coder model family",
-      "stars": 22823,
-      "irrlicht_support": "none",
+      "description": "Alibaba's open-source terminal coding agent tuned for the Qwen3-Coder model family.",
+      "stars": 23813,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 22823},
-        {"date": "2026-04-01", "stars": 22493}
+        {
+          "date": "2026-04-24",
+          "stars": 23813
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 22823
+        }
       ]
     },
     {
-      "name": "SWE-agent",
-      "github_repo": "princeton-nlp/SWE-agent",
+      "name": "Crush",
+      "github_repo": "charmbracelet/crush",
       "category": "agent",
-      "website": "https://github.com/princeton-nlp/SWE-agent",
-      "description": "Princeton's autonomous software engineering agent",
-      "stars": 18968,
+      "website": "https://charm.land/crush",
+      "description": "Charmbracelet's multi-model terminal coding agent written in Go.",
+      "stars": 23418,
+      "language": "Go",
+      "license": "MIT",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-10",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-04-24",
+          "stars": 23418
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 22889
+        }
+      ]
+    },
+    {
+      "name": "Roo Code",
+      "github_repo": "RooCodeInc/Roo-Code",
+      "category": "agent",
+      "website": "https://roocode.com",
+      "description": "VS Code coding agent with multi-mode team-of-agents support.",
+      "stars": 23345,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "IDE extension (VS Code)",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 18968},
-        {"date": "2026-04-01", "stars": 18961},
-        {"date": "2026-01-01", "stars": 13000}
+        {
+          "date": "2026-04-24",
+          "stars": 23345
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 23088
+        }
+      ]
+    },
+    {
+      "name": "SWE-agent",
+      "github_repo": "SWE-agent/SWE-agent",
+      "category": "agent",
+      "website": "https://swe-agent.com",
+      "description": "Princeton NLP's autonomous agent for resolving GitHub issues (NeurIPS 2024).",
+      "stars": 19050,
+      "language": "Python",
+      "license": "MIT",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-04-24",
+          "stars": 19050
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 18968
+        }
       ]
     },
     {
@@ -291,15 +456,24 @@
       "github_repo": "Kilo-Org/kilocode",
       "category": "agent",
       "website": "https://kilo.ai",
-      "description": "Open-source agentic coding platform for VS Code, JetBrains, and CLI",
-      "stars": 17988,
-      "irrlicht_support": "none",
+      "description": "All-in-one agentic coding platform for VS Code, JetBrains, and CLI.",
+      "stars": 18505,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "IDE extension / CLI",
+      "pricing": "Freemium",
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 17988},
-        {"date": "2026-04-01", "stars": 17922},
-        {"date": "2026-01-01", "stars": 11000}
+        {
+          "date": "2026-04-24",
+          "stars": 18505
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 17988
+        }
       ]
     },
     {
@@ -307,14 +481,24 @@
       "github_repo": "plandex-ai/plandex",
       "category": "agent",
       "website": "https://plandex.ai",
-      "description": "Open-source terminal agent for large, multi-step coding tasks spanning many files",
-      "stars": 15231,
+      "description": "Open-source terminal agent for large, multi-step coding tasks spanning many files.",
+      "stars": 15289,
+      "language": "Go",
+      "license": "MIT",
+      "interface": "CLI",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 15231},
-        {"date": "2026-04-01", "stars": 15226}
+        {
+          "date": "2026-04-24",
+          "stars": 15289
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 15231
+        }
       ]
     },
     {
@@ -322,14 +506,24 @@
       "github_repo": "langchain-ai/open-swe",
       "category": "agent",
       "website": "https://github.com/langchain-ai/open-swe",
-      "description": "LangChain's open-source async cloud-hosted coding agent",
-      "stars": 9484,
+      "description": "LangChain's open-source asynchronous cloud coding agent.",
+      "stars": 9642,
+      "language": "Python",
+      "license": "MIT",
+      "interface": "Web",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 9484},
-        {"date": "2026-04-01", "stars": 9413}
+        {
+          "date": "2026-04-24",
+          "stars": 9642
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 9484
+        }
       ]
     },
     {
@@ -337,30 +531,49 @@
       "github_repo": "sweepai/sweep",
       "category": "agent",
       "website": "https://sweep.dev",
-      "description": "AI junior developer for GitHub issues",
-      "stars": 7709,
+      "description": "AI coding assistant for JetBrains (pivoted from earlier GitHub-issue automation).",
+      "stars": 7705,
+      "language": "Jupyter Notebook",
+      "license": null,
+      "interface": "IDE extension (JetBrains)",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 7709},
-        {"date": "2026-04-01", "stars": 7705},
-        {"date": "2026-01-01", "stars": 7200}
+        {
+          "date": "2026-04-24",
+          "stars": 7705
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 7709
+        }
       ]
     },
     {
       "name": "Forge Code",
-      "github_repo": "antinomyhq/forgecode",
+      "github_repo": "tailcallhq/forgecode",
       "category": "agent",
-      "website": "https://github.com/antinomyhq/forgecode",
-      "description": "Rust-based open-source terminal AI pair programmer",
-      "stars": 6466,
+      "website": "https://forgecode.dev",
+      "description": "Rust-based open-source terminal AI pair programmer supporting 300+ models.",
+      "stars": 6925,
+      "language": "Rust",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 6466},
-        {"date": "2026-04-01", "stars": 6417}
+        {
+          "date": "2026-04-24",
+          "stars": 6925
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 6466
+        }
       ]
     },
     {
@@ -368,14 +581,24 @@
       "github_repo": "ai-christianson/RA.Aid",
       "category": "agent",
       "website": "https://www.ra-aid.ai",
-      "description": "LangGraph-based autonomous coding agent with research-plan-implement loop",
-      "stars": 2218,
+      "description": "LangGraph-based autonomous coding agent with research \u2192 plan \u2192 implement loop.",
+      "stars": 2223,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 2218},
-        {"date": "2026-04-01", "stars": 2217}
+        {
+          "date": "2026-04-24",
+          "stars": 2223
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 2218
+        }
       ]
     },
     {
@@ -383,14 +606,24 @@
       "github_repo": "Factory-AI/factory",
       "category": "agent",
       "website": "https://www.factory.ai",
-      "description": "Agent-native development platform with Droid agents",
-      "stars": 756,
+      "description": "Agent-native software development platform with Droid agents.",
+      "stars": 794,
+      "language": null,
+      "license": null,
+      "interface": "Web / CLI",
+      "pricing": "Paid",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 756},
-        {"date": "2026-04-01", "stars": 734}
+        {
+          "date": "2026-04-24",
+          "stars": 794
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 756
+        }
       ]
     },
     {
@@ -398,15 +631,24 @@
       "github_repo": "trypear/pearai-app",
       "category": "agent",
       "website": "https://trypear.ai",
-      "description": "Open-source AI code editor",
-      "stars": 674,
+      "description": "Open-source AI code editor (VS Code fork with Continue submodule).",
+      "stars": 676,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "Desktop app (IDE)",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 674},
-        {"date": "2026-04-01", "stars": 675},
-        {"date": "2026-01-01", "stars": 500}
+        {
+          "date": "2026-04-24",
+          "stars": 676
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 674
+        }
       ]
     },
     {
@@ -414,64 +656,42 @@
       "github_repo": "codegen-sh/codegen",
       "category": "agent",
       "website": "https://codegen.com",
-      "description": "AI coding agent platform with SDK for programmatic control",
+      "description": "Python wrapper for the Codegen API \u2014 run code agents at scale against a hosted service.",
       "stars": 521,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "SDK / Web",
+      "pricing": "Paid",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 521},
-        {"date": "2026-04-01", "stars": 521}
+        {
+          "date": "2026-04-24",
+          "stars": 521
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 521
+        }
       ]
     },
     {
-      "name": "GitHub Copilot",
+      "name": "Amazon Q Developer",
       "github_repo": null,
       "category": "agent",
-      "website": "https://github.com/features/copilot",
-      "description": "GitHub's AI pair programmer",
+      "website": "https://aws.amazon.com/q/developer/",
+      "description": "AWS's AI coding assistant (completions, transformations, agentic refactors).",
       "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension / CLI",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "estimated_users": "15000000",
-        "funding_millions_usd": null,
-        "source": "GitHub blog, press reports",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Windsurf",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://codeium.com/windsurf",
-      "description": "AI-powered IDE by Codeium, now owned by Cognition AI",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "estimated_users": "1000000",
-        "funding_millions_usd": 250,
-        "source": "Codeium press, Cognition acquisition reports",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Devin",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://devin.ai",
-      "description": "Autonomous AI software engineer by Cognition",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "funding_millions_usd": 700,
-        "estimated_users": null,
-        "source": "Cognition AI funding rounds, TechCrunch",
-        "measured_date": "2026-04-12"
+        "source": "AWS product; no independent user/funding disclosures",
+        "measured_date": "2026-04-24"
       },
       "stars_history": []
     },
@@ -480,29 +700,17 @@
       "github_repo": null,
       "category": "agent",
       "website": "https://ampcode.com",
-      "description": "Sourcegraph's AI coding agent",
+      "description": "Agentic coding agent spinning out from Sourcegraph as a standalone company in 2026 (formerly Sourcegraph Cody); CLI + VS Code extension.",
       "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension / CLI",
+      "pricing": "Freemium",
       "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "funding_millions_usd": 225,
-        "source": "Sourcegraph total funding via Crunchbase",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Amazon Q Developer",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://aws.amazon.com/q/developer/",
-      "description": "AWS AI coding assistant",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "source": "no public user count data found; enterprise-scale AWS product",
-        "measured_date": "2026-04-12"
+        "source": "Amp spin-out announcement (Q1 2026); inherits Sourcegraph Cody lineage",
+        "measured_date": "2026-04-24"
       },
       "stars_history": []
     },
@@ -511,138 +719,18 @@
       "github_repo": null,
       "category": "agent",
       "website": "https://www.augmentcode.com",
-      "description": "AI coding agent with deep codebase understanding",
+      "description": "AI coding agent with deep codebase understanding and enterprise context retrieval.",
       "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension",
+      "pricing": "Paid",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
         "funding_millions_usd": 252,
-        "source": "Crunchbase, TechCrunch",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Poolside",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://www.poolside.ai",
-      "description": "Enterprise AI coding platform with custom foundation models",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "funding_millions_usd": 626,
-        "source": "Crunchbase, TechCrunch, Nvidia investment reports",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Tabnine",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://www.tabnine.com",
-      "description": "AI code completion and chat assistant",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "estimated_users": "1000000",
-        "funding_millions_usd": 102,
-        "source": "Tabnine press releases, Crunchbase",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Qodo",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://www.qodo.ai",
-      "description": "Agentic code integrity platform for review, testing, and governance",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "funding_millions_usd": 120,
-        "source": "TechCrunch, Ctech (Series B Mar 2026)",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Sourcegraph Cody",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://sourcegraph.com/cody",
-      "description": "AI coding assistant with full codebase context",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "source": "now merged into Amp; Sourcegraph total funding ~$225M",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Cosine Genie",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://cosine.sh",
-      "description": "Fully autonomous AI software engineer with proprietary Genie model",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "source": "no public data found",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "Zencoder",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://zencoder.ai",
-      "description": "AI coding agent with repo-wide context indexing",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "source": "seed-stage; no public data found",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "CodeGPT",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://www.codegpt.co",
-      "description": "Full-stack AI agent platform with codebase knowledge graph",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "source": "no public data found",
-        "measured_date": "2026-04-12"
-      },
-      "stars_history": []
-    },
-    {
-      "name": "MorphLLM",
-      "github_repo": null,
-      "category": "agent",
-      "website": "https://www.morphllm.com",
-      "description": "Subagent infrastructure: Fast Apply, WarpGrep, context compression",
-      "stars": null,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": {
-        "source": "no public data found",
-        "measured_date": "2026-04-12"
+        "source": "Crunchbase; TechCrunch Series B coverage",
+        "measured_date": "2026-04-24"
       },
       "stars_history": []
     },
@@ -651,13 +739,96 @@
       "github_repo": null,
       "category": "agent",
       "website": "https://codebuff.com",
-      "description": "AI coding agent in your terminal",
+      "description": "AI coding agent for the terminal.",
       "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "CLI",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": {
-        "source": "no public data found",
-        "measured_date": "2026-04-12"
+        "source": "no public metrics found",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "CodeGPT",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://www.codegpt.co",
+      "description": "Full-stack AI agent platform with a codebase knowledge graph.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension / Web",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "source": "no public metrics found",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "Cosine Genie",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://cosine.sh",
+      "description": "Fully autonomous AI software engineer using Cosine's proprietary Genie model.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "Web",
+      "pricing": "Paid",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "source": "no public funding/user data found",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "Devin",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://devin.ai",
+      "description": "Cognition AI's autonomous software-engineer agent; parent company merged Windsurf (Cascade IDE) into its stack in 2025.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "Web",
+      "pricing": "Paid (from $20/mo)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "funding_millions_usd": 696,
+        "valuation_billions_usd": 10.2,
+        "source": "Cognition's Sep 2025 $400M round (Founders Fund, Lux, 8VC); Wikipedia; CNBC",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "GitHub Copilot",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://github.com/features/copilot",
+      "description": "GitHub's AI pair programmer (completion + chat + coding agent).",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension / Web",
+      "pricing": "Paid (from $10/mo)",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "estimated_users": "20000000+",
+        "source": "GitHub Q4 2025 disclosures; exact figure varies by source",
+        "measured_date": "2026-04-24"
       },
       "stars_history": []
     },
@@ -666,45 +837,163 @@
       "github_repo": null,
       "category": "agent",
       "website": "https://kiro.dev",
-      "description": "AWS-backed agentic IDE with spec-driven development and autonomous task execution",
+      "description": "AWS-backed agentic IDE with spec-driven development and autonomous task execution.",
       "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "Desktop app (IDE)",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-10",
       "alternative_metrics": {
-        "source": "AWS-backed; no independent funding data",
-        "measured_date": "2026-04-12"
+        "source": "AWS-backed product; no independent funding data",
+        "measured_date": "2026-04-24"
       },
       "stars_history": []
     },
     {
-      "name": "GPT Engineer",
-      "github_repo": "gpt-engineer-org/gpt-engineer",
-      "category": "orchestrator",
-      "website": "https://github.com/gpt-engineer-org/gpt-engineer",
-      "description": "AI agent that builds codebases from specifications",
-      "stars": 55217,
+      "name": "MorphLLM",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://www.morphllm.com",
+      "description": "Subagent infrastructure: Fast Apply, WarpGrep, context compression.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "API / SDK",
+      "pricing": "Paid",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {"date": "2026-04-12", "stars": 55217},
-        {"date": "2026-04-01", "stars": 55220},
-        {"date": "2026-01-01", "stars": 53000}
-      ]
+      "alternative_metrics": {
+        "source": "no public metrics found",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "Poolside",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://www.poolside.ai",
+      "description": "Enterprise AI coding platform with custom foundation models.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "Enterprise SaaS",
+      "pricing": "Enterprise",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "funding_millions_usd": 626,
+        "source": "Crunchbase; Nvidia strategic investment reports",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "Qodo",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://www.qodo.ai",
+      "description": "Agentic code-integrity platform for review, testing, and governance (formerly CodiumAI).",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension / Web",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "funding_millions_usd": 120,
+        "source": "TechCrunch / Ctech Series B (Mar 2026)",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "Tabnine",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://www.tabnine.com",
+      "description": "AI code completion, chat, and code-review agent with on-prem/private deployment options.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "estimated_users": "1000000",
+        "funding_millions_usd": 102,
+        "source": "Tabnine press releases; Crunchbase",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "Windsurf",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://windsurf.com",
+      "description": "Agentic AI IDE (Cascade). Acquired by Cognition AI from Codeium in December 2025 for ~$250M; brand continues under Cognition.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "Desktop app (IDE)",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "funding_millions_usd": null,
+        "acquisition_price_millions_usd": 250,
+        "source": "Cognition AI press release (Dec 2025); TechCrunch coverage",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
+    },
+    {
+      "name": "Zencoder",
+      "github_repo": null,
+      "category": "agent",
+      "website": "https://zencoder.ai",
+      "description": "AI coding agent with repo-wide context indexing.",
+      "stars": null,
+      "language": null,
+      "license": null,
+      "interface": "IDE extension",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": {
+        "source": "early-stage; no public metrics",
+        "measured_date": "2026-04-24"
+      },
+      "stars_history": []
     },
     {
       "name": "Paperclip",
       "github_repo": "paperclipai/paperclip",
       "category": "orchestrator",
       "website": "https://paperclip.ing",
-      "description": "Open-source hierarchical agent orchestrator modelling a zero-human company with CEO, manager, and worker agents",
-      "stars": 52042,
-      "irrlicht_support": "none",
+      "description": "Orchestration platform for \"zero-human companies\" \u2014 agents assigned to CEO/manager/worker roles with budgets and approvals.",
+      "stars": 58383,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "Web",
+      "pricing": "Freemium",
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 52042},
-        {"date": "2026-04-01", "stars": 51241}
+        {
+          "date": "2026-04-24",
+          "stars": 58383
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 52042
+        }
       ]
     },
     {
@@ -712,31 +1001,24 @@
       "github_repo": "agno-agi/agno",
       "category": "orchestrator",
       "website": "https://www.agno.com",
-      "description": "Python agent runtime for teams and workflows (formerly Phidata)",
-      "stars": 39367,
+      "description": "Python agent runtime for teams and workflows (formerly Phidata).",
+      "stars": 39648,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "SDK / Web",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 39367},
-        {"date": "2026-04-01", "stars": 39332},
-        {"date": "2026-01-01", "stars": 36000}
-      ]
-    },
-    {
-      "name": "ChatDev",
-      "github_repo": "OpenBMB/ChatDev",
-      "category": "orchestrator",
-      "website": "https://github.com/OpenBMB/ChatDev",
-      "description": "Virtual software company powered by AI agents",
-      "stars": 32685,
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {"date": "2026-04-12", "stars": 32685},
-        {"date": "2026-04-01", "stars": 32660},
-        {"date": "2026-01-01", "stars": 28000}
+        {
+          "date": "2026-04-24",
+          "stars": 39648
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 39367
+        }
       ]
     },
     {
@@ -744,15 +1026,49 @@
       "github_repo": "ruvnet/ruflo",
       "category": "orchestrator",
       "website": "https://github.com/ruvnet/ruflo",
-      "description": "Multi-agent swarm orchestration platform for Claude",
-      "stars": 31366,
+      "description": "Agent orchestration platform for Claude: multi-agent swarms, RAG integration, Claude Code/Codex integration.",
+      "stars": 33079,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "CLI / SDK",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-04-24",
+          "stars": 33079
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 31366
+        }
+      ]
+    },
+    {
+      "name": "ChatDev",
+      "github_repo": "OpenBMB/ChatDev",
+      "category": "orchestrator",
+      "website": "https://github.com/OpenBMB/ChatDev",
+      "description": "Virtual software company powered by multi-agent LLM collaboration (ChatDev 2.0).",
+      "stars": 32847,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "CLI / Web",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 31366},
-        {"date": "2026-04-01", "stars": 31095},
-        {"date": "2026-01-01", "stars": 29700}
+        {
+          "date": "2026-04-24",
+          "stars": 32847
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 32685
+        }
       ]
     },
     {
@@ -760,15 +1076,24 @@
       "github_repo": "stitionai/devika",
       "category": "orchestrator",
       "website": "https://github.com/stitionai/devika",
-      "description": "Open-source AI software engineer",
-      "stars": 19497,
+      "description": "Open-source agentic software engineer (originally an open alternative to Devin).",
+      "stars": 19502,
+      "language": "Python",
+      "license": "MIT",
+      "interface": "Web",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 19497},
-        {"date": "2026-04-01", "stars": 19499},
-        {"date": "2026-01-01", "stars": 18500}
+        {
+          "date": "2026-04-24",
+          "stars": 19502
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 19497
+        }
       ]
     },
     {
@@ -776,15 +1101,24 @@
       "github_repo": "gastownhall/gastown",
       "category": "orchestrator",
       "website": "https://github.com/gastownhall/gastown",
-      "description": "Multi-agent workspace manager by Steve Yegge",
-      "stars": 13898,
+      "description": "Multi-agent workspace manager: Mayor (coordinator) routes work through Rigs and Polecats with a Beads work-state ledger.",
+      "stars": 14580,
+      "language": "Go",
+      "license": "MIT",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
       "irrlicht_support": "live",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 13898},
-        {"date": "2026-04-01", "stars": 13824},
-        {"date": "2026-01-01", "stars": 1000}
+        {
+          "date": "2026-04-24",
+          "stars": 14580
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 13898
+        }
       ]
     },
     {
@@ -792,15 +1126,24 @@
       "github_repo": "smtg-ai/claude-squad",
       "category": "orchestrator",
       "website": "https://github.com/smtg-ai/claude-squad",
-      "description": "Manage multiple Claude Code instances in tmux",
-      "stars": 6961,
+      "description": "Manage multiple AI terminal agents (Claude Code, Codex, OpenCode, Amp) in tmux.",
+      "stars": 7145,
+      "language": "Go",
+      "license": "AGPL-3.0",
+      "interface": "CLI (tmux)",
+      "pricing": "Free (open source)",
       "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 6961},
-        {"date": "2026-04-01", "stars": 6939},
-        {"date": "2026-01-01", "stars": 5800}
+        {
+          "date": "2026-04-24",
+          "stars": 7145
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 6961
+        }
       ]
     },
     {
@@ -808,14 +1151,24 @@
       "github_repo": "ComposioHQ/agent-orchestrator",
       "category": "orchestrator",
       "website": "https://composio.dev",
-      "description": "Agent-agnostic orchestrator for parallel coding agents with CI auto-fix",
-      "stars": 6182,
+      "description": "Agent-agnostic orchestrator for parallel coding agents with autonomous CI auto-fix.",
+      "stars": 6474,
+      "language": "TypeScript",
+      "license": "MIT",
+      "interface": "CLI / Web",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 6182},
-        {"date": "2026-04-01", "stars": 6141}
+        {
+          "date": "2026-04-24",
+          "stars": 6474
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 6182
+        }
       ]
     },
     {
@@ -823,14 +1176,24 @@
       "github_repo": "dlorenc/multiclaude",
       "category": "orchestrator",
       "website": "https://github.com/dlorenc/multiclaude",
-      "description": "Parallel Claude Code instances in tmux with Brownian ratchet CI model",
-      "stars": 529,
-      "irrlicht_support": "none",
+      "description": "Parallel Claude Code instances in tmux with a Brownian-ratchet CI model.",
+      "stars": 539,
+      "language": "Go",
+      "license": null,
+      "interface": "CLI (tmux)",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 529},
-        {"date": "2026-04-01", "stars": 530}
+        {
+          "date": "2026-04-24",
+          "stars": 539
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 529
+        }
       ]
     },
     {
@@ -838,14 +1201,24 @@
       "github_repo": "stoneforge-ai/stoneforge",
       "category": "orchestrator",
       "website": "https://stoneforge.ai",
-      "description": "Web dashboard orchestrating AI coding agent teams with worktree isolation",
-      "stars": 113,
+      "description": "Web dashboard orchestrating AI coding agent teams with worktree isolation.",
+      "stars": 130,
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "interface": "Web",
+      "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 113},
-        {"date": "2026-04-01", "stars": 110}
+        {
+          "date": "2026-04-24",
+          "stars": 130
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 113
+        }
       ]
     },
     {
@@ -853,14 +1226,24 @@
       "github_repo": "nxtg-ai/forge-orchestrator",
       "category": "orchestrator",
       "website": "https://forge.nxtg.ai",
-      "description": "Rust-based multi-AI task orchestrator with file locking and drift detection",
-      "stars": 108,
+      "description": "Rust-based multi-AI task orchestrator with file locking and drift detection.",
+      "stars": 109,
+      "language": "Rust",
+      "license": null,
+      "interface": "CLI",
+      "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
-        {"date": "2026-04-12", "stars": 108},
-        {"date": "2026-04-01", "stars": 107}
+        {
+          "date": "2026-04-24",
+          "stars": 109
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 108
+        }
       ]
     }
   ]
