@@ -12,9 +12,9 @@ func TestLogger_FilePermissions(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	logPath := filepath.Join(dir, "events.log")
-	logger, err := NewWithPath(logPath)
+	logger, err := newWithPath(logPath)
 	if err != nil {
-		t.Fatalf("NewWithPath: %v", err)
+		t.Fatalf("newWithPath: %v", err)
 	}
 	defer logger.Close()
 	logger.LogInfo("test", "", "hello")

@@ -12,11 +12,11 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// DefaultInterval is the polling interval used when none is specified.
-const DefaultInterval = 1 * time.Second
+// defaultInterval is the polling interval used when none is specified.
+const defaultInterval = 1 * time.Second
 
-// BackoffInterval is the slower polling interval used when the PID set is stable.
-const BackoffInterval = 5 * time.Second
+// backoffInterval is the slower polling interval used when the PID set is stable.
+const backoffInterval = 5 * time.Second
 
 // stableThreshold is the number of consecutive stable polls before backing off.
 const stableThreshold = 5
@@ -45,7 +45,7 @@ type Scanner struct {
 	tracked map[int]trackedProc // pid → pre-session
 	subs    []chan agent.Event
 
-	// Adaptive backoff: back off to BackoffInterval when PID set is stable.
+	// Adaptive backoff: back off to backoffInterval when PID set is stable.
 	lastPIDCount int
 	stablePolls  int
 }
@@ -53,10 +53,10 @@ type Scanner struct {
 // NewScanner creates a Scanner for the given agent process.
 //   - processName: exact binary name, e.g. "claude"
 //   - adapter:     adapter label, e.g. "claude-code"
-//   - interval:    how often to poll; pass 0 to use DefaultInterval
+//   - interval:    how often to poll; pass 0 to use defaultInterval
 func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 	if interval <= 0 {
-		interval = DefaultInterval
+		interval = defaultInterval
 	}
 	return &Scanner{
 		processName: processName,
@@ -108,7 +108,7 @@ func HasRealSessionForPID(sessions []*session.SessionState, projectDir string, p
 
 // Watch begins polling. It runs an immediate scan then continues on the
 // configured interval until ctx is cancelled. The interval backs off from
-// DefaultInterval to BackoffInterval when the PID set is stable.
+// defaultInterval to backoffInterval when the PID set is stable.
 func (s *Scanner) Watch(ctx context.Context) error {
 	s.poll()
 
@@ -137,7 +137,7 @@ func (s *Scanner) Watch(ctx context.Context) error {
 
 			var targetInterval time.Duration
 			if s.stablePolls >= stableThreshold {
-				targetInterval = BackoffInterval
+				targetInterval = backoffInterval
 			} else {
 				targetInterval = s.interval
 			}
@@ -175,7 +175,7 @@ func (s *Scanner) Unsubscribe(ch <-chan agent.Event) {
 // for newcomers without transcripts, and removes pre-sessions that have exited
 // or whose real transcript has appeared.
 func (s *Scanner) poll() {
-	pids, err := FindProcesses(s.processName)
+	pids, err := findProcesses(s.processName)
 	if err != nil {
 		return
 	}
@@ -191,7 +191,7 @@ func (s *Scanner) poll() {
 		_, alreadyTracked := s.tracked[pid]
 		s.mu.Unlock()
 
-		cwd, err := ProcessCWD(pid)
+		cwd, err := processCWD(pid)
 		if err != nil || cwd == "" || cwd == "/" {
 			continue
 		}

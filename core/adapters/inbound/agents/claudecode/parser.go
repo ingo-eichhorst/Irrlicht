@@ -31,261 +31,313 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	ev := &tailer.ParsedEvent{
 		Timestamp: tailer.ParseTimestamp(raw),
 	}
-
-	eventType := "unknown"
-	if et, ok := raw["type"].(string); ok {
-		eventType = et
-	} else if _, ok := raw["user_input"]; ok {
-		eventType = "user_message"
-	} else if _, ok := raw["assistant_output"]; ok {
-		eventType = "assistant_message"
-	} else if _, ok := raw["tool_call"]; ok {
-		eventType = "tool_call"
-	}
-
-	// CWD from top-level field.
 	if cwd := transcript.ExtractCWDFromLine(raw); cwd != "" {
 		ev.CWD = cwd
 	}
 
-	// System events: turn_duration and stop_hook_summary are authoritative
-	// "agent is done" signals. Return them as turn_done with no MessageEvent.
-	if eventType == "system" {
-		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
-			ev.EventType = "turn_done"
-			// Don't skip — the tailer needs to set LastEventType to turn_done.
-			// But it's not a message event, so we mark it specially.
-			return ev
-		}
-		ev.Skip = true
+	eventType := resolveEventType(raw)
+
+	if handleEarlyReturn(eventType, raw, ev) {
 		return ev
 	}
 
-	// Local commands (shell escapes, /context, etc.) write user events but
-	// don't trigger agent turns. Skip them to avoid affecting state detection.
-	if eventType == "user" {
-		if isMeta, ok := raw["isMeta"].(bool); ok && isMeta {
-			ev.Skip = true
-			return ev
-		}
-		// Task-notification events are Claude Code's authoritative "subagent
-		// done" signal on the parent transcript (origin.kind="task-notification"
-		// with an XML payload as message.content string). The subagent's own
-		// JSONL is structurally ambiguous when --continue kills the parent
-		// mid-stream, so this parent-side event is the only reliable signal
-		// without timing heuristics. Skip=true so the line does not feed
-		// LastEventType / interrupt flags. See issue #134.
-		if origin, ok := raw["origin"].(map[string]interface{}); ok {
-			if kind, _ := origin["kind"].(string); kind == "task-notification" {
-				if msg, ok := raw["message"].(map[string]interface{}); ok {
-					if content, ok := msg["content"].(string); ok {
-						ev.SubagentCompletions = append(ev.SubagentCompletions, tailer.SubagentCompletion{
-							AgentID:   extractXMLField(content, "task-id"),
-							ToolUseID: extractXMLField(content, "tool-use-id"),
-							Status:    extractXMLField(content, "status"),
-						})
-					}
-				}
-				ev.Skip = true
-				return ev
-			}
-		}
-		if msg, ok := raw["message"].(map[string]interface{}); ok {
-			if content, ok := msg["content"].(string); ok {
-				if strings.HasPrefix(content, "<local-command") ||
-					strings.HasPrefix(content, "<command-name>") ||
-					strings.HasPrefix(content, "<bash-input>") ||
-					strings.HasPrefix(content, "<bash-stdout>") {
-					ev.Skip = true
-					return ev
-				}
-			}
-			// User interrupts come in two flavors that look similar but mean
-			// different things:
-			//   - "[Request interrupted by user]" — ESC during text generation.
-			//     The agent's turn is over; the classifier should transition
-			//     to ready. Marked with IsUserInterrupt.
-			//   - "[Request interrupted by user for tool use]" — the user
-			//     denied a permission prompt for a tool call. The agent's
-			//     turn is NOT over: it typically responds with an alternate
-			//     approach. Marked with IsToolDenial; the cancellation rule
-			//     must NOT fire (otherwise the session bounces working →
-			//     ready → working on every denial).
-			//
-			// Neither sets IsError — that's reserved for tool_result.is_error
-			// (grep with no matches, build failures, etc.). See issue #102
-			// Bug B and the follow-up split for the denial flicker.
-			if contentArr, ok := msg["content"].([]interface{}); ok {
-				for _, item := range contentArr {
-					if block, ok := item.(map[string]interface{}); ok {
-						if block["type"] == "text" {
-							if text, ok := block["text"].(string); ok {
-								if strings.HasPrefix(text, "[Request interrupted by user for tool use") {
-									ev.IsToolDenial = true
-									break
-								}
-								if strings.HasPrefix(text, "[Request interrupted by user") {
-									ev.IsUserInterrupt = true
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Permission mode events.
-	if eventType == "permission-mode" {
-		if mode, ok := raw["permissionMode"].(string); ok {
-			ev.PermissionMode = mode
-		}
-		ev.Skip = true
-		return ev
-	}
-
-	// Model extraction.
 	ev.ModelName, ev.ContextWindow = extractClaudeCodeModel(raw)
-
-	// Token extraction — set Tokens for context-utilization display.
 	ev.Tokens = extractClaudeCodeTokens(raw)
-
-	// Cost contribution: deduplicate by requestId and emit a PerTurnContribution
-	// when the turn changes. Claude Code streams multiple events per API turn;
-	// only the final event's token counts are authoritative.
-	if reqID, ok := raw["requestId"].(string); ok && reqID != "" {
-		ev.RequestID = reqID
-		if reqID != p.lastRequestID {
-			// New turn started — emit the previous turn's contribution.
-			if p.lastRequestID != "" && p.pendingContrib != nil {
-				ev.Contribution = p.pendingContrib
-			}
-			p.lastRequestID = reqID
-			p.pendingContrib = nil
-		}
-		// Update pending with latest usage for this turn.
-		if ev.Tokens != nil {
-			p.pendingContrib = &tailer.PerTurnContribution{
-				Model: ev.ModelName,
-				Usage: extractAnthropicUsageBreakdown(raw),
-			}
-		}
-	}
-
-	// Content character count for token estimation.
+	p.applyRequestIDContribution(raw, ev)
 	ev.ContentChars = tailer.ExtractContentChars(raw)
 
-	// Intermediate streaming messages from Claude Code (thinking blocks,
-	// partial text before tool_use) are written as separate JSONL lines
-	// within one API response. Using eventTypeAssistantStreaming for these
-	// prevents IsAgentDone() from falsely returning true between tool calls.
-	//
-	// We use an allow-list of terminal stop_reasons rather than a deny-list
-	// of intermediate ones — any stop_reason NOT known to be terminal is
-	// assumed to be mid-turn. This protects against Bug D in issue #102,
-	// where `max_tokens` (agent hit thinking budget, will continue) was
-	// classified as "done" because the previous deny-list only handled nil.
-	//
-	// Terminal stop_reasons (this message is complete):
-	//   - end_turn       normal completion → agent's turn is over
-	//   - stop_sequence  stop token matched → turn is over
-	//   - refusal        agent refused to answer → turn is over
-	//   - tool_use       message ends because a tool was called → turn NOT
-	//                    over, but the message is complete. IsAgentDone()
-	//                    downstream uses HasOpenToolCall to stay in working.
-	//
-	// Everything else (nil, max_tokens, pause_turn, unknown) is treated as
-	// streaming/mid-turn. max_tokens in particular was Bug D in #102: an
-	// agent that hits its thinking budget mid-turn emits a thinking-only
-	// assistant message with stop_reason=max_tokens, which used to classify
-	// as "assistant" and trip IsAgentDone() → spurious ready. Any future
-	// stop_reason Claude adds defaults to "assume streaming", which is the
-	// safe side of the error.
-	if eventType == "assistant" {
-		if msg, ok := raw["message"].(map[string]interface{}); ok {
-			stopReason, _ := msg["stop_reason"].(string)
+	eventType = resolveAssistantStreaming(raw, eventType)
 
-			switch stopReason {
-			case "end_turn", "stop_sequence", "refusal", "tool_use":
-				// Terminal for this message — keep eventType as "assistant".
-			default:
-				eventType = eventTypeAssistantStreaming
-			}
-		}
-	}
-
-	// Filter non-message events.
 	if !isClaudeCodeMessageEvent(eventType) {
 		ev.Skip = true
 		return ev
 	}
-
 	ev.EventType = eventType
 
-	// Scan message.content[] for embedded tool_use and tool_result blocks.
-	var askUserQuestion string
+	askUserQuestion := scanMessageContent(raw, ev)
+	applyAssistantText(raw, ev, eventType, askUserQuestion)
+	return ev
+}
+
+// resolveEventType reads the event discriminator, falling back to field shape
+// for legacy transcript flavours that don't set "type" explicitly.
+func resolveEventType(raw map[string]interface{}) string {
+	if et, ok := raw["type"].(string); ok {
+		return et
+	}
+	if _, ok := raw["user_input"]; ok {
+		return "user_message"
+	}
+	if _, ok := raw["assistant_output"]; ok {
+		return "assistant_message"
+	}
+	if _, ok := raw["tool_call"]; ok {
+		return "tool_call"
+	}
+	return "unknown"
+}
+
+// handleEarlyReturn processes event types that never reach the message-content
+// pipeline (system/turn_done, user meta/interrupts, permission-mode). Returns
+// true when the caller should return ev immediately.
+func handleEarlyReturn(eventType string, raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	switch eventType {
+	case "system":
+		handleSystemEvent(raw, ev)
+		return true
+	case "user":
+		return handleUserEvent(raw, ev)
+	case "permission-mode":
+		if mode, ok := raw["permissionMode"].(string); ok {
+			ev.PermissionMode = mode
+		}
+		ev.Skip = true
+		return true
+	}
+	return false
+}
+
+// handleSystemEvent maps turn_duration / stop_hook_summary subtypes to
+// turn_done; everything else is skipped.
+func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
+		ev.EventType = "turn_done"
+		return
+	}
+	ev.Skip = true
+}
+
+// handleUserEvent handles the user event variants that should short-circuit
+// the parser (isMeta, task-notification, local-command wrappers). Returns
+// true when caller should return ev immediately. Interrupts are recorded on
+// ev but do NOT short-circuit.
+func handleUserEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	if isMeta, ok := raw["isMeta"].(bool); ok && isMeta {
+		ev.Skip = true
+		return true
+	}
+	if handleTaskNotification(raw, ev) {
+		return true
+	}
+	msg, ok := raw["message"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	if isLocalCommandContent(msg) {
+		ev.Skip = true
+		return true
+	}
+	recordUserInterruptFlags(msg, ev)
+	return false
+}
+
+// handleTaskNotification captures subagent-completion signals from the parent
+// transcript's task-notification events. Returns true when the event was a
+// task-notification and the caller should skip it. See issue #134.
+func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
+	origin, ok := raw["origin"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	if kind, _ := origin["kind"].(string); kind != "task-notification" {
+		return false
+	}
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
-		if contentArr, ok := msg["content"].([]interface{}); ok {
-			for _, item := range contentArr {
-				if block, ok := item.(map[string]interface{}); ok {
-					switch block["type"] {
-					case "tool_use":
-						id, _ := block["id"].(string)
-						name, _ := block["name"].(string)
-						if name != "" {
-							ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: id, Name: name})
-						}
-						switch name {
-						case "TaskCreate":
-							if input, ok := block["input"].(map[string]interface{}); ok {
-								subject, _ := input["subject"].(string)
-								desc, _ := input["description"].(string)
-								activeForm, _ := input["activeForm"].(string)
-								ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-									Op:          tailer.TaskOpCreate,
-									Subject:     subject,
-									Description: desc,
-									ActiveForm:  activeForm,
-								})
-							}
-						case "TaskUpdate":
-							if input, ok := block["input"].(map[string]interface{}); ok {
-								taskID, _ := input["taskId"].(string)
-								status, _ := input["status"].(string)
-								ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-									Op:     tailer.TaskOpUpdate,
-									ID:     taskID,
-									Status: status,
-								})
-							}
-						case "AskUserQuestion":
-							if input, ok := block["input"].(map[string]interface{}); ok {
-								if qs, ok := input["questions"].([]interface{}); ok && len(qs) > 0 {
-									if q, ok := qs[0].(map[string]interface{}); ok {
-										askUserQuestion, _ = q["question"].(string)
-									}
-								}
-							}
-						}
-					case "tool_result":
-						if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
-							ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
-						}
-						if isErr, ok := block["is_error"].(bool); ok && isErr {
-							ev.IsError = true
-						}
-					}
+		if content, ok := msg["content"].(string); ok {
+			ev.SubagentCompletions = append(ev.SubagentCompletions, tailer.SubagentCompletion{
+				AgentID:   extractXMLField(content, "task-id"),
+				ToolUseID: extractXMLField(content, "tool-use-id"),
+				Status:    extractXMLField(content, "status"),
+			})
+		}
+	}
+	ev.Skip = true
+	return true
+}
+
+// isLocalCommandContent returns true when the user message is one of the
+// shell-escape / command wrappers that Claude Code writes for /context,
+// <bash-input>, etc. These don't represent real user turns.
+func isLocalCommandContent(msg map[string]interface{}) bool {
+	content, ok := msg["content"].(string)
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix(content, "<local-command") ||
+		strings.HasPrefix(content, "<command-name>") ||
+		strings.HasPrefix(content, "<bash-input>") ||
+		strings.HasPrefix(content, "<bash-stdout>")
+}
+
+// recordUserInterruptFlags scans a user message's content blocks for the two
+// interrupt flavours (ESC cancel vs tool-use denial) and sets the matching
+// flag on ev. Neither sets IsError — that's reserved for tool_result.is_error.
+// See issue #102 Bug B and the follow-up split for the denial flicker.
+func recordUserInterruptFlags(msg map[string]interface{}, ev *tailer.ParsedEvent) {
+	contentArr, ok := msg["content"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, item := range contentArr {
+		block, ok := item.(map[string]interface{})
+		if !ok || block["type"] != "text" {
+			continue
+		}
+		text, ok := block["text"].(string)
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(text, "[Request interrupted by user for tool use") {
+			ev.IsToolDenial = true
+			return
+		}
+		if strings.HasPrefix(text, "[Request interrupted by user") {
+			ev.IsUserInterrupt = true
+			return
+		}
+	}
+}
+
+// applyRequestIDContribution implements the request-ID-scoped deduplication.
+// Claude Code streams multiple events per API turn with the same requestId;
+// only the final event carries authoritative token counts. We emit the prior
+// turn's contribution once a new requestId arrives.
+func (p *Parser) applyRequestIDContribution(raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	reqID, ok := raw["requestId"].(string)
+	if !ok || reqID == "" {
+		return
+	}
+	ev.RequestID = reqID
+	if reqID != p.lastRequestID {
+		if p.lastRequestID != "" && p.pendingContrib != nil {
+			ev.Contribution = p.pendingContrib
+		}
+		p.lastRequestID = reqID
+		p.pendingContrib = nil
+	}
+	if ev.Tokens != nil {
+		p.pendingContrib = &tailer.PerTurnContribution{
+			Model: ev.ModelName,
+			Usage: extractAnthropicUsageBreakdown(raw),
+		}
+	}
+}
+
+// resolveAssistantStreaming downgrades an assistant event to the streaming
+// marker when its stop_reason is not known-terminal, preventing IsAgentDone()
+// from firing between tool calls. Uses an allow-list so unknown future stop
+// reasons default to "assume streaming" — the safe side of Bug D (#102).
+//
+// Terminal stop_reasons: end_turn, stop_sequence, refusal, tool_use.
+// Everything else (nil, max_tokens, pause_turn, unknown) maps to streaming.
+func resolveAssistantStreaming(raw map[string]interface{}, eventType string) string {
+	if eventType != "assistant" {
+		return eventType
+	}
+	msg, ok := raw["message"].(map[string]interface{})
+	if !ok {
+		return eventType
+	}
+	stopReason, _ := msg["stop_reason"].(string)
+	switch stopReason {
+	case "end_turn", "stop_sequence", "refusal", "tool_use":
+		return eventType
+	default:
+		return eventTypeAssistantStreaming
+	}
+}
+
+// scanMessageContent walks message.content[] collecting tool_use / tool_result
+// deltas onto ev. Returns the latest AskUserQuestion prompt text so the caller
+// can surface it as the waiting-state header when no text block is present.
+func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) string {
+	msg, ok := raw["message"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	contentArr, ok := msg["content"].([]interface{})
+	if !ok {
+		return ""
+	}
+	var askUserQuestion string
+	for _, item := range contentArr {
+		block, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch block["type"] {
+		case "tool_use":
+			if q := collectToolUse(block, ev); q != "" {
+				askUserQuestion = q
+			}
+		case "tool_result":
+			collectToolResult(block, ev)
+		}
+	}
+	return askUserQuestion
+}
+
+// collectToolUse records a tool_use block onto ev and extracts task/question
+// metadata for the known Claude Code tool kinds. Returns the AskUserQuestion
+// prompt text when this block was one.
+func collectToolUse(block map[string]interface{}, ev *tailer.ParsedEvent) string {
+	id, _ := block["id"].(string)
+	name, _ := block["name"].(string)
+	if name != "" {
+		ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: id, Name: name})
+	}
+	input, _ := block["input"].(map[string]interface{})
+	if input == nil {
+		return ""
+	}
+	switch name {
+	case "TaskCreate":
+		subject, _ := input["subject"].(string)
+		desc, _ := input["description"].(string)
+		activeForm, _ := input["activeForm"].(string)
+		ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+			Op:          tailer.TaskOpCreate,
+			Subject:     subject,
+			Description: desc,
+			ActiveForm:  activeForm,
+		})
+	case "TaskUpdate":
+		taskID, _ := input["taskId"].(string)
+		status, _ := input["status"].(string)
+		ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+			Op:     tailer.TaskOpUpdate,
+			ID:     taskID,
+			Status: status,
+		})
+	case "AskUserQuestion":
+		if qs, ok := input["questions"].([]interface{}); ok && len(qs) > 0 {
+			if q, ok := qs[0].(map[string]interface{}); ok {
+				if text, _ := q["question"].(string); text != "" {
+					return text
 				}
 			}
 		}
 	}
+	return ""
+}
 
-	// Track assistant text for waiting-state display.
+// collectToolResult records a tool_result's matching id and the is_error flag.
+func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent) {
+	if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
+		ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
+	}
+	if isErr, ok := block["is_error"].(bool); ok && isErr {
+		ev.IsError = true
+	}
+}
+
+// applyAssistantText fills AssistantText for assistant/streaming events,
+// falling back to the tail of an AskUserQuestion prompt when the message
+// carries no text block. For user events it just signals the tool-name reset.
+func applyAssistantText(raw map[string]interface{}, ev *tailer.ParsedEvent, eventType, askUserQuestion string) {
 	switch eventType {
 	case "assistant", eventTypeAssistantStreaming, "assistant_message", "assistant_output":
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
-		// Fall back to AskUserQuestion text when the message has no text block.
 		if ev.AssistantText == "" && askUserQuestion != "" {
 			runes := []rune(askUserQuestion)
 			if len(runes) > 200 {
@@ -297,8 +349,6 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
 	}
-
-	return ev
 }
 
 // extractClaudeCodeModel extracts model name and context window from a Claude Code event.

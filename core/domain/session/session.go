@@ -195,8 +195,8 @@ func (m *SessionMetrics) IsAgentDone() bool {
 	return false
 }
 
-// SubagentSummary tracks the aggregate state of all child sessions.
-type SubagentSummary struct {
+// subagentSummary tracks the aggregate state of all child sessions.
+type subagentSummary struct {
 	Total   int `json:"total"`
 	Working int `json:"working"`
 	Waiting int `json:"waiting"`
@@ -270,7 +270,7 @@ type SessionState struct {
 
 	// Subagents holds the aggregate state of all child sessions.
 	// Nil when this session has no children.
-	Subagents *SubagentSummary `json:"subagents,omitempty"`
+	Subagents *subagentSummary `json:"subagents,omitempty"`
 
 	// DaemonVersion records which irrlichd version created this session,
 	// enabling future data migrations when the schema evolves.

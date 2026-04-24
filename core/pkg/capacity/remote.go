@@ -44,14 +44,14 @@ type liteLLMEntry struct {
 	Mode                          string  `json:"mode"`
 }
 
-// cachedCapacity wraps CapacityConfig with cache metadata.
+// cachedCapacity wraps capacityConfig with cache metadata.
 type cachedCapacity struct {
 	FetchedAt time.Time      `json:"fetched_at"`
-	Config    CapacityConfig `json:"config"`
+	Config    capacityConfig `json:"config"`
 }
 
-// CachePath returns the path for the cached remote capacity data.
-func CachePath() (string, error) {
+// cachePath returns the path for the cached remote capacity data.
+func cachePath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -62,7 +62,7 @@ func CachePath() (string, error) {
 
 // FetchAndCacheLiteLLMData fetches model data from LiteLLM and caches it locally.
 // Non-fatal: callers should fall back to embedded data on error.
-func FetchAndCacheLiteLLMData() (*CapacityConfig, error) {
+func FetchAndCacheLiteLLMData() (*capacityConfig, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(liteLLMURL)
 	if err != nil {
@@ -90,14 +90,14 @@ func FetchAndCacheLiteLLMData() (*CapacityConfig, error) {
 	return config, nil
 }
 
-// parseLiteLLMData converts LiteLLM's JSON format to our CapacityConfig.
-func parseLiteLLMData(data []byte) (*CapacityConfig, error) {
+// parseLiteLLMData converts LiteLLM's JSON format to our capacityConfig.
+func parseLiteLLMData(data []byte) (*capacityConfig, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse LiteLLM JSON: %w", err)
 	}
 
-	config := &CapacityConfig{
+	config := &capacityConfig{
 		Version:     "remote-v2",
 		LastUpdated: time.Now().Format("2006-01-02"),
 		Models:      make(map[string]ModelCapacity),
@@ -178,10 +178,10 @@ func deriveFamilyFromLiteLLM(modelID, provider string) string {
 	}
 }
 
-// LoadCachedRemoteData reads previously cached remote capacity data.
+// loadCachedRemoteData reads previously cached remote capacity data.
 // Returns nil if cache doesn't exist or is expired.
-func LoadCachedRemoteData() *CapacityConfig {
-	path, err := CachePath()
+func loadCachedRemoteData() *capacityConfig {
+	path, err := cachePath()
 	if err != nil {
 		return nil
 	}
@@ -204,8 +204,8 @@ func LoadCachedRemoteData() *CapacityConfig {
 }
 
 // saveCachedData writes capacity config to the cache file.
-func saveCachedData(config *CapacityConfig) error {
-	path, err := CachePath()
+func saveCachedData(config *capacityConfig) error {
+	path, err := cachePath()
 	if err != nil {
 		return err
 	}
@@ -229,7 +229,7 @@ func saveCachedData(config *CapacityConfig) error {
 
 // IsCacheStale returns true if the cache doesn't exist or has expired.
 func IsCacheStale() bool {
-	path, err := CachePath()
+	path, err := cachePath()
 	if err != nil {
 		return true
 	}
@@ -247,15 +247,3 @@ func IsCacheStale() bool {
 	return time.Since(cached.FetchedAt) > cacheTTL
 }
 
-// RefreshRemoteDataIfStale checks if the cache is stale and fetches fresh data.
-// Returns the number of models fetched, or an error.
-func RefreshRemoteDataIfStale() (int, error) {
-	if !IsCacheStale() {
-		return 0, nil
-	}
-	config, err := FetchAndCacheLiteLLMData()
-	if err != nil {
-		return 0, err
-	}
-	return len(config.Models), nil
-}

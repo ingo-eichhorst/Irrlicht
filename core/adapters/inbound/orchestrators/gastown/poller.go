@@ -1,4 +1,4 @@
-// Package gastown — Poller invokes the gt CLI to collect rig, polecat, dog,
+// Package gastown — poller invokes the gt CLI to collect rig, polecat, dog,
 // and boot state, enriches it with session data, and maps it to the standardised
 // orchestrator.State model.
 package gastown
@@ -16,24 +16,24 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// SessionLister provides read access to active sessions for CWD matching.
-type SessionLister interface {
+// sessionLister provides read access to active sessions for CWD matching.
+type sessionLister interface {
 	ListAll() ([]*session.SessionState, error)
 }
 
-// Poller queries the gt CLI for rig, polecat, dog, and boot state and maps
+// poller queries the gt CLI for rig, polecat, dog, and boot state and maps
 // the results to the standardised orchestrator.State model.
-type Poller struct {
-	collector *Collector
+type poller struct {
+	collector *collector
 	gtBin     string
 	interval  time.Duration
-	sessions  SessionLister
+	sessions  sessionLister
 }
 
-// NewPoller creates a Poller that reads from the given collector and
+// newPoller creates a poller that reads from the given collector and
 // shells out to gtBin for rig/polecat state.
-func NewPoller(collector *Collector, gtBin string, interval time.Duration, sessions SessionLister) *Poller {
-	return &Poller{
+func newPoller(collector *collector, gtBin string, interval time.Duration, sessions sessionLister) *poller {
+	return &poller{
 		collector: collector,
 		gtBin:     gtBin,
 		interval:  interval,
@@ -43,8 +43,8 @@ func NewPoller(collector *Collector, gtBin string, interval time.Duration, sessi
 
 // BuildOrchestratorState fetches current gt state and returns the standardised
 // orchestrator.State model. Called by Adapter on each poll tick.
-func (p *Poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State {
-	daemon := p.collector.DaemonState()
+func (p *poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State {
+	daemon := p.collector.daemonState()
 	now := time.Now().UTC()
 	gtRoot := p.collector.Root()
 
@@ -59,10 +59,10 @@ func (p *Poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State
 
 	// Fetch rig list, polecat list, dog list, and boot status in parallel.
 	var wg sync.WaitGroup
-	var rigs []RigState
-	var polecats []PolecatState
-	var dogs []DogState
-	var boot *BootStatus
+	var rigs []rigState
+	var polecats []polecatState
+	var dogs []dogState
+	var boot *bootStatus
 
 	wg.Add(4)
 	go func() { defer wg.Done(); rigs = p.fetchRigs(ctx) }()
@@ -76,11 +76,11 @@ func (p *Poller) BuildOrchestratorState(ctx context.Context) *orchestrator.State
 }
 
 // mapToOrchestratorState maps raw Gas Town types to the standardised model.
-func (p *Poller) mapToOrchestratorState(
-	rigs []RigState,
-	polecats []PolecatState,
-	dogs []DogState,
-	boot *BootStatus,
+func (p *poller) mapToOrchestratorState(
+	rigs []rigState,
+	polecats []polecatState,
+	dogs []dogState,
+	boot *bootStatus,
 	running bool,
 	now time.Time,
 ) *orchestrator.State {
@@ -196,7 +196,7 @@ func (p *Poller) mapToOrchestratorState(
 	state.GlobalAgents = globalAgents
 
 	// Group polecats by rig.
-	polecatsByRig := make(map[string][]PolecatState)
+	polecatsByRig := make(map[string][]polecatState)
 	for _, pc := range polecats {
 		polecatsByRig[pc.Rig] = append(polecatsByRig[pc.Rig], pc)
 	}
@@ -251,7 +251,7 @@ func (p *Poller) mapToOrchestratorState(
 			if s.CWD == "" {
 				continue
 			}
-			ri := DeriveRole(s.CWD, gtRoot)
+			ri := deriveRole(s.CWD, gtRoot)
 			if ri == nil || ri.Role != RoleCrew || ri.Rig != rig.Name {
 				continue
 			}
@@ -332,13 +332,13 @@ func (p *Poller) mapToOrchestratorState(
 
 // gtCommand creates an exec.Cmd that runs from GT_ROOT so the gt CLI
 // can find its workspace context.
-func (p *Poller) gtCommand(ctx context.Context, args ...string) *exec.Cmd {
+func (p *poller) gtCommand(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, p.gtBin, args...)
 	cmd.Dir = p.collector.Root()
 	return cmd
 }
 
-func (p *Poller) fetchRigs(ctx context.Context) []RigState {
+func (p *poller) fetchRigs(ctx context.Context) []rigState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -347,14 +347,14 @@ func (p *Poller) fetchRigs(ctx context.Context) []RigState {
 		// Fallback to collector's cached rigs from rigs.json.
 		return p.collector.Rigs()
 	}
-	var rigs []RigState
+	var rigs []rigState
 	if err := json.Unmarshal(out, &rigs); err != nil {
 		return p.collector.Rigs()
 	}
 	return rigs
 }
 
-func (p *Poller) fetchPolecats(ctx context.Context) []PolecatState {
+func (p *poller) fetchPolecats(ctx context.Context) []polecatState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -362,14 +362,14 @@ func (p *Poller) fetchPolecats(ctx context.Context) []PolecatState {
 	if err != nil {
 		return nil
 	}
-	var polecats []PolecatState
+	var polecats []polecatState
 	if err := json.Unmarshal(out, &polecats); err != nil {
 		return nil
 	}
 	return polecats
 }
 
-func (p *Poller) fetchDogs(ctx context.Context) []DogState {
+func (p *poller) fetchDogs(ctx context.Context) []dogState {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -377,14 +377,14 @@ func (p *Poller) fetchDogs(ctx context.Context) []DogState {
 	if err != nil {
 		return nil
 	}
-	var dogs []DogState
+	var dogs []dogState
 	if err := json.Unmarshal(out, &dogs); err != nil {
 		return nil
 	}
 	return dogs
 }
 
-func (p *Poller) fetchBootStatus(ctx context.Context) *BootStatus {
+func (p *poller) fetchBootStatus(ctx context.Context) *bootStatus {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -392,7 +392,7 @@ func (p *Poller) fetchBootStatus(ctx context.Context) *BootStatus {
 	if err != nil {
 		return nil
 	}
-	var boot BootStatus
+	var boot bootStatus
 	if err := json.Unmarshal(out, &boot); err != nil {
 		return nil
 	}

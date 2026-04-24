@@ -18,7 +18,7 @@ type State struct {
 	// Codebases are the repositories/projects managed by the orchestrator.
 	Codebases []Codebase `json:"codebases,omitempty"`
 	// WorkUnits are trackable units of work (convoys, task lists, etc.).
-	WorkUnits []WorkUnit `json:"work_units,omitempty"`
+	WorkUnits []workUnit `json:"work_units,omitempty"`
 	// UpdatedAt is when this state snapshot was produced.
 	UpdatedAt time.Time `json:"updated_at"`
 	// RoleIcons maps role names to display emojis. Set by the adapter,
@@ -62,8 +62,8 @@ type Worker struct {
 	State       string `json:"state"`
 }
 
-// WorkUnit represents a trackable unit of work with progress.
-type WorkUnit struct {
+// workUnit represents a trackable unit of work with progress.
+type workUnit struct {
 	ID     string `json:"id"`
 	Type   string `json:"type"`   // "convoy", "task_list"
 	Name   string `json:"name"`
