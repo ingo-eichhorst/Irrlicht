@@ -457,7 +457,7 @@ func TestReplayWithSidecar_HookEvents(t *testing.T) {
 	sidecarBody := `{"seq":1,"ts":"2026-04-11T10:00:00Z","kind":"transcript_new","session_id":"sess-1","adapter":"claude-code"}
 {"seq":2,"ts":"2026-04-11T10:00:00.500Z","kind":"transcript_activity","session_id":"sess-1","file_size":93}
 {"seq":3,"ts":"2026-04-11T10:00:01Z","kind":"transcript_activity","session_id":"sess-1","file_size":192}
-{"seq":4,"ts":"2026-04-11T10:00:01.500Z","kind":"hook_received","session_id":"sess-1","hook_name":"PreToolUse"}
+{"seq":4,"ts":"2026-04-11T10:00:01.500Z","kind":"hook_received","session_id":"sess-1","hook_name":"PermissionRequest"}
 `
 	if err := os.WriteFile(sidecar, []byte(sidecarBody), 0644); err != nil {
 		t.Fatalf("write sidecar: %v", err)
