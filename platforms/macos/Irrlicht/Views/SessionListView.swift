@@ -46,6 +46,11 @@ enum DisplayMode: String, CaseIterable {
 }
 
 struct SessionListView: View {
+    /// Canonical panel width. Referenced by `MenuBarController` for the
+    /// initial NSPanel contentRect so SwiftUI's `.frame(width:)` and the
+    /// panel placeholder size can't drift apart.
+    static let panelWidth: CGFloat = 380
+
     @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var gasTownProvider: GasTownProvider
     @State private var isQuitButtonHovered = false
@@ -104,7 +109,7 @@ struct SessionListView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .frame(width: 380)
+            .frame(width: Self.panelWidth)
             .background(Color(NSColor.windowBackgroundColor))
         }
     }

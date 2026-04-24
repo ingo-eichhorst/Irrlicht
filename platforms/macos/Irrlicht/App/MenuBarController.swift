@@ -48,7 +48,7 @@ final class MenuBarController: NSObject {
         self.hostingController = NSHostingController(rootView: AnyView(root))
 
         self.panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 200),
+            contentRect: NSRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 200),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -166,16 +166,7 @@ final class MenuBarController: NSObject {
         defer { anchoring = false }
 
         let panelSize = panel.frame.size
-        var origin = fallbackOrigin(panelSize: panelSize)
-
-        if let button = statusItem.button, let window = button.window {
-            let buttonRectInWindow = button.convert(button.bounds, to: nil)
-            let buttonRectOnScreen = window.convertToScreen(buttonRectInWindow)
-            origin = NSPoint(
-                x: buttonRectOnScreen.minX,
-                y: buttonRectOnScreen.minY - panelSize.height - 2
-            )
-        }
+        var origin = statusItemOrigin(panelSize: panelSize) ?? fallbackOrigin(panelSize: panelSize)
 
         let screen = NSScreen.screens.first(where: { $0.frame.contains(origin) })
             ?? NSScreen.main
@@ -195,6 +186,24 @@ final class MenuBarController: NSObject {
         panel.setFrameOrigin(origin)
     }
 
+    /// Compute the panel origin anchored to the status item button.
+    /// Returns nil when the button isn't hosted in a window (hidden
+    /// from the menu bar), or when its on-screen rect doesn't
+    /// intersect any screen — both cases mean the icon is effectively
+    /// invisible (e.g. swallowed by the notch) and the caller should
+    /// fall back to the primary screen's top-right.
+    private func statusItemOrigin(panelSize: NSSize) -> NSPoint? {
+        guard let button = statusItem.button, let window = button.window else { return nil }
+        let buttonRectInWindow = button.convert(button.bounds, to: nil)
+        let buttonRectOnScreen = window.convertToScreen(buttonRectInWindow)
+        let onAScreen = NSScreen.screens.contains { $0.frame.intersects(buttonRectOnScreen) }
+        guard onAScreen else { return nil }
+        return NSPoint(
+            x: buttonRectOnScreen.minX,
+            y: buttonRectOnScreen.minY - panelSize.height - 2
+        )
+    }
+
     private func fallbackOrigin(panelSize: NSSize) -> NSPoint {
         let screen = NSScreen.main ?? NSScreen.screens.first
         guard let visible = screen?.visibleFrame else { return .zero }
@@ -207,17 +216,21 @@ final class MenuBarController: NSObject {
     // MARK: - Dismiss handling
 
     private func installDismissMonitors() {
+        // Both NSEvent global monitors and NotificationCenter observers
+        // with queue=.main deliver on the main thread — assumeIsolated
+        // is the cheap path; Task { @MainActor } would add an
+        // unnecessary hop.
         if globalMonitor == nil {
             globalMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.leftMouseDown, .rightMouseDown]
             ) { [weak self] _ in
-                Task { @MainActor in self?.hidePanel() }
+                MainActor.assumeIsolated { self?.hidePanel() }
             }
         }
         if escapeMonitor == nil {
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
                 guard event.keyCode == 53 else { return event }  // 53 = Escape
-                self?.hidePanel()
+                MainActor.assumeIsolated { self?.hidePanel() }
                 return nil
             }
         }
@@ -227,7 +240,7 @@ final class MenuBarController: NSObject {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in self?.hidePanel() }
+                MainActor.assumeIsolated { self?.hidePanel() }
             }
         }
     }
@@ -254,8 +267,10 @@ extension MenuBarController: NSWindowDelegate {
     /// Fires after `NSHostingController` propagates its preferred content
     /// size into the panel. Re-anchor so the top edge stays pinned to the
     /// status item regardless of which direction the size changed.
+    /// `NSWindow` delegate callbacks dispatch on the main thread, so
+    /// `assumeIsolated` is safe and skips the Task hop.
     nonisolated func windowDidResize(_ notification: Notification) {
-        Task { @MainActor in
+        MainActor.assumeIsolated {
             guard (notification.object as? NSWindow) === self.panel, self.panel.isVisible else { return }
             self.anchorPanelToStatusItem()
         }
