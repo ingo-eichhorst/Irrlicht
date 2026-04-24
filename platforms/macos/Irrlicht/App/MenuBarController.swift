@@ -29,7 +29,8 @@ final class MenuBarController: NSObject {
     private var globalMonitor: Any?
     private var escapeMonitor: Any?
     private var resignObserver: NSObjectProtocol?
-    private var anchoring = false  // guards re-entrancy from setFrame during windowDidResize
+
+    private static let escapeKeyCode: UInt16 = 53
 
     init(
         daemonManager: DaemonManager,
@@ -161,10 +162,6 @@ final class MenuBarController: NSObject {
     /// Uses the CURRENT panel size — the window's content size is
     /// already synced by NSHostingController before this is called.
     private func anchorPanelToStatusItem() {
-        guard !anchoring else { return }
-        anchoring = true
-        defer { anchoring = false }
-
         let panelSize = panel.frame.size
         var origin = statusItemOrigin(panelSize: panelSize) ?? fallbackOrigin(panelSize: panelSize)
 
@@ -229,7 +226,7 @@ final class MenuBarController: NSObject {
         }
         if escapeMonitor == nil {
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-                guard event.keyCode == 53 else { return event }  // 53 = Escape
+                guard event.keyCode == Self.escapeKeyCode else { return event }
                 MainActor.assumeIsolated { self?.hidePanel() }
                 return nil
             }
