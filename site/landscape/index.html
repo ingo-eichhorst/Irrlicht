@@ -120,482 +120,455 @@ footer { padding: 2rem 2.5rem; border-top: 1px solid var(--border); display: fle
 <div class="container">
   <div class="page-header">
     <h1>AI Coding Agent Landscape</h1>
-    <div class="updated">Last updated: 2026-04-12</div>
+    <div class="updated">Last updated: 2026-04-24</div>
     <p class="intro">A living ranking of AI coding agents and agent orchestrators, sorted by a blend of GitHub popularity and growth momentum. Agents that Irrlicht already monitors are marked <span class="badge badge-live">live</span>, upcoming integrations are <span class="badge badge-planned">planned</span>. Agents first tracked less than 3 months ago are marked <span class="badge badge-new">NEW</span>.</p>
     <a href="compare/" class="compare-link">See detailed comparison with all metrics &rarr;</a>
   </div>
 
   <h2 class="section-title">Coding Agents</h2>
-  <p class="trend-note">1M: no snapshot within 10 days of 2026-03-13 — data will appear as history accumulates. 3M: measured vs 2026-01-01 snapshot.</p>
+  <p class="trend-note">Growth measured from snapshots closest to 1 month and 3 months before 2026-04-24.</p>
   <table class="landscape-table">
-<thead>
-<tr>
-  <th>#</th>
-  <th>Agent</th>
-  <th>Stars</th>
-  <th>3M Growth</th>
-  <th>Irrlicht</th>
-  <th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-  <td class="rank">1</td>
-  <td class="name"><a href="https://opencode.ai" target="_blank" rel="noopener">OpenCode</a></td>
-  <td class="stars">141,888</td>
-  <td class="growth growth-3m"><span class="growth-up">+136,388 <span class="growth-pct">(2,480.7%)</span></span></td>
-  <td><span class="badge badge-planned">planned</span></td>
-  <td class="desc">The open source coding agent</td>
-</tr>
-<tr>
-  <td class="rank">2</td>
-  <td class="name"><a href="https://github.com/anthropics/claude-code" target="_blank" rel="noopener">Claude Code</a></td>
-  <td class="stars">112,845</td>
-  <td class="growth growth-3m"><span class="growth-up">+61,145 <span class="growth-pct">(118.3%)</span></span></td>
-  <td><span class="badge badge-live">live</span></td>
-  <td class="desc">Anthropic's terminal-based AI coding agent</td>
-</tr>
-<tr>
-  <td class="rank">3</td>
-  <td class="name"><a href="https://github.com/openai/codex" target="_blank" rel="noopener">OpenAI Codex</a></td>
-  <td class="stars">74,758</td>
-  <td class="growth growth-3m"><span class="growth-up">+28,758 <span class="growth-pct">(62.5%)</span></span></td>
-  <td><span class="badge badge-live">live</span></td>
-  <td class="desc">OpenAI's terminal AI coding agent</td>
-</tr>
-<tr>
-  <td class="rank">4</td>
-  <td class="name"><a href="https://claw-code.codes" target="_blank" rel="noopener">Claw Code</a></td>
-  <td class="stars">182,111</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Clean-room Python/Rust rewrite of Claude Code architecture</td>
-</tr>
-<tr>
-  <td class="rank">5</td>
-  <td class="name"><a href="https://github.com/All-Hands-AI/OpenHands" target="_blank" rel="noopener">OpenHands</a></td>
-  <td class="stars">71,060</td>
-  <td class="growth growth-3m"><span class="growth-up">+19,060 <span class="growth-pct">(36.7%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Open-source platform for autonomous AI software agents</td>
-</tr>
-<tr>
-  <td class="rank">6</td>
-  <td class="name"><a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener">Gemini CLI</a></td>
-  <td class="stars">100,994</td>
-  <td class="growth growth-3m"><span class="growth-up">+11,194 <span class="growth-pct">(12.5%)</span></span></td>
-  <td><span class="badge badge-planned">planned</span></td>
-  <td class="desc">Google's terminal AI coding agent</td>
-</tr>
-<tr>
-  <td class="rank">7</td>
-  <td class="name"><a href="https://github.com/cline/cline" target="_blank" rel="noopener">Cline</a></td>
-  <td class="stars">60,178</td>
-  <td class="growth growth-3m"><span class="growth-up">+24,178 <span class="growth-pct">(67.2%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Autonomous AI coding agent for VS Code</td>
-</tr>
-<tr>
-  <td class="rank">8</td>
-  <td class="name"><a href="https://block.github.io/goose/" target="_blank" rel="noopener">Goose</a></td>
-  <td class="stars">41,312</td>
-  <td class="growth growth-3m"><span class="growth-up">+15,212 <span class="growth-pct">(58.3%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Block's open-source extensible AI agent</td>
-</tr>
-<tr>
-  <td class="rank">9</td>
-  <td class="name"><a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener">Pi</a></td>
-  <td class="stars">34,689</td>
-  <td class="growth growth-3m"><span class="growth-up">+16,289 <span class="growth-pct">(88.5%)</span></span></td>
-  <td><span class="badge badge-live">live</span></td>
-  <td class="desc">Anthropic's lightweight coding agent</td>
-</tr>
-<tr>
-  <td class="rank">10</td>
-  <td class="name"><a href="https://aider.chat" target="_blank" rel="noopener">Aider</a></td>
-  <td class="stars">43,202</td>
-  <td class="growth growth-3m"><span class="growth-up">+7,202 <span class="growth-pct">(20.0%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI pair programming in your terminal</td>
-</tr>
-<tr>
-  <td class="rank">11</td>
-  <td class="name"><a href="https://cursor.com" target="_blank" rel="noopener">Cursor</a></td>
-  <td class="stars">32,624</td>
-  <td class="growth growth-3m"><span class="growth-up">+7,624 <span class="growth-pct">(30.5%)</span></span></td>
-  <td><span class="badge badge-planned">planned</span></td>
-  <td class="desc">AI-first code editor with agent mode</td>
-</tr>
-<tr>
-  <td class="rank">12</td>
-  <td class="name"><a href="https://github.com/voideditor/void" target="_blank" rel="noopener">Void</a></td>
-  <td class="stars">28,553</td>
-  <td class="growth growth-3m"><span class="growth-up">+5,553 <span class="growth-pct">(24.1%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Open-source AI code editor</td>
-</tr>
-<tr>
-  <td class="rank">13</td>
-  <td class="name"><a href="https://github.com/RooVetGit/Roo-Code" target="_blank" rel="noopener">Roo Code</a></td>
-  <td class="stars">23,088</td>
-  <td class="growth growth-3m"><span class="growth-up">+5,588 <span class="growth-pct">(31.9%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI coding agent for VS Code with multi-mode support</td>
-</tr>
-<tr>
-  <td class="rank">14</td>
-  <td class="name"><a href="https://kilo.ai" target="_blank" rel="noopener">Kilo Code</a></td>
-  <td class="stars">17,988</td>
-  <td class="growth growth-3m"><span class="growth-up">+6,988 <span class="growth-pct">(63.5%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Open-source agentic coding platform</td>
-</tr>
-<tr>
-  <td class="rank">15</td>
-  <td class="name"><a href="https://github.com/princeton-nlp/SWE-agent" target="_blank" rel="noopener">SWE-agent</a></td>
-  <td class="stars">18,968</td>
-  <td class="growth growth-3m"><span class="growth-up">+5,968 <span class="growth-pct">(45.9%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Princeton's autonomous software engineering agent</td>
-</tr>
-<tr>
-  <td class="rank">16</td>
-  <td class="name"><a href="https://www.warp.dev" target="_blank" rel="noopener">Warp</a></td>
-  <td class="stars">26,372</td>
-  <td class="growth growth-3m"><span class="growth-up">+2,372 <span class="growth-pct">(9.9%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Agentic terminal with Oz cloud orchestration</td>
-</tr>
-<tr>
-  <td class="rank">17</td>
-  <td class="name"><a href="https://continue.dev" target="_blank" rel="noopener">Continue</a></td>
-  <td class="stars">32,499</td>
-  <td class="growth growth-3m"><span class="growth-up">+1,499 <span class="growth-pct">(4.8%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Open-source AI code assistant for VS Code and JetBrains</td>
-</tr>
-<tr>
-  <td class="rank">18</td>
-  <td class="name"><a href="https://charm.land/crush" target="_blank" rel="noopener">Crush</a> <span class="badge badge-new">NEW</span></td>
-  <td class="stars">22,889</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Open-source terminal coding agent by Charmbracelet</td>
-</tr>
-<tr>
-  <td class="rank">19</td>
-  <td class="name"><a href="https://qwen.ai/qwencode" target="_blank" rel="noopener">Qwen Code</a> <span class="badge badge-new">NEW</span></td>
-  <td class="stars">22,823</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Alibaba's terminal coding agent for Qwen3-Coder</td>
-</tr>
-<tr>
-  <td class="rank">20</td>
-  <td class="name"><a href="https://plandex.ai" target="_blank" rel="noopener">Plandex</a> <span class="badge badge-new">NEW</span></td>
-  <td class="stars">15,231</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Open-source terminal agent for multi-step coding tasks</td>
-</tr>
-<tr>
-  <td class="rank">21</td>
-  <td class="name"><a href="https://github.com/langchain-ai/open-swe" target="_blank" rel="noopener">Open SWE</a></td>
-  <td class="stars">9,484</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">LangChain's async cloud-hosted coding agent</td>
-</tr>
-<tr>
-  <td class="rank">22</td>
-  <td class="name"><a href="https://github.com/antinomyhq/forgecode" target="_blank" rel="noopener">Forge Code</a></td>
-  <td class="stars">6,466</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Rust-based open-source terminal AI pair programmer</td>
-</tr>
-<tr>
-  <td class="rank">23</td>
-  <td class="name"><a href="https://sweep.dev" target="_blank" rel="noopener">Sweep</a></td>
-  <td class="stars">7,709</td>
-  <td class="growth growth-3m"><span class="growth-up">+509 <span class="growth-pct">(7.1%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI junior developer for GitHub issues</td>
-</tr>
-<tr>
-  <td class="rank">24</td>
-  <td class="name"><a href="https://www.ra-aid.ai" target="_blank" rel="noopener">RA.Aid</a></td>
-  <td class="stars">2,218</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">LangGraph-based autonomous coding agent</td>
-</tr>
-<tr>
-  <td class="rank">25</td>
-  <td class="name"><a href="https://www.factory.ai" target="_blank" rel="noopener">Factory</a></td>
-  <td class="stars">756</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Agent-native development platform with Droid agents</td>
-</tr>
-<tr>
-  <td class="rank">26</td>
-  <td class="name"><a href="https://trypear.ai" target="_blank" rel="noopener">Pear AI</a></td>
-  <td class="stars">674</td>
-  <td class="growth growth-3m"><span class="growth-up">+174 <span class="growth-pct">(34.8%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Open-source AI code editor</td>
-</tr>
-<tr>
-  <td class="rank">27</td>
-  <td class="name"><a href="https://codegen.com" target="_blank" rel="noopener">Codegen</a></td>
-  <td class="stars">521</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI coding agent platform with SDK</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://github.com/features/copilot" target="_blank" rel="noopener">GitHub Copilot</a></td>
-  <td class="stars"><span class="alt-metric">~15M users</span></td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">GitHub's AI pair programmer</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://codeium.com/windsurf" target="_blank" rel="noopener">Windsurf</a></td>
-  <td class="stars"><span class="alt-metric">~1M users</span></td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI-powered IDE by Codeium, now owned by Cognition AI</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://www.tabnine.com" target="_blank" rel="noopener">Tabnine</a></td>
-  <td class="stars"><span class="alt-metric">~1M users</span></td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI code completion and chat assistant</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://devin.ai" target="_blank" rel="noopener">Devin</a></td>
-  <td class="stars"><span class="alt-metric">$700M raised</span></td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Autonomous AI software engineer by Cognition</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://www.poolside.ai" target="_blank" rel="noopener">Poolside</a></td>
-  <td class="stars"><span class="alt-metric">$626M raised</span></td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Enterprise AI coding platform with custom foundation models</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://www.augmentcode.com" target="_blank" rel="noopener">Augment Code</a></td>
-  <td class="stars"><span class="alt-metric">$252M raised</span></td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI coding agent with deep codebase understanding</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://ampcode.com" target="_blank" rel="noopener">Amp</a></td>
-  <td class="stars"><span class="alt-metric">$225M (SG funding)</span></td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-planned">planned</span></td>
-  <td class="desc">Sourcegraph's AI coding agent</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://www.qodo.ai" target="_blank" rel="noopener">Qodo</a></td>
-  <td class="stars"><span class="alt-metric">$120M raised</span></td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Agentic code integrity platform</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://aws.amazon.com/q/developer/" target="_blank" rel="noopener">Amazon Q Developer</a></td>
-  <td class="stars" style="color:var(--text-dim)">&#8212;</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AWS AI coding assistant</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://sourcegraph.com/cody" target="_blank" rel="noopener">Sourcegraph Cody</a></td>
-  <td class="stars" style="color:var(--text-dim)">&#8212;</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI coding assistant with full codebase context</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://cosine.sh" target="_blank" rel="noopener">Cosine Genie</a></td>
-  <td class="stars" style="color:var(--text-dim)">&#8212;</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Fully autonomous AI software engineer</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://zencoder.ai" target="_blank" rel="noopener">Zencoder</a></td>
-  <td class="stars" style="color:var(--text-dim)">&#8212;</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI coding agent with repo-wide context indexing</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://www.codegpt.co" target="_blank" rel="noopener">CodeGPT</a></td>
-  <td class="stars" style="color:var(--text-dim)">&#8212;</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Full-stack AI agent platform with codebase knowledge graph</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://www.morphllm.com" target="_blank" rel="noopener">MorphLLM</a></td>
-  <td class="stars" style="color:var(--text-dim)">&#8212;</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Subagent infrastructure: Fast Apply, WarpGrep</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://codebuff.com" target="_blank" rel="noopener">Codebuff</a></td>
-  <td class="stars" style="color:var(--text-dim)">&#8212;</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI coding agent in your terminal</td>
-</tr>
-<tr>
-  <td class="rank" style="color:var(--text-dim)">&#8212;</td>
-  <td class="name"><a href="https://kiro.dev" target="_blank" rel="noopener">Kiro</a> <span class="badge badge-new">NEW</span></td>
-  <td class="stars" style="color:var(--text-dim)">&#8212;</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AWS-backed agentic IDE</td>
-</tr>
-</tbody>
-</table>
+<thead><tr>
+  <th class="rank">#</th><th>Name</th><th>Stars</th><th class="growth-3m">Recent growth</th><th>Irrlicht</th><th>Description</th>
+</tr></thead>
+<tbody>
+
+  <tr>
+    <td class="rank">#1</td>
+    <td class="name"><a href="https://github.com/ultraworkers/claw-code" target="_blank" rel="noopener">Claw Code</a></td>
+    <td class="stars">188,050</td>
+    <td class="growth growth-3m"><span class="growth-up">+5,939 <span class="growth-pct">(+3.3%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Rust CLI agent harness that wraps Claude via the Anthropic API; star count inflated by viral self-promotion in the README.</td>
+  </tr>
+  <tr>
+    <td class="rank">#2</td>
+    <td class="name"><a href="https://opencode.ai" target="_blank" rel="noopener">OpenCode</a></td>
+    <td class="stars">148,747</td>
+    <td class="growth growth-3m"><span class="growth-up">+6,859 <span class="growth-pct">(+4.8%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Open-source coding agent (TypeScript CLI).</td>
+  </tr>
+  <tr>
+    <td class="rank">#3</td>
+    <td class="name"><a href="https://www.anthropic.com/claude-code" target="_blank" rel="noopener">Claude Code</a></td>
+    <td class="stars">117,553</td>
+    <td class="growth growth-3m"><span class="growth-up">+4,708 <span class="growth-pct">(+4.2%)</span></span></td>
+    <td><span class="badge badge-live">live</span></td>
+    <td class="desc">Anthropic&#x27;s terminal-based coding agent.</td>
+  </tr>
+  <tr>
+    <td class="rank">#4</td>
+    <td class="name"><a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener">Gemini CLI</a></td>
+    <td class="stars">102,304</td>
+    <td class="growth growth-3m"><span class="growth-up">+1,310 <span class="growth-pct">(+1.3%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Google&#x27;s open-source terminal coding agent for Gemini models.</td>
+  </tr>
+  <tr>
+    <td class="rank">#5</td>
+    <td class="name"><a href="https://github.com/openai/codex" target="_blank" rel="noopener">OpenAI Codex</a></td>
+    <td class="stars">77,568</td>
+    <td class="growth growth-3m"><span class="growth-up">+2,810 <span class="growth-pct">(+3.8%)</span></span></td>
+    <td><span class="badge badge-live">live</span></td>
+    <td class="desc">OpenAI&#x27;s lightweight terminal coding agent.</td>
+  </tr>
+  <tr>
+    <td class="rank">#6</td>
+    <td class="name"><a href="https://github.com/OpenHands/OpenHands" target="_blank" rel="noopener">OpenHands</a></td>
+    <td class="stars">71,985</td>
+    <td class="growth growth-3m"><span class="growth-up">+925 <span class="growth-pct">(+1.3%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">AI-driven development platform for autonomous software agents.</td>
+  </tr>
+  <tr>
+    <td class="rank">#7</td>
+    <td class="name"><a href="https://cline.bot" target="_blank" rel="noopener">Cline</a></td>
+    <td class="stars">60,949</td>
+    <td class="growth growth-3m"><span class="growth-up">+771 <span class="growth-pct">(+1.3%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Autonomous coding agent embedded in VS Code.</td>
+  </tr>
+  <tr>
+    <td class="rank">#8</td>
+    <td class="name"><a href="https://aider.chat" target="_blank" rel="noopener">Aider</a></td>
+    <td class="stars">43,874</td>
+    <td class="growth growth-3m"><span class="growth-up">+672 <span class="growth-pct">(+1.6%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">AI pair-programming tool in your terminal.</td>
+  </tr>
+  <tr>
+    <td class="rank">#9</td>
+    <td class="name"><a href="https://block.github.io/goose/" target="_blank" rel="noopener">Goose</a></td>
+    <td class="stars">43,139</td>
+    <td class="growth growth-3m"><span class="growth-up">+1,827 <span class="growth-pct">(+4.4%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Extensible open-source agent that can install, execute, edit, and test with any LLM (originated at Block).</td>
+  </tr>
+  <tr>
+    <td class="rank">#10</td>
+    <td class="name"><a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener">Pi</a></td>
+    <td class="stars">39,373</td>
+    <td class="growth growth-3m"><span class="growth-up">+4,684 <span class="growth-pct">(+13.5%)</span></span></td>
+    <td><span class="badge badge-live">live</span></td>
+    <td class="desc">Mario Zechner&#x27;s AI agent toolkit: coding agent CLI, unified LLM API, TUI/web libraries, Slack bot, vLLM pods.</td>
+  </tr>
+  <tr>
+    <td class="rank">#11</td>
+    <td class="name"><a href="https://continue.dev" target="_blank" rel="noopener">Continue</a></td>
+    <td class="stars">32,770</td>
+    <td class="growth growth-3m"><span class="growth-up">+271 <span class="growth-pct">(+0.8%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Source-controlled AI coding assistant and CI checks; VS Code / JetBrains / CLI.</td>
+  </tr>
+  <tr>
+    <td class="rank">#12</td>
+    <td class="name"><a href="https://cursor.com" target="_blank" rel="noopener">Cursor</a></td>
+    <td class="stars">32,693</td>
+    <td class="growth growth-3m"><span class="growth-up">+69 <span class="growth-pct">(+0.2%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Proprietary AI-first code editor (the GitHub repo hosts issues only; editor source is closed).</td>
+  </tr>
+  <tr>
+    <td class="rank">#13</td>
+    <td class="name"><a href="https://voideditor.com" target="_blank" rel="noopener">Void</a></td>
+    <td class="stars">28,644</td>
+    <td class="growth growth-3m"><span class="growth-up">+91 <span class="growth-pct">(+0.3%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Open-source AI code editor (VS Code fork).</td>
+  </tr>
+  <tr>
+    <td class="rank">#14</td>
+    <td class="name"><a href="https://www.warp.dev" target="_blank" rel="noopener">Warp</a></td>
+    <td class="stars">26,501</td>
+    <td class="growth growth-3m"><span class="growth-up">+129 <span class="growth-pct">(+0.5%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Agentic development environment built on a modern terminal.</td>
+  </tr>
+  <tr>
+    <td class="rank">#15</td>
+    <td class="name"><a href="https://qwen.ai/qwencode" target="_blank" rel="noopener">Qwen Code</a><sup class="badge badge-new">NEW</sup></td>
+    <td class="stars">23,813</td>
+    <td class="growth growth-3m"><span class="growth-up">+990 <span class="growth-pct">(+4.3%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Alibaba&#x27;s open-source terminal coding agent tuned for the Qwen3-Coder model family.</td>
+  </tr>
+  <tr>
+    <td class="rank">#16</td>
+    <td class="name"><a href="https://charm.land/crush" target="_blank" rel="noopener">Crush</a><sup class="badge badge-new">NEW</sup></td>
+    <td class="stars">23,418</td>
+    <td class="growth growth-3m"><span class="growth-up">+529 <span class="growth-pct">(+2.3%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Charmbracelet&#x27;s multi-model terminal coding agent written in Go.</td>
+  </tr>
+  <tr>
+    <td class="rank">#17</td>
+    <td class="name"><a href="https://roocode.com" target="_blank" rel="noopener">Roo Code</a></td>
+    <td class="stars">23,345</td>
+    <td class="growth growth-3m"><span class="growth-up">+257 <span class="growth-pct">(+1.1%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">VS Code coding agent with multi-mode team-of-agents support.</td>
+  </tr>
+  <tr>
+    <td class="rank">#18</td>
+    <td class="name"><a href="https://swe-agent.com" target="_blank" rel="noopener">SWE-agent</a></td>
+    <td class="stars">19,050</td>
+    <td class="growth growth-3m"><span class="growth-up">+82 <span class="growth-pct">(+0.4%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Princeton NLP&#x27;s autonomous agent for resolving GitHub issues (NeurIPS 2024).</td>
+  </tr>
+  <tr>
+    <td class="rank">#19</td>
+    <td class="name"><a href="https://kilo.ai" target="_blank" rel="noopener">Kilo Code</a></td>
+    <td class="stars">18,505</td>
+    <td class="growth growth-3m"><span class="growth-up">+517 <span class="growth-pct">(+2.9%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">All-in-one agentic coding platform for VS Code, JetBrains, and CLI.</td>
+  </tr>
+  <tr>
+    <td class="rank">#20</td>
+    <td class="name"><a href="https://plandex.ai" target="_blank" rel="noopener">Plandex</a><sup class="badge badge-new">NEW</sup></td>
+    <td class="stars">15,289</td>
+    <td class="growth growth-3m"><span class="growth-up">+58 <span class="growth-pct">(+0.4%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Open-source terminal agent for large, multi-step coding tasks spanning many files.</td>
+  </tr>
+  <tr>
+    <td class="rank">#21</td>
+    <td class="name"><a href="https://github.com/langchain-ai/open-swe" target="_blank" rel="noopener">Open SWE</a></td>
+    <td class="stars">9,642</td>
+    <td class="growth growth-3m"><span class="growth-up">+158 <span class="growth-pct">(+1.7%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">LangChain&#x27;s open-source asynchronous cloud coding agent.</td>
+  </tr>
+  <tr>
+    <td class="rank">#22</td>
+    <td class="name"><a href="https://sweep.dev" target="_blank" rel="noopener">Sweep</a></td>
+    <td class="stars">7,705</td>
+    <td class="growth growth-3m"><span class="growth-down">-4 <span class="growth-pct">(-0.1%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">AI coding assistant for JetBrains (pivoted from earlier GitHub-issue automation).</td>
+  </tr>
+  <tr>
+    <td class="rank">#23</td>
+    <td class="name"><a href="https://forgecode.dev" target="_blank" rel="noopener">Forge Code</a></td>
+    <td class="stars">6,925</td>
+    <td class="growth growth-3m"><span class="growth-up">+459 <span class="growth-pct">(+7.1%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Rust-based open-source terminal AI pair programmer supporting 300+ models.</td>
+  </tr>
+  <tr>
+    <td class="rank">#24</td>
+    <td class="name"><a href="https://www.ra-aid.ai" target="_blank" rel="noopener">RA.Aid</a></td>
+    <td class="stars">2,223</td>
+    <td class="growth growth-3m"><span class="growth-up">+5 <span class="growth-pct">(+0.2%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">LangGraph-based autonomous coding agent with research → plan → implement loop.</td>
+  </tr>
+  <tr>
+    <td class="rank">#25</td>
+    <td class="name"><a href="https://www.factory.ai" target="_blank" rel="noopener">Factory</a></td>
+    <td class="stars">794</td>
+    <td class="growth growth-3m"><span class="growth-up">+38 <span class="growth-pct">(+5.0%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Agent-native software development platform with Droid agents.</td>
+  </tr>
+  <tr>
+    <td class="rank">#26</td>
+    <td class="name"><a href="https://trypear.ai" target="_blank" rel="noopener">Pear AI</a></td>
+    <td class="stars">676</td>
+    <td class="growth growth-3m"><span class="growth-up">+2 <span class="growth-pct">(+0.3%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Open-source AI code editor (VS Code fork with Continue submodule).</td>
+  </tr>
+  <tr>
+    <td class="rank">#27</td>
+    <td class="name"><a href="https://codegen.com" target="_blank" rel="noopener">Codegen</a></td>
+    <td class="stars">521</td>
+    <td class="growth growth-3m"><span class="growth-flat">0 <span class="growth-pct">(0.0%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Python wrapper for the Codegen API — run code agents at scale against a hosted service.</td>
+  </tr>
+  <tr><td colspan="6" style="padding-top:1.2rem; color: var(--text-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: none;">No public repo — popularity via funding / users</td></tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://aws.amazon.com/q/developer/" target="_blank" rel="noopener">Amazon Q Developer</a></td>
+    <td class="alt-metric">—</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">AWS&#x27;s AI coding assistant (completions, transformations, agentic refactors).</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://ampcode.com" target="_blank" rel="noopener">Amp</a></td>
+    <td class="alt-metric">—</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Agentic coding agent spinning out from Sourcegraph as a standalone company in 2026 (formerly Sourcegraph Cody); CLI + VS Code extension.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://www.augmentcode.com" target="_blank" rel="noopener">Augment Code</a></td>
+    <td class="alt-metric">$252M raised</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">AI coding agent with deep codebase understanding and enterprise context retrieval.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://codebuff.com" target="_blank" rel="noopener">Codebuff</a></td>
+    <td class="alt-metric">—</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">AI coding agent for the terminal.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://www.codegpt.co" target="_blank" rel="noopener">CodeGPT</a></td>
+    <td class="alt-metric">—</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Full-stack AI agent platform with a codebase knowledge graph.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://cosine.sh" target="_blank" rel="noopener">Cosine Genie</a></td>
+    <td class="alt-metric">—</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Fully autonomous AI software engineer using Cosine&#x27;s proprietary Genie model.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://devin.ai" target="_blank" rel="noopener">Devin</a></td>
+    <td class="alt-metric">$696M raised</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Cognition AI&#x27;s autonomous software-engineer agent; parent company merged Windsurf (Cascade IDE) into its stack in 2025.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://github.com/features/copilot" target="_blank" rel="noopener">GitHub Copilot</a></td>
+    <td class="alt-metric">20.0M users</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">GitHub&#x27;s AI pair programmer (completion + chat + coding agent).</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://kiro.dev" target="_blank" rel="noopener">Kiro</a><sup class="badge badge-new">NEW</sup></td>
+    <td class="alt-metric">—</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">AWS-backed agentic IDE with spec-driven development and autonomous task execution.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://www.morphllm.com" target="_blank" rel="noopener">MorphLLM</a></td>
+    <td class="alt-metric">—</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Subagent infrastructure: Fast Apply, WarpGrep, context compression.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://www.poolside.ai" target="_blank" rel="noopener">Poolside</a></td>
+    <td class="alt-metric">$626M raised</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Enterprise AI coding platform with custom foundation models.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://www.qodo.ai" target="_blank" rel="noopener">Qodo</a></td>
+    <td class="alt-metric">$120M raised</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Agentic code-integrity platform for review, testing, and governance (formerly CodiumAI).</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://www.tabnine.com" target="_blank" rel="noopener">Tabnine</a></td>
+    <td class="alt-metric">$102M raised</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">AI code completion, chat, and code-review agent with on-prem/private deployment options.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://windsurf.com" target="_blank" rel="noopener">Windsurf</a></td>
+    <td class="alt-metric">$250M acquisition</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Agentic AI IDE (Cascade). Acquired by Cognition AI from Codeium in December 2025 for ~$250M; brand continues under Cognition.</td>
+  </tr>
+  <tr>
+    <td class="rank">—</td>
+    <td class="name"><a href="https://zencoder.ai" target="_blank" rel="noopener">Zencoder</a></td>
+    <td class="alt-metric">—</td>
+    <td class="growth growth-3m"><span class="growth-na">—</span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">AI coding agent with repo-wide context indexing.</td>
+  </tr>
+</tbody></table>
 
   <h2 class="section-title">Agent Orchestrators</h2>
-  <p class="trend-note">1M: no snapshot within 10 days of 2026-03-13 — data will appear as history accumulates. 3M: measured vs 2026-01-01 snapshot.</p>
+  <p class="trend-note">Growth measured from snapshots closest to 1 month and 3 months before 2026-04-24.</p>
   <table class="landscape-table">
-<thead>
-<tr>
-  <th>#</th>
-  <th>Orchestrator</th>
-  <th>Stars</th>
-  <th>3M Growth</th>
-  <th>Irrlicht</th>
-  <th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-  <td class="rank">1</td>
-  <td class="name"><a href="https://paperclip.ing" target="_blank" rel="noopener">Paperclip</a> <span class="badge badge-new">NEW</span></td>
-  <td class="stars">52,042</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Hierarchical agent orchestrator modelling a zero-human company</td>
-</tr>
-<tr>
-  <td class="rank">2</td>
-  <td class="name"><a href="https://github.com/gpt-engineer-org/gpt-engineer" target="_blank" rel="noopener">GPT Engineer</a></td>
-  <td class="stars">55,217</td>
-  <td class="growth growth-3m"><span class="growth-up">+2,217 <span class="growth-pct">(4.2%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">AI agent that builds codebases from specifications</td>
-</tr>
-<tr>
-  <td class="rank">3</td>
-  <td class="name"><a href="https://github.com/OpenBMB/ChatDev" target="_blank" rel="noopener">ChatDev</a></td>
-  <td class="stars">32,685</td>
-  <td class="growth growth-3m"><span class="growth-up">+4,685 <span class="growth-pct">(16.7%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Virtual software company powered by AI agents</td>
-</tr>
-<tr>
-  <td class="rank">4</td>
-  <td class="name"><a href="https://www.agno.com" target="_blank" rel="noopener">Agno</a></td>
-  <td class="stars">39,367</td>
-  <td class="growth growth-3m"><span class="growth-up">+3,367 <span class="growth-pct">(9.4%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Python agent runtime for teams and workflows</td>
-</tr>
-<tr>
-  <td class="rank">5</td>
-  <td class="name"><a href="https://github.com/gastownhall/gastown" target="_blank" rel="noopener">Gas Town</a></td>
-  <td class="stars">13,898</td>
-  <td class="growth growth-3m"><span class="growth-up">+12,898 <span class="growth-pct">(1,289.8%)</span></span></td>
-  <td><span class="badge badge-live">live</span></td>
-  <td class="desc">Multi-agent workspace manager by Steve Yegge</td>
-</tr>
-<tr>
-  <td class="rank">6</td>
-  <td class="name"><a href="https://github.com/ruvnet/ruflo" target="_blank" rel="noopener">Ruflo</a></td>
-  <td class="stars">31,366</td>
-  <td class="growth growth-3m"><span class="growth-up">+1,666 <span class="growth-pct">(5.6%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Multi-agent swarm orchestration platform for Claude</td>
-</tr>
-<tr>
-  <td class="rank">7</td>
-  <td class="name"><a href="https://github.com/stitionai/devika" target="_blank" rel="noopener">Devika</a></td>
-  <td class="stars">19,497</td>
-  <td class="growth growth-3m"><span class="growth-up">+997 <span class="growth-pct">(5.4%)</span></span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Open-source AI software engineer</td>
-</tr>
-<tr>
-  <td class="rank">8</td>
-  <td class="name"><a href="https://github.com/smtg-ai/claude-squad" target="_blank" rel="noopener">Claude Squad</a></td>
-  <td class="stars">6,961</td>
-  <td class="growth growth-3m"><span class="growth-up">+1,161 <span class="growth-pct">(20.0%)</span></span></td>
-  <td><span class="badge badge-planned">planned</span></td>
-  <td class="desc">Manage multiple Claude Code instances in tmux</td>
-</tr>
-<tr>
-  <td class="rank">9</td>
-  <td class="name"><a href="https://composio.dev" target="_blank" rel="noopener">Composio</a></td>
-  <td class="stars">6,182</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Agent-agnostic orchestrator for parallel coding agents</td>
-</tr>
-<tr>
-  <td class="rank">10</td>
-  <td class="name"><a href="https://github.com/dlorenc/multiclaude" target="_blank" rel="noopener">Multiclaude</a></td>
-  <td class="stars">529</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Parallel Claude Code instances in tmux</td>
-</tr>
-<tr>
-  <td class="rank">11</td>
-  <td class="name"><a href="https://stoneforge.ai" target="_blank" rel="noopener">Stoneforge</a></td>
-  <td class="stars">113</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Web dashboard orchestrating AI coding agent teams</td>
-</tr>
-<tr>
-  <td class="rank">12</td>
-  <td class="name"><a href="https://forge.nxtg.ai" target="_blank" rel="noopener">Forge Orchestrator</a></td>
-  <td class="stars">108</td>
-  <td class="growth growth-3m"><span class="growth-na">&#8212;</span></td>
-  <td><span class="badge badge-none">none</span></td>
-  <td class="desc">Rust-based multi-AI task orchestrator</td>
-</tr>
-</tbody>
-</table>
+<thead><tr>
+  <th class="rank">#</th><th>Name</th><th>Stars</th><th class="growth-3m">Recent growth</th><th>Irrlicht</th><th>Description</th>
+</tr></thead>
+<tbody>
+
+  <tr>
+    <td class="rank">#1</td>
+    <td class="name"><a href="https://paperclip.ing" target="_blank" rel="noopener">Paperclip</a><sup class="badge badge-new">NEW</sup></td>
+    <td class="stars">58,383</td>
+    <td class="growth growth-3m"><span class="growth-up">+6,341 <span class="growth-pct">(+12.2%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Orchestration platform for &quot;zero-human companies&quot; — agents assigned to CEO/manager/worker roles with budgets and approvals.</td>
+  </tr>
+  <tr>
+    <td class="rank">#2</td>
+    <td class="name"><a href="https://www.agno.com" target="_blank" rel="noopener">Agno</a></td>
+    <td class="stars">39,648</td>
+    <td class="growth growth-3m"><span class="growth-up">+281 <span class="growth-pct">(+0.7%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Python agent runtime for teams and workflows (formerly Phidata).</td>
+  </tr>
+  <tr>
+    <td class="rank">#3</td>
+    <td class="name"><a href="https://github.com/ruvnet/ruflo" target="_blank" rel="noopener">Ruflo</a></td>
+    <td class="stars">33,079</td>
+    <td class="growth growth-3m"><span class="growth-up">+1,713 <span class="growth-pct">(+5.5%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Agent orchestration platform for Claude: multi-agent swarms, RAG integration, Claude Code/Codex integration.</td>
+  </tr>
+  <tr>
+    <td class="rank">#4</td>
+    <td class="name"><a href="https://github.com/OpenBMB/ChatDev" target="_blank" rel="noopener">ChatDev</a></td>
+    <td class="stars">32,847</td>
+    <td class="growth growth-3m"><span class="growth-up">+162 <span class="growth-pct">(+0.5%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Virtual software company powered by multi-agent LLM collaboration (ChatDev 2.0).</td>
+  </tr>
+  <tr>
+    <td class="rank">#5</td>
+    <td class="name"><a href="https://github.com/stitionai/devika" target="_blank" rel="noopener">Devika</a></td>
+    <td class="stars">19,502</td>
+    <td class="growth growth-3m"><span class="growth-up">+5 <span class="growth-pct">(+0.0%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Open-source agentic software engineer (originally an open alternative to Devin).</td>
+  </tr>
+  <tr>
+    <td class="rank">#6</td>
+    <td class="name"><a href="https://github.com/gastownhall/gastown" target="_blank" rel="noopener">Gas Town</a></td>
+    <td class="stars">14,580</td>
+    <td class="growth growth-3m"><span class="growth-up">+682 <span class="growth-pct">(+4.9%)</span></span></td>
+    <td><span class="badge badge-live">live</span></td>
+    <td class="desc">Multi-agent workspace manager: Mayor (coordinator) routes work through Rigs and Polecats with a Beads work-state ledger.</td>
+  </tr>
+  <tr>
+    <td class="rank">#7</td>
+    <td class="name"><a href="https://github.com/smtg-ai/claude-squad" target="_blank" rel="noopener">Claude Squad</a></td>
+    <td class="stars">7,145</td>
+    <td class="growth growth-3m"><span class="growth-up">+184 <span class="growth-pct">(+2.6%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Manage multiple AI terminal agents (Claude Code, Codex, OpenCode, Amp) in tmux.</td>
+  </tr>
+  <tr>
+    <td class="rank">#8</td>
+    <td class="name"><a href="https://composio.dev" target="_blank" rel="noopener">Composio</a></td>
+    <td class="stars">6,474</td>
+    <td class="growth growth-3m"><span class="growth-up">+292 <span class="growth-pct">(+4.7%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Agent-agnostic orchestrator for parallel coding agents with autonomous CI auto-fix.</td>
+  </tr>
+  <tr>
+    <td class="rank">#9</td>
+    <td class="name"><a href="https://github.com/dlorenc/multiclaude" target="_blank" rel="noopener">Multiclaude</a></td>
+    <td class="stars">539</td>
+    <td class="growth growth-3m"><span class="growth-up">+10 <span class="growth-pct">(+1.9%)</span></span></td>
+    <td><span class="badge badge-planned">planned</span></td>
+    <td class="desc">Parallel Claude Code instances in tmux with a Brownian-ratchet CI model.</td>
+  </tr>
+  <tr>
+    <td class="rank">#10</td>
+    <td class="name"><a href="https://stoneforge.ai" target="_blank" rel="noopener">Stoneforge</a></td>
+    <td class="stars">130</td>
+    <td class="growth growth-3m"><span class="growth-up">+17 <span class="growth-pct">(+15.0%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Web dashboard orchestrating AI coding agent teams with worktree isolation.</td>
+  </tr>
+  <tr>
+    <td class="rank">#11</td>
+    <td class="name"><a href="https://forge.nxtg.ai" target="_blank" rel="noopener">Forge Orchestrator</a></td>
+    <td class="stars">109</td>
+    <td class="growth growth-3m"><span class="growth-up">+1 <span class="growth-pct">(+0.9%)</span></span></td>
+    <td><span class="badge badge-none">not tracked</span></td>
+    <td class="desc">Rust-based multi-AI task orchestrator with file locking and drift detection.</td>
+  </tr>
+</tbody></table>
 </div>
 
 <footer>

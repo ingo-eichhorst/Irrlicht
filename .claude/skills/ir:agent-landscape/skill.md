@@ -7,242 +7,200 @@ description: "Scan the web for coding agents and agent orchestrators, track GitH
 
 Discover, track, and rank coding agents and agent orchestrators. Publish a styled HTML report to the irrlicht site at `site/landscape/index.html` and an in-depth comparison at `site/landscape/compare/index.html`.
 
+## Non-negotiable rules
+
+Past runs of this skill invented data — fabricated star counts, wrong repo paths, copied descriptions instead of reading the actual README, and fake historical snapshots (e.g. "2026-01-01" entries for agents the skill only started tracking in April). Follow these rules to prevent a repeat:
+
+1. **Never invent a value.** Every `stars`, `language`, `license`, `description`, `funding_millions_usd`, `estimated_users`, or historical snapshot must come from a concrete source you can quote (the gh CLI, a specific WebFetch URL, a specific search result). If you don't have a source, write `null` and move on.
+2. **Never copy an old value forward.** If you can't re-verify a field on this run, set it to `null` instead of leaving whatever was in the file from last time.
+3. **Always use `gh api` for GitHub data, not WebFetch.** `gh api repos/OWNER/REPO` returns canonical stars, language, license, description, archived flag, and follows renames. `WebFetch` on github.com returns JS-rendered pages that routinely give stale numbers.
+4. **Honor GitHub's repo-rename redirects.** `gh api` returns a `full_name` field. If `full_name != OWNER/REPO` that you requested, the repo has been transferred. Update `github_repo` to the new canonical path in `agent-data.json`.
+5. **Never write a historical snapshot you didn't measure.** `stars_history` may only contain entries this skill actually measured. Do not back-fill "~3 months ago" or "~1 month ago" rows from memory or estimate.
+6. **Plausibility check before writing.** Before writing a new stars value, compare to the prior snapshot. If the delta is >30% in <30 days for a repo with >5k stars, investigate before trusting it — it's more likely a bad query than real growth. Common causes: cached HTML, wrong repo, joke repo inflating itself via README marketing.
+7. **Descriptions come from the repo's own `description` field**, not from product marketing pages. If a description contains attribution (e.g. "Anthropic's X" or "Google's Y"), verify the GitHub owner matches the claim. `badlogic/pi-mono` is not Anthropic's. `block/goose` is not Block's anymore (it was transferred). `cursor/cursor` is not the editor source (it's the issue tracker).
+8. **Archived repos go in the "archived" list, not the ranked table.** `gh api` returns `archived: true` — respect it.
+9. **Short-window growth is not 1-month or 3-month growth.** Until the repo has a snapshot ≥30 days old, the growth column must read "Recent growth since <date> (Nd ago)", not "1M" or "3M". The HTML generator already enforces this.
+
 ## Data File
 
 All state persists in `references/agent-data.json` (relative to this skill directory). Schema:
 
 ```json
 {
-  "last_updated": "2026-04-12",
+  "last_updated": "2026-04-24",
   "agents": [
     {
       "name": "Aider",
-      "github_repo": "paul-gauthier/aider",
+      "github_repo": "Aider-AI/aider",
       "category": "agent",
       "website": "https://aider.chat",
-      "description": "AI pair programming in your terminal",
-      "stars": 30000,
+      "description": "AI pair-programming tool in your terminal.",
+      "stars": 43874,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
       "stars_history": [
-        {"date": "2026-04-12", "stars": 30000},
-        {"date": "2026-04-05", "stars": 29800},
-        {"date": "2026-03-12", "stars": 28500},
-        {"date": "2026-01-12", "stars": 27000}
+        {"date": "2026-04-24", "stars": 43874},
+        {"date": "2026-04-12", "stars": 43202}
       ],
       "alternative_metrics": null,
       "irrlicht_support": "none",
-      "first_seen": "2026-01-05"
+      "first_seen": "2026-04-05"
     }
   ]
 }
 ```
 
 Field definitions:
-- `stars` — current GitHub stars (null if no public repo)
-- `stars_history` — array of `{date, stars}` snapshots, newest first. Always maintain 4 anchor points: **today**, **~1 week ago**, **~1 month ago**, **~3 months ago**. When adding today's snapshot, keep the existing entry closest to each anchor and trim anything else. Keep up to 6 entries total.
-- `alternative_metrics` — for agents without a public GitHub repo. Object with optional fields:
-  ```json
-  {
-    "vscode_installs": 5200000,
-    "npm_weekly_downloads": 120000,
-    "funding_millions_usd": 150,
-    "estimated_users": "1M+",
-    "source": "VS Code Marketplace, Crunchbase",
-    "measured_date": "2026-04-12"
-  }
-  ```
-  Set to `null` for agents that have a GitHub repo.
-- `irrlicht_support` — one of: `"live"`, `"planned"`, `"none"`
-- `category` — one of: `"agent"`, `"orchestrator"`
-- `first_seen` — ISO date when the agent was first added to tracking
+- `github_repo` — canonical `OWNER/REPO` from `gh api` `.full_name`. Rewrite on repo rename.
+- `stars` — current GitHub stars from `gh api` `.stargazers_count`. `null` if no public repo.
+- `language`, `license` — straight from `gh api` (`.language`, `.license.spdx_id`). `null` if missing.
+- `description` — from `gh api` `.description`. Lightly cleaned if too long, but never replaced with third-party marketing copy. For non-GitHub agents, use the project's own homepage.
+- `interface` — curated string (CLI / IDE extension / Desktop app / Web / SDK / Enterprise SaaS / CLI (tmux) / etc.).
+- `pricing` — curated string (Free (open source) / Freemium / Paid / Enterprise / Paid (usage-based)).
+- `stars_history` — snapshots **this skill actually measured**. Newest first. Never back-fill.
+- `alternative_metrics` — for non-GitHub agents. Object with any of `funding_millions_usd`, `acquisition_price_millions_usd`, `estimated_users`, `source`, `measured_date`. Set to `null` when `github_repo` is set.
+- `irrlicht_support` — `"live"` (adapter exists in `core/adapters/inbound/`), `"planned"`, or `"none"`.
+- `category` — `"agent"` or `"orchestrator"`.
+- `first_seen` — ISO date when this entry was first added. Never change it once set.
 
-### Snapshot Strategy
+### Snapshot strategy
 
-Snapshots are measured relative to the **current date** (the day the skill runs), NOT normalized to month boundaries.
+Snapshots accumulate over successive runs. No back-filling.
 
-Anchor points (always relative to today):
-- **today** — fresh star count from GitHub API
-- **~1 week ago** — closest existing snapshot to (today - 7 days)
-- **~1 month ago** — closest existing snapshot to (today - 30 days)
-- **~3 months ago** — closest existing snapshot to (today - 90 days)
+On each run:
+1. Append today's `{date, stars}` to `stars_history` for each GitHub agent.
+2. Retain all prior real snapshots (no trimming until we have > 12 entries).
+3. If today already has an entry, overwrite it (same-day re-run).
+4. Dates are the run date, not a month/week anchor.
 
-When updating:
-1. Add today's snapshot (or update if today already exists)
-2. From remaining history, keep the single entry closest to each anchor
-3. Discard duplicates and anything else beyond 6 total entries
-4. Sort newest first
+Growth is only computed on demand in the HTML generator using whichever snapshots exist. Until there is a snapshot ≥30 days old, growth is shown as "Recent growth since <date> (Nd ago)" rather than "1M" / "3M".
 
-### "NEW" Badge
+### NEW badge
 
-An agent is marked **NEW** if its `first_seen` date is less than 3 months before today (i.e., `today - first_seen < 90 days`). Display a "new" superscript badge next to its name in both the main table and comparison page.
+An agent is "NEW" only if both:
+- `first_seen` is strictly later than the earliest `first_seen` across all tracked agents (so the initial seed batch never gets tagged), **and**
+- `first_seen` is within the last 90 days.
 
-## Deny List
+## Deny list
 
-`references/deny-list.txt` lists agent/orchestrator names to explicitly exclude (one per line). Skip any agent whose name matches a line in this file during discovery and HTML generation. Remove matching entries from `agent-data.json` if present.
+`references/deny-list.txt` lists agent/orchestrator names to explicitly exclude. One name per line; `#` lines are comments. Entries with matching `name` field are skipped during discovery and removed from `agent-data.json` if present.
 
-## Irrlicht Support Status
+## Irrlicht support mapping
 
-These agents have irrlicht adapters (mark as `"live"`):
-- Claude Code (`anthropics/claude-code`)
-- OpenAI Codex CLI (`openai/codex`, display as "OpenAI Codex")
-- Pi (`badlogic/pi-mono`)
-- Gas Town
+The canonical source of truth is `core/adapters/inbound/agents/` + `core/adapters/inbound/orchestrators/`. As of this writing:
 
-These are planned (mark as `"planned"`):
-- Gemini CLI
-- Cursor
-- Amp
-- Claude Squad
-- OpenCode (`anomalyco/opencode`)
+- `live`: Claude Code (`anthropics/claude-code`), OpenAI Codex (`openai/codex`), Pi (`badlogic/pi-mono`), Gas Town (`gastownhall/gastown`).
+- `planned`: Gemini CLI, Cursor, Amp, Claude Squad, OpenCode, Qwen Code, Crush, Continue, Goose, Aider, Kilo Code, Paperclip, Ruflo, Multiclaude, SWE-agent.
+- Everything else: `none`.
 
-Everything else: `"none"`.
+Before each run, `ls core/adapters/inbound/agents/` and `ls core/adapters/inbound/orchestrators/` to confirm the list is still correct. If the set of live adapters has changed, update this section and apply the change to `agent-data.json`.
 
 ## Workflow
 
-### 1. Load Existing Data
+### 0. Preflight
 
-Read `references/agent-data.json`. If `agents` is empty, read `references/seed-agents.md` for the initial list of known agents.
-
-Read `references/deny-list.txt`. Remove any agents whose name matches a deny-list entry from the loaded data. Skip denied names during discovery (step 2).
-
-### 2. Search for New Agents
-
-Use WebSearch to find coding agents and orchestrators not already tracked:
-- `"best AI coding agents 2026"`
-- `"new coding assistant CLI terminal 2026"`
-- `"AI agent orchestrator framework 2026"`
-- `"agentic coding tools"`
-- `"claude code coding agent alternatives"`
-- `"gas town coding agent orchestrator alternatives"`
-
-Add any genuinely new coding agents or orchestrators found. Skip IDE themes, linters, or general-purpose AI chatbots — only track tools that write/edit code autonomously or orchestrate agents that do.
-
-### 3. Fetch GitHub Stars
-
-For each agent with a `github_repo`:
-
-1. Use WebFetch to get `https://api.github.com/repos/{owner}/{repo}` (JSON response includes `stargazers_count`)
-2. Set `stars` to current `stargazers_count`
-3. Add a snapshot for **today** in `stars_history`
-4. Trim history per the snapshot strategy above (keep closest to each anchor, max 6 entries)
-
-If the GitHub API rate-limits (403), use WebSearch `"{agent name}" github stars` as fallback and parse the count from search results.
-
-### 4. Fetch Alternative Metrics for Non-GitHub Agents
-
-For agents where `github_repo` is null, gather alternative popularity signals:
-
-1. **VS Code Marketplace installs** — if the agent has a VS Code extension, use WebSearch `"{agent name}" VS Code marketplace installs` and extract the install count
-2. **npm weekly downloads** — if there's an npm package, use WebFetch `https://api.npmjs.org/downloads/point/last-week/{package}` 
-3. **Funding** — use WebSearch `"{agent name}" funding raised` to find total funding in millions USD
-4. **Estimated users** — use WebSearch `"{agent name}" users monthly active` for any public user counts
-
-Store results in `alternative_metrics`. Set `source` to describe where the data came from. Set `measured_date` to today. Only populate fields you can actually find — leave others out of the object.
-
-If you cannot find any alternative metrics, set `alternative_metrics` to an empty object `{}` with just `measured_date` and `source: "no public data found"`.
-
-### 5. Compute Rankings
-
-For each agent, compute a `score` using star data from `stars_history`:
-
-```
-# Anchor dates (relative to today)
-today       = current date
-date_1m     = today - 30 days
-date_3m     = today - 90 days
-
-# Pick the snapshots closest to each anchor (strict tolerance)
-current  = stars_history entry closest to today
-snap_1m  = stars_history entry closest to date_1m (null if none within 10 days)
-snap_3m  = stars_history entry closest to date_3m (null if none within 21 days)
-
-# Growth calculations
-growth_1m_abs = current.stars - snap_1m.stars      (null if snap_1m missing)
-growth_1m_pct = growth_1m_abs / snap_1m.stars * 100 (null if snap_1m missing or snap_1m.stars == 0)
-
-growth_3m_abs = current.stars - snap_3m.stars      (null if snap_3m missing)
-growth_3m_pct = growth_3m_abs / snap_3m.stars * 100 (null if snap_3m missing or snap_3m.stars == 0)
-
-# Trend = average monthly gain over 3 months
-days     = days between snap_3m.date and current.date
-trend    = growth_3m_abs / days * 30               (0 if < 2 snapshots)
-
-normalized_stars = log10(stars + 1)                 # dampen mega-repos
-normalized_trend = log10(trend + 1)                 # monthly gain scale
-
-# Score depends on whether we have enough history for a trend
-if snap_3m is not null:
-    score = 0.6 * normalized_stars + 0.4 * normalized_trend
-else:
-    score = 0.85 * normalized_stars              # no trend penalty for new entries
+```bash
+cd /Users/ingo/projects/irrlicht
+gh auth status
+ls core/adapters/inbound/agents
+ls core/adapters/inbound/orchestrators
 ```
 
-**Non-GitHub agents** (where `stars` is null) are **not ranked** alongside GitHub agents. They appear in a separate "No Public Repo" group below the ranked table, sorted by their best available alternative metric. Do not assign them a numeric rank — show `—` for rank.
+Abort if `gh` is not authenticated — every other step depends on it.
 
-### 6. Save Data
+### 1. Load existing data
 
-Write updated `references/agent-data.json` with the new snapshots and alternative metrics.
+Read `references/agent-data.json`. Read `references/deny-list.txt` and prune any matching entries from the data. If `agents` is empty, read `references/seed-agents.md` for the initial list.
 
-### 7. Generate HTML Report (Main Table)
+### 2. Refresh every GitHub agent via `gh api`
 
-Generate `site/landscape/index.html` using the template structure in `assets/page-template.html`.
+For every agent with `github_repo`, run:
 
-The page must:
-- Match the irrlicht site design (dark theme, same CSS variables, fonts, nav)
-- Show two tables: "Coding Agents" and "Agent Orchestrators"
-- Each row: rank, name (linked to website/repo), stars (formatted with commas), **3M growth**, irrlicht support badge, description
-- **3M growth column**: Show absolute change and percentage, e.g. `+5,200 (12.3%)`. Use green for positive, red for negative, dim for zero/flat. Show `—` if no 3M data. (1M growth is only shown on the comparison page.)
-- **NEW badge**: Show a styled "NEW" superscript next to the name for agents first seen < 90 days ago
-- **Trend note**: Add a small note below the table header stating the actual baseline dates, e.g.: "1M growth measured vs YYYY-MM-DD snapshot; 3M growth measured vs YYYY-MM-DD snapshot." Use the real dates of the snapshots used, not approximate labels.
-- For agents without GitHub stars but with `alternative_metrics`: show the most relevant metric instead of stars (e.g., "5.2M installs" or "$150M raised") with a footnote explaining the source
-- Badges: green "live" / orange "planned" / grey "not tracked" matching the site's tag styles
-- Show `last_updated` date in the header
-- Include a "What is this?" intro explaining the page
-- Link to the comparison page: "See the [detailed comparison →](compare/)" 
-- Be fully self-contained (inline CSS, no external dependencies beyond Google Fonts)
+```bash
+gh api repos/<github_repo> --jq '{repo: .full_name, stars: .stargazers_count, language: .language, license: .license.spdx_id, description: .description, archived: .archived}'
+```
 
-### 8. Generate Comparison Page
+Batch them in a single bash loop so you don't issue 40 separate tool calls. Example:
 
-Generate `site/landscape/compare/index.html` using the template in `assets/compare-template.html`.
+```bash
+jq -r '.agents[] | select(.github_repo != null) | .github_repo' references/agent-data.json \
+| while read -r repo; do
+    gh api "repos/$repo" --jq '{queried: "'"$repo"'", repo: .full_name, stars: .stargazers_count, language: .language, license: .license.spdx_id, description: .description, archived: .archived}'
+  done
+```
 
-This is an in-depth comparison page with a single unified table covering **all** agents and orchestrators. The table includes these columns:
+For each result:
+- If `repo != queried`, GitHub has renamed the repo — update `github_repo` to `repo`.
+- If `archived: true`, move the agent out of the ranked tables into a separate "archived" list (or drop it if it's been replaced by another product — note the reason in a commit message).
+- Update `stars`, `language`, `license`, `description` from the API response.
+- Append today's `{date, stars}` to `stars_history` (overwriting if today already exists).
+- Run the plausibility check from rule #6 above.
 
-| Column | Description |
-|--------|-------------|
-| Name | Agent name + link + NEW badge if applicable |
-| Category | "Agent" or "Orchestrator" badge |
-| Stars | Current GitHub stars (or alternative metric) |
-| 1M Growth | Stars gained in the last month (absolute + %) |
-| 3M Growth | Stars gained in the last 3 months (absolute + %) |
-| Open Source | Yes/No |
-| License | MIT, Apache-2.0, proprietary, etc. |
-| Primary Language | Go, TypeScript, Python, Rust, etc. |
-| Interface | CLI, IDE extension, Web, Desktop app |
-| Pricing | Free, freemium, paid, etc. |
-| Irrlicht | Support badge |
+### 3. Search for new agents (optional; only when explicitly requested or quarterly)
 
-Data sourcing for comparison columns:
-- **License** and **Primary Language**: fetch from GitHub API (`license.spdx_id`, `language` fields) for repos with `github_repo`. Use WebSearch for non-GitHub agents.
-- **Interface** and **Pricing**: derive from existing `description` field + WebSearch if not obvious.
-- **Open Source**: `true` if `github_repo` is not null and license is not proprietary.
-The comparison page must:
-- Use the same dark theme, nav, and fonts as the main page
-- Be sortable by clicking column headers (use inline JavaScript, no external deps)
-- Include a note at the top: "Growth figures measured relative to today ({{LAST_UPDATED}}). 1M baseline: YYYY-MM-DD. 3M baseline: YYYY-MM-DD." Use the real snapshot dates.
-- Mark **License** and **Pricing** column headers with an asterisk (*). Add a footnote at the bottom of the table: "* License and pricing data sourced via web search and may not reflect the latest changes. Verify on the project's website."
-- Show a "← Back to Landscape" link to the main table
-- Be fully self-contained
+Use WebSearch queries such as:
+- `"best AI coding agents <year>"`
+- `"new coding assistant CLI terminal <year>"`
+- `"agent orchestrator framework <year>"`
+- `"claude code alternatives"` / `"gas town alternatives"`
 
-### 9. Update Landing Page Navigation
+Skip anything that isn't a coding-specific agent or orchestrator (IDE themes, linters, general chatbots). Skip anything on the deny list.
 
-Add a nav link to the landscape page in `site/index.html` if not already present. Add it to both:
-- The nav bar: `<li class="nav-hide-sm"><a href="landscape/">Landscape</a></li>` (before Docs)
-- The footer: `<a href="landscape/">Agent Landscape</a>` (before Docs)
+For each new discovery:
+- Resolve the canonical repo with `gh api` (see step 2) before writing anything.
+- Set `first_seen` to today.
+- Fill `interface` and `pricing` manually based on the project's own homepage.
 
-### 10. Summary
+### 4. Refresh non-GitHub agents (alternative_metrics)
 
-Print a concise summary:
-- Total agents tracked, how many new this run
-- Top 5 by score (name + stars + 1M growth + 3M growth)
-- Any agents where irrlicht support status may be outdated
-- Count of agents with vs. without GitHub repos
-- Note: "Comparison page generated at site/landscape/compare/index.html"
+For each agent with `github_repo: null`, re-check the following and update `measured_date` to today:
+
+- Funding: `"<name>" funding round <year>` — look for the most recent round on TechCrunch / Bloomberg / Crunchbase.
+- Acquisition: `"<name>" acquisition <year>` — if acquired, set `acquisition_price_millions_usd` and note in the description.
+- User count: `"<name>" monthly active users` or `"<name>" VS Code marketplace installs`.
+
+Only write numbers you have a source for. Set `source` to a short citation (outlet + date). If no data found, set `source` to a honest `"no public data found"` string.
+
+Common pitfalls:
+- Devin ≠ Cognition's total funding. Record under Devin since Devin is Cognition's product, but note "Cognition AI parent" in the source.
+- Amp ≠ Sourcegraph Cody. Cody was rebranded to Amp; Amp is spinning out as a standalone company. Do not list both.
+- Windsurf was acquired by Cognition (Dec 2025). Its funding field should be null; its `acquisition_price_millions_usd` should be set.
+
+### 5. Save `agent-data.json`
+
+Write the updated data. Sort agents by category (agent first), then by stars descending, then by name ascending. Set `last_updated` to today.
+
+### 6. Generate HTML
+
+Run the HTML generator:
+
+```bash
+python3 .claude/skills/ir:agent-landscape/assets/generate.py   # if checked in
+# else: use the generator documented below
+```
+
+If the generator script is not checked in, the latest reference implementation lives in the commit that last touched `site/landscape/`. Use it as-is rather than re-writing it from scratch.
+
+The generator must:
+- Rank GitHub agents by `log10(stars + 1)` when no ≥30-day snapshot exists (no fake trend bonus).
+- Add a trend component only when at least one snapshot is ≥30 days old.
+- Show "Recent growth since `<prior snapshot date>` (Nd ago)" in the growth column header when no 30-day snapshot exists; switch to "1M / 3M growth" only when real snapshots at those horizons exist.
+- Tag NEW per the rule above (later than earliest `first_seen` and within 90 days).
+- Place non-GitHub agents in an unranked "No public repo" group below the ranked table.
+- Include a footnote: "* License and pricing are sourced from the GitHub API and public web pages. Verify on the project's own website before relying on them."
+
+### 7. Update landing-page nav
+
+Ensure `site/index.html` has the Landscape nav link (nav bar + footer). Idempotent; skip if present.
+
+### 8. Summary
+
+Print:
+- Count of tracked agents, how many github vs non-github.
+- Any repos where `gh api` returned a renamed `full_name` (report the rename so the user can commit it).
+- Any agents marked `archived: true` (report even if you've moved them out of the ranked list).
+- Any plausibility-check failures (stars delta >30% in <30 days for a 5k+ repo) — do NOT silently write them; ask the user whether to trust the number.
+- Top 5 by current stars per category.
+- Diff summary: `git diff --stat site/landscape/` and `git diff --stat .claude/skills/ir:agent-landscape/references/agent-data.json`.
