@@ -130,7 +130,8 @@ func main() {
 
 	fsRepo, cachedRepo := initSessionStorage(logger, cfg)
 	costTracker := initCostTracker(logger, fsRepo)
-	historyTracker := startHistoryTracker(logger)
+	historyTracker, historyCancel := startHistoryTracker(logger)
+	defer historyCancel()
 
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
@@ -533,19 +534,18 @@ func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepositor
 	return costTracker
 }
 
-// startHistoryTracker brings up the per-session rolling ring buffers (1s/
-// 10s/60s) used by the history endpoint. State persists to
-// ~/.local/share/irrlicht/history.json so data survives a daemon restart.
-// The background goroutine is owned by main's lifetime — cancellation
-// flushes at shutdown.
-func startHistoryTracker(logger outbound.Logger) *services.HistoryTracker {
+// startHistoryTracker brings up the per-session rolling ring buffers used by
+// the history endpoint and returns the tracker plus a cancel func. The
+// caller must defer the cancel — HistoryTracker.Run calls save() in its
+// ctx.Done branch, so skipping the cancel loses the final flush on clean
+// shutdown and history regresses to the last periodic tick.
+func startHistoryTracker(logger outbound.Logger) (*services.HistoryTracker, context.CancelFunc) {
 	home, _ := os.UserHomeDir()
 	histDir := filepath.Join(home, ".local", "share", "irrlicht")
 	ht := services.NewHistoryTrackerWithDir(histDir)
 	ht.Load()
-	histCtx, histCancel := context.WithCancel(context.Background())
-	_ = histCancel // cancelled at process exit
-	go ht.Run(histCtx)
+	ctx, cancel := context.WithCancel(context.Background())
+	go ht.Run(ctx)
 	logger.LogInfo("startup", "", "history tracker started")
-	return ht
+	return ht, cancel
 }
