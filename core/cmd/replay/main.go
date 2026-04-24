@@ -85,8 +85,16 @@ type cliOptions struct {
 func main() {
 	opts := parseFlags()
 	transcriptPath, sidecarPath, useSidecar := resolveInputPaths(opts.src)
+	if !useSidecar && opts.sessionFlag != "" {
+		fmt.Fprintln(os.Stderr, "--session requires a sidecar (.events.jsonl); no sidecar found")
+		os.Exit(2)
+	}
 	cfg := buildReportSettings(opts, transcriptPath)
-	report := runReplay(opts, useSidecar, transcriptPath, sidecarPath, cfg)
+	report, err := runReplay(transcriptPath, sidecarPath, useSidecar, cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	emitReport(opts, report)
 	if c := report.ExtendedCheck; c != nil {
 		if len(c.OrderedMismatches) > 0 || len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
@@ -153,36 +161,30 @@ func buildReportSettings(opts cliOptions, transcriptPath string) reportSettings 
 	}
 }
 
-// runReplay dispatches to the sidecar-driven or transcript-only replay,
-// runs the extended sidecar check when applicable, and returns the fully
-// populated report. Any error terminates the process.
-func runReplay(opts cliOptions, useSidecar bool, transcriptPath, sidecarPath string, cfg reportSettings) *replayReport {
+// runReplay dispatches to the sidecar-driven or transcript-only replay and,
+// when a sidecar is present, attaches the extended-check diff. Returned to
+// callers so both main() and the byte-identity test share one dispatch.
+func runReplay(transcriptPath, sidecarPath string, useSidecar bool, cfg reportSettings) (*replayReport, error) {
 	var (
-		report    *replayReport
-		replayErr error
+		report *replayReport
+		err    error
 	)
 	if useSidecar {
-		report, replayErr = replayWithSidecar(transcriptPath, sidecarPath, cfg)
+		report, err = replayWithSidecar(transcriptPath, sidecarPath, cfg)
 	} else {
-		if opts.sessionFlag != "" {
-			fmt.Fprintln(os.Stderr, "--session requires a sidecar (.events.jsonl); no sidecar found")
-			os.Exit(2)
-		}
-		report, replayErr = replay(transcriptPath, cfg)
+		report, err = replay(transcriptPath, cfg)
 	}
-	if replayErr != nil {
-		fmt.Fprintln(os.Stderr, "replay failed:", replayErr)
-		os.Exit(1)
+	if err != nil {
+		return nil, fmt.Errorf("replay failed: %w", err)
 	}
 	if useSidecar {
 		check, err := runExtendedCheck(sidecarPath, report.Transitions)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "extended check failed:", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("extended check failed: %w", err)
 		}
 		report.ExtendedCheck = check
 	}
-	return report
+	return report, nil
 }
 
 // emitReport encodes the report to the chosen destination and prints the
