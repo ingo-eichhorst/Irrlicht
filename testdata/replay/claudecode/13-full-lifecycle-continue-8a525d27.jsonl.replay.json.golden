@@ -1,0 +1,735 @@
+{
+  "extended_check": {
+    "ordered_matches": 10,
+    "ordered_mismatches": [
+      {
+        "index": 10,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 11,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 12,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 13,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 14,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 15,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 16,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 17,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 18,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 19,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 20,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 21,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 22,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 23,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_transition_count": 10,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_transition_count": 24,
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "sidecar_path": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.events.jsonl"
+  },
+  "generated_at": "0001-01-01T00:00:00Z",
+  "schema_version": 1,
+  "sessions": [
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 0,
+      "duration_ms": 235403,
+      "event_count": 6,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:52:54.087384+02:00",
+      "last_seen": "2026-04-11T20:56:49.491263+02:00",
+      "session_id": "proc-95631",
+      "state_changes": 1,
+      "state_durations_ms": {
+        "ready": 235367
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 11,
+      "duration_ms": 1134071,
+      "event_count": 58,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:52:56.764165+02:00",
+      "last_seen": "2026-04-11T21:11:50.835265+02:00",
+      "pid": 34198,
+      "pid_discovery_lag_ms": 1124208,
+      "session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "state_changes": 12,
+      "state_durations_ms": {
+        "ready": 951072,
+        "working": 182995
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 3,
+      "duration_ms": 5747,
+      "event_count": 12,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:00.166666+02:00",
+      "last_seen": "2026-04-11T20:53:05.913991+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-ae04f393030f3393b",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 1286,
+        "working": 4421
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 2,
+      "duration_ms": 5238,
+      "event_count": 10,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:00.966936+02:00",
+      "last_seen": "2026-04-11T20:53:06.205292+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-ad5ac77d703f22b9f",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 886,
+        "working": 4313
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 2,
+      "duration_ms": 3828,
+      "event_count": 11,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:01.851577+02:00",
+      "last_seen": "2026-04-11T20:53:05.680417+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-abb993514b4da5e14",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 937,
+        "working": 2852
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 9,
+      "duration_ms": 9386,
+      "event_count": 25,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:09.134782+02:00",
+      "last_seen": "2026-04-11T20:53:18.521646+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-a3788f20434910dfb",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 827,
+        "working": 8521
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 12,
+      "duration_ms": 11931,
+      "event_count": 31,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:09.960442+02:00",
+      "last_seen": "2026-04-11T20:53:21.892216+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-aa893b95554e698f9",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 923,
+        "working": 10969
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 12,
+      "duration_ms": 9640,
+      "event_count": 31,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:10.597683+02:00",
+      "last_seen": "2026-04-11T20:53:20.237693+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-a8c6b99a5471d404c",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 878,
+        "working": 8721
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 4,
+      "duration_ms": 6466,
+      "event_count": 17,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:32.770335+02:00",
+      "last_seen": "2026-04-11T20:53:39.237176+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-a0ecfa598b8d3e4cb",
+      "state_changes": 4,
+      "state_durations_ms": {
+        "ready": 4815,
+        "working": 1612
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 5,
+      "duration_ms": 7417,
+      "event_count": 19,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:33.564777+02:00",
+      "last_seen": "2026-04-11T20:53:40.981916+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-ab5d816197e4bbfec",
+      "state_changes": 4,
+      "state_durations_ms": {
+        "ready": 5177,
+        "working": 2196
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 2,
+      "duration_ms": 5830,
+      "event_count": 11,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:34.684094+02:00",
+      "last_seen": "2026-04-11T20:53:40.514094+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-aaf3eed3bb8d10332",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 899,
+        "working": 4890
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 15,
+      "duration_ms": 12329,
+      "event_count": 35,
+      "final_state": "working",
+      "first_seen": "2026-04-11T20:53:38.466257+02:00",
+      "last_seen": "2026-04-11T20:53:50.795512+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-af7bf8be5a1b511e4",
+      "state_changes": 2,
+      "state_durations_ms": {
+        "ready": 1015,
+        "working": 11268
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 33,
+      "duration_ms": 28245,
+      "event_count": 73,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:39.530805+02:00",
+      "last_seen": "2026-04-11T20:54:07.776216+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-adafcd67f82b65a1f",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 819,
+        "working": 27376
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 3,
+      "duration_ms": 14404,
+      "event_count": 13,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T20:53:40.293102+02:00",
+      "last_seen": "2026-04-11T20:53:54.697818+02:00",
+      "parent_session_id": "8a525d27-37a4-4a12-8523-a3ea345290cf",
+      "session_id": "agent-a9df09b50d5f3ad98",
+      "state_changes": 3,
+      "state_durations_ms": {
+        "ready": 1393,
+        "working": 12967
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 0,
+      "duration_ms": 15458,
+      "event_count": 6,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T21:11:40.425536+02:00",
+      "last_seen": "2026-04-11T21:11:55.883559+02:00",
+      "session_id": "proc-34198",
+      "state_changes": 1,
+      "state_durations_ms": {
+        "ready": 15423
+      }
+    }
+  ],
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.jsonl",
+  "summary": {
+    "consumed_events": 30,
+    "cum_cache_creation_tokens": 26033,
+    "cum_cache_read_tokens": 418421,
+    "cum_input_tokens": 60,
+    "cum_output_tokens": 2123,
+    "estimated_cost_usd": 0.5229155,
+    "first_event_time": "2026-04-11T20:52:56.865909+02:00",
+    "flicker_count": 9,
+    "flickers_by_category": {
+      "ready_between_working": 8,
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 8,
+      "force ready→working on first activity": 1
+    },
+    "last_event_time": "2026-04-11T21:11:50.311894+02:00",
+    "model_name": "claude-opus-4-6",
+    "state_durations": {
+      "ready": 1090635521000,
+      "working": 42810464000
+    },
+    "total_events": 30,
+    "total_transitions": 25,
+    "wall_clock_session_duration": 1133445985000
+  },
+  "transitions": [
+    {
+      "cause": "init",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 0,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "",
+      "reason": "initial state",
+      "virtual_time": "2026-04-11T20:52:56.865909+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 0,
+      "has_open_tool": false,
+      "index": 1,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:52:56.865909+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 9,
+      "has_open_tool": false,
+      "index": 2,
+      "is_agent_done": true,
+      "last_assistant_text_head": "All waves complete (6 foreground subagents). Check the UI for the full picture.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:53:22.636996+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 10,
+      "has_open_tool": false,
+      "index": 3,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:53:29.123866+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 16,
+      "has_open_tool": false,
+      "index": 4,
+      "is_agent_done": true,
+      "last_assistant_text_head": "All waves launched (6 background agents). Check the UI for the full picture.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:53:43.445381+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 17,
+      "has_open_tool": false,
+      "index": 5,
+      "is_agent_done": true,
+      "last_assistant_text_head": "Background agents completing. Waiting for the remaining Wave 2 agents to finish.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:53:47.409967+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 17,
+      "has_open_tool": false,
+      "index": 6,
+      "is_agent_done": true,
+      "last_assistant_text_head": "Background agents completing. Waiting for the remaining Wave 2 agents to finish.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:53:47.409967+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 18,
+      "has_open_tool": false,
+      "index": 7,
+      "is_agent_done": true,
+      "last_assistant_text_head": "Background agents completing. Waiting for the remaining Wave 2 agents to finish.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:53:50.905946+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 18,
+      "has_open_tool": false,
+      "index": 8,
+      "is_agent_done": true,
+      "last_assistant_text_head": "Background agents completing. Waiting for the remaining Wave 2 agents to finish.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:53:50.905946+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 19,
+      "has_open_tool": false,
+      "index": 9,
+      "is_agent_done": true,
+      "last_assistant_text_head": "Still waiting on the final two background agents.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:53:53.023596+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 19,
+      "has_open_tool": false,
+      "index": 10,
+      "is_agent_done": true,
+      "last_assistant_text_head": "Still waiting on the final two background agents.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:53:53.023596+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 20,
+      "has_open_tool": false,
+      "index": 11,
+      "is_agent_done": true,
+      "last_assistant_text_head": "Still waiting on the final two background agents.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:53:56.701262+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 20,
+      "has_open_tool": false,
+      "index": 12,
+      "is_agent_done": true,
+      "last_assistant_text_head": "Still waiting on the final two background agents.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:53:56.701262+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 21,
+      "has_open_tool": false,
+      "index": 13,
+      "is_agent_done": true,
+      "last_assistant_text_head": "One background agent remaining.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:53:56.748147+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 21,
+      "has_open_tool": false,
+      "index": 14,
+      "is_agent_done": true,
+      "last_assistant_text_head": "One background agent remaining.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:53:56.748147+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 22,
+      "has_open_tool": false,
+      "index": 15,
+      "is_agent_done": true,
+      "last_assistant_text_head": "One background agent remaining.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:54:07.779625+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 22,
+      "has_open_tool": false,
+      "index": 16,
+      "is_agent_done": true,
+      "last_assistant_text_head": "One background agent remaining.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:54:07.779625+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 23,
+      "has_open_tool": false,
+      "index": 17,
+      "is_agent_done": true,
+      "last_assistant_text_head": "All 6 background agents complete.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:54:11.77726+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 23,
+      "has_open_tool": false,
+      "index": 18,
+      "is_agent_done": true,
+      "last_assistant_text_head": "All 6 background agents complete.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:54:11.77726+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 24,
+      "has_open_tool": false,
+      "index": 19,
+      "is_agent_done": true,
+      "last_assistant_text_head": "All 6 background agents complete.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T20:56:47.104418+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 24,
+      "has_open_tool": false,
+      "index": 20,
+      "is_agent_done": true,
+      "last_assistant_text_head": "All 6 background agents complete.",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T20:56:47.104418+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 26,
+      "has_open_tool": false,
+      "index": 21,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T21:11:45.046448+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 27,
+      "has_open_tool": false,
+      "index": 22,
+      "is_agent_done": true,
+      "last_assistant_text_head": "```\nAGENTS.md    README.md    core         platforms    site         version.jso…",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T21:11:47.76431+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 28,
+      "has_open_tool": false,
+      "index": 23,
+      "is_agent_done": true,
+      "last_assistant_text_head": "```\nAGENTS.md    README.md    core         platforms    site         version.jso…",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T21:11:50.310406+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 28,
+      "has_open_tool": false,
+      "index": 24,
+      "is_agent_done": true,
+      "last_assistant_text_head": "```\nAGENTS.md    README.md    core         platforms    site         version.jso…",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T21:11:50.310406+02:00",
+      "waiting_for_user_input": false
+    }
+  ]
+}

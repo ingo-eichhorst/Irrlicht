@@ -1,0 +1,80 @@
+{
+  "generated_at": "0001-01-01T00:00:00Z",
+  "schema_version": 1,
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.subagents/agent-ab5d816197e4bbfec.jsonl",
+  "summary": {
+    "consumed_events": 14,
+    "cum_cache_creation_tokens": 14862,
+    "cum_cache_read_tokens": 47777,
+    "cum_input_tokens": 14,
+    "cum_output_tokens": 664,
+    "estimated_cost_usd": 0.026689200000000003,
+    "first_event_time": "2026-04-11T18:53:33.461Z",
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "last_event_time": "2026-04-11T18:53:40.879Z",
+    "model_name": "claude-haiku-4-5",
+    "state_durations": {
+      "ready": 3257000000,
+      "working": 4161000000
+    },
+    "total_events": 14,
+    "total_transitions": 3,
+    "wall_clock_session_duration": 7418000000
+  },
+  "transitions": [
+    {
+      "cause": "init",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 0,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "",
+      "reason": "initial state",
+      "virtual_time": "2026-04-11T18:53:33.461Z",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 12,
+      "has_open_tool": false,
+      "index": 1,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T18:53:36.718Z",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 13,
+      "has_open_tool": false,
+      "index": 2,
+      "is_agent_done": true,
+      "last_assistant_text_head": "…strator metadata for a matched session (unexported)\n\nThe test files (session_…",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T18:53:40.879Z",
+      "waiting_for_user_input": false
+    }
+  ]
+}

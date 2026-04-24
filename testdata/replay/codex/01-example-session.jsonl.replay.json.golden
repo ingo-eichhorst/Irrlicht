@@ -1,0 +1,54 @@
+{
+  "generated_at": "0001-01-01T00:00:00Z",
+  "schema_version": 1,
+  "settings": {
+    "adapter": "codex",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/codex/01-example-session.jsonl",
+  "summary": {
+    "consumed_events": 470,
+    "first_event_time": "2026-04-06T18:46:22.298Z",
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "last_event_time": "2026-04-06T18:46:22.298Z",
+    "model_name": "gpt-5.4",
+    "state_durations": {},
+    "total_events": 470,
+    "total_transitions": 2,
+    "wall_clock_session_duration": 0
+  },
+  "transitions": [
+    {
+      "cause": "init",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 0,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "",
+      "reason": "initial state",
+      "virtual_time": "2026-04-06T18:46:22.298Z",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 469,
+      "has_open_tool": false,
+      "index": 1,
+      "is_agent_done": false,
+      "last_assistant_text_head": "…d:** `origin/main` contains merge commit `af7217a`\n- **Updated locally:** che…",
+      "last_event_type": "assistant_message",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-06T18:46:22.298Z",
+      "waiting_for_user_input": false
+    }
+  ]
+}

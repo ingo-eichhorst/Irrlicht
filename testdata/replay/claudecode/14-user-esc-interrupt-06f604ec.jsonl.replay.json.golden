@@ -1,0 +1,152 @@
+{
+  "extended_check": {
+    "ordered_matches": 4,
+    "recorded_transition_count": 4,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_transition_count": 4,
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "sidecar_path": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/14-user-esc-interrupt-06f604ec.events.jsonl"
+  },
+  "generated_at": "0001-01-01T00:00:00Z",
+  "schema_version": 1,
+  "sessions": [
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 0,
+      "duration_ms": 40464,
+      "event_count": 6,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T22:30:11.578173+02:00",
+      "last_seen": "2026-04-11T22:30:52.043135+02:00",
+      "session_id": "proc-22208",
+      "state_changes": 1,
+      "state_durations_ms": {
+        "ready": 40428
+      }
+    },
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 1,
+      "duration_ms": 21424,
+      "event_count": 13,
+      "final_state": "ready",
+      "first_seen": "2026-04-11T22:30:27.925851+02:00",
+      "last_seen": "2026-04-11T22:30:49.350442+02:00",
+      "pid": 22208,
+      "pid_discovery_lag_ms": 4,
+      "session_id": "06f604ec-448f-41ea-b066-0f8157ad6ce4",
+      "state_changes": 5,
+      "state_durations_ms": {
+        "ready": 18004,
+        "working": 3417
+      }
+    }
+  ],
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/14-user-esc-interrupt-06f604ec.jsonl",
+  "summary": {
+    "consumed_events": 4,
+    "cum_cache_creation_tokens": 11497,
+    "cum_cache_read_tokens": 16902,
+    "cum_input_tokens": 6,
+    "first_event_time": "2026-04-11T22:30:28.028309+02:00",
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "last_event_time": "2026-04-11T22:30:49.117171+02:00",
+    "model_name": "\u003csynthetic\u003e",
+    "state_durations": {
+      "ready": 17633026000,
+      "working": 3455836000
+    },
+    "total_events": 4,
+    "total_transitions": 5,
+    "wall_clock_session_duration": 21088862000
+  },
+  "transitions": [
+    {
+      "cause": "init",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 0,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "",
+      "reason": "initial state",
+      "virtual_time": "2026-04-11T22:30:28.028309+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 0,
+      "has_open_tool": false,
+      "index": 1,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T22:30:28.028309+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 1,
+      "has_open_tool": false,
+      "index": 2,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "user ESC interrupt while working → ready",
+      "virtual_time": "2026-04-11T22:30:31.484145+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 2,
+      "has_open_tool": false,
+      "index": 3,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T22:30:49.114597+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 2,
+      "has_open_tool": false,
+      "index": 4,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "user ESC interrupt while working → ready",
+      "virtual_time": "2026-04-11T22:30:49.114597+02:00",
+      "waiting_for_user_input": false
+    }
+  ]
+}

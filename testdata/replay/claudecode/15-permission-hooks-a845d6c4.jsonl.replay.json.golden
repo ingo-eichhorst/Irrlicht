@@ -1,0 +1,508 @@
+{
+  "extended_check": {
+    "ordered_matches": 6,
+    "ordered_mismatches": [
+      {
+        "index": 1,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "working→waiting"
+      },
+      {
+        "index": 2,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "waiting→working"
+      },
+      {
+        "index": 3,
+        "kind": "state_differs",
+        "recorded": "working→waiting",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 4,
+        "kind": "state_differs",
+        "recorded": "waiting→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 5,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→waiting"
+      },
+      {
+        "index": 6,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "waiting→ready"
+      },
+      {
+        "index": 8,
+        "kind": "state_differs",
+        "recorded": "working→waiting",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 9,
+        "kind": "state_differs",
+        "recorded": "waiting→working",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 10,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "working→waiting"
+      },
+      {
+        "index": 11,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "waiting→working"
+      },
+      {
+        "index": 14,
+        "kind": "state_differs",
+        "recorded": "working→waiting",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 15,
+        "kind": "state_differs",
+        "recorded": "waiting→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 16,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→waiting"
+      },
+      {
+        "index": 17,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "waiting→ready"
+      },
+      {
+        "index": 20,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 21,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_transition_count": 20,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "waiting→ready",
+      "waiting→working",
+      "working→ready",
+      "working→waiting"
+    ],
+    "replayed_transition_count": 22,
+    "replayed_unique_kinds": [
+      "ready→working",
+      "waiting→ready",
+      "waiting→working",
+      "working→ready",
+      "working→waiting"
+    ],
+    "sidecar_path": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/15-permission-hooks-a845d6c4.events.jsonl"
+  },
+  "generated_at": "0001-01-01T00:00:00Z",
+  "schema_version": 1,
+  "sessions": [
+    {
+      "adapter": "claude-code",
+      "debounce_coalesced_events": 3,
+      "duration_ms": 82209,
+      "event_count": 50,
+      "final_state": "ready",
+      "first_seen": "2026-04-12T18:43:55.211616+02:00",
+      "last_seen": "2026-04-12T18:45:17.42153+02:00",
+      "pid": 79936,
+      "pid_discovery_lag_ms": 4,
+      "session_id": "a845d6c4-d7ef-4d28-9b3b-a4dd9f2b69b1",
+      "state_changes": 21,
+      "state_durations_ms": {
+        "ready": 44467,
+        "waiting": 8864,
+        "working": 28875
+      }
+    }
+  ],
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/15-permission-hooks-a845d6c4.jsonl",
+  "summary": {
+    "consumed_events": 18,
+    "cum_cache_creation_tokens": 14119,
+    "cum_cache_read_tokens": 196147,
+    "cum_input_tokens": 23,
+    "cum_output_tokens": 497,
+    "estimated_cost_usd": 0.2518035,
+    "first_event_time": "2026-04-12T18:43:55.312572+02:00",
+    "flicker_count": 9,
+    "flickers_by_category": {
+      "ready_between_working": 4,
+      "waiting_between_working": 2,
+      "working_between_ready": 3
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 4,
+      "force ready→working on first activity": 3,
+      "hook: PermissionRequest (permission pending)": 1,
+      "hook: PostToolUse (permission pending)": 1
+    },
+    "last_event_time": "2026-04-12T18:45:17.162753+02:00",
+    "model_name": "claude-opus-4-6",
+    "state_durations": {
+      "ready": 44080374000,
+      "waiting": 9090861000,
+      "working": 28678946000
+    },
+    "total_events": 18,
+    "total_transitions": 23,
+    "wall_clock_session_duration": 81850181000
+  },
+  "transitions": [
+    {
+      "cause": "init",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 0,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "",
+      "reason": "initial state",
+      "virtual_time": "2026-04-12T18:43:55.312572+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 0,
+      "has_open_tool": false,
+      "index": 1,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-12T18:43:55.312572+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "hook",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 2,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "waiting",
+      "prev_state": "working",
+      "reason": "hook: PostToolUse (permission pending)",
+      "virtual_time": "2026-04-12T18:43:58.926199+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 1,
+      "has_open_tool": false,
+      "index": 3,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "waiting",
+      "reason": "transcript activity (waiting → working)",
+      "virtual_time": "2026-04-12T18:43:59.042076+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 2,
+      "has_open_tool": false,
+      "index": 4,
+      "is_agent_done": true,
+      "last_assistant_text_head": "```\nAGENTS.md\nassets/\nCHANGELOG.md\nCLAUDE.md\nCODE_OF_CONDUCT.md\nCONTRIBUTING.md\n…",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-12T18:44:02.976358+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 3,
+      "has_open_tool": false,
+      "index": 5,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-12T18:44:04.534177+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "hook",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 6,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "waiting",
+      "prev_state": "working",
+      "reason": "hook: PermissionRequest (permission pending)",
+      "virtual_time": "2026-04-12T18:44:06.76008+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 4,
+      "has_open_tool": false,
+      "index": 7,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "waiting",
+      "reason": "tool permission denied while waiting → ready",
+      "virtual_time": "2026-04-12T18:44:10.655164+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 5,
+      "has_open_tool": false,
+      "index": 8,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-12T18:44:24.332084+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 6,
+      "has_open_tool": false,
+      "index": 9,
+      "is_agent_done": true,
+      "last_assistant_text_head": "ok",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-12T18:44:27.669879+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 7,
+      "has_open_tool": false,
+      "index": 10,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-12T18:44:29.900367+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "hook",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 11,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "waiting",
+      "prev_state": "working",
+      "reason": "hook: PermissionRequest (permission pending)",
+      "virtual_time": "2026-04-12T18:44:31.944662+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 8,
+      "has_open_tool": false,
+      "index": 12,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "waiting",
+      "reason": "transcript activity (waiting → working)",
+      "virtual_time": "2026-04-12T18:44:34.51245+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 9,
+      "has_open_tool": false,
+      "index": 13,
+      "is_agent_done": true,
+      "last_assistant_text_head": "There's a lot in `/tmp`. Notable items include irrlicht build artifacts (`irrlic…",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-12T18:44:40.303244+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 10,
+      "has_open_tool": false,
+      "index": 14,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-12T18:44:50.885133+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 11,
+      "has_open_tool": false,
+      "index": 15,
+      "is_agent_done": true,
+      "last_assistant_text_head": "ok",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-12T18:44:52.931787+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 12,
+      "has_open_tool": false,
+      "index": 16,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-12T18:44:55.052649+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "hook",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 17,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "waiting",
+      "prev_state": "working",
+      "reason": "hook: PermissionRequest (permission pending)",
+      "virtual_time": "2026-04-12T18:44:57.101261+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 13,
+      "has_open_tool": false,
+      "index": 18,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "waiting",
+      "reason": "tool permission denied while waiting → ready",
+      "virtual_time": "2026-04-12T18:44:59.613373+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 14,
+      "has_open_tool": false,
+      "index": 19,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-12T18:45:09.165159+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 15,
+      "has_open_tool": false,
+      "index": 20,
+      "is_agent_done": true,
+      "last_assistant_text_head": "ok",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-12T18:45:12.802143+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 16,
+      "has_open_tool": false,
+      "index": 21,
+      "is_agent_done": true,
+      "last_assistant_text_head": "ok",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-12T18:45:17.161065+02:00",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 16,
+      "has_open_tool": false,
+      "index": 22,
+      "is_agent_done": true,
+      "last_assistant_text_head": "ok",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-12T18:45:17.161065+02:00",
+      "waiting_for_user_input": false
+    }
+  ]
+}

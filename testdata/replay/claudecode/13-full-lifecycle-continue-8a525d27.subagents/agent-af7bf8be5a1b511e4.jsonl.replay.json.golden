@@ -1,0 +1,61 @@
+{
+  "generated_at": "0001-01-01T00:00:00Z",
+  "schema_version": 1,
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.subagents/agent-af7bf8be5a1b511e4.jsonl",
+  "summary": {
+    "consumed_events": 23,
+    "cum_cache_creation_tokens": 5649,
+    "cum_cache_read_tokens": 141822,
+    "cum_input_tokens": 36,
+    "cum_output_tokens": 756,
+    "estimated_cost_usd": 0.02505945,
+    "first_event_time": "2026-04-11T18:53:38.363Z",
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "last_event_time": "2026-04-11T18:53:50.694Z",
+    "model_name": "claude-haiku-4-5",
+    "state_durations": {
+      "ready": 12331000000
+    },
+    "total_events": 23,
+    "total_transitions": 2,
+    "wall_clock_session_duration": 12331000000
+  },
+  "transitions": [
+    {
+      "cause": "init",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 0,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "",
+      "reason": "initial state",
+      "virtual_time": "2026-04-11T18:53:38.363Z",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 22,
+      "has_open_tool": false,
+      "index": 1,
+      "is_agent_done": false,
+      "last_assistant_text_head": "…y, .js, .rs, .swift)\n- All subdirectories (adapters, application, cmd, domain…",
+      "last_event_type": "assistant_streaming",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T18:53:50.694Z",
+      "waiting_for_user_input": false
+    }
+  ]
+}

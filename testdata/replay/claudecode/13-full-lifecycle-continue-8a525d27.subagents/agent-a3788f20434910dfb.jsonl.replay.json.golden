@@ -1,0 +1,80 @@
+{
+  "generated_at": "0001-01-01T00:00:00Z",
+  "schema_version": 1,
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.subagents/agent-a3788f20434910dfb.jsonl",
+  "summary": {
+    "consumed_events": 13,
+    "cum_cache_creation_tokens": 4029,
+    "cum_cache_read_tokens": 92965,
+    "cum_input_tokens": 20,
+    "cum_output_tokens": 995,
+    "estimated_cost_usd": 0.019327749999999998,
+    "first_event_time": "2026-04-11T18:53:09.031Z",
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "last_event_time": "2026-04-11T18:53:18.419Z",
+    "model_name": "claude-haiku-4-5",
+    "state_durations": {
+      "ready": 6147000000,
+      "working": 3241000000
+    },
+    "total_events": 13,
+    "total_transitions": 3,
+    "wall_clock_session_duration": 9388000000
+  },
+  "transitions": [
+    {
+      "cause": "init",
+      "event_index": -1,
+      "has_open_tool": false,
+      "index": 0,
+      "is_agent_done": false,
+      "last_event_type": "",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "",
+      "reason": "initial state",
+      "virtual_time": "2026-04-11T18:53:09.031Z",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "debounce_coalesce",
+      "event_index": 11,
+      "has_open_tool": false,
+      "index": 1,
+      "is_agent_done": false,
+      "last_event_type": "user",
+      "needs_user_attention": false,
+      "new_state": "working",
+      "prev_state": "ready",
+      "reason": "force ready→working on first activity",
+      "virtual_time": "2026-04-11T18:53:15.178Z",
+      "waiting_for_user_input": false
+    },
+    {
+      "cause": "event",
+      "event_index": 12,
+      "has_open_tool": false,
+      "index": 2,
+      "is_agent_done": true,
+      "last_assistant_text_head": "…thelpers_test.go\n18. /Users/ingo/projects/irrlicht/core/e2e/presession_test.g…",
+      "last_event_type": "assistant",
+      "needs_user_attention": false,
+      "new_state": "ready",
+      "prev_state": "working",
+      "reason": "agent finished turn → ready",
+      "virtual_time": "2026-04-11T18:53:18.419Z",
+      "waiting_for_user_input": false
+    }
+  ]
+}
