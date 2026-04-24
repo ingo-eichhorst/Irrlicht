@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.jsonl",
+  "source_transcript": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.jsonl",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "claude-code",
@@ -10,21 +10,21 @@
   "summary": {
     "total_events": 30,
     "consumed_events": 30,
-    "total_transitions": 25,
+    "total_transitions": 11,
     "first_event_time": "2026-04-11T20:52:56.865909+02:00",
     "last_event_time": "2026-04-11T21:11:50.311894+02:00",
     "wall_clock_session_duration": 1133445985000,
     "state_durations": {
-      "ready": 1090635521000,
-      "working": 42810464000
+      "ready": 1062303642000,
+      "working": 71142343000
     },
-    "flicker_count": 9,
+    "flicker_count": 3,
     "flickers_by_category": {
-      "ready_between_working": 8,
+      "ready_between_working": 2,
       "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 8,
+      "agent finished turn → ready": 2,
       "force ready→working on first activity": 1
     },
     "estimated_cost_usd": 0.5229155,
@@ -94,9 +94,9 @@
     },
     {
       "index": 4,
-      "event_index": 16,
-      "virtual_time": "2026-04-11T20:53:43.445381+02:00",
-      "cause": "event",
+      "event_index": 23,
+      "virtual_time": "2026-04-11T20:54:11.77726+02:00",
+      "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -105,13 +105,13 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "All waves launched (6 background agents). Check the UI for the full picture."
+      "last_assistant_text_head": "All 6 background agents complete."
     },
     {
       "index": 5,
-      "event_index": 17,
-      "virtual_time": "2026-04-11T20:53:47.409967+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": 24,
+      "virtual_time": "2026-04-11T20:56:47.104418+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -120,13 +120,13 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Background agents completing. Waiting for the remaining Wave 2 agents to finish."
+      "last_assistant_text_head": "All 6 background agents complete."
     },
     {
       "index": 6,
-      "event_index": 17,
-      "virtual_time": "2026-04-11T20:53:47.409967+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": 24,
+      "virtual_time": "2026-04-11T20:56:47.104418+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -135,220 +135,10 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "Background agents completing. Waiting for the remaining Wave 2 agents to finish."
+      "last_assistant_text_head": "All 6 background agents complete."
     },
     {
       "index": 7,
-      "event_index": 18,
-      "virtual_time": "2026-04-11T20:53:50.905946+02:00",
-      "cause": "event",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Background agents completing. Waiting for the remaining Wave 2 agents to finish."
-    },
-    {
-      "index": 8,
-      "event_index": 18,
-      "virtual_time": "2026-04-11T20:53:50.905946+02:00",
-      "cause": "event",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Background agents completing. Waiting for the remaining Wave 2 agents to finish."
-    },
-    {
-      "index": 9,
-      "event_index": 19,
-      "virtual_time": "2026-04-11T20:53:53.023596+02:00",
-      "cause": "event",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Still waiting on the final two background agents."
-    },
-    {
-      "index": 10,
-      "event_index": 19,
-      "virtual_time": "2026-04-11T20:53:53.023596+02:00",
-      "cause": "event",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Still waiting on the final two background agents."
-    },
-    {
-      "index": 11,
-      "event_index": 20,
-      "virtual_time": "2026-04-11T20:53:56.701262+02:00",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Still waiting on the final two background agents."
-    },
-    {
-      "index": 12,
-      "event_index": 20,
-      "virtual_time": "2026-04-11T20:53:56.701262+02:00",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Still waiting on the final two background agents."
-    },
-    {
-      "index": 13,
-      "event_index": 21,
-      "virtual_time": "2026-04-11T20:53:56.748147+02:00",
-      "cause": "event",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "One background agent remaining."
-    },
-    {
-      "index": 14,
-      "event_index": 21,
-      "virtual_time": "2026-04-11T20:53:56.748147+02:00",
-      "cause": "event",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "One background agent remaining."
-    },
-    {
-      "index": 15,
-      "event_index": 22,
-      "virtual_time": "2026-04-11T20:54:07.779625+02:00",
-      "cause": "event",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "One background agent remaining."
-    },
-    {
-      "index": 16,
-      "event_index": 22,
-      "virtual_time": "2026-04-11T20:54:07.779625+02:00",
-      "cause": "event",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "One background agent remaining."
-    },
-    {
-      "index": 17,
-      "event_index": 23,
-      "virtual_time": "2026-04-11T20:54:11.77726+02:00",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "All 6 background agents complete."
-    },
-    {
-      "index": 18,
-      "event_index": 23,
-      "virtual_time": "2026-04-11T20:54:11.77726+02:00",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "All 6 background agents complete."
-    },
-    {
-      "index": 19,
-      "event_index": 24,
-      "virtual_time": "2026-04-11T20:56:47.104418+02:00",
-      "cause": "event",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "All 6 background agents complete."
-    },
-    {
-      "index": 20,
-      "event_index": 24,
-      "virtual_time": "2026-04-11T20:56:47.104418+02:00",
-      "cause": "event",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "All 6 background agents complete."
-    },
-    {
-      "index": 21,
       "event_index": 26,
       "virtual_time": "2026-04-11T21:11:45.046448+02:00",
       "cause": "event",
@@ -362,7 +152,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 22,
+      "index": 8,
       "event_index": 27,
       "virtual_time": "2026-04-11T21:11:47.76431+02:00",
       "cause": "event",
@@ -377,7 +167,7 @@
       "last_assistant_text_head": "```\nAGENTS.md    README.md    core         platforms    site         version.jso…"
     },
     {
-      "index": 23,
+      "index": 9,
       "event_index": 28,
       "virtual_time": "2026-04-11T21:11:50.310406+02:00",
       "cause": "event",
@@ -392,7 +182,7 @@
       "last_assistant_text_head": "```\nAGENTS.md    README.md    core         platforms    site         version.jso…"
     },
     {
-      "index": 24,
+      "index": 10,
       "event_index": 28,
       "virtual_time": "2026-04-11T21:11:50.310406+02:00",
       "cause": "event",
@@ -647,82 +437,10 @@
     }
   ],
   "extended_check": {
-    "sidecar_path": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.events.jsonl",
+    "sidecar_path": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/13-full-lifecycle-continue-8a525d27.events.jsonl",
     "recorded_transition_count": 10,
-    "replayed_transition_count": 24,
+    "replayed_transition_count": 10,
     "ordered_matches": 10,
-    "ordered_mismatches": [
-      {
-        "index": 10,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 11,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 12,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 13,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 14,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 15,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 16,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 17,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 18,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 19,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 20,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 21,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 22,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 23,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      }
-    ],
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"

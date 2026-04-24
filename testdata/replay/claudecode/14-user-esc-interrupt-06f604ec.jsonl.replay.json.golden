@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/14-user-esc-interrupt-06f604ec.jsonl",
+  "source_transcript": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/14-user-esc-interrupt-06f604ec.jsonl",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "claude-code",
@@ -136,7 +136,7 @@
     }
   ],
   "extended_check": {
-    "sidecar_path": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/14-user-esc-interrupt-06f604ec.events.jsonl",
+    "sidecar_path": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/14-user-esc-interrupt-06f604ec.events.jsonl",
     "recorded_transition_count": 4,
     "replayed_transition_count": 4,
     "ordered_matches": 4,

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/15-permission-hooks-a845d6c4.jsonl",
+  "source_transcript": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/15-permission-hooks-a845d6c4.jsonl",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "claude-code",
@@ -10,26 +10,25 @@
   "summary": {
     "total_events": 18,
     "consumed_events": 18,
-    "total_transitions": 23,
+    "total_transitions": 21,
     "first_event_time": "2026-04-12T18:43:55.312572+02:00",
     "last_event_time": "2026-04-12T18:45:17.162753+02:00",
     "wall_clock_session_duration": 81850181000,
     "state_durations": {
       "ready": 44080374000,
-      "waiting": 9090861000,
-      "working": 28678946000
+      "waiting": 8863528000,
+      "working": 28906279000
     },
     "flicker_count": 9,
     "flickers_by_category": {
       "ready_between_working": 4,
-      "waiting_between_working": 2,
-      "working_between_ready": 3
+      "waiting_between_working": 1,
+      "working_between_ready": 4
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 4,
-      "force ready→working on first activity": 3,
-      "hook: PermissionRequest (permission pending)": 1,
-      "hook: PostToolUse (permission pending)": 1
+      "force ready→working on first activity": 4,
+      "permission prompt open → waiting": 1
     },
     "estimated_cost_usd": 0.2518035,
     "cum_input_tokens": 23,
@@ -69,34 +68,6 @@
     },
     {
       "index": 2,
-      "event_index": -1,
-      "virtual_time": "2026-04-12T18:43:58.926199+02:00",
-      "cause": "hook",
-      "prev_state": "working",
-      "new_state": "waiting",
-      "reason": "hook: PostToolUse (permission pending)",
-      "last_event_type": "",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
-    },
-    {
-      "index": 3,
-      "event_index": 1,
-      "virtual_time": "2026-04-12T18:43:59.042076+02:00",
-      "cause": "event",
-      "prev_state": "waiting",
-      "new_state": "working",
-      "reason": "transcript activity (waiting → working)",
-      "last_event_type": "user",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
-    },
-    {
-      "index": 4,
       "event_index": 2,
       "virtual_time": "2026-04-12T18:44:02.976358+02:00",
       "cause": "debounce_coalesce",
@@ -111,7 +82,7 @@
       "last_assistant_text_head": "```\nAGENTS.md\nassets/\nCHANGELOG.md\nCLAUDE.md\nCODE_OF_CONDUCT.md\nCONTRIBUTING.md\n…"
     },
     {
-      "index": 5,
+      "index": 3,
       "event_index": 3,
       "virtual_time": "2026-04-12T18:44:04.534177+02:00",
       "cause": "event",
@@ -125,21 +96,21 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 6,
+      "index": 4,
       "event_index": -1,
       "virtual_time": "2026-04-12T18:44:06.76008+02:00",
       "cause": "hook",
       "prev_state": "working",
       "new_state": "waiting",
-      "reason": "hook: PermissionRequest (permission pending)",
-      "last_event_type": "",
+      "reason": "permission prompt open → waiting",
+      "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
     },
     {
-      "index": 7,
+      "index": 5,
       "event_index": 4,
       "virtual_time": "2026-04-12T18:44:10.655164+02:00",
       "cause": "event",
@@ -153,7 +124,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 8,
+      "index": 6,
       "event_index": 5,
       "virtual_time": "2026-04-12T18:44:24.332084+02:00",
       "cause": "event",
@@ -167,7 +138,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 9,
+      "index": 7,
       "event_index": 6,
       "virtual_time": "2026-04-12T18:44:27.669879+02:00",
       "cause": "debounce_coalesce",
@@ -182,7 +153,7 @@
       "last_assistant_text_head": "ok"
     },
     {
-      "index": 10,
+      "index": 8,
       "event_index": 7,
       "virtual_time": "2026-04-12T18:44:29.900367+02:00",
       "cause": "event",
@@ -196,24 +167,24 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 11,
+      "index": 9,
       "event_index": -1,
       "virtual_time": "2026-04-12T18:44:31.944662+02:00",
       "cause": "hook",
       "prev_state": "working",
       "new_state": "waiting",
-      "reason": "hook: PermissionRequest (permission pending)",
-      "last_event_type": "",
+      "reason": "permission prompt open → waiting",
+      "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
     },
     {
-      "index": 12,
-      "event_index": 8,
-      "virtual_time": "2026-04-12T18:44:34.51245+02:00",
-      "cause": "event",
+      "index": 10,
+      "event_index": -1,
+      "virtual_time": "2026-04-12T18:44:34.400994+02:00",
+      "cause": "hook",
       "prev_state": "waiting",
       "new_state": "working",
       "reason": "transcript activity (waiting → working)",
@@ -224,7 +195,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 13,
+      "index": 11,
       "event_index": 9,
       "virtual_time": "2026-04-12T18:44:40.303244+02:00",
       "cause": "event",
@@ -239,7 +210,7 @@
       "last_assistant_text_head": "There's a lot in `/tmp`. Notable items include irrlicht build artifacts (`irrlic…"
     },
     {
-      "index": 14,
+      "index": 12,
       "event_index": 10,
       "virtual_time": "2026-04-12T18:44:50.885133+02:00",
       "cause": "event",
@@ -253,7 +224,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 15,
+      "index": 13,
       "event_index": 11,
       "virtual_time": "2026-04-12T18:44:52.931787+02:00",
       "cause": "event",
@@ -268,7 +239,7 @@
       "last_assistant_text_head": "ok"
     },
     {
-      "index": 16,
+      "index": 14,
       "event_index": 12,
       "virtual_time": "2026-04-12T18:44:55.052649+02:00",
       "cause": "event",
@@ -282,21 +253,21 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 17,
+      "index": 15,
       "event_index": -1,
       "virtual_time": "2026-04-12T18:44:57.101261+02:00",
       "cause": "hook",
       "prev_state": "working",
       "new_state": "waiting",
-      "reason": "hook: PermissionRequest (permission pending)",
-      "last_event_type": "",
+      "reason": "permission prompt open → waiting",
+      "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
     },
     {
-      "index": 18,
+      "index": 16,
       "event_index": 13,
       "virtual_time": "2026-04-12T18:44:59.613373+02:00",
       "cause": "event",
@@ -310,7 +281,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 19,
+      "index": 17,
       "event_index": 14,
       "virtual_time": "2026-04-12T18:45:09.165159+02:00",
       "cause": "event",
@@ -324,7 +295,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 20,
+      "index": 18,
       "event_index": 15,
       "virtual_time": "2026-04-12T18:45:12.802143+02:00",
       "cause": "event",
@@ -339,7 +310,7 @@
       "last_assistant_text_head": "ok"
     },
     {
-      "index": 21,
+      "index": 19,
       "event_index": 16,
       "virtual_time": "2026-04-12T18:45:17.161065+02:00",
       "cause": "event",
@@ -354,7 +325,7 @@
       "last_assistant_text_head": "ok"
     },
     {
-      "index": 22,
+      "index": 20,
       "event_index": 16,
       "virtual_time": "2026-04-12T18:45:17.161065+02:00",
       "cause": "event",
@@ -390,106 +361,10 @@
     }
   ],
   "extended_check": {
-    "sidecar_path": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/15-permission-hooks-a845d6c4.events.jsonl",
+    "sidecar_path": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/15-permission-hooks-a845d6c4.events.jsonl",
     "recorded_transition_count": 20,
-    "replayed_transition_count": 22,
-    "ordered_matches": 6,
-    "ordered_mismatches": [
-      {
-        "index": 1,
-        "kind": "state_differs",
-        "recorded": "working→ready",
-        "replayed": "working→waiting"
-      },
-      {
-        "index": 2,
-        "kind": "state_differs",
-        "recorded": "ready→working",
-        "replayed": "waiting→working"
-      },
-      {
-        "index": 3,
-        "kind": "state_differs",
-        "recorded": "working→waiting",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 4,
-        "kind": "state_differs",
-        "recorded": "waiting→ready",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 5,
-        "kind": "state_differs",
-        "recorded": "ready→working",
-        "replayed": "working→waiting"
-      },
-      {
-        "index": 6,
-        "kind": "state_differs",
-        "recorded": "working→ready",
-        "replayed": "waiting→ready"
-      },
-      {
-        "index": 8,
-        "kind": "state_differs",
-        "recorded": "working→waiting",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 9,
-        "kind": "state_differs",
-        "recorded": "waiting→working",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 10,
-        "kind": "state_differs",
-        "recorded": "working→ready",
-        "replayed": "working→waiting"
-      },
-      {
-        "index": 11,
-        "kind": "state_differs",
-        "recorded": "ready→working",
-        "replayed": "waiting→working"
-      },
-      {
-        "index": 14,
-        "kind": "state_differs",
-        "recorded": "working→waiting",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 15,
-        "kind": "state_differs",
-        "recorded": "waiting→ready",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 16,
-        "kind": "state_differs",
-        "recorded": "ready→working",
-        "replayed": "working→waiting"
-      },
-      {
-        "index": 17,
-        "kind": "state_differs",
-        "recorded": "working→ready",
-        "replayed": "waiting→ready"
-      },
-      {
-        "index": 20,
-        "kind": "extra_in_replay",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 21,
-        "kind": "extra_in_replay",
-        "replayed": "working→ready"
-      }
-    ],
+    "replayed_transition_count": 20,
+    "ordered_matches": 20,
     "recorded_unique_kinds": [
       "ready→working",
       "waiting→ready",

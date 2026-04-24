@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/08-issue-114-stuck-working-a.jsonl",
+  "source_transcript": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/08-issue-114-stuck-working-a.jsonl",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "claude-code",

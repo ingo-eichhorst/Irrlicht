@@ -78,6 +78,43 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.8 <small>(2026-04-24)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Menu bar rewrite: NSStatusItem + NSPanel</strong> &mdash; replaces SwiftUI's <code>MenuBarExtra(.window)</code> so content changes and panel resize land in the same runloop tick. Eliminates the one-frame background flash on group collapse/expand, and keeps the panel top pinned to the status item while height grows downward. Panel opens rightward with 10pt continuous-curve rounded corners; screen-edge clamp + notch fallback cover narrow right-edge displays</li>
+        <li><strong>SessionListView column rebalance</strong> &mdash; panel 350 &rarr; 380pt; context bar 80 &rarr; 100pt; cost column 40 &rarr; 36pt. Branch column shrinks to 44pt when a subagent badge is present so the context bar's x-position is constant across rows. Two-pass <code>FlowLayout</code> aligns the 7pt task-progress circles with the taller &quot;done/total&quot; label</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>&quot;&hellip;&quot; overflow indicator beyond 5 menu-bar groups</strong> &mdash; when more than five project groups are active, the menu bar icon shows a trailing &quot;&hellip;&quot; so you know the list is truncated rather than silently dropping the extras</li>
+        <li><strong>Replay harness mirrors daemon parent-hold, permission-pending, and orphan promotion</strong> &mdash; sidecar-driven replay was skipping three pieces of daemon logic (parent-child hold when subagents are active, permission-pending overlay from <code>PermissionRequest</code>/<code>PostToolUse</code> hooks, and stale-sweep promotion of children whose transcripts go quiet). Extended-check now passes on the subagent and permission-hook fixtures without regenerating their sidecars</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>Core ARS composite 8.0 &rarr; 8.2</strong> &mdash; large internal refactor: <code>session_detector.go</code> split into <code>_activity</code>/<code>_helpers</code>/<code>_lifecycle</code>/<code>_subagent</code> files; <code>cmd/replay/main.go</code> split into <code>lifecycle</code>/<code>metrics</code>/<code>replay_sidecar</code>/<code>replay_transcript</code>/<code>extended_check</code>/<code>types</code>/<code>fixtures_test</code>; <code>cmd/irrlichd/main.go</code> request handlers factored into <code>handlers.go</code>. Behavior unchanged</li>
+        <li><strong>Unified agent registration via <code>agents.Config</code></strong> &mdash; adding a new agent adapter is now one <code>Config()</code> constructor + one line in <code>main.go</code>'s <code>agentCfgs</code> slice. <code>PIDDiscoverFunc</code> moved to <code>domain/agent/</code> so <code>Config</code> can reference it without violating hexagonal layering; metrics adapter inverted so outbound no longer imports inbound</li>
+        <li><strong>Shared constants between daemon and replay</strong> &mdash; <code>HookPermissionRequest</code>/<code>PostToolUse</code>/<code>PostToolUseFailure</code> in the claudecode adapter, exported <code>services.SubagentQuietWindow</code>, and <code>services.ForceReadyToWorkingReason</code> &mdash; so hook names, the 30s stale-sweep window, and the force-ready reason string can't drift between the live classifier and the replay</li>
+      </ul>
+
+      <h3>Developer tooling</h3>
+
+      <ul>
+        <li><strong><code>/ir:onboard-agent</code> skill</strong> &mdash; produces a canonical scenario &times; adapter fixture matrix. Scenarios are defined once, agent-agnostically, with a <code>requires: [capability]</code> list; adapters declare <code>Capabilities</code>, and matrix cells fall out automatically. Unifies refresh, bootstrap, and new-agent-onboarding workflows</li>
+        <li><strong><code>/ir:agent-landscape</code> hardened against hallucinations</strong> &mdash; every agent in the landscape report is verified against the GitHub API before publishing; the skill refuses to emit entries it can't resolve</li>
+      </ul>
+
+      <h3>Site</h3>
+
+      <ul>
+        <li><strong>Landing page: Terminals &amp; IDEs column dropped</strong> &mdash; the click-to-focus host list grew past what fit cleanly in the features grid; replaced with a single &quot;works with your terminal&quot; sentence</li>
+      </ul>
+
       <h2>v0.3.7 <small>(2026-04-24)</small></h2>
 
       <h3>Added</h3>

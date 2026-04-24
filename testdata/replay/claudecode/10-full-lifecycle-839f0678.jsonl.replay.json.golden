@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/10-full-lifecycle-839f0678.jsonl",
+  "source_transcript": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/10-full-lifecycle-839f0678.jsonl",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "claude-code",
@@ -225,7 +225,7 @@
     }
   ],
   "extended_check": {
-    "sidecar_path": "/Users/ingo/projects/irrlicht/.claude/worktrees/194/testdata/replay/claudecode/10-full-lifecycle-839f0678.events.jsonl",
+    "sidecar_path": "/Users/ingo/projects/irrlicht/testdata/replay/claudecode/10-full-lifecycle-839f0678.events.jsonl",
     "recorded_transition_count": 10,
     "replayed_transition_count": 10,
     "ordered_matches": 10,
