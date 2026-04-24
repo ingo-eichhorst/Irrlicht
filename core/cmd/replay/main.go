@@ -63,13 +63,13 @@ var agentConfigs = []agents.Config{
 	pi.Config(),
 }
 
+var parserFactories = agents.ParserMap(agentConfigs)
+
 // parserFor returns a fresh TranscriptParser for the given adapter name,
 // falling back to Claude Code for unknown names (preserves prior behavior).
 func parserFor(name string) tailer.TranscriptParser {
-	for _, c := range agentConfigs {
-		if c.Name == name {
-			return c.NewParser()
-		}
+	if f, ok := parserFactories[name]; ok {
+		return f()
 	}
 	return &claudecode.Parser{}
 }

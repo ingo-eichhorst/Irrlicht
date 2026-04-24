@@ -84,12 +84,15 @@ case "$ADAPTER" in
     ;;
 esac
 
-# 5. Build irrlichd from the current worktree so recordings reflect
-#    code under review, not whatever daemon was last installed.
+# 5. Build irrlichd + replay from the current worktree so recordings
+#    reflect code under review, and so run-cell.sh can invoke replay
+#    directly without paying a `go run` recompile per cell.
 BIN_DIR="$REPO_ROOT/.build/refresh/bin"
 mkdir -p "$BIN_DIR"
-if ! (cd "$REPO_ROOT" && go build -o "$BIN_DIR/irrlichd" ./core/cmd/irrlichd) >/dev/null 2>&1; then
-  fail "failed to build irrlichd from ./core/cmd/irrlichd"
-fi
+for bin in irrlichd replay; do
+  if ! (cd "$REPO_ROOT" && go build -o "$BIN_DIR/$bin" ./core/cmd/"$bin") >/dev/null 2>&1; then
+    fail "failed to build $bin from ./core/cmd/$bin"
+  fi
+done
 
-echo "precheck: OK (adapter=$ADAPTER, claude=${CLAUDE_VER:-n/a}, bin=$BIN_DIR/irrlichd)"
+echo "precheck: OK (adapter=$ADAPTER, claude=${CLAUDE_VER:-n/a}, bin=$BIN_DIR)"
