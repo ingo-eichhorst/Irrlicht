@@ -14,6 +14,14 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// Hook event names. Claude Code fires these; the daemon recognizes only
+// these three and ignores everything else.
+const (
+	HookPermissionRequest  = "PermissionRequest"
+	HookPostToolUse        = "PostToolUse"
+	HookPostToolUseFailure = "PostToolUseFailure"
+)
+
 // HookPayload is the JSON body sent by Claude Code hook events.
 // Only the fields used by the handler are decoded; the rest is ignored.
 type HookPayload struct {
@@ -71,7 +79,7 @@ func NewHookHandler(target HookTarget, log outbound.Logger) http.HandlerFunc {
 		}
 
 		switch payload.HookEventName {
-		case "PermissionRequest", "PostToolUse", "PostToolUseFailure":
+		case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
 			log.LogInfo("hook-receiver", sessionID,
 				fmt.Sprintf("received %s (tool=%s)", payload.HookEventName, payload.ToolName))
 			target.HandlePermissionHook(sessionID, payload.TranscriptPath, payload.HookEventName)

@@ -42,7 +42,7 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
-// subagentQuietWindow is how long a subagent's transcript must have been
+// SubagentQuietWindow is how long a subagent's transcript must have been
 // silent before finishOrphanedChildren will promote it to ready.
 //
 // The window has to survive the worst-case normal gap between transcript
@@ -53,7 +53,7 @@ const staleWorkingRefreshInterval = 5 * time.Second
 // the very next write. 30 seconds comfortably covers normal API latency
 // while still being 4× faster than the 2-minute stale-transcript sweep,
 // which is the fallback cleanup path for anything this function misses.
-const subagentQuietWindow = 30 * time.Second
+const SubagentQuietWindow = 30 * time.Second
 
 // debounceEntry holds debounce state for a single session.
 type debounceEntry struct {
@@ -550,7 +550,7 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 	// already shows IsAgentDone()=true would stay ready with no transition
 	// broadcast — the UI would never see the "agent finished" event.
 	if state.State == session.StateReady && state.Metrics != nil && state.Metrics.LastEventType != "" {
-		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: "force ready→working on first activity"})
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: ForceReadyToWorkingReason})
 		state.State = session.StateWorking
 	}
 
@@ -970,7 +970,7 @@ func (d *SessionDetector) finishOrphanedChildren(parentID string) {
 			continue
 		}
 		// Safety: a child whose transcript has been written in the last
-		// subagentQuietWindow is a background agent still mid-run — we
+		// SubagentQuietWindow is a background agent still mid-run — we
 		// don't know whether the parent's "done" means "finished the
 		// subagents" or "kicked off async background work". Leaving active
 		// children alone avoids the bug where background agents are
@@ -981,7 +981,7 @@ func (d *SessionDetector) finishOrphanedChildren(parentID string) {
 		if err != nil {
 			continue
 		}
-		if time.Since(info.ModTime()) < subagentQuietWindow {
+		if time.Since(info.ModTime()) < SubagentQuietWindow {
 			continue
 		}
 

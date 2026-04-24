@@ -492,7 +492,7 @@ func Replay(src string, cfg ReportSettings) (*Report, error) {
 
 		if state == session.StateReady && domainMetrics.LastEventType != "" {
 			emit(transitionFromMetrics(batch[len(batch)-1].Index, nextEventTime, cause,
-				state, session.StateWorking, "force ready→working on first activity", domainMetrics))
+				state, session.StateWorking, services.ForceReadyToWorkingReason, domainMetrics))
 			state = session.StateWorking
 		}
 
@@ -656,64 +656,54 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		return nil, fmt.Errorf("sidecar has no transcript_activity events with file_size for primary session %s: %s", primarySessionID, sidecarPath)
 	}
 
-	// Collect child sessions of the primary so we can mirror the daemon's
-	// parent-hold: when the classifier would transition the primary to
-	// ready, hold it in working while any child is still working/waiting
-	// (session_detector.go:590-600).
-	childSessionIDs := map[string]bool{}
-	for _, ev := range sidecarEvents {
-		if ev.Kind == lifecycle.KindParentLinked && ev.ParentSessionID == primarySessionID {
-			childSessionIDs[ev.SessionID] = true
-		}
-	}
-	// Per-child last-activity timestamp and final sidecar state. Used to
-	// synthesize orphan-promotion events (mirroring
-	// session_detector.finishOrphanedChildren) for children whose recording
-	// ends while still working/waiting — the daemon's stale-sweep would
-	// have promoted them after the quiet window, but that promotion isn't
-	// emitted to the sidecar (finishOrphanedChildren saves the state but
-	// the enclosing stale-sweep path doesn't always record it).
+	// Collect child sessions of the primary to mirror the daemon's
+	// parent-hold behaviour. `state` is mutated during the timeline walk;
+	// `finalState` is a one-shot snapshot of the last recorded child
+	// state, used only for generating orphan triggers below.
 	type childInfo struct {
 		lastActivityAt time.Time
 		finalState     string
+		state          string
 	}
-	childInfos := map[string]*childInfo{}
-	for id := range childSessionIDs {
-		childInfos[id] = &childInfo{finalState: session.StateReady}
-	}
-	var childTransitions []lifecycle.Event
+	children := map[string]*childInfo{}
 	for _, ev := range sidecarEvents {
-		if !childSessionIDs[ev.SessionID] {
-			continue
-		}
-		ci := childInfos[ev.SessionID]
-		if ev.Timestamp.After(ci.lastActivityAt) {
-			ci.lastActivityAt = ev.Timestamp
-		}
-		if ev.Kind == lifecycle.KindStateTransition {
-			childTransitions = append(childTransitions, ev)
-			if ev.NewState != "" {
-				ci.finalState = ev.NewState
+		if ev.Kind == lifecycle.KindParentLinked && ev.ParentSessionID == primarySessionID {
+			children[ev.SessionID] = &childInfo{
+				state:      session.StateReady,
+				finalState: session.StateReady,
 			}
 		}
 	}
-	// Stale-child orphan triggers: any child whose final recorded state is
+	var childTransitions []lifecycle.Event
+	for _, ev := range sidecarEvents {
+		ci, ok := children[ev.SessionID]
+		if !ok {
+			continue
+		}
+		if ev.Timestamp.After(ci.lastActivityAt) {
+			ci.lastActivityAt = ev.Timestamp
+		}
+		if ev.Kind == lifecycle.KindStateTransition && ev.NewState != "" {
+			childTransitions = append(childTransitions, ev)
+			ci.finalState = ev.NewState
+		}
+	}
+	// Orphan triggers: any child whose final recorded state is
 	// working/waiting would have been fast-forwarded to ready by the
-	// daemon's 5s stale-sweep once its transcript went quiet for
-	// subagentQuietWindow. Fire a synthetic "child orphaned" event at
+	// daemon's stale-sweep once its transcript went quiet for
+	// SubagentQuietWindow. Fire a synthetic "child orphaned" event at
 	// (lastActivityAt + quietWindow) so the parent's held-working can
 	// release at roughly the same virtual time the daemon would have.
-	const replaySubagentQuietWindow = 30 * time.Second
 	type orphanTrigger struct {
 		sessionID string
 		at        time.Time
 	}
 	var orphanTriggers []orphanTrigger
-	for id, ci := range childInfos {
+	for id, ci := range children {
 		if ci.finalState == session.StateWorking || ci.finalState == session.StateWaiting {
 			orphanTriggers = append(orphanTriggers, orphanTrigger{
 				sessionID: id,
-				at:        ci.lastActivityAt.Add(replaySubagentQuietWindow),
+				at:        ci.lastActivityAt.Add(services.SubagentQuietWindow),
 			})
 		}
 	}
@@ -780,12 +770,11 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	// permissionPending mirrors SessionDetector.permissionPending for the
 	// primary session. Set by PermissionRequest hooks and cleared by
 	// PostToolUse/PostToolUseFailure hooks, then overlaid onto metrics
-	// before ClassifyState so rule 0 can fire (state_classifier.go:32-37).
+	// before ClassifyState so its PermissionPending rule can fire.
 	permissionPending := false
-	childStates := map[string]string{}
 	anyChildActive := func() bool {
-		for _, s := range childStates {
-			if s == session.StateWorking || s == session.StateWaiting {
+		for _, ci := range children {
+			if ci.state == session.StateWorking || ci.state == session.StateWaiting {
 				return true
 			}
 		}
@@ -797,7 +786,7 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		}
 		// Tool-denial short-circuit: Claude Code doesn't emit
 		// PostToolUseFailure on denial, so the denial text in the
-		// transcript is what clears the flag (session_detector.go:562-574).
+		// transcript is what clears the flag.
 		if m.LastWasToolDenial {
 			permissionPending = false
 			return
@@ -806,11 +795,11 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 	}
 
 	// runClassifier mirrors the force/classify/parent-hold/synth-waiting
-	// pipeline in SessionDetector.processActivity (lines 547-642).
+	// pipeline in SessionDetector.processActivity.
 	runClassifier := func(domainMetrics *session.SessionMetrics, virtTime time.Time, eventIdx int, cause Cause) {
 		if state == session.StateReady && domainMetrics.LastEventType != "" {
 			emit(transitionFromMetrics(eventIdx, virtTime, cause,
-				state, session.StateWorking, "force ready→working on first activity", domainMetrics))
+				state, session.StateWorking, services.ForceReadyToWorkingReason, domainMetrics))
 			state = session.StateWorking
 		}
 
@@ -818,7 +807,7 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 
 		// Parent-child hold: if any child session is still
 		// working/waiting, keep the parent in its current state rather
-		// than letting it transition to ready (session_detector.go:590-600).
+		// than letting it transition to ready.
 		parentHeldWorking := false
 		if newState == session.StateReady && anyChildActive() {
 			newState = state
@@ -862,16 +851,16 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 		return nil
 	}
 
-	// applyHookEvent mirrors SessionDetector.HandlePermissionHook
-	// (session_detector.go:768-803): update the permission-pending flag
-	// based on hook type, then trigger a re-classification using the
-	// last-known metrics (the daemon injects a synthetic activity event
-	// that causes processActivity to run against the current transcript).
+	// applyHookEvent mirrors SessionDetector.HandlePermissionHook:
+	// update the permission-pending flag based on hook type, then
+	// trigger a re-classification using the last-known metrics (the
+	// daemon injects a synthetic activity event that causes
+	// processActivity to run against the current transcript).
 	applyHookEvent := func(hookEv lifecycle.Event) {
 		switch hookEv.HookName {
-		case "PermissionRequest":
+		case claudecode.HookPermissionRequest:
 			permissionPending = true
-		case "PostToolUse", "PostToolUseFailure":
+		case claudecode.HookPostToolUse, claudecode.HookPostToolUseFailure:
 			permissionPending = false
 		default:
 			return
@@ -1013,7 +1002,9 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 			// records child transitions from their own daemon lifetime,
 			// which may not align with the parent's gate.
 			ev := childTransitions[entry.idx]
-			childStates[ev.SessionID] = ev.NewState
+			if ci, ok := children[ev.SessionID]; ok {
+				ci.state = ev.NewState
+			}
 			continue
 		case timelineChildOrphan:
 			// Synthetic orphan promotion: the child's transcript went
@@ -1024,10 +1015,11 @@ func ReplayWithSidecar(transcriptPath, sidecarPath string, cfg ReportSettings) (
 			// working→ready transition fires at roughly the virtual
 			// time the daemon would have emitted it.
 			orphan := orphanTriggers[entry.idx]
-			if childStates[orphan.sessionID] != session.StateWorking && childStates[orphan.sessionID] != session.StateWaiting {
+			ci := children[orphan.sessionID]
+			if ci.state != session.StateWorking && ci.state != session.StateWaiting {
 				continue
 			}
-			childStates[orphan.sessionID] = session.StateReady
+			ci.state = session.StateReady
 			if !alive || lastMetrics == nil {
 				continue
 			}
