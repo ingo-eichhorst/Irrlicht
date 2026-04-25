@@ -69,6 +69,7 @@
         "contains_tool_call": "Agent",
         "parent_linked_min": 2,
         "subagent_transcripts_min": 2,
+        "tool_calls_max": 10,
         "final_state": "ready"
       },
       "by_adapter": {

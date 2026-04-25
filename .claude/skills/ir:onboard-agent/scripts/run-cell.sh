@@ -202,9 +202,24 @@ if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
     'select(.kind=="parent_linked" and .parent_session_id==$sid)' \
     "$RECORDING" | wc -l | tr -d ' ')"
   SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$UUID/subagents"
-  SUBAGENT_FILES=0
-  if [[ -d "$SUBAGENT_DIR" ]]; then
-    SUBAGENT_FILES="$(find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' ')"
+  count_subagent_files() {
+    if [[ -d "$SUBAGENT_DIR" ]]; then
+      find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' '
+    else
+      echo 0
+    fi
+  }
+  SUBAGENT_FILES="$(count_subagent_files)"
+  # If the daemon saw parent_linked events but the child transcripts
+  # haven't been flushed to disk yet (race against the parent transcript's
+  # appearance), poll briefly. We only poll when we already know children
+  # exist — otherwise there's nothing to wait for.
+  if [[ "$PARENT_LINKED_COUNT" -gt 0 && "$SUBAGENT_FILES" -eq 0 ]]; then
+    for _ in $(seq 1 20); do
+      sleep 0.5
+      SUBAGENT_FILES="$(count_subagent_files)"
+      [[ "$SUBAGENT_FILES" -gt 0 ]] && break
+    done
   fi
   if [[ "$PARENT_LINKED_COUNT" -eq 0 || "$SUBAGENT_FILES" -eq 0 ]]; then
     jq -n \
