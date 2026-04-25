@@ -114,11 +114,15 @@ func (g *mockGit) GetGitRoot(dir string) string                { return "" }
 func (g *mockGit) GetBranchFromTranscript(path string) string  { return "" }
 func (g *mockGit) GetCWDFromTranscript(path string) string     { return "" }
 
-type mockMetrics struct{}
+type mockMetrics struct {
+	pruned []string
+}
 
 func (m *mockMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
 	return nil, nil
 }
+
+func (m *mockMetrics) PruneEntry(path string) { m.pruned = append(m.pruned, path) }
 
 // funcMetrics is a metrics collector whose ComputeMetrics behaviour can be
 // configured per test. Used to simulate a tailer that returns refreshed
@@ -133,6 +137,8 @@ func (m *funcMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetr
 	}
 	return m.fn(path, adapter)
 }
+
+func (m *funcMetrics) PruneEntry(path string) {}
 
 // --- AgentWatcher mock -------------------------------------------------------
 

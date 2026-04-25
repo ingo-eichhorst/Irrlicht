@@ -615,6 +615,42 @@ func TestSessionDetector_Removed_TransitionsToReady(t *testing.T) {
 	}
 }
 
+func TestSessionDetector_Removed_PrunesMetricsLedger(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	mm := &mockMetrics{}
+
+	transcriptPath := "/home/.claude/projects/-Users-test/rm-prune.jsonl"
+	repo.states["rm-prune"] = &session.SessionState{
+		SessionID:      "rm-prune",
+		State:          session.StateWorking,
+		TranscriptPath: transcriptPath,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := services.NewSessionDetector(
+		[]inbound.AgentWatcher{tw}, pw, repo,
+		&mockLogger{}, &mockGit{}, mm, nil,
+		"test", 0, nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{Type: agent.EventRemoved, SessionID: "rm-prune"}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if len(mm.pruned) != 1 || mm.pruned[0] != transcriptPath {
+		t.Errorf("PruneEntry calls: got %v, want [%q]", mm.pruned, transcriptPath)
+	}
+}
+
 func TestSessionDetector_Removed_SkipsTerminalState(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()

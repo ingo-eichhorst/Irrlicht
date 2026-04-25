@@ -487,9 +487,60 @@ func initSessionStorage(logger outbound.Logger, cfg config.Config) (*filesystem.
 		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d stale session files", pruned))
 	}
 	pruneDeadProcSessions(fsRepo, logger)
+	pruneOrphanLedgers(fsRepo, logger)
 
 	cachedRepo := filesystem.NewCachedSessionRepository(fsRepo, 3*time.Second)
 	return fsRepo, cachedRepo
+}
+
+// pruneOrphanLedgers removes per-session ledger files in
+// ~/.local/share/irrlicht/sessions/ that no longer correspond to any session
+// known to the repo. Handles transcripts deleted while the daemon was off —
+// the live-daemon case is covered by SessionDetector.onRemoved calling
+// MetricsCollector.PruneEntry.
+func pruneOrphanLedgers(fsRepo *filesystem.SessionRepository, logger outbound.Logger) {
+	dir, err := metrics.LedgerDir()
+	if err != nil {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		logger.LogError("startup", "", fmt.Sprintf("ledger dir read failed: %v", err))
+		return
+	}
+	allSessions, err := fsRepo.ListAll()
+	if err != nil {
+		return
+	}
+	expected := make(map[string]struct{}, len(allSessions))
+	for _, s := range allSessions {
+		if s.TranscriptPath == "" {
+			continue
+		}
+		expected[metrics.LedgerFilename(s.TranscriptPath)] = struct{}{}
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".ledger.json") {
+			continue
+		}
+		if _, ok := expected[name]; ok {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d orphan ledger files", removed))
+	}
 }
 
 // pruneDeadProcSessions removes proc-<pid> session files whose backing

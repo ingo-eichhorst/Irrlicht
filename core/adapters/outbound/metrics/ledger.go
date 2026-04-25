@@ -45,9 +45,20 @@ func ledgerPath(transcriptPath string) string {
 	if err != nil {
 		return ""
 	}
-	h := sha256.Sum256([]byte(transcriptPath))
-	return filepath.Join(dir, fmt.Sprintf("%x.ledger.json", h[:8]))
+	return filepath.Join(dir, LedgerFilename(transcriptPath))
 }
+
+// LedgerFilename returns the basename of the ledger file for a transcript path.
+// Exposed so the daemon-startup orphan sweep can compute the expected filenames
+// for live sessions without re-implementing the SHA-256 scheme.
+func LedgerFilename(transcriptPath string) string {
+	h := sha256.Sum256([]byte(transcriptPath))
+	return fmt.Sprintf("%x.ledger.json", h[:8])
+}
+
+// LedgerDir returns the directory holding per-session ledger files.
+// Exposed for the daemon-startup orphan sweep.
+func LedgerDir() (string, error) { return ledgerDir() }
 
 // loadLedger reads the ledger at path, returning nil on error or version mismatch.
 // Silent on all errors so a missing or corrupt ledger just falls back to a fresh scan.
