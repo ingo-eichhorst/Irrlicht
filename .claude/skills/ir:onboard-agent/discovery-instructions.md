@@ -185,71 +185,122 @@ a daemon that turns out to need format/discovery work first.
 
 The smoke is a scripted two-process test (no human-in-terminal):
 
-1. **Stub adapter** (≤80 LOC) under `core/adapters/inbound/agents/<slug>/`:
-   - `adapter.go` — `AdapterName`, `ProcessName`, `rootDir` constants
-   - `config.go` — `Config()` returning `agents.Config{...}` with a no-op parser
-   - `parser.go` — `NoOpParser` whose `ParseLine` returns nil (skip)
-   - `pid.go` — `DiscoverPID` reusing `processlifecycle.DiscoverPIDByCWD(ProcessName, …)`
+### 1. Stub adapter (~50–100 LOC, depending on agent shape)
 
-   Template: `core/adapters/inbound/agents/aider/`. Discovery does NOT
-   propose this scaffold; the maintainer adds it manually as a distinct
-   commit before adapter implementation begins.
+Under `core/adapters/inbound/agents/<slug>/`:
+- `adapter.go` — `AdapterName`, `ProcessName`, `rootDir` constants
+- `config.go` — `Config()` returning `agents.Config{...}` with a no-op parser
+- `parser.go` — `NoOpParser` whose `ParseLine` returns nil (skip)
+- `pid.go` — `DiscoverPID` matching the adapter's process-discovery shape
 
-2. **Wire into `core/cmd/irrlichd/main.go`** — one import, one line in
-   the `agentCfgs` slice.
+**Template: `core/adapters/inbound/agents/aider/`** — covers the most
+demanding case (Python wrapper + non-JSONL + per-CWD transcript).
+Discovery does NOT propose this scaffold; the maintainer adds it
+manually as a distinct commit before adapter implementation begins.
 
-3. **Build** the daemon: `go build -o .build/irrlichd ./core/cmd/irrlichd`.
+#### Adapter shape decision tree
 
-4. **Run the tmux driver** alongside `irrlichd --record`:
+Pick the smallest set of `agents.Config` fields the agent needs:
 
-   ```bash
-   # Pre-flight: ensure no other irrlichd is on port 7837.
-   pgrep -x irrlichd && { echo "stop the running daemon first"; exit 1; }
+| Agent shape | Required fields | DiscoverPID helper |
+|---|---|---|
+| Native binary, JSONL transcript under fixed `$HOME/.<x>/` | `Name`, `ProcessName`, `RootDir` | `DiscoverPIDByCWD(ProcessName, cwd, ...)` |
+| Wrapper-launched (Python, npx, etc.), JSONL under fixed root | + `CommandLineMatch: "/<bin>"` | `DiscoverPIDByCWDAndCmdLine(pattern, cwd, ...)` |
+| Native binary, transcript per-project in CWD | + `TranscriptFilename: ".<x>.history.md"` | `DiscoverPIDByCWD(...)` |
+| Wrapper-launched + per-project transcript (e.g. aider) | + both `CommandLineMatch` AND `TranscriptFilename` | `DiscoverPIDByCWDAndCmdLine(pattern, cwd, ...)` |
 
-   mkdir -p .build/manual-<slug>
-   PROMPT="$(jq -r '.scenarios[] | select(.name=="baseline-hello") | .by_adapter.claudecode.prompt' \
-     .claude/skills/ir:onboard-agent/scenarios.json)"
+**Critical gotcha**: when you set `CommandLineMatch`, the `DiscoverPID`
+function in `pid.go` MUST use the matching `DiscoverPIDByCWDAndCmdLine`
+helper with the same pattern. If the scanner uses `pgrep -f` but the
+discoverer uses `pgrep -x`, the PID never resolves → the kqueue death
+monitor never registers → `process_exited` never fires. Aider hit this:
+recovery cost a debugging round.
 
-   IRRLICHT_RECORDINGS_DIR=.build/manual-<slug>/recordings \
-     .build/irrlichd --record > .build/manual-<slug>/daemon.log 2>&1 &
-   DAEMON_PID=$!
-   sleep 1
+### 2. Wire into `core/cmd/irrlichd/main.go`
 
-   bash .claude/skills/ir:onboard-agent/scripts/drive-tmux-agent.sh \
-     <slug>-smoke .build/manual-<slug> "$PROMPT" -- <agent-cli> [args...]
+One import, one line in the `agentCfgs` slice.
 
-   kill -INT $DAEMON_PID; wait $DAEMON_PID 2>/dev/null || true
-   ```
+### 3. Build the daemon
 
-   The driver (`drive-tmux-agent.sh`) is REPL-agent agnostic: starts the
-   agent in a detached tmux session, sends the prompt via `tmux
-   send-keys`, polls the pane buffer until the agent's prompt indicator
-   returns (capped at 90s), captures the buffer + scrollback, tears the
-   session down with Ctrl-C → Ctrl-D → `kill-session`.
+```bash
+go build -o .build/irrlichd ./core/cmd/irrlichd
+```
 
-5. **Inspect the recording** and classify the result:
+### 4. Run the tmux driver alongside `irrlichd --record`
 
-   ```bash
-   RECORDING=$(ls -t .build/manual-<slug>/recordings/*.jsonl | head -1)
-   jq -r '.kind' "$RECORDING" | sort | uniq -c
-   jq -c "select(.adapter==\"<slug>\")" "$RECORDING"
-   ```
+```bash
+# Pre-flight: ensure no other irrlichd is on port 7837.
+pgrep -x irrlichd && { echo "stop the running daemon first"; exit 1; }
 
-   - **PASS — full detection**: recording contains `pid_discovered` AND
-     `transcript_new` for the agent's actual transcript path. Both
-     daemon layers (process scanner + fswatcher) work; only the parser
-     remains as adapter work.
-   - **PARTIAL — process-only**: `pid_discovered` fires but
-     `transcript_new` doesn't (fswatcher mismatch on extension or wrong
-     root dir). Common for agents whose transcript isn't `.jsonl`. The
-     subsequent adapter PR must include either a fswatcher widening or
-     a non-fswatcher polling path.
-   - **FAIL — nothing**: no events for the agent. Stub adapter wasn't
-     picked up; recheck `main.go` wiring.
+mkdir -p .build/manual-<slug>/{recordings,workspace}
+(cd .build/manual-<slug>/workspace && git init -q && \
+  git config user.email t@l && git config user.name t && \
+  echo "# t" > README.md && git add . && git commit -q -m init)
 
-The PARTIAL outcome is genuinely useful — it scopes the next adapter PR.
-Don't skip the gate just to get to "PASS"; the diagnostic value is the
-point.
+PROMPT="$(jq -r '.scenarios[] | select(.name=="baseline-hello") | .by_adapter.claudecode.prompt' \
+  .claude/skills/ir:onboard-agent/scenarios.json)"
+
+IRRLICHT_RECORDINGS_DIR=$(pwd)/.build/manual-<slug>/recordings \
+  $(pwd)/.build/irrlichd --record > .build/manual-<slug>/daemon.log 2>&1 &
+DAEMON_PID=$!
+sleep 2
+
+bash .claude/skills/ir:onboard-agent/scripts/drive-tmux-agent.sh \
+  <slug>-smoke "$(pwd)/.build/manual-<slug>/workspace" "$PROMPT" -- \
+  <agent-cli> [args...]
+
+sleep 2  # let kqueue death detection fire
+kill -INT $DAEMON_PID; wait $DAEMON_PID 2>/dev/null || true
+```
+
+The driver (`drive-tmux-agent.sh`) is REPL-agent agnostic: starts the
+agent in a detached tmux session, sends the prompt via `tmux
+send-keys`, polls the pane buffer until the agent's prompt indicator
+returns (capped at 90s), captures the buffer + scrollback, tears the
+session down with Ctrl-C → Ctrl-D → `kill-session`.
+
+### 5. Inspect the recording and classify
+
+```bash
+RECORDING=$(ls -t .build/manual-<slug>/recordings/*.jsonl | head -1)
+echo "=== aider event kinds (count) ==="
+jq -r 'select(.adapter=="<slug>") | .kind' "$RECORDING" | sort | uniq -c
+echo "=== ALL <slug> events in order ==="
+jq -c 'select(.adapter=="<slug>")' "$RECORDING"
+echo "=== process_exited (any non-claudecode pid) ==="
+jq -c 'select(.kind=="process_exited" and .pid > 10000)' "$RECORDING"
+```
+
+#### Classification
+
+- **PASS — full lifecycle**: recording contains all of:
+  `presession_created`, `state_transition→ready`, `pid_discovered`,
+  `transcript_new` (with `transcript_path`), `transcript_activity`
+  (one or more, as the file grows), `process_exited`,
+  `transcript_removed`. Every meaningful state of the session is
+  observable. The next adapter PR is only the parser (markdown →
+  tailer events) — all the daemon-side plumbing works.
+- **PARTIAL — process-only**: `presession_created` fires but no
+  `transcript_new` with a `transcript_path`. Means the
+  `TranscriptFilename` probe didn't find the file in CWD. Either the
+  filename is wrong, the agent writes elsewhere (e.g. under `$HOME`),
+  or the file is created so late that the scanner missed it before
+  shutdown. Add a longer `sleep` between `send-keys` and daemon kill,
+  or fix the filename.
+- **FAIL — nothing**: no events for `<slug>` in the recording. Stub
+  adapter wasn't picked up — common causes:
+  1. Forgot to add `<slug>.Config()` to `agentCfgs` in `main.go`
+  2. `ProcessName` mismatch: agent runs as `python` (wrapper-launched)
+     but stub only set `ProcessName`, no `CommandLineMatch`. Verify
+     with `pgrep -fl <slug>`.
+  3. `DiscoverPID` mismatch (see "Critical gotcha" above)
+
+### Common false-PASS
+
+If you see `pid_discovered` for a PID that isn't your agent — it's
+probably `claude-code` matching against your own running irrlicht
+session (the daemon you're running this script from). Filter event
+inspection to `.adapter=="<slug>"` to avoid this confusion.
 
 ## Anti-patterns
 

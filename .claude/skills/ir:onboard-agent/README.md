@@ -156,14 +156,39 @@ Staged outputs:
 
 When a new adapter (say, `aider`) is supported:
 
-1. Add it via Phase-0 plumbing: `core/adapters/inbound/agents/aider/` with
-   parser, PID discovery, and a `Config()` that declares `Capabilities`.
-2. Write `.claude/skills/ir:onboard-agent/scripts/drive-aider.sh` —
-   mirrors `drive-claudecode.sh`, using `aider`'s headless flag convention.
-3. Update `scripts/precheck.sh` to add the `aider` case.
-4. For every scenario whose `requires` matches `aider`'s capabilities, add
-   `by_adapter.aider` with the eliciting prompt/settings.
-5. Run `/ir:onboard-agent aider` to populate its column.
+0. Run discovery: `/ir:onboard-agent --new aider` → review proposed
+   capabilities → merge into `replaydata/agents/<name>/capabilities.json`.
+1. Add the **stub adapter** (~50–100 LOC) under
+   `core/adapters/inbound/agents/<name>/` with the right combination of
+   `Config` fields per the agent's shape. See "Adapter shape decision
+   tree" in `discovery-instructions.md → Post-discovery gate` — different
+   agent shapes (native binary vs Python wrapper, fixed root vs per-CWD
+   transcript) need different field combinations:
+   - `ProcessName` for native binaries (`pgrep -x`)
+   - `CommandLineMatch: "/<name>"` for wrapper-launched (Python via
+     `pipx`/`uv`, npx, etc.)
+   - `TranscriptFilename: ".<name>.history.<ext>"` for agents that
+     write per-project transcripts in CWD instead of under
+     `$HOME/.<name>/`
+2. Wire into `core/cmd/irrlichd/main.go` agentCfgs slice (one line).
+3. **Run the post-discovery live recording smoke** against the stub.
+   Confirm PASS-level detection (`pid_discovered` + `transcript_new`
+   with path + `transcript_activity` + `process_exited`). If anything
+   is missing, fix the stub before writing the parser.
+4. Write the real parser (`parser.go` — adapter-specific transcript
+   format → `tailer.ParsedEvent` events).
+5. Write `.claude/skills/ir:onboard-agent/scripts/drive-<name>.sh`.
+6. Update `scripts/precheck.sh` to add the `<name>` case.
+7. For every scenario whose `requires` matches `<name>`'s capabilities,
+   add `by_adapter.<name>` with the eliciting prompt/settings.
+8. Run `/ir:onboard-agent <name>` to populate its column.
+
+The order matters: discover → stub + smoke → parser → driver. Trying
+to write the parser first against an unverified daemon-detection
+chain wastes a parser PR's worth of work when the daemon turns out to
+need format/discovery widening (this is exactly what happened during
+aider onboarding; the smoke caught two distinct gaps that would have
+otherwise surfaced after the parser was written).
 
 ## Interpreting cell states
 
