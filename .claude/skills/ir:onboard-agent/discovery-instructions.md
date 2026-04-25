@@ -176,6 +176,81 @@ done
 
 The skill never copies these files itself.
 
+## Post-discovery gate: live recording smoke
+
+Before any full adapter implementation for the discovered agent, the
+maintainer **MUST** prove `irrlichd` actually detects the agent live.
+Skipping this step has historically meant writing a parser blind against
+a daemon that turns out to need format/discovery work first.
+
+The smoke is a scripted two-process test (no human-in-terminal):
+
+1. **Stub adapter** (≤80 LOC) under `core/adapters/inbound/agents/<slug>/`:
+   - `adapter.go` — `AdapterName`, `ProcessName`, `rootDir` constants
+   - `config.go` — `Config()` returning `agents.Config{...}` with a no-op parser
+   - `parser.go` — `NoOpParser` whose `ParseLine` returns nil (skip)
+   - `pid.go` — `DiscoverPID` reusing `processlifecycle.DiscoverPIDByCWD(ProcessName, …)`
+
+   Template: `core/adapters/inbound/agents/aider/`. Discovery does NOT
+   propose this scaffold; the maintainer adds it manually as a distinct
+   commit before adapter implementation begins.
+
+2. **Wire into `core/cmd/irrlichd/main.go`** — one import, one line in
+   the `agentCfgs` slice.
+
+3. **Build** the daemon: `go build -o .build/irrlichd ./core/cmd/irrlichd`.
+
+4. **Run the tmux driver** alongside `irrlichd --record`:
+
+   ```bash
+   # Pre-flight: ensure no other irrlichd is on port 7837.
+   pgrep -x irrlichd && { echo "stop the running daemon first"; exit 1; }
+
+   mkdir -p .build/manual-<slug>
+   PROMPT="$(jq -r '.scenarios[] | select(.name=="baseline-hello") | .by_adapter.claudecode.prompt' \
+     .claude/skills/ir:onboard-agent/scenarios.json)"
+
+   IRRLICHT_RECORDINGS_DIR=.build/manual-<slug>/recordings \
+     .build/irrlichd --record > .build/manual-<slug>/daemon.log 2>&1 &
+   DAEMON_PID=$!
+   sleep 1
+
+   bash .claude/skills/ir:onboard-agent/scripts/drive-tmux-agent.sh \
+     <slug>-smoke .build/manual-<slug> "$PROMPT" -- <agent-cli> [args...]
+
+   kill -INT $DAEMON_PID; wait $DAEMON_PID 2>/dev/null || true
+   ```
+
+   The driver (`drive-tmux-agent.sh`) is REPL-agent agnostic: starts the
+   agent in a detached tmux session, sends the prompt via `tmux
+   send-keys`, polls the pane buffer until the agent's prompt indicator
+   returns (capped at 90s), captures the buffer + scrollback, tears the
+   session down with Ctrl-C → Ctrl-D → `kill-session`.
+
+5. **Inspect the recording** and classify the result:
+
+   ```bash
+   RECORDING=$(ls -t .build/manual-<slug>/recordings/*.jsonl | head -1)
+   jq -r '.kind' "$RECORDING" | sort | uniq -c
+   jq -c "select(.adapter==\"<slug>\")" "$RECORDING"
+   ```
+
+   - **PASS — full detection**: recording contains `pid_discovered` AND
+     `transcript_new` for the agent's actual transcript path. Both
+     daemon layers (process scanner + fswatcher) work; only the parser
+     remains as adapter work.
+   - **PARTIAL — process-only**: `pid_discovered` fires but
+     `transcript_new` doesn't (fswatcher mismatch on extension or wrong
+     root dir). Common for agents whose transcript isn't `.jsonl`. The
+     subsequent adapter PR must include either a fswatcher widening or
+     a non-fswatcher polling path.
+   - **FAIL — nothing**: no events for the agent. Stub adapter wasn't
+     picked up; recheck `main.go` wiring.
+
+The PARTIAL outcome is genuinely useful — it scopes the next adapter PR.
+Don't skip the gate just to get to "PASS"; the diagnostic value is the
+point.
+
 ## Anti-patterns
 
 - **Don't** run the agent's CLI in discovery mode. That's WS06/13.

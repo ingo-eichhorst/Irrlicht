@@ -158,6 +158,15 @@ For each (agent-adapter, scenario) cell, invoke
 - replay report generation (staged + committed, if any)
 - `run-manifest.json` writeback
 
+**Pre-cell gate** (only relevant for agents new to irrlicht): if the
+adapter has a `replaydata/agents/<name>/capabilities.json` but no entry
+in `core/cmd/irrlichd/main.go:agentCfgs` yet, the daemon literally
+cannot see it. Before running cells for a new adapter, complete the
+post-discovery live recording smoke described in
+`discovery-instructions.md → Post-discovery gate`. That step adds the
+minimum stub adapter, drives the agent in tmux, and produces a recording
+that classifies the daemon's detection as PASS / PARTIAL / FAIL.
+
 **On cell failure**: when `run-cell.sh` exits nonzero or the manifest's
 `error` field is set, run `scripts/lib/classify-failure.sh <staging>`. The
 output is `{"code": "<code>", "summary": "...", "evidence": "..."}`. Look
