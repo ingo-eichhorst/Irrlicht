@@ -20,6 +20,11 @@
     "multi_model_orchestration": "unknown",
     "repo_map": "unknown",
     "voice_input": "unknown",
-    "multimodal_input": "unknown"
+    "multimodal_input": "unknown",
+    "gui_mode": "unknown",
+    "watch_mode": "unknown",
+    "linting_test_automation": "unknown",
+    "edit_strategy_selection": "unknown",
+    "context_curation": "unknown"
   }
 }

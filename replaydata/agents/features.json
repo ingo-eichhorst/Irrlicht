@@ -117,6 +117,41 @@
       "description": "Agent accepts non-text inputs as part of a turn — images, screenshots, web page snapshots, PDFs, etc. Test: include an image in the prompt; expect the agent to refer to its content in the response.",
       "added_in": "2026-04-25",
       "notes": "Added 2026-04-25 from aider discovery. Likely cross-agent: aider supports images; claudecode is vision-capable; codex behavior unclear."
+    },
+    {
+      "id": "gui_mode",
+      "title": "GUI / browser mode",
+      "description": "Agent ships a graphical interface (browser-based or native window) as an alternative to the terminal — for visual file editing, prompt composition, or session inspection. Test: launch with the GUI flag; expect a window/page to open and the agent to remain functional from it.",
+      "added_in": "2026-04-25",
+      "notes": "Aider --browser mode; potential common ground with future agents that ship a desktop app or web UI."
+    },
+    {
+      "id": "watch_mode",
+      "title": "File-watch / IDE-driven mode",
+      "description": "Agent runs as a long-lived daemon watching files for marker comments (e.g. `# AI: do X`) or change events, responding without an explicit prompt invocation. Enables IDE integrations and ambient coding flows. Test: place an inline marker comment in a watched file; expect the agent to act on it.",
+      "added_in": "2026-04-25",
+      "notes": "Aider --watch-files; widely applicable to any agent designed to integrate inside an editor."
+    },
+    {
+      "id": "linting_test_automation",
+      "title": "Auto-run linters / tests",
+      "description": "Agent automatically runs linters and/or test suites after edits and feeds failures back into its own loop to fix them. Test: edit a file with a deliberate lint or test failure; expect the agent to run the tools, surface the failure, and propose or apply a fix.",
+      "added_in": "2026-04-25",
+      "notes": "Common pattern across agents (claudecode does this on demand; aider does it automatically). Worth canonicalizing."
+    },
+    {
+      "id": "edit_strategy_selection",
+      "title": "Selectable edit strategy",
+      "description": "Agent supports multiple file-editing formats (whole-file rewrite, unified diff, search/replace block, function-level patch, etc.) that the user can select per session or per model. Test: swap edit strategies between two runs against the same prompt; expect different patch shapes in the transcript.",
+      "added_in": "2026-04-25",
+      "notes": "Aider exposes 15+ Coder strategies. claudecode picks one internally; codex similar. Only canonical when the user can choose."
+    },
+    {
+      "id": "context_curation",
+      "title": "Explicit context curation",
+      "description": "Agent exposes user commands to add/drop files from the active context, mark files as read-only references, or otherwise prune the prompt window mid-session. Test: add a file then drop it; expect the file's contents to leave the next prompt sent to the LLM.",
+      "added_in": "2026-04-25",
+      "notes": "Aider /add /drop /read-only. claudecode has /clear; the granularity differs but the capability is shared."
     }
   ]
 }
