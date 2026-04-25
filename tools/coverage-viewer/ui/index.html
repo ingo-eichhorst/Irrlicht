@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Irrlicht — Coverage Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Coverage Viewer</h1>
+  <p class="sub">Agent × scenario coverage matrix · live from <code>replaydata/</code></p>
+</header>
+
+<main>
+  <section id="matrix-section">
+    <div id="matrix-loading">Loading matrix…</div>
+    <div id="matrix-wrap" hidden>
+      <table id="matrix"></table>
+      <aside id="legend">
+        <h3>Cell states</h3>
+        <ul>
+          <li><span class="chip covered">covered</span> committed fixture exists</li>
+          <li><span class="chip staged-only">staged-only</span> by_adapter present, no fixture yet</li>
+          <li><span class="chip missing-prompt">missing-prompt</span> capability satisfied, scenarios.json missing entry</li>
+          <li><span class="chip n-a">N/A</span> adapter lacks a required capability</li>
+        </ul>
+        <h3>Tips</h3>
+        <ul class="tips">
+          <li>Click a <strong>cell</strong> to open the scenario drilldown.</li>
+          <li>Click an <strong>adapter name</strong> in the column header to see which features that adapter covers.</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<!-- Modal: scenario drilldown -->
+<div class="modal-backdrop" id="drilldown-modal" hidden>
+  <div class="modal-card">
+    <button class="modal-close" data-close="drilldown" aria-label="Close">×</button>
+    <div class="modal-body" id="drilldown"></div>
+  </div>
+</div>
+
+<!-- Modal: timeline (full-width) -->
+<div class="modal-backdrop" id="timeline-modal" hidden>
+  <div class="modal-card wide">
+    <button class="modal-close" data-close="timeline" aria-label="Close">×</button>
+    <div class="modal-body">
+      <div id="timeline-meta"></div>
+      <div id="timeline"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Side panel: timeline event detail (sits on top of timeline modal) -->
+<div class="side-panel" id="timeline-detail" hidden>
+  <button class="modal-close" data-close="detail" aria-label="Close">×</button>
+  <pre id="timeline-detail-body"></pre>
+</div>
+
+<!-- Modal: per-adapter feature coverage -->
+<div class="modal-backdrop" id="features-modal" hidden>
+  <div class="modal-card wide">
+    <button class="modal-close" data-close="features" aria-label="Close">×</button>
+    <div class="modal-body" id="features-body"></div>
+  </div>
+</div>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

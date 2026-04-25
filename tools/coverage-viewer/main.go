@@ -1,0 +1,656 @@
+// Coverage-viewer is a small dev-only HTTP server that renders the agent ×
+// scenario coverage matrix, a per-cell pipeline drilldown, and a per-session
+// swim-lane timeline. It reads canonical files in place — no cache, no DB.
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"irrlicht/core/adapters/inbound/agents/aider"
+	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/pi"
+	"irrlicht/core/pkg/tailer"
+)
+
+const (
+	githubRepoURL  = "https://github.com/ingo-eichhorst/Irrlicht"
+	scenariosJSON  = ".claude/skills/ir:onboard-agent/scenarios.json"
+	featuresJSON   = "replaydata/agents/features.json"
+	replayAgentDir = "replaydata/agents"
+)
+
+var (
+	addr    = flag.String("addr", "127.0.0.1:7838", "HTTP listen address")
+	rootDir = flag.String("root", "", "repo root (auto-detected if empty)")
+)
+
+func main() {
+	flag.Parse()
+	if *rootDir == "" {
+		root, err := findRepoRoot()
+		if err != nil {
+			log.Fatalf("find repo root: %v", err)
+		}
+		*rootDir = root
+	}
+	log.Printf("repo root: %s", *rootDir)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/matrix", handleMatrix)
+	mux.HandleFunc("/api/scenario/", handleScenario)
+	mux.HandleFunc("/api/timeline/", handleTimeline)
+	mux.Handle("/", http.FileServer(http.Dir(filepath.Join(execDir(), "ui"))))
+
+	log.Printf("coverage-viewer listening on http://%s", *addr)
+	if err := http.ListenAndServe(*addr, mux); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// findRepoRoot walks up from CWD looking for go.work or .git.
+func findRepoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			return dir, nil
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no go.work or .git found above %s", dir)
+		}
+		dir = parent
+	}
+}
+
+// execDir returns the directory containing this binary's source/ui assets.
+// When run via `go run .` it's the source dir; for a built binary, fall back
+// to <rootDir>/tools/coverage-viewer for serving ui/.
+func execDir() string {
+	if wd, err := os.Getwd(); err == nil {
+		// `go run .` in tools/coverage-viewer → cwd contains ui/
+		if _, err := os.Stat(filepath.Join(wd, "ui", "index.html")); err == nil {
+			return wd
+		}
+	}
+	return filepath.Join(*rootDir, "tools", "coverage-viewer")
+}
+
+// ---------- /api/matrix ----------
+
+type cell struct {
+	State  string `json:"state"`            // "covered" | "staged-only" | "missing-prompt" | "n/a"
+	Reason string `json:"reason,omitempty"` // human-readable detail
+}
+
+type scenarioMeta struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Requires    []string `json:"requires"`
+}
+
+type featureMeta struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+type matrixResp struct {
+	Adapters     []string                      `json:"adapters"`
+	Scenarios    []scenarioMeta                `json:"scenarios"`
+	Cells        map[string]map[string]cell    `json:"cells"`        // adapter → scenario → cell
+	Features     []featureMeta                 `json:"features"`
+	Capabilities map[string]map[string]any     `json:"capabilities"` // adapter → feature → true|false|"unknown"
+}
+
+func handleMatrix(w http.ResponseWriter, r *http.Request) {
+	resp, err := buildMatrix()
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	writeJSON(w, resp)
+}
+
+func buildMatrix() (*matrixResp, error) {
+	features, err := loadFeatures()
+	if err != nil {
+		return nil, fmt.Errorf("features: %w", err)
+	}
+	scenarios, _, err := loadScenarios()
+	if err != nil {
+		return nil, fmt.Errorf("scenarios: %w", err)
+	}
+	adapters, err := discoverAdapters()
+	if err != nil {
+		return nil, fmt.Errorf("adapters: %w", err)
+	}
+
+	caps := make(map[string]map[string]any)
+	for _, a := range adapters {
+		c, err := loadCapabilities(a)
+		if err != nil {
+			return nil, fmt.Errorf("caps %s: %w", a, err)
+		}
+		caps[a] = c
+	}
+
+	cells := make(map[string]map[string]cell, len(adapters))
+	for _, a := range adapters {
+		cells[a] = make(map[string]cell, len(scenarios))
+		for _, s := range scenarios {
+			cells[a][s.Name] = deriveCell(a, s, caps[a])
+		}
+	}
+
+	metas := make([]scenarioMeta, len(scenarios))
+	for i, s := range scenarios {
+		metas[i] = scenarioMeta{Name: s.Name, Description: s.Description, Requires: s.Requires}
+	}
+	return &matrixResp{
+		Adapters:     adapters,
+		Scenarios:    metas,
+		Cells:        cells,
+		Features:     features,
+		Capabilities: caps,
+	}, nil
+}
+
+// deriveCell mirrors .claude/skills/ir:onboard-agent/skill.md step 2.
+func deriveCell(adapter string, s scenario, caps map[string]any) cell {
+	for _, req := range s.Requires {
+		v, ok := caps[req]
+		if !ok || v != true { // both false and "unknown" block
+			return cell{State: "n/a", Reason: "missing capability: " + req}
+		}
+	}
+	if _, ok := s.ByAdapter[adapter]; !ok {
+		return cell{State: "missing-prompt", Reason: "no by_adapter." + adapter + " entry in scenarios.json"}
+	}
+	fixture := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", s.Name, "transcript.jsonl")
+	if _, err := os.Stat(fixture); err == nil {
+		return cell{State: "covered"}
+	}
+	return cell{State: "staged-only", Reason: "by_adapter present but no committed fixture"}
+}
+
+// ---------- /api/scenario/{adapter}/{scenario} ----------
+
+type drilldownStep struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Link        string `json:"link"`
+}
+
+type drilldownResp struct {
+	Adapter        string          `json:"adapter"`
+	Scenario       string          `json:"scenario"`
+	Description    string          `json:"description"`
+	Requires       []string        `json:"requires"`
+	State          string          `json:"state"`
+	Reason         string          `json:"reason,omitempty"`
+	Prompt         string          `json:"prompt,omitempty"`
+	Settings       any             `json:"settings,omitempty"`
+	TimeoutSeconds int             `json:"timeout_seconds,omitempty"`
+	Verify         map[string]any  `json:"verify,omitempty"`
+	Steps          []drilldownStep `json:"steps"`
+	HasFixture     bool            `json:"has_fixture"`
+}
+
+func handleScenario(w http.ResponseWriter, r *http.Request) {
+	adapter, scenarioName, ok := splitAdapterScenario(r.URL.Path, "/api/scenario/")
+	if !ok {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+	scenarios, _, err := loadScenarios()
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	var s *scenario
+	for i := range scenarios {
+		if scenarios[i].Name == scenarioName {
+			s = &scenarios[i]
+			break
+		}
+	}
+	if s == nil {
+		http.Error(w, "scenario not found", http.StatusNotFound)
+		return
+	}
+	caps, err := loadCapabilities(adapter)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	c := deriveCell(adapter, *s, caps)
+
+	resp := drilldownResp{
+		Adapter:     adapter,
+		Scenario:    scenarioName,
+		Description: s.Description,
+		Requires:    s.Requires,
+		State:       c.State,
+		Reason:      c.Reason,
+		Verify:      s.Verify,
+		HasFixture:  c.State == "covered",
+	}
+	if ba, ok := s.ByAdapter[adapter]; ok {
+		resp.Prompt = ba.Prompt
+		resp.Settings = ba.Settings
+		resp.TimeoutSeconds = ba.TimeoutSeconds
+	}
+
+	sha := headSHA()
+	pl := func(rel string) string {
+		return fmt.Sprintf("%s/blob/%s/%s", githubRepoURL, sha, rel)
+	}
+	driverScript := fmt.Sprintf(".claude/skills/ir:onboard-agent/scripts/drive-%s.sh", adapter)
+	resp.Steps = []drilldownStep{
+		{Title: "Precheck", Description: "Validate adapter, port 7837 free, daemon binary present, working tree clean.", Link: pl(".claude/skills/ir:onboard-agent/scripts/precheck.sh")},
+		{Title: "Daemon spawn", Description: "irrlichd --record on 127.0.0.1:7837 with isolated IRRLICHT_RECORDINGS_DIR. SIGINT → 6s grace → SIGTERM → SIGKILL teardown.", Link: pl(".claude/skills/ir:onboard-agent/scripts/run-cell.sh")},
+		{Title: "Driver", Description: "Drives the " + adapter + " CLI with the prompt + settings shown above.", Link: pl(driverScript)},
+		{Title: "Curate fixture", Description: "Bundle the recording + per-session transcripts (and any subagents) into replaydata/agents/" + adapter + "/scenarios/" + scenarioName + "/.", Link: pl("scripts/curate-lifecycle-fixture.sh")},
+		{Title: "Replay", Description: "replay --quiet --out <report> runs the simulator against the staged + committed transcripts and emits per-state-transition diffs.", Link: pl("scripts/replay-fixtures.sh")},
+		{Title: "Verify", Description: "Assert the verify block (above) holds: transitions topology, tool-call presence, hook firings, final state, etc.", Link: pl(scenariosJSON)},
+	}
+	writeJSON(w, resp)
+}
+
+// ---------- /api/timeline/{adapter}/{scenario} ----------
+
+type timelineEntry struct {
+	TS        time.Time      `json:"ts"`
+	Lane      string         `json:"lane"`              // driver | agent | tool_result | hook | daemon | subagent
+	Kind      string         `json:"kind"`              // narrower (state_transition, tool_call, …)
+	SessionID string         `json:"session_id,omitempty"`
+	ParentID  string         `json:"parent_id,omitempty"`
+	Title     string         `json:"title"`
+	Payload   map[string]any `json:"payload"`
+}
+
+type timelineResp struct {
+	Adapter   string          `json:"adapter"`
+	Scenario  string          `json:"scenario"`
+	Note      string          `json:"note,omitempty"`
+	Entries   []timelineEntry `json:"entries"`
+}
+
+func handleTimeline(w http.ResponseWriter, r *http.Request) {
+	adapter, scenarioName, ok := splitAdapterScenario(r.URL.Path, "/api/timeline/")
+	if !ok {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+	scenarioDir := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName)
+	if _, err := os.Stat(scenarioDir); err != nil {
+		http.Error(w, "no fixture", http.StatusNotFound)
+		return
+	}
+
+	resp := timelineResp{Adapter: adapter, Scenario: scenarioName}
+
+	eventsPath := filepath.Join(scenarioDir, "events.jsonl")
+	eventEntries, parents, err := loadEvents(eventsPath)
+	if err != nil && !os.IsNotExist(err) {
+		httpError(w, err)
+		return
+	}
+	resp.Entries = append(resp.Entries, eventEntries...)
+
+	transcriptPath := filepath.Join(scenarioDir, "transcript.jsonl")
+	parser := newParserFor(adapter)
+	if parser == nil {
+		resp.Note = "transcript not parsed for adapter: " + adapter + " (e.g. aider markdown)"
+	} else if _, err := os.Stat(transcriptPath); err == nil {
+		txEntries, err := loadTranscript(transcriptPath, parser, "agent", primarySessionID(eventEntries))
+		if err != nil {
+			httpError(w, err)
+			return
+		}
+		resp.Entries = append(resp.Entries, txEntries...)
+	}
+
+	subDir := filepath.Join(scenarioDir, "subagents")
+	if entries, _ := os.ReadDir(subDir); len(entries) > 0 && parser != nil {
+		for _, ent := range entries {
+			if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".jsonl") {
+				continue
+			}
+			childID := strings.TrimSuffix(ent.Name(), ".jsonl")
+			parent := parents[childID]
+			subParser := newParserFor(adapter)
+			subEntries, err := loadTranscript(filepath.Join(subDir, ent.Name()), subParser, "subagent", childID)
+			if err != nil {
+				continue
+			}
+			for i := range subEntries {
+				if parent != "" {
+					subEntries[i].ParentID = parent
+				}
+			}
+			resp.Entries = append(resp.Entries, subEntries...)
+		}
+	}
+
+	sort.SliceStable(resp.Entries, func(i, j int) bool {
+		return resp.Entries[i].TS.Before(resp.Entries[j].TS)
+	})
+	writeJSON(w, resp)
+}
+
+func loadEvents(path string) ([]timelineEntry, map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	parents := map[string]string{} // child_session_id → parent_session_id
+	var out []timelineEntry
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var raw map[string]any
+		if err := dec.Decode(&raw); err != nil {
+			break
+		}
+		kind, _ := raw["kind"].(string)
+		ts := parseTime(raw["ts"])
+		sid, _ := raw["session_id"].(string)
+		entry := timelineEntry{TS: ts, Kind: kind, SessionID: sid, Payload: raw}
+		switch kind {
+		case "state_transition":
+			entry.Lane = "daemon"
+			prev, _ := raw["prev_state"].(string)
+			ns, _ := raw["new_state"].(string)
+			if prev == "" {
+				entry.Title = "→ " + ns
+			} else {
+				entry.Title = prev + " → " + ns
+			}
+		case "hook_received":
+			entry.Lane = "hook"
+			name, _ := raw["hook_name"].(string)
+			entry.Title = "hook: " + name
+		case "parent_linked":
+			entry.Lane = "subagent"
+			parent, _ := raw["parent_session_id"].(string)
+			entry.ParentID = parent
+			entry.Title = "subagent linked"
+			if sid != "" && parent != "" {
+				parents[sid] = parent
+			}
+		case "transcript_new", "transcript_removed", "presession_created", "presession_removed", "pid_discovered", "process_exited":
+			entry.Lane = "daemon"
+			entry.Title = kind
+		default:
+			entry.Lane = "daemon"
+			entry.Title = kind
+		}
+		out = append(out, entry)
+	}
+	return out, parents, nil
+}
+
+func loadTranscript(path string, parser tailer.TranscriptParser, lane, sessionID string) ([]timelineEntry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []timelineEntry
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var raw map[string]any
+		if err := dec.Decode(&raw); err != nil {
+			break
+		}
+		ev := parser.ParseLine(raw)
+		if ev == nil || ev.Skip {
+			// Surface queue-operation enqueue as a Driver-lane prompt event.
+			if t, _ := raw["type"].(string); t == "queue-operation" && raw["operation"] == "enqueue" {
+				out = append(out, timelineEntry{
+					TS:        parseTime(raw["timestamp"]),
+					Lane:      "driver",
+					Kind:      "prompt_send",
+					SessionID: sessionID,
+					Title:     truncate(stringField(raw, "content"), 80),
+					Payload:   raw,
+				})
+			}
+			continue
+		}
+		entry := timelineEntry{
+			TS:        ev.Timestamp,
+			Lane:      lane,
+			Kind:      ev.EventType,
+			SessionID: sessionID,
+			Payload:   raw,
+		}
+		switch {
+		case len(ev.ToolUses) > 0:
+			names := make([]string, len(ev.ToolUses))
+			for i, t := range ev.ToolUses {
+				names[i] = t.Name
+			}
+			entry.Lane = lane
+			entry.Kind = "tool_call"
+			entry.Title = "tool: " + strings.Join(names, ", ")
+		case len(ev.ToolResultIDs) > 0:
+			entry.Lane = "tool_result"
+			entry.Kind = "tool_result"
+			if ev.IsError {
+				entry.Title = "tool result (error)"
+			} else {
+				entry.Title = "tool result"
+			}
+		case ev.EventType == "user_message":
+			entry.Lane = "driver"
+			entry.Title = "user message"
+		case ev.EventType == "assistant_message", ev.EventType == "assistant", ev.EventType == "turn_done":
+			entry.Title = describeAssistant(raw, ev)
+		default:
+			entry.Title = ev.EventType
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+func describeAssistant(raw map[string]any, ev *tailer.ParsedEvent) string {
+	text := tailer.ExtractAssistantText(raw)
+	if text != "" {
+		return truncate(text, 80)
+	}
+	if ev.EventType != "" {
+		return ev.EventType
+	}
+	return "assistant"
+}
+
+func primarySessionID(entries []timelineEntry) string {
+	for _, e := range entries {
+		if e.Kind == "transcript_new" && e.SessionID != "" && !strings.HasPrefix(e.SessionID, "proc-") {
+			return e.SessionID
+		}
+	}
+	return ""
+}
+
+// ---------- adapters / parsers ----------
+
+func newParserFor(adapter string) tailer.TranscriptParser {
+	switch adapter {
+	case "claudecode":
+		return &claudecode.Parser{}
+	case "codex":
+		return &codex.Parser{}
+	case "pi":
+		return &pi.Parser{}
+	case "aider":
+		return &aider.NoOpParser{}
+	default:
+		return nil
+	}
+}
+
+func discoverAdapters() ([]string, error) {
+	dir := filepath.Join(*rootDir, replayAgentDir)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range ents {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, e.Name(), "capabilities.json")); err != nil {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// ---------- file loaders ----------
+
+func loadFeatures() ([]featureMeta, error) {
+	b, err := os.ReadFile(filepath.Join(*rootDir, featuresJSON))
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Features []featureMeta `json:"features"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	return doc.Features, nil
+}
+
+type byAdapterEntry struct {
+	Prompt         string `json:"prompt"`
+	Settings       any    `json:"settings"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
+type scenario struct {
+	Name        string                    `json:"name"`
+	Description string                    `json:"description"`
+	Requires    []string                  `json:"requires"`
+	Verify      map[string]any            `json:"verify"`
+	ByAdapter   map[string]byAdapterEntry `json:"by_adapter"`
+}
+
+func loadScenarios() ([]scenario, []scenario, error) {
+	b, err := os.ReadFile(filepath.Join(*rootDir, scenariosJSON))
+	if err != nil {
+		return nil, nil, err
+	}
+	var doc struct {
+		Scenarios             []scenario `json:"scenarios"`
+		OrchestratorScenarios []scenario `json:"orchestrator_scenarios"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, nil, err
+	}
+	return doc.Scenarios, doc.OrchestratorScenarios, nil
+}
+
+func loadCapabilities(adapter string) (map[string]any, error) {
+	path := filepath.Join(*rootDir, replayAgentDir, adapter, "capabilities.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Features map[string]any `json:"features"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	return doc.Features, nil
+}
+
+// ---------- helpers ----------
+
+func headSHA() string {
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = *rootDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "main"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func splitAdapterScenario(urlPath, prefix string) (string, string, bool) {
+	rest := strings.TrimPrefix(urlPath, prefix)
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func parseTime(v any) time.Time {
+	s, _ := v.(string)
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05Z07:00"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		log.Printf("encode: %v", err)
+	}
+}
+
+func httpError(w http.ResponseWriter, err error) {
+	log.Printf("error: %v", err)
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func truncate(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
+}
+
+func stringField(raw map[string]any, key string) string {
+	v, _ := raw[key].(string)
+	return v
+}
+
+// Keep io referenced for future streaming use.
+var _ = io.Discard
