@@ -125,7 +125,6 @@ function openFeatures(adapter) {
   const caps = matrixData.capabilities[adapter] || {};
   const cells = matrixData.cells[adapter] || {};
 
-  // For each feature, find scenarios that require it AND their cell state for this adapter.
   const rows = matrixData.features.map((f) => {
     const cap = caps[f.id];
     const scenariosRequiring = matrixData.scenarios.filter((s) =>
@@ -215,16 +214,23 @@ function renderCapChip(cap) {
 
 // ---------- drilldown ----------
 
-async function openDrilldown(adapter, scenario) {
-  const dd = $("drilldown");
-  dd.innerHTML = `<p class="crumb">Loading ${escapeHtml(adapter)} / ${escapeHtml(scenario)}…</p>`;
-  openModal("drilldown");
+async function loadAndRender({ modal, placeholderEl, url, render }) {
+  placeholderEl.innerHTML = `<p class="crumb">Loading…</p>`;
+  openModal(modal);
   try {
-    const d = await fetchJSON(`/api/scenario/${adapter}/${scenario}`);
-    renderDrilldown(d);
+    render(await fetchJSON(url));
   } catch (err) {
-    dd.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+    placeholderEl.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
   }
+}
+
+function openDrilldown(adapter, scenario) {
+  return loadAndRender({
+    modal: "drilldown",
+    placeholderEl: $("drilldown"),
+    url: `/api/scenario/${adapter}/${scenario}`,
+    render: renderDrilldown,
+  });
 }
 
 function renderDrilldown(d) {
@@ -279,16 +285,13 @@ const LANES = [
   ["subagent", "Subagent"],
 ];
 
-async function openTimeline(adapter, scenario) {
-  $("timeline-meta").innerHTML = `Loading timeline for <strong>${escapeHtml(adapter)} / ${escapeHtml(scenario)}</strong>…`;
-  $("timeline").innerHTML = "";
-  openModal("timeline");
-  try {
-    const t = await fetchJSON(`/api/timeline/${adapter}/${scenario}`);
-    renderTimeline(t);
-  } catch (err) {
-    $("timeline").innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
-  }
+function openTimeline(adapter, scenario) {
+  return loadAndRender({
+    modal: "timeline",
+    placeholderEl: $("timeline"),
+    url: `/api/timeline/${adapter}/${scenario}`,
+    render: renderTimeline,
+  });
 }
 
 function renderTimeline(t) {
@@ -305,38 +308,35 @@ function renderTimeline(t) {
     byLane[e.lane].push(e);
   }
 
+  for (const [laneKey, laneLabel] of LANES) {
+    if (laneKey === "subagent") continue;
+    appendLaneRow(tl, laneLabel, byLane[laneKey] || [], laneKey);
+  }
+
+  // Subagents render as nested rows under their parent session, not as one
+  // sibling lane — preserves causality when multiple parents spawn children.
   const subsByParent = {};
   for (const e of byLane.subagent || []) {
     const key = e.parent_id || "_root";
-    if (!subsByParent[key]) subsByParent[key] = [];
-    subsByParent[key].push(e);
+    (subsByParent[key] ||= []).push(e);
   }
-
-  for (const [laneKey, laneLabel] of LANES) {
-    if (laneKey === "subagent") continue;
-    const label = document.createElement("div");
-    label.className = "lane-label";
-    label.textContent = laneLabel;
-    tl.appendChild(label);
-
-    const row = document.createElement("div");
-    row.className = "lane-row lane-" + laneKey;
-    for (const e of byLane[laneKey] || []) row.appendChild(blockEl(e));
-    tl.appendChild(row);
-  }
-
   for (const [parentSid, children] of Object.entries(subsByParent)) {
-    const label = document.createElement("div");
-    label.className = "lane-label";
-    label.textContent = parentSid === "_root" ? "Subagent" : "↳ subagent";
-    label.title = parentSid;
-    tl.appendChild(label);
-
-    const row = document.createElement("div");
-    row.className = "lane-row lane-subagent";
-    for (const e of children) row.appendChild(blockEl(e));
-    tl.appendChild(row);
+    const label = parentSid === "_root" ? "Subagent" : "↳ subagent";
+    appendLaneRow(tl, label, children, "subagent", parentSid);
   }
+}
+
+function appendLaneRow(tl, labelText, entries, laneClass, labelTitle = "") {
+  const label = document.createElement("div");
+  label.className = "lane-label";
+  label.textContent = labelText;
+  if (labelTitle) label.title = labelTitle;
+  tl.appendChild(label);
+
+  const row = document.createElement("div");
+  row.className = "lane-row lane-" + laneClass;
+  for (const e of entries) row.appendChild(blockEl(e));
+  tl.appendChild(row);
 }
 
 function blockEl(e) {
@@ -361,7 +361,6 @@ async function fetchJSON(url) {
 }
 
 function chipClass(state) {
-  if (state === "n/a") return "n-a";
   return state.replace(/[^a-z0-9]+/g, "-");
 }
 

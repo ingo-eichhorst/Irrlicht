@@ -15,13 +15,26 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/pkg/tailer"
+)
+
+// Lane labels used in the timeline swim-lanes — kept as constants so the Go
+// emitter and the JS consumer share a single source of truth.
+const (
+	laneDriver     = "driver"
+	laneAgent      = "agent"
+	laneToolResult = "tool_result"
+	laneHook       = "hook"
+	laneDaemon     = "daemon"
+	laneSubagent   = "subagent"
 )
 
 // safeSegment matches the only shapes adapter and scenario names take in this
@@ -282,13 +295,13 @@ func handleScenario(w http.ResponseWriter, r *http.Request) {
 // ---------- /api/timeline/{adapter}/{scenario} ----------
 
 type timelineEntry struct {
-	TS        time.Time      `json:"ts"`
-	Lane      string         `json:"lane"`              // driver | agent | tool_result | hook | daemon | subagent
-	Kind      string         `json:"kind"`              // narrower (state_transition, tool_call, …)
-	SessionID string         `json:"session_id,omitempty"`
-	ParentID  string         `json:"parent_id,omitempty"`
-	Title     string         `json:"title"`
-	Payload   map[string]any `json:"payload"`
+	TS        time.Time `json:"ts"`
+	Lane      string    `json:"lane"`              // driver | agent | tool_result | hook | daemon | subagent
+	Kind      string    `json:"kind"`              // narrower (state_transition, tool_call, …)
+	SessionID string    `json:"session_id,omitempty"`
+	ParentID  string    `json:"parent_id,omitempty"`
+	Title     string    `json:"title"`
+	Payload   any       `json:"payload"` // lifecycle.Event for daemon events, raw map[string]any for transcripts
 }
 
 type timelineResp struct {
@@ -305,32 +318,32 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scenarioDir := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName)
-	if _, err := os.Stat(scenarioDir); err != nil {
-		http.Error(w, "no fixture", http.StatusNotFound)
-		return
-	}
-
 	resp := timelineResp{Adapter: adapter, Scenario: scenarioName}
 
-	eventsPath := filepath.Join(scenarioDir, "events.jsonl")
-	eventEntries, parents, err := loadEvents(eventsPath)
+	eventEntries, parents, err := loadEvents(filepath.Join(scenarioDir, "events.jsonl"))
 	if err != nil && !os.IsNotExist(err) {
 		httpError(w, err)
 		return
 	}
 	resp.Entries = append(resp.Entries, eventEntries...)
 
-	transcriptPath := filepath.Join(scenarioDir, "transcript.jsonl")
 	parser := newParserFor(adapter)
 	if parser == nil {
 		resp.Note = "transcript not parsed for adapter: " + adapter + " (e.g. aider markdown)"
-	} else if _, err := os.Stat(transcriptPath); err == nil {
-		txEntries, err := loadTranscript(transcriptPath, parser, "agent", primarySessionID(eventEntries))
-		if err != nil {
+	} else {
+		txEntries, err := loadTranscript(filepath.Join(scenarioDir, "transcript.jsonl"), parser, laneAgent, primarySessionID(eventEntries))
+		if err != nil && !os.IsNotExist(err) {
 			httpError(w, err)
 			return
 		}
 		resp.Entries = append(resp.Entries, txEntries...)
+	}
+
+	// If neither events.jsonl nor transcript.jsonl produced anything, the
+	// (adapter, scenario) directory likely doesn't exist — surface that.
+	if len(resp.Entries) == 0 {
+		http.Error(w, "no fixture", http.StatusNotFound)
+		return
 	}
 
 	subDir := filepath.Join(scenarioDir, "subagents")
@@ -341,13 +354,14 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 			}
 			childID := strings.TrimSuffix(ent.Name(), ".jsonl")
 			parent := parents[childID]
-			subParser := newParserFor(adapter)
-			subEntries, err := loadTranscript(filepath.Join(subDir, ent.Name()), subParser, "subagent", childID)
+			// Fresh parser per subagent file — claudecode.Parser is stateful
+			// (lastRequestID / pendingContrib) and would carry state across files otherwise.
+			subEntries, err := loadTranscript(filepath.Join(subDir, ent.Name()), newParserFor(adapter), laneSubagent, childID)
 			if err != nil {
 				continue
 			}
-			for i := range subEntries {
-				if parent != "" {
+			if parent != "" {
+				for i := range subEntries {
 					subEntries[i].ParentID = parent
 				}
 			}
@@ -371,42 +385,35 @@ func loadEvents(path string) ([]timelineEntry, map[string]string, error) {
 	var out []timelineEntry
 	dec := json.NewDecoder(f)
 	for dec.More() {
-		var raw map[string]any
-		if err := dec.Decode(&raw); err != nil {
+		var ev lifecycle.Event
+		if err := dec.Decode(&ev); err != nil {
 			break
 		}
-		kind, _ := raw["kind"].(string)
-		ts := parseTime(raw["ts"])
-		sid, _ := raw["session_id"].(string)
-		entry := timelineEntry{TS: ts, Kind: kind, SessionID: sid, Payload: raw}
-		switch kind {
-		case "state_transition":
-			entry.Lane = "daemon"
-			prev, _ := raw["prev_state"].(string)
-			ns, _ := raw["new_state"].(string)
-			if prev == "" {
-				entry.Title = "→ " + ns
+		entry := timelineEntry{
+			TS:        ev.Timestamp,
+			Kind:      string(ev.Kind),
+			SessionID: ev.SessionID,
+			Lane:      laneDaemon,
+			Title:     string(ev.Kind),
+			Payload:   ev,
+		}
+		switch ev.Kind {
+		case lifecycle.KindStateTransition:
+			if ev.PrevState == "" {
+				entry.Title = "→ " + ev.NewState
 			} else {
-				entry.Title = prev + " → " + ns
+				entry.Title = ev.PrevState + " → " + ev.NewState
 			}
-		case "hook_received":
-			entry.Lane = "hook"
-			name, _ := raw["hook_name"].(string)
-			entry.Title = "hook: " + name
-		case "parent_linked":
-			entry.Lane = "subagent"
-			parent, _ := raw["parent_session_id"].(string)
-			entry.ParentID = parent
+		case lifecycle.KindHookReceived:
+			entry.Lane = laneHook
+			entry.Title = "hook: " + ev.HookName
+		case lifecycle.KindParentLinked:
+			entry.Lane = laneSubagent
+			entry.ParentID = ev.ParentSessionID
 			entry.Title = "subagent linked"
-			if sid != "" && parent != "" {
-				parents[sid] = parent
+			if ev.SessionID != "" && ev.ParentSessionID != "" {
+				parents[ev.SessionID] = ev.ParentSessionID
 			}
-		case "transcript_new", "transcript_removed", "presession_created", "presession_removed", "pid_discovered", "process_exited":
-			entry.Lane = "daemon"
-			entry.Title = kind
-		default:
-			entry.Lane = "daemon"
-			entry.Title = kind
 		}
 		out = append(out, entry)
 	}
@@ -432,7 +439,7 @@ func loadTranscript(path string, parser tailer.TranscriptParser, lane, sessionID
 			if t, _ := raw["type"].(string); t == "queue-operation" && raw["operation"] == "enqueue" {
 				out = append(out, timelineEntry{
 					TS:        parseTime(raw["timestamp"]),
-					Lane:      "driver",
+					Lane:      laneDriver,
 					Kind:      "prompt_send",
 					SessionID: sessionID,
 					Title:     truncate(stringField(raw, "content"), 80),
@@ -454,11 +461,10 @@ func loadTranscript(path string, parser tailer.TranscriptParser, lane, sessionID
 			for i, t := range ev.ToolUses {
 				names[i] = t.Name
 			}
-			entry.Lane = lane
 			entry.Kind = "tool_call"
 			entry.Title = "tool: " + strings.Join(names, ", ")
 		case len(ev.ToolResultIDs) > 0:
-			entry.Lane = "tool_result"
+			entry.Lane = laneToolResult
 			entry.Kind = "tool_result"
 			if ev.IsError {
 				entry.Title = "tool result (error)"
@@ -466,7 +472,7 @@ func loadTranscript(path string, parser tailer.TranscriptParser, lane, sessionID
 				entry.Title = "tool result"
 			}
 		case ev.EventType == "user_message":
-			entry.Lane = "driver"
+			entry.Lane = laneDriver
 			entry.Title = "user message"
 		case ev.EventType == "assistant_message", ev.EventType == "assistant", ev.EventType == "turn_done":
 			entry.Title = describeAssistant(raw, ev)
@@ -489,9 +495,12 @@ func describeAssistant(raw map[string]any, ev *tailer.ParsedEvent) string {
 	return "assistant"
 }
 
+// primarySessionID picks the agent session ID from the lifecycle stream — the
+// first transcript_new whose session_id isn't a "proc-<pid>" pre-session
+// sentinel emitted by the daemon's process scanner.
 func primarySessionID(entries []timelineEntry) string {
 	for _, e := range entries {
-		if e.Kind == "transcript_new" && e.SessionID != "" && !strings.HasPrefix(e.SessionID, "proc-") {
+		if e.Kind == string(lifecycle.KindTranscriptNew) && e.SessionID != "" && !strings.HasPrefix(e.SessionID, "proc-") {
 			return e.SessionID
 		}
 	}
@@ -596,14 +605,26 @@ func loadCapabilities(adapter string) (map[string]any, error) {
 
 // ---------- helpers ----------
 
+var (
+	headSHAOnce  sync.Once
+	cachedHeadSHA string
+)
+
+// headSHA returns the repo HEAD SHA, cached once at first call. The viewer
+// doesn't watch for new commits, so per-request `git rev-parse` would just
+// fork a process to return the same answer.
 func headSHA() string {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = *rootDir
-	out, err := cmd.Output()
-	if err != nil {
-		return "main"
-	}
-	return strings.TrimSpace(string(out))
+	headSHAOnce.Do(func() {
+		cmd := exec.Command("git", "rev-parse", "HEAD")
+		cmd.Dir = *rootDir
+		out, err := cmd.Output()
+		if err != nil {
+			cachedHeadSHA = "main"
+			return
+		}
+		cachedHeadSHA = strings.TrimSpace(string(out))
+	})
+	return cachedHeadSHA
 }
 
 // splitAdapterScenario parses /<prefix>/<adapter>/<scenario> and rejects any
