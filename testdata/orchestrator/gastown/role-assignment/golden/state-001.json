@@ -1,0 +1,54 @@
+{
+  "adapter": "gastown",
+  "running": true,
+  "root": "\u003cGT_ROOT\u003e",
+  "global_agents": [
+    {
+      "role": "mayor",
+      "icon": "🎩",
+      "description": "Coordinates all rigs and global state",
+      "state": "idle"
+    },
+    {
+      "role": "deacon",
+      "icon": "📋",
+      "description": "Assigns tasks to polecats, manages the queue",
+      "state": "idle"
+    },
+    {
+      "role": "boot",
+      "icon": "🥾",
+      "description": "Watchdog for the Deacon",
+      "state": "working"
+    }
+  ],
+  "codebases": [
+    {
+      "name": "irrlicht",
+      "status": "ok",
+      "worktrees": [
+        {
+          "path": "\u003cGT_ROOT\u003e/irrlicht",
+          "is_main": true,
+          "workers": [
+            {
+              "role": "witness",
+              "icon": "🦉",
+              "description": "Reviews polecat work before merging",
+              "session_id": "sess-witness-001",
+              "state": "working"
+            },
+            {
+              "role": "refinery",
+              "icon": "🏭",
+              "description": "Merges accepted work into the main branch",
+              "session_id": "sess-refinery-001",
+              "state": "ready"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "updated_at": "0001-01-01T00:00:00Z"
+}

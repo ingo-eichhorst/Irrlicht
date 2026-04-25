@@ -1,0 +1,4 @@
+{
+  "description": "Daemon reports running=false and the rig is degraded. Verifies that orchestrator.State.Running and Codebase.Status reflect aggregated multi-source state.",
+  "poll_ticks": 1
+}

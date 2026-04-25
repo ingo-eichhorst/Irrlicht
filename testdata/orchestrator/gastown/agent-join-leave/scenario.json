@@ -1,0 +1,4 @@
+{
+  "description": "Polecat workforce churns over 3 polls: tick-001 has 1 polecat, tick-002 adds a second, tick-003 removes the second. Verifies that the snapshot stream reflects each join/leave on its own poll cycle.",
+  "poll_ticks": 3
+}
