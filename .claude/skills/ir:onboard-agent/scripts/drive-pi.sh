@@ -100,6 +100,15 @@ if [[ -n "$TRANSCRIPT" ]]; then
   UUID="$(head -n1 "$TRANSCRIPT" | jq -r '.id // empty' 2>/dev/null || true)"
 fi
 
+# Maintain the invariant: transcript.path is non-empty ⇒ session.uuid is
+# valid. If we can't extract a UUID, the transcript is unusable for
+# curation (the daemon's recording session_id won't correlate). Clear
+# transcript.path and let run-cell.sh report ERROR.
+if [[ -n "$TRANSCRIPT" && -z "$UUID" ]]; then
+  echo "drive-pi: WARN — found transcript $TRANSCRIPT but could not extract session UUID from line 1" >&2
+  TRANSCRIPT=""
+fi
+
 echo "${UUID:-}" > "$STAGING/session.uuid"
 echo "${TRANSCRIPT:-}" > "$STAGING/transcript.path"
 

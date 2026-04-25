@@ -160,13 +160,14 @@ RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/d
 MANIFEST="$STAGING/run-manifest.json"
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo "unknown")"
 
-if [[ -z "$TRANSCRIPT" || -z "$RECORDING" ]]; then
+if [[ -z "$TRANSCRIPT" || -z "$RECORDING" || -z "$ACTUAL_UUID" ]]; then
   jq -n \
     --arg adapter "$ADAPTER" \
     --arg scenario "$SCENARIO" \
     --arg session_uuid "$ACTUAL_UUID" \
     --argjson transcript_found "$([[ -n "$TRANSCRIPT" ]] && echo true || echo false)" \
     --argjson recording_found "$([[ -n "$RECORDING" ]] && echo true || echo false)" \
+    --argjson uuid_resolved "$([[ -n "$ACTUAL_UUID" ]] && echo true || echo false)" \
     --arg driver_exit_reason "$DRIVER_REASON" \
     --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
     --arg staging "$STAGING" \
@@ -174,14 +175,15 @@ if [[ -z "$TRANSCRIPT" || -z "$RECORDING" ]]; then
       scenario: $scenario,
       session_uuid: $session_uuid,
       verdict: "ERROR",
-      error: "transcript_or_recording_missing",
+      error: "transcript_recording_or_uuid_missing",
       transcript_found: $transcript_found,
       recording_found: $recording_found,
+      uuid_resolved: $uuid_resolved,
       driver_exit_reason: $driver_exit_reason,
       daemon_shutdown: $daemon_shutdown,
       staging: $staging}' \
     > "$MANIFEST"
-  echo "ERROR: transcript=${TRANSCRIPT:-missing} recording=${RECORDING:-missing}" >&2
+  echo "ERROR: transcript=${TRANSCRIPT:-missing} recording=${RECORDING:-missing} uuid=${ACTUAL_UUID:-missing}" >&2
   exit 1
 fi
 
