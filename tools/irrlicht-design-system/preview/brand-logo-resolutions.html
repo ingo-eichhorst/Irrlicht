@@ -1,0 +1,145 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"><link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@500;700&family=Cormorant+Garamond:wght@300&display=swap" rel="stylesheet"><style>
+body{overflow-y:auto}
+.card{min-height:auto;justify-content:flex-start;padding:32px 36px;gap:28px;display:grid;grid-template-columns:1fr;max-width:860px;margin:0 auto}
+.section-head{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.28em;text-transform:uppercase;color:#5a6378;border-bottom:1px solid rgba(138,92,246,0.08);padding-bottom:8px;margin-bottom:-6px}
+
+.size-row{display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap}
+.size-cell{display:flex;flex-direction:column;align-items:center;gap:8px}
+.size-cell .lbl{font-family:'DM Mono',monospace;font-size:9px;color:#5a6378;letter-spacing:0.08em}
+.size-cell .dim{font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8}
+
+.style-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+.tile{aspect-ratio:1;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:14px;border:1px solid rgba(255,255,255,0.04);position:relative;overflow:hidden}
+.tile .name{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:inherit;opacity:0.75}
+.tile-dark{background:#080c16}
+.tile-bg{background:rgba(12,18,35,0.6)}
+.tile-purple{background:linear-gradient(135deg,#2a1646,#1a0f2e)}
+.tile-light{background:#e8ecf4}
+.tile-light .name{color:#050a14}
+.tile-mono{background:#f3f0ff}
+.tile-mono .name{color:#3f1f73}
+
+.lockup-row{display:flex;flex-direction:column;gap:14px}
+.lockup{display:flex;align-items:center;gap:12px;padding:16px 20px;border:1px solid rgba(138,92,246,0.1);border-radius:10px;background:rgba(12,18,35,0.4)}
+.lockup.light{background:#e8ecf4;border-color:rgba(0,0,0,0.06)}
+.lockup-wm-mono{font-family:'DM Mono',monospace;font-size:18px;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;color:#e8ecf4}
+.lockup-wm-mono .pct{color:#8B5CF6}
+.lockup.light .lockup-wm-mono{color:#0f1628}
+.lockup-wm-serif{font-family:'Cormorant Garamond',serif;font-weight:300;font-size:34px;letter-spacing:0.06em;color:#e8ecf4;line-height:1}
+.lockup.light .lockup-wm-serif{color:#0f1628}
+.lockup-wm-serif.gradient{background:linear-gradient(135deg,#8B5CF6 0%,#c084fc 50%,#FF9500 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.lockup-meta{margin-left:auto;font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.16em;text-transform:uppercase;color:#5a6378}
+.lockup.light .lockup-meta{color:#5a6378}
+
+.swatches{display:flex;gap:8px;align-items:center}
+.swatch{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,0.06)}
+</style></head><body><div class="card">
+
+<!-- ────── FLAME MARK · COLOR STYLES ────── -->
+<div>
+  <div class="section-head">Flame mark &mdash; color styles</div>
+  <div class="style-grid">
+    <div class="tile tile-dark"><svg id="flame-full" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">full-color</div></div>
+    <div class="tile tile-dark"><svg id="flame-mono" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">mono&nbsp;purple</div></div>
+    <div class="tile tile-dark"><svg id="flame-white" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">white&nbsp;knockout</div></div>
+    <div class="tile tile-light"><svg id="flame-black" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">solid&nbsp;black</div></div>
+    <div class="tile tile-dark"><svg id="flame-off" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">extinguished</div></div>
+  </div>
+</div>
+
+<!-- ────── SIZE LADDER ────── -->
+<div>
+  <div class="section-head">Sizes &mdash; the flame stays legible down to 16px</div>
+  <div class="size-row" style="margin-top:14px">
+    <div class="size-cell"><svg class="flame-live" width="16" height="16" viewBox="0 0 32 32"></svg><div class="lbl">favicon</div><div class="dim">16</div></div>
+    <div class="size-cell"><svg class="flame-live" width="24" height="24" viewBox="0 0 32 32"></svg><div class="lbl">menu bar</div><div class="dim">24</div></div>
+    <div class="size-cell"><svg class="flame-live" width="32" height="32" viewBox="0 0 32 32"></svg><div class="lbl">nav</div><div class="dim">32</div></div>
+    <div class="size-cell"><svg class="flame-live" width="48" height="48" viewBox="0 0 32 32"></svg><div class="lbl">card</div><div class="dim">48</div></div>
+    <div class="size-cell"><svg class="flame-live" width="80" height="80" viewBox="0 0 32 32"></svg><div class="lbl">hero inset</div><div class="dim">80</div></div>
+    <div class="size-cell"><svg class="flame-live" width="128" height="128" viewBox="0 0 32 32"></svg><div class="lbl">app icon</div><div class="dim">128</div></div>
+  </div>
+</div>
+
+<!-- ────── LOCKUPS ────── -->
+<div>
+  <div class="section-head">Horizontal lockups</div>
+  <div class="lockup-row" style="margin-top:14px">
+    <div class="lockup">
+      <svg class="flame-live" width="26" height="26" viewBox="0 0 32 32"></svg>
+      <div class="lockup-wm-mono">irr<span class="pct">licht</span></div>
+      <div class="lockup-meta">mono &middot; app &amp; ui</div>
+    </div>
+    <div class="lockup">
+      <svg class="flame-live" width="38" height="38" viewBox="0 0 32 32"></svg>
+      <div class="lockup-wm-serif gradient">Irrlicht</div>
+      <div class="lockup-meta">serif &middot; marketing</div>
+    </div>
+    <div class="lockup light">
+      <svg class="flame-black-live" width="26" height="26" viewBox="0 0 32 32"></svg>
+      <div class="lockup-wm-mono">irr<span class="pct">licht</span></div>
+      <div class="lockup-meta">mono &middot; light bg</div>
+    </div>
+  </div>
+</div>
+
+<!-- ────── COLOR VALUES ────── -->
+<div>
+  <div class="section-head">Palette used in the mark</div>
+  <div class="swatches" style="margin-top:10px;gap:14px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#e9d5ff"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#e9d5ff<span style="color:#5a6378"> &middot; crown</span></span></div>
+    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#a78bfa"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#a78bfa<span style="color:#5a6378"> &middot; body mid</span></span></div>
+    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#8B5CF6"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#8B5CF6<span style="color:#5a6378"> &middot; primary</span></span></div>
+    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#6d28d9"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#6d28d9<span style="color:#5a6378"> &middot; base</span></span></div>
+    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#6b7280"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#6b7280<span style="color:#5a6378"> &middot; extinguished</span></span></div>
+  </div>
+</div>
+
+</div>
+
+<script>
+// The flame path — reused everywhere
+const OUTER = "M16 3.5 C 14.2 8, 11 11.5, 10.3 16 C 9.8 19.5, 10.5 23, 13 25 C 14.2 25.9, 15.1 26.5, 16 26.8 C 16.9 26.5, 17.9 25.9, 19.2 24.8 C 21.6 22.8, 22.2 19.5, 21.7 16.2 C 21 11.7, 17.8 8, 16 3.5 Z";
+const INNER = "M16 9.5 C 14.9 13, 13.1 15.2, 12.9 17.8 C 12.7 20.2, 13.8 22.4, 15.3 23.3 C 15.6 23.5, 15.8 23.6, 16 23.6 C 16.2 23.6, 16.4 23.5, 16.8 23.2 C 18.4 22.1, 19.2 20, 19 17.7 C 18.8 15.2, 17.1 13, 16 9.5 Z";
+
+function flameFull(uid) {
+  return `<defs>
+    <linearGradient id="fb${uid}" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#e9d5ff"/><stop offset="35%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+    <linearGradient id="fc${uid}" x1="50%" y1="20%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#fef9ff"/><stop offset="60%" stop-color="#ede9fe"/><stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <path d="${OUTER}" fill="url(#fb${uid})"/>
+  <path d="${INNER}" fill="url(#fc${uid})" opacity="0.95"/>
+  <ellipse cx="16" cy="19.2" rx="1.5" ry="3" fill="#fff" opacity="0.75"/>`;
+}
+function flameMono(color) {
+  return `<path d="${OUTER}" fill="${color}" opacity="0.95"/>
+  <path d="${INNER}" fill="${color}" opacity="0.55"/>
+  <ellipse cx="16" cy="19.2" rx="1.5" ry="3" fill="${color}" opacity="0.35"/>`;
+}
+function flameOff() {
+  return `<defs>
+    <linearGradient id="ob" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#6b7280" stop-opacity="0.7"/><stop offset="100%" stop-color="#3f4551" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="oc" x1="50%" y1="20%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#9ca3af" stop-opacity="0.6"/><stop offset="100%" stop-color="#6b7280" stop-opacity="0.3"/>
+    </linearGradient>
+  </defs>
+  <path d="${OUTER}" fill="url(#ob)"/>
+  <path d="${INNER}" fill="url(#oc)"/>`;
+}
+
+document.getElementById('flame-full').innerHTML = flameFull('a');
+document.getElementById('flame-mono').innerHTML = flameMono('#8B5CF6');
+document.getElementById('flame-white').innerHTML = flameMono('#ffffff');
+document.getElementById('flame-black').innerHTML = flameMono('#050a14');
+document.getElementById('flame-off').innerHTML = flameOff();
+
+let liveId = 0;
+document.querySelectorAll('.flame-live').forEach(el => { el.innerHTML = flameFull('l' + (liveId++)); });
+document.querySelectorAll('.flame-black-live').forEach(el => { el.innerHTML = flameMono('#0f1628'); });
+</script>
+</body></html>

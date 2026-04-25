@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Irrlicht — Landing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=DM+Mono:wght@400;500;700&family=Outfit:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#050a14;
+  --bg-glow:#0d1424;
+  --text:#c8cdd8;
+  --text-bright:#e8ecf4;
+  --muted:#5a6378;
+  --working:#8B5CF6;
+  --waiting:#FF9500;
+  --ready:#34C759;
+  --border:rgba(138,92,246,0.10);
+  --sans:'Outfit',-apple-system,sans-serif;
+  --serif:'Cormorant Garamond',serif;
+  --mono:'DM Mono',ui-monospace,Menlo,monospace;
+}
+html,body{background:var(--bg);color:var(--text);font-family:var(--sans);font-weight:300;min-height:100vh;-webkit-font-smoothing:antialiased;line-height:1.55}
+body{background-image:radial-gradient(ellipse 70% 50% at 50% 28%,rgba(139,92,246,0.08) 0%,transparent 60%),radial-gradient(ellipse 60% 40% at 80% 70%,rgba(255,149,0,0.05) 0%,transparent 60%),radial-gradient(ellipse 70% 50% at 50% 28%,var(--bg-glow) 0%,var(--bg) 80%)}
+body::before{content:'';position:fixed;inset:0;opacity:0.030;pointer-events:none;z-index:1;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+.site-header{position:sticky;top:0;z-index:10;display:flex;justify-content:space-between;align-items:center;padding:20px 48px;background:rgba(5,10,20,0.7);backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,0.03)}
+.wordmark-sm{font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;color:var(--text-bright)}
+.wordmark-sm span{color:var(--working)}
+.site-header nav{display:flex;gap:28px;font-family:var(--mono);font-size:11px;letter-spacing:0.1em}
+.site-header a{color:var(--muted);text-decoration:none;transition:color 0.2s}
+.site-header a:hover{color:var(--text-bright)}
+.site-header a.gh{color:var(--text)}
+
+main{max-width:1080px;margin:0 auto;padding:0 48px;position:relative;z-index:2}
+
+.hero{text-align:center;padding:96px 0 48px}
+.hero-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:0.3em;text-transform:uppercase;color:var(--muted);margin-bottom:40px}
+.hero-word{font-family:var(--serif);font-weight:300;font-size:clamp(96px,18vw,220px);line-height:1;letter-spacing:0.04em;background:linear-gradient(135deg,#c084fc 0%,#8B5CF6 35%,#FF9500 85%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:18px;filter:drop-shadow(0 0 60px rgba(139,92,246,0.25))}
+.hero-pron{font-family:var(--serif);font-style:italic;font-weight:300;font-size:22px;color:var(--muted);margin-bottom:40px}
+.hero-pron span{color:#3a4158}
+.hero-tag{font-family:var(--serif);font-weight:300;font-size:30px;line-height:1.3;color:var(--text-bright);max-width:640px;margin:0 auto;text-wrap:balance}
+.hero-tag em{font-style:italic}
+.hero-tag em:nth-of-type(1){color:var(--working)}
+.hero-tag em:nth-of-type(2){color:var(--waiting)}
+.hero-tag em:nth-of-type(3){color:var(--ready)}
+
+.lights{display:grid;grid-template-columns:repeat(3,1fr);gap:48px;padding:72px 0 64px;max-width:880px;margin:0 auto}
+.light{text-align:center;display:flex;flex-direction:column;align-items:center;gap:14px}
+.orb{width:44px;height:44px;border-radius:50%;animation:breathe 4s ease-in-out infinite}
+.light:nth-child(2) .orb{animation-delay:-1.3s}
+.light:nth-child(3) .orb{animation-delay:-2.6s}
+@keyframes breathe{0%,100%{transform:scale(1);filter:brightness(1)}50%{transform:scale(1.05);filter:brightness(1.15)}}
+.light .label{font-family:var(--mono);font-size:11px;letter-spacing:0.3em;text-transform:uppercase;color:var(--text-bright);font-weight:500}
+.light .caption{font-family:var(--serif);font-style:italic;font-weight:300;font-size:16px;color:var(--muted);max-width:220px;line-height:1.4}
+
+.install{text-align:center;padding:24px 0 96px}
+.install-label{font-family:var(--mono);font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:var(--muted);margin-bottom:20px}
+.install-pill{display:inline-flex;align-items:center;gap:14px;padding:14px 18px 14px 22px;background:rgba(12,18,35,0.65);border:1px solid var(--border);border-radius:10px;font-family:var(--mono);font-size:13px;color:var(--text);backdrop-filter:blur(8px)}
+.install-prompt{color:var(--working);font-weight:700}
+.install-cmd{color:var(--text-bright);font-weight:400;white-space:nowrap}
+.install-copy{font-family:var(--mono);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;padding:6px 12px;background:rgba(139,92,246,0.08);color:var(--working);border:1px solid rgba(139,92,246,0.2);border-radius:5px;cursor:pointer;transition:background 0.2s}
+.install-copy:hover{background:rgba(139,92,246,0.15)}
+.install-foot{font-family:var(--mono);font-size:10px;letter-spacing:0.1em;color:var(--muted);margin-top:16px}
+
+.features{display:grid;grid-template-columns:repeat(3,1fr);gap:40px;padding:24px 0 96px;border-top:1px solid rgba(255,255,255,0.04)}
+.feature{padding-top:36px}
+.feature-dot{width:8px;height:8px;border-radius:50%;margin-bottom:20px}
+.feature-title{font-family:var(--serif);font-weight:400;font-size:26px;color:var(--text-bright);letter-spacing:0.01em;margin-bottom:10px;line-height:1.2}
+.feature-body{font-family:var(--sans);font-weight:300;font-size:15px;line-height:1.55;color:var(--muted);text-wrap:pretty}
+
+.site-footer{padding:48px;border-top:1px solid rgba(255,255,255,0.04);max-width:1080px;margin:0 auto}
+.etym{font-family:var(--serif);font-weight:300;font-size:17px;color:var(--muted);display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;padding-bottom:18px}
+.etym .word{font-weight:400;color:var(--text-bright);font-size:19px}
+.etym .pron{font-style:italic;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.etym .pos{font-style:italic;color:var(--muted)}
+.etym .def{color:var(--muted);flex:1;min-width:280px}
+.colophon{font-family:var(--mono);font-size:10px;letter-spacing:0.12em;color:#3a4158;text-transform:uppercase}
+
+@media (max-width: 720px){
+  main,.site-header,.site-footer{padding-left:24px;padding-right:24px}
+  .lights,.features{grid-template-columns:1fr;gap:32px}
+  .hero{padding:64px 0 32px}
+  .hero-tag{font-size:22px}
+  .install-pill{font-size:11px;flex-wrap:wrap}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="SiteHeader.jsx"></script>
+<script type="text/babel" src="Hero.jsx"></script>
+<script type="text/babel" src="InstallBlock.jsx"></script>
+
+<script type="text/babel">
+function App() {
+  return (
+    <>
+      <SiteHeader />
+      <main>
+        <Hero />
+        <LightsSignature />
+        <InstallBlock />
+        <FeatureTrio />
+      </main>
+      <SiteFooter />
+    </>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

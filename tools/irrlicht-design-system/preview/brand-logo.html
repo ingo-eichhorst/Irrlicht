@@ -1,0 +1,54 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"><link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@500;600;700&family=Cormorant+Garamond:wght@300&display=swap" rel="stylesheet"><style>
+.card{gap:18px}
+.wordmark-mono{font-family:'DM Mono',monospace;font-size:20px;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;color:#e8ecf4;display:inline-flex;align-items:center;gap:10px}
+.wordmark-mono span{color:#8B5CF6}
+.wordmark-mono svg{filter:drop-shadow(0 0 8px rgba(139,92,246,0.4))}
+.wordmark-serif{font-family:'Cormorant Garamond',serif;font-weight:300;font-size:34px;letter-spacing:0.08em;background:linear-gradient(135deg,#8B5CF6 0%,#c084fc 50%,#FF9500 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.cluster{display:flex;align-items:center;gap:14px}
+.orb{width:22px;height:22px;border-radius:50%}
+.wisp-off{filter:drop-shadow(0 0 4px rgba(107,114,128,0.25));opacity:0.85}
+.sep{width:1px;height:18px;background:rgba(138,92,246,0.14);margin:0 2px}
+.head{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.2em;text-transform:uppercase;color:#5a6378;margin-bottom:6px}
+.caption{font-family:'DM Mono',monospace;font-size:9px;color:#5a6378;margin-left:8px;letter-spacing:0.05em}
+</style></head><body><div class="card">
+<div><div class="head">Mono lock-up &mdash; app / UI</div>
+  <div class="wordmark-mono">
+    <svg width="22" height="22" viewBox="0 0 32 32">
+      <defs>
+        <linearGradient id="wbody" x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0%" stop-color="#e9d5ff"/><stop offset="35%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#6d28d9"/>
+        </linearGradient>
+        <linearGradient id="wcore" x1="50%" y1="20%" x2="50%" y2="100%">
+          <stop offset="0%" stop-color="#fef9ff"/><stop offset="60%" stop-color="#ede9fe"/><stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.6"/>
+        </linearGradient>
+      </defs>
+      <path d="M16 3.5 C 14.2 8, 11 11.5, 10.3 16 C 9.8 19.5, 10.5 23, 13 25 C 14.2 25.9, 15.1 26.5, 16 26.8 C 16.9 26.5, 17.9 25.9, 19.2 24.8 C 21.6 22.8, 22.2 19.5, 21.7 16.2 C 21 11.7, 17.8 8, 16 3.5 Z" fill="url(#wbody)"/>
+      <path d="M16 9.5 C 14.9 13, 13.1 15.2, 12.9 17.8 C 12.7 20.2, 13.8 22.4, 15.3 23.3 C 15.6 23.5, 15.8 23.6, 16 23.6 C 16.2 23.6, 16.4 23.5, 16.8 23.2 C 18.4 22.1, 19.2 20, 19 17.7 C 18.8 15.2, 17.1 13, 16 9.5 Z" fill="url(#wcore)" opacity="0.95"/>
+      <ellipse cx="16" cy="19.2" rx="1.5" ry="3" fill="#ffffff" opacity="0.75"/>
+    </svg>
+    <span style="color:#e8ecf4">irr<span style="color:#8B5CF6">licht</span></span>
+  </div>
+</div>
+
+<div><div class="head">Serif display &mdash; marketing hero</div><div class="wordmark-serif">Irrlicht</div></div>
+
+<div><div class="head">Lights signature</div><div class="cluster">
+  <div class="orb" style="background:#8B5CF6;box-shadow:0 0 14px #8B5CF6,0 0 40px rgba(139,92,246,0.4)"></div>
+  <div class="orb" style="background:#FF9500;box-shadow:0 0 14px #FF9500,0 0 40px rgba(255,149,0,0.4)"></div>
+  <div class="orb" style="background:#34C759;box-shadow:0 0 14px #34C759,0 0 40px rgba(52,199,89,0.4)"></div>
+  <div class="sep"></div>
+  <svg class="wisp-off" width="22" height="22" viewBox="0 0 32 32">
+    <defs>
+      <linearGradient id="offbody" x1="50%" y1="0%" x2="50%" y2="100%">
+        <stop offset="0%" stop-color="#6b7280" stop-opacity="0.7"/><stop offset="100%" stop-color="#3f4551" stop-opacity="0.95"/>
+      </linearGradient>
+      <linearGradient id="offcore" x1="50%" y1="20%" x2="50%" y2="100%">
+        <stop offset="0%" stop-color="#9ca3af" stop-opacity="0.6"/><stop offset="100%" stop-color="#6b7280" stop-opacity="0.3"/>
+      </linearGradient>
+    </defs>
+    <path d="M16 3.5 C 14.2 8, 11 11.5, 10.3 16 C 9.8 19.5, 10.5 23, 13 25 C 14.2 25.9, 15.1 26.5, 16 26.8 C 16.9 26.5, 17.9 25.9, 19.2 24.8 C 21.6 22.8, 22.2 19.5, 21.7 16.2 C 21 11.7, 17.8 8, 16 3.5 Z" fill="url(#offbody)"/>
+    <path d="M16 9.5 C 14.9 13, 13.1 15.2, 12.9 17.8 C 12.7 20.2, 13.8 22.4, 15.3 23.3 C 15.6 23.5, 15.8 23.6, 16 23.6 C 16.2 23.6, 16.4 23.5, 16.8 23.2 C 18.4 22.1, 19.2 20, 19 17.7 C 18.8 15.2, 17.1 13, 16 9.5 Z" fill="url(#offcore)"/>
+  </svg>
+  <span class="caption">working &middot; waiting &middot; ready &middot; no sessions</span>
+</div></div>
+</div></body></html>

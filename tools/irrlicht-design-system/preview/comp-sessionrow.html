@@ -1,0 +1,31 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"><link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"><style>
+body{background:#080c16}
+.rows{display:flex;flex-direction:column;gap:2px;font-family:'DM Mono',monospace}
+.row{display:flex;align-items:center;gap:6px;padding:3px 10px;font-size:10px;color:#c8cdd8;border-radius:3px}
+.row:hover{background:#141d34}
+.ico{width:12px;height:12px;display:flex;align-items:center;justify-content:center}
+.num{font-size:9px;color:#5a6480;width:12px;text-align:right}
+.branch{font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{font-size:10px;padding:0 5px;height:14px;border-radius:3px;background:rgba(139,92,246,0.12);color:#8B5CF6;font-weight:600;display:flex;align-items:center}
+.ctxbar{width:80px;height:6px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden}
+.ctxfill{height:100%;border-radius:2px}
+.ctxpct{font-size:9px;font-variant-numeric:tabular-nums}
+.cost{font-size:9px;color:#5a6480}
+.tool{font-size:9px;color:#5a6480}
+.tool.u{color:#FF9500}
+.spacer{flex:1}
+.model{font-size:10px;color:#5a6480}
+.elapsed{font-size:9px;color:#5a6480;min-width:36px;text-align:right}
+.id{font-size:9px;color:#5a6480;opacity:0.5}
+.q{font-size:9px;color:#FF9500;opacity:0.85;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+.spin{animation:spin 2.5s linear infinite}
+.head{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.2em;text-transform:uppercase;color:#5a6480;padding:0 10px}
+</style></head><body><div class="card">
+<div class="head">Session row — the atomic unit</div>
+<div class="rows">
+<div class="row"><div class="ico"><svg class="spin" viewBox="0 0 16 16" fill="none" width="12" height="12"><circle cx="8" cy="8" r="6.5" stroke="#8B5CF6" stroke-width="1.5" stroke-dasharray="4 3"/></svg></div><div class="badge">🧭 navigator</div><div class="num">1</div><div class="branch">feat/menubar-pill</div><div class="ctxbar"><div class="ctxfill" style="width:32%;background:#34C759"></div></div><div class="ctxpct" style="color:#34C759">32%</div><div class="cost">$0.84</div><div class="tool">Edit</div><div class="spacer"></div><div class="model">sonnet.4.5</div><div class="elapsed">4m12s</div><div class="id">a0f3e1</div></div>
+<div class="row"><div class="ico"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="4" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/><rect x="9.5" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/></svg></div><div class="num">2</div><div class="branch">main</div><div class="q">Should I proceed with the destructive migration?</div><div class="ctxbar"><div class="ctxfill" style="width:67%;background:#FF9500"></div></div><div class="ctxpct" style="color:#FF9500">67%</div><div class="cost">$1.42</div><div class="tool u">Ask User</div><div class="spacer"></div><div class="model">opus.4.1</div><div class="elapsed">12m</div><div class="id">b7c210</div></div>
+<div class="row"><div class="ico"><svg viewBox="0 0 16 16" width="12" height="12" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#34C759" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="#34C759" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="num">3</div><div class="branch">fix/reconnect</div><div class="ctxbar"><div class="ctxfill" style="width:18%;background:#34C759"></div></div><div class="ctxpct" style="color:#34C759">18%</div><div class="cost">$0.31</div><div class="spacer"></div><div class="model">haiku.4.5</div><div class="elapsed">1m44s</div><div class="id">c91e55</div></div>
+</div>
+</div></body></html>

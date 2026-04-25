@@ -1,0 +1,79 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"><link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@500;600;700&display=swap" rel="stylesheet"><style>
+body{background:#080c16}
+.wrap{display:flex;flex-direction:column;gap:18px;font-family:'DM Mono',monospace}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:3px;font-size:10px;font-weight:600;border:1px solid transparent;line-height:1}
+.pill svg{flex-shrink:0}
+.agent{background:rgba(139,92,246,0.12);color:#8B5CF6}
+.agent-orange{background:rgba(255,149,0,0.12);color:#FF9500}
+.alert{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:3px;font-size:9px;line-height:1}
+.alert-h{background:rgba(255,59,48,0.1);color:#FF3B30}
+.alert-c{background:rgba(215,0,21,0.12);color:#D70015}
+.wschip{display:inline-flex;align-items:center;gap:7px;font-size:10px;color:#5a6480;letter-spacing:0.03em}
+.wsring{width:8px;height:8px;border-radius:50%;border:2px solid}
+.connected{border-color:#34C759;background:rgba(52,199,89,0.3)}
+.disconnected{border-color:#FF3B30}
+.connecting{border-color:#FF9500}
+.subbadge{width:14px;height:14px;border-radius:50%;background:#8B5CF6;color:#fff;font-size:9px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;line-height:1}
+.head{font-size:9px;letter-spacing:0.2em;text-transform:uppercase;color:#5a6480}
+.note{color:#5a6480;font-size:10px}
+</style></head><body><div class="card">
+<div class="wrap">
+
+<div>
+  <div class="head">Role badges</div>
+  <div class="row" style="margin-top:6px">
+    <span class="pill agent">
+      <svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"/><path d="M7 13l2-6 4 2-2 6z"/></svg>
+      navigator
+    </span>
+    <span class="pill agent">
+      <svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2L4 12h5l-1 6 7-10h-5z"/></svg>
+      worker
+    </span>
+    <span class="pill agent">
+      <svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5"/><path d="M12.5 12.5l4 4"/></svg>
+      reviewer
+    </span>
+    <span class="pill agent-orange">
+      <svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17h14M5 17v-5h4v5M11 17V8h4v9"/></svg>
+      builder
+    </span>
+  </div>
+</div>
+
+<div>
+  <div class="head">Sub-agent count</div>
+  <div class="row" style="margin-top:6px">
+    <span class="subbadge">2</span>
+    <span class="subbadge">4</span>
+    <span class="subbadge" style="background:#FF9500">1</span>
+    <span class="note">integer on parent rows with children</span>
+  </div>
+</div>
+
+<div>
+  <div class="head">Pressure alerts</div>
+  <div class="row" style="margin-top:6px">
+    <span class="alert alert-h">
+      <svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5L1.5 17.5h17z"/><path d="M10 8v4M10 14.5v.5"/></svg>
+      Switch to a fresh session soon
+    </span>
+    <span class="alert alert-c">
+      <svg width="10" height="10" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5L1.5 17.5h17z"/><path d="M10 8v4M10 14.5v.5"/></svg>
+      Context critical &mdash; plan before Compact
+    </span>
+  </div>
+</div>
+
+<div>
+  <div class="head">WebSocket status</div>
+  <div class="row" style="margin-top:6px">
+    <span class="wschip"><span class="wsring connected"></span>connected</span>
+    <span class="wschip"><span class="wsring connecting"></span>connecting</span>
+    <span class="wschip"><span class="wsring disconnected"></span>disconnected</span>
+  </div>
+</div>
+
+</div>
+</div></body></html>

@@ -1,0 +1,24 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=DM+Mono:wght@400;500&family=Outfit:wght@300;400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="_base.css"><style>
+.row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.sw{height:80px;border-radius:8px;padding:10px;display:flex;flex-direction:column;justify-content:space-between;border:1px solid rgba(255,255,255,0.04)}
+.sw .n{font-family:'DM Mono',monospace;font-size:9px;color:#e8ecf4;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8}
+.sw .h{font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8;opacity:0.55}
+.lbl{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.2em;text-transform:uppercase;color:#5a6378}
+</style></head><body><div class="card">
+<div class="lbl">Backgrounds &amp; surfaces</div>
+<div class="row">
+<div class="sw" style="background:#050a14"><div class="n">bg</div><div class="h">#050a14</div></div>
+<div class="sw" style="background:#0a1020"><div class="n">bg-surface</div><div class="h">#0a1020</div></div>
+<div class="sw" style="background:#0d1424"><div class="n">bg-glow</div><div class="h">#0d1424</div></div>
+<div class="sw" style="background:rgba(12,18,35,0.65);backdrop-filter:blur(8px)"><div class="n">bg-card</div><div class="h">12,18,35/.65</div></div>
+<div class="sw" style="background:#060d1a"><div class="n">bg-code</div><div class="h">#060d1a</div></div>
+</div>
+<div class="lbl" style="margin-top:8px">Text</div>
+<div class="row">
+<div class="sw" style="background:#e8ecf4;color:#050a14"><div class="n" style="color:#050a14">text-bright</div><div class="h" style="color:#050a14">#e8ecf4</div></div>
+<div class="sw" style="background:#c8cdd8;color:#050a14"><div class="n" style="color:#050a14">text</div><div class="h" style="color:#050a14">#c8cdd8</div></div>
+<div class="sw" style="background:#5a6378"><div class="n">text-dim</div><div class="h">#5a6378</div></div>
+<div class="sw" style="background:#1a2340"><div class="n">border-strong</div><div class="h">#1a2340</div></div>
+<div class="sw" style="background:transparent;border:1px solid rgba(138,92,246,0.25)"><div class="n">border</div><div class="h">138,92,246/.08</div></div>
+</div>
+</div></body></html>

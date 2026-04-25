@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Irrlicht — Dashboard Kit</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080c16;--bg-glow:#0d1424;--surface:#0f1628;--surface-hover:#141d34;
+  --border:#1a2340;--border-subtle:#141c32;
+  --text:#d4daf0;--text-bright:#edf0fa;--muted:#5a6480;
+  --working:#8B5CF6;--working-dim:rgba(139,92,246,0.12);
+  --waiting:#FF9500;--waiting-dim:rgba(255,149,0,0.12);
+  --ready:#34C759;--ready-dim:rgba(52,199,89,0.12);
+  --cancelled:#8E8E93;
+  --pressure-low:#34C759;--pressure-medium:#FF9500;--pressure-high:#FF3B30;--pressure-critical:#D70015;
+  --ws-connected:#34C759;--ws-disconnected:#FF3B30;
+  --font-mono:ui-monospace,"SF Mono","Cascadia Code","Fira Mono",Menlo,Consolas,monospace;
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+}
+body{background:var(--bg);background-image:radial-gradient(ellipse 80% 60% at 50% 40%,var(--bg-glow) 0%,var(--bg) 100%);color:var(--text);font-family:var(--font-sans);font-size:14px;min-height:100vh;-webkit-font-smoothing:antialiased}
+body::before{content:'';position:fixed;inset:0;opacity:0.035;pointer-events:none;z-index:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+body::after{content:'';position:fixed;inset:0;opacity:0.03;pointer-events:none;z-index:0;background-image:repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(100,140,255,0.3) 59px,rgba(100,140,255,0.3) 60px),repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(100,140,255,0.3) 59px,rgba(100,140,255,0.3) 60px)}
+header{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--border-subtle);background:rgba(8,12,22,0.85);backdrop-filter:blur(12px)}
+.header-left{display:flex;align-items:baseline;gap:16px}
+.logo{font-family:var(--font-mono);font-size:13px;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;color:var(--text-bright)}
+.logo span{color:var(--working)}
+.summary{display:flex;align-items:center;gap:14px;font-family:var(--font-mono);font-size:11px;letter-spacing:0.04em}
+.summary-item{display:flex;align-items:center;gap:5px;color:var(--muted)}
+.summary-dot{width:6px;height:6px;border-radius:50%}
+.summary-count{font-weight:700;font-variant-numeric:tabular-nums;color:var(--text)}
+.ws-status{display:flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:10px;letter-spacing:0.03em;color:var(--muted)}
+.ws-ring{width:8px;height:8px;border-radius:50%;border:2px solid var(--ws-disconnected)}
+.ws-ring.connected{border-color:var(--ws-connected);background:rgba(52,199,89,0.3)}
+.ws-ring.connecting{border-color:var(--waiting);animation:ws-pulse 1.2s ease-in-out infinite}
+@keyframes ws-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.85)}}
+main{position:relative;z-index:1;padding:12px 20px;max-width:1200px;margin:0 auto}
+.tab-bar{display:flex;border-bottom:1px solid var(--border);margin-bottom:12px}
+.tab-btn{font-family:var(--font-mono);font-size:11px;letter-spacing:0.04em;text-transform:uppercase;padding:8px 16px;background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);cursor:pointer}
+.tab-btn:hover{color:var(--text)}
+.tab-btn.active{color:var(--text-bright);border-bottom-color:var(--working)}
+.session-list{display:flex;flex-direction:column}
+.group-hdr{display:flex;align-items:center;gap:6px;padding:6px 10px 4px;cursor:pointer;user-select:none}
+.group-hdr:hover{background:var(--surface-hover);border-radius:4px}
+.group-chevron{font-size:8px;color:var(--muted);width:10px;text-align:center;transition:transform 0.15s}
+.group-chevron.collapsed{transform:rotate(-90deg)}
+.group-name{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--text-bright);letter-spacing:0.03em}
+.group-cost{font-family:var(--font-mono);font-size:9px;color:var(--muted);margin-left:4px;cursor:pointer}
+.group-cost:hover{color:var(--text-bright)}
+.group-count{font-family:var(--font-mono);font-size:9px;color:var(--muted);margin-left:auto}
+.group-dot{width:6px;height:6px;border-radius:50%}
+.session-row{display:flex;align-items:center;gap:6px;padding:3px 10px;font-family:var(--font-mono);font-size:10px;color:var(--text);border-radius:3px}
+.session-row:hover{background:var(--surface-hover)}
+.session-row.child{padding-left:30px}
+.row-state-icon{width:12px;height:12px}
+.row-state-icon svg.working{animation:spin 2.5s linear infinite}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+.row-num{width:12px;font-size:9px;color:var(--muted);text-align:right}
+.row-sub-badge{width:14px;height:14px;border-radius:50%;background:var(--working);color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;line-height:1}
+.row-branch{color:var(--text);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
+.row-ctx-bar{width:80px;height:6px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden}
+.row-ctx-fill{height:100%;border-radius:2px;background:var(--pressure-low);transition:width 0.4s ease,background 0.3s}
+.row-ctx-fill.medium{background:var(--pressure-medium)}
+.row-ctx-fill.high{background:var(--pressure-high)}
+.row-ctx-fill.critical{background:var(--pressure-critical)}
+.row-ctx-pct{font-size:9px;font-variant-numeric:tabular-nums}
+.row-cost{font-size:9px;font-weight:500;color:var(--muted)}
+.row-spacer{flex:1}
+.row-model{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.row-elapsed{font-size:9px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:36px;text-align:right}
+.row-id{font-size:9px;color:var(--muted);opacity:0.5}
+.row-question{font-size:9px;color:var(--waiting);opacity:0.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px;padding:0 4px}
+.row-role-badge{font-size:10px;padding:0 5px;height:14px;border-radius:3px;background:rgba(139,92,246,0.12);color:var(--working);font-family:var(--font-mono);font-weight:600;display:flex;align-items:center;white-space:nowrap}
+.row-tool{font-family:var(--font-mono);font-size:9px;color:var(--muted);white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis}
+.row-tool.tool-user{color:var(--waiting)}
+.pressure-alert-row{padding:2px 10px 2px 30px;font-family:var(--font-mono);font-size:9px}
+.pressure-alert-row span{display:inline-block;padding:1px 6px;border-radius:3px}
+.pressure-alert-row .alert-high{background:rgba(255,59,48,0.1);color:var(--pressure-high)}
+.pressure-alert-row .alert-critical{background:rgba(215,0,21,0.12);color:var(--pressure-critical)}
+.gt-section{margin-bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.gt-header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border-subtle)}
+.gt-title{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--text-bright);letter-spacing:0.04em}
+.gt-status-dot{width:6px;height:6px;border-radius:50%}
+.gt-status-label{font-family:var(--font-mono);font-size:10px;color:var(--muted);display:flex;align-items:center;gap:5px}
+.gt-convoy-header{display:flex;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border-subtle);font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase}
+.gt-convoy-row{display:flex;align-items:center;gap:8px;padding:4px 12px 4px 24px;border-bottom:1px solid var(--border-subtle);font-family:var(--font-mono);font-size:10px}
+.gt-convoy-row:last-child{border-bottom:none}
+.gt-convoy-name{color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gt-convoy-name.done{color:var(--muted)}
+.gt-dotbar{letter-spacing:2px;font-size:10px}
+.gt-convoy-fraction{font-size:10px;color:var(--muted);min-width:36px;text-align:right;font-variant-numeric:tabular-nums}
+.gt-convoy-check{color:var(--ready);font-size:10px}
+.gt-agents-row{display:flex;align-items:center;gap:8px;padding:5px 12px;border-bottom:1px solid var(--border-subtle);flex-wrap:wrap}
+.gt-agent-chip{display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:10px;color:var(--text);padding:2px 7px;border-radius:3px;background:var(--surface-hover);border:1px solid var(--border-subtle)}
+.gt-chip-dot{width:5px;height:5px;border-radius:50%}
+.gt-chip-id{font-size:9px;color:var(--muted)}
+.gt-rig-block{padding:5px 12px;border-bottom:1px solid var(--border-subtle)}
+.gt-rig-block:last-of-type{border-bottom:none}
+.gt-rig-name{font-family:var(--font-mono);font-size:9px;font-weight:700;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px}
+.gt-workers{display:flex;flex-wrap:wrap;gap:4px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="Header.jsx"></script>
+<script type="text/babel" src="SessionRow.jsx"></script>
+<script type="text/babel" src="GroupHeader.jsx"></script>
+<script type="text/babel" src="GasTown.jsx"></script>
+
+<script type="text/babel">
+const FAKE_GROUPS = [
+  {
+    name: 'irrlicht', collapsed: false,
+    costs: { day: 4.82, week: 28.41, month: 112.50, year: 1340.22 },
+    agents: [
+      {
+        session_id: 'a0f3e182b', state: 'working', git_branch: 'feat/menubar-pill',
+        role: 'navigator', icon: '🧭', description: 'Plans changes across files',
+        metrics: { model_name: 'claude-sonnet-4-5', context_utilization_percentage: 32, pressure_level: 'low', estimated_cost_usd: 0.84, elapsed_seconds: 252, has_open_tool_call: true, last_open_tool_names: ['Edit'] },
+        children: [
+          { session_id: 's1', state: 'working', metrics: { model_name: 'claude-haiku-4-5', context_utilization_percentage: 14, pressure_level: 'low', estimated_cost_usd: 0.12, elapsed_seconds: 44, has_open_tool_call: true, last_open_tool_names: ['Grep'] } },
+          { session_id: 's2', state: 'ready', metrics: { model_name: 'claude-haiku-4-5', context_utilization_percentage: 8, pressure_level: 'low', estimated_cost_usd: 0.04, elapsed_seconds: 12 } },
+        ],
+      },
+      {
+        session_id: 'b7c210ff3', state: 'waiting', git_branch: 'main',
+        metrics: { model_name: 'claude-opus-4-1', context_utilization_percentage: 67, pressure_level: 'medium', estimated_cost_usd: 1.42, elapsed_seconds: 722, last_assistant_text: 'Should I proceed with the destructive migration? This will drop the sessions_v1 table.', has_open_tool_call: true, last_open_tool_names: ['AskUserQuestion'] },
+      },
+      {
+        session_id: 'c91e5542a', state: 'working', git_branch: 'refactor/pressure-heuristic',
+        metrics: { model_name: 'claude-sonnet-4-5', context_utilization_percentage: 84, pressure_level: 'high', estimated_cost_usd: 2.18, elapsed_seconds: 1845, has_open_tool_call: true, last_open_tool_names: ['Read'] },
+      },
+    ],
+  },
+  {
+    name: 'gas-town', collapsed: false,
+    costs: { day: 1.31, week: 9.82, month: 40.10, year: 420.00 },
+    agents: [
+      {
+        session_id: 'd42aa891', state: 'ready', git_branch: 'fix/reconnect',
+        metrics: { model_name: 'claude-haiku-4-5', context_utilization_percentage: 18, pressure_level: 'low', estimated_cost_usd: 0.31, elapsed_seconds: 104 },
+      },
+    ],
+  },
+];
+
+const FAKE_ORCH = {
+  running: true,
+  global_agents: [
+    { role: 'dispatcher', icon: '📡', state: 'working', session_id: 'x1y2z3a4', description: 'Routes tasks to idle workers' },
+    { role: 'watcher', icon: '👁', state: 'ready', session_id: 'p9q8r7s6', description: 'Monitors session health' },
+  ],
+  codebases: [
+    { name: 'irrlicht', worktrees: [{ workers: [
+      { role: 'worker', icon: '⚡', name: 'ada', state: 'working', id: 'adax1234', description: 'Builds features' },
+      { role: 'worker', icon: '⚡', name: 'grace', state: 'waiting', id: 'gracx567', description: 'Builds features' },
+    ]}]},
+  ],
+  work_units: [
+    { type: 'convoy', name: 'migrate sessions → sessions_v2', total: 6, done: 4 },
+    { type: 'convoy', name: 'rewrite menu-bar renderer', total: 3, done: 3 },
+  ],
+};
+
+function App() {
+  const [tab, setTab] = React.useState('dashboard');
+  const [collapsed, setCollapsed] = React.useState(new Set());
+  const [timeframe, setTimeframe] = React.useState('day');
+  const toggle = name => setCollapsed(s => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; });
+  const cycle = () => {
+    const tfs = ['day','week','month','year'];
+    setTimeframe(t => tfs[(tfs.indexOf(t) + 1) % 4]);
+  };
+  const all = FAKE_GROUPS.flatMap(g => g.agents.flatMap(a => [a, ...(a.children || [])]));
+  const counts = { working: all.filter(a => a.state === 'working').length, waiting: all.filter(a => a.state === 'waiting').length, ready: all.filter(a => a.state === 'ready').length };
+
+  let agentNum = 0;
+  return (
+    <>
+      <Header counts={counts} wsStatus="connected" />
+      <main>
+        <div className="tab-bar">
+          <button className={'tab-btn' + (tab === 'dashboard' ? ' active' : '')} onClick={() => setTab('dashboard')}>Dashboard</button>
+          <button className={'tab-btn' + (tab === 'raw' ? ' active' : '')} onClick={() => setTab('raw')}>Raw</button>
+        </div>
+        {tab === 'dashboard' && (
+          <>
+            <GasTown orchestrator={FAKE_ORCH} />
+            <div className="session-list">
+              {FAKE_GROUPS.map(g => (
+                <React.Fragment key={g.name}>
+                  <GroupHeader group={g} collapsed={collapsed.has(g.name)} onToggle={() => toggle(g.name)} timeframe={timeframe} onCycleTimeframe={cycle} />
+                  {!collapsed.has(g.name) && g.agents.map(a => {
+                    agentNum++;
+                    const isAlert = (a.state === 'working' || a.state === 'waiting') && (a.metrics?.pressure_level === 'high' || a.metrics?.pressure_level === 'critical' || a.metrics?.pressure_level === 'warning');
+                    return (
+                      <React.Fragment key={a.session_id}>
+                        <SessionRow agent={a} num={agentNum} isChild={false} />
+                        {isAlert && <PressureAlert level={a.metrics.pressure_level} />}
+                        {(a.children || []).map(c => <SessionRow key={c.session_id} agent={c} num="" isChild={true} />)}
+                      </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+          </>
+        )}
+        {tab === 'raw' && (
+          <pre style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:6,padding:14,fontFamily:'var(--font-mono)',fontSize:11,lineHeight:1.5,color:'var(--text)',maxHeight:'calc(100vh - 140px)',overflow:'auto'}}>{JSON.stringify(FAKE_GROUPS, null, 2)}</pre>
+        )}
+      </main>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="_base.css"><style>
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.sw{height:100px;border-radius:10px;padding:14px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.bar{position:absolute;left:0;right:0;bottom:0;height:6px}
+.n{font-family:'DM Mono',monospace;font-size:10px;color:#e8ecf4;letter-spacing:0.12em;text-transform:uppercase;opacity:0.9}
+.pct{font-family:'DM Mono',monospace;font-size:20px;color:#e8ecf4;font-weight:500}
+.h{font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8;opacity:0.65}
+.lbl{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.2em;text-transform:uppercase;color:#5a6378;margin-bottom:2px}
+</style></head><body><div class="card">
+<div class="lbl">Context pressure scale — per-session gauge</div>
+<div class="row">
+<div class="sw" style="background:rgba(52,199,89,0.08);border:1px solid rgba(52,199,89,0.2)"><div class="n">low</div><div><div class="pct" style="color:#34C759">32%</div><div class="h">#34C759</div></div><div class="bar" style="background:#34C759;width:32%"></div></div>
+<div class="sw" style="background:rgba(255,149,0,0.08);border:1px solid rgba(255,149,0,0.2)"><div class="n">medium</div><div><div class="pct" style="color:#FF9500">67%</div><div class="h">#FF9500</div></div><div class="bar" style="background:#FF9500;width:67%"></div></div>
+<div class="sw" style="background:rgba(255,59,48,0.08);border:1px solid rgba(255,59,48,0.25)"><div class="n">high</div><div><div class="pct" style="color:#FF3B30">84%</div><div class="h">#FF3B30</div></div><div class="bar" style="background:#FF3B30;width:84%"></div></div>
+<div class="sw" style="background:rgba(215,0,21,0.08);border:1px solid rgba(215,0,21,0.3)"><div class="n">critical</div><div><div class="pct" style="color:#D70015">96%</div><div class="h">#D70015</div></div><div class="bar" style="background:#D70015;width:96%"></div></div>
+</div>
+</div></body></html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"><link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;700&display=swap" rel="stylesheet"><style>
+body{background:linear-gradient(180deg,#1a1a1a 0%,#222 100%);overflow-y:auto}
+.card{justify-content:flex-start;padding-top:28px;gap:24px}
+.head{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.25em;text-transform:uppercase;color:#5a6378;text-align:center}
+
+.menu-bar{display:flex;align-items:center;gap:3px;padding:3px 7px;background:rgba(0,0,0,0.35);border-radius:4px;border:0.5px solid rgba(255,255,255,0.08);width:fit-content;margin:0 auto}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;border:0.5px solid rgba(0,0,0,0.35);box-shadow:0 0 5px currentColor}
+.group{display:inline-flex;align-items:center;padding:0 5px}
+.group .dot + .dot{margin-left:-4px}
+.group + .group{border-left:0.5px solid rgba(255,255,255,0.15)}
+.count{font-family:'DM Mono',monospace;font-size:10px;font-weight:700;color:#e8ecf4;margin-left:3px;line-height:1}
+.pie{width:11px;height:11px;border-radius:50%;border:0.5px solid rgba(0,0,0,0.3)}
+
+.row{display:flex;flex-direction:column;align-items:center;gap:10px}
+.caption{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.02em;color:#c8cdd8;text-align:center;max-width:520px;line-height:1.5}
+.caption em{color:#5a6378;font-style:normal}
+</style></head><body><div class="card">
+<div class="head">macOS menu-bar status &mdash; project-grouped pills</div>
+
+<div class="row">
+  <div class="menu-bar">
+    <div class="group">
+      <span class="dot" style="background:#8B5CF6;color:#8B5CF6"></span>
+      <span class="dot" style="background:#FF9500;color:#FF9500"></span>
+    </div>
+  </div>
+  <div class="caption">One project, two sessions &mdash; <em>dots sit tight inside the group</em></div>
+</div>
+
+<div class="row">
+  <div class="menu-bar">
+    <div class="group">
+      <span class="dot" style="background:#8B5CF6;color:#8B5CF6"></span>
+      <span class="dot" style="background:#FF9500;color:#FF9500"></span>
+    </div>
+    <div class="group">
+      <span class="dot" style="background:#34C759;color:#34C759"></span>
+      <span class="dot" style="background:#34C759;color:#34C759"></span>
+      <span class="dot" style="background:#34C759;color:#34C759"></span>
+    </div>
+  </div>
+  <div class="caption">Two projects side-by-side &mdash; <em>thin vertical rule between groups</em></div>
+</div>
+
+<div class="row">
+  <div class="menu-bar">
+    <div class="group">
+      <span class="dot" style="background:#8B5CF6;color:#8B5CF6"></span>
+      <span class="dot" style="background:#8B5CF6;color:#8B5CF6"></span>
+      <span class="dot" style="background:#FF9500;color:#FF9500"></span>
+    </div>
+    <div class="group">
+      <span class="pie" style="background:conic-gradient(#8B5CF6 0 55%,#34C759 55% 100%)"></span>
+      <span class="count">5</span>
+    </div>
+  </div>
+  <div class="caption">Left group: 3 sessions max as dots. Right group: <em>&gt;3 collapses to a pie + count</em></div>
+</div>
+</div></body></html>

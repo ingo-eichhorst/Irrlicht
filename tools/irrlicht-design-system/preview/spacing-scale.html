@@ -1,0 +1,23 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_base.css"><link href="https://fonts.googleapis.com/css2?family=DM+Mono&display=swap" rel="stylesheet"><style>
+.row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+.sp{display:flex;flex-direction:column;align-items:center;gap:8px}
+.box{background:#8B5CF6;opacity:0.9;border-radius:2px}
+.lbl{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.1em;color:#c8cdd8}
+.v{font-family:'DM Mono',monospace;font-size:10px;color:#5a6378}
+.head{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.2em;text-transform:uppercase;color:#5a6378;margin-bottom:4px}
+</style></head><body><div class="card">
+<div class="head">Spacing scale — 4px base</div>
+<div class="row">
+<div class="sp"><div class="box" style="width:4px;height:4px"></div><div class="lbl">sp-1</div><div class="v">4</div></div>
+<div class="sp"><div class="box" style="width:8px;height:8px"></div><div class="lbl">sp-2</div><div class="v">8</div></div>
+<div class="sp"><div class="box" style="width:12px;height:12px"></div><div class="lbl">sp-3</div><div class="v">12</div></div>
+<div class="sp"><div class="box" style="width:16px;height:16px"></div><div class="lbl">sp-4</div><div class="v">16</div></div>
+<div class="sp"><div class="box" style="width:24px;height:24px"></div><div class="lbl">sp-5</div><div class="v">24</div></div>
+<div class="sp"><div class="box" style="width:32px;height:32px"></div><div class="lbl">sp-6</div><div class="v">32</div></div>
+</div>
+<div class="row" style="margin-top:12px">
+<div class="sp"><div class="box" style="width:48px;height:48px"></div><div class="lbl">sp-7</div><div class="v">48</div></div>
+<div class="sp"><div class="box" style="width:64px;height:64px"></div><div class="lbl">sp-8</div><div class="v">64</div></div>
+<div class="sp" style="grid-column:span 4;align-items:flex-start"><div class="lbl" style="font-size:10px;color:#c8cdd8">Section padding is typically <span style="color:#e8ecf4">sp-9 (96px)</span> top/bottom. Cards use <span style="color:#e8ecf4">sp-5 (24px)</span> or <span style="color:#e8ecf4">sp-6 (32px)</span> internal.</div></div>
+</div>
+</div></body></html>

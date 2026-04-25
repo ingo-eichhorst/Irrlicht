@@ -1,0 +1,208 @@
+/* ─────────────────────────────────────────────────────────────
+   Irrlicht — Colors & Type
+   Source: irrlicht.io landing page + docs/docs.css + web dashboard
+   ───────────────────────────────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap');
+
+:root {
+  /* ── Backgrounds ─────────────────────────── */
+  --bg: #050a14;              /* deepest page ground — near-black navy */
+  --bg-surface: #0a1020;      /* sidebar / raised surface */
+  --bg-card: rgba(12, 18, 35, 0.65);  /* translucent card over bg */
+  --bg-code: #060d1a;         /* code blocks */
+  --bg-glow: #0d1424;         /* radial glow center */
+
+  /* ── The Light System (the brand) ────────── */
+  --working: #8B5CF6;         /* purple — agent thinking/building */
+  --waiting: #FF9500;         /* orange — agent needs your judgment */
+  --ready:   #34C759;         /* green — idle, available */
+  --cancelled: #8E8E93;       /* grey — cancelled/stopped */
+
+  /* Soft fills for badges / backgrounds */
+  --working-dim: rgba(139, 92, 246, 0.12);
+  --waiting-dim: rgba(255, 149, 0, 0.12);
+  --ready-dim:   rgba(52, 199, 89, 0.12);
+
+  /* Halo glows for orbs / dots */
+  --working-glow: rgba(139, 92, 246, 0.25);
+  --waiting-glow: rgba(255, 149, 0, 0.20);
+  --ready-glow:   rgba(52, 199, 89, 0.20);
+
+  /* ── Text ────────────────────────────────── */
+  --text-bright: #e8ecf4;     /* headings, important numbers */
+  --text:        #c8cdd8;     /* body */
+  --text-dim:    #5a6378;     /* labels, meta */
+  --muted:       #5a6480;     /* alias used in web app */
+
+  /* ── Accents & borders ───────────────────── */
+  --accent: var(--working);
+  --border: rgba(138, 92, 246, 0.08);      /* purple-tinted hairline */
+  --border-subtle: rgba(200, 205, 216, 0.06);
+  --border-strong: #1a2340;                /* web app card border */
+
+  /* ── Context-pressure scale (docs + app) ── */
+  --pressure-low:      #34C759;   /* 0–50%   */
+  --pressure-medium:   #FF9500;   /* 50–75%  */
+  --pressure-high:     #FF3B30;   /* 75–90%  */
+  --pressure-critical: #D70015;   /* 90%+    */
+
+  /* ── Connection state ────────────────────── */
+  --ws-connected:    #34C759;
+  --ws-disconnected: #FF3B30;
+
+  /* ── Type families ───────────────────────── */
+  --font-display: 'Cormorant Garamond', 'Times New Roman', serif;   /* logo, H1, hero */
+  --font-sans:    'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono:    'DM Mono', ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Mono', Menlo, Consolas, monospace;
+
+  /* ── Type scale (landing page semantics) ── */
+  --fs-hero:       clamp(3.5rem, 9vw, 7.5rem);   /* ~56–120px — serif hero */
+  --fs-section:    clamp(2rem, 4vw, 3.2rem);     /* ~32–51px — section titles */
+  --fs-h1-docs:    2.4rem;   /* 38.4px */
+  --fs-h2:         1.35rem;  /* 21.6px — sans medium */
+  --fs-h3:         1.05rem;  /* 16.8px */
+  --fs-body:       1rem;     /* 16px */
+  --fs-small:      0.88rem;  /* 14px */
+  --fs-caption:    0.82rem;  /* 13px */
+  --fs-meta:       0.7rem;   /* 11.2px — mono uppercase */
+  --fs-label:      0.65rem;  /* 10.4px — mono, tracked */
+
+  /* ── Letter spacing (tracking) ──────────── */
+  --ls-hero:   0.08em;
+  --ls-logo:   0.25em;  /* monospace IRRLICHT */
+  --ls-label:  0.3em;   /* "MENU-BAR TELEMETRY" */
+  --ls-meta:   0.1em;
+
+  /* ── Radii ──────────────────────────────── */
+  --r-xs: 3px;   --r-sm: 4px;   --r-md: 6px;
+  --r-lg: 10px;  --r-xl: 16px;  --r-2xl: 24px;
+
+  /* ── Elevation / glows ──────────────────── */
+  --shadow-card: 0 20px 60px rgba(0,0,0,0.30);
+  --shadow-hover: 0 20px 60px rgba(0,0,0,0.30), 0 0 40px rgba(139,92,246,0.15);
+  --shadow-btn: 0 4px 20px rgba(139,92,246,0.25);
+  --shadow-btn-hover: 0 8px 30px rgba(139,92,246,0.35);
+  --glow-purple: 0 0 20px var(--working), 0 0 60px var(--working-glow);
+  --glow-orange: 0 0 20px var(--waiting), 0 0 60px var(--waiting-glow);
+  --glow-green:  0 0 20px var(--ready),   0 0 60px var(--ready-glow);
+
+  /* ── Spacing scale ──────────────────────── */
+  --sp-1: 4px;   --sp-2: 8px;    --sp-3: 12px;
+  --sp-4: 16px;  --sp-5: 24px;   --sp-6: 32px;
+  --sp-7: 48px;  --sp-8: 64px;   --sp-9: 96px;   --sp-10: 128px;
+
+  /* ── Motion ─────────────────────────────── */
+  --ease-out:   cubic-bezier(0.16, 1, 0.3, 1);  /* used everywhere on reveals */
+  --dur-fast:   0.2s;
+  --dur-base:   0.3s;
+  --dur-slow:   0.4s;
+  --dur-reveal: 0.8s;
+}
+
+/* ─────────────────────────────────────────────
+   Semantic element styles — apply to raw tags
+   ───────────────────────────────────────────── */
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: var(--fs-h1-docs);
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  color: var(--text-bright);
+}
+
+h2 {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: var(--fs-h2);
+  color: var(--text-bright);
+  line-height: 1.3;
+}
+
+h3 {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: var(--fs-h3);
+  color: var(--text-bright);
+}
+
+p {
+  font-weight: 300;
+  line-height: 1.7;
+}
+
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+code {
+  background: rgba(139, 92, 246, 0.06);
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--r-sm);
+  color: var(--text-bright);
+}
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 1.25rem 1.5rem;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+
+em, i { font-style: italic; }
+
+/* Serif italic "meaning" treatment — eg /eer-likht/ */
+.meaning {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* Mono all-caps section label — THE workhorse accent type */
+.eyebrow,
+.section-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  font-weight: 400;
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  letter-spacing: var(--ls-meta);
+  color: var(--text-dim);
+}
+
+/* Serif section title — the "Three states. No ambiguity." look */
+.display-title {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: var(--fs-section);
+  line-height: 1.2;
+  color: var(--text-bright);
+}
+
+/* Gradient wordmark treatment (hero) */
+.wordmark-gradient {
+  background: linear-gradient(135deg, var(--working) 0%, #c084fc 50%, var(--waiting) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

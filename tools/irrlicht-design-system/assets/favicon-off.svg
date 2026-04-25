@@ -1,0 +1,15 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="wisp-off-body" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#6b7280" stop-opacity="0.6"></stop>
+      <stop offset="100%" stop-color="#3f4551" stop-opacity="0.9"></stop>
+    </linearGradient>
+    <linearGradient id="wisp-off-core" x1="50%" y1="20%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#9ca3af" stop-opacity="0.55"></stop>
+      <stop offset="100%" stop-color="#6b7280" stop-opacity="0.3"></stop>
+    </linearGradient>
+  </defs>
+  <path d="M16 3.5&#xA;           C 14.2 8,  11 11.5, 10.3 16&#xA;           C 9.8 19.5, 10.5 23, 13 25&#xA;           C 14.2 25.9, 15.1 26.5, 16 26.8&#xA;           C 16.9 26.5, 17.9 25.9, 19.2 24.8&#xA;           C 21.6 22.8, 22.2 19.5, 21.7 16.2&#xA;           C 21 11.7, 17.8 8, 16 3.5 Z" fill="url(#wisp-off-body)"></path>
+  <path d="M16 9.5&#xA;           C 14.9 13, 13.1 15.2, 12.9 17.8&#xA;           C 12.7 20.2, 13.8 22.4, 15.3 23.3&#xA;           C 15.6 23.5, 15.8 23.6, 16 23.6&#xA;           C 16.2 23.6, 16.4 23.5, 16.8 23.2&#xA;           C 18.4 22.1, 19.2 20, 19 17.7&#xA;           C 18.8 15.2, 17.1 13, 16 9.5 Z" fill="url(#wisp-off-core)"></path>
+</svg>
