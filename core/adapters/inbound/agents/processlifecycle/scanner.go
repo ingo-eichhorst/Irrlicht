@@ -29,6 +29,7 @@ type trackedProc struct {
 	superseded        bool   // real transcript exists; keep tracking to prevent re-creation
 	cwd               string // captured at first sight; needed for TranscriptFilename probe
 	transcriptEmitted bool   // dedupe per-PID transcript_new emissions for CWD-resident transcripts
+	transcriptSize    int64  // last-seen size of the CWD-resident transcript; drives EventActivity emission
 }
 
 // Scanner polls for agent processes and emits synthetic EventNewSession /
@@ -293,14 +294,17 @@ func (s *Scanner) poll() {
 	// --- probe for CWD-resident transcripts (per-adapter opt-in) ---
 	// For agents that write transcripts per-project (e.g. aider's
 	// .aider.chat.history.md), check each tracked PID's CWD for the
-	// configured filename. Emit EventNewSession with TranscriptPath when
-	// the file appears. Dedupe via trackedProc.transcriptEmitted so we
-	// don't spam the channel on every poll.
+	// configured filename:
+	//   - First sight of the file → emit EventNewSession with TranscriptPath
+	//   - Subsequent polls where size grew → emit EventActivity
+	// This bypasses the fswatcher (which only watches one fixed RootDir
+	// under $HOME and filters to .jsonl) so non-JSONL, per-project agents
+	// produce the same lifecycle event stream as fswatcher-friendly ones.
 	if s.transcriptFilename != "" {
 		s.mu.Lock()
 		var emit []agent.Event
 		for pid, proc := range s.tracked {
-			if proc.transcriptEmitted || proc.cwd == "" {
+			if proc.cwd == "" {
 				continue
 			}
 			path := filepath.Join(proc.cwd, s.transcriptFilename)
@@ -308,17 +312,36 @@ func (s *Scanner) poll() {
 			if err != nil {
 				continue
 			}
-			emit = append(emit, agent.Event{
-				Type:           agent.EventNewSession,
-				Adapter:        s.adapter,
-				SessionID:      proc.sessionID,
-				ProjectDir:     proc.projectDir,
-				TranscriptPath: path,
-				Size:           info.Size(),
-				CWD:            proc.cwd,
-			})
-			proc.transcriptEmitted = true
-			s.tracked[pid] = proc
+			size := info.Size()
+			switch {
+			case !proc.transcriptEmitted:
+				// First sight — announce the transcript.
+				emit = append(emit, agent.Event{
+					Type:           agent.EventNewSession,
+					Adapter:        s.adapter,
+					SessionID:      proc.sessionID,
+					ProjectDir:     proc.projectDir,
+					TranscriptPath: path,
+					Size:           size,
+					CWD:            proc.cwd,
+				})
+				proc.transcriptEmitted = true
+				proc.transcriptSize = size
+				s.tracked[pid] = proc
+			case size != proc.transcriptSize:
+				// File grew (or shrank, e.g. on rotation) — emit activity.
+				emit = append(emit, agent.Event{
+					Type:           agent.EventActivity,
+					Adapter:        s.adapter,
+					SessionID:      proc.sessionID,
+					ProjectDir:     proc.projectDir,
+					TranscriptPath: path,
+					Size:           size,
+					CWD:            proc.cwd,
+				})
+				proc.transcriptSize = size
+				s.tracked[pid] = proc
+			}
 		}
 		subs := s.subs
 		s.mu.Unlock()
