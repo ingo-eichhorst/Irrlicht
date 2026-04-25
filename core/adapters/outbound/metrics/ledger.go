@@ -13,6 +13,11 @@ import (
 
 const ledgerSchemaVersion = 2 // bumped to force re-scan for task support
 
+// LedgerSuffix is the filename suffix used for per-session ledger files.
+// Exposed so the daemon-startup orphan sweep can filter directory entries
+// without re-encoding the convention.
+const LedgerSuffix = ".ledger.json"
+
 var ledgerDirOnce sync.Once
 
 // ensureLedgerDir creates the ledger directory on the first call; subsequent
@@ -53,7 +58,7 @@ func ledgerPath(transcriptPath string) string {
 // for live sessions without re-implementing the SHA-256 scheme.
 func LedgerFilename(transcriptPath string) string {
 	h := sha256.Sum256([]byte(transcriptPath))
-	return fmt.Sprintf("%x.ledger.json", h[:8])
+	return fmt.Sprintf("%x%s", h[:8], LedgerSuffix)
 }
 
 // LedgerDir returns the directory holding per-session ledger files.

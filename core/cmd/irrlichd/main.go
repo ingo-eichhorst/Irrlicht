@@ -528,7 +528,7 @@ func pruneOrphanLedgers(fsRepo *filesystem.SessionRepository, logger outbound.Lo
 			continue
 		}
 		name := e.Name()
-		if !strings.HasSuffix(name, ".ledger.json") {
+		if !strings.HasSuffix(name, metrics.LedgerSuffix) {
 			continue
 		}
 		if _, ok := expected[name]; ok {

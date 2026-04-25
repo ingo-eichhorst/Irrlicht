@@ -154,6 +154,11 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 // in-memory tailer cache entry and removes the on-disk ledger file. Idempotent
 // on a missing transcript path or already-removed ledger file. Silent on I/O
 // errors — the ledger is best-effort cache, not authoritative state.
+//
+// We don't take the per-tailer lock — caller invariant is that PruneEntry runs
+// in response to EventRemoved (transcript file gone), so any concurrent
+// TailAndProcess returns nil metrics without saving. If a save did race in,
+// the daemon-startup orphan sweep would clean it up on next restart.
 func (a *Adapter) PruneEntry(transcriptPath string) {
 	if transcriptPath == "" {
 		return
