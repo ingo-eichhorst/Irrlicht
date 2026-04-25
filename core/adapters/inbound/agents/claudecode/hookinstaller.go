@@ -20,7 +20,10 @@ const hookSentinel = "localhost:7837/api/v1/hooks/claudecode"
 //   - -f: fail silently on HTTP errors (non-blocking)
 //   - -sS: silent but show errors
 //   - --max-time 1: abort after 1 second (fast no-op when daemon is down)
-const installedHookCommand = "curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode"
+//
+// `|| true` keeps exit status 0 when the daemon is down so Claude Code
+// doesn't surface "connection refused" as a PostToolUse hook error.
+const installedHookCommand = "curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode || true"
 
 // hookMatcher filters which tools trigger the hooks. PermissionRequest only
 // fires for tools that need permission, but PostToolUse/PostToolUseFailure
@@ -48,6 +51,9 @@ func EnsureHooksInstalled() (bool, error) {
 
 	modified := false
 	for _, event := range installedHookEvents {
+		if upgradeStaleHookCommands(hooksMap, event) {
+			modified = true
+		}
 		if !hasOurHook(hooksMap, event) {
 			addOurHook(hooksMap, event)
 			modified = true
@@ -187,6 +193,51 @@ func hasOurHook(hooksMap map[string]interface{}, event string) bool {
 		}
 	}
 	return false
+}
+
+// upgradeStaleHookCommands rewrites any hook command that contains hookSentinel
+// but isn't the canonical installedHookCommand. Returns true if any entry was
+// rewritten. This migrates users whose settings.json still has an older form
+// of our command (e.g., missing the trailing `|| true`).
+func upgradeStaleHookCommands(hooksMap map[string]interface{}, event string) bool {
+	arr, ok := hooksMap[event]
+	if !ok {
+		return false
+	}
+	groups, ok := arr.([]interface{})
+	if !ok {
+		return false
+	}
+	upgraded := false
+	for _, g := range groups {
+		group, ok := g.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		innerArr, ok := group["hooks"]
+		if !ok {
+			continue
+		}
+		innerHooks, ok := innerArr.([]interface{})
+		if !ok {
+			continue
+		}
+		for _, h := range innerHooks {
+			hook, ok := h.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			cmd, ok := hook["command"].(string)
+			if !ok {
+				continue
+			}
+			if strings.Contains(cmd, hookSentinel) && cmd != installedHookCommand {
+				hook["command"] = installedHookCommand
+				upgraded = true
+			}
+		}
+	}
+	return upgraded
 }
 
 // addOurHook appends a matcher group with our hook command to the event's array.
