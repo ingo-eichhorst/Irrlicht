@@ -66,7 +66,14 @@ func discoverReplayFixtures(t *testing.T, root string) []string {
 		if d.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(path, ".jsonl") || strings.HasSuffix(path, ".events.jsonl") {
+		if !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		// Skip lifecycle-event sidecars: legacy <scenario>.events.jsonl naming
+		// AND the post-WS02 per-scenario-folder naming where the basename is
+		// exactly "events.jsonl".
+		base := filepath.Base(path)
+		if base == "events.jsonl" || strings.HasSuffix(path, ".events.jsonl") {
 			return nil
 		}
 		out = append(out, path)
