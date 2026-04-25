@@ -527,7 +527,7 @@ func newParserFor(adapter string) tailer.TranscriptParser {
 	case "pi":
 		return &pi.Parser{}
 	case "aider":
-		return &aider.NoOpParser{}
+		return &aider.Parser{}
 	default:
 		return nil
 	}
