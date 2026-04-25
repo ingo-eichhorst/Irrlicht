@@ -5,10 +5,16 @@ import SwiftUI
 
 /// Forces a native NSView tooltip on any SwiftUI view.
 /// `.help()` doesn't work inside MenuBarExtra panels, so we bridge to AppKit.
+/// `hitTest` returns nil so the overlay doesn't swallow clicks meant for
+/// interactive views (buttons) underneath.
+private final class PassThroughTooltipView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 private struct TooltipView: NSViewRepresentable {
     let text: String
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+        let view = PassThroughTooltipView()
         view.toolTip = text
         return view
     }
@@ -25,9 +31,9 @@ extension View {
 
 enum DisplayMode: String, CaseIterable {
     case context   = "Context"
-    case history1s  = "1s"
-    case history10s = "10s"
-    case history60s = "60s"
+    case history1s  = "1 Min"
+    case history10s = "10 Min"
+    case history60s = "60 Min"
 
     var isHistory: Bool { self != .context }
 
@@ -42,6 +48,15 @@ enum DisplayMode: String, CaseIterable {
     func next() -> DisplayMode {
         let all = Self.allCases
         return all[((all.firstIndex(of: self) ?? 0) + 1) % all.count]
+    }
+
+    var tooltip: String {
+        switch self {
+        case .context:    return "Context utilization (click to cycle to history view)"
+        case .history1s:  return "Activity over the last 1 minute (60 buckets × 1s)"
+        case .history10s: return "Activity over the last 10 minutes (60 buckets × 10s)"
+        case .history60s: return "Activity over the last 60 minutes (60 buckets × 1min)"
+        }
     }
 }
 
@@ -200,6 +215,7 @@ struct SessionListView: View {
             .cornerRadius(4)
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
             .contentShape(Rectangle())
+            .tooltip(displayMode.tooltip)
             .id("mode-cycle-btn")
 
             statusIndicator
@@ -396,6 +412,14 @@ struct SessionRowView: View {
                     } else {
                         Color.clear.frame(width: 132, height: 13)
                     }
+                } else {
+                    // Historical modes (1s/10s/60s): bar fills the same column as the
+                    // Context bar+label so x-alignment stays stable across modes, and is
+                    // taller because it carries no cost/% readout alongside it.
+                    HistoryBarView(states: sessionManager.stateHistory[session.id] ?? [],
+                                   bucketCount: sessionManager.historyBucketCount)
+                        .frame(width: 132, height: 16)
+                        .tooltip(displayMode.tooltip)
                 }
 
                 Spacer()
@@ -404,29 +428,26 @@ struct SessionRowView: View {
                     SessionActionButtons(session: session)
                 }
 
-                if displayMode.isHistory {
-                    HistoryBarView(states: sessionManager.stateHistory[session.id] ?? [],
-                                   bucketCount: sessionManager.historyBucketCount)
-                        .frame(width: 120, height: 6)
-                } else {
-                    // Short model name + adapter icon — grouped so layoutPriority applies to both
-                    HStack(spacing: 6) {
-                        Text(session.shortModelName)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .tooltip(session.effectiveModel)
-                            .accessibilityIdentifier("session-model-label-\(session.id)")
-                        if let icon = session.adapterIcon {
-                            Image(nsImage: icon)
-                                .frame(width: 12, height: 12)
-                                .tooltip(session.adapterName)
-                        }
+                // Short model name + adapter icon — grouped so layoutPriority applies to both
+                HStack(spacing: 6) {
+                    Text(session.shortModelName)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .tooltip(session.effectiveModel)
+                        .accessibilityIdentifier("session-model-label-\(session.id)")
+                    if let icon = session.adapterIcon {
+                        Image(nsImage: icon)
+                            .frame(width: 12, height: 12)
+                            .tooltip(session.adapterName)
                     }
-                    .layoutPriority(1)
                 }
+                .layoutPriority(1)
             }
+            // Pin row to the tallest bar (history at 16pt) so toggling between
+            // Context and 1s/10s/60s doesn't shift row height.
+            .frame(minHeight: 16)
 
             // Waiting question block
             if session.state == .waiting,

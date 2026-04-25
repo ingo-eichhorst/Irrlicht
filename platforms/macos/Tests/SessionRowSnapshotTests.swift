@@ -104,4 +104,31 @@ final class SessionRowSnapshotTests: XCTestCase {
         let view = host(session)
         assertSnapshot(of: view, as: .image)
     }
+
+    private func sampleHistory() -> [String] {
+        Array(repeating: "ready", count: 80)
+            + Array(repeating: "working", count: 40)
+            + Array(repeating: "waiting", count: 20)
+            + Array(repeating: "working", count: 10)
+    }
+
+    private func snapshotHistoryMode(_ mode: String, testName: String = #function) {
+        UserDefaults.standard.set(mode, forKey: "displayMode")
+        let session = makeSession(state: .working, metrics: makeMetrics())
+        sessionManager.stateHistory[session.id] = sampleHistory()
+        let view = host(session)
+        assertSnapshot(of: view, as: .image, testName: testName)
+    }
+
+    func testHistoryBar1Min_PreservesModelLabel() {
+        snapshotHistoryMode("1 Min")
+    }
+
+    func testHistoryBar10Min_PreservesModelLabel() {
+        snapshotHistoryMode("10 Min")
+    }
+
+    func testHistoryBar60Min_PreservesModelLabel() {
+        snapshotHistoryMode("60 Min")
+    }
 }
