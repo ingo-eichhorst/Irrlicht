@@ -119,3 +119,4 @@ state.json
 replaydata/agents/_reports/
 .pi
 .specs
+.aider*
