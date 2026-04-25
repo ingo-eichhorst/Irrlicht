@@ -132,6 +132,10 @@ done
 [[ -S "$SOCK" ]] || { echo "daemon socket never appeared: $SOCK" >&2; exit 1; }
 
 # --- Drive the agent ----------------------------------------------------
+# Drivers are responsible for resolving the transcript path and writing
+# session.uuid + transcript.path back to staging. UUID arg $2 is a
+# "preferred" UUID — drive-claudecode.sh honors it via --session-id;
+# codex/pi drivers ignore it and surface the agent-assigned UUID.
 DRIVER="$SCRIPT_DIR/drive-$ADAPTER.sh"
 [[ -x "$DRIVER" ]] || { echo "driver missing: $DRIVER" >&2; exit 1; }
 set +e
@@ -143,21 +147,12 @@ DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown"
 cleanup
 trap - EXIT
 
-# --- Resolve the transcript path ----------------------------------------
-# Claude Code writes transcripts to ~/.claude/projects/<slug>/<UUID>.jsonl.
-# Stat the expected path under each slug dir (O(#projects)) rather than
-# walking the whole tree with `find`. Poll up to 30s.
-TRANSCRIPT=""
-for _ in $(seq 1 60); do
-  for slug_dir in "$HOME"/.claude/projects/*/; do
-    candidate="$slug_dir$UUID.jsonl"
-    if [[ -f "$candidate" ]]; then
-      TRANSCRIPT="$candidate"
-      break 2
-    fi
-  done
-  sleep 0.5
-done
+# --- Read driver-resolved transcript + actual UUID ----------------------
+TRANSCRIPT="$(cat "$STAGING/transcript.path" 2>/dev/null || true)"
+ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
+# Fall back to the pre-generated UUID if the driver didn't write one
+# (e.g., a stale driver from before the contract change).
+[[ -n "$ACTUAL_UUID" ]] || ACTUAL_UUID="$UUID"
 
 # --- Locate the recording file ------------------------------------------
 RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
@@ -169,7 +164,7 @@ if [[ -z "$TRANSCRIPT" || -z "$RECORDING" ]]; then
   jq -n \
     --arg adapter "$ADAPTER" \
     --arg scenario "$SCENARIO" \
-    --arg session_uuid "$UUID" \
+    --arg session_uuid "$ACTUAL_UUID" \
     --argjson transcript_found "$([[ -n "$TRANSCRIPT" ]] && echo true || echo false)" \
     --argjson recording_found "$([[ -n "$RECORDING" ]] && echo true || echo false)" \
     --arg driver_exit_reason "$DRIVER_REASON" \
@@ -195,7 +190,7 @@ fi
 #   <staging>/testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}
 "$REPO_ROOT/scripts/curate-lifecycle-fixture.sh" \
   -d "$STAGING/testdata/replay" \
-  "$RECORDING" "$UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
+  "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
 
 STAGED_TRANSCRIPT="$STAGING/testdata/replay/$ADAPTER/$SCENARIO.jsonl"
 
@@ -226,7 +221,7 @@ fi
 jq -n \
   --arg adapter "$ADAPTER" \
   --arg scenario "$SCENARIO" \
-  --arg session_uuid "$UUID" \
+  --arg session_uuid "$ACTUAL_UUID" \
   --arg staging "$STAGING" \
   --arg raw_recording "$RECORDING" \
   --arg source_transcript "$TRANSCRIPT" \

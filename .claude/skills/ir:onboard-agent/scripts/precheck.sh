@@ -30,10 +30,7 @@ fail() {
 
 # 1. Adapter is supported by a driver.
 case "$ADAPTER" in
-  claudecode) ;;
-  codex|pi)
-    fail "adapter '$ADAPTER' has no driver script yet (see README: 'Adding an adapter column')"
-    ;;
+  claudecode|codex|pi) ;;
   *)
     fail "unknown adapter: $ADAPTER"
     ;;
@@ -66,23 +63,39 @@ if [[ ! -f "$SCENARIOS_JSON" ]]; then
 fi
 MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.min_versions[$a] // empty' "$SCENARIOS_JSON")"
 
+CLI_VER=""
 case "$ADAPTER" in
   claudecode)
     if ! command -v claude >/dev/null 2>&1; then
       fail "claude CLI not on PATH"
     fi
-    CLAUDE_VER="$(claude --version 2>/dev/null | awk '{print $1}' | head -n1)"
-    if [[ -z "$CLAUDE_VER" ]]; then
-      fail "could not parse 'claude --version' output"
+    CLI_VER="$(claude --version 2>/dev/null | awk '{print $1}' | head -n1)"
+    [[ -n "$CLI_VER" ]] || fail "could not parse 'claude --version' output"
+    ;;
+  codex)
+    if ! command -v codex >/dev/null 2>&1; then
+      fail "codex CLI not on PATH"
     fi
-    if [[ -n "$MIN_VERSION" ]]; then
-      LOWEST="$(printf '%s\n%s\n' "$MIN_VERSION" "$CLAUDE_VER" | sort -V | head -n1)"
-      if [[ "$LOWEST" != "$MIN_VERSION" ]]; then
-        fail "claude $CLAUDE_VER is below pinned minimum $MIN_VERSION"
-      fi
+    # `codex --version` prints "codex-cli X.Y.Z"; take field 2.
+    CLI_VER="$(codex --version 2>/dev/null | awk '{print $2}' | head -n1)"
+    [[ -n "$CLI_VER" ]] || fail "could not parse 'codex --version' output"
+    ;;
+  pi)
+    if ! command -v pi >/dev/null 2>&1; then
+      fail "pi CLI not on PATH"
     fi
+    # `pi --version` prints just "X.Y.Z".
+    CLI_VER="$(pi --version 2>/dev/null | awk '{print $1}' | head -n1)"
+    [[ -n "$CLI_VER" ]] || fail "could not parse 'pi --version' output"
     ;;
 esac
+
+if [[ -n "$MIN_VERSION" && -n "$CLI_VER" ]]; then
+  LOWEST="$(printf '%s\n%s\n' "$MIN_VERSION" "$CLI_VER" | sort -V | head -n1)"
+  if [[ "$LOWEST" != "$MIN_VERSION" ]]; then
+    fail "$ADAPTER $CLI_VER is below pinned minimum $MIN_VERSION"
+  fi
+fi
 
 # 5. Build irrlichd + replay from the current worktree so recordings
 #    reflect code under review, and so run-cell.sh can invoke replay
@@ -95,4 +108,4 @@ for bin in irrlichd replay; do
   fi
 done
 
-echo "precheck: OK (adapter=$ADAPTER, claude=${CLAUDE_VER:-n/a}, bin=$BIN_DIR)"
+echo "precheck: OK (adapter=$ADAPTER, $ADAPTER=${CLI_VER:-n/a}, bin=$BIN_DIR)"
