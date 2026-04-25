@@ -63,6 +63,10 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	if d.historyTracker != nil {
 		d.historyTracker.Remove(ev.SessionID)
 	}
+
+	// Drop the in-memory tailer cache and the on-disk ledger file —
+	// the transcript is gone, so this state will never change again.
+	d.enricher.PruneMetrics(state.TranscriptPath)
 }
 
 // HandleProcessExit deletes a session when its process exits.

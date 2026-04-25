@@ -56,6 +56,10 @@ type GitResolver interface {
 // "codex", "pi") so the correct parser is used.
 type MetricsCollector interface {
 	ComputeMetrics(transcriptPath, adapter string) (*session.SessionMetrics, error)
+	// PruneEntry releases per-session state — both the in-memory tailer
+	// cache and the on-disk ledger file — when a session ends. Idempotent
+	// on a missing or already-removed entry.
+	PruneEntry(transcriptPath string)
 }
 
 // PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).

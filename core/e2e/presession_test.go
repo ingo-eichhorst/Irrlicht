@@ -479,6 +479,8 @@ func (m *stubMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, erro
 	return nil, nil
 }
 
+func (m *stubMetrics) PruneEntry(_ string) {}
+
 type mockWatcher struct {
 	ch chan agent.Event
 }
