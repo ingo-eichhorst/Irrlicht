@@ -165,27 +165,37 @@ RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/d
 MANIFEST="$STAGING/run-manifest.json"
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo "unknown")"
 
-if [[ -z "$TRANSCRIPT" || -z "$RECORDING" ]]; then
+# Write an ERROR-verdict run-manifest with the standard envelope plus
+# error-specific fields supplied as a JSON object (pass '{}' for none).
+write_error_manifest() {
+  local error_code="$1"
+  local extras_json="$2"
   jq -n \
     --arg adapter "$ADAPTER" \
     --arg scenario "$SCENARIO" \
     --arg session_uuid "$UUID" \
-    --argjson transcript_found "$([[ -n "$TRANSCRIPT" ]] && echo true || echo false)" \
-    --argjson recording_found "$([[ -n "$RECORDING" ]] && echo true || echo false)" \
+    --arg error "$error_code" \
     --arg driver_exit_reason "$DRIVER_REASON" \
     --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
     --arg staging "$STAGING" \
+    --argjson extras "$extras_json" \
     '{adapter: $adapter,
       scenario: $scenario,
       session_uuid: $session_uuid,
       verdict: "ERROR",
-      error: "transcript_or_recording_missing",
-      transcript_found: $transcript_found,
-      recording_found: $recording_found,
+      error: $error,
       driver_exit_reason: $driver_exit_reason,
       daemon_shutdown: $daemon_shutdown,
-      staging: $staging}' \
+      staging: $staging} + $extras' \
     > "$MANIFEST"
+}
+
+if [[ -z "$TRANSCRIPT" || -z "$RECORDING" ]]; then
+  write_error_manifest "transcript_or_recording_missing" \
+    "$(jq -nc \
+        --argjson transcript_found "$([[ -n "$TRANSCRIPT" ]] && echo true || echo false)" \
+        --argjson recording_found "$([[ -n "$RECORDING" ]] && echo true || echo false)" \
+        '{transcript_found: $transcript_found, recording_found: $recording_found}')"
   echo "ERROR: transcript=${TRANSCRIPT:-missing} recording=${RECORDING:-missing}" >&2
   exit 1
 fi
@@ -196,6 +206,7 @@ fi
 # saw the resulting parent_linked events. Fail cleanly here so the manifest
 # carries a structured reason instead of producing an empty .subagents/ dir
 # downstream.
+# "subagents" matches agents.CapSubagents in core/adapters/inbound/agents/config.go.
 REQUIRES_SUBAGENTS="$(jq -r '.requires | index("subagents") // empty' <<<"$CELL_JSON")"
 if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
   PARENT_LINKED_COUNT="$(jq -c --arg sid "$UUID" \
@@ -203,11 +214,7 @@ if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
     "$RECORDING" | wc -l | tr -d ' ')"
   SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$UUID/subagents"
   count_subagent_files() {
-    if [[ -d "$SUBAGENT_DIR" ]]; then
-      find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' '
-    else
-      echo 0
-    fi
+    find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' '
   }
   SUBAGENT_FILES="$(count_subagent_files)"
   # If the daemon saw parent_linked events but the child transcripts
@@ -222,26 +229,11 @@ if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
     done
   fi
   if [[ "$PARENT_LINKED_COUNT" -eq 0 || "$SUBAGENT_FILES" -eq 0 ]]; then
-    jq -n \
-      --arg adapter "$ADAPTER" \
-      --arg scenario "$SCENARIO" \
-      --arg session_uuid "$UUID" \
-      --argjson parent_linked_count "$PARENT_LINKED_COUNT" \
-      --argjson subagent_transcript_count "$SUBAGENT_FILES" \
-      --arg driver_exit_reason "$DRIVER_REASON" \
-      --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
-      --arg staging "$STAGING" \
-      '{adapter: $adapter,
-        scenario: $scenario,
-        session_uuid: $session_uuid,
-        verdict: "ERROR",
-        error: "no_subagents_spawned",
-        parent_linked_count: $parent_linked_count,
-        subagent_transcript_count: $subagent_transcript_count,
-        driver_exit_reason: $driver_exit_reason,
-        daemon_shutdown: $daemon_shutdown,
-        staging: $staging}' \
-      > "$MANIFEST"
+    write_error_manifest "no_subagents_spawned" \
+      "$(jq -nc \
+          --argjson parent_linked_count "$PARENT_LINKED_COUNT" \
+          --argjson subagent_transcript_count "$SUBAGENT_FILES" \
+          '{parent_linked_count: $parent_linked_count, subagent_transcript_count: $subagent_transcript_count}')"
     echo "ERROR: scenario requires subagents but none spawned (parent_linked=$PARENT_LINKED_COUNT, files=$SUBAGENT_FILES)" >&2
     exit 1
   fi
