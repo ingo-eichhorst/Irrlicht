@@ -26,5 +26,10 @@ func Config() agents.Config {
 		// to the binary path and excludes wrappers (tmux, sh) that mention
 		// `aider` in their own argv.
 		CommandLineMatch: "/aider",
+		// Aider writes its chat history per-project (in CWD), not under
+		// ~/.aider. The scanner probes each detected aider process's CWD
+		// for this file and emits transcript_new with the real path when
+		// the file appears (lazily, on the first user message).
+		TranscriptFilename: ".aider.chat.history.md",
 	}
 }

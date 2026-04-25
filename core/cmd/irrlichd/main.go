@@ -316,6 +316,9 @@ func main() {
 		if c.CommandLineMatch != "" {
 			scanner.WithCommandLineMatch(c.CommandLineMatch)
 		}
+		if c.TranscriptFilename != "" {
+			scanner.WithTranscriptFilename(c.TranscriptFilename)
+		}
 		scanner.WithSessionChecker(realSessionCheck)
 		watchers = append(watchers, scanner)
 	}

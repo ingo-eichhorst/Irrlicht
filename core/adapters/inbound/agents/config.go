@@ -51,6 +51,16 @@ type Config struct {
 	// (tmux, sh) that mention the agent name in their own argv. Leave empty
 	// for exact-match agents (claude, codex, pi).
 	CommandLineMatch string
+
+	// TranscriptFilename is an optional fixed filename the scanner looks for
+	// in each detected process's CWD (e.g. ".aider.chat.history.md"). When
+	// set, the scanner emits a per-PID transcript_new event with the real
+	// path on the first poll where the file exists in CWD. Use this for
+	// agents that write transcripts per-project (in CWD) rather than under
+	// a fixed RootDir under $HOME — the fswatcher's "watch one fixed root"
+	// model doesn't fit them. Leave empty for fswatcher-friendly agents
+	// (claude-code, codex, pi).
+	TranscriptFilename string
 }
 
 // ParserMap collapses a slice of Configs into a name → factory map. Callers

@@ -3,6 +3,7 @@ package processlifecycle
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,19 +24,22 @@ const stableThreshold = 5
 
 // trackedProc holds the pre-session metadata for a running process.
 type trackedProc struct {
-	sessionID  string
-	projectDir string
-	superseded bool // real transcript exists; keep tracking to prevent re-creation
+	sessionID         string
+	projectDir        string
+	superseded        bool   // real transcript exists; keep tracking to prevent re-creation
+	cwd               string // captured at first sight; needed for TranscriptFilename probe
+	transcriptEmitted bool   // dedupe per-PID transcript_new emissions for CWD-resident transcripts
 }
 
 // Scanner polls for agent processes and emits synthetic EventNewSession /
 // EventRemoved events so the session can be shown before the first message.
 // It implements inbound.AgentWatcher.
 type Scanner struct {
-	processName      string // exact process name matched by pgrep -x
-	commandLineMatch string // if non-empty, used with pgrep -f instead of -x ProcessName
-	adapter          string // adapter label placed on emitted events
-	interval         time.Duration
+	processName        string // exact process name matched by pgrep -x
+	commandLineMatch   string // if non-empty, used with pgrep -f instead of -x ProcessName
+	transcriptFilename string // if non-empty, scanner checks <CWD>/<filename> for the real transcript
+	adapter            string // adapter label placed on emitted events
+	interval           time.Duration
 
 	// sessionChecker is an optional function that reports whether a real
 	// (non-proc) session for the given projectDir and PID already exists.
@@ -76,6 +80,16 @@ func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 // (e.g. python launching aider). Returns the scanner for chaining.
 func (s *Scanner) WithCommandLineMatch(pattern string) *Scanner {
 	s.commandLineMatch = pattern
+	return s
+}
+
+// WithTranscriptFilename tells the scanner to additionally probe each
+// detected process's CWD for a fixed filename (e.g.
+// ".aider.chat.history.md") and emit an EventNewSession with the real
+// transcript path when the file appears. Use for agents that write
+// transcripts per-project rather than under a fixed RootDir.
+func (s *Scanner) WithTranscriptFilename(name string) *Scanner {
+	s.transcriptFilename = name
 	return s
 }
 
@@ -265,7 +279,7 @@ func (s *Scanner) poll() {
 		// tracking so the next poll retries rather than silently losing the event.
 		s.mu.Lock()
 		if len(s.subs) > 0 {
-			s.tracked[pid] = trackedProc{sessionID: sessionID, projectDir: projectDir}
+			s.tracked[pid] = trackedProc{sessionID: sessionID, projectDir: projectDir, cwd: cwd}
 			for _, ch := range s.subs {
 				select {
 				case ch <- ev:
@@ -274,6 +288,48 @@ func (s *Scanner) poll() {
 			}
 		}
 		s.mu.Unlock()
+	}
+
+	// --- probe for CWD-resident transcripts (per-adapter opt-in) ---
+	// For agents that write transcripts per-project (e.g. aider's
+	// .aider.chat.history.md), check each tracked PID's CWD for the
+	// configured filename. Emit EventNewSession with TranscriptPath when
+	// the file appears. Dedupe via trackedProc.transcriptEmitted so we
+	// don't spam the channel on every poll.
+	if s.transcriptFilename != "" {
+		s.mu.Lock()
+		var emit []agent.Event
+		for pid, proc := range s.tracked {
+			if proc.transcriptEmitted || proc.cwd == "" {
+				continue
+			}
+			path := filepath.Join(proc.cwd, s.transcriptFilename)
+			info, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			emit = append(emit, agent.Event{
+				Type:           agent.EventNewSession,
+				Adapter:        s.adapter,
+				SessionID:      proc.sessionID,
+				ProjectDir:     proc.projectDir,
+				TranscriptPath: path,
+				Size:           info.Size(),
+				CWD:            proc.cwd,
+			})
+			proc.transcriptEmitted = true
+			s.tracked[pid] = proc
+		}
+		subs := s.subs
+		s.mu.Unlock()
+		for _, ev := range emit {
+			for _, ch := range subs {
+				select {
+				case ch <- ev:
+				default:
+				}
+			}
+		}
 	}
 
 	// --- handle exited PIDs ---
