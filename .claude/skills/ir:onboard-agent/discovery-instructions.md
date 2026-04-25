@@ -407,29 +407,35 @@ Run `/ir:test-mac` first so the dev app is up against the worktree's
 daemon, then start a real session against the new adapter and watch
 the matching row.
 
+> File paths reference function/symbol names rather than line numbers
+> so the checklist doesn't rot every time someone adds an adapter case
+> above the switch. Use `grep -n` to locate.
+
 ### A. Adapter icon — `platforms/macos/Irrlicht/Models/SessionState.swift`
 
-Extend the `adapterIcon` switch (around line 518) with a `case "<id>":`
-that returns a brand-aware SVG. Reference the agent's official
-brand color/wordmark, design at the 100×100 viewBox used by the other
-adapters, and keep visual distinction from existing icons:
+Extend the `adapterIcon` switch with a `case "<id>":` that returns a
+brand-aware SVG, alongside a new `private static let <id>SVG` (or
+`<id>SVG(dark:Bool)` if your icon adapts to appearance). Reference the
+agent's official brand color/wordmark, design at the 100×100 viewBox
+used by the other adapters, and keep visual distinction from existing
+icons:
 
 | Adapter | Visual | Mark |
 |---|---|---|
 | claude-code | pixel-art creature | mascot |
 | codex | circle + `>_` | terminal chevron |
 | pi | circle + π | Greek letter |
-| aider | dark CRT circle + green block cursor | terminal phosphor |
+| aider | CRT circle + green block cursor | terminal phosphor |
 
 Without this case, the row falls back to the Claude Code mascot via
 the `default:` branch — confusing for users.
 
-### B. Adapter display name — `SessionState.swift:507`
+### B. Adapter display name — `adapterName` in `SessionState.swift`
 
 Add a `case "<id>": return "<Display Name>"` to the `adapterName`
 switch. Surfaced in tooltips and accessibility labels.
 
-### C. Model name normalization — `core/pkg/tailer/parser.go` and `SessionState.swift:484`
+### C. Model name normalization — `core/pkg/tailer/parser.go` (`NormalizeModelName`) and `SessionState.swift` (`shortModelName`)
 
 `shortModelName` already strips LiteLLM provider/route prefixes
 (everything before the last `/`), so models like
@@ -469,7 +475,7 @@ dev app, and verify all five elements render:
 If any of these are wrong or empty, walk the corresponding sub-
 section above. The fixes are usually single-line additions to the
 switch statements in `SessionState.swift` plus a one-line tweak in
-the view at `SessionListView.swift:388-426`.
+the `displayMode == .context` branch of `SessionListView.swift`.
 
 ## Anti-patterns
 

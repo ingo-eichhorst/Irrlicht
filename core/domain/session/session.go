@@ -159,11 +159,12 @@ func isUserBlockingTool(name string) bool {
 }
 
 // trailingMarkdownNoise are characters that commonly appear AFTER a
-// question mark when models wrap questions in markdown formatting.
+// question mark when models wrap questions in markdown or punctuation.
 // e.g. `**Question?**` (bold), `*Question?*` (italic), `_Question?_`,
 // `~~Question?~~`, `` `Question?` `` (inline code), `"Question?"`
-// (quoted), and trailing whitespace.
-const trailingMarkdownNoise = "*_~`\"' \t\n\r"
+// (quoted), `(yes/no?)` (parenthetical), `[link?]` (bracketed), and
+// trailing whitespace.
+const trailingMarkdownNoise = "*_~`\"')] \t\n\r"
 
 // IsWaitingForUserInput returns true when the agent finished its turn but the
 // last assistant message ends with a question mark — indicating the agent is
@@ -359,6 +360,14 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
+	}
+	// Preserve a previously-known "unknown context" verdict over a fresh
+	// false — pre-token TailAndProcess passes leave the flag at its zero
+	// value, and we don't want the UI to flip the tentative bar off and
+	// on between passes. The flag goes back to false only when the next
+	// real computation produces a known window.
+	if !merged.ContextWindowUnknown && oldM.ContextWindowUnknown && merged.ContextWindow == 0 {
+		merged.ContextWindowUnknown = oldM.ContextWindowUnknown
 	}
 	if merged.ElapsedSeconds == 0 && oldM.ElapsedSeconds > 0 {
 		merged.ElapsedSeconds = oldM.ElapsedSeconds

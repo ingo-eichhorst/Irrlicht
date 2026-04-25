@@ -303,9 +303,15 @@ func (t *TranscriptTailer) computeMetrics() {
 }
 
 // computeContextUtilization calculates context utilization percentage and pressure level.
+//
+// Note on ContextWindowUnknown: we deliberately do NOT clear the flag in the
+// early-return path. A pre-tokens pass would otherwise transiently set it to
+// false on every TailAndProcess call, producing flicker between
+// `unknown=true` (after computation) and `unknown=false` (before). The flag
+// is only set or cleared in branches that actually computed a window, so the
+// last "real" answer is sticky. MergeMetrics also prefers the older true
+// value over a fresh false (defense in depth).
 func (t *TranscriptTailer) computeContextUtilization() {
-	t.metrics.ContextWindowUnknown = false
-
 	if t.metrics.TotalTokens == 0 || t.metrics.ModelName == "" {
 		t.metrics.ContextUtilization = 0.0
 		t.metrics.PressureLevel = "unknown"
@@ -351,4 +357,5 @@ func (t *TranscriptTailer) computeContextUtilization() {
 	t.metrics.ContextWindow = effectiveContextWindow
 	t.metrics.ContextUtilization = utilizationPercentage
 	t.metrics.PressureLevel = pressureLevel
+	t.metrics.ContextWindowUnknown = false
 }

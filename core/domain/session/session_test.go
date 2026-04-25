@@ -26,7 +26,10 @@ func TestIsWaitingForUserInput_TrailingMarkdown(t *testing.T) {
 		{"single-quoted", "'What now?'", true},
 		{"mixed bold + whitespace", "**What now?**\n", true},
 		{"production gemma case (asterisks)", "Are there any conventions you follow?**", true},
+		{"parenthetical", "Is this true (yes/no)?)", true},
+		{"bracketed citation", "Did you mean foo?]", true},
 		{"statement", "I am done.", false},
+		{"declarative ending in *", "**Done**", false},
 		{"empty", "", false},
 		{"only delimiters", "***", false},
 	}
@@ -63,6 +66,43 @@ func TestIsStale(t *testing.T) {
 				t.Errorf("IsStale(%v) = %v, want %v", tt.maxAge, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMergeMetrics_ContextWindowUnknown_StickyAcrossTransientPasses(t *testing.T) {
+	// Sticky-unknown invariant: once a TailAndProcess pass has decided the
+	// model has no known context window, a subsequent pass that hasn't yet
+	// recomputed (zero metrics, flag at zero value) must not flip the UI
+	// signal off. Otherwise the tentative bar flickers on every poll.
+	oldM := &SessionMetrics{
+		TotalTokens:          1500,
+		ModelName:            "openai/google/gemma-4-26b-a4b",
+		PressureLevel:        "unknown",
+		ContextWindow:        0,
+		ContextWindowUnknown: true,
+	}
+	newM := &SessionMetrics{
+		ModelName: "openai/google/gemma-4-26b-a4b",
+		// ContextWindowUnknown left at zero value (false) — simulates a
+		// pre-tokens pass.
+	}
+	got := MergeMetrics(newM, oldM)
+	if !got.ContextWindowUnknown {
+		t.Error("ContextWindowUnknown should remain true across a transient zero-tokens pass")
+	}
+
+	// Once the next pass produces a real window, the flag must clear.
+	resolvedM := &SessionMetrics{
+		ModelName:            "claude-sonnet-4-6",
+		TotalTokens:          1500,
+		ContextWindow:        200000,
+		ContextUtilization:   0.75,
+		PressureLevel:        "safe",
+		ContextWindowUnknown: false,
+	}
+	got2 := MergeMetrics(resolvedM, oldM)
+	if got2.ContextWindowUnknown {
+		t.Error("ContextWindowUnknown should clear once a real ContextWindow is computed")
 	}
 }
 

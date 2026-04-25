@@ -145,12 +145,19 @@ struct SessionMetrics: Codable {
         // Hide entirely when there's no session activity yet.
         guard totalTokens > 0 else { return nil }
         let cost = estimatedCostUSD ?? 0
-        // Free local models (LM Studio / Ollama) and paid models with no
-        // pricing in the LiteLLM cache both land here. Show "—" rather
-        // than nil so the column doesn't render empty for aider sessions.
-        if cost == 0 { return "—" }
-        if cost < 0.01 { return "<$0.01" }
-        return String(format: "$%.2f", cost)
+        if cost > 0 {
+            if cost < 0.01 { return "<$0.01" }
+            return String(format: "$%.2f", cost)
+        }
+        // Cost is zero with tokens flowing. We only render the explicit
+        // "—" placeholder when the daemon has positively told us cost
+        // can't be computed (model has no LiteLLM pricing entry, signaled
+        // via contextWindowUnknown). For other adapters, returning nil
+        // here keeps the historical "hide on transient zero-cost windows"
+        // behavior — claudecode / codex / pi cost converges to a real
+        // number within a turn, and we don't want a flicker through "—".
+        if contextWindowUnknown == true { return "—" }
+        return nil
     }
     
     // Real-time elapsed time for active sessions
@@ -564,13 +571,15 @@ struct SessionState: Identifiable, Codable {
         """
     }
 
-    // Aider — VT220-green block cursor on a dark CRT-screen circle. Mirrors
+    // Aider — VT220-green block cursor on a CRT-screen circle. Mirrors
     // aider's official wordmark colors (terminal green #14b014 from
-    // aider.chat/assets/logo.svg) and stays brand-consistent across light
-    // and dark appearances. Distinct from codex's `>_` chevron prompt.
+    // aider.chat/assets/logo.svg). Brand-consistent across light/dark
+    // appearances. The fill is a mid-dark green (#1f3a1f), not pure
+    // black, so the icon has visible contrast against macOS dark mode's
+    // ~#1e1e1e backgrounds while still reading as a CRT screen.
     private static let aiderSVG = """
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r="44" fill="#0a1a0a" stroke="#14b014" stroke-width="6"/>
+      <circle cx="50" cy="50" r="44" fill="#1f3a1f" stroke="#14b014" stroke-width="6"/>
       <rect x="40" y="32" width="20" height="36" fill="#14b014"/>
     </svg>
     """

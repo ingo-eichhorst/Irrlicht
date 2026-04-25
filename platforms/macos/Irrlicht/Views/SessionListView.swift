@@ -415,7 +415,7 @@ struct SessionRowView: View {
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundColor(.secondary)
                             .frame(width: 100, height: 13, alignment: .leading)
-                            .tooltip("Token count — context window not known for \(metrics.modelName)")
+                            .tooltip("Token count — context window not known for \(session.shortModelName)")
                         if showCostDisplay {
                             Text(metrics.formattedCost ?? "—")
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
