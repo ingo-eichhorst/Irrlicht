@@ -107,6 +107,7 @@ struct SessionListView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .tooltip("Open settings panel")
 
                     Divider().frame(height: 20)
 
@@ -122,6 +123,7 @@ struct SessionListView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .tooltip("Quit Irrlicht")
                 }
             }
             .frame(width: Self.panelWidth)
@@ -261,6 +263,16 @@ struct SessionListView: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
+        .tooltip(statusTooltip)
+    }
+
+    private var statusTooltip: String {
+        switch sessionManager.connectionState {
+        case .connected: return "Daemon connected — watching for sessions"
+        case .connecting: return "Connecting to daemon\u{2026}"
+        case .reconnecting: return "Reconnecting to daemon\u{2026}"
+        case .disconnected: return "Daemon disconnected"
+        }
     }
 
     private var statusColor: Color {
@@ -371,6 +383,7 @@ struct SessionRowView: View {
                         .frame(width: 14, height: 14)
                         .background(Color.purple)
                         .clipShape(Circle())
+                        .tooltip("\(activeSubagentCount) active subagent\(activeSubagentCount == 1 ? "" : "s")")
                 }
 
                 // Branch name — column shrinks when a subagent badge is present so
@@ -392,16 +405,19 @@ struct SessionRowView: View {
                                    pressureColor: metrics.contextPressureColor,
                                    label: metrics.formattedTokenCount)
                             .frame(width: 100, height: 13)
+                            .tooltip("Context window usage")
                         if showCostDisplay {
                             Text(metrics.formattedCost ?? "")
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundColor(.secondary)
                                 .frame(width: 36, alignment: .leading)
+                                .tooltip("Estimated session cost")
                         } else {
                             Text(metrics.formattedContextUtilization)
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundColor(Color(hex: metrics.contextPressureColor))
                                 .frame(width: 32, alignment: .leading)
+                                .tooltip("Context window usage")
                         }
                     } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
                         Color.clear.frame(width: 100, height: 13)
@@ -463,6 +479,7 @@ struct SessionRowView: View {
                     .background(Color.orange.opacity(0.12))
                     .cornerRadius(4)
                     .padding(.top, 2)
+                    .tooltip("Agent is waiting for input")
             }
 
             // Context pressure alert (80%+, active sessions only)
@@ -484,6 +501,7 @@ struct SessionRowView: View {
                 .background((isCritical ? Color.red : Color.orange).opacity(0.08))
                 .cornerRadius(4)
                 .padding(.top, 2)
+                .tooltip(isCritical ? "Context window critically full" : "Context window nearing limit")
             }
 
             // Task list (Claude Code TaskCreate / TaskUpdate)
@@ -500,7 +518,7 @@ struct SessionRowView: View {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(session.id, forType: .string)
                             }
-                            .help("Click to copy full ID")
+                            .tooltip("Click to copy full ID")
                         Text("updated: \(elapsedString(from: session.updatedAt, now: context.date))")
                         Text("created: \(elapsedString(from: session.firstSeen, now: context.date))")
                         if let metrics = session.metrics, metrics.totalTokens > 0 {
@@ -644,7 +662,7 @@ struct SessionActionButtons: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Reset to ready state")
+            .tooltip("Reset to ready state")
 
             Button(action: {
                 sessionManager.deleteSession(sessionId: session.id)
@@ -654,7 +672,7 @@ struct SessionActionButtons: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Delete session")
+            .tooltip("Delete session")
         }
         .opacity(0.6)
     }
@@ -796,6 +814,7 @@ struct GroupView: View {
                         if isTopLevel && group.isGasTown {
                             Text("\u{26FD}")
                                 .font(.system(size: 10))
+                                .tooltip("Gas Town session (external API calls)")
                         }
 
                         Text(group.name)
@@ -806,6 +825,7 @@ struct GroupView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .tooltip(isExpanded ? "Collapse group" : "Expand group")
 
                 if let cost = formattedCost {
                     Button(action: cycleCostTimeframe) {
@@ -815,7 +835,7 @@ struct GroupView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Click to cycle time frame (day → week → month → year)")
+                    .tooltip("Click to cycle time frame (day → week → month → year)")
                 }
 
                 Spacer()
@@ -828,10 +848,10 @@ struct GroupView: View {
                 if isTopLevel, sessionManager.apiGroups.count > 1,
                    let idx = sessionManager.apiGroups.firstIndex(where: { $0.name == group.name }) {
                     HStack(spacing: 0) {
-                        reorderButton(icon: "chevron.up", disabled: idx == 0) {
+                        reorderButton(icon: "chevron.up", tooltip: "Move group up", disabled: idx == 0) {
                             sessionManager.moveProjectGroupUp(name: group.name)
                         }
-                        reorderButton(icon: "chevron.down", disabled: idx == sessionManager.apiGroups.count - 1) {
+                        reorderButton(icon: "chevron.down", tooltip: "Move group down", disabled: idx == sessionManager.apiGroups.count - 1) {
                             sessionManager.moveProjectGroupDown(name: group.name)
                         }
                     }
@@ -857,7 +877,7 @@ struct GroupView: View {
         }
     }
 
-    private func reorderButton(icon: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+    private func reorderButton(icon: String, tooltip: String, disabled: Bool, action: @escaping () -> Void) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.22)) { action() }
         } label: {
@@ -870,6 +890,7 @@ struct GroupView: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .opacity(disabled ? 0.3 : 1.0)
+        .tooltip(tooltip)
     }
 }
 

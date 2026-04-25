@@ -52,6 +52,7 @@ struct SettingsView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundColor(.orange)
                             .font(.caption)
+                            .tooltip("Notifications blocked in System Settings")
                         Text("Notifications are blocked.")
                             .font(.caption)
                             .foregroundColor(.orange)
@@ -62,6 +63,7 @@ struct SettingsView: View {
                         }
                         .font(.caption)
                         .buttonStyle(.link)
+                        .tooltip("Open System Settings → Notifications")
                     }
                 }
             }
