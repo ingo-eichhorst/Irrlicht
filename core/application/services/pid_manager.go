@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
@@ -409,7 +409,7 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	foundDead := false
 	for _, state := range states {
 		if state.PID > 0 {
-			if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
+			if !processlifecycle.PidAlive(state.PID) {
 				pm.HandleProcessExit(state.PID, state.SessionID)
 				foundDead = true
 			}
@@ -464,7 +464,7 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 			}
 			// Don't delete sessions whose process is still alive.
 			if state.PID > 0 {
-				if err := syscall.Kill(state.PID, 0); err == nil {
+				if processlifecycle.PidAlive(state.PID) {
 					continue
 				}
 			}
@@ -517,7 +517,7 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 // process is dead, otherwise watches it and backfills launcher metadata.
 // Returns true when the state remains alive after processing.
 func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
-	if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
+	if !processlifecycle.PidAlive(state.PID) {
 		pm.log.LogInfo("session-detector-seed", state.SessionID,
 			fmt.Sprintf("pid %d dead, deleting session", state.PID))
 		pm.deleteWithChildren(state)

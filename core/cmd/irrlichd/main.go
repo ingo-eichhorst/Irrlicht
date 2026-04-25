@@ -497,7 +497,7 @@ func pruneDeadProcSessions(fsRepo *filesystem.SessionRepository, logger outbound
 		if _, err := fmt.Sscanf(s.SessionID, "proc-%d", &pid); err != nil || pid <= 0 {
 			continue
 		}
-		if err := syscall.Kill(pid, 0); err != nil {
+		if !processlifecycle.PidAlive(pid) {
 			_ = fsRepo.Delete(s.SessionID)
 			logger.LogInfo("startup", s.SessionID, "pruned dead proc session")
 		}

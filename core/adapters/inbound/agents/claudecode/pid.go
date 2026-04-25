@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
@@ -175,14 +174,8 @@ func readSessionMeta(path string) (claudeSessionMeta, bool) {
 	return meta, true
 }
 
-// pidAlive returns true if signal 0 can be delivered to pid (i.e. the process
-// exists and the caller has permission). Overridable in tests.
-var pidAlive = func(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	return syscall.Kill(pid, 0) == nil
-}
+// pidAlive reports whether pid refers to a live process. Overridable in tests.
+var pidAlive = processlifecycle.PidAlive
 
 // discoverByCWD is the fallback CWD-matching implementation. It's a package
 // variable so tests can inject a stub in place of the real pgrep+lsof call.

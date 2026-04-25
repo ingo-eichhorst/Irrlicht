@@ -1,63 +1,17 @@
 // Package processlifecycle owns the full process lifecycle for agent sessions:
-// birth detection (polling) and death detection (kqueue). It unifies the
-// previously separate processscanner and process/watcher packages, deduplicating
-// shared OS utilities (pgrep, lsof, CWD resolution).
+// birth detection (polling) and death detection (kqueue on darwin, polling
+// elsewhere). It unifies the previously separate processscanner and
+// process/watcher packages, deduplicating shared OS utilities (process
+// enumeration, cwd, env capture).
 package processlifecycle
 
 import (
-	"context"
 	"encoding/binary"
-	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	"irrlicht/core/domain/session"
 )
-
-// findProcesses returns PIDs of processes whose name exactly matches name
-// (uses pgrep -x for exact binary name match).
-func findProcesses(name string) ([]int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "pgrep", "-x", name).Output()
-	if err != nil {
-		// pgrep exits 1 when there are no matches — not an error.
-		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var pids []int
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		pid, err := strconv.Atoi(line)
-		if err == nil && pid > 0 {
-			pids = append(pids, pid)
-		}
-	}
-	return pids, nil
-}
-
-// processCWD returns the working directory of pid using lsof.
-func processCWD(pid int) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
-	if err != nil {
-		return "", fmt.Errorf("lsof cwd pid %d: %w", pid, err)
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "n") {
-			return strings.TrimPrefix(line, "n"), nil
-		}
-	}
-	return "", fmt.Errorf("cwd not found for pid %d", pid)
-}
 
 // CWDToProjectDir converts a working directory path to the directory name used
 // by Claude Code under ~/.claude/projects/. Claude Code replaces both "/" and
@@ -71,12 +25,12 @@ func CWDToProjectDir(cwd string) string {
 // launcherEnvKeys are the env vars whitelisted for launcher identity capture.
 // Everything else is ignored — we never read the full env, only these keys.
 var launcherEnvKeys = map[string]struct{}{
-	"TERM_PROGRAM":     {},
-	"ITERM_SESSION_ID": {},
-	"TERM_SESSION_ID":  {},
-	"TMUX":             {},
-	"TMUX_PANE":        {},
-	"VSCODE_PID":       {},
+	"TERM_PROGRAM":      {},
+	"ITERM_SESSION_ID":  {},
+	"TERM_SESSION_ID":   {},
+	"TMUX":              {},
+	"TMUX_PANE":         {},
+	"VSCODE_PID":        {},
 	"TERMINAL_EMULATOR": {}, // JetBrains JediTerm sets this to "JetBrains-JediTerm"
 	"KITTY_LISTEN_ON":   {}, // kitty remote-control socket path (e.g. "unix:/tmp/kitty-NNN/sock")
 	"KITTY_WINDOW_ID":   {}, // kitty window ID for precise window targeting
@@ -148,34 +102,14 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	return l
 }
 
-// processTTY returns the controlling TTY of pid in the form "/dev/ttysNNN",
-// or "" if the process has no controlling terminal (hardened-runtime
-// children often don't) or the ps lookup fails. The result is normalized
-// to match Terminal.app's AppleScript `tty` property format — `ps -o tty=`
-// on macOS omits the "/dev/" prefix that AppleScript returns.
-func processTTY(pid int) string {
-	if pid <= 0 {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return ""
-	}
-	tty := strings.TrimSpace(string(out))
-	if tty == "" || tty == "?" || tty == "??" || tty == "-" {
-		return ""
-	}
-	if !strings.HasPrefix(tty, "/dev/") {
-		tty = "/dev/" + tty
-	}
-	return tty
-}
-
 // readProcessEnv is implemented per-platform (osutil_darwin.go,
-// osutil_linux.go, osutil_other.go) and returns the whitelisted env vars
-// for pid. Returns nil, nil on unsupported platforms.
+// osutil_linux.go, osutil_windows.go, osutil_other.go) and returns the
+// whitelisted env vars for pid. Returns nil, nil on unsupported platforms.
+
+// findProcesses, processCWD, processTTY, and PidAlive are implemented in
+// per-platform files (osutil_unix.go on darwin/linux, osutil_windows.go on
+// windows). The Windows path uses CreateToolhelp32Snapshot + OpenProcess
+// instead of pgrep/lsof/ps shell-outs.
 
 // parseProcargs2 extracts the env portion of a KERN_PROCARGS2 sysctl buffer
 // and returns the whitelisted entries. The buffer layout is:
@@ -233,4 +167,3 @@ func parseProcargs2(buf []byte) map[string]string {
 	}
 	return out
 }
-

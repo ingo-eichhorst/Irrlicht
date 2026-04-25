@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Installation — Irrlicht Docs</title>
-<meta name="description" content="Install Irrlicht via package installer or build from source. macOS menu bar telemetry for AI coding agents.">
+<meta name="description" content="Install Irrlicht via package installer or build from source. macOS menu bar app and Windows 11 system tray for AI coding agents.">
 <link rel="canonical" href="https://irrlicht.io/docs/installation.html">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Installation — Irrlicht Docs">
-<meta property="og:description" content="Install Irrlicht via package installer or build from source. macOS menu bar telemetry for AI coding agents.">
+<meta property="og:description" content="Install Irrlicht via package installer or build from source. macOS menu bar app and Windows 11 system tray for AI coding agents.">
 <meta property="og:url" content="https://irrlicht.io/docs/installation.html">
 <meta property="og:site_name" content="Irrlicht">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Installation — Irrlicht Docs">
-<meta name="twitter:description" content="Install Irrlicht via package installer or build from source. macOS menu bar telemetry for AI coding agents.">
+<meta name="twitter:description" content="Install Irrlicht via package installer or build from source. macOS menu bar app and Windows 11 system tray for AI coding agents.">
 
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
@@ -75,13 +75,13 @@
     <div class="docs-content">
 
       <h1>Installation</h1>
-      <p class="page-subtitle">Get Irrlicht running on your Mac in under two minutes via the package installer, or build everything from source.</p>
+      <p class="page-subtitle">Get Irrlicht running on macOS or Windows 11 in under two minutes via the package installer, or build everything from source.</p>
 
       <!-- ── Prerequisites ── -->
       <h2>Prerequisites</h2>
 
       <ul>
-        <li><strong>macOS 13 (Ventura) or later</strong> &mdash; Irrlicht uses SwiftUI APIs that require Ventura as a minimum.</li>
+        <li><strong>macOS 13 (Ventura) or later</strong> or <strong>Windows 11</strong> &mdash; the menu-bar / tray apps target these as the minimum supported OS.</li>
         <li><strong>At least one supported AI coding agent</strong> installed and working:
           <ul>
             <li><a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></li>
@@ -145,6 +145,40 @@ curl -fsSL https://irrlicht.io/install.sh | sh -s -- --version 0.3.4</code></pre
         <li>
           <strong>Launch the app</strong>
           <p>Open <strong>Irrlicht</strong> from Applications. A sparkle icon appears in the menu bar, and the daemon starts automatically in the background.</p>
+        </li>
+      </ol>
+
+      <!-- ── Windows 11 ── -->
+      <h2>Install on Windows 11</h2>
+
+      <p>The Windows tray app ships as a single NSIS installer covering both <code>amd64</code> and <code>arm64</code>. Like the macOS version, the daemon is bundled alongside the tray binary &mdash; no separate service to install.</p>
+
+      <ol class="steps">
+        <li>
+          <strong>Download the installer</strong>
+          <p>Grab <code>Irrlicht-&lt;version&gt;-windows-amd64-setup.exe</code> (or <code>-arm64-setup.exe</code> for Windows on ARM) from the <a href="https://github.com/ingo-eichhorst/Irrlicht/releases/latest">GitHub Releases</a> page.</p>
+        </li>
+        <li>
+          <strong>Run the installer</strong>
+          <p>Double-click <code>setup.exe</code>. Until the installer is signed with an EV certificate, Windows SmartScreen will warn &ldquo;Windows protected your PC&rdquo; &mdash; click <strong>More info &rarr; Run anyway</strong> to proceed. For a silent install (no UI), run <code>setup.exe /S</code> from an Administrator command prompt.</p>
+        </li>
+        <li>
+          <strong>What gets installed</strong>
+          <table>
+            <thead>
+              <tr><th>Component</th><th>Location</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>irrlicht.exe (system tray)</td><td><code>C:\Program Files\Irrlicht\irrlicht.exe</code></td></tr>
+              <tr><td>irrlichd.exe (daemon)</td><td><code>C:\Program Files\Irrlicht\irrlichd.exe</code></td></tr>
+              <tr><td>Start Menu shortcut</td><td><code>Start &rarr; Irrlicht</code></td></tr>
+              <tr><td>Auto-start at login</td><td><code>HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Irrlicht</code></td></tr>
+            </tbody>
+          </table>
+        </li>
+        <li>
+          <strong>Launch</strong>
+          <p>The tray icon appears in the notification area. Right-click for the menu (Open Dashboard, Quit); left-click opens the dashboard at <code>http://127.0.0.1:7837/</code> in your default browser.</p>
         </li>
       </ol>
 

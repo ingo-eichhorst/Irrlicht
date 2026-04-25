@@ -1,0 +1,55 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Version (defaults to version.json)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows installers
+    # Ubuntu runner: Go cross-compiles to GOOS=windows for both amd64 and
+    # arm64, and NSIS is available via apt. Avoiding a windows-latest
+    # runner keeps the matrix simple; signing will move to that runner in
+    # a follow-up that adds signtool.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+
+      - name: Build Windows installers (amd64 + arm64)
+        run: ./platforms/windows/build-release.sh
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: irrlicht-windows-installers
+          path: |
+            .build/windows/Irrlicht-*-windows-*-setup.exe
+            .build/windows/checksums.sha256
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            .build/windows/Irrlicht-*-windows-*-setup.exe
+            .build/windows/checksums.sha256
+          fail_on_unmatched_files: true
