@@ -101,21 +101,11 @@ func TestParser_BaselineHello_FullTurn(t *testing.T) {
 func TestParser_TokensWithCost(t *testing.T) {
 	p := &Parser{}
 	drive(p, []string{
-		"> Model: openai/gemma-4-e2b-it-uncensored with whole edit format",
-		"#### hello",
-		"hi there",
-		"> Tokens: 1.2k sent, 543 received, $0.0123 message, $0.0456 session.",
-	})
-
-	// Re-run flush by ParseLineRaw on the tokens line directly to inspect
-	// the contribution shape.
-	p2 := &Parser{}
-	drive(p2, []string{
 		"> Model: openai/gpt-5 with diff edit format",
 		"#### hi",
 		"reply text",
 	})
-	ev := p2.ParseLineRaw("> Tokens: 1.2k sent, 543 received, $0.0123 message, $0.0456 session.")
+	ev := p.ParseLineRaw("> Tokens: 1.2k sent, 543 received, $0.0123 message, $0.0456 session.")
 	if ev == nil || ev.Contribution == nil {
 		t.Fatal("expected Contribution")
 	}

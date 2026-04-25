@@ -16,8 +16,8 @@ import (
 //
 // State machine: a turn begins on a `#### …` line (user prompt). Plain
 // prose lines accumulate as assistant text until the next `> Tokens: …`
-// line, which closes the turn and triggers an assistant_message event
-// carrying the buffered text and a PerTurnContribution.
+// line, which closes the turn and triggers a turn_done event carrying
+// the buffered text and a PerTurnContribution.
 type Parser struct {
 	model           string
 	assistantBuffer strings.Builder
