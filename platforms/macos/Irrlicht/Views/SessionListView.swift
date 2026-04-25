@@ -1,31 +1,147 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Tooltip support for MenuBarExtra
+// MARK: - Tooltip
+//
+// SwiftUI overlays are children of the host window's content layer, which the
+// MenuBarController clips to a rounded rectangle (`masksToBounds = true`). Any
+// SwiftUI-rendered tooltip that's wider than the hovered element gets cropped
+// at the panel edge. NSView.toolTip likewise doesn't fire here because
+// NSToolTipManager hit-tests the cursor's view, and the bridge's
+// click-through hitTest=nil makes it invisible to that lookup.
+//
+// The fix is what AppKit itself does: render the tooltip in its own borderless
+// nonactivating panel, positioned in screen coordinates above the cursor.
 
-/// Forces a native NSView tooltip on any SwiftUI view.
-/// `.help()` doesn't work inside MenuBarExtra panels, so we bridge to AppKit.
-/// `hitTest` returns nil so the overlay doesn't swallow clicks meant for
-/// interactive views (buttons) underneath.
-private final class PassThroughTooltipView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+@MainActor
+private final class TooltipWindowController {
+    static let shared = TooltipWindowController()
+
+    private let panel: NSPanel
+    private let label: NSTextField
+
+    private init() {
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 30),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        // Z-order vs the host panel is enforced via addChildWindow(_:ordered:.above)
+        // in show(...) — that guarantees the tooltip renders above the host
+        // regardless of level. Level only matters when there is no host.
+        panel.level = NSWindow.Level(rawValue: 200)
+        panel.ignoresMouseEvents = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.animationBehavior = .none
+
+        label = NSTextField(labelWithString: "")
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .labelColor
+        label.backgroundColor = .clear
+        label.isBezeled = false
+        label.isEditable = false
+        label.isSelectable = false
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let bg = NSVisualEffectView()
+        bg.material = .toolTip
+        bg.blendingMode = .behindWindow
+        bg.state = .active
+        bg.wantsLayer = true
+        bg.layer?.cornerRadius = 4
+        bg.layer?.borderWidth = 0.5
+        bg.layer?.borderColor = NSColor.separatorColor.cgColor
+        bg.layer?.masksToBounds = true
+
+        bg.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -6),
+            label.topAnchor.constraint(equalTo: bg.topAnchor, constant: 3),
+            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -3),
+        ])
+
+        panel.contentView = bg
+    }
+
+    func show(text: String, near cursor: NSPoint) {
+        label.stringValue = text
+        let maxWidth: CGFloat = 280
+        label.preferredMaxLayoutWidth = maxWidth
+        let labelSize = label.sizeThatFits(NSSize(width: maxWidth, height: .greatestFiniteMagnitude))
+        let size = NSSize(width: ceil(labelSize.width) + 12, height: ceil(labelSize.height) + 6)
+
+        // Native macOS tooltips appear diagonally below-right of the cursor.
+        // Screen Y grows upward, so "below cursor" = lower Y.
+        var origin = NSPoint(x: cursor.x + 14, y: cursor.y - size.height - 18)
+        // Clamp to the screen the cursor is actually on, not NSScreen.main —
+        // otherwise the tooltip jumps to the focused display on multi-monitor.
+        let cursorScreen = NSScreen.screens.first { $0.frame.contains(cursor) } ?? NSScreen.main
+        if let visible = cursorScreen?.visibleFrame {
+            origin.x = max(visible.minX + 4, min(origin.x, visible.maxX - size.width - 4))
+            if origin.y < visible.minY + 4 {
+                origin.y = cursor.y + 18  // flip above when no room below
+            }
+            origin.y = min(origin.y, visible.maxY - size.height - 4)
+        }
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        // Parent the tooltip to whichever window is on top (main panel, or a
+        // sheet presented on top of it). AppKit guarantees children render
+        // above their parent in z-order — this is the only mechanism that
+        // works reliably for two nonactivating panels in the same process.
+        if let host = findHostWindow(), panel.parent !== host {
+            panel.parent?.removeChildWindow(panel)
+            host.addChildWindow(panel, ordered: .above)
+        }
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+    }
+
+    private func findHostWindow() -> NSWindow? {
+        // orderedWindows is front-to-back; first non-tooltip visible window
+        // is whichever the user is currently interacting with.
+        NSApp.orderedWindows.first { $0 !== panel && $0.isVisible }
+    }
 }
 
-private struct TooltipView: NSViewRepresentable {
+private struct TooltipModifier: ViewModifier {
     let text: String
-    func makeNSView(context: Context) -> NSView {
-        let view = PassThroughTooltipView()
-        view.toolTip = text
-        return view
-    }
-    func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.toolTip = text
+    @State private var hoverTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content.onHover { hovering in
+            hoverTask?.cancel()
+            if hovering, !text.isEmpty {
+                hoverTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    if !Task.isCancelled {
+                        TooltipWindowController.shared.show(
+                            text: text,
+                            near: NSEvent.mouseLocation
+                        )
+                    }
+                }
+            } else {
+                TooltipWindowController.shared.hide()
+            }
+        }
     }
 }
 
 extension View {
     func tooltip(_ text: String) -> some View {
-        overlay(TooltipView(text: text))
+        modifier(TooltipModifier(text: text))
     }
 }
 
@@ -107,6 +223,7 @@ struct SessionListView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .tooltip("Open settings panel")
 
                     Divider().frame(height: 20)
 
@@ -122,6 +239,7 @@ struct SessionListView: View {
                             }
                     }
                     .buttonStyle(.plain)
+                    .tooltip("Quit Irrlicht")
                 }
             }
             .frame(width: Self.panelWidth)
@@ -261,6 +379,7 @@ struct SessionListView: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
+        .tooltip(sessionManager.connectionState.tooltip)
     }
 
     private var statusColor: Color {
@@ -371,6 +490,7 @@ struct SessionRowView: View {
                         .frame(width: 14, height: 14)
                         .background(Color.purple)
                         .clipShape(Circle())
+                        .tooltip("\(activeSubagentCount) active subagent\(activeSubagentCount == 1 ? "" : "s")")
                 }
 
                 // Branch name — column shrinks when a subagent badge is present so
@@ -392,11 +512,13 @@ struct SessionRowView: View {
                                    pressureColor: metrics.contextPressureColor,
                                    label: metrics.formattedTokenCount)
                             .frame(width: 100, height: 13)
+                            .tooltip("Context window usage")
                         if showCostDisplay {
                             Text(metrics.formattedCost ?? "")
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundColor(.secondary)
                                 .frame(width: 36, alignment: .leading)
+                                .tooltip("Estimated session cost")
                         } else {
                             Text(metrics.formattedContextUtilization)
                                 .font(.system(size: 9, design: .monospaced))
@@ -463,6 +585,8 @@ struct SessionRowView: View {
                     .background(Color.orange.opacity(0.12))
                     .cornerRadius(4)
                     .padding(.top, 2)
+                    // Surface the full prompt — head-truncation hides the start.
+                    .tooltip(text)
             }
 
             // Context pressure alert (80%+, active sessions only)
@@ -484,6 +608,7 @@ struct SessionRowView: View {
                 .background((isCritical ? Color.red : Color.orange).opacity(0.08))
                 .cornerRadius(4)
                 .padding(.top, 2)
+                .tooltip(isCritical ? "Context window critically full" : "Context window nearing limit")
             }
 
             // Task list (Claude Code TaskCreate / TaskUpdate)
@@ -500,7 +625,7 @@ struct SessionRowView: View {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(session.id, forType: .string)
                             }
-                            .help("Click to copy full ID")
+                            .tooltip("Click to copy full ID")
                         Text("updated: \(elapsedString(from: session.updatedAt, now: context.date))")
                         Text("created: \(elapsedString(from: session.firstSeen, now: context.date))")
                         if let metrics = session.metrics, metrics.totalTokens > 0 {
@@ -644,7 +769,7 @@ struct SessionActionButtons: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Reset to ready state")
+            .tooltip("Reset to ready state")
 
             Button(action: {
                 sessionManager.deleteSession(sessionId: session.id)
@@ -654,7 +779,7 @@ struct SessionActionButtons: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Delete session")
+            .tooltip("Delete session")
         }
         .opacity(0.6)
     }
@@ -759,6 +884,14 @@ struct GroupView: View {
 
     private var isTopLevel: Bool { depth == 0 }
 
+    private var groupExpandTooltip: String {
+        let action = isExpanded ? "Collapse" : "Expand"
+        if isTopLevel && group.isGasTown {
+            return "\(action) Gas Town group (external API calls)"
+        }
+        return "\(action) group"
+    }
+
     /// Formatted cost for this group in the currently-selected time frame.
     /// Returns nil only when there is no cost data at all (hides the toggle).
     /// Returns "$0 / <frame>" when data exists for other frames but not this one,
@@ -807,6 +940,7 @@ struct GroupView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .tooltip(groupExpandTooltip)
 
                 if let cost = formattedCost {
                     Button(action: cycleCostTimeframe) {
@@ -816,7 +950,7 @@ struct GroupView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Click to cycle time frame (day → week → month → year)")
+                    .tooltip("Click to cycle time frame (day → week → month → year)")
                 }
 
                 Spacer()
@@ -829,10 +963,10 @@ struct GroupView: View {
                 if isTopLevel, sessionManager.apiGroups.count > 1,
                    let idx = sessionManager.apiGroups.firstIndex(where: { $0.name == group.name }) {
                     HStack(spacing: 0) {
-                        reorderButton(icon: "chevron.up", disabled: idx == 0) {
+                        reorderButton(icon: "chevron.up", tooltip: "Move group up", disabled: idx == 0) {
                             sessionManager.moveProjectGroupUp(name: group.name)
                         }
-                        reorderButton(icon: "chevron.down", disabled: idx == sessionManager.apiGroups.count - 1) {
+                        reorderButton(icon: "chevron.down", tooltip: "Move group down", disabled: idx == sessionManager.apiGroups.count - 1) {
                             sessionManager.moveProjectGroupDown(name: group.name)
                         }
                     }
@@ -858,7 +992,7 @@ struct GroupView: View {
         }
     }
 
-    private func reorderButton(icon: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+    private func reorderButton(icon: String, tooltip: String, disabled: Bool, action: @escaping () -> Void) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.22)) { action() }
         } label: {
@@ -871,6 +1005,7 @@ struct GroupView: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .opacity(disabled ? 0.3 : 1.0)
+        .tooltip(tooltip)
     }
 }
 
