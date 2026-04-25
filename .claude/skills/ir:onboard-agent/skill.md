@@ -242,6 +242,27 @@ After normalizing, compare the two reports on these dimensions only:
 Do NOT diff exact transition-reason strings, per-event latencies, or model
 output text. Those are nondeterministic.
 
+### Evaluating `verify` matchers
+
+The scenario's `verify` block lists structural assertions you check against
+the staged report (and, for new fixtures, against the transcript). Most are
+self-explanatory — `final_state`, `has_waiting_state`, `tool_calls_max`,
+`contains_tool_call`, `contains_hook`, `transitions_topology`,
+`tool_call_failed`, `parent_linked_min`, `subagent_transcripts_min`. Three
+matchers introduced for the aider scenarios in #217 are less obvious because
+they require reading the staged transcript directly:
+
+- **`min_turns: N`** — count `> Tokens:` lines in the staged transcript (or
+  count transitions whose `last_event_type == "turn_done"` in the report).
+  Pass if ≥ N.
+- **`contains_interrupt: true`** — pass if the transcript shows more `####`
+  user-prompt markers than `> Tokens:` turn-close markers (the missing
+  Tokens line is the interrupt signature). Equivalent: at least one
+  `####` block has no `> Tokens:` before the next `####`.
+- **`model_changed: true`** — pass if the transcript contains two or more
+  distinct `> Model:` lines, OR if the report's transitions show two
+  different `model_name` values across turns.
+
 ### Verdict for each cell
 
 Pick one:

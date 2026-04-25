@@ -356,12 +356,18 @@ running locally; reproducing them does not require any cloud API key.
 
 **Setup once:**
 
-1. Install LM Studio and pull a small instruction-tuned model. Anything
-   that fits in your RAM and follows simple prompts will do; the gate run
-   used `gemma-4-e2b-it`. From LM Studio's CLI:
+1. Install LM Studio and pull instruction-tuned models. Two recommended:
    ```bash
-   lms get gemma-4-e2b-it
+   lms get gemma-4-e2b-it             # ~1 GB; fine for baseline-hello
+   lms get gemma-4-26b-a4b            # ~13 GB; needed for tool-call /
+                                      # multi-turn / interrupt scenarios
    ```
+   The smaller `gemma-4-e2b-it` is enough for `baseline-hello` (single
+   short reply). Tool-call and interactive scenarios from #217
+   (`full-lifecycle-toolcall`, `multi-turn-conversation`,
+   `interrupted-turn`, `model-switch`) need `gemma-4-26b-a4b` — the
+   smaller model doesn't reliably emit `> Applied edit` / `> Running`
+   status lines or follow multi-step instructions.
 2. Start the local server (LM Studio app → "Local Server" tab → Start,
    or `lms server start`). It listens on `http://localhost:1234/v1` by
    default.
@@ -370,10 +376,14 @@ running locally; reproducing them does not require any cloud API key.
    ```bash
    export OPENAI_API_BASE="http://localhost:1234/v1"
    export OPENAI_API_KEY="lm-studio"   # any non-empty value
-   export IRRLICHT_AIDER_MODEL="openai/gemma-4-e2b-it"
+   # Default to the larger model so interactive/toolcall scenarios work.
+   # Override per-scenario when re-recording baseline-hello against the
+   # smaller model committed in #216.
+   export IRRLICHT_AIDER_MODEL="openai/gemma-4-26b-a4b"
    ```
-   `IRRLICHT_AIDER_MODEL` is read by `drive-aider.sh`. Without it the
-   driver lets aider pick up its own `~/.aider.conf.yml` defaults.
+   `IRRLICHT_AIDER_MODEL` is read by both `drive-aider.sh` and
+   `drive-aider-interactive.sh`. Without it the driver lets aider pick
+   up its own `~/.aider.conf.yml` defaults.
 4. Smoke-check from a scratch CWD:
    ```bash
    mkdir /tmp/aider-smoke && cd /tmp/aider-smoke
