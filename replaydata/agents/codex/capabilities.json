@@ -5,6 +5,7 @@
   "source": "manual_bootstrap",
   "features": {
     "headless_mode": true,
+    "tui": true,
     "tool_calls": true,
     "permission_hooks": false,
     "subagents": false,

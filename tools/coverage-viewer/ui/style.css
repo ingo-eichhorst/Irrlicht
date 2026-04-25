@@ -164,6 +164,8 @@ table.features td.count { text-align: center; color: var(--text-dim); font-famil
 table.features td.count.covered { color: var(--ready); font-weight: 500; }
 table.features td.count.zero { color: var(--text-dim); }
 table.features tr.uncovered td.feature-id { color: var(--text-dim); }
+table.features tr.cat-head td { background: var(--bg); color: var(--text-bright); font-weight: 500; padding: 0.6rem 0.6rem 0.4rem; border-top: 1px solid var(--border); text-transform: none; letter-spacing: 0; font-size: 0.8rem; }
+table.features tr.cat-head .cat-count { color: var(--text-dim); font-size: 0.72rem; font-weight: 400; margin-left: 0.5rem; }
 
 #matrix-loading { color: var(--text-dim); font-size: 0.9rem; padding: 2rem 0; }
 .error { color: var(--danger); padding: 0.75rem; background: rgba(239, 68, 68, 0.08); border: 1px solid var(--danger); border-radius: 4px; }

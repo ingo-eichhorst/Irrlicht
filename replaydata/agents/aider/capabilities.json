@@ -5,6 +5,7 @@
   "source": "discovery_subagent",
   "features": {
     "headless_mode": true,
+    "tui": true,
     "tool_calls": true,
     "permission_hooks": false,
     "subagents": false,

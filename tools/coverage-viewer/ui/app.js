@@ -126,31 +126,51 @@ function openFeatures(adapter) {
   const cells = matrixData.cells[adapter] || {};
 
   const rows = matrixData.features.map((f) => {
-    const cap = caps[f.id];
     const scenariosRequiring = matrixData.scenarios.filter((s) =>
       (s.requires || []).includes(f.id),
     );
-    const coveringScenarios = scenariosRequiring.filter(
-      (s) => (cells[s.name] || {}).state === "covered",
-    );
     return {
       feature: f,
-      cap,
+      cap: caps[f.id],
       scenariosRequiring,
-      coveringScenarios,
-      coverageCount: coveringScenarios.length,
+      coverageCount: scenariosRequiring.filter(
+        (s) => (cells[s.name] || {}).state === "covered",
+      ).length,
     };
   });
 
   const stats = {
-    capTrue: rows.filter((r) => r.cap === true).length,
-    capFalse: rows.filter((r) => r.cap === false).length,
-    capUnknown: rows.filter((r) => r.cap === "unknown").length,
-    capMissing: rows.filter((r) => r.cap === undefined).length,
-    coveredAtLeastOnce: rows.filter((r) => r.coverageCount > 0).length,
-    coveredMultiple: rows.filter((r) => r.coverageCount > 1).length,
-    declaredButUntested: rows.filter((r) => r.cap === true && r.coverageCount === 0).length,
+    capTrue: 0, capFalse: 0, capUnknownOrMissing: 0,
+    coveredAtLeastOnce: 0, coveredMultiple: 0, declaredButUntested: 0,
   };
+  for (const r of rows) {
+    if (r.cap === true) stats.capTrue++;
+    else if (r.cap === false) stats.capFalse++;
+    else stats.capUnknownOrMissing++;
+    if (r.coverageCount >= 1) stats.coveredAtLeastOnce++;
+    if (r.coverageCount >= 2) stats.coveredMultiple++;
+    if (r.cap === true && r.coverageCount === 0) stats.declaredButUntested++;
+  }
+
+  // Group rows by category, in declared category order; "Uncategorised" last.
+  const categoryOrder = (matrixData.categories || []).map((c) => c.id);
+  const categoryTitle = Object.fromEntries((matrixData.categories || []).map((c) => [c.id, c.title]));
+  const groups = new Map();
+  for (const id of categoryOrder) groups.set(id, []);
+  for (const r of rows) {
+    const key = r.feature.category || "_uncategorised";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+
+  const groupHTML = [...groups.entries()]
+    .filter(([, list]) => list.length > 0)
+    .map(([id, list]) => `
+      <tbody>
+        <tr class="cat-head"><td colspan="4">${escapeHtml(categoryTitle[id] || "Uncategorised")} <span class="cat-count">${list.length} feature${list.length === 1 ? "" : "s"}</span></td></tr>
+        ${list.map((r) => renderFeatureRow(adapter, r)).join("")}
+      </tbody>
+    `).join("");
 
   body.innerHTML = `
     <h2>${escapeHtml(adapter)} <span style="color:var(--text-dim);font-weight:400">— feature coverage</span></h2>
@@ -159,7 +179,7 @@ function openFeatures(adapter) {
       <span class="stat"><strong>${stats.coveredAtLeastOnce}</strong>/${matrixData.features.length} features covered ≥ 1×</span>
       <span class="stat"><strong>${stats.coveredMultiple}</strong> covered multiple times</span>
       <span class="stat"><strong>${stats.declaredButUntested}</strong> declared but untested</span>
-      <span class="stat"><strong>${stats.capTrue}</strong> capable · <strong>${stats.capUnknown + stats.capMissing}</strong> unknown · <strong>${stats.capFalse}</strong> not capable</span>
+      <span class="stat"><strong>${stats.capTrue}</strong> capable · <strong>${stats.capUnknownOrMissing}</strong> unknown · <strong>${stats.capFalse}</strong> not capable</span>
     </div>
     <table class="features">
       <thead><tr>
@@ -168,12 +188,9 @@ function openFeatures(adapter) {
         <th>Scenarios testing it</th>
         <th>Times covered</th>
       </tr></thead>
-      <tbody>
-        ${rows.map((r) => renderFeatureRow(adapter, r)).join("")}
-      </tbody>
+      ${groupHTML}
     </table>
   `;
-  // Wire scenario links → drilldown modal (replaces features modal).
   body.querySelectorAll("[data-scenario]").forEach((el) => {
     el.addEventListener("click", () => {
       closeModal("features");

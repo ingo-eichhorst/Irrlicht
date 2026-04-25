@@ -126,15 +126,23 @@ type scenarioMeta struct {
 
 type featureMeta struct {
 	ID          string `json:"id"`
+	Title       string `json:"title,omitempty"`
+	Category    string `json:"category,omitempty"`
 	Description string `json:"description"`
 }
 
+type categoryMeta struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
 type matrixResp struct {
-	Adapters     []string                      `json:"adapters"`
-	Scenarios    []scenarioMeta                `json:"scenarios"`
-	Cells        map[string]map[string]cell    `json:"cells"`        // adapter → scenario → cell
-	Features     []featureMeta                 `json:"features"`
-	Capabilities map[string]map[string]any     `json:"capabilities"` // adapter → feature → true|false|"unknown"
+	Adapters     []string                   `json:"adapters"`
+	Scenarios    []scenarioMeta             `json:"scenarios"`
+	Cells        map[string]map[string]cell `json:"cells"` // adapter → scenario → cell
+	Features     []featureMeta              `json:"features"`
+	Categories   []categoryMeta             `json:"categories,omitempty"`
+	Capabilities map[string]map[string]any  `json:"capabilities"` // adapter → feature → true|false|"unknown"
 }
 
 func handleMatrix(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +155,7 @@ func handleMatrix(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildMatrix() (*matrixResp, error) {
-	features, err := loadFeatures()
+	features, categories, err := loadFeatures()
 	if err != nil {
 		return nil, fmt.Errorf("features: %w", err)
 	}
@@ -186,6 +194,7 @@ func buildMatrix() (*matrixResp, error) {
 		Scenarios:    metas,
 		Cells:        cells,
 		Features:     features,
+		Categories:   categories,
 		Capabilities: caps,
 	}, nil
 }
@@ -546,18 +555,19 @@ func discoverAdapters() ([]string, error) {
 
 // ---------- file loaders ----------
 
-func loadFeatures() ([]featureMeta, error) {
+func loadFeatures() ([]featureMeta, []categoryMeta, error) {
 	b, err := os.ReadFile(filepath.Join(*rootDir, featuresJSON))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var doc struct {
-		Features []featureMeta `json:"features"`
+		Features   []featureMeta  `json:"features"`
+		Categories []categoryMeta `json:"categories"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return doc.Features, nil
+	return doc.Features, doc.Categories, nil
 }
 
 type byAdapterEntry struct {
