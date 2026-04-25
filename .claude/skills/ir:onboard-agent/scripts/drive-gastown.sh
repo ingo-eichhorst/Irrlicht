@@ -68,11 +68,8 @@ COMMITTED_DIR="$REPO_ROOT/$FIXTURE_REL"
 # --- Staging --------------------------------------------------------------
 TS="$(date -u +%Y%m%dT%H%M%S)"
 STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$SCENARIO-$TS"
-# Same safety guard as run-cell.sh: never write outside .build/refresh/.
-if [[ "$STAGING" != "$REPO_ROOT/.build/refresh/"* ]] || [[ "$STAGING" == *"/testdata/"* ]]; then
-  echo "refusing to stage outside .build/refresh/: $STAGING" >&2
-  exit 1
-fi
+# shellcheck source=lib/assert-staging-path.sh
+. "$SCRIPT_DIR/lib/assert-staging-path.sh"
 mkdir -p "$STAGING/fixtures"
 cp -R "$COMMITTED_DIR" "$STAGING/fixtures/$SCENARIO"
 

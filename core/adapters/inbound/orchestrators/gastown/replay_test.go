@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -95,10 +94,9 @@ func runScenario(t *testing.T, scenarioDir string) {
 	copyFile(t, filepath.Join(scenarioDir, "input/daemon/state.json"),
 		filepath.Join(gtRoot, "daemon/state.json"))
 
-	// Per-tick counter file. The fake gt reads this to dispatch responses.
-	tickWorkdir := t.TempDir()
-	tickFile := filepath.Join(tickWorkdir, "tick")
-	writeTick(t, tickFile, 1)
+	// Per-tick counter file. The fake gt reads this to dispatch responses;
+	// the loop below writes the value before each BuildOrchestratorState call.
+	tickFile := filepath.Join(t.TempDir(), "tick")
 
 	ticksDir := filepath.Join(scenarioDir, "input/ticks")
 	fakeGT := writeFakeGT(t, ticksDir, tickFile)
@@ -162,8 +160,9 @@ func runScenario(t *testing.T, scenarioDir string) {
 }
 
 // normalizeState produces a deterministic snapshot suitable for golden
-// comparison: zero out UpdatedAt, replace tmp paths with <GT_ROOT>, and
-// sort slices that the poller already orders (defensive).
+// comparison: zero out UpdatedAt, replace tmp paths with <GT_ROOT>. Slice
+// ordering is left to the poller; if the poller's ordering contract
+// changes, the goldens should fail loudly rather than be re-sorted here.
 func normalizeState(s *orchestrator.State, gtRoot string) orchestrator.State {
 	if s == nil {
 		return orchestrator.State{}
@@ -184,9 +183,6 @@ func normalizeState(s *orchestrator.State, gtRoot string) orchestrator.State {
 		codebases[i] = cb
 	}
 	cp.Codebases = codebases
-	sort.Slice(cp.Codebases, func(i, j int) bool {
-		return cp.Codebases[i].Name < cp.Codebases[j].Name
-	})
 	return cp
 }
 
