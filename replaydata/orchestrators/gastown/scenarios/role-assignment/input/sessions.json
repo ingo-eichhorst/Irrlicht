@@ -1,0 +1,4 @@
+[
+  {"session_id": "sess-witness-001", "state": "working", "cwd": "<GT_ROOT>/irrlicht/witness"},
+  {"session_id": "sess-refinery-001", "state": "ready", "cwd": "<GT_ROOT>/irrlicht/refinery"}
+]

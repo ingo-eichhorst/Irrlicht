@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # curate-lifecycle-fixture.sh — copy a raw lifecycle recording + its
-# transcript + any subagent transcripts into testdata/replay/<adapter>/
-# as a committable fixture bundle.
+# transcript + any subagent transcripts into
+# replaydata/agents/<adapter>/scenarios/<scenario>/ as a committable
+# per-scenario fixture bundle.
 #
 # Filters the recording down to events for the named session and all
 # of its file-based subagents (anything with parent_linked pointing at
@@ -11,12 +12,12 @@
 # full parent-with-subagents lifecycle.
 #
 # Usage:
-#   scripts/curate-lifecycle-fixture.sh [-d <testdata-root>] \
-#     <recording.jsonl> <session-id> <transcript.jsonl> <adapter> <fixture-name>
+#   scripts/curate-lifecycle-fixture.sh [-d <agents-root>] \
+#     <recording.jsonl> <session-id> <transcript.jsonl> <adapter> <scenario>
 #
-# -d <testdata-root> overrides the default ($REPO_ROOT/testdata/replay).
+# -d <agents-root> overrides the default ($REPO_ROOT/replaydata/agents).
 # Used by the ir:onboard-agent skill to stage fixtures under .build/refresh/
-# before a human reviews and copies them into the real testdata/ tree.
+# before a human reviews and copies them into the real replaydata/ tree.
 #
 # Example:
 #   scripts/curate-lifecycle-fixture.sh \
@@ -27,24 +28,24 @@
 #     11-background-agents-b27fdaef
 #
 # Writes:
-#   <testdata-root>/<adapter>/<fixture-name>.jsonl
+#   <agents-root>/<adapter>/scenarios/<scenario>/transcript.jsonl
 #       — parent transcript (unchanged)
-#   <testdata-root>/<adapter>/<fixture-name>.events.jsonl
+#   <agents-root>/<adapter>/scenarios/<scenario>/events.jsonl
 #       — lifecycle events for the parent AND every detected subagent,
 #         sorted by seq
-#   <testdata-root>/<adapter>/<fixture-name>.subagents/agent-*.jsonl
+#   <agents-root>/<adapter>/scenarios/<scenario>/subagents/agent-*.jsonl
 #       — each subagent transcript found under <parent>/subagents/
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TESTDATA_ROOT="$REPO_ROOT/testdata/replay"
+AGENTS_ROOT="$REPO_ROOT/replaydata/agents"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d)
-      [[ $# -ge 2 ]] || { echo "-d requires a <testdata-root> argument" >&2; exit 2; }
-      TESTDATA_ROOT="$2"
+      [[ $# -ge 2 ]] || { echo "-d requires an <agents-root> argument" >&2; exit 2; }
+      AGENTS_ROOT="$2"
       shift 2
       ;;
     --)
@@ -74,10 +75,10 @@ RECORDING="$1"
 SESSION_ID="$2"
 TRANSCRIPT="$3"
 ADAPTER="$4"
-FIXTURE_NAME="$5"
+SCENARIO="$5"
 
-FIXTURES_DIR="$TESTDATA_ROOT/$ADAPTER"
-mkdir -p "$FIXTURES_DIR"
+SCENARIO_DIR="$AGENTS_ROOT/$ADAPTER/scenarios/$SCENARIO"
+mkdir -p "$SCENARIO_DIR"
 
 if [[ ! -f "$RECORDING" ]]; then
   echo "recording not found: $RECORDING" >&2
@@ -88,9 +89,9 @@ if [[ ! -f "$TRANSCRIPT" ]]; then
   exit 1
 fi
 
-OUT_TRANSCRIPT="$FIXTURES_DIR/${FIXTURE_NAME}.jsonl"
-OUT_EVENTS="$FIXTURES_DIR/${FIXTURE_NAME}.events.jsonl"
-OUT_SUBAGENTS_DIR="$FIXTURES_DIR/${FIXTURE_NAME}.subagents"
+OUT_TRANSCRIPT="$SCENARIO_DIR/transcript.jsonl"
+OUT_EVENTS="$SCENARIO_DIR/events.jsonl"
+OUT_SUBAGENTS_DIR="$SCENARIO_DIR/subagents"
 
 # Discover child session IDs by scanning parent_linked events in the
 # recording. Each such event carries (session_id=child, parent_session_id=parent).

@@ -1259,8 +1259,8 @@ func TestParser_TaskNotification_EmitsSubagentCompletion(t *testing.T) {
 // test: the fixture from issue #134 must produce a SubagentCompletion in
 // SessionMetrics.SubagentCompletions after a single TailAndProcess pass.
 func TestTailer_TaskNotification_SurfacedThroughMetrics(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "..", "..", "testdata", "replay", "claudecode",
-		"13-full-lifecycle-continue-8a525d27.jsonl")
+	path := filepath.Join("..", "..", "..", "..", "..", "replaydata", "agents", "claudecode",
+		"scenarios", "13-full-lifecycle-continue-8a525d27", "transcript.jsonl")
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("fixture not present at %s: %v", path, err)
 	}

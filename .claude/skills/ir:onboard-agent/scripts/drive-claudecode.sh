@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # drive-claudecode.sh — run one scenario against the claude CLI headlessly.
 #
-# Writes driver.log (stdout+stderr) and exit-code/session-uuid into the
-# staging dir. The caller (run-cell.sh) handles daemon lifecycle, curation,
-# and report generation.
+# Writes driver.log (stdout+stderr), driver.exit-reason, transcript.path,
+# and session.uuid into the staging dir. The caller (run-cell.sh) handles
+# daemon lifecycle, curation, and report generation.
+#
+# Contract files written to <staging-dir>:
+#   driver.log[.stdout|.stderr]  — captured CLI output
+#   driver.exit-reason           — ok|timeout|killed|nonzero(N)
+#   transcript.path              — absolute path to the resolved transcript
+#   session.uuid                 — actual session UUID (== arg $2 for claude)
 #
 # Usage:
 #   drive-claudecode.sh <staging-dir> <session-uuid> \
@@ -64,6 +70,27 @@ case "$EXIT_CODE" in
 esac
 
 echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
-echo "drive-claudecode: $EXIT_REASON (uuid=$UUID, log=$DRIVER_LOG)"
+
+# Resolve the transcript path. Claude Code writes transcripts to
+# ~/.claude/projects/<slug>/<UUID>.jsonl. Stat the expected path under
+# each slug dir (O(#projects)) rather than walking the whole tree with
+# `find`. Poll up to 30s — claude may still be flushing after exit.
+TRANSCRIPT=""
+for _ in $(seq 1 60); do
+  for slug_dir in "$HOME"/.claude/projects/*/; do
+    candidate="$slug_dir$UUID.jsonl"
+    if [[ -f "$candidate" ]]; then
+      TRANSCRIPT="$candidate"
+      break 2
+    fi
+  done
+  sleep 0.5
+done
+
+# Always write session.uuid; transcript.path is empty if resolution failed.
+echo "$UUID" > "$STAGING/session.uuid"
+echo "${TRANSCRIPT:-}" > "$STAGING/transcript.path"
+
+echo "drive-claudecode: $EXIT_REASON (uuid=$UUID, transcript=${TRANSCRIPT:-<unresolved>}, log=$DRIVER_LOG)"
 
 exit "$EXIT_CODE"

@@ -28,35 +28,39 @@ type ParserFactory func() tailer.TranscriptParser
 // transcript's metrics, provides a non-nil counter.
 type SubagentCounter func(m *tailer.SessionMetrics) int
 
-// Capability describes a behavior an adapter (and its upstream agent) supports.
-// The ir:onboard-agent skill uses capability lists to decide which canonical
-// scenarios apply to which adapters — an adapter that does not declare
-// CapSubagents is excluded from any scenario whose Requires list contains it.
-type Capability string
-
-const (
-	// CapHeadlessMode — the agent CLI supports a non-interactive prompt→exit
-	// mode suitable for scripted driving (claude --print, codex exec, pi --print).
-	CapHeadlessMode Capability = "headless_mode"
-	// CapToolCalls — the agent can invoke tools mid-session.
-	CapToolCalls Capability = "tool_calls"
-	// CapPermissionHooks — the adapter wires permission-pending state via
-	// agent-emitted hooks (Claude Code's PermissionRequest / PostToolUse*).
-	CapPermissionHooks Capability = "permission_hooks"
-	// CapSubagents — the agent can spawn child agents that appear as separate
-	// tracked sessions with a ParentSessionID link.
-	CapSubagents Capability = "subagents"
-)
-
 // Config is the registration record each inbound agent adapter exports.
+//
+// Per-adapter capability declarations live in
+// replaydata/agents/<name>/capabilities.json (keyed against
+// replaydata/agents/features.json). They are not Go data anymore — the
+// ir:onboard-agent skill reads the JSON to compute scenario × adapter
+// applicability.
 type Config struct {
 	Name               string        // adapter label on events, e.g. "claude-code"
-	ProcessName        string        // OS-level executable name for pgrep, e.g. "claude"
+	ProcessName        string        // OS-level executable name for pgrep -x, e.g. "claude"
 	RootDir            string        // transcript root relative to $HOME, e.g. ".claude/projects"
 	NewParser          ParserFactory // fresh-per-call factory; parsers are stateful
 	DiscoverPID        agent.PIDDiscoverFunc
 	CountOpenSubagents SubagentCounter // optional; nil = always zero
-	Capabilities       []Capability    // consumed by the onboarding-scenario matrix
+
+	// CommandLineMatch is an optional regex pattern fed to `pgrep -f` instead
+	// of `pgrep -x ProcessName`. Use this for agents whose process name on
+	// disk doesn't match their CLI name — e.g. Python tools where the OS
+	// process is `python` and the agent script is in argv[1]. A pattern like
+	// "/aider($| )" matches the binary path while excluding wrapper scripts
+	// (tmux, sh) that mention the agent name in their own argv. Leave empty
+	// for exact-match agents (claude, codex, pi).
+	CommandLineMatch string
+
+	// TranscriptFilename is an optional fixed filename the scanner looks for
+	// in each detected process's CWD (e.g. ".aider.chat.history.md"). When
+	// set, the scanner emits a per-PID transcript_new event with the real
+	// path on the first poll where the file exists in CWD. Use this for
+	// agents that write transcripts per-project (in CWD) rather than under
+	// a fixed RootDir under $HOME — the fswatcher's "watch one fixed root"
+	// model doesn't fit them. Leave empty for fswatcher-friendly agents
+	// (claude-code, codex, pi).
+	TranscriptFilename string
 }
 
 // ParserMap collapses a slice of Configs into a name → factory map. Callers

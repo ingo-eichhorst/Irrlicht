@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/fswatcher"
@@ -148,6 +149,7 @@ func main() {
 		claudecode.Config(),
 		codex.Config(),
 		pi.Config(),
+		aider.Config(),
 	}
 
 	// Shared adapters for SessionDetector.
@@ -311,6 +313,12 @@ func main() {
 		watcherRoots = append(watcherRoots, fmt.Sprintf("%s (%s)", c.Name, w.Root()))
 
 		scanner := processlifecycle.NewScanner(c.ProcessName, c.Name, 0)
+		if c.CommandLineMatch != "" {
+			scanner.WithCommandLineMatch(c.CommandLineMatch)
+		}
+		if c.TranscriptFilename != "" {
+			scanner.WithTranscriptFilename(c.TranscriptFilename)
+		}
 		scanner.WithSessionChecker(realSessionCheck)
 		watchers = append(watchers, scanner)
 	}

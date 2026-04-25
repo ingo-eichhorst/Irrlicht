@@ -16,8 +16,14 @@ const (
 	KindTranscriptRemoved  Kind = "transcript_removed"
 
 	// Process lifecycle events.
-	KindPIDDiscovered Kind = "pid_discovered"
-	KindProcessExited Kind = "process_exited"
+	KindPIDDiscovered  Kind = "pid_discovered"
+	KindProcessSpawned Kind = "process_spawned"
+	KindProcessExited  Kind = "process_exited"
+
+	// File-system events on the agent's working directory. Debounced.
+	// Reserved by .specs/onboard-agent/07-10-recorder-fidelity.md (WS08);
+	// emission is wired by a follow-up PR.
+	KindFileEvent Kind = "file_event"
 
 	// State machine transitions (output of ClassifyState).
 	KindStateTransition Kind = "state_transition"
@@ -72,4 +78,8 @@ type Event struct {
 	// Hooks (future: issue #108).
 	HookName string `json:"hook_name,omitempty"`
 	HookData string `json:"hook_data,omitempty"`
+
+	// File-system events (KindFileEvent). Reserved by WS08 — emission pending.
+	Path   string `json:"path,omitempty"`
+	FileOp string `json:"file_op,omitempty"` // create | write | remove | rename
 }

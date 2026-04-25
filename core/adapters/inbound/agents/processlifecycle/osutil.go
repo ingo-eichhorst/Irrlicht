@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -19,9 +20,39 @@ import (
 // findProcesses returns PIDs of processes whose name exactly matches name
 // (uses pgrep -x for exact binary name match).
 func findProcesses(name string) ([]int, error) {
+	return runPgrep("-x", name)
+}
+
+// findProcessesByCmdLine returns PIDs of processes whose full command line
+// matches the regex pattern (uses pgrep -f). Used for agents whose process
+// name on disk doesn't match their CLI name — e.g. Python tools launched
+// via a wrapper, where the OS process is `python` and the agent script is
+// in argv[1]. The pattern is interpreted by pgrep, which uses extended
+// regex on macOS / basic regex on Linux.
+func findProcessesByCmdLine(pattern string) ([]int, error) {
+	// Exclude our own pgrep call from matching itself when the pattern
+	// happens to be a substring of pgrep's argv. Filter the result.
+	ownPID := strconv.Itoa(os.Getpid())
+	pids, err := runPgrep("-f", pattern)
+	if err != nil {
+		return nil, err
+	}
+	out := pids[:0]
+	for _, p := range pids {
+		if strconv.Itoa(p) == ownPID {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// runPgrep invokes pgrep with the given flag and pattern, parses the PIDs
+// from stdout, and returns nil for the no-match (exit 1) case.
+func runPgrep(flag, pattern string) ([]int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "pgrep", "-x", name).Output()
+	out, err := exec.CommandContext(ctx, "pgrep", flag, pattern).Output()
 	if err != nil {
 		// pgrep exits 1 when there are no matches — not an error.
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {

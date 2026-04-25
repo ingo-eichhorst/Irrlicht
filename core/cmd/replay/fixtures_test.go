@@ -12,11 +12,17 @@ import (
 )
 
 // TestFixtureReplayByteIdentity pins the JSON output of every
-// testdata/replay/**/*.jsonl fixture to a committed golden. Refresh with:
+// replaydata/agents/**/*.jsonl fixture to a committed golden. Refresh with:
 //
 //	UPDATE_REPLAY_GOLDENS=1 go test ./core/cmd/replay/...
 func TestFixtureReplayByteIdentity(t *testing.T) {
-	fixturesDir := fixturePath(t, ".")
+	// Walk the agents tree from its repo-root anchor. We cannot reuse
+	// fixturePath here because that helper inserts a "scenarios/" segment
+	// for "<adapter>/..." inputs; here we want the bare adapters root.
+	fixturesDir, err := filepath.Abs(filepath.Join("..", "..", "..", "replaydata", "agents"))
+	if err != nil {
+		t.Fatalf("abs fixtures dir: %v", err)
+	}
 	fixtures := discoverReplayFixtures(t, fixturesDir)
 	if len(fixtures) == 0 {
 		t.Fatalf("no .jsonl fixtures discovered under %s", fixturesDir)
@@ -60,7 +66,14 @@ func discoverReplayFixtures(t *testing.T, root string) []string {
 		if d.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(path, ".jsonl") || strings.HasSuffix(path, ".events.jsonl") {
+		if !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		// Skip lifecycle-event sidecars: legacy <scenario>.events.jsonl naming
+		// AND the post-WS02 per-scenario-folder naming where the basename is
+		// exactly "events.jsonl".
+		base := filepath.Base(path)
+		if base == "events.jsonl" || strings.HasSuffix(path, ".events.jsonl") {
 			return nil
 		}
 		out = append(out, path)

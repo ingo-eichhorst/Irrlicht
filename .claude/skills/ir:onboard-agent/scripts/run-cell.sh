@@ -6,7 +6,7 @@
 #                →  drive-<adapter>.sh (runs the agent under timeout)
 #                →  SIGINT → 6s grace → SIGTERM → SIGKILL the daemon
 #                →  resolve transcript path from session UUID
-#                →  scripts/curate-lifecycle-fixture.sh -d <staging>/testdata
+#                →  scripts/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents
 #                →  replay against staged + committed fixtures
 #                →  write run-manifest.json
 #
@@ -18,7 +18,7 @@
 #
 # Outputs under ./.build/refresh/<adapter>/<scenario>-<UTC-ts>/:
 #   recordings/            — isolated daemon recording (raw)
-#   testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}  — staged fixture
+#   replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl  — staged fixture
 #   reports/staged.json    — replay report over staged fixture
 #   reports/committed.json — replay report over committed fixture (if any)
 #   driver.log, driver.exit-reason, daemon.log
@@ -69,14 +69,9 @@ PROMPT="$(jq -r '.prompt' <<<"$CELL_JSON")"
 # --- Staging -------------------------------------------------------------
 TS="$(date -u +%Y%m%dT%H%M%S)"
 STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$SCENARIO-$TS"
-# Hard safety: staging must live under .build/refresh/. Guards against
-# ADAPTER/SCENARIO arguments containing path traversal ("..") that
-# survived the jq lookup; cheap string test.
-if [[ "$STAGING" != "$REPO_ROOT/.build/refresh/"* ]] || [[ "$STAGING" == *"/testdata/"* ]]; then
-  echo "refusing to stage outside .build/refresh/: $STAGING" >&2
-  exit 1
-fi
-mkdir -p "$STAGING/recordings" "$STAGING/testdata/replay/$ADAPTER" "$STAGING/reports"
+# shellcheck source=lib/assert-staging-path.sh
+. "$SCRIPT_DIR/lib/assert-staging-path.sh"
+mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO" "$STAGING/reports"
 
 # Scenario's settings blob → staging file, passed to driver as a path.
 # This avoids --settings <json-blob> shell-quoting fragility.
@@ -132,6 +127,10 @@ done
 [[ -S "$SOCK" ]] || { echo "daemon socket never appeared: $SOCK" >&2; exit 1; }
 
 # --- Drive the agent ----------------------------------------------------
+# Drivers are responsible for resolving the transcript path and writing
+# session.uuid + transcript.path back to staging. UUID arg $2 is a
+# "preferred" UUID — drive-claudecode.sh honors it via --session-id;
+# codex/pi drivers ignore it and surface the agent-assigned UUID.
 DRIVER="$SCRIPT_DIR/drive-$ADAPTER.sh"
 [[ -x "$DRIVER" ]] || { echo "driver missing: $DRIVER" >&2; exit 1; }
 set +e
@@ -143,21 +142,9 @@ DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown"
 cleanup
 trap - EXIT
 
-# --- Resolve the transcript path ----------------------------------------
-# Claude Code writes transcripts to ~/.claude/projects/<slug>/<UUID>.jsonl.
-# Stat the expected path under each slug dir (O(#projects)) rather than
-# walking the whole tree with `find`. Poll up to 30s.
-TRANSCRIPT=""
-for _ in $(seq 1 60); do
-  for slug_dir in "$HOME"/.claude/projects/*/; do
-    candidate="$slug_dir$UUID.jsonl"
-    if [[ -f "$candidate" ]]; then
-      TRANSCRIPT="$candidate"
-      break 2
-    fi
-  done
-  sleep 0.5
-done
+# --- Read driver-resolved transcript + actual UUID ----------------------
+TRANSCRIPT="$(cat "$STAGING/transcript.path" 2>/dev/null || true)"
+ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
 
 # --- Locate the recording file ------------------------------------------
 RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
@@ -165,39 +152,89 @@ RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/d
 MANIFEST="$STAGING/run-manifest.json"
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo "unknown")"
 
-if [[ -z "$TRANSCRIPT" || -z "$RECORDING" ]]; then
+# Write an ERROR-verdict run-manifest with the standard envelope plus
+# error-specific fields supplied as a JSON object (pass '{}' for none).
+write_error_manifest() {
+  local error_code="$1"
+  local extras_json="$2"
   jq -n \
     --arg adapter "$ADAPTER" \
     --arg scenario "$SCENARIO" \
-    --arg session_uuid "$UUID" \
-    --argjson transcript_found "$([[ -n "$TRANSCRIPT" ]] && echo true || echo false)" \
-    --argjson recording_found "$([[ -n "$RECORDING" ]] && echo true || echo false)" \
+    --arg session_uuid "$ACTUAL_UUID" \
+    --arg error "$error_code" \
     --arg driver_exit_reason "$DRIVER_REASON" \
     --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
     --arg staging "$STAGING" \
+    --argjson extras "$extras_json" \
     '{adapter: $adapter,
       scenario: $scenario,
       session_uuid: $session_uuid,
       verdict: "ERROR",
-      error: "transcript_or_recording_missing",
-      transcript_found: $transcript_found,
-      recording_found: $recording_found,
+      error: $error,
       driver_exit_reason: $driver_exit_reason,
       daemon_shutdown: $daemon_shutdown,
-      staging: $staging}' \
+      staging: $staging} + $extras' \
     > "$MANIFEST"
-  echo "ERROR: transcript=${TRANSCRIPT:-missing} recording=${RECORDING:-missing}" >&2
+}
+
+if [[ -z "$TRANSCRIPT" || -z "$RECORDING" || -z "$ACTUAL_UUID" ]]; then
+  write_error_manifest "transcript_recording_or_uuid_missing" \
+    "$(jq -nc \
+        --argjson transcript_found "$([[ -n "$TRANSCRIPT" ]] && echo true || echo false)" \
+        --argjson recording_found "$([[ -n "$RECORDING" ]] && echo true || echo false)" \
+        --argjson uuid_resolved "$([[ -n "$ACTUAL_UUID" ]] && echo true || echo false)" \
+        '{transcript_found: $transcript_found, recording_found: $recording_found, uuid_resolved: $uuid_resolved}')"
+  echo "ERROR: transcript=${TRANSCRIPT:-missing} recording=${RECORDING:-missing} uuid=${ACTUAL_UUID:-missing}" >&2
   exit 1
 fi
 
-# --- Curate the staged fixture ------------------------------------------
-# The committed-to-testdata location of the curated artifacts is:
-#   <staging>/testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}
-"$REPO_ROOT/scripts/curate-lifecycle-fixture.sh" \
-  -d "$STAGING/testdata/replay" \
-  "$RECORDING" "$UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
+# --- Subagent probe -----------------------------------------------------
+# If the scenario requires the `subagents` capability, the run is only
+# meaningful if the parent actually emitted Agent tool calls and the daemon
+# saw the resulting parent_linked events. Fail cleanly here so the manifest
+# carries a structured reason instead of producing an empty .subagents/ dir
+# downstream.
+# "subagents" matches agents.CapSubagents in core/adapters/inbound/agents/config.go.
+REQUIRES_SUBAGENTS="$(jq -r '.requires | index("subagents") // empty' <<<"$CELL_JSON")"
+if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
+  PARENT_LINKED_COUNT="$(jq -c --arg sid "$ACTUAL_UUID" \
+    'select(.kind=="parent_linked" and .parent_session_id==$sid)' \
+    "$RECORDING" | wc -l | tr -d ' ')"
+  SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$ACTUAL_UUID/subagents"
+  count_subagent_files() {
+    find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' '
+  }
+  SUBAGENT_FILES="$(count_subagent_files)"
+  # If the daemon saw parent_linked events but the child transcripts
+  # haven't been flushed to disk yet (race against the parent transcript's
+  # appearance), poll briefly. We only poll when we already know children
+  # exist — otherwise there's nothing to wait for.
+  if [[ "$PARENT_LINKED_COUNT" -gt 0 && "$SUBAGENT_FILES" -eq 0 ]]; then
+    for _ in $(seq 1 20); do
+      sleep 0.5
+      SUBAGENT_FILES="$(count_subagent_files)"
+      [[ "$SUBAGENT_FILES" -gt 0 ]] && break
+    done
+  fi
+  if [[ "$PARENT_LINKED_COUNT" -eq 0 || "$SUBAGENT_FILES" -eq 0 ]]; then
+    write_error_manifest "no_subagents_spawned" \
+      "$(jq -nc \
+          --argjson parent_linked_count "$PARENT_LINKED_COUNT" \
+          --argjson subagent_transcript_count "$SUBAGENT_FILES" \
+          '{parent_linked_count: $parent_linked_count, subagent_transcript_count: $subagent_transcript_count}')"
+    echo "ERROR: scenario requires subagents but none spawned (parent_linked=$PARENT_LINKED_COUNT, files=$SUBAGENT_FILES)" >&2
+    exit 1
+  fi
+fi
 
-STAGED_TRANSCRIPT="$STAGING/testdata/replay/$ADAPTER/$SCENARIO.jsonl"
+# --- Curate the staged fixture ------------------------------------------
+# The committed-to-replaydata location of the curated artifacts is:
+#   <staging>/replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl
+"$REPO_ROOT/scripts/curate-lifecycle-fixture.sh" \
+  -d "$STAGING/replaydata/agents" \
+  "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
+
+STAGED_TRANSCRIPT="$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.jsonl"
 
 # --- Build replay reports -----------------------------------------------
 # precheck.sh pre-built the replay binary under .build/refresh/bin/replay
@@ -214,7 +251,7 @@ replay_one() {
 
 replay_one "$STAGED_TRANSCRIPT" "$STAGING/reports/staged.json" || exit 1
 
-COMMITTED_TRANSCRIPT="$REPO_ROOT/testdata/replay/$ADAPTER/$SCENARIO.jsonl"
+COMMITTED_TRANSCRIPT="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.jsonl"
 if [[ -f "$COMMITTED_TRANSCRIPT" ]]; then
   replay_one "$COMMITTED_TRANSCRIPT" "$STAGING/reports/committed.json" || exit 1
   COMMITTED_PRESENT=true
@@ -226,12 +263,12 @@ fi
 jq -n \
   --arg adapter "$ADAPTER" \
   --arg scenario "$SCENARIO" \
-  --arg session_uuid "$UUID" \
+  --arg session_uuid "$ACTUAL_UUID" \
   --arg staging "$STAGING" \
   --arg raw_recording "$RECORDING" \
   --arg source_transcript "$TRANSCRIPT" \
   --arg staged_fixture_transcript "$STAGED_TRANSCRIPT" \
-  --arg staged_fixture_events "$STAGING/testdata/replay/$ADAPTER/$SCENARIO.events.jsonl" \
+  --arg staged_fixture_events "$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/events.jsonl" \
   --arg staged_report "$STAGING/reports/staged.json" \
   --argjson committed_fixture_present "$COMMITTED_PRESENT" \
   --arg committed_report "$STAGING/reports/committed.json" \

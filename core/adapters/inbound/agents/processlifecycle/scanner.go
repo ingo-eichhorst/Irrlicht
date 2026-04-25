@@ -3,6 +3,7 @@ package processlifecycle
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,18 +24,23 @@ const stableThreshold = 5
 
 // trackedProc holds the pre-session metadata for a running process.
 type trackedProc struct {
-	sessionID  string
-	projectDir string
-	superseded bool // real transcript exists; keep tracking to prevent re-creation
+	sessionID         string
+	projectDir        string
+	superseded        bool   // real transcript exists; keep tracking to prevent re-creation
+	cwd               string // captured at first sight; needed for TranscriptFilename probe
+	transcriptEmitted bool   // dedupe per-PID transcript_new emissions for CWD-resident transcripts
+	transcriptSize    int64  // last-seen size of the CWD-resident transcript; drives EventActivity emission
 }
 
 // Scanner polls for agent processes and emits synthetic EventNewSession /
 // EventRemoved events so the session can be shown before the first message.
 // It implements inbound.AgentWatcher.
 type Scanner struct {
-	processName string // exact process name matched by pgrep -x
-	adapter     string // adapter label placed on emitted events
-	interval    time.Duration
+	processName        string // exact process name matched by pgrep -x
+	commandLineMatch   string // if non-empty, used with pgrep -f instead of -x ProcessName
+	transcriptFilename string // if non-empty, scanner checks <CWD>/<filename> for the real transcript
+	adapter            string // adapter label placed on emitted events
+	interval           time.Duration
 
 	// sessionChecker is an optional function that reports whether a real
 	// (non-proc) session for the given projectDir and PID already exists.
@@ -54,6 +60,10 @@ type Scanner struct {
 //   - processName: exact binary name, e.g. "claude"
 //   - adapter:     adapter label, e.g. "claude-code"
 //   - interval:    how often to poll; pass 0 to use defaultInterval
+//
+// For agents whose process name on disk differs from their CLI name (e.g.
+// Python tools launched via a wrapper), use WithCommandLineMatch to switch
+// to a pgrep -f pattern.
 func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 	if interval <= 0 {
 		interval = defaultInterval
@@ -64,6 +74,24 @@ func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 		interval:    interval,
 		tracked:     make(map[int]trackedProc),
 	}
+}
+
+// WithCommandLineMatch switches the scanner from `pgrep -x ProcessName` to
+// `pgrep -f <pattern>`. Use for agents whose actual OS process is a wrapper
+// (e.g. python launching aider). Returns the scanner for chaining.
+func (s *Scanner) WithCommandLineMatch(pattern string) *Scanner {
+	s.commandLineMatch = pattern
+	return s
+}
+
+// WithTranscriptFilename tells the scanner to additionally probe each
+// detected process's CWD for a fixed filename (e.g.
+// ".aider.chat.history.md") and emit an EventNewSession with the real
+// transcript path when the file appears. Use for agents that write
+// transcripts per-project rather than under a fixed RootDir.
+func (s *Scanner) WithTranscriptFilename(name string) *Scanner {
+	s.transcriptFilename = name
+	return s
 }
 
 // WithSessionChecker sets a function that reports whether a real
@@ -175,7 +203,13 @@ func (s *Scanner) Unsubscribe(ch <-chan agent.Event) {
 // for newcomers without transcripts, and removes pre-sessions that have exited
 // or whose real transcript has appeared.
 func (s *Scanner) poll() {
-	pids, err := findProcesses(s.processName)
+	var pids []int
+	var err error
+	if s.commandLineMatch != "" {
+		pids, err = findProcessesByCmdLine(s.commandLineMatch)
+	} else {
+		pids, err = findProcesses(s.processName)
+	}
 	if err != nil {
 		return
 	}
@@ -246,7 +280,7 @@ func (s *Scanner) poll() {
 		// tracking so the next poll retries rather than silently losing the event.
 		s.mu.Lock()
 		if len(s.subs) > 0 {
-			s.tracked[pid] = trackedProc{sessionID: sessionID, projectDir: projectDir}
+			s.tracked[pid] = trackedProc{sessionID: sessionID, projectDir: projectDir, cwd: cwd}
 			for _, ch := range s.subs {
 				select {
 				case ch <- ev:
@@ -255,6 +289,70 @@ func (s *Scanner) poll() {
 			}
 		}
 		s.mu.Unlock()
+	}
+
+	// --- probe for CWD-resident transcripts (per-adapter opt-in) ---
+	// For agents that write transcripts per-project (e.g. aider's
+	// .aider.chat.history.md), check each tracked PID's CWD for the
+	// configured filename:
+	//   - First sight of the file → emit EventNewSession with TranscriptPath
+	//   - Subsequent polls where size grew → emit EventActivity
+	// This bypasses the fswatcher (which only watches one fixed RootDir
+	// under $HOME and filters to .jsonl) so non-JSONL, per-project agents
+	// produce the same lifecycle event stream as fswatcher-friendly ones.
+	if s.transcriptFilename != "" {
+		s.mu.Lock()
+		var emit []agent.Event
+		for pid, proc := range s.tracked {
+			if proc.cwd == "" {
+				continue
+			}
+			path := filepath.Join(proc.cwd, s.transcriptFilename)
+			info, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			size := info.Size()
+			switch {
+			case !proc.transcriptEmitted:
+				// First sight — announce the transcript.
+				emit = append(emit, agent.Event{
+					Type:           agent.EventNewSession,
+					Adapter:        s.adapter,
+					SessionID:      proc.sessionID,
+					ProjectDir:     proc.projectDir,
+					TranscriptPath: path,
+					Size:           size,
+					CWD:            proc.cwd,
+				})
+				proc.transcriptEmitted = true
+				proc.transcriptSize = size
+				s.tracked[pid] = proc
+			case size != proc.transcriptSize:
+				// File grew (or shrank, e.g. on rotation) — emit activity.
+				emit = append(emit, agent.Event{
+					Type:           agent.EventActivity,
+					Adapter:        s.adapter,
+					SessionID:      proc.sessionID,
+					ProjectDir:     proc.projectDir,
+					TranscriptPath: path,
+					Size:           size,
+					CWD:            proc.cwd,
+				})
+				proc.transcriptSize = size
+				s.tracked[pid] = proc
+			}
+		}
+		subs := s.subs
+		s.mu.Unlock()
+		for _, ev := range emit {
+			for _, ch := range subs {
+				select {
+				case ch <- ev:
+				default:
+				}
+			}
+		}
 	}
 
 	// --- handle exited PIDs ---

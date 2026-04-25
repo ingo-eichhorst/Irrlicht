@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "orchestrator": "gastown",
+  "discovered_at": "2026-04-25",
+  "source": "manual_bootstrap",
+  "features": {
+    "multi_codebase_discovery": true,
+    "role_assignment": true,
+    "state_aggregation": true,
+    "polling_lifecycle": true,
+    "transient_global_agents": true,
+    "gt_poller_fallback": true,
+    "sidecar_response_format": true
+  }
+}

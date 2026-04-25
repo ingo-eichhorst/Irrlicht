@@ -21,7 +21,29 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 	if err != nil {
 		return 0, fmt.Errorf("find %s processes: %w", processName, err)
 	}
+	return narrowByCWD(pids, cwd, disambiguate), nil
+}
 
+// DiscoverPIDByCWDAndCmdLine finds a process whose full command line matches
+// the given regex pattern (via pgrep -f) and whose CWD matches cwd. Use this
+// for agents whose OS process name doesn't match their CLI name — e.g. Python
+// tools where the OS process is `python` and the agent script is in argv[1].
+// Mirrors DiscoverPIDByCWD's contract: returns 0, nil when no match.
+func DiscoverPIDByCWDAndCmdLine(cmdLinePattern, cwd string, disambiguate func([]int) int) (int, error) {
+	if cwd == "" || cmdLinePattern == "" {
+		return 0, nil
+	}
+	pids, err := findProcessesByCmdLine(cmdLinePattern)
+	if err != nil {
+		return 0, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
+	}
+	return narrowByCWD(pids, cwd, disambiguate), nil
+}
+
+// narrowByCWD filters pids to those whose CWD equals the given path, then
+// resolves to a single PID via disambiguate (falling back to highest PID).
+// Excludes the daemon's own PID. Returns 0 when no match.
+func narrowByCWD(pids []int, cwd string, disambiguate func([]int) int) int {
 	myPID := os.Getpid()
 	var matches []int
 	for _, pid := range pids {
@@ -36,15 +58,14 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 			matches = append(matches, pid)
 		}
 	}
-
 	switch len(matches) {
 	case 0:
-		return 0, nil
+		return 0
 	case 1:
-		return matches[0], nil
+		return matches[0]
 	default:
 		if disambiguate != nil {
-			return disambiguate(matches), nil
+			return disambiguate(matches)
 		}
 		// Default: highest PID (most recently started on macOS).
 		best := 0
@@ -53,7 +74,7 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 				best = p
 			}
 		}
-		return best, nil
+		return best
 	}
 }
 

@@ -1,0 +1,4 @@
+[
+  {"rig": "irrlicht", "name": "pc-001", "state": "working", "issue": "irr-100", "session_running": true},
+  {"rig": "irrlicht", "name": "pc-002", "state": "working", "issue": "irr-101", "session_running": true}
+]

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "agent": "pi",
+  "discovered_at": "2026-04-25",
+  "source": "manual_bootstrap",
+  "features": {
+    "headless_mode": true,
+    "tool_calls": true,
+    "permission_hooks": false,
+    "subagents": false,
+    "session_id_assignment": false,
+    "settings_file_support": false,
+    "session_resume": "unknown",
+    "mcp_servers": "unknown",
+    "streaming_output": "unknown",
+    "structured_output_jsonl": "unknown",
+    "slash_commands": "unknown",
+    "plan_mode": "unknown",
+    "git_integration": "unknown",
+    "multi_model_orchestration": "unknown",
+    "repo_map": "unknown",
+    "voice_input": "unknown",
+    "multimodal_input": "unknown",
+    "gui_mode": "unknown",
+    "watch_mode": "unknown",
+    "linting_test_automation": "unknown",
+    "edit_strategy_selection": "unknown",
+    "context_curation": "unknown"
+  }
+}

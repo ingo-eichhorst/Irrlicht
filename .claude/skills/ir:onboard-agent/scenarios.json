@@ -1,10 +1,10 @@
 {
-  "$schema_notes": "Canonical scenario catalogue for the ir:onboard-agent skill. Scenarios are agent-agnostic — each declares 'requires' capabilities, and 'by_adapter' holds the per-adapter prompt/settings that elicit the behavior. An adapter whose Capabilities (declared in core/adapters/inbound/agents/*/config.go) do not satisfy 'requires' is excluded from that scenario (matrix cell = N/A). If the capabilities match but no 'by_adapter' entry exists, the matrix cell is 'missing-prompt' — actionable by adding one here.",
+  "$schema_notes": "Canonical scenario catalogue for the ir:onboard-agent skill. Two parallel axes: 'scenarios' for prompt-driven agent adapters (claudecode/codex/pi) and 'orchestrator_scenarios' for polling-based orchestrator adapters (gastown). Agent scenarios are agent-agnostic — each declares 'requires' capabilities, and 'by_adapter' holds the per-adapter prompt/settings that elicit the behavior. An adapter whose Capabilities (declared in core/adapters/inbound/agents/*/config.go) do not satisfy 'requires' is excluded from that scenario (matrix cell = N/A). If the capabilities match but no 'by_adapter' entry exists, the matrix cell is 'missing-prompt' — actionable by adding one here. Orchestrator scenarios are driven by canned 'gt' CLI responses + seeded GT_ROOT sidecars and verified via snapshot golden compare in core/adapters/inbound/orchestrators/gastown/replay_test.go.",
 
   "min_versions": {
     "claudecode": "2.0.0",
     "codex": "0.50.0",
-    "pi": "1.0.0"
+    "pi": "0.70.0"
   },
 
   "scenarios": [
@@ -22,6 +22,16 @@
           "prompt": "Reply with exactly the word: ok",
           "settings": {},
           "timeout_seconds": 60
+        },
+        "codex": {
+          "prompt": "Output exactly the two characters: ok",
+          "settings": {},
+          "timeout_seconds": 120
+        },
+        "pi": {
+          "prompt": "Reply with exactly the word: ok",
+          "settings": {},
+          "timeout_seconds": 90
         }
       }
     },
@@ -39,6 +49,16 @@
           "prompt": "Run bash 'echo hello' using the Bash tool, then reply 'done'.",
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "prompt": "Run the shell command 'echo hello', then reply 'done'.",
+          "settings": {},
+          "timeout_seconds": 240
+        },
+        "pi": {
+          "prompt": "Use the bash tool to run 'echo hello', then reply 'done'.",
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -57,6 +77,99 @@
           "prompt": "Use the Bash tool to run: cat /tmp/irrlicht-nonexistent-xyz-123. If it fails, just tell me the error.",
           "settings": {},
           "timeout_seconds": 180
+        }
+      }
+    },
+
+    {
+      "name": "subagent-spawn",
+      "description": "Parent emits multiple Agent tool calls; daemon links each child via parent_linked. Verifies subagent transcripts land under <parent>/subagents/ and the curator bundles them into <fixture>.subagents/. Mirrors the shape of the committed 13-full-lifecycle-continue-* fixture but reproducible.",
+      "requires": ["headless_mode", "subagents"],
+      "verify": {
+        "contains_tool_call": "Agent",
+        "parent_linked_min": 2,
+        "subagent_transcripts_min": 2,
+        "tool_calls_max": 10,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "prompt": "Launch 3 Explore subagents in parallel via the Agent tool, in a single response. Subagent 1: count .go files in core/. Subagent 2: list test files in core/e2e/. Subagent 3: find imports of the 'sync' package across core/. After all three report back, reply 'done'.",
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    }
+  ],
+
+  "orchestrator_scenarios": [
+    {
+      "name": "agent-discovery",
+      "description": "Two rigs declared in rigs.json; gt rig list returns the same set. Verifies that both rigs surface as codebases with their default workers (witness, refinery), and that mayor/deacon appear as idle global agents when no sessions match.",
+      "verify": {
+        "codebases_count": 2,
+        "codebases_names": ["gastown", "irrlicht"],
+        "global_agents_roles": ["mayor", "deacon", "boot"]
+      },
+      "by_orchestrator": {
+        "gastown": {
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/agent-discovery",
+          "poll_ticks": 1
+        }
+      }
+    },
+    {
+      "name": "role-assignment",
+      "description": "Two sessions are active with CWDs under <rig>/witness and <rig>/refinery. The poller must populate worker.SessionID for those roles via deriveRole/CWD matching.",
+      "verify": {
+        "workers_with_session_min": 2,
+        "expected_session_ids": ["sess-witness-001", "sess-refinery-001"]
+      },
+      "by_orchestrator": {
+        "gastown": {
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/role-assignment",
+          "poll_ticks": 1
+        }
+      }
+    },
+    {
+      "name": "state-aggregation",
+      "description": "Daemon reports running=false and the rig is degraded. Verifies that orchestrator.State.Running and Codebase.Status reflect aggregated multi-source state.",
+      "verify": {
+        "running": false,
+        "codebase_statuses": ["degraded"]
+      },
+      "by_orchestrator": {
+        "gastown": {
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/state-aggregation",
+          "poll_ticks": 1
+        }
+      }
+    },
+    {
+      "name": "agent-join-leave",
+      "description": "Polecat workforce churns over 3 polls: tick-001 has 1 polecat, tick-002 adds a second, tick-003 removes the second. Verifies that the snapshot stream reflects each join/leave on its own poll cycle.",
+      "verify": {
+        "polecat_count_per_tick": [1, 2, 1]
+      },
+      "by_orchestrator": {
+        "gastown": {
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/agent-join-leave",
+          "poll_ticks": 3
+        }
+      }
+    },
+    {
+      "name": "polling-lifecycle",
+      "description": "gt CLI is healthy on tick 1, fails completely on tick 2 (poller falls back to cached rigs.json sidecar; polecats/dogs/boot become empty since they have no fallback), then recovers on tick 3. Verifies the production fallback path through the rigs.json sidecar.",
+      "verify": {
+        "codebases_count_per_tick": [1, 1, 1],
+        "boot_present_per_tick": [true, false, true]
+      },
+      "by_orchestrator": {
+        "gastown": {
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/polling-lifecycle",
+          "poll_ticks": 3
         }
       }
     }

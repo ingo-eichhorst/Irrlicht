@@ -1,0 +1,7 @@
+{
+  "running": true,
+  "pid": 12345,
+  "started_at": "2026-04-25T12:00:00Z",
+  "last_heartbeat": "2026-04-25T12:01:00Z",
+  "heartbeat_count": 60
+}

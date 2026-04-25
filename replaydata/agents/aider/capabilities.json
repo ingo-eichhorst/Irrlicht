@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "agent": "aider",
+  "discovered_at": "2026-04-25",
+  "source": "discovery_subagent",
+  "features": {
+    "headless_mode": true,
+    "tool_calls": true,
+    "permission_hooks": false,
+    "subagents": false,
+    "session_id_assignment": false,
+    "settings_file_support": true,
+    "session_resume": false,
+    "mcp_servers": false,
+    "streaming_output": true,
+    "structured_output_jsonl": false,
+    "slash_commands": true,
+    "plan_mode": true,
+    "git_integration": true,
+    "multi_model_orchestration": true,
+    "repo_map": true,
+    "voice_input": true,
+    "multimodal_input": true
+  }
+}

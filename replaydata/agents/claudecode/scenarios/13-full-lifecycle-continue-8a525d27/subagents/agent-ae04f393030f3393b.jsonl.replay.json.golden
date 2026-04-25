@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "source_transcript": "/Users/ingo/projects/irrlicht/replaydata/agents/claudecode/scenarios/13-full-lifecycle-continue-8a525d27/subagents/agent-ae04f393030f3393b.jsonl",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 5,
+    "consumed_events": 5,
+    "total_transitions": 3,
+    "first_event_time": "2026-04-11T18:53:00.058Z",
+    "last_event_time": "2026-04-11T18:53:03.81Z",
+    "wall_clock_session_duration": 3752000000,
+    "state_durations": {
+      "ready": 3752000000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "estimated_cost_usd": 0.03486035,
+    "cum_input_tokens": 8,
+    "cum_output_tokens": 213,
+    "cum_cache_read_tokens": 21886,
+    "cum_cache_creation_tokens": 25279,
+    "model_name": "claude-haiku-4-5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-04-11T18:53:00.058Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 4,
+      "virtual_time": "2026-04-11T18:53:03.81Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…apters/ (inbound and outbound adapters)\n- core/application/services/\n- core/c…"
+    },
+    {
+      "index": 2,
+      "event_index": 4,
+      "virtual_time": "2026-04-11T18:53:03.81Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…apters/ (inbound and outbound adapters)\n- core/application/services/\n- core/c…"
+    }
+  ]
+}

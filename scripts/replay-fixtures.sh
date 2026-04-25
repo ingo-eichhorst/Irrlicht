@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# replay-fixtures.sh — run the offline replay against every fixture in
-# testdata/replay/<adapter>/*.jsonl and emit JSON + Markdown reports into
-# testdata/replay/reports/.
+# replay-fixtures.sh — run the offline replay against every transcript in
+# replaydata/agents/<adapter>/scenarios/<scenario>/transcript.jsonl and emit
+# JSON + Markdown reports into replaydata/agents/_reports/.
 #
 # Usage:
 #   scripts/replay-fixtures.sh                       # default settings
@@ -28,8 +28,8 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-FIXTURES_ROOT="testdata/replay"
-REPORTS_DIR="testdata/replay/reports"
+FIXTURES_ROOT="replaydata/agents"
+REPORTS_DIR="replaydata/agents/_reports"
 
 if [[ ! -d "$FIXTURES_ROOT" ]]; then
   echo "no fixtures root at $FIXTURES_ROOT" >&2
@@ -41,21 +41,19 @@ BIN=".build/replay"
 echo "building $BIN ..." >&2
 ( cd core && go build -o "../${BIN}" ./cmd/replay )
 
-# Walk every adapter subdirectory, skipping the reports/ output dir. Portable
+# Walk every transcript.jsonl under replaydata/agents/<adapter>/scenarios/.
+# Skip subagent transcripts (they live under .../subagents/ and are
+# referenced, not replayed, by the parent's extended check). Portable
 # to macOS bash 3.2 — avoid `mapfile`, use a while-read loop.
 found_any=0
 while IFS= read -r fix; do
   [[ -z "$fix" ]] && continue
-  # Skip lifecycle-event sidecars — they share the .jsonl suffix but are not
-  # transcripts. The replay tool picks them up automatically when present.
-  [[ "$fix" == *.events.jsonl ]] && continue
-  # Skip subagent transcript bundles — they live in <name>.subagents/
-  # sibling dirs next to their parent fixture and are referenced (not
-  # replayed) by the parent's extended check.
-  [[ "$fix" == *.subagents/*.jsonl ]] && continue
+  [[ "$fix" == */subagents/* ]] && continue
   found_any=1
-  adapter="$(basename "$(dirname "$fix")")"
-  name="$(basename "${fix%.jsonl}")"
+  # Path shape: replaydata/agents/<adapter>/scenarios/<scenario>/transcript.jsonl
+  scenario_dir="$(dirname "$fix")"
+  name="$(basename "$scenario_dir")"
+  adapter="$(basename "$(dirname "$(dirname "$scenario_dir")")")"
   json="$REPORTS_DIR/${adapter}-${name}.json"
   md="$REPORTS_DIR/${adapter}-${name}.md"
 
@@ -176,7 +174,7 @@ with open(md_path, "w") as out:
 PY
 
   echo "   wrote $json + $md" >&2
-done < <(find "$FIXTURES_ROOT" -mindepth 2 -name '*.jsonl' -not -path '*/reports/*' | sort)
+done < <(find "$FIXTURES_ROOT" -name 'transcript.jsonl' -not -path '*/_reports/*' | sort)
 
 if [[ "$found_any" -eq 0 ]]; then
   echo "no .jsonl fixtures found under $FIXTURES_ROOT/*/" >&2

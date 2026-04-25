@@ -14,11 +14,5 @@ func Config() agents.Config {
 		NewParser:          func() tailer.TranscriptParser { return &Parser{} },
 		DiscoverPID:        DiscoverPID,
 		CountOpenSubagents: CountOpenSubagents,
-		Capabilities: []agents.Capability{
-			agents.CapHeadlessMode,
-			agents.CapToolCalls,
-			agents.CapPermissionHooks,
-			agents.CapSubagents,
-		},
 	}
 }
