@@ -24,6 +24,14 @@ func newMetadataEnricher(git outbound.GitResolver, metrics outbound.MetricsColle
 	return &metadataEnricher{git: git, metrics: metrics}
 }
 
+// PruneMetrics releases per-session metrics state when a session ends.
+func (e *metadataEnricher) PruneMetrics(transcriptPath string) {
+	if e.metrics == nil || transcriptPath == "" {
+		return
+	}
+	e.metrics.PruneEntry(transcriptPath)
+}
+
 // EnrichNewSession resolves git metadata and computes initial metrics for a
 // newly created session. It prefers CWD from the event (set by process
 // scanner), falling back to transcript inspection for file-based sessions.

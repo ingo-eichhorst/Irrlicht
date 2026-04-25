@@ -119,6 +119,74 @@ func TestEnsureHooksInstalled_PreservesExistingHooks(t *testing.T) {
 	}
 }
 
+func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
+	home := withTempHome(t)
+	path := filepath.Join(home, ".claude", "settings.json")
+
+	// Stale command: same sentinel, but missing the trailing `|| true`.
+	const staleCommand = "curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode"
+	if staleCommand == installedHookCommand {
+		t.Fatal("stale command must differ from canonical command for this test to be meaningful")
+	}
+
+	staleGroup := map[string]interface{}{
+		"matcher": hookMatcher,
+		"hooks": []interface{}{
+			map[string]interface{}{
+				"type":    "command",
+				"command": staleCommand,
+			},
+		},
+	}
+	existing := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			HookPostToolUse: []interface{}{staleGroup},
+		},
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(existing)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true when upgrading stale command")
+	}
+
+	settings := readJSON(t, path)
+	hooksMap := settings["hooks"].(map[string]interface{})
+
+	postArr, ok := hooksMap[HookPostToolUse].([]interface{})
+	if !ok {
+		t.Fatalf("missing %s array after upgrade", HookPostToolUse)
+	}
+	if len(postArr) != 1 {
+		t.Fatalf("expected 1 %s matcher group (in-place upgrade, no append), got %d", HookPostToolUse, len(postArr))
+	}
+
+	group := postArr[0].(map[string]interface{})
+	innerHooks := group["hooks"].([]interface{})
+	cmd := innerHooks[0].(map[string]interface{})["command"].(string)
+	if cmd != installedHookCommand {
+		t.Fatalf("expected upgraded command, got %q", cmd)
+	}
+
+	// Second call must be idempotent.
+	modified, err = EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modified {
+		t.Fatal("expected modified=false on second install after upgrade (idempotent)")
+	}
+}
+
 func TestUninstallHooks_RemovesOurHooks(t *testing.T) {
 	home := withTempHome(t)
 

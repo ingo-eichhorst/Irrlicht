@@ -147,6 +147,7 @@ struct SessionMetrics: Codable {
         let cost = estimatedCostUSD ?? 0
         if cost > 0 {
             if cost < 0.01 { return "<$0.01" }
+            if cost >= 100 { return String(format: "$%.0f", cost) }
             return String(format: "$%.2f", cost)
         }
         // Cost is zero with tokens flowing. We only render the explicit
