@@ -186,12 +186,16 @@ final class SessionManagerTests: XCTestCase {
         )
     }
 
-    func testFormattedCost_AlwaysTwoDecimalsAboveOneDollar() {
-        // Regression: old code switched to "$%.0f" for cost >= $10, hiding the
-        // cents. Now every non-trivial cost uses two decimals.
-        XCTAssertEqual(makeMetrics(cost: 12.5).formattedCost, "$12.50")
-        XCTAssertEqual(makeMetrics(cost: 105.0).formattedCost, "$105.00")
+    func testFormattedCost_DropsCentsAt100AndAbove() {
+        // Below $100: keep two decimals. The prior bug hid cents at $10+.
         XCTAssertEqual(makeMetrics(cost: 9.99).formattedCost, "$9.99")
+        XCTAssertEqual(makeMetrics(cost: 12.5).formattedCost, "$12.50")
+        XCTAssertEqual(makeMetrics(cost: 99.99).formattedCost, "$99.99")
+        // $100+: drop cents so the value fits the 36pt cost column behind the
+        // context bar (issue #214).
+        XCTAssertEqual(makeMetrics(cost: 100.0).formattedCost, "$100")
+        XCTAssertEqual(makeMetrics(cost: 105.0).formattedCost, "$105")
+        XCTAssertEqual(makeMetrics(cost: 106.99).formattedCost, "$107")
     }
 
     func testFormattedCost_SmallAndZero() {

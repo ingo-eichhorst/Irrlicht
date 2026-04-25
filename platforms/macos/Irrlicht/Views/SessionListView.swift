@@ -770,6 +770,7 @@ struct GroupView: View {
         guard v > 0 else { return "$0" + costTimeframe.suffix }
         let formatted: String
         if v < 0.01 { formatted = "<$0.01" }
+        else if v >= 100 { formatted = String(format: "$%.0f", v) }
         else { formatted = String(format: "$%.2f", v) }
         return formatted + costTimeframe.suffix
     }
