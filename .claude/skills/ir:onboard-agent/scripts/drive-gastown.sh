@@ -54,7 +54,15 @@ if [[ -z "$CELL_JSON" || "$CELL_JSON" == "null" ]]; then
   exit 1
 fi
 
-COMMITTED_DIR="$REPO_ROOT/testdata/orchestrator/$ADAPTER/$SCENARIO"
+# `fixture_dir` is repo-relative; resolve against $REPO_ROOT so the JSON is
+# the single source of truth. If a maintainer relocates fixtures they only
+# update scenarios.json — script keeps working.
+FIXTURE_REL="$(jq -r '.fixture_dir // empty' <<<"$CELL_JSON")"
+if [[ -z "$FIXTURE_REL" ]]; then
+  echo "scenarios.json: orchestrator_scenarios[$SCENARIO].by_orchestrator.gastown.fixture_dir is missing" >&2
+  exit 1
+fi
+COMMITTED_DIR="$REPO_ROOT/$FIXTURE_REL"
 [[ -d "$COMMITTED_DIR" ]] || { echo "committed fixture missing: $COMMITTED_DIR" >&2; exit 1; }
 
 # --- Staging --------------------------------------------------------------
