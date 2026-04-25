@@ -132,6 +132,10 @@ done
 [[ -S "$SOCK" ]] || { echo "daemon socket never appeared: $SOCK" >&2; exit 1; }
 
 # --- Drive the agent ----------------------------------------------------
+# Drivers are responsible for resolving the transcript path and writing
+# session.uuid + transcript.path back to staging. UUID arg $2 is a
+# "preferred" UUID — drive-claudecode.sh honors it via --session-id;
+# codex/pi drivers ignore it and surface the agent-assigned UUID.
 DRIVER="$SCRIPT_DIR/drive-$ADAPTER.sh"
 [[ -x "$DRIVER" ]] || { echo "driver missing: $DRIVER" >&2; exit 1; }
 set +e
@@ -143,21 +147,9 @@ DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown"
 cleanup
 trap - EXIT
 
-# --- Resolve the transcript path ----------------------------------------
-# Claude Code writes transcripts to ~/.claude/projects/<slug>/<UUID>.jsonl.
-# Stat the expected path under each slug dir (O(#projects)) rather than
-# walking the whole tree with `find`. Poll up to 30s.
-TRANSCRIPT=""
-for _ in $(seq 1 60); do
-  for slug_dir in "$HOME"/.claude/projects/*/; do
-    candidate="$slug_dir$UUID.jsonl"
-    if [[ -f "$candidate" ]]; then
-      TRANSCRIPT="$candidate"
-      break 2
-    fi
-  done
-  sleep 0.5
-done
+# --- Read driver-resolved transcript + actual UUID ----------------------
+TRANSCRIPT="$(cat "$STAGING/transcript.path" 2>/dev/null || true)"
+ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
 
 # --- Locate the recording file ------------------------------------------
 RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
@@ -173,7 +165,7 @@ write_error_manifest() {
   jq -n \
     --arg adapter "$ADAPTER" \
     --arg scenario "$SCENARIO" \
-    --arg session_uuid "$UUID" \
+    --arg session_uuid "$ACTUAL_UUID" \
     --arg error "$error_code" \
     --arg driver_exit_reason "$DRIVER_REASON" \
     --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
@@ -190,13 +182,14 @@ write_error_manifest() {
     > "$MANIFEST"
 }
 
-if [[ -z "$TRANSCRIPT" || -z "$RECORDING" ]]; then
-  write_error_manifest "transcript_or_recording_missing" \
+if [[ -z "$TRANSCRIPT" || -z "$RECORDING" || -z "$ACTUAL_UUID" ]]; then
+  write_error_manifest "transcript_recording_or_uuid_missing" \
     "$(jq -nc \
         --argjson transcript_found "$([[ -n "$TRANSCRIPT" ]] && echo true || echo false)" \
         --argjson recording_found "$([[ -n "$RECORDING" ]] && echo true || echo false)" \
-        '{transcript_found: $transcript_found, recording_found: $recording_found}')"
-  echo "ERROR: transcript=${TRANSCRIPT:-missing} recording=${RECORDING:-missing}" >&2
+        --argjson uuid_resolved "$([[ -n "$ACTUAL_UUID" ]] && echo true || echo false)" \
+        '{transcript_found: $transcript_found, recording_found: $recording_found, uuid_resolved: $uuid_resolved}')"
+  echo "ERROR: transcript=${TRANSCRIPT:-missing} recording=${RECORDING:-missing} uuid=${ACTUAL_UUID:-missing}" >&2
   exit 1
 fi
 
@@ -209,10 +202,10 @@ fi
 # "subagents" matches agents.CapSubagents in core/adapters/inbound/agents/config.go.
 REQUIRES_SUBAGENTS="$(jq -r '.requires | index("subagents") // empty' <<<"$CELL_JSON")"
 if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
-  PARENT_LINKED_COUNT="$(jq -c --arg sid "$UUID" \
+  PARENT_LINKED_COUNT="$(jq -c --arg sid "$ACTUAL_UUID" \
     'select(.kind=="parent_linked" and .parent_session_id==$sid)' \
     "$RECORDING" | wc -l | tr -d ' ')"
-  SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$UUID/subagents"
+  SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$ACTUAL_UUID/subagents"
   count_subagent_files() {
     find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' '
   }
@@ -244,7 +237,7 @@ fi
 #   <staging>/testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}
 "$REPO_ROOT/scripts/curate-lifecycle-fixture.sh" \
   -d "$STAGING/testdata/replay" \
-  "$RECORDING" "$UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
+  "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
 
 STAGED_TRANSCRIPT="$STAGING/testdata/replay/$ADAPTER/$SCENARIO.jsonl"
 
@@ -275,7 +268,7 @@ fi
 jq -n \
   --arg adapter "$ADAPTER" \
   --arg scenario "$SCENARIO" \
-  --arg session_uuid "$UUID" \
+  --arg session_uuid "$ACTUAL_UUID" \
   --arg staging "$STAGING" \
   --arg raw_recording "$RECORDING" \
   --arg source_transcript "$TRANSCRIPT" \
