@@ -25,14 +25,11 @@ if [[ $# -ne 5 ]]; then
 fi
 
 STAGING="$1"
-PREFERRED_UUID="$2"   # codex assigns its own; we keep this arg for ABI parity
+# $2 (preferred-uuid) and $4 (settings-path) are accepted for ABI parity
+# with drive-claudecode.sh; codex assigns its own UUID and has no
+# --settings flag, so both are unused here.
 TIMEOUT_S="$3"
-SETTINGS_PATH="$4"    # codex has no --settings flag; arg accepted, no-op
 PROMPT="$5"
-
-# Reference unused args once each so `set -u` and shellcheck don't flag them.
-: "${PREFERRED_UUID:-}"
-: "${SETTINGS_PATH:-}"
 
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"

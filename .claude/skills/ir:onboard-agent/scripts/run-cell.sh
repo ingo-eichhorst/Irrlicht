@@ -150,9 +150,6 @@ trap - EXIT
 # --- Read driver-resolved transcript + actual UUID ----------------------
 TRANSCRIPT="$(cat "$STAGING/transcript.path" 2>/dev/null || true)"
 ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
-# Fall back to the pre-generated UUID if the driver didn't write one
-# (e.g., a stale driver from before the contract change).
-[[ -n "$ACTUAL_UUID" ]] || ACTUAL_UUID="$UUID"
 
 # --- Locate the recording file ------------------------------------------
 RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"

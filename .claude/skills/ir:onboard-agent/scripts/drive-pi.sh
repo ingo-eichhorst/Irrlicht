@@ -32,28 +32,23 @@ if [[ $# -ne 5 ]]; then
 fi
 
 STAGING="$1"
-PREFERRED_UUID="$2"   # pi assigns its own; we keep this arg for ABI parity
+# $2 (preferred-uuid) and $4 (settings-path) are accepted for ABI parity
+# with drive-claudecode.sh; pi assigns its own UUID and has no
+# --settings flag, so both are unused here.
 TIMEOUT_S="$3"
-SETTINGS_PATH="$4"    # pi has no --settings flag; arg accepted, no-op
 PROMPT="$5"
-
-: "${PREFERRED_UUID:-}"
-: "${SETTINGS_PATH:-}"
 
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 PI_SESSIONS_DIR="$HOME/.pi/agent/sessions"
 
-# Marker file lets `find -newer` reliably pick up only the file pi
-# creates during this run. mkdir guarantees the parent exists even if
-# the user has never run pi before.
+# Marker scopes the post-run `find -newer` to this invocation.
+# mkdir handles the case where the user has never run pi.
 mkdir -p "$PI_SESSIONS_DIR"
 MARKER="$STAGING/.pi-start-marker"
 touch "$MARKER"
-sleep 1   # ensure mtime resolution distinguishes new files (HFS+ = 1s)
 
-# `pi --print -p` is the documented non-interactive mode. Auth is the
-# user's responsibility (`pi --api-key` or provider env vars).
+# Auth is the user's responsibility (`pi --api-key` or provider env vars).
 set +e
 timeout --signal=SIGINT --kill-after=10 "$TIMEOUT_S" \
   pi --print -p "$PROMPT" \
