@@ -6,7 +6,7 @@
 #                →  drive-<adapter>.sh (runs the agent under timeout)
 #                →  SIGINT → 6s grace → SIGTERM → SIGKILL the daemon
 #                →  resolve transcript path from session UUID
-#                →  scripts/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents
+#                →  tools/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents
 #                →  replay against staged + committed fixtures
 #                →  write run-manifest.json
 #
@@ -264,7 +264,7 @@ fi
 # --- Curate the staged fixture ------------------------------------------
 # The committed-to-replaydata location of the curated artifacts is:
 #   <staging>/replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl
-"$REPO_ROOT/scripts/curate-lifecycle-fixture.sh" \
+"$REPO_ROOT/tools/curate-lifecycle-fixture.sh" \
   -d "$STAGING/replaydata/agents" \
   "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
 

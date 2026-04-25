@@ -12,7 +12,7 @@
 # full parent-with-subagents lifecycle.
 #
 # Usage:
-#   scripts/curate-lifecycle-fixture.sh [-d <agents-root>] \
+#   tools/curate-lifecycle-fixture.sh [-d <agents-root>] \
 #     <recording.jsonl> <session-id> <transcript.jsonl> <adapter> <scenario>
 #
 # -d <agents-root> overrides the default ($REPO_ROOT/replaydata/agents).
@@ -20,7 +20,7 @@
 # before a human reviews and copies them into the real replaydata/ tree.
 #
 # Example:
-#   scripts/curate-lifecycle-fixture.sh \
+#   tools/curate-lifecycle-fixture.sh \
 #     ~/.local/share/irrlicht/recordings/2026-04-11T153839-46b20d.jsonl \
 #     b27fdaef-6de4-403a-b277-790fe8d803bb \
 #     ~/.claude/projects/-Users-ingo-projects-irrlicht/b27fdaef-6de4-403a-b277-790fe8d803bb.jsonl \

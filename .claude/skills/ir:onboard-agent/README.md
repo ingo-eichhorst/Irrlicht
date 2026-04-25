@@ -220,7 +220,7 @@ otherwise surfaced after the parser was written).
 
 ## See also
 
-- `scripts/curate-lifecycle-fixture.sh` — the underlying curator (accepts
+- `tools/curate-lifecycle-fixture.sh` — the underlying curator (accepts
   `-d <agents-root>` for staging).
 - `core/cmd/replay/main.go` — the replay engine that produces reports.
 - `core/cmd/replay/main_test.go` — the golden-fixture regression tests

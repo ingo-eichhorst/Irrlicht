@@ -42,7 +42,7 @@ Temporary Items
 .apdisk
 
 # Web frontend embed copy (build artifact — source of truth: platforms/web/)
-# Run: go generate ./core/cmd/irrlichd/ or platforms/build-release.sh
+# Run: go generate ./core/cmd/irrlichd/ or tools/build-release.sh
 core/cmd/irrlichd/ui/
 
 # Go build artifacts
@@ -115,7 +115,7 @@ state.json
 .beads/
 
 # Replay harness — fixtures are committed as regression data; reports are
-# regenerated locally by scripts/replay-fixtures.sh.
+# regenerated locally by tools/replay-fixtures.sh.
 replaydata/agents/_reports/
 .pi
 .specs

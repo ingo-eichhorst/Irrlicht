@@ -154,7 +154,7 @@ For each (agent-adapter, scenario) cell, invoke
 - driver invocation via `scripts/drive-<adapter>.sh`
 - graceful shutdown (SIGINT → 6s → SIGTERM → SIGKILL)
 - transcript resolution via session UUID
-- `scripts/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents …`
+- `tools/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents …`
 - replay report generation (staged + committed, if any)
 - `run-manifest.json` writeback
 

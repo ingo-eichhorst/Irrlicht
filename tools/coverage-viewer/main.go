@@ -294,8 +294,8 @@ func handleScenario(w http.ResponseWriter, r *http.Request) {
 		{Title: "Precheck", Description: "Validate adapter, port 7837 free, daemon binary present, working tree clean.", Link: pl(".claude/skills/ir:onboard-agent/scripts/precheck.sh")},
 		{Title: "Daemon spawn", Description: "irrlichd --record on 127.0.0.1:7837 with isolated IRRLICHT_RECORDINGS_DIR. SIGINT → 6s grace → SIGTERM → SIGKILL teardown.", Link: pl(".claude/skills/ir:onboard-agent/scripts/run-cell.sh")},
 		{Title: "Driver", Description: "Drives the " + adapter + " CLI with the prompt + settings shown above.", Link: pl(driverScript)},
-		{Title: "Curate fixture", Description: "Bundle the recording + per-session transcripts (and any subagents) into replaydata/agents/" + adapter + "/scenarios/" + scenarioName + "/.", Link: pl("scripts/curate-lifecycle-fixture.sh")},
-		{Title: "Replay", Description: "replay --quiet --out <report> runs the simulator against the staged + committed transcripts and emits per-state-transition diffs.", Link: pl("scripts/replay-fixtures.sh")},
+		{Title: "Curate fixture", Description: "Bundle the recording + per-session transcripts (and any subagents) into replaydata/agents/" + adapter + "/scenarios/" + scenarioName + "/.", Link: pl("tools/curate-lifecycle-fixture.sh")},
+		{Title: "Replay", Description: "replay --quiet --out <report> runs the simulator against the staged + committed transcripts and emits per-state-transition diffs.", Link: pl("tools/replay-fixtures.sh")},
 		{Title: "Verify", Description: "Assert the verify block (above) holds: transitions topology, tool-call presence, hook firings, final state, etc.", Link: pl(scenariosJSON)},
 	}
 	writeJSON(w, resp)

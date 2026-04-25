@@ -25,7 +25,7 @@ Prerequisites: macOS 13+, Go 1.21+, Swift 5.9+, Xcode Command Line Tools.
 ```bash
 git clone https://github.com/ingo-eichhorst/Irrlicht.git
 cd Irrlicht
-./platforms/build-release.sh   # build daemon + macOS app
+./tools/build-release.sh       # build daemon + macOS app
 ./validate.sh                  # run the full validation pipeline
 ```
 

@@ -6,8 +6,8 @@
 # transcript.jsonl.
 #
 # Usage:
-#   scripts/replay-fixtures.sh                       # default settings
-#   scripts/replay-fixtures.sh --debounce 200ms      # tighter debounce window
+#   tools/replay-fixtures.sh                         # default settings
+#   tools/replay-fixtures.sh --debounce 200ms        # tighter debounce window
 #
 # The replay binary auto-detects the adapter from the fixture path (claude
 # code, codex, or pi).

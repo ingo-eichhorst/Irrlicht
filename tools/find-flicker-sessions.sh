@@ -4,8 +4,8 @@
 # identify candidate fixtures for issue #102.
 #
 # Usage:
-#   scripts/find-flicker-sessions.sh [--limit N] [--min-events N]
-#                                    [--projects-root DIR] [--out FILE]
+#   tools/find-flicker-sessions.sh [--limit N] [--min-events N]
+#                                  [--projects-root DIR] [--out FILE]
 #
 # Defaults:
 #   --limit         15        show top-N flickering sessions
