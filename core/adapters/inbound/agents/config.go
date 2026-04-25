@@ -37,11 +37,20 @@ type SubagentCounter func(m *tailer.SessionMetrics) int
 // applicability.
 type Config struct {
 	Name               string        // adapter label on events, e.g. "claude-code"
-	ProcessName        string        // OS-level executable name for pgrep, e.g. "claude"
+	ProcessName        string        // OS-level executable name for pgrep -x, e.g. "claude"
 	RootDir            string        // transcript root relative to $HOME, e.g. ".claude/projects"
 	NewParser          ParserFactory // fresh-per-call factory; parsers are stateful
 	DiscoverPID        agent.PIDDiscoverFunc
 	CountOpenSubagents SubagentCounter // optional; nil = always zero
+
+	// CommandLineMatch is an optional regex pattern fed to `pgrep -f` instead
+	// of `pgrep -x ProcessName`. Use this for agents whose process name on
+	// disk doesn't match their CLI name — e.g. Python tools where the OS
+	// process is `python` and the agent script is in argv[1]. A pattern like
+	// "/aider($| )" matches the binary path while excluding wrapper scripts
+	// (tmux, sh) that mention the agent name in their own argv. Leave empty
+	// for exact-match agents (claude, codex, pi).
+	CommandLineMatch string
 }
 
 // ParserMap collapses a slice of Configs into a name → factory map. Callers

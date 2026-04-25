@@ -32,9 +32,10 @@ type trackedProc struct {
 // EventRemoved events so the session can be shown before the first message.
 // It implements inbound.AgentWatcher.
 type Scanner struct {
-	processName string // exact process name matched by pgrep -x
-	adapter     string // adapter label placed on emitted events
-	interval    time.Duration
+	processName      string // exact process name matched by pgrep -x
+	commandLineMatch string // if non-empty, used with pgrep -f instead of -x ProcessName
+	adapter          string // adapter label placed on emitted events
+	interval         time.Duration
 
 	// sessionChecker is an optional function that reports whether a real
 	// (non-proc) session for the given projectDir and PID already exists.
@@ -54,6 +55,10 @@ type Scanner struct {
 //   - processName: exact binary name, e.g. "claude"
 //   - adapter:     adapter label, e.g. "claude-code"
 //   - interval:    how often to poll; pass 0 to use defaultInterval
+//
+// For agents whose process name on disk differs from their CLI name (e.g.
+// Python tools launched via a wrapper), use WithCommandLineMatch to switch
+// to a pgrep -f pattern.
 func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 	if interval <= 0 {
 		interval = defaultInterval
@@ -64,6 +69,14 @@ func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 		interval:    interval,
 		tracked:     make(map[int]trackedProc),
 	}
+}
+
+// WithCommandLineMatch switches the scanner from `pgrep -x ProcessName` to
+// `pgrep -f <pattern>`. Use for agents whose actual OS process is a wrapper
+// (e.g. python launching aider). Returns the scanner for chaining.
+func (s *Scanner) WithCommandLineMatch(pattern string) *Scanner {
+	s.commandLineMatch = pattern
+	return s
 }
 
 // WithSessionChecker sets a function that reports whether a real
@@ -175,7 +188,13 @@ func (s *Scanner) Unsubscribe(ch <-chan agent.Event) {
 // for newcomers without transcripts, and removes pre-sessions that have exited
 // or whose real transcript has appeared.
 func (s *Scanner) poll() {
-	pids, err := findProcesses(s.processName)
+	var pids []int
+	var err error
+	if s.commandLineMatch != "" {
+		pids, err = findProcessesByCmdLine(s.commandLineMatch)
+	} else {
+		pids, err = findProcesses(s.processName)
+	}
 	if err != nil {
 		return
 	}

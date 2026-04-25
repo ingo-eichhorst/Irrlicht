@@ -313,6 +313,9 @@ func main() {
 		watcherRoots = append(watcherRoots, fmt.Sprintf("%s (%s)", c.Name, w.Root()))
 
 		scanner := processlifecycle.NewScanner(c.ProcessName, c.Name, 0)
+		if c.CommandLineMatch != "" {
+			scanner.WithCommandLineMatch(c.CommandLineMatch)
+		}
 		scanner.WithSessionChecker(realSessionCheck)
 		watchers = append(watchers, scanner)
 	}

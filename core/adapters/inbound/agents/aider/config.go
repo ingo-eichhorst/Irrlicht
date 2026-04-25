@@ -20,5 +20,11 @@ func Config() agents.Config {
 		RootDir:     rootDir,
 		NewParser:   func() tailer.TranscriptParser { return &NoOpParser{} },
 		DiscoverPID: DiscoverPID,
+		// Aider's actual OS process is `python` invoking the aider script
+		// (uv/pipx wrapper), so `pgrep -x aider` finds nothing. Match the
+		// binary path on the command line instead. The leading slash anchors
+		// to the binary path and excludes wrappers (tmux, sh) that mention
+		// `aider` in their own argv.
+		CommandLineMatch: "/aider",
 	}
 }
