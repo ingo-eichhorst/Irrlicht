@@ -64,6 +64,7 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		ContextWindow:                     m.ContextWindow,
 		ContextUtilization:                m.ContextUtilization,
 		PressureLevel:                     m.PressureLevel,
+		ContextWindowUnknown:              m.ContextWindowUnknown,
 		HasOpenToolCall:                   m.HasOpenToolCall,
 		OpenToolCallCount:                 m.OpenToolCallCount,
 		LastEventType:                     m.LastEventType,

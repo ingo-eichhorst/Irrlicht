@@ -157,6 +157,20 @@ type TranscriptParser interface {
 	ParseLine(raw map[string]interface{}) *ParsedEvent
 }
 
+// RawLineParser is implemented by parsers whose source format is not JSONL.
+// When the tailer detects this capability it skips its JSON pre-parse and
+// hands the trimmed line directly to ParseLineRaw. ParseLine is still part
+// of the TranscriptParser contract; raw-line parsers should make it a no-op
+// returning nil.
+//
+// Implementers must emit EventType="turn_done" (not "assistant_message")
+// when the agent finishes a turn. The state classifier returns the session
+// to ready only on turn_done; an assistant_message alone leaves the session
+// stuck in working. See aider's parser for the reference shape.
+type RawLineParser interface {
+	ParseLineRaw(line string) *ParsedEvent
+}
+
 // pendingContributor is an optional interface that stateful parsers implement
 // (currently Claude Code) to expose the in-progress turn's cost contribution.
 // The tailer queries this at metrics-computation time to include the latest

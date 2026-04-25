@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # replay-fixtures.sh — run the offline replay against every transcript in
-# replaydata/agents/<adapter>/scenarios/<scenario>/transcript.jsonl and emit
-# JSON + Markdown reports into replaydata/agents/_reports/.
+# replaydata/agents/<adapter>/scenarios/<scenario>/transcript.{jsonl,md}
+# and emit JSON + Markdown reports into replaydata/agents/_reports/.
+# Aider fixtures use transcript.md (markdown source); other adapters use
+# transcript.jsonl.
 #
 # Usage:
 #   scripts/replay-fixtures.sh                       # default settings
@@ -174,10 +176,10 @@ with open(md_path, "w") as out:
 PY
 
   echo "   wrote $json + $md" >&2
-done < <(find "$FIXTURES_ROOT" -name 'transcript.jsonl' -not -path '*/_reports/*' | sort)
+done < <(find "$FIXTURES_ROOT" \( -name 'transcript.jsonl' -o -name 'transcript.md' \) -not -path '*/_reports/*' | sort)
 
 if [[ "$found_any" -eq 0 ]]; then
-  echo "no .jsonl fixtures found under $FIXTURES_ROOT/*/" >&2
+  echo "no transcript fixtures found under $FIXTURES_ROOT/*/" >&2
   exit 1
 fi
 

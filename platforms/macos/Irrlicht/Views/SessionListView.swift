@@ -525,12 +525,30 @@ struct SessionRowView: View {
                                 .foregroundColor(Color(hex: metrics.contextPressureColor))
                                 .frame(width: 32, alignment: .leading)
                         }
-                    } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
-                        Color.clear.frame(width: 100, height: 13)
+                    } else if let metrics = session.metrics, metrics.totalTokens > 0 {
+                        // Tokens flowing but no context-window data — daemon
+                        // sets metrics.contextWindowUnknown when the capacity
+                        // manager has no LiteLLM pricing entry for the model
+                        // (common for aider via LM Studio / any local
+                        // provider). Render the raw token count in the bar
+                        // slot so the row carries signal, and put cost (or
+                        // a placeholder) in the secondary column.
                         Text(metrics.formattedTokenUsage)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Color(hex: "#8E8E93"))
-                            .frame(width: 32, alignment: .leading)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .frame(width: 100, height: 13, alignment: .leading)
+                            .tooltip("Token count — context window not known for \(session.shortModelName)")
+                        if showCostDisplay {
+                            Text(metrics.formattedCost ?? "—")
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .frame(width: 36, alignment: .leading)
+                        } else {
+                            Text("—")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .frame(width: 32, alignment: .leading)
+                        }
                     } else {
                         Color.clear.frame(width: 132, height: 13)
                     }
@@ -1090,6 +1108,7 @@ struct SessionListView_Previews: PreviewProvider {
                             contextWindow: 200000,
                             contextUtilization: 7.5,
                             pressureLevel: "safe",
+                            contextWindowUnknown: nil,
                             estimatedCostUSD: nil,
                             lastAssistantText: nil,
                             tasks: nil

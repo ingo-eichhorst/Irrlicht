@@ -103,6 +103,40 @@ func TestContextUtilization_UnknownModel_ShowsTokensOnly(t *testing.T) {
 	if m.TotalTokens != 100000 {
 		t.Errorf("TotalTokens = %d, want 100000", m.TotalTokens)
 	}
+	// New flag introduced for the macOS UI: lets the client render a
+	// tokens-only label when the daemon has no context-window data,
+	// instead of silently hiding the context column.
+	if !m.ContextWindowUnknown {
+		t.Error("ContextWindowUnknown should be true for unknown model")
+	}
+}
+
+func TestContextUtilization_KnownModel_ContextWindowUnknown_StaysFalse(t *testing.T) {
+	// Sanity: known models with pricing must NOT carry the unknown flag.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{
+			"type":      "assistant",
+			"timestamp": ts(0),
+			"message": map[string]interface{}{
+				"model": "claude-sonnet-4-6",
+				"usage": map[string]interface{}{
+					"input_tokens":  float64(1000),
+					"output_tokens": float64(500),
+				},
+			},
+		},
+	})
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.ContextWindowUnknown {
+		t.Error("ContextWindowUnknown should be false for known model")
+	}
+	if m.ContextWindow == 0 {
+		t.Error("ContextWindow should be populated for known model")
+	}
 }
 
 func TestContextUtilization_Codex53_Uses256KContextWindow(t *testing.T) {

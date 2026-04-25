@@ -216,6 +216,45 @@ discoverer uses `pgrep -x`, the PID never resolves → the kqueue death
 monitor never registers → `process_exited` never fires. Aider hit this:
 recovery cost a debugging round.
 
+**Critical gotcha — per-CWD transcript agents need a git-init'd run CWD**:
+agents that walk up to find a git root (aider, claude, codex, likely
+others) write their per-project state at the git root, not the process
+CWD. If the driver runs them in a plain tmp dir inside a git checkout,
+the transcript lands at the worktree root and pollutes the tree. The
+driver must either `git init -q && git commit --allow-empty -q -m init`
+the per-run CWD before launching the agent, or invoke the agent with a
+no-git flag if one exists. `drive-aider.sh` is the reference shape.
+
+**Critical gotcha — non-JSONL transcripts**: the tailer's main loop
+filters every line that isn't `{...}` JSON before invoking `ParseLine`,
+so a JSONL-only `TranscriptParser` will never see a markdown line. For
+markdown / plain-text formats, implement `tailer.RawLineParser` (in
+addition to the no-op `ParseLine` required by the interface) — the
+tailer detects the capability and skips its JSON pre-parse. Two extra
+requirements that aren't obvious from the interface:
+
+- **Emit `EventType: "turn_done"` on turn close**, not
+  `"assistant_message"`. The state classifier returns the session to
+  `ready` only on `turn_done`; the first aider replay run came out
+  `ready→working` and never closed because the parser used
+  `assistant_message` for the turn-end event.
+- **Committed fixtures use the native extension** (`transcript.md`,
+  not `transcript.jsonl`). `curate-lifecycle-fixture.sh`,
+  `replay-fixtures.sh`, and `run-cell.sh` all branch on adapter name
+  for the extension.
+
+**Critical gotcha — agents with no native session UUID**: aider, and
+likely other wrapper-launched agents, don't assign session IDs. The
+daemon falls back to `proc-<pid>` per observed process, and a single
+transcript can be associated with multiple PIDs (Python wrapper +
+worker, fork-on-scan, etc.). `curate-lifecycle-fixture.sh` filters
+events by `session_id`, so it sees zero events if you pass the
+synthesized UUID the driver wrote. `run-cell.sh` has an aider-specific
+block that, after the daemon shuts down, queries the recording for
+`transcript_new` events matching the resolved transcript path and uses
+the lowest-`seq` `proc-<pid>` as the session ID for curate. Reuse this
+pattern for any future UUID-less adapter.
+
 ### 2. Wire into `core/cmd/irrlichd/main.go`
 
 One import, one line in the `agentCfgs` slice.
@@ -301,6 +340,142 @@ If you see `pid_discovered` for a PID that isn't your agent — it's
 probably `claude-code` matching against your own running irrlicht
 session (the daemon you're running this script from). Filter event
 inspection to `.adapter=="<slug>"` to avoid this confusion.
+
+## Per-agent setup notes
+
+Most adapters (claudecode, codex, pi) authenticate out-of-band — the
+contributor has already run `claude login` / `codex auth` / etc. and
+`precheck.sh` does not check API keys. The following adapters need
+extra local setup before scenarios will run:
+
+### aider (LM Studio default)
+
+Aider needs an OpenAI-compatible LLM endpoint. The post-discovery gate
+and committed fixtures were validated against [LM Studio](https://lmstudio.ai/)
+running locally; reproducing them does not require any cloud API key.
+
+**Setup once:**
+
+1. Install LM Studio and pull instruction-tuned models. Two recommended:
+   ```bash
+   lms get gemma-4-e2b-it             # ~1 GB; fine for baseline-hello
+   lms get gemma-4-26b-a4b            # ~13 GB; needed for tool-call /
+                                      # multi-turn / interrupt scenarios
+   ```
+   The smaller `gemma-4-e2b-it` is enough for `baseline-hello` (single
+   short reply). Tool-call and interactive scenarios from #217
+   (`full-lifecycle-toolcall`, `multi-turn-conversation`,
+   `interrupted-turn`, `model-switch`) need `gemma-4-26b-a4b` — the
+   smaller model doesn't reliably emit `> Applied edit` / `> Running`
+   status lines or follow multi-step instructions.
+2. Start the local server (LM Studio app → "Local Server" tab → Start,
+   or `lms server start`). It listens on `http://localhost:1234/v1` by
+   default.
+3. Export the OpenAI-compatible env vars aider reads. Add to your shell
+   profile:
+   ```bash
+   export OPENAI_API_BASE="http://localhost:1234/v1"
+   export OPENAI_API_KEY="lm-studio"   # any non-empty value
+   # Default to the larger model so interactive/toolcall scenarios work.
+   # Override per-scenario when re-recording baseline-hello against the
+   # smaller model committed in #216.
+   export IRRLICHT_AIDER_MODEL="openai/gemma-4-26b-a4b"
+   ```
+   `IRRLICHT_AIDER_MODEL` is read by both `drive-aider.sh` and
+   `drive-aider-interactive.sh`. Without it the driver lets aider pick
+   up its own `~/.aider.conf.yml` defaults.
+4. Smoke-check from a scratch CWD:
+   ```bash
+   mkdir /tmp/aider-smoke && cd /tmp/aider-smoke
+   aider --message "say ok" --no-auto-commits --yes-always \
+     --model "$IRRLICHT_AIDER_MODEL"
+   ls .aider.chat.history.md   # should exist after the round-trip
+   ```
+
+If your LM Studio install has a different model loaded, set
+`IRRLICHT_AIDER_MODEL` accordingly — the value goes through to
+`aider --model` verbatim.
+
+## Post-onboarding macOS UI checklist
+
+After the new adapter passes its replay scenarios, walk these five
+call-sites once to make sure session rows render correctly in the dev
+app. Skipping this leaves the row showing the Claude Code mascot, the
+literal provider/route prefix on the model, or an empty context column.
+
+Run `/ir:test-mac` first so the dev app is up against the worktree's
+daemon, then start a real session against the new adapter and watch
+the matching row.
+
+> File paths reference function/symbol names rather than line numbers
+> so the checklist doesn't rot every time someone adds an adapter case
+> above the switch. Use `grep -n` to locate.
+
+### A. Adapter icon — `platforms/macos/Irrlicht/Models/SessionState.swift`
+
+Extend the `adapterIcon` switch with a `case "<id>":` that returns a
+brand-aware SVG, alongside a new `private static let <id>SVG` (or
+`<id>SVG(dark:Bool)` if your icon adapts to appearance). Reference the
+agent's official brand color/wordmark, design at the 100×100 viewBox
+used by the other adapters, and keep visual distinction from existing
+icons:
+
+| Adapter | Visual | Mark |
+|---|---|---|
+| claude-code | pixel-art creature | mascot |
+| codex | circle + `>_` | terminal chevron |
+| pi | circle + π | Greek letter |
+| aider | CRT circle + green block cursor | terminal phosphor |
+
+Without this case, the row falls back to the Claude Code mascot via
+the `default:` branch — confusing for users.
+
+### B. Adapter display name — `adapterName` in `SessionState.swift`
+
+Add a `case "<id>": return "<Display Name>"` to the `adapterName`
+switch. Surfaced in tooltips and accessibility labels.
+
+### C. Model name normalization — `core/pkg/tailer/parser.go` (`NormalizeModelName`) and `SessionState.swift` (`shortModelName`)
+
+`shortModelName` already strips LiteLLM provider/route prefixes
+(everything before the last `/`), so models like
+`openai/google/gemma-4-26b-a4b` render as `gemma-4-26b-a4b` without
+extra code. Verify that's what you want for your adapter's typical
+model strings; if not, extend `NormalizeModelName` in the tailer.
+
+### D. Capacity manager — context window for unknown models
+
+The capacity manager loads pricing/context-window data from a
+LiteLLM cache. Models without an entry produce
+`pressure_level: "unknown"` and `context_window_unknown: true` in
+the daemon's metrics output. The macOS app handles this gracefully
+(renders a tokens-only label like `1.9K / ?` in place of the bar),
+so you don't need to register your adapter's models — but if you
+do want a real percentage bar, either:
+
+1. Add the adapter's typical models to the LiteLLM cache, OR
+2. Set the per-session `contextWindowOverride` in the tailer config
+   (used by codex/pi for adapters that emit context window in
+   transcript metadata).
+
+### E. Live smoke
+
+Start a real session against the new adapter, look at the row in the
+dev app, and verify all five elements render:
+
+1. **Adapter icon** — your new SVG, not the Claude Code mascot
+2. **Adapter name** — your display string in the tooltip
+3. **Short model name** — provider prefix stripped
+4. **Context** — either a colored bar with percentage (capacity
+   manager knows the model) or a plain `<tokens> / ?` label (model
+   unknown — flag `context_window_unknown` is true)
+5. **Cost** — a `$X.YZ` value if the adapter or capacity manager
+   produces cost data, otherwise `—`
+
+If any of these are wrong or empty, walk the corresponding sub-
+section above. The fixes are usually single-line additions to the
+switch statements in `SessionState.swift` plus a one-line tweak in
+the `displayMode == .context` branch of `SessionListView.swift`.
 
 ## Anti-patterns
 

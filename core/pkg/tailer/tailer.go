@@ -43,6 +43,13 @@ type SessionMetrics struct {
 	ContextUtilization     float64 `json:"context_utilization_percentage,omitempty"`
 	PressureLevel          string  `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
 
+	// ContextWindowUnknown is true when ContextWindow is the 32k sentinel
+	// fallback (no LiteLLM pricing for this model) rather than a known
+	// value. The macOS app uses this to render a tentative bar (dashed
+	// outline / "~" prefix). See computeContextUtilization in
+	// tailer_metrics.go.
+	ContextWindowUnknown bool `json:"context_window_unknown,omitempty"`
+
 	// Raw event data for real-time client-side calculations
 	TotalEventCount        int64     `json:"total_event_count,omitempty"`
 	RecentEventCount       int64     `json:"recent_event_count,omitempty"`
@@ -335,6 +342,8 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// bufio.Scanner's 64KB default token size.
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 
+	rawLineParser, isRawLine := t.parser.(RawLineParser)
+
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		currentOffset += int64(len(scanner.Bytes()) + 1)
@@ -343,18 +352,24 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			continue
 		}
 
-		// Quick JSON check.
-		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
-			continue
-		}
+		var parsed *ParsedEvent
+		if isRawLine {
+			// Markdown / non-JSONL formats: parser sees the trimmed line directly.
+			parsed = rawLineParser.ParseLineRaw(line)
+		} else {
+			// Quick JSON check.
+			if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+				continue
+			}
 
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
-		}
+			var raw map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &raw); err != nil {
+				continue
+			}
 
-		// Delegate to format-specific parser.
-		parsed := t.parser.ParseLine(raw)
+			// Delegate to format-specific parser.
+			parsed = t.parser.ParseLine(raw)
+		}
 		if parsed == nil || parsed.Skip {
 			// Even for skipped events, apply metadata that the parser extracted
 			// (e.g. model from model_change, CWD from session header) and drain

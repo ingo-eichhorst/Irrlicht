@@ -4,7 +4,8 @@
   "min_versions": {
     "claudecode": "2.0.0",
     "codex": "0.50.0",
-    "pi": "0.70.0"
+    "pi": "0.70.0",
+    "aider": "0.86.0"
   },
 
   "scenarios": [
@@ -32,6 +33,11 @@
           "prompt": "Reply with exactly the word: ok",
           "settings": {},
           "timeout_seconds": 90
+        },
+        "aider": {
+          "prompt": "Reply with exactly the word: ok",
+          "settings": {},
+          "timeout_seconds": 120
         }
       }
     },
@@ -59,6 +65,115 @@
           "prompt": "Use the bash tool to run 'echo hello', then reply 'done'.",
           "settings": {},
           "timeout_seconds": 240
+        },
+        "aider": {
+          "prompt": "Create a new file named hello.txt with exactly the contents: hello\n\nThen on the next line reply with exactly: done",
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+
+    {
+      "name": "agent-question-pending",
+      "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a).",
+      "requires": ["headless_mode"],
+      "verify": {
+        "has_waiting_state": true,
+        "final_state": "waiting"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+          "settings": {},
+          "timeout_seconds": 60
+        },
+        "codex": {
+          "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+          "settings": {},
+          "timeout_seconds": 120
+        },
+        "pi": {
+          "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+          "settings": {},
+          "timeout_seconds": 90
+        },
+        "aider": {
+          "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+
+    {
+      "name": "multi-turn-conversation",
+      "description": "Three consecutive user prompts in one aider session. Validates state reset between turns and per-turn Contribution accumulation. Aider-only for now because the other adapters' headless drivers are single-shot; multi-turn coverage there comes via session_resume.",
+      "requires": ["headless_mode"],
+      "verify": {
+        "min_turns": 3,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "aider": {
+          "script": [
+            {"type": "send", "text": "Reply with exactly: turn-one"},
+            {"type": "wait_turn"},
+            {"type": "send", "text": "Reply with exactly: turn-two"},
+            {"type": "wait_turn"},
+            {"type": "send", "text": "Reply with exactly: turn-three"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+
+    {
+      "name": "interrupted-turn",
+      "description": "User interrupts aider mid-turn (Ctrl-C before the LLM round completes). The interrupted turn never produces a `> Tokens:` line, so the parser's turnOpen state must reset cleanly on the next `####` user prompt. Aider-only.",
+      "requires": ["headless_mode"],
+      "verify": {
+        "contains_interrupt": true,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "aider": {
+          "script": [
+            {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
+            {"type": "sleep", "seconds": 8},
+            {"type": "interrupt"},
+            {"type": "sleep", "seconds": 3},
+            {"type": "send", "text": "Reply with exactly: ok"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 360
+        }
+      }
+    },
+
+    {
+      "name": "model-switch",
+      "description": "User invokes /model mid-session to swap the LLM. Validates that the parser's per-turn Contribution.Model follows the latest `> Model:` line in the transcript. Aider-only — claude/codex/pi don't expose runtime model switching this way.",
+      "requires": ["headless_mode", "multi_model_orchestration"],
+      "verify": {
+        "model_changed": true,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "aider": {
+          "script": [
+            {"type": "send", "text": "Reply with exactly: first"},
+            {"type": "wait_turn"},
+            {"type": "slash", "text": "/model openai/gemma-4-e2b-it-uncensored"},
+            {"type": "sleep", "seconds": 2},
+            {"type": "send", "text": "Reply with exactly: second"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
