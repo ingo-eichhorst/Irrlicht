@@ -14,7 +14,7 @@ import SwiftUI
 // nonactivating panel, positioned in screen coordinates above the cursor.
 
 @MainActor
-final class TooltipWindowController {
+private final class TooltipWindowController {
     static let shared = TooltipWindowController()
 
     private let panel: NSPanel
@@ -82,7 +82,10 @@ final class TooltipWindowController {
         // Native macOS tooltips appear diagonally below-right of the cursor.
         // Screen Y grows upward, so "below cursor" = lower Y.
         var origin = NSPoint(x: cursor.x + 14, y: cursor.y - size.height - 18)
-        if let visible = NSScreen.main?.visibleFrame {
+        // Clamp to the screen the cursor is actually on, not NSScreen.main —
+        // otherwise the tooltip jumps to the focused display on multi-monitor.
+        let cursorScreen = NSScreen.screens.first { $0.frame.contains(cursor) } ?? NSScreen.main
+        if let visible = cursorScreen?.visibleFrame {
             origin.x = max(visible.minX + 4, min(origin.x, visible.maxX - size.width - 4))
             if origin.y < visible.minY + 4 {
                 origin.y = cursor.y + 18  // flip above when no room below
