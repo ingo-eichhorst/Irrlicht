@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +23,11 @@ import (
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/pkg/tailer"
 )
+
+// safeSegment matches the only shapes adapter and scenario names take in this
+// repo: lowercase ascii words with dashes, optionally suffixed with a short hex
+// hash. Anything else (slashes, dots, ..) is rejected to prevent path escape.
+var safeSegment = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
 
 const (
 	githubRepoURL  = "https://github.com/ingo-eichhorst/Irrlicht"
@@ -108,7 +113,6 @@ type scenarioMeta struct {
 
 type featureMeta struct {
 	ID          string `json:"id"`
-	Title       string `json:"title"`
 	Description string `json:"description"`
 }
 
@@ -134,7 +138,7 @@ func buildMatrix() (*matrixResp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("features: %w", err)
 	}
-	scenarios, _, err := loadScenarios()
+	scenarios, err := loadScenarios()
 	if err != nil {
 		return nil, fmt.Errorf("scenarios: %w", err)
 	}
@@ -220,7 +224,7 @@ func handleScenario(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
-	scenarios, _, err := loadScenarios()
+	scenarios, err := loadScenarios()
 	if err != nil {
 		httpError(w, err)
 		return
@@ -561,19 +565,18 @@ type scenario struct {
 	ByAdapter   map[string]byAdapterEntry `json:"by_adapter"`
 }
 
-func loadScenarios() ([]scenario, []scenario, error) {
+func loadScenarios() ([]scenario, error) {
 	b, err := os.ReadFile(filepath.Join(*rootDir, scenariosJSON))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var doc struct {
-		Scenarios             []scenario `json:"scenarios"`
-		OrchestratorScenarios []scenario `json:"orchestrator_scenarios"`
+		Scenarios []scenario `json:"scenarios"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return doc.Scenarios, doc.OrchestratorScenarios, nil
+	return doc.Scenarios, nil
 }
 
 func loadCapabilities(adapter string) (map[string]any, error) {
@@ -603,10 +606,16 @@ func headSHA() string {
 	return strings.TrimSpace(string(out))
 }
 
+// splitAdapterScenario parses /<prefix>/<adapter>/<scenario> and rejects any
+// segment that isn't a plain lowercase identifier — guards against path
+// escape (../, absolute paths, encoded slashes, etc.).
 func splitAdapterScenario(urlPath, prefix string) (string, string, bool) {
 	rest := strings.TrimPrefix(urlPath, prefix)
 	parts := strings.SplitN(rest, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	if !safeSegment.MatchString(parts[0]) || !safeSegment.MatchString(parts[1]) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
@@ -652,5 +661,3 @@ func stringField(raw map[string]any, key string) string {
 	return v
 }
 
-// Keep io referenced for future streaming use.
-var _ = io.Discard

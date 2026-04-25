@@ -4,7 +4,6 @@
 const $ = (id) => document.getElementById(id);
 
 let matrixData = null;
-let featureIndex = {};
 
 init();
 
@@ -12,7 +11,6 @@ async function init() {
   bindUI();
   try {
     matrixData = await fetchJSON("/api/matrix");
-    featureIndex = Object.fromEntries(matrixData.features.map((f) => [f.id, f]));
     renderMatrix(matrixData);
     $("matrix-loading").hidden = true;
     $("matrix-wrap").hidden = false;
@@ -126,7 +124,6 @@ function openFeatures(adapter) {
   const body = $("features-body");
   const caps = matrixData.capabilities[adapter] || {};
   const cells = matrixData.cells[adapter] || {};
-  const scenariosByName = Object.fromEntries(matrixData.scenarios.map((s) => [s.name, s]));
 
   // For each feature, find scenarios that require it AND their cell state for this adapter.
   const rows = matrixData.features.map((f) => {
@@ -173,7 +170,7 @@ function openFeatures(adapter) {
         <th>Times covered</th>
       </tr></thead>
       <tbody>
-        ${rows.map((r) => renderFeatureRow(adapter, r, scenariosByName)).join("")}
+        ${rows.map((r) => renderFeatureRow(adapter, r)).join("")}
       </tbody>
     </table>
   `;
@@ -187,7 +184,7 @@ function openFeatures(adapter) {
   openModal("features");
 }
 
-function renderFeatureRow(adapter, r, scenariosByName) {
+function renderFeatureRow(adapter, r) {
   const capChip = renderCapChip(r.cap);
   const scnLinks = r.scenariosRequiring.length === 0
     ? `<span style="color:var(--text-dim)">— no scenario requires this feature —</span>`
