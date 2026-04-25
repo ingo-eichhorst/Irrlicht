@@ -15,6 +15,11 @@
     "streaming_output": "unknown",
     "structured_output_jsonl": true,
     "slash_commands": "unknown",
-    "plan_mode": "unknown"
+    "plan_mode": "unknown",
+    "git_integration": "unknown",
+    "multi_model_orchestration": "unknown",
+    "repo_map": "unknown",
+    "voice_input": "unknown",
+    "multimodal_input": "unknown"
   }
 }

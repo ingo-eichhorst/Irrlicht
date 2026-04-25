@@ -4,81 +4,119 @@
     {
       "id": "headless_mode",
       "title": "Headless / non-interactive mode",
-      "description": "Agent can be invoked with a single prompt and exit cleanly without a TTY. Required for any scenario that drives the agent from a script.",
+      "description": "Agent can be invoked with a single prompt and exit cleanly without a TTY. Required for any scenario that drives the agent from a script. Test: run agent with one prompt argument; expect clean exit code 0 and no terminal control sequences.",
       "added_in": "2026-04-25",
       "notes": "Replaces the legacy CapHeadlessMode enum value."
     },
     {
       "id": "tool_calls",
       "title": "Tool / function calling",
-      "description": "Agent can invoke tools (file read/write, shell, web fetch, MCP servers, etc.) during a turn and surface the results back into the conversation.",
+      "description": "Agent can invoke tools (file read/write, shell, web fetch, custom integrations) during a turn and surface the results back into the conversation. Test: run a scenario that requires file editing; expect a tool-use event in the transcript.",
       "added_in": "2026-04-25",
-      "notes": "Replaces the legacy CapToolCalls enum value. Does not specify which tools — only that some tool-call mechanism exists."
+      "notes": "Does not include MCP specifically — see mcp_servers. Replaces the legacy CapToolCalls enum value."
     },
     {
       "id": "permission_hooks",
-      "title": "Permission / approval hooks",
-      "description": "Agent emits a hook event when it wants to invoke a sensitive tool, allowing an external policy to allow, deny, or modify the call before it runs.",
+      "title": "Permission / approval interception",
+      "description": "Agent supports an external interceptor that can allow, deny, or modify a tool invocation before it runs (hook events, callbacks, policy files, etc.). Test: configure a deny rule for a specific tool; expect the agent to surface the denial without executing.",
       "added_in": "2026-04-25",
-      "notes": "Replaces the legacy CapPermissionHooks enum value. Today only claudecode supports this."
+      "notes": "Widened 2026-04-25 from claudecode-specific PreToolUse/PostToolUse hooks to any external-interception mechanism. Replaces the legacy CapPermissionHooks enum value."
     },
     {
       "id": "subagents",
       "title": "Subagent / child-session spawning",
-      "description": "Agent can spawn child sessions (often called subagents, task agents, or background agents) that run with their own session ID and report back to the parent.",
+      "description": "Agent can spawn child sessions (often called subagents, task agents, or background agents) that run with their own session ID and report back to the parent. Test: run a scenario that triggers a child agent; expect a parent-child link event in the recording.",
       "added_in": "2026-04-25",
       "notes": "Replaces the legacy CapSubagents enum value. Child sessions surface in irrlicht via ParentSessionID linking."
     },
     {
       "id": "session_id_assignment",
       "title": "Caller-assigned session ID",
-      "description": "Caller can pin the session UUID at launch (e.g. via a --session-id flag) instead of having the agent generate one. Lets a driver correlate the eventual transcript without out-of-band guessing.",
+      "description": "Caller can pin the session UUID at launch (e.g. via a --session-id flag) instead of having the agent generate one. Lets a driver correlate the eventual transcript without out-of-band guessing. Test: launch with a known UUID; expect the transcript file to use that UUID.",
       "added_in": "2026-04-25",
-      "notes": "claudecode supports this directly; codex and pi require parsing the UUID out of the first event or inferring from new-file mtime."
+      "notes": "claudecode supports this directly; codex and pi require parsing the UUID from output."
     },
     {
       "id": "settings_file_support",
       "title": "Per-invocation settings file",
-      "description": "Agent accepts a JSON / TOML settings file at launch that scopes configuration (model choice, permission policy, MCP servers, etc.) to that single invocation without mutating user-level config.",
+      "description": "Agent accepts a config file at launch (JSON, TOML, YAML, etc.) that scopes configuration (model choice, policy, integrations) to that single invocation without mutating user-level config. Test: pass a settings file with a non-default model; expect that model to be used for that run only.",
       "added_in": "2026-04-25",
-      "notes": "claudecode --settings supports this. codex and pi ignore today (drive-codex.sh:28, drive-pi.sh:24)."
+      "notes": "claudecode --settings supports this; aider --config likewise. codex and pi do not honor a per-invocation settings file."
     },
     {
       "id": "session_resume",
       "title": "Session resume / continuation",
-      "description": "Agent can resume a previous session and continue the same conversation, preserving session ID and history (e.g. claude --continue / --resume).",
+      "description": "Agent can resume a previous session and continue the same conversation, preserving session ID and history (e.g. claude --continue / --resume, codex resume). Test: end a session, then re-launch with the resume flag and the prior session ID; expect the new transcript to extend the prior one.",
       "added_in": "2026-04-25"
     },
     {
       "id": "mcp_servers",
       "title": "MCP server hosting",
-      "description": "Agent can connect to and call tools from Model Context Protocol servers configured at launch.",
-      "added_in": "2026-04-25"
+      "description": "Agent can connect to and call tools from Model Context Protocol servers configured at launch. Test: configure an MCP server with a known tool; trigger the agent to call it; expect the tool name to appear in the tool-use event.",
+      "added_in": "2026-04-25",
+      "notes": "Distinct from tool_calls — this specifically tests the MCP protocol path."
     },
     {
       "id": "streaming_output",
       "title": "Streaming output",
-      "description": "Agent emits partial response tokens / events while a turn is in progress, before the turn finishes. Affects how the recorder needs to handle in-flight events.",
+      "description": "Agent emits partial response tokens / events while a turn is in progress, before the turn finishes. Affects how the recorder needs to handle in-flight events. Test: tail the transcript during a long turn; expect intermediate writes before the final event.",
       "added_in": "2026-04-25"
     },
     {
       "id": "structured_output_jsonl",
       "title": "Structured JSONL transcript output",
-      "description": "Agent can emit a machine-readable transcript as JSON Lines on stdout or to a sidecar file, with one event per line. Preferred surface for replay capture.",
+      "description": "Agent emits a machine-readable transcript as JSON Lines (one event per line), either to stdout or a sidecar file. The preferred surface for replay capture. Test: invoke with the JSONL flag; expect each line to parse as valid JSON.",
       "added_in": "2026-04-25",
-      "notes": "codex --json already exposes this. claudecode writes to ~/.claude/projects/. pi writes to ~/.pi/agent/sessions/."
+      "notes": "codex --json exposes this. claudecode writes to ~/.claude/projects/. pi writes to ~/.pi/agent/sessions/. Aider does not — it uses a chat-history file in markdown-ish format."
     },
     {
       "id": "slash_commands",
-      "title": "User-defined slash commands / skills",
-      "description": "Agent supports user-defined commands (slash commands, skills, recipes, etc.) that expand to a richer prompt or workflow at invocation time.",
-      "added_in": "2026-04-25"
+      "title": "Slash-command interface",
+      "description": "Agent provides a slash-command interface (`/foo`) for user actions during a session — built-in commands, user-defined commands, or both. Test: type a known command; expect the agent to recognize it as a command (not as a prompt).",
+      "added_in": "2026-04-25",
+      "notes": "Widened 2026-04-25 from 'user-defined slash commands' to 'any slash interface'. Aider has built-in /add, /drop, /run; claudecode has built-in /login plus user-defined ~/.claude/commands/*.md."
     },
     {
       "id": "plan_mode",
-      "title": "Plan / read-only mode",
-      "description": "Agent can run in a constrained mode where it can read and reason but not mutate state (no file writes, no shell side effects). Useful for proposing a change without executing it.",
-      "added_in": "2026-04-25"
+      "title": "Read-only / advisory mode",
+      "description": "Agent supports a constrained mode where it can analyze, propose, or answer questions but not mutate the workspace (no file writes, no shell side effects). Includes plan-then-execute flows, ask-only/Q&A modes, and dry-run modes. Test: launch in the read-only mode and ask for a change; expect a proposal but no file mutations.",
+      "added_in": "2026-04-25",
+      "notes": "Widened 2026-04-25 from 'plan mode' to 'any read-only/advisory mode'. claudecode has plan mode; aider has /ask mode."
+    },
+    {
+      "id": "git_integration",
+      "title": "Version-control automation",
+      "description": "Agent automates version-control operations during a session — built-in auto-commit with descriptive messages, tracked edits, undo/rollback support, OR a tool-driven git workflow (git invoked via the agent's shell tool with the agent reasoning about commits). Test: run a scenario that edits a file in a git repo; expect a commit (or a record that the agent considered/proposed one).",
+      "added_in": "2026-04-25",
+      "notes": "Added 2026-04-25 from aider discovery. Aider has built-in auto-commit; claudecode does this via Bash + git; codex/pi behavior unclear."
+    },
+    {
+      "id": "multi_model_orchestration",
+      "title": "Multi-model orchestration",
+      "description": "Agent can invoke different LLMs for different sub-tasks within a single session — e.g. a planner model paired with an editor model, a fast model for routine work plus a strong model for hard tasks, or per-tool model routing. Test: configure two models; trigger a flow that should route to one then the other; expect both providers in the transcript.",
+      "added_in": "2026-04-25",
+      "notes": "Added 2026-04-25 from aider discovery (architect/editor mode). Likely cross-agent: claudecode has Haiku-for-some-tasks; codex may grow similar."
+    },
+    {
+      "id": "repo_map",
+      "title": "Automatic repository map",
+      "description": "Agent maintains an automatic structural summary of the repository (tree-sitter, AST, or similar) so it can reason about distant code without loading every file into the prompt. Distinct from a project memory file (CLAUDE.md / AGENTS.md), which is human-curated. Test: run the agent in a large repo; expect references to symbols/files the agent did not explicitly read.",
+      "added_in": "2026-04-25",
+      "notes": "Added 2026-04-25 from aider discovery. Aider's repo-map is the canonical example. Configurable token budget."
+    },
+    {
+      "id": "voice_input",
+      "title": "Voice input",
+      "description": "Agent accepts spoken input (microphone capture, transcribed via STT) as an alternative to typed prompts. Test: invoke the voice command; speak a prompt; expect the transcribed text to enter the conversation.",
+      "added_in": "2026-04-25",
+      "notes": "Added 2026-04-25 from aider discovery. Aider-distinctive today; widely applicable feature."
+    },
+    {
+      "id": "multimodal_input",
+      "title": "Multimodal input",
+      "description": "Agent accepts non-text inputs as part of a turn — images, screenshots, web page snapshots, PDFs, etc. Test: include an image in the prompt; expect the agent to refer to its content in the response.",
+      "added_in": "2026-04-25",
+      "notes": "Added 2026-04-25 from aider discovery. Likely cross-agent: aider supports images; claudecode is vision-capable; codex behavior unclear."
     }
   ]
 }
