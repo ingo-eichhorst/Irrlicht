@@ -335,6 +335,8 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// bufio.Scanner's 64KB default token size.
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 
+	rawLineParser, isRawLine := t.parser.(RawLineParser)
+
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		currentOffset += int64(len(scanner.Bytes()) + 1)
@@ -343,18 +345,24 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			continue
 		}
 
-		// Quick JSON check.
-		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
-			continue
-		}
+		var parsed *ParsedEvent
+		if isRawLine {
+			// Markdown / non-JSONL formats: parser sees the trimmed line directly.
+			parsed = rawLineParser.ParseLineRaw(line)
+		} else {
+			// Quick JSON check.
+			if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+				continue
+			}
 
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
-		}
+			var raw map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &raw); err != nil {
+				continue
+			}
 
-		// Delegate to format-specific parser.
-		parsed := t.parser.ParseLine(raw)
+			// Delegate to format-specific parser.
+			parsed = t.parser.ParseLine(raw)
+		}
 		if parsed == nil || parsed.Skip {
 			// Even for skipped events, apply metadata that the parser extracted
 			// (e.g. model from model_change, CWD from session header) and drain

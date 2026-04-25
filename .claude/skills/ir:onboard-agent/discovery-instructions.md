@@ -216,6 +216,45 @@ discoverer uses `pgrep -x`, the PID never resolves → the kqueue death
 monitor never registers → `process_exited` never fires. Aider hit this:
 recovery cost a debugging round.
 
+**Critical gotcha — per-CWD transcript agents need a git-init'd run CWD**:
+agents that walk up to find a git root (aider, claude, codex, likely
+others) write their per-project state at the git root, not the process
+CWD. If the driver runs them in a plain tmp dir inside a git checkout,
+the transcript lands at the worktree root and pollutes the tree. The
+driver must either `git init -q && git commit --allow-empty -q -m init`
+the per-run CWD before launching the agent, or invoke the agent with a
+no-git flag if one exists. `drive-aider.sh` is the reference shape.
+
+**Critical gotcha — non-JSONL transcripts**: the tailer's main loop
+filters every line that isn't `{...}` JSON before invoking `ParseLine`,
+so a JSONL-only `TranscriptParser` will never see a markdown line. For
+markdown / plain-text formats, implement `tailer.RawLineParser` (in
+addition to the no-op `ParseLine` required by the interface) — the
+tailer detects the capability and skips its JSON pre-parse. Two extra
+requirements that aren't obvious from the interface:
+
+- **Emit `EventType: "turn_done"` on turn close**, not
+  `"assistant_message"`. The state classifier returns the session to
+  `ready` only on `turn_done`; the first aider replay run came out
+  `ready→working` and never closed because the parser used
+  `assistant_message` for the turn-end event.
+- **Committed fixtures use the native extension** (`transcript.md`,
+  not `transcript.jsonl`). `curate-lifecycle-fixture.sh`,
+  `replay-fixtures.sh`, and `run-cell.sh` all branch on adapter name
+  for the extension.
+
+**Critical gotcha — agents with no native session UUID**: aider, and
+likely other wrapper-launched agents, don't assign session IDs. The
+daemon falls back to `proc-<pid>` per observed process, and a single
+transcript can be associated with multiple PIDs (Python wrapper +
+worker, fork-on-scan, etc.). `curate-lifecycle-fixture.sh` filters
+events by `session_id`, so it sees zero events if you pass the
+synthesized UUID the driver wrote. `run-cell.sh` has an aider-specific
+block that, after the daemon shuts down, queries the recording for
+`transcript_new` events matching the resolved transcript path and uses
+the lowest-`seq` `proc-<pid>` as the session ID for curate. Reuse this
+pattern for any future UUID-less adapter.
+
 ### 2. Wire into `core/cmd/irrlichd/main.go`
 
 One import, one line in the `agentCfgs` slice.
@@ -301,6 +340,51 @@ If you see `pid_discovered` for a PID that isn't your agent — it's
 probably `claude-code` matching against your own running irrlicht
 session (the daemon you're running this script from). Filter event
 inspection to `.adapter=="<slug>"` to avoid this confusion.
+
+## Per-agent setup notes
+
+Most adapters (claudecode, codex, pi) authenticate out-of-band — the
+contributor has already run `claude login` / `codex auth` / etc. and
+`precheck.sh` does not check API keys. The following adapters need
+extra local setup before scenarios will run:
+
+### aider (LM Studio default)
+
+Aider needs an OpenAI-compatible LLM endpoint. The post-discovery gate
+and committed fixtures were validated against [LM Studio](https://lmstudio.ai/)
+running locally; reproducing them does not require any cloud API key.
+
+**Setup once:**
+
+1. Install LM Studio and pull a small instruction-tuned model. Anything
+   that fits in your RAM and follows simple prompts will do; the gate run
+   used `gemma-4-e2b-it`. From LM Studio's CLI:
+   ```bash
+   lms get gemma-4-e2b-it
+   ```
+2. Start the local server (LM Studio app → "Local Server" tab → Start,
+   or `lms server start`). It listens on `http://localhost:1234/v1` by
+   default.
+3. Export the OpenAI-compatible env vars aider reads. Add to your shell
+   profile:
+   ```bash
+   export OPENAI_API_BASE="http://localhost:1234/v1"
+   export OPENAI_API_KEY="lm-studio"   # any non-empty value
+   export IRRLICHT_AIDER_MODEL="openai/gemma-4-e2b-it"
+   ```
+   `IRRLICHT_AIDER_MODEL` is read by `drive-aider.sh`. Without it the
+   driver lets aider pick up its own `~/.aider.conf.yml` defaults.
+4. Smoke-check from a scratch CWD:
+   ```bash
+   mkdir /tmp/aider-smoke && cd /tmp/aider-smoke
+   aider --message "say ok" --no-auto-commits --yes-always \
+     --model "$IRRLICHT_AIDER_MODEL"
+   ls .aider.chat.history.md   # should exist after the round-trip
+   ```
+
+If your LM Studio install has a different model loaded, set
+`IRRLICHT_AIDER_MODEL` accordingly — the value goes through to
+`aider --model` verbatim.
 
 ## Anti-patterns
 

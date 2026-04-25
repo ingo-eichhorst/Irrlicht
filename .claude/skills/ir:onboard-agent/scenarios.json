@@ -4,7 +4,8 @@
   "min_versions": {
     "claudecode": "2.0.0",
     "codex": "0.50.0",
-    "pi": "0.70.0"
+    "pi": "0.70.0",
+    "aider": "0.86.0"
   },
 
   "scenarios": [
@@ -32,6 +33,11 @@
           "prompt": "Reply with exactly the word: ok",
           "settings": {},
           "timeout_seconds": 90
+        },
+        "aider": {
+          "prompt": "Reply with exactly the word: ok",
+          "settings": {},
+          "timeout_seconds": 120
         }
       }
     },
@@ -57,6 +63,11 @@
         },
         "pi": {
           "prompt": "Use the bash tool to run 'echo hello', then reply 'done'.",
+          "settings": {},
+          "timeout_seconds": 240
+        },
+        "aider": {
+          "prompt": "Run the shell command 'echo hello' and tell me the output.",
           "settings": {},
           "timeout_seconds": 240
         }
