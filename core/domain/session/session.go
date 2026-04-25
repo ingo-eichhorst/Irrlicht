@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,16 @@ type SessionMetrics struct {
 	ContextWindow      int64   `json:"context_window,omitempty"`
 	ContextUtilization float64 `json:"context_utilization_percentage"`
 	PressureLevel      string  `json:"pressure_level"`
+
+	// ContextWindowUnknown signals that the model has no LiteLLM pricing
+	// entry, so ContextWindow is a sentinel fallback (32k) rather than a
+	// known value. The UI uses this to render a tentative bar (dashed
+	// outline / "~" prefix) instead of suppressing context display
+	// entirely. Without this fallback, sessions on local models like
+	// `gemma-4-26b-a4b` (aider via LM Studio) had pressure_level="unknown"
+	// which the macOS app treated as "no data" and hid the row's context
+	// column.
+	ContextWindowUnknown bool `json:"context_window_unknown,omitempty"`
 
 	// Tool call tracking — count unmatched tool_use/tool_result pairs.
 	HasOpenToolCall   bool `json:"has_open_tool_call"`
@@ -147,15 +158,30 @@ func isUserBlockingTool(name string) bool {
 	return name == "AskUserQuestion" || name == "ExitPlanMode"
 }
 
+// trailingMarkdownNoise are characters that commonly appear AFTER a
+// question mark when models wrap questions in markdown formatting.
+// e.g. `**Question?**` (bold), `*Question?*` (italic), `_Question?_`,
+// `~~Question?~~`, `` `Question?` `` (inline code), `"Question?"`
+// (quoted), and trailing whitespace.
+const trailingMarkdownNoise = "*_~`\"' \t\n\r"
+
 // IsWaitingForUserInput returns true when the agent finished its turn but the
 // last assistant message ends with a question mark — indicating the agent is
 // waiting for user input even though no user-blocking tool is open.
+//
+// Models routinely wrap questions in markdown for emphasis, e.g.
+// `**Should I do X?**`, leaving the literal final byte as `*` rather
+// than `?`. We strip trailing markdown delimiters and whitespace before
+// the check so the heuristic survives any reasonable formatting.
 func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	if m == nil || m.LastAssistantText == "" {
 		return false
 	}
-	// LastAssistantText is already trimmed by the tailer.
-	return m.LastAssistantText[len(m.LastAssistantText)-1] == '?'
+	trimmed := strings.TrimRight(m.LastAssistantText, trailingMarkdownNoise)
+	if trimmed == "" {
+		return false
+	}
+	return trimmed[len(trimmed)-1] == '?'
 }
 
 // IsAgentDone returns true when the agent finished its turn. The primary
@@ -313,6 +339,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		ContextWindow:          newM.ContextWindow,
 		ContextUtilization:     newM.ContextUtilization,
 		PressureLevel:          newM.PressureLevel,
+		ContextWindowUnknown:   newM.ContextWindowUnknown,
 		HasOpenToolCall:        newM.HasOpenToolCall,
 		OpenToolCallCount:      newM.OpenToolCallCount,
 		OpenSubagents:          newM.OpenSubagents,

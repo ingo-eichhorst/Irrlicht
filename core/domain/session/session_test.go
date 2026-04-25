@@ -6,6 +6,40 @@ import (
 	"time"
 )
 
+func TestIsWaitingForUserInput_TrailingMarkdown(t *testing.T) {
+	// Models routinely wrap questions in markdown; the literal last
+	// byte is often a delimiter, not '?'. Pin that the classifier
+	// strips trailing markdown noise before the check.
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"plain", "What now?", true},
+		{"trailing whitespace", "What now?   \n", true},
+		{"bold", "**What now?**", true},
+		{"italic asterisk", "*What now?*", true},
+		{"italic underscore", "_What now?_", true},
+		{"strikethrough", "~~What now?~~", true},
+		{"inline code", "`What now?`", true},
+		{"quoted", "\"What now?\"", true},
+		{"single-quoted", "'What now?'", true},
+		{"mixed bold + whitespace", "**What now?**\n", true},
+		{"production gemma case (asterisks)", "Are there any conventions you follow?**", true},
+		{"statement", "I am done.", false},
+		{"empty", "", false},
+		{"only delimiters", "***", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := &SessionMetrics{LastAssistantText: c.text}
+			if got := m.IsWaitingForUserInput(); got != c.want {
+				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
+			}
+		})
+	}
+}
+
 func TestIsStale(t *testing.T) {
 	now := time.Now().Unix()
 

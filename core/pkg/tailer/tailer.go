@@ -43,6 +43,13 @@ type SessionMetrics struct {
 	ContextUtilization     float64 `json:"context_utilization_percentage,omitempty"`
 	PressureLevel          string  `json:"pressure_level,omitempty"` // "safe", "caution", "warning", "critical"
 
+	// ContextWindowUnknown is true when ContextWindow is the 32k sentinel
+	// fallback (no LiteLLM pricing for this model) rather than a known
+	// value. The macOS app uses this to render a tentative bar (dashed
+	// outline / "~" prefix). See computeContextUtilization in
+	// tailer_metrics.go.
+	ContextWindowUnknown bool `json:"context_window_unknown,omitempty"`
+
 	// Raw event data for real-time client-side calculations
 	TotalEventCount        int64     `json:"total_event_count,omitempty"`
 	RecentEventCount       int64     `json:"recent_event_count,omitempty"`

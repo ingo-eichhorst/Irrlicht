@@ -112,6 +112,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		ContextWindow:          m.ContextWindow,
 		ContextUtilization:     m.ContextUtilization,
 		PressureLevel:          m.PressureLevel,
+		ContextWindowUnknown:   m.ContextWindowUnknown,
 		HasOpenToolCall:        m.HasOpenToolCall,
 		OpenToolCallCount:      m.OpenToolCallCount,
 		OpenSubagents:          a.countOpenSubagents(adapter, m),

@@ -167,6 +167,14 @@ post-discovery live recording smoke described in
 minimum stub adapter, drives the agent in tmux, and produces a recording
 that classifies the daemon's detection as PASS / PARTIAL / FAIL.
 
+**Post-cell UI gate** (also new-adapter only): once cells pass, walk
+the macOS UI checklist in
+`discovery-instructions.md → Post-onboarding macOS UI checklist` to
+add the adapter's icon, display name, and verify the session row
+renders icon + name + short model + context + cost correctly. Skipping
+this leaves the row showing the Claude Code mascot and the literal
+provider/route prefix on the model — confusing for users.
+
 **On cell failure**: when `run-cell.sh` exits nonzero or the manifest's
 `error` field is set, run `scripts/lib/classify-failure.sh <staging>`. The
 output is `{"code": "<code>", "summary": "...", "evidence": "..."}`. Look

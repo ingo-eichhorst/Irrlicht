@@ -34,6 +34,7 @@ struct SessionMetrics: Codable {
     let contextWindow: Int64?       // model context window size (nil/0 if unknown)
     let contextUtilization: Double  // context utilization percentage (0-100) (0 if not available)
     let pressureLevel: String       // pressure level: "safe", "caution", "warning", "critical" ("unknown" if not available)
+    let contextWindowUnknown: Bool? // true when daemon has no LiteLLM pricing for the model — render tokens-only, no percentage
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
     let lastAssistantText: String?  // last assistant message text, truncated (~200 chars)
     let tasks: [SessionTask]?              // Claude Code task list (nil when TaskCreate never called)
@@ -45,6 +46,7 @@ struct SessionMetrics: Codable {
         case contextWindow = "context_window"
         case contextUtilization = "context_utilization_percentage"
         case pressureLevel = "pressure_level"
+        case contextWindowUnknown = "context_window_unknown"
         case estimatedCostUSD = "estimated_cost_usd"
         case lastAssistantText = "last_assistant_text"
         case tasks
@@ -140,7 +142,13 @@ struct SessionMetrics: Codable {
     }
 
     var formattedCost: String? {
-        guard let cost = estimatedCostUSD, cost > 0 else { return nil }
+        // Hide entirely when there's no session activity yet.
+        guard totalTokens > 0 else { return nil }
+        let cost = estimatedCostUSD ?? 0
+        // Free local models (LM Studio / Ollama) and paid models with no
+        // pricing in the LiteLLM cache both land here. Show "—" rather
+        // than nil so the column doesn't render empty for aider sessions.
+        if cost == 0 { return "—" }
         if cost < 0.01 { return "<$0.01" }
         return String(format: "$%.2f", cost)
     }
@@ -482,7 +490,14 @@ struct SessionState: Identifiable, Codable {
     }
 
     var shortModelName: String {
-        var short = effectiveModel.replacingOccurrences(of: "claude-", with: "")
+        var short = effectiveModel
+        // Strip LiteLLM provider/routing prefix, e.g.
+        // "openai/google/gemma-4-26b-a4b" → "gemma-4-26b-a4b"
+        // "anthropic/claude-opus-4-7"     → "claude-opus-4-7"
+        if let lastSlash = short.lastIndex(of: "/") {
+            short = String(short[short.index(after: lastSlash)...])
+        }
+        short = short.replacingOccurrences(of: "claude-", with: "")
         // "sonnet-4-6" → "sonnet-4.6"
         if let range = short.range(of: #"-(\d+)$"#, options: .regularExpression) {
             short = short.replacingCharacters(in: range, with: "." + short[range].dropFirst())
@@ -494,6 +509,7 @@ struct SessionState: Identifiable, Codable {
         switch adapter ?? "claude-code" {
         case "codex": return "Codex"
         case "pi": return "Pi"
+        case "aider": return "Aider"
         default: return "Claude Code"
         }
     }
@@ -509,6 +525,8 @@ struct SessionState: Identifiable, Codable {
             svg = SessionState.codexSVG(dark: isDark)
         case "pi":
             svg = SessionState.piSVG(dark: isDark)
+        case "aider":
+            svg = SessionState.aiderSVG
         default:
             svg = SessionState.claudeCodeSVG
         }
@@ -545,6 +563,17 @@ struct SessionState: Identifiable, Codable {
         </svg>
         """
     }
+
+    // Aider — VT220-green block cursor on a dark CRT-screen circle. Mirrors
+    // aider's official wordmark colors (terminal green #14b014 from
+    // aider.chat/assets/logo.svg) and stays brand-consistent across light
+    // and dark appearances. Distinct from codex's `>_` chevron prompt.
+    private static let aiderSVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="44" fill="#0a1a0a" stroke="#14b014" stroke-width="6"/>
+      <rect x="40" y="32" width="20" height="36" fill="#14b014"/>
+    </svg>
+    """
 
     // Pi coding agent — Greek letter pi in a circle. Color adapts to appearance.
     private static func piSVG(dark: Bool) -> String {

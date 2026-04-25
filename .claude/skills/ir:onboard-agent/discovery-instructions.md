@@ -396,6 +396,81 @@ If your LM Studio install has a different model loaded, set
 `IRRLICHT_AIDER_MODEL` accordingly — the value goes through to
 `aider --model` verbatim.
 
+## Post-onboarding macOS UI checklist
+
+After the new adapter passes its replay scenarios, walk these five
+call-sites once to make sure session rows render correctly in the dev
+app. Skipping this leaves the row showing the Claude Code mascot, the
+literal provider/route prefix on the model, or an empty context column.
+
+Run `/ir:test-mac` first so the dev app is up against the worktree's
+daemon, then start a real session against the new adapter and watch
+the matching row.
+
+### A. Adapter icon — `platforms/macos/Irrlicht/Models/SessionState.swift`
+
+Extend the `adapterIcon` switch (around line 518) with a `case "<id>":`
+that returns a brand-aware SVG. Reference the agent's official
+brand color/wordmark, design at the 100×100 viewBox used by the other
+adapters, and keep visual distinction from existing icons:
+
+| Adapter | Visual | Mark |
+|---|---|---|
+| claude-code | pixel-art creature | mascot |
+| codex | circle + `>_` | terminal chevron |
+| pi | circle + π | Greek letter |
+| aider | dark CRT circle + green block cursor | terminal phosphor |
+
+Without this case, the row falls back to the Claude Code mascot via
+the `default:` branch — confusing for users.
+
+### B. Adapter display name — `SessionState.swift:507`
+
+Add a `case "<id>": return "<Display Name>"` to the `adapterName`
+switch. Surfaced in tooltips and accessibility labels.
+
+### C. Model name normalization — `core/pkg/tailer/parser.go` and `SessionState.swift:484`
+
+`shortModelName` already strips LiteLLM provider/route prefixes
+(everything before the last `/`), so models like
+`openai/google/gemma-4-26b-a4b` render as `gemma-4-26b-a4b` without
+extra code. Verify that's what you want for your adapter's typical
+model strings; if not, extend `NormalizeModelName` in the tailer.
+
+### D. Capacity manager — context window for unknown models
+
+The capacity manager loads pricing/context-window data from a
+LiteLLM cache. Models without an entry produce
+`pressure_level: "unknown"` and `context_window_unknown: true` in
+the daemon's metrics output. The macOS app handles this gracefully
+(renders a tokens-only label like `1.9K / ?` in place of the bar),
+so you don't need to register your adapter's models — but if you
+do want a real percentage bar, either:
+
+1. Add the adapter's typical models to the LiteLLM cache, OR
+2. Set the per-session `contextWindowOverride` in the tailer config
+   (used by codex/pi for adapters that emit context window in
+   transcript metadata).
+
+### E. Live smoke
+
+Start a real session against the new adapter, look at the row in the
+dev app, and verify all five elements render:
+
+1. **Adapter icon** — your new SVG, not the Claude Code mascot
+2. **Adapter name** — your display string in the tooltip
+3. **Short model name** — provider prefix stripped
+4. **Context** — either a colored bar with percentage (capacity
+   manager knows the model) or a plain `<tokens> / ?` label (model
+   unknown — flag `context_window_unknown` is true)
+5. **Cost** — a `$X.YZ` value if the adapter or capacity manager
+   produces cost data, otherwise `—`
+
+If any of these are wrong or empty, walk the corresponding sub-
+section above. The fixes are usually single-line additions to the
+switch statements in `SessionState.swift` plus a one-line tweak in
+the view at `SessionListView.swift:388-426`.
+
 ## Anti-patterns
 
 - **Don't** run the agent's CLI in discovery mode. That's WS06/13.

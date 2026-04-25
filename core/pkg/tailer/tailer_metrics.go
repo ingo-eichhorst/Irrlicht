@@ -304,6 +304,8 @@ func (t *TranscriptTailer) computeMetrics() {
 
 // computeContextUtilization calculates context utilization percentage and pressure level.
 func (t *TranscriptTailer) computeContextUtilization() {
+	t.metrics.ContextWindowUnknown = false
+
 	if t.metrics.TotalTokens == 0 || t.metrics.ModelName == "" {
 		t.metrics.ContextUtilization = 0.0
 		t.metrics.PressureLevel = "unknown"
@@ -320,11 +322,18 @@ func (t *TranscriptTailer) computeContextUtilization() {
 		effectiveContextWindow = t.capacityMgr.GetModelCapacity(t.metrics.ModelName).ContextWindow
 	}
 
-	// Unknown model: no context window data available — report raw tokens only.
+	// No pricing for this model (capacity manager doesn't know it). We
+	// intentionally do NOT invent a synthetic context window — guessing
+	// wrong (e.g. 100k tokens against an assumed 32k) shows >100%
+	// utilization which is more confusing than honest "unknown". Instead,
+	// the macOS client uses the ContextWindowUnknown flag to render a
+	// tokens-only label without a percentage, so the row still has signal
+	// instead of silently hiding the column.
 	if effectiveContextWindow <= 0 {
 		t.metrics.ContextWindow = 0
 		t.metrics.ContextUtilization = 0
 		t.metrics.PressureLevel = "unknown"
+		t.metrics.ContextWindowUnknown = true
 		return
 	}
 
