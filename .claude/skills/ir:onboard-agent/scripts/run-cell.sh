@@ -69,13 +69,8 @@ PROMPT="$(jq -r '.prompt' <<<"$CELL_JSON")"
 # --- Staging -------------------------------------------------------------
 TS="$(date -u +%Y%m%dT%H%M%S)"
 STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$SCENARIO-$TS"
-# Hard safety: staging must live under .build/refresh/. Guards against
-# ADAPTER/SCENARIO arguments containing path traversal ("..") that
-# survived the jq lookup; cheap string test.
-if [[ "$STAGING" != "$REPO_ROOT/.build/refresh/"* ]] || [[ "$STAGING" == *"/testdata/"* ]]; then
-  echo "refusing to stage outside .build/refresh/: $STAGING" >&2
-  exit 1
-fi
+# shellcheck source=lib/assert-staging-path.sh
+. "$SCRIPT_DIR/lib/assert-staging-path.sh"
 mkdir -p "$STAGING/recordings" "$STAGING/testdata/replay/$ADAPTER" "$STAGING/reports"
 
 # Scenario's settings blob → staging file, passed to driver as a path.

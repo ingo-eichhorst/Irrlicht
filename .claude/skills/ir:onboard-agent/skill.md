@@ -12,26 +12,45 @@ description: >
 
 # Irrlicht Agent Onboarding
 
-Produce or refresh the canonical scenario × adapter fixture matrix. Each
-scenario in `scenarios.json` is agent-agnostic and declares `requires:
-[capability]`. Each adapter declares `Capabilities` in
-`core/adapters/inbound/agents/<adapter>/config.go`. The matrix of valid cells
-falls out automatically; running this skill populates or refreshes them.
+Produce or refresh the canonical scenario × adapter fixture matrix. There
+are two parallel axes:
+
+1. **Agent scenarios** in `scenarios.json -> scenarios[]`. Agent-agnostic
+   declarations with `requires: [capability]`; per-adapter prompt under
+   `by_adapter`. Adapters declare `Capabilities` in
+   `core/adapters/inbound/agents/<adapter>/config.go`. Valid cells run a
+   real CLI under an isolated daemon and capture transcripts.
+2. **Orchestrator scenarios** in `scenarios.json -> orchestrator_scenarios[]`.
+   Per-orchestrator inputs under `by_orchestrator`. Each scenario
+   references a `fixture_dir` under `testdata/orchestrator/<adapter>/`
+   containing seeded `gt`-style responses, sidecar files, and golden
+   `orchestrator.State` snapshots. Verification is a Go test against the
+   committed goldens.
+
+The matrix of valid cells falls out automatically; running this skill
+populates or refreshes them.
 
 Auth is the user's responsibility — `claude` subscription login, `codex`
 auth, etc. are set up out-of-band. If a CLI isn't authenticated it will say
-so on stderr and the run will fail cleanly.
+so on stderr and the run will fail cleanly. Orchestrator scenarios are
+hermetic and don't need auth.
 
 ## Invocations
 
 - **`/ir:onboard-agent`** — no args: compute and print the matrix status (see
   Step 2). No cost spent.
 - **`/ir:onboard-agent <adapter>`** — run every cell that applies to
-  `<adapter>`. E.g. `/ir:onboard-agent claudecode`.
+  `<adapter>`. E.g. `/ir:onboard-agent claudecode` or
+  `/ir:onboard-agent gastown`.
 - **`/ir:onboard-agent <adapter> <scenario>`** — run one specific cell. E.g.
-  `/ir:onboard-agent claudecode baseline-hello`.
+  `/ir:onboard-agent claudecode baseline-hello` or
+  `/ir:onboard-agent gastown agent-discovery`.
 - **`/ir:onboard-agent --diff`** — re-summarize the latest staged runs
   (under `.build/refresh/<adapter>/<scenario>-*/`) without re-running.
+
+The adapter argument disambiguates which axis is being run: agent adapters
+(`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator
+adapters (`gastown`) match `orchestrator_scenarios[].by_orchestrator`.
 
 ## Step 1: Understand the task
 
@@ -46,7 +65,11 @@ If the invocation is ambiguous, ask the user which mode to run.
 ## Step 2: Compute matrix status
 
 Before any run (or as the sole output of `list`), compute the current state
-of the matrix. Each cell's state is one of:
+of **both** matrices.
+
+### Agent matrix (`scenarios[]` × agent adapters)
+
+Each cell's state is one of:
 
 - **OK** — fixture committed at `testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}`, and this session has not refreshed it.
 - **stale** — fixture committed, this session refreshed it, and the summarize step found material change.
@@ -54,14 +77,10 @@ of the matrix. Each cell's state is one of:
 - **missing-prompt** — capabilities match but `by_adapter.<adapter>` is absent from `scenarios.json`. Actionable: add the entry.
 - **N/A (no <capability>)** — adapter's `Capabilities` don't satisfy the scenario's `requires`. Document which capability is missing.
 
-To compute the status:
-
 ```bash
-# Read all scenarios
 SCENARIOS_JSON=.claude/skills/ir:onboard-agent/scenarios.json
 
-# Read each adapter's capabilities from its Go config file.
-# Grep for "Capabilities:" and the agents.Cap... constants inside the literal.
+# Adapter capabilities:
 grep -A10 "Capabilities: \[\]agents.Capability" \
   core/adapters/inbound/agents/claudecode/config.go \
   core/adapters/inbound/agents/codex/config.go \
@@ -71,15 +90,38 @@ grep -A10 "Capabilities: \[\]agents.Capability" \
 ls testdata/replay/claudecode/ testdata/replay/codex/ testdata/replay/pi/ 2>/dev/null
 ```
 
-Print a table: rows = adapters (claudecode, codex, pi), columns = scenario
-names. For any **missing-prompt** or **never-recorded** cell, append a one-line
-hint: "add `by_adapter.codex` entry to scenarios.json" or "run
-`/ir:onboard-agent codex baseline-hello`".
+Print a table: rows = agent adapters, columns = scenario names. For any
+**missing-prompt** or **never-recorded** cell, append a one-line hint.
+
+### Orchestrator matrix (`orchestrator_scenarios[]` × orchestrator adapters)
+
+Each cell's state is one of:
+
+- **OK** — committed `golden/state-NNN.json` files cover all `poll_ticks` declared in `by_orchestrator.<adapter>`.
+- **stale** — this session ran `drive-gastown.sh` and the summarize step reported `verdict: CHANGED`.
+- **never-recorded** — `by_orchestrator.<adapter>` entry exists but the scenario's `golden/` directory is empty or missing.
+- **missing-fixture** — `by_orchestrator.<adapter>` entry exists but `testdata/orchestrator/<adapter>/<scenario>/input/` is missing. Actionable: add the input fixtures.
+
+```bash
+# Orchestrator scenarios + their fixture dirs:
+jq -r '.orchestrator_scenarios[] | "\(.name)\t\(.by_orchestrator.gastown.fixture_dir)\t\(.by_orchestrator.gastown.poll_ticks)"' \
+  $SCENARIOS_JSON
+
+# Existing goldens:
+find testdata/orchestrator/gastown -name 'state-*.json' 2>/dev/null | sort
+```
+
+Print a second table: rows = orchestrator adapters (currently just `gastown`),
+columns = orchestrator scenario names.
 
 ## Step 3: Execute cells
 
-For each cell (in order), invoke `scripts/run-cell.sh <adapter> <scenario>`.
-The script handles:
+Dispatch by adapter type:
+
+### Agent cells
+
+For each (agent-adapter, scenario) cell, invoke
+`scripts/run-cell.sh <adapter> <scenario>`. The script handles:
 - `scripts/precheck.sh` (pgrep, git-clean, CLI version, build daemon)
 - isolated daemon launch with `IRRLICHT_RECORDINGS_DIR`
 - driver invocation via `scripts/drive-<adapter>.sh`
@@ -89,11 +131,25 @@ The script handles:
 - replay report generation (staged + committed, if any)
 - `run-manifest.json` writeback
 
+### Orchestrator cells
+
+For each (orchestrator-adapter, orchestrator-scenario) cell, invoke
+`scripts/drive-<adapter>.sh <scenario>` directly (no run-cell.sh wrapper —
+orchestrator scenarios are hermetic and don't need a live daemon). For
+gastown, the script:
+
+- Stages a writable copy of `testdata/orchestrator/gastown/<scenario>/` under `.build/refresh/gastown/<scenario>-<UTC-ts>/fixtures/<scenario>/`.
+- Runs `go test -run TestGastownReplay/<scenario> -update-goldens` against the staged copy via `GASTOWN_FIXTURES_DIR`.
+- Diffs the regenerated staged goldens against the committed `testdata/` goldens.
+- Writes `run-manifest.json` with `verdict` (`OK` / `CHANGED` / `ERROR`) and the list of differing golden files.
+
 Stream the script's output as it runs. On nonzero exit, read
 `<staging>/run-manifest.json` and report the failing step specifically. Stop
 the batch on first failure.
 
 ## Step 4: Summarize (the important step — read carefully)
+
+### Agent cells
 
 For each staged cell, read `<staging>/reports/staged.json` and (if present)
 `<staging>/reports/committed.json`. Produce a structured diff and a verdict.
@@ -158,7 +214,7 @@ Pick one:
 - **ERROR: <reason>** — `run-manifest.json` contains an error (transcript
   not found, daemon shutdown SIGKILL, etc.).
 
-### Per-cell output format
+### Per-cell output format (agent)
 
 ```
 [claudecode / baseline-hello]  verdict: OK
@@ -168,10 +224,59 @@ Pick one:
   final_state: ready → ready
 ```
 
+### Orchestrator cells
+
+The driver already produced the verdict. Read `<staging>/run-manifest.json`:
+
+- `verdict: OK` → no material change. The poller produced byte-identical
+  goldens against committed.
+- `verdict: CHANGED` → list `manifest.diffs` (the differing
+  `state-NNN.json` filenames). For each, also produce a structural diff
+  against the same dimensions used for agents where applicable: codebase
+  count/names, worker counts by role, global-agent presence, top-level
+  `running` flag. Diff the staged JSON against the committed JSON in
+  `<scenario>/golden/` to surface specifically which fields moved.
+- `verdict: ERROR` → read `<staging>/test.log` for the Go test failure and
+  surface the relevant test output (panic, missing fixture, parse error,
+  etc.).
+
+Cross-check the scenario's `verify` block in `scenarios.json` against the
+staged goldens:
+
+- `codebases_count`, `codebases_names`, `global_agents_roles` — direct field comparison on `state-001.json`.
+- `running`, `codebase_statuses` — direct field comparison.
+- `polecat_count_per_tick`, `boot_present_per_tick`, `codebases_count_per_tick` — read each tick's `state-NNN.json`, derive the array, compare.
+- `workers_with_session_min`, `expected_session_ids` — sum across worktrees and report.
+
+A `verify` failure with `verdict: OK` should be flagged as a
+**VERIFY-FAIL** verdict that blocks commit (the goldens reproduce, but
+they no longer match the scenario's intent — fixture inputs likely need
+adjusting).
+
+### Per-cell output format (orchestrator)
+
+```
+[gastown / agent-discovery]  verdict: OK
+  ticks: 1
+  codebases: 2 [gastown, irrlicht]
+  global_agents: 3 [mayor, deacon, boot]
+  verify: PASS
+
+[gastown / polling-lifecycle]  verdict: CHANGED
+  ticks: 3
+  diffs: state-002.json
+  delta: tick 2 — boot_present went true→false (regression: gt-fail
+         fallback path no longer drops the boot agent)
+  verify: PASS  (the verify block accepts the change, so this is a real
+                 regression in the poller, not a verify drift)
+```
+
 ## Step 5: Next steps
 
 After summarizing, print the concrete commands the maintainer runs to
-commit accepted cells:
+commit accepted cells.
+
+### Agent cells
 
 ```
 # Review each staged fixture vs current committed one:
@@ -189,8 +294,27 @@ go test ./core/cmd/replay/... -run TestReplayWithSidecar
 git add testdata/replay/claudecode/baseline-hello.* && git commit -m "..."
 ```
 
-Do NOT run the `cp` or `git commit` yourself. The maintainer reviews and
-commits by hand — this skill never touches `testdata/` directly.
+### Orchestrator cells
+
+```
+# Review the regenerated goldens vs committed:
+diff -r testdata/orchestrator/gastown/agent-discovery/golden \
+        .build/refresh/gastown/agent-discovery-20260425-101500/fixtures/agent-discovery/golden
+
+# If accepted, regenerate goldens in place (touches testdata/ only):
+go test ./core/adapters/inbound/orchestrators/gastown/ \
+        -run TestGastownReplay/agent-discovery -update-goldens
+
+# Verify the test now passes against committed:
+go test ./core/adapters/inbound/orchestrators/gastown/ -run TestGastownReplay
+
+# Commit:
+git add testdata/orchestrator/gastown/agent-discovery/ && git commit -m "..."
+```
+
+Do NOT run the `cp`, `-update-goldens`, or `git commit` yourself. The
+maintainer reviews and commits by hand — this skill never touches
+`testdata/` directly.
 
 ## Anti-patterns
 
@@ -207,3 +331,7 @@ commits by hand — this skill never touches `testdata/` directly.
   prompt by editing `scenarios.json` and runs again.
 - **Don't** diff exact text from transition reasons, assistant output, or
   tool-call arguments. Only structural invariants are stable across runs.
+- **Don't** run `go test -update-goldens` against `testdata/orchestrator/`
+  yourself. Always go through `drive-gastown.sh`, which writes to
+  `.build/refresh/`. The maintainer chooses when (and whether) to
+  regenerate the committed goldens.

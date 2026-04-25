@@ -1,0 +1,4 @@
+{
+  "description": "Two rigs declared in rigs.json; gt rig list returns the same set. Verifies that both rigs surface as codebases with their default workers (witness, refinery), and that mayor/deacon appear as idle global agents when no sessions match.",
+  "poll_ticks": 1
+}

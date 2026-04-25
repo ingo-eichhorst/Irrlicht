@@ -1,0 +1,4 @@
+[
+  {"name": "irrlicht", "beads_prefix": "irr", "status": "ok", "witness": "idle", "refinery": "idle", "polecats": 0, "crew": 0},
+  {"name": "gastown",  "beads_prefix": "gt",  "status": "ok", "witness": "idle", "refinery": "idle", "polecats": 0, "crew": 0}
+]

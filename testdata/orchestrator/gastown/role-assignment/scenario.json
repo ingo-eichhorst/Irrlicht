@@ -1,0 +1,4 @@
+{
+  "description": "Two sessions are active with CWDs under <rig>/witness and <rig>/refinery. The poller must populate worker.SessionID for those roles via deriveRole/CWD matching.",
+  "poll_ticks": 1
+}
