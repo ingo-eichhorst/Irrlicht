@@ -42,6 +42,8 @@ ADAPTER="$1"
 SCENARIO="$2"
 
 # Look up the cell from scenarios.json. Absent cell → refuse.
+# A cell carries either `prompt` (single-shot, headless driver) or `script`
+# (array of step objects, interactive driver). Both can't be set.
 CELL_JSON="$(jq --arg s "$SCENARIO" --arg a "$ADAPTER" '
   .scenarios[]
   | select(.name == $s)
@@ -51,6 +53,7 @@ CELL_JSON="$(jq --arg s "$SCENARIO" --arg a "$ADAPTER" '
       requires,
       verify,
       prompt: .by_adapter[$a].prompt,
+      script: .by_adapter[$a].script,
       settings: .by_adapter[$a].settings,
       timeout_seconds: .by_adapter[$a].timeout_seconds
     }
@@ -61,7 +64,12 @@ if [[ -z "$CELL_JSON" || "$CELL_JSON" == "null" ]]; then
 fi
 
 TIMEOUT_S="$(jq -r '.timeout_seconds' <<<"$CELL_JSON")"
-PROMPT="$(jq -r '.prompt' <<<"$CELL_JSON")"
+PROMPT="$(jq -r '.prompt // ""' <<<"$CELL_JSON")"
+SCRIPT_JSON="$(jq -c '.script // empty' <<<"$CELL_JSON")"
+if [[ -z "$PROMPT" && -z "$SCRIPT_JSON" ]]; then
+  echo "cell has neither prompt nor script: scenario=$SCENARIO adapter=$ADAPTER" >&2
+  exit 1
+fi
 
 # --- Precheck ------------------------------------------------------------
 "$SCRIPT_DIR/precheck.sh" "$ADAPTER" "$SCENARIOS_JSON"
@@ -131,10 +139,18 @@ done
 # session.uuid + transcript.path back to staging. UUID arg $2 is a
 # "preferred" UUID — drive-claudecode.sh honors it via --session-id;
 # codex/pi drivers ignore it and surface the agent-assigned UUID.
-DRIVER="$SCRIPT_DIR/drive-$ADAPTER.sh"
+# Cells with a `script` block route through the interactive driver (REPL +
+# step-script). Plain `prompt` cells use the headless driver.
+if [[ -n "$SCRIPT_JSON" ]]; then
+  DRIVER="$SCRIPT_DIR/drive-$ADAPTER-interactive.sh"
+  DRIVER_INPUT="$SCRIPT_JSON"
+else
+  DRIVER="$SCRIPT_DIR/drive-$ADAPTER.sh"
+  DRIVER_INPUT="$PROMPT"
+fi
 [[ -x "$DRIVER" ]] || { echo "driver missing: $DRIVER" >&2; exit 1; }
 set +e
-"$DRIVER" "$STAGING" "$UUID" "$TIMEOUT_S" "$STAGING/settings.json" "$PROMPT"
+"$DRIVER" "$STAGING" "$UUID" "$TIMEOUT_S" "$STAGING/settings.json" "$DRIVER_INPUT"
 set -e
 DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown")"
 
