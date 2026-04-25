@@ -1,0 +1,7 @@
+{
+  "running": false,
+  "pid": 0,
+  "started_at": "0001-01-01T00:00:00Z",
+  "last_heartbeat": "0001-01-01T00:00:00Z",
+  "heartbeat_count": 0
+}

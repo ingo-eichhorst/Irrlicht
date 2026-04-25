@@ -110,6 +110,8 @@ ehthumbs.db
 .logs/
 __pycache__/
 state.json
+# Allow gastown scenario fixtures (daemon/state.json) under replaydata.
+!replaydata/orchestrators/**/input/daemon/state.json
 .beads/
 
 # Replay harness — fixtures are committed as regression data; reports are
