@@ -7,18 +7,19 @@ import (
 
 // Config returns the registration record the daemon uses to wire this adapter.
 //
-// Aider is registered as a stub for the post-discovery live-recording smoke
-// (see .claude/skills/ir:onboard-agent/discovery-instructions.md). The parser
-// is a no-op because Aider's transcript format is markdown, not JSONL — the
-// tailer's JSON-line gate filters every line out before reaching the parser.
-// This stub exists to make the daemon's process scanner detect `aider` and
-// emit `pid_discovered` lifecycle events; full parser work is a follow-up.
+// Aider's transcript is markdown (`.aider.chat.history.md`), not JSONL.
+// The parser implements tailer.RawLineParser so the tailer skips its JSON
+// pre-parse and feeds each trimmed line directly. The post-discovery
+// lifecycle (presession_created, pid_discovered, transcript_new,
+// transcript_activity, process_exited, transcript_removed) was wired in
+// #211; this Config closes the loop by emitting structured ParsedEvents
+// from the markdown content.
 func Config() agents.Config {
 	return agents.Config{
 		Name:        AdapterName,
 		ProcessName: ProcessName,
 		RootDir:     rootDir,
-		NewParser:   func() tailer.TranscriptParser { return &NoOpParser{} },
+		NewParser:   func() tailer.TranscriptParser { return &Parser{} },
 		DiscoverPID: DiscoverPID,
 		// Aider's actual OS process is `python` invoking the aider script
 		// (uv/pipx wrapper), so `pgrep -x aider` finds nothing. Match the

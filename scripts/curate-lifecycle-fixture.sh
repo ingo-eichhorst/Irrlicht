@@ -89,9 +89,17 @@ if [[ ! -f "$TRANSCRIPT" ]]; then
   exit 1
 fi
 
-OUT_TRANSCRIPT="$SCENARIO_DIR/transcript.jsonl"
 OUT_EVENTS="$SCENARIO_DIR/events.jsonl"
 OUT_SUBAGENTS_DIR="$SCENARIO_DIR/subagents"
+
+# Aider's source transcript is markdown (.aider.chat.history.md), not
+# JSONL — preserve the native extension so the parser can ingest the file
+# verbatim during replay.
+if [[ "$ADAPTER" == "aider" ]]; then
+  OUT_TRANSCRIPT="$SCENARIO_DIR/transcript.md"
+else
+  OUT_TRANSCRIPT="$SCENARIO_DIR/transcript.jsonl"
+fi
 
 # Discover child session IDs by scanning parent_linked events in the
 # recording. Each such event carries (session_id=child, parent_session_id=parent).

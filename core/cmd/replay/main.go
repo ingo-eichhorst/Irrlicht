@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/pi"
@@ -56,6 +57,7 @@ var agentConfigs = []agents.Config{
 	claudecode.Config(),
 	codex.Config(),
 	pi.Config(),
+	aider.Config(),
 }
 
 var parserFactories = agents.ParserMap(agentConfigs)
@@ -88,8 +90,11 @@ func detectAdapter(path string) (string, error) {
 		strings.Contains(abs, "/.pi/sessions/"),
 		strings.Contains(abs, "/replaydata/agents/pi/"):
 		return pi.AdapterName, nil
+	case strings.Contains(abs, "/replaydata/agents/aider/"),
+		strings.HasSuffix(abs, "/.aider.chat.history.md"):
+		return aider.AdapterName, nil
 	}
-	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi", path)
+	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider", path)
 }
 
 // cliOptions bundles the parsed CLI flags and positional argument so the

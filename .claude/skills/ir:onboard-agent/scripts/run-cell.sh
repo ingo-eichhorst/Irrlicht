@@ -149,6 +149,24 @@ ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
 # --- Locate the recording file ------------------------------------------
 RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
 
+# --- Aider session-id mapping -------------------------------------------
+# Aider has no native session-id; the daemon synthesizes proc-<pid> per
+# observed process. The driver wrote a synthesized UUID to session.uuid
+# for fixture-naming parity — replace it with the actual proc-<pid> the
+# daemon used so curate-lifecycle-fixture.sh can filter the recording
+# against real events. When multiple PIDs share one transcript (Python
+# wrapper + worker), we pick the earliest by sequence number; curate's
+# existing pid_discovered scan picks up the other PIDs from there.
+if [[ "$ADAPTER" == "aider" && -n "$RECORDING" && -n "$TRANSCRIPT" ]]; then
+  AIDER_SID="$(jq -r --arg path "$TRANSCRIPT" '
+    select(.adapter=="aider" and .kind=="transcript_new" and .transcript_path==$path)
+    | [.seq, .session_id] | @tsv' "$RECORDING" | sort -n | head -n1 | cut -f2)"
+  if [[ -n "$AIDER_SID" ]]; then
+    ACTUAL_UUID="$AIDER_SID"
+    echo "$ACTUAL_UUID" > "$STAGING/session.uuid"
+  fi
+fi
+
 MANIFEST="$STAGING/run-manifest.json"
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo "unknown")"
 
@@ -234,7 +252,14 @@ fi
   -d "$STAGING/replaydata/agents" \
   "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
 
-STAGED_TRANSCRIPT="$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.jsonl"
+# Aider's curated fixture is markdown (curate-lifecycle-fixture.sh keeps
+# the native extension); other adapters are JSONL.
+if [[ "$ADAPTER" == "aider" ]]; then
+  TRANSCRIPT_EXT="md"
+else
+  TRANSCRIPT_EXT="jsonl"
+fi
+STAGED_TRANSCRIPT="$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.$TRANSCRIPT_EXT"
 
 # --- Build replay reports -----------------------------------------------
 # precheck.sh pre-built the replay binary under .build/refresh/bin/replay
@@ -251,7 +276,7 @@ replay_one() {
 
 replay_one "$STAGED_TRANSCRIPT" "$STAGING/reports/staged.json" || exit 1
 
-COMMITTED_TRANSCRIPT="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.jsonl"
+COMMITTED_TRANSCRIPT="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.$TRANSCRIPT_EXT"
 if [[ -f "$COMMITTED_TRANSCRIPT" ]]; then
   replay_one "$COMMITTED_TRANSCRIPT" "$STAGING/reports/committed.json" || exit 1
   COMMITTED_PRESENT=true
