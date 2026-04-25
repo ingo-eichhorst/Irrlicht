@@ -186,6 +186,86 @@ func TestParser_BlockquoteNoise_Skipped(t *testing.T) {
 	}
 }
 
+// TestParser_MainModel_AfterSlashCommand pins that `> Main model: …` (the
+// line aider emits after a `/model` switch) is treated identically to
+// `> Model: …`. Without this, model_changed scenarios silently fail because
+// post-switch turns keep the original model name on Contribution.Model.
+func TestParser_MainModel_AfterSlashCommand(t *testing.T) {
+	p := &Parser{}
+	drive(p, []string{
+		"> Model: openai/gemma-4-26b-a4b with whole edit format",
+		"#### first",
+		"first reply",
+		"> Tokens: 100 sent, 5 received.",
+	})
+	if p.model != "gemma-4-26b" && p.model != "openai/gemma-4-26b-a4b" {
+		t.Errorf("initial model should be set, got %q", p.model)
+	}
+
+	// Simulate the `/model` switch.
+	ev := p.ParseLineRaw("> Main model: openai/gemma-4-e2b-it-uncensored with whole edit format")
+	if ev == nil || ev.ModelName == "" {
+		t.Fatalf("expected Skip+ModelName for `> Main model: …`, got %+v", ev)
+	}
+	if !ev.Skip {
+		t.Errorf("model line should set Skip=true, got %+v", ev)
+	}
+	if p.model == "openai/gemma-4-26b-a4b" || p.model == "gemma-4-26b" {
+		t.Errorf("model should have switched away from gemma-4-26b, got %q", p.model)
+	}
+}
+
+// TestParser_TrailingQuestionMark_PreservedForWaitingClassification pins the
+// contract with the state classifier: when the assistant's last buffered line
+// ends in `?`, the emitted turn_done event's AssistantText must also end in
+// `?`. session.IsWaitingForUserInput keys off that suffix to flip the session
+// to `waiting`. Don't relax this without updating the classifier.
+func TestParser_TrailingQuestionMark_PreservedForWaitingClassification(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+	}{
+		{
+			name: "single-line question",
+			lines: []string{
+				"#### what next",
+				"What would you like to do?",
+				"> Tokens: 50 sent, 7 received.",
+			},
+		},
+		{
+			name: "multi-line question with trailing whitespace",
+			lines: []string{
+				"#### ask me",
+				"I have two options for you.",
+				"Which one would you prefer?   ",
+				"> Tokens: 60 sent, 14 received.",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			events := drive(&Parser{}, tc.lines)
+			var done *tailer.ParsedEvent
+			for _, e := range events {
+				if e.EventType == "turn_done" {
+					done = e
+				}
+			}
+			if done == nil {
+				t.Fatal("no turn_done emitted")
+			}
+			if done.AssistantText == "" {
+				t.Fatal("AssistantText must be non-empty for the classifier to inspect")
+			}
+			if last := done.AssistantText[len(done.AssistantText)-1]; last != '?' {
+				t.Errorf("AssistantText must end in '?', got %q (full=%q)", last, done.AssistantText)
+			}
+		})
+	}
+}
+
 func TestParser_MultiTurn_StateResets(t *testing.T) {
 	p := &Parser{}
 	events := drive(p, []string{

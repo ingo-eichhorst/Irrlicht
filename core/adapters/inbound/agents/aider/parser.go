@@ -30,8 +30,12 @@ var (
 	tokensRE = regexp.MustCompile(`^>\s*Tokens:\s*([\d.]+\s*[kKmM]?)\s*sent,\s*([\d.]+\s*[kKmM]?)\s*received(.*)$`)
 	// `, $0.0123 message` / `, $0.0123 message, $0.456 session.`
 	costMessageRE = regexp.MustCompile(`\$([\d.]+)\s*message`)
-	// `> Model: openai/gemma-4-e2b-it-uncensored with whole edit format`
-	modelRE = regexp.MustCompile(`^>\s*Model:\s*(\S+)`)
+	// `> Model: openai/gemma-4-e2b-it-uncensored with whole edit format`.
+	// Also matches `> Main model: …` which aider emits after a `/model`
+	// switch — both are authoritative for the next turn's Contribution.Model.
+	// `> Weak model: …` is intentionally not matched (aider's internal
+	// quick-summary model, not the main turn).
+	modelRE = regexp.MustCompile(`^>\s*(?:Main\s+)?[Mm]odel:\s*(\S+)`)
 	// `> Applied edit to <file>` — file edit tool call
 	appliedEditRE = regexp.MustCompile(`^>\s*Applied edit to\s+`)
 	// `> Running <cmd>` or `> Running shell command:` — shell tool call
