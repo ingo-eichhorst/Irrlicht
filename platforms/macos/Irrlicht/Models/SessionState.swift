@@ -142,6 +142,7 @@ struct SessionMetrics: Codable {
     var formattedCost: String? {
         guard let cost = estimatedCostUSD, cost > 0 else { return nil }
         if cost < 0.01 { return "<$0.01" }
+        if cost >= 100 { return String(format: "$%.0f", cost) }
         return String(format: "$%.2f", cost)
     }
     
