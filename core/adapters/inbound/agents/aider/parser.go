@@ -48,16 +48,13 @@ func (p *Parser) ParseLine(_ map[string]interface{}) *tailer.ParsedEvent {
 // ParsedEvent. Returns nil for lines that contribute only to internal
 // buffering (assistant prose accumulates between `####` and `> Tokens:`).
 func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
-	switch {
-	case line == "":
+	if line == "" || strings.HasPrefix(line, "# aider chat started") {
+		// Session header carries no event for the daemon — it already
+		// emits transcript_new lifecycle events.
 		return nil
+	}
 
-	case strings.HasPrefix(line, "# aider chat started"):
-		// Session header. Nothing to surface — the daemon already has CWD
-		// + transcript_new lifecycle events.
-		return nil
-
-	case strings.HasPrefix(line, "#### "):
+	if strings.HasPrefix(line, "#### ") {
 		// User prompt. A new turn opens; reset the assistant buffer in case
 		// the previous turn was interrupted before its `> Tokens:` line.
 		p.assistantBuffer.Reset()
@@ -69,48 +66,42 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 			ContentChars:   int64(len(text)),
 			ClearToolNames: true,
 		}
+	}
 
-	case modelRE.MatchString(line):
-		// Model declaration line. Skip-style metadata: the tailer applies
-		// ModelName even when Skip=true.
-		m := modelRE.FindStringSubmatch(line)
+	if m := modelRE.FindStringSubmatch(line); m != nil {
 		p.model = tailer.NormalizeModelName(m[1])
 		return &tailer.ParsedEvent{Skip: true, ModelName: p.model}
+	}
 
-	case tokensRE.MatchString(line):
-		// Turn boundary: emit the accumulated assistant_message with
-		// PerTurnContribution and reset the buffer.
-		return p.flushAssistantTurn(line)
+	if m := tokensRE.FindStringSubmatch(line); m != nil {
+		return p.flushAssistantTurn(m)
+	}
 
-	case appliedEditRE.MatchString(line):
+	if appliedEditRE.MatchString(line) {
 		return p.toolCall("Edit")
-
-	case runningRE.MatchString(line):
+	}
+	if runningRE.MatchString(line) {
 		return p.toolCall("Bash")
+	}
 
-	case strings.HasPrefix(line, ">"):
+	if strings.HasPrefix(line, ">") {
 		// Other blockquote lines are aider status output (warnings,
 		// confirmation prompts, invocation echo). Ignore.
 		return nil
-
-	default:
-		// Plain prose: assistant response. Buffer it for the eventual
-		// turn-flush. ContentChars updates run on flush, not per line.
-		if p.turnOpen {
-			if p.assistantBuffer.Len() > 0 {
-				p.assistantBuffer.WriteString(" ")
-			}
-			p.assistantBuffer.WriteString(line)
-		}
-		return nil
 	}
+
+	// Plain prose: assistant response. Buffer it for the eventual
+	// turn-flush. ContentChars updates run on flush, not per line.
+	if p.turnOpen {
+		if p.assistantBuffer.Len() > 0 {
+			p.assistantBuffer.WriteString(" ")
+		}
+		p.assistantBuffer.WriteString(line)
+	}
+	return nil
 }
 
-func (p *Parser) flushAssistantTurn(tokensLine string) *tailer.ParsedEvent {
-	m := tokensRE.FindStringSubmatch(tokensLine)
-	if m == nil {
-		return nil
-	}
+func (p *Parser) flushAssistantTurn(m []string) *tailer.ParsedEvent {
 	sent := parseTokenCount(m[1])
 	received := parseTokenCount(m[2])
 	rest := m[3]

@@ -162,6 +162,11 @@ type TranscriptParser interface {
 // hands the trimmed line directly to ParseLineRaw. ParseLine is still part
 // of the TranscriptParser contract; raw-line parsers should make it a no-op
 // returning nil.
+//
+// Implementers must emit EventType="turn_done" (not "assistant_message")
+// when the agent finishes a turn. The state classifier returns the session
+// to ready only on turn_done; an assistant_message alone leaves the session
+// stuck in working. See aider's parser for the reference shape.
 type RawLineParser interface {
 	ParseLineRaw(line string) *ParsedEvent
 }
