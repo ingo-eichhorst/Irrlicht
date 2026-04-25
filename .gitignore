@@ -114,5 +114,6 @@ state.json
 
 # Replay harness — fixtures are committed as regression data; reports are
 # regenerated locally by scripts/replay-fixtures.sh.
-testdata/replay/reports/
+replaydata/agents/_reports/
 .pi
+.specs

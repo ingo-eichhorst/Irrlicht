@@ -13,9 +13,5 @@ func Config() agents.Config {
 		RootDir:     rootDir,
 		NewParser:   func() tailer.TranscriptParser { return &Parser{} },
 		DiscoverPID: DiscoverPID,
-		Capabilities: []agents.Capability{
-			agents.CapHeadlessMode,
-			agents.CapToolCalls,
-		},
 	}
 }

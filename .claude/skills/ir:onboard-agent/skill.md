@@ -22,7 +22,7 @@ are two parallel axes:
    real CLI under an isolated daemon and capture transcripts.
 2. **Orchestrator scenarios** in `scenarios.json -> orchestrator_scenarios[]`.
    Per-orchestrator inputs under `by_orchestrator`. Each scenario
-   references a `fixture_dir` under `testdata/orchestrator/<adapter>/`
+   references a `fixture_dir` under `replaydata/orchestrators/<adapter>/`
    containing seeded `gt`-style responses, sidecar files, and golden
    `orchestrator.State` snapshots. Verification is a Go test against the
    committed goldens.
@@ -47,6 +47,10 @@ hermetic and don't need auth.
   `/ir:onboard-agent gastown agent-discovery`.
 - **`/ir:onboard-agent --diff`** — re-summarize the latest staged runs
   (under `.build/refresh/<adapter>/<scenario>-*/`) without re-running.
+- **`/ir:onboard-agent --new <slug>`** — discover mode. Researches a
+  previously unknown agent on the web via subagents and proposes a
+  `capabilities.json`. See `discovery-instructions.md` for the dispatch
+  recipe. No live agent CLI is invoked.
 
 The adapter argument disambiguates which axis is being run: agent adapters
 (`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator
@@ -59,6 +63,7 @@ Parse the invocation into one of:
 - `run_all` — one adapter
 - `run_one` — one adapter + one scenario
 - `diff_only` — `--diff` flag
+- `discover` — `--new <slug>`; load `discovery-instructions.md` and follow that recipe instead of Steps 2–5 below
 
 If the invocation is ambiguous, ask the user which mode to run.
 
@@ -67,28 +72,50 @@ If the invocation is ambiguous, ask the user which mode to run.
 Before any run (or as the sole output of `list`), compute the current state
 of **both** matrices.
 
+### Cross-reference check (run first)
+
+Every feature ID referenced by `scenarios.json -> scenarios[].requires` must
+exist in `replaydata/agents/features.json`; same for
+`orchestrator_scenarios[].requires` against
+`replaydata/orchestrators/features.json`. Unknown IDs are a hard error:
+report them as `scenario <name> requires <id> which is not in the canonical
+features list — add the feature or fix the typo`. Do not proceed with
+matrix computation until every reference resolves.
+
+```bash
+comm -23 \
+  <(jq -r '.scenarios[].requires[]' .claude/skills/ir:onboard-agent/scenarios.json | sort -u) \
+  <(jq -r '.features[].id' replaydata/agents/features.json | sort -u)
+# any output = unknown IDs — block.
+```
+
 ### Agent matrix (`scenarios[]` × agent adapters)
 
 Each cell's state is one of:
 
-- **OK** — fixture committed at `testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}`, and this session has not refreshed it.
+- **OK** — fixture committed at `replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl`, and this session has not refreshed it.
 - **stale** — fixture committed, this session refreshed it, and the summarize step found material change.
 - **never-recorded** — capabilities match, `by_adapter.<adapter>` entry exists in `scenarios.json`, but no committed fixture.
 - **missing-prompt** — capabilities match but `by_adapter.<adapter>` is absent from `scenarios.json`. Actionable: add the entry.
-- **N/A (no <capability>)** — adapter's `Capabilities` don't satisfy the scenario's `requires`. Document which capability is missing.
+- **N/A (no <capability>)** — adapter's `capabilities.json` does not declare every required feature as `true`. Document which feature is missing or `unknown`.
 
 ```bash
 SCENARIOS_JSON=.claude/skills/ir:onboard-agent/scenarios.json
 
-# Adapter capabilities:
-grep -A10 "Capabilities: \[\]agents.Capability" \
-  core/adapters/inbound/agents/claudecode/config.go \
-  core/adapters/inbound/agents/codex/config.go \
-  core/adapters/inbound/agents/pi/config.go
+# Per-adapter capabilities (one file per adapter):
+for a in claudecode codex pi; do
+  echo "== $a =="
+  jq -r '.features | to_entries[] | "\(.key)=\(.value)"' \
+    replaydata/agents/$a/capabilities.json
+done
 
-# Committed fixtures:
-ls testdata/replay/claudecode/ testdata/replay/codex/ testdata/replay/pi/ 2>/dev/null
+# Committed scenario fixtures:
+ls replaydata/agents/{claudecode,codex,pi}/scenarios/ 2>/dev/null
 ```
+
+Cell applicability rule: a scenario is applicable to an adapter iff every
+ID in `scenarios[].requires` maps to `true` in the adapter's
+`capabilities.json -> features`. `false` and `"unknown"` both block.
 
 Print a table: rows = agent adapters, columns = scenario names. For any
 **missing-prompt** or **never-recorded** cell, append a one-line hint.
@@ -100,7 +127,7 @@ Each cell's state is one of:
 - **OK** — committed `golden/state-NNN.json` files cover all `poll_ticks` declared in `by_orchestrator.<adapter>`.
 - **stale** — this session ran `drive-gastown.sh` and the summarize step reported `verdict: CHANGED`.
 - **never-recorded** — `by_orchestrator.<adapter>` entry exists but the scenario's `golden/` directory is empty or missing.
-- **missing-fixture** — `by_orchestrator.<adapter>` entry exists but `testdata/orchestrator/<adapter>/<scenario>/input/` is missing. Actionable: add the input fixtures.
+- **missing-fixture** — `by_orchestrator.<adapter>` entry exists but `replaydata/orchestrators/<adapter>/<scenario>/input/` is missing. Actionable: add the input fixtures.
 
 ```bash
 # Orchestrator scenarios + their fixture dirs:
@@ -108,7 +135,7 @@ jq -r '.orchestrator_scenarios[] | "\(.name)\t\(.by_orchestrator.gastown.fixture
   $SCENARIOS_JSON
 
 # Existing goldens:
-find testdata/orchestrator/gastown -name 'state-*.json' 2>/dev/null | sort
+find replaydata/orchestrators/gastown/scenarios -name 'state-*.json' 2>/dev/null | sort
 ```
 
 Print a second table: rows = orchestrator adapters (currently just `gastown`),
@@ -127,9 +154,19 @@ For each (agent-adapter, scenario) cell, invoke
 - driver invocation via `scripts/drive-<adapter>.sh`
 - graceful shutdown (SIGINT → 6s → SIGTERM → SIGKILL)
 - transcript resolution via session UUID
-- `scripts/curate-lifecycle-fixture.sh -d <staging>/testdata/replay …`
+- `scripts/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents …`
 - replay report generation (staged + committed, if any)
 - `run-manifest.json` writeback
+
+**On cell failure**: when `run-cell.sh` exits nonzero or the manifest's
+`error` field is set, run `scripts/lib/classify-failure.sh <staging>`. The
+output is `{"code": "<code>", "summary": "...", "evidence": "..."}`. Look
+up `<code>` in `install-instructions.md` for the matching action recipe.
+Use `AskUserQuestion` to present three options: "show install/auth
+instructions", "I'll fix manually — wait", "skip this adapter". On
+"show", paste the relevant install-instructions.md section verbatim and
+pause. On "wait", continue paused until the user says "retry". On "skip",
+mark the cell `BLOCKED` in the Step 4 summary and move on.
 
 ### Orchestrator cells
 
@@ -138,9 +175,9 @@ For each (orchestrator-adapter, orchestrator-scenario) cell, invoke
 orchestrator scenarios are hermetic and don't need a live daemon). For
 gastown, the script:
 
-- Stages a writable copy of `testdata/orchestrator/gastown/<scenario>/` under `.build/refresh/gastown/<scenario>-<UTC-ts>/fixtures/<scenario>/`.
+- Stages a writable copy of `replaydata/orchestrators/gastown/scenarios/<scenario>/` under `.build/refresh/gastown/<scenario>-<UTC-ts>/fixtures/<scenario>/`.
 - Runs `go test -run TestGastownReplay/<scenario> -update-goldens` against the staged copy via `GASTOWN_FIXTURES_DIR`.
-- Diffs the regenerated staged goldens against the committed `testdata/` goldens.
+- Diffs the regenerated staged goldens against the committed `replaydata/` goldens.
 - Writes `run-manifest.json` with `verdict` (`OK` / `CHANGED` / `ERROR`) and the list of differing golden files.
 
 Stream the script's output as it runs. On nonzero exit, read
@@ -280,28 +317,28 @@ commit accepted cells.
 
 ```
 # Review each staged fixture vs current committed one:
-diff testdata/replay/claudecode/baseline-hello.jsonl \
-     .build/refresh/claudecode/baseline-hello-20260424-152301/testdata/replay/claudecode/baseline-hello.jsonl
+diff replaydata/agents/claudecode/baseline-hello.jsonl \
+     .build/refresh/claudecode/baseline-hello-20260424-152301/replaydata/agents/claudecode/baseline-hello.jsonl
 
-# If satisfied, copy into testdata/:
-cp .build/refresh/claudecode/baseline-hello-*/testdata/replay/claudecode/baseline-hello.* \
-   testdata/replay/claudecode/
+# If satisfied, copy into replaydata/:
+cp .build/refresh/claudecode/baseline-hello-*/replaydata/agents/claudecode/baseline-hello.* \
+   replaydata/agents/claudecode/
 
 # Verify replay tests still pass:
 go test ./core/cmd/replay/... -run TestReplayWithSidecar
 
 # Commit:
-git add testdata/replay/claudecode/baseline-hello.* && git commit -m "..."
+git add replaydata/agents/claudecode/baseline-hello.* && git commit -m "..."
 ```
 
 ### Orchestrator cells
 
 ```
 # Review the regenerated goldens vs committed:
-diff -r testdata/orchestrator/gastown/agent-discovery/golden \
+diff -r replaydata/orchestrators/gastown/scenarios/agent-discovery/golden \
         .build/refresh/gastown/agent-discovery-20260425-101500/fixtures/agent-discovery/golden
 
-# If accepted, regenerate goldens in place (touches testdata/ only):
+# If accepted, regenerate goldens in place (touches replaydata/ only):
 go test ./core/adapters/inbound/orchestrators/gastown/ \
         -run TestGastownReplay/agent-discovery -update-goldens
 
@@ -309,19 +346,19 @@ go test ./core/adapters/inbound/orchestrators/gastown/ \
 go test ./core/adapters/inbound/orchestrators/gastown/ -run TestGastownReplay
 
 # Commit:
-git add testdata/orchestrator/gastown/agent-discovery/ && git commit -m "..."
+git add replaydata/orchestrators/gastown/scenarios/agent-discovery/ && git commit -m "..."
 ```
 
 Do NOT run the `cp`, `-update-goldens`, or `git commit` yourself. The
 maintainer reviews and commits by hand — this skill never touches
-`testdata/` directly.
+`replaydata/` directly.
 
 ## Anti-patterns
 
 - **Don't** skip normalization in Step 4. UUID/timestamp drift will make
   every refresh look like a break. This is the single most important
   instruction.
-- **Don't** write fixtures directly to `testdata/replay/`. All writes go to
+- **Don't** write fixtures directly to `replaydata/agents/`. All writes go to
   `.build/refresh/`; maintainer copies manually.
 - **Don't** run with an existing `irrlichd` up. Both daemons would race on
   port 7837 and hooks would route to the wrong one. `precheck.sh` refuses;
@@ -331,7 +368,7 @@ maintainer reviews and commits by hand — this skill never touches
   prompt by editing `scenarios.json` and runs again.
 - **Don't** diff exact text from transition reasons, assistant output, or
   tool-call arguments. Only structural invariants are stable across runs.
-- **Don't** run `go test -update-goldens` against `testdata/orchestrator/`
+- **Don't** run `go test -update-goldens` against `replaydata/orchestrators/`
   yourself. Always go through `drive-gastown.sh`, which writes to
   `.build/refresh/`. The maintainer chooses when (and whether) to
   regenerate the committed goldens.

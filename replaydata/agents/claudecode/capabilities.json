@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "agent": "claudecode",
+  "discovered_at": "2026-04-25",
+  "source": "manual_bootstrap",
+  "features": {
+    "headless_mode": true,
+    "tool_calls": true,
+    "permission_hooks": true,
+    "subagents": true,
+    "session_id_assignment": true,
+    "settings_file_support": true,
+    "session_resume": "unknown",
+    "mcp_servers": "unknown",
+    "streaming_output": "unknown",
+    "structured_output_jsonl": "unknown",
+    "slash_commands": "unknown",
+    "plan_mode": "unknown"
+  }
+}

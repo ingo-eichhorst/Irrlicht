@@ -43,15 +43,15 @@ if pgrep -x irrlichd >/dev/null 2>&1; then
   fail "another irrlichd is running (pgrep -x irrlichd); stop it first"
 fi
 
-# 3. Clean working tree under testdata/replay/. A dirty tree means the
+# 3. Clean working tree under replaydata/agents/. A dirty tree means the
 #    maintainer already has staged fixture changes; we refuse to layer
 #    another round on top.
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "$REPO_ROOT" ]]; then
   fail "not in a git repository"
 fi
-if [[ -n "$(cd "$REPO_ROOT" && git status --porcelain testdata/replay/ 2>/dev/null)" ]]; then
-  fail "testdata/replay/ has uncommitted changes; commit or stash first"
+if [[ -n "$(cd "$REPO_ROOT" && git status --porcelain replaydata/agents/ 2>/dev/null)" ]]; then
+  fail "replaydata/agents/ has uncommitted changes; commit or stash first"
 fi
 
 # 4. Adapter CLI present + version check against min_versions in scenarios.json.

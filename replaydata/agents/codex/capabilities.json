@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "agent": "codex",
+  "discovered_at": "2026-04-25",
+  "source": "manual_bootstrap",
+  "features": {
+    "headless_mode": true,
+    "tool_calls": true,
+    "permission_hooks": false,
+    "subagents": false,
+    "session_id_assignment": false,
+    "settings_file_support": false,
+    "session_resume": "unknown",
+    "mcp_servers": "unknown",
+    "streaming_output": "unknown",
+    "structured_output_jsonl": true,
+    "slash_commands": "unknown",
+    "plan_mode": "unknown"
+  }
+}

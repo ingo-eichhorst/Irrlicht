@@ -6,7 +6,7 @@
 #                →  drive-<adapter>.sh (runs the agent under timeout)
 #                →  SIGINT → 6s grace → SIGTERM → SIGKILL the daemon
 #                →  resolve transcript path from session UUID
-#                →  scripts/curate-lifecycle-fixture.sh -d <staging>/testdata
+#                →  scripts/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents
 #                →  replay against staged + committed fixtures
 #                →  write run-manifest.json
 #
@@ -18,7 +18,7 @@
 #
 # Outputs under ./.build/refresh/<adapter>/<scenario>-<UTC-ts>/:
 #   recordings/            — isolated daemon recording (raw)
-#   testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}  — staged fixture
+#   replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl  — staged fixture
 #   reports/staged.json    — replay report over staged fixture
 #   reports/committed.json — replay report over committed fixture (if any)
 #   driver.log, driver.exit-reason, daemon.log
@@ -71,7 +71,7 @@ TS="$(date -u +%Y%m%dT%H%M%S)"
 STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$SCENARIO-$TS"
 # shellcheck source=lib/assert-staging-path.sh
 . "$SCRIPT_DIR/lib/assert-staging-path.sh"
-mkdir -p "$STAGING/recordings" "$STAGING/testdata/replay/$ADAPTER" "$STAGING/reports"
+mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO" "$STAGING/reports"
 
 # Scenario's settings blob → staging file, passed to driver as a path.
 # This avoids --settings <json-blob> shell-quoting fragility.
@@ -228,13 +228,13 @@ if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
 fi
 
 # --- Curate the staged fixture ------------------------------------------
-# The committed-to-testdata location of the curated artifacts is:
-#   <staging>/testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}
+# The committed-to-replaydata location of the curated artifacts is:
+#   <staging>/replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl
 "$REPO_ROOT/scripts/curate-lifecycle-fixture.sh" \
-  -d "$STAGING/testdata/replay" \
+  -d "$STAGING/replaydata/agents" \
   "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
 
-STAGED_TRANSCRIPT="$STAGING/testdata/replay/$ADAPTER/$SCENARIO.jsonl"
+STAGED_TRANSCRIPT="$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.jsonl"
 
 # --- Build replay reports -----------------------------------------------
 # precheck.sh pre-built the replay binary under .build/refresh/bin/replay
@@ -251,7 +251,7 @@ replay_one() {
 
 replay_one "$STAGED_TRANSCRIPT" "$STAGING/reports/staged.json" || exit 1
 
-COMMITTED_TRANSCRIPT="$REPO_ROOT/testdata/replay/$ADAPTER/$SCENARIO.jsonl"
+COMMITTED_TRANSCRIPT="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.jsonl"
 if [[ -f "$COMMITTED_TRANSCRIPT" ]]; then
   replay_one "$COMMITTED_TRANSCRIPT" "$STAGING/reports/committed.json" || exit 1
   COMMITTED_PRESENT=true
@@ -268,7 +268,7 @@ jq -n \
   --arg raw_recording "$RECORDING" \
   --arg source_transcript "$TRANSCRIPT" \
   --arg staged_fixture_transcript "$STAGED_TRANSCRIPT" \
-  --arg staged_fixture_events "$STAGING/testdata/replay/$ADAPTER/$SCENARIO.events.jsonl" \
+  --arg staged_fixture_events "$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/events.jsonl" \
   --arg staged_report "$STAGING/reports/staged.json" \
   --argjson committed_fixture_present "$COMMITTED_PRESENT" \
   --arg committed_report "$STAGING/reports/committed.json" \

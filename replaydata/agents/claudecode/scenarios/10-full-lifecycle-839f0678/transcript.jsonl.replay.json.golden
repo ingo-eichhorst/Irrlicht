@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "source_transcript": "/Users/ingo/projects/irrlicht/replaydata/agents/claudecode/scenarios/10-full-lifecycle-839f0678/transcript.jsonl",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 23,
+    "consumed_events": 23,
+    "total_transitions": 8,
+    "first_event_time": "2026-04-11T09:52:07.671Z",
+    "last_event_time": "2026-04-11T09:52:51.612Z",
+    "wall_clock_session_duration": 43941000000,
+    "state_durations": {
+      "ready": 7613000000,
+      "waiting": 16389000000,
+      "working": 19939000000
+    },
+    "flicker_count": 3,
+    "flickers_by_category": {
+      "ready_between_working": 1,
+      "working_between_ready": 1,
+      "working_between_waiting": 1
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 1,
+      "transcript activity (ready → working)": 1,
+      "transcript activity (waiting → working)": 1
+    },
+    "estimated_cost_usd": 0.4214535,
+    "cum_input_tokens": 26,
+    "cum_output_tokens": 570,
+    "cum_cache_read_tokens": 165867,
+    "cum_cache_creation_tokens": 32414,
+    "model_name": "claude-opus-4-6"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-04-11T09:52:07.671Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 2,
+      "virtual_time": "2026-04-11T09:52:07.671Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "transcript activity (ready → working)",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 10,
+      "virtual_time": "2026-04-11T09:52:15.69Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "```\nAGENTS.md   CLAUDE.md   LICENSE     README.md   assets      core\nevents.md  …"
+    },
+    {
+      "index": 3,
+      "event_index": 11,
+      "virtual_time": "2026-04-11T09:52:23.303Z",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 15,
+      "virtual_time": "2026-04-11T09:52:33.187Z",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "user-blocking tool open → waiting",
+      "last_event_type": "assistant",
+      "has_open_tool": true,
+      "open_tool_names": [
+        "AskUserQuestion"
+      ],
+      "is_agent_done": false,
+      "needs_user_attention": true,
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "What would you like to work on in the irrlicht repo right now?"
+    },
+    {
+      "index": 5,
+      "event_index": 16,
+      "virtual_time": "2026-04-11T09:52:43.542Z",
+      "cause": "event",
+      "prev_state": "waiting",
+      "new_state": "working",
+      "reason": "transcript activity (waiting → working)",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 18,
+      "virtual_time": "2026-04-11T09:52:45.578Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "Got it — just chatting. What's on your mind?"
+    },
+    {
+      "index": 7,
+      "event_index": 22,
+      "virtual_time": "2026-04-11T09:52:51.612Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "waiting",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Okay."
+    }
+  ]
+}

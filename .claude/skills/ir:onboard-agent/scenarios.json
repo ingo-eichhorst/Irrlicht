@@ -113,7 +113,7 @@
       },
       "by_orchestrator": {
         "gastown": {
-          "fixture_dir": "testdata/orchestrator/gastown/agent-discovery",
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/agent-discovery",
           "poll_ticks": 1
         }
       }
@@ -127,7 +127,7 @@
       },
       "by_orchestrator": {
         "gastown": {
-          "fixture_dir": "testdata/orchestrator/gastown/role-assignment",
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/role-assignment",
           "poll_ticks": 1
         }
       }
@@ -141,7 +141,7 @@
       },
       "by_orchestrator": {
         "gastown": {
-          "fixture_dir": "testdata/orchestrator/gastown/state-aggregation",
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/state-aggregation",
           "poll_ticks": 1
         }
       }
@@ -154,7 +154,7 @@
       },
       "by_orchestrator": {
         "gastown": {
-          "fixture_dir": "testdata/orchestrator/gastown/agent-join-leave",
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/agent-join-leave",
           "poll_ticks": 3
         }
       }
@@ -168,7 +168,7 @@
       },
       "by_orchestrator": {
         "gastown": {
-          "fixture_dir": "testdata/orchestrator/gastown/polling-lifecycle",
+          "fixture_dir": "replaydata/orchestrators/gastown/scenarios/polling-lifecycle",
           "poll_ticks": 3
         }
       }

@@ -71,7 +71,7 @@ func parserFor(name string) tailer.TranscriptParser {
 
 // detectAdapter infers the adapter name from a transcript path by matching
 // either the canonical session-storage root for each supported format or the
-// repo-relative testdata/replay/<adapter>/ fixture layout.
+// repo-relative replaydata/agents/<adapter>/ fixture layout.
 func detectAdapter(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -79,14 +79,14 @@ func detectAdapter(path string) (string, error) {
 	}
 	switch {
 	case strings.Contains(abs, "/.claude/projects/"),
-		strings.Contains(abs, "/testdata/replay/claudecode/"):
+		strings.Contains(abs, "/replaydata/agents/claudecode/"):
 		return claudecode.AdapterName, nil
 	case strings.Contains(abs, "/.codex/sessions/"),
-		strings.Contains(abs, "/testdata/replay/codex/"):
+		strings.Contains(abs, "/replaydata/agents/codex/"):
 		return codex.AdapterName, nil
 	case strings.Contains(abs, "/.pi/agent/sessions/"),
 		strings.Contains(abs, "/.pi/sessions/"),
-		strings.Contains(abs, "/testdata/replay/pi/"):
+		strings.Contains(abs, "/replaydata/agents/pi/"):
 		return pi.AdapterName, nil
 	}
 	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi", path)

@@ -10,10 +10,10 @@
 # `<staging>/run-manifest.json` contract.
 #
 # Pipeline:
-#   1. Stage a writable copy of testdata/orchestrator/gastown/<scenario>/.
+#   1. Stage a writable copy of replaydata/orchestrators/gastown/scenarios/<scenario>/.
 #   2. Run `go test ... -update-goldens` against the staged copy
 #      (GASTOWN_FIXTURES_DIR points at the staging dir).
-#   3. Diff staged goldens vs committed testdata/ goldens.
+#   3. Diff staged goldens vs committed replaydata/ goldens.
 #      - identical → verdict OK
 #      - differ    → verdict CHANGED (skill summarizer surfaces the diff)
 #   4. Emit run-manifest.json.

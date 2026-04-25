@@ -17,7 +17,7 @@ import (
 
 // replay_test.go drives the gastown poller against canned `gt` responses and
 // rigs.json sidecars to lock down orchestrator state across the five
-// scenarios in testdata/orchestrator/gastown/. See issue #201.
+// scenarios in replaydata/orchestrators/gastown/scenarios/. See issue #201.
 //
 // Run `go test ./core/adapters/inbound/orchestrators/gastown/...
 //   -run TestGastownReplay -update-goldens` to regenerate the goldens after
@@ -27,8 +27,8 @@ var updateGoldens = flag.Bool("update-goldens", false, "regenerate orchestrator 
 
 // scenariosRel is used when GASTOWN_FIXTURES_DIR is unset. The skill's
 // drive-gastown.sh sets that env var to a staging directory so it can
-// regenerate goldens without touching committed testdata/.
-const scenariosRel = "../../../../../testdata/orchestrator/gastown"
+// regenerate goldens without touching committed replaydata/.
+const scenariosRel = "../../../../../replaydata/orchestrators/gastown/scenarios"
 
 type scenarioConfig struct {
 	Description string `json:"description"`

@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "features": [
+    {
+      "id": "multi_codebase_discovery",
+      "title": "Multi-codebase discovery",
+      "description": "Orchestrator scans for and tracks multiple codebases as first-class entities, each with its own state. Enables the agent-discovery scenario family.",
+      "added_in": "2026-04-25",
+      "notes": "Verified by gastown agent-discovery scenario via verify.codebases_count and verify.codebases_names."
+    },
+    {
+      "id": "role_assignment",
+      "title": "Per-codebase role assignment",
+      "description": "Orchestrator assigns roles to workers within a codebase (e.g. mayor, deacon) and exposes which workers hold which session IDs.",
+      "added_in": "2026-04-25",
+      "notes": "Verified by gastown role-assignment scenario via verify.workers_with_session_min and verify.expected_session_ids."
+    },
+    {
+      "id": "state_aggregation",
+      "title": "Global state aggregation",
+      "description": "Orchestrator computes and exposes a global running view across all tracked codebases (top-level running flag, codebase status map, etc.).",
+      "added_in": "2026-04-25",
+      "notes": "Verified by gastown state-aggregation scenario via verify.running and verify.codebase_statuses."
+    },
+    {
+      "id": "polling_lifecycle",
+      "title": "Multi-tick polling lifecycle",
+      "description": "Orchestrator supports being polled across multiple ticks and exposes per-tick state snapshots, allowing scenarios that observe transient changes between ticks.",
+      "added_in": "2026-04-25",
+      "notes": "Required when orchestrator_scenarios[].by_orchestrator.<adapter>.poll_ticks > 1."
+    },
+    {
+      "id": "transient_global_agents",
+      "title": "Transient global agents",
+      "description": "Orchestrator supports global-scope agents that come and go across ticks (e.g. boot, polecat) without being permanently attached to a codebase.",
+      "added_in": "2026-04-25",
+      "notes": "Verified by gastown agent-join-leave scenario via verify.polecat_count_per_tick."
+    },
+    {
+      "id": "gt_poller_fallback",
+      "title": "gt-poller fallback path",
+      "description": "Orchestrator has a fallback code path when its primary poller (gt) fails or returns no useful response, ensuring the global state remains coherent.",
+      "added_in": "2026-04-25",
+      "notes": "Verified by gastown polling-lifecycle scenario via verify.boot_present_per_tick (boot agent presence is the fallback signal)."
+    },
+    {
+      "id": "sidecar_response_format",
+      "title": "Sidecar response file format",
+      "description": "Orchestrator consumes structured response artifacts written by workers as sidecar files (rather than parsing free-form output), letting the orchestrator and worker evolve their formats independently.",
+      "added_in": "2026-04-25",
+      "notes": "All gastown scenarios depend on this — input fixtures under replaydata/orchestrators/gastown/scenarios/<scenario>/input/ are sidecar files."
+    }
+  ]
+}

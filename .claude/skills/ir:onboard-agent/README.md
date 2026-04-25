@@ -5,30 +5,42 @@ Developer documentation for the fixture-matrix refresh skill.
 ## What this skill does
 
 Produces or refreshes the canonical scenario × adapter fixture matrix in
-`testdata/replay/`. Scenarios are defined once, agent-agnostically; each
+`replaydata/agents/`. Scenarios are defined once, agent-agnostically; each
 scenario declares required capabilities. Each adapter declares what it
 supports in `core/adapters/inbound/agents/<adapter>/config.go:Capabilities`.
 Cells fall out: a cell is applicable when the adapter's capabilities satisfy
 the scenario's `requires`.
 
-The skill unifies three operations that used to be separate:
-- **Refresh** — re-record an existing committed fixture to pick up upstream
-  agent format changes.
+The skill unifies four operations:
+- **Discover** (`--new <slug>`) — research a previously unknown agent on
+  the web via subagents and propose `replaydata/agents/<slug>/capabilities.json`.
+  See `discovery-instructions.md`.
+- **Refresh** (`<adapter>` or `<adapter> <scenario>`) — re-record an
+  existing committed fixture to pick up upstream agent format changes.
 - **Bootstrap** — record a fixture for a cell that applies but has no
-  committed file yet.
-- **Onboard a new agent** — after adding an adapter with `Capabilities` and
-  filling `by_adapter.<name>` entries in `scenarios.json`, run the skill
-  once to populate every matching cell.
+  committed file yet (same invocation as Refresh; the skill detects
+  "no committed fixture" and treats it as first-record).
+- **Onboard a new adapter** — after adding the Go adapter scaffold under
+  `core/adapters/inbound/agents/<name>/` plus `replaydata/agents/<name>/capabilities.json`
+  (or via `--new` discovery), run `<adapter>` to populate every matching cell.
+
+## Vision and overhaul
+
+The current skill is the result of the onboard-agent overhaul; see
+`/Users/ingo/projects/irrlicht/.specs/onboard-agent-overhaul.md` for the
+high-level plan and `.specs/onboard-agent/NN-*.md` for per-workstream
+deep plans.
 
 ## Setup
 
-Auth is configured out-of-band per adapter:
-- `claudecode` — `claude` CLI subscription / login.
-- `codex` — `codex` config (`~/.codex/config.toml`).
-- `pi` — `pi --api-key` or provider env vars.
+Auth is configured out-of-band per adapter — see `install-instructions.md`
+for the per-adapter install + auth recipe.
 
-The skill assumes the relevant CLI is authenticated and ready. Auth failures
-surface through the CLI's own stderr and are captured in `driver.log`.
+When a recording fails, the skill runs `scripts/lib/classify-failure.sh`
+to categorize the failure (cli_not_found / cli_too_old / auth_failed /
+daemon_dirty / working_tree_dirty / transcript_missing / timeout /
+unknown), then uses `AskUserQuestion` to surface the relevant install or
+auth instructions and waits for the user to retry.
 
 ## Correctness guards
 
@@ -36,33 +48,63 @@ Not cost-related — these prevent broken runs, not unintended spend:
 
 - `pgrep -x irrlichd` refusal — port 7837 would clash with a running
   production daemon.
-- Git-clean check on `testdata/replay/` — refuses if uncommitted fixture
+- Git-clean check on `replaydata/agents/` — refuses if uncommitted fixture
   changes exist, so you don't layer confusion.
 - CLI version minimum check against `scenarios.json.min_versions`.
 - Wall-clock `timeout` per cell (hang protection, not spend cap).
-- Staged outputs only — skill never writes to `testdata/` directly.
+- Staged outputs only — skill never writes to `replaydata/` directly.
 
 ## File layout
 
 ```
 .claude/skills/ir:onboard-agent/
   skill.md          — the orchestration the user invokes via /ir:onboard-agent
-  scenarios.json    — canonical scenario catalogue
+  scenarios.json              — canonical scenario catalogue
+  discovery-instructions.md   — discovery-mode (--new) recipe (WS04)
+  install-instructions.md     — per-adapter install + auth recipes (WS06)
   scripts/
-    precheck.sh          — fail-fast precondition bundle
-    drive-claudecode.sh  — adapter-specific CLI driver
-    run-cell.sh          — glue: precheck → daemon → driver → curate → replay
-  README.md         — this file
+    precheck.sh               — fail-fast precondition bundle
+    drive-{claudecode,codex,pi,gastown}.sh — adapter-specific drivers
+    run-cell.sh               — glue: precheck → daemon → driver → curate → replay
+    discover-agent.sh         — render discovery preamble for --new mode (WS04)
+    lib/
+      assert-staging-path.sh  — path-traversal guard
+      classify-failure.sh     — categorize a failed staging dir (WS06)
+  README.md                   — this file
+```
+
+The canonical features list and per-adapter capabilities live outside the
+skill, alongside the scenario fixtures, in `replaydata/`:
+
+```
+replaydata/
+  agents/
+    features.json                     — canonical feature catalog (WS01)
+    <adapter>/
+      capabilities.json               — per-adapter feature support (WS03)
+      scenarios/<scenario>/
+        transcript.jsonl              — agent transcript (raw)
+        events.jsonl                  — lifecycle events
+        transcript.jsonl.replay.json.golden
+        subagents/                    — child sessions, when applicable
+        # Reserved by WS07–10 (emission deferred):
+        # process.jsonl, files.jsonl, hooks.jsonl, recording.json
+  orchestrators/
+    features.json                     — canonical orchestrator features
+    <orchestrator>/
+      capabilities.json
+      scenarios/<scenario>/
+        input/, golden/, scenario.json
 ```
 
 Staged outputs:
 ```
 .build/refresh/<adapter>/<scenario>-<UTC-ts>/
   recordings/                           — raw daemon recording
-  testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}
+  replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl
   reports/
     staged.json                         — replay over staged fixture
-    committed.json                      — replay over current testdata (if any)
+    committed.json                      — replay over current replaydata (if any)
   settings.json                         — scenario's settings blob
   driver.log, driver.exit-reason
   daemon.log, daemon.shutdown
@@ -108,7 +150,7 @@ Staged outputs:
    per-adapter entry for every adapter that supports the `requires`
    capabilities.
 5. Run `/ir:onboard-agent <adapter> <new-scenario>` to bootstrap the cell.
-6. Review the staged fixture, then copy into `testdata/` and commit.
+6. Review the staged fixture, then copy into `replaydata/` and commit.
 
 ## Adding an adapter column
 
@@ -138,7 +180,7 @@ When a new adapter (say, `aider`) is supported:
 - **"another irrlichd is running"** — stop the production daemon before
   running: `launchctl unload ~/Library/LaunchAgents/…` or kill the
   menu-bar app.
-- **"testdata/replay/ has uncommitted changes"** — commit or stash your
+- **"replaydata/agents/ has uncommitted changes"** — commit or stash your
   current staged fixtures before refreshing.
 - **"claude X.Y.Z is below pinned minimum"** — update `claude` CLI, or
   bump the minimum in `scenarios.json` if intentional.
@@ -154,7 +196,7 @@ When a new adapter (say, `aider`) is supported:
 ## See also
 
 - `scripts/curate-lifecycle-fixture.sh` — the underlying curator (accepts
-  `-d <testdata-root>` for staging).
+  `-d <agents-root>` for staging).
 - `core/cmd/replay/main.go` — the replay engine that produces reports.
 - `core/cmd/replay/main_test.go` — the golden-fixture regression tests
   that consume these fixtures.

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,11 +13,22 @@ import (
 )
 
 // fixturePath returns an absolute path to a fixture under the repo-root
-// testdata/replay/<adapter>/ tree. The test binary runs from the package
-// directory (core/cmd/replay), so we walk up three parents.
+// replaydata/agents/<adapter>/scenarios/<scenario>/ tree. The test binary runs
+// from the package directory (core/cmd/replay), so we walk up three parents.
+//
+// Callers pass "<adapter>/<scenario>/<basename>" — e.g.
+// "claudecode/baseline-hello/transcript.jsonl". The "scenarios/" segment is
+// inserted by this helper.
 func fixturePath(t *testing.T, rel string) string {
 	t.Helper()
-	abs, err := filepath.Abs(filepath.Join("..", "..", "..", "testdata", "replay", rel))
+	parts := strings.SplitN(rel, "/", 2)
+	var resolved string
+	if len(parts) == 2 {
+		resolved = filepath.Join("..", "..", "..", "replaydata", "agents", parts[0], "scenarios", parts[1])
+	} else {
+		resolved = filepath.Join("..", "..", "..", "replaydata", "agents", rel)
+	}
+	abs, err := filepath.Abs(resolved)
 	if err != nil {
 		t.Fatalf("abs fixture path: %v", err)
 	}
@@ -29,8 +41,8 @@ func fixturePath(t *testing.T, rel string) string {
 // ordered-diff mismatches, AND the replay's own transition sequence must
 // match the expected lifecycle.
 func TestReplayWithSidecar_GoldenFixture(t *testing.T) {
-	transcript := fixturePath(t, "claudecode/10-full-lifecycle-839f0678.jsonl")
-	sidecar := fixturePath(t, "claudecode/10-full-lifecycle-839f0678.events.jsonl")
+	transcript := fixturePath(t, "claudecode/10-full-lifecycle-839f0678/transcript.jsonl")
+	sidecar := fixturePath(t, "claudecode/10-full-lifecycle-839f0678/events.jsonl")
 
 	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
 		Adapter:            claudecode.AdapterName,
@@ -113,8 +125,8 @@ func TestReplayWithSidecar_GoldenFixture(t *testing.T) {
 // are out of scope for this issue; this test deliberately does not
 // assert on them.
 func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
-	transcript := fixturePath(t, "claudecode/13-full-lifecycle-continue-8a525d27.jsonl")
-	sidecar := fixturePath(t, "claudecode/13-full-lifecycle-continue-8a525d27.events.jsonl")
+	transcript := fixturePath(t, "claudecode/13-full-lifecycle-continue-8a525d27/transcript.jsonl")
+	sidecar := fixturePath(t, "claudecode/13-full-lifecycle-continue-8a525d27/events.jsonl")
 
 	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
 		Adapter:            claudecode.AdapterName,
@@ -282,7 +294,7 @@ func TestRunExtendedCheck_DetectsDrift(t *testing.T) {
 
 // TestReplay_GoldenFixture locks in the non-sidecar line-timestamp batching path.
 func TestReplay_GoldenFixture(t *testing.T) {
-	src := fixturePath(t, "claudecode/07-tool-denial-and-esc-db57d2ab.jsonl")
+	src := fixturePath(t, "claudecode/07-tool-denial-and-esc-db57d2ab/transcript.jsonl")
 	report, err := replay(src, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
@@ -342,7 +354,7 @@ func TestReplay_GoldenFixture(t *testing.T) {
 // waiting episode (natural "user-blocking tool open → waiting" on the
 // tool_use, or synthetic on same-pass collapse).
 func TestReplay_Issue150_AskUserQuestion(t *testing.T) {
-	src := fixturePath(t, "claudecode/16-ask-user-question-issue-150.jsonl")
+	src := fixturePath(t, "claudecode/16-ask-user-question-issue-150/transcript.jsonl")
 	report, err := replay(src, reportSettings{
 		Adapter:            claudecode.AdapterName,
 		DebounceWindow:     2 * time.Second,
@@ -387,12 +399,12 @@ func TestDetectAdapter(t *testing.T) {
 		want string
 	}{
 		{"claude code session root", "/Users/u/.claude/projects/-Users-u-proj/abc.jsonl", "claude-code"},
-		{"claude code testdata", "testdata/replay/claudecode/07.jsonl", "claude-code"},
+		{"claude code replaydata", "replaydata/agents/claudecode/scenarios/07/transcript.jsonl", "claude-code"},
 		{"codex session root", "/Users/u/.codex/sessions/2026/04/01/sess.jsonl", "codex"},
-		{"codex testdata", "testdata/replay/codex/01.jsonl", "codex"},
+		{"codex replaydata", "replaydata/agents/codex/scenarios/01/transcript.jsonl", "codex"},
 		{"pi agent sessions", "/Users/u/.pi/agent/sessions/s.jsonl", "pi"},
 		{"pi sessions", "/Users/u/.pi/sessions/s.jsonl", "pi"},
-		{"pi testdata", "testdata/replay/pi/01.jsonl", "pi"},
+		{"pi replaydata", "replaydata/agents/pi/scenarios/01/transcript.jsonl", "pi"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
