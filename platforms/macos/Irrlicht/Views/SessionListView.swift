@@ -263,16 +263,7 @@ struct SessionListView: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
-        .tooltip(statusTooltip)
-    }
-
-    private var statusTooltip: String {
-        switch sessionManager.connectionState {
-        case .connected: return "Daemon connected — watching for sessions"
-        case .connecting: return "Connecting to daemon\u{2026}"
-        case .reconnecting: return "Reconnecting to daemon\u{2026}"
-        case .disconnected: return "Daemon disconnected"
-        }
+        .tooltip(sessionManager.connectionState.tooltip)
     }
 
     private var statusColor: Color {
@@ -417,7 +408,6 @@ struct SessionRowView: View {
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundColor(Color(hex: metrics.contextPressureColor))
                                 .frame(width: 32, alignment: .leading)
-                                .tooltip("Context window usage")
                         }
                     } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
                         Color.clear.frame(width: 100, height: 13)
@@ -479,7 +469,8 @@ struct SessionRowView: View {
                     .background(Color.orange.opacity(0.12))
                     .cornerRadius(4)
                     .padding(.top, 2)
-                    .tooltip("Agent is waiting for input")
+                    // Surface the full prompt — head-truncation hides the start.
+                    .tooltip(text)
             }
 
             // Context pressure alert (80%+, active sessions only)
@@ -777,6 +768,14 @@ struct GroupView: View {
 
     private var isTopLevel: Bool { depth == 0 }
 
+    private var groupExpandTooltip: String {
+        let action = isExpanded ? "Collapse" : "Expand"
+        if isTopLevel && group.isGasTown {
+            return "\(action) Gas Town group (external API calls)"
+        }
+        return "\(action) group"
+    }
+
     /// Formatted cost for this group in the currently-selected time frame.
     /// Returns nil only when there is no cost data at all (hides the toggle).
     /// Returns "$0 / <frame>" when data exists for other frames but not this one,
@@ -814,7 +813,6 @@ struct GroupView: View {
                         if isTopLevel && group.isGasTown {
                             Text("\u{26FD}")
                                 .font(.system(size: 10))
-                                .tooltip("Gas Town session (external API calls)")
                         }
 
                         Text(group.name)
@@ -825,7 +823,7 @@ struct GroupView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .tooltip(isExpanded ? "Collapse group" : "Expand group")
+                .tooltip(groupExpandTooltip)
 
                 if let cost = formattedCost {
                     Button(action: cycleCostTimeframe) {

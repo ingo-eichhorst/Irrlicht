@@ -9,6 +9,15 @@ enum ConnectionState {
     case connecting     // initial connection attempt
     case connected      // WebSocket active and receiving
     case reconnecting   // transient disconnect, auto-recovering
+
+    var tooltip: String {
+        switch self {
+        case .connected:    return "Daemon connected — watching for sessions"
+        case .connecting:   return "Connecting to daemon\u{2026}"
+        case .reconnecting: return "Reconnecting to daemon\u{2026}"
+        case .disconnected: return "Daemon disconnected"
+        }
+    }
 }
 
 @MainActor
