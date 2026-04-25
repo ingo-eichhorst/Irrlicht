@@ -59,6 +59,26 @@
           "timeout_seconds": 180
         }
       }
+    },
+
+    {
+      "name": "subagent-spawn",
+      "description": "Parent emits multiple Agent tool calls; daemon links each child via parent_linked. Verifies subagent transcripts land under <parent>/subagents/ and the curator bundles them into <fixture>.subagents/. Mirrors the shape of the committed 13-full-lifecycle-continue-* fixture but reproducible.",
+      "requires": ["headless_mode", "subagents"],
+      "verify": {
+        "contains_tool_call": "Agent",
+        "parent_linked_min": 2,
+        "subagent_transcripts_min": 2,
+        "tool_calls_max": 10,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "prompt": "Launch 3 Explore subagents in parallel via the Agent tool, in a single response. Subagent 1: count .go files in core/. Subagent 2: list test files in core/e2e/. Subagent 3: find imports of the 'sync' package across core/. After all three report back, reply 'done'.",
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
     }
   ]
 }
