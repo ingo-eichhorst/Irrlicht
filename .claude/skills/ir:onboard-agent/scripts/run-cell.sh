@@ -190,6 +190,48 @@ if [[ -z "$TRANSCRIPT" || -z "$RECORDING" ]]; then
   exit 1
 fi
 
+# --- Subagent probe -----------------------------------------------------
+# If the scenario requires the `subagents` capability, the run is only
+# meaningful if the parent actually emitted Agent tool calls and the daemon
+# saw the resulting parent_linked events. Fail cleanly here so the manifest
+# carries a structured reason instead of producing an empty .subagents/ dir
+# downstream.
+REQUIRES_SUBAGENTS="$(jq -r '.requires | index("subagents") // empty' <<<"$CELL_JSON")"
+if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
+  PARENT_LINKED_COUNT="$(jq -c --arg sid "$UUID" \
+    'select(.kind=="parent_linked" and .parent_session_id==$sid)' \
+    "$RECORDING" | wc -l | tr -d ' ')"
+  SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$UUID/subagents"
+  SUBAGENT_FILES=0
+  if [[ -d "$SUBAGENT_DIR" ]]; then
+    SUBAGENT_FILES="$(find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' ')"
+  fi
+  if [[ "$PARENT_LINKED_COUNT" -eq 0 || "$SUBAGENT_FILES" -eq 0 ]]; then
+    jq -n \
+      --arg adapter "$ADAPTER" \
+      --arg scenario "$SCENARIO" \
+      --arg session_uuid "$UUID" \
+      --argjson parent_linked_count "$PARENT_LINKED_COUNT" \
+      --argjson subagent_transcript_count "$SUBAGENT_FILES" \
+      --arg driver_exit_reason "$DRIVER_REASON" \
+      --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
+      --arg staging "$STAGING" \
+      '{adapter: $adapter,
+        scenario: $scenario,
+        session_uuid: $session_uuid,
+        verdict: "ERROR",
+        error: "no_subagents_spawned",
+        parent_linked_count: $parent_linked_count,
+        subagent_transcript_count: $subagent_transcript_count,
+        driver_exit_reason: $driver_exit_reason,
+        daemon_shutdown: $daemon_shutdown,
+        staging: $staging}' \
+      > "$MANIFEST"
+    echo "ERROR: scenario requires subagents but none spawned (parent_linked=$PARENT_LINKED_COUNT, files=$SUBAGENT_FILES)" >&2
+    exit 1
+  fi
+fi
+
 # --- Curate the staged fixture ------------------------------------------
 # The committed-to-testdata location of the curated artifacts is:
 #   <staging>/testdata/replay/<adapter>/<scenario>.{jsonl,events.jsonl}
