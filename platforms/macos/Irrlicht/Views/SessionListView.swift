@@ -1,31 +1,144 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Tooltip support for MenuBarExtra
+// MARK: - Tooltip
+//
+// SwiftUI overlays are children of the host window's content layer, which the
+// MenuBarController clips to a rounded rectangle (`masksToBounds = true`). Any
+// SwiftUI-rendered tooltip that's wider than the hovered element gets cropped
+// at the panel edge. NSView.toolTip likewise doesn't fire here because
+// NSToolTipManager hit-tests the cursor's view, and the bridge's
+// click-through hitTest=nil makes it invisible to that lookup.
+//
+// The fix is what AppKit itself does: render the tooltip in its own borderless
+// nonactivating panel, positioned in screen coordinates above the cursor.
 
-/// Forces a native NSView tooltip on any SwiftUI view.
-/// `.help()` doesn't work inside MenuBarExtra panels, so we bridge to AppKit.
-/// `hitTest` returns nil so the overlay doesn't swallow clicks meant for
-/// interactive views (buttons) underneath.
-private final class PassThroughTooltipView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+@MainActor
+final class TooltipWindowController {
+    static let shared = TooltipWindowController()
+
+    private let panel: NSPanel
+    private let label: NSTextField
+
+    private init() {
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 30),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        // Z-order vs the host panel is enforced via addChildWindow(_:ordered:.above)
+        // in show(...) — that guarantees the tooltip renders above the host
+        // regardless of level. Level only matters when there is no host.
+        panel.level = NSWindow.Level(rawValue: 200)
+        panel.ignoresMouseEvents = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.animationBehavior = .none
+
+        label = NSTextField(labelWithString: "")
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .labelColor
+        label.backgroundColor = .clear
+        label.isBezeled = false
+        label.isEditable = false
+        label.isSelectable = false
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let bg = NSVisualEffectView()
+        bg.material = .toolTip
+        bg.blendingMode = .behindWindow
+        bg.state = .active
+        bg.wantsLayer = true
+        bg.layer?.cornerRadius = 4
+        bg.layer?.borderWidth = 0.5
+        bg.layer?.borderColor = NSColor.separatorColor.cgColor
+        bg.layer?.masksToBounds = true
+
+        bg.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -6),
+            label.topAnchor.constraint(equalTo: bg.topAnchor, constant: 3),
+            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -3),
+        ])
+
+        panel.contentView = bg
+    }
+
+    func show(text: String, near cursor: NSPoint) {
+        label.stringValue = text
+        let maxWidth: CGFloat = 280
+        label.preferredMaxLayoutWidth = maxWidth
+        let labelSize = label.sizeThatFits(NSSize(width: maxWidth, height: .greatestFiniteMagnitude))
+        let size = NSSize(width: ceil(labelSize.width) + 12, height: ceil(labelSize.height) + 6)
+
+        // Native macOS tooltips appear diagonally below-right of the cursor.
+        // Screen Y grows upward, so "below cursor" = lower Y.
+        var origin = NSPoint(x: cursor.x + 14, y: cursor.y - size.height - 18)
+        if let visible = NSScreen.main?.visibleFrame {
+            origin.x = max(visible.minX + 4, min(origin.x, visible.maxX - size.width - 4))
+            if origin.y < visible.minY + 4 {
+                origin.y = cursor.y + 18  // flip above when no room below
+            }
+            origin.y = min(origin.y, visible.maxY - size.height - 4)
+        }
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        // Parent the tooltip to whichever window is on top (main panel, or a
+        // sheet presented on top of it). AppKit guarantees children render
+        // above their parent in z-order — this is the only mechanism that
+        // works reliably for two nonactivating panels in the same process.
+        if let host = findHostWindow(), panel.parent !== host {
+            panel.parent?.removeChildWindow(panel)
+            host.addChildWindow(panel, ordered: .above)
+        }
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+    }
+
+    private func findHostWindow() -> NSWindow? {
+        // orderedWindows is front-to-back; first non-tooltip visible window
+        // is whichever the user is currently interacting with.
+        NSApp.orderedWindows.first { $0 !== panel && $0.isVisible }
+    }
 }
 
-private struct TooltipView: NSViewRepresentable {
+private struct TooltipModifier: ViewModifier {
     let text: String
-    func makeNSView(context: Context) -> NSView {
-        let view = PassThroughTooltipView()
-        view.toolTip = text
-        return view
-    }
-    func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.toolTip = text
+    @State private var hoverTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content.onHover { hovering in
+            hoverTask?.cancel()
+            if hovering, !text.isEmpty {
+                hoverTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    if !Task.isCancelled {
+                        TooltipWindowController.shared.show(
+                            text: text,
+                            near: NSEvent.mouseLocation
+                        )
+                    }
+                }
+            } else {
+                TooltipWindowController.shared.hide()
+            }
+        }
     }
 }
 
 extension View {
     func tooltip(_ text: String) -> some View {
-        overlay(TooltipView(text: text))
+        modifier(TooltipModifier(text: text))
     }
 }
 
