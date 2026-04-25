@@ -148,11 +148,17 @@ final class MenuBarController: NSObject {
         anchorPanelToStatusItem()
         panel.orderFrontRegardless()
         installDismissMonitors()
+        // Defer highlight past AppKit's mouseUp, which would otherwise clear it.
+        DispatchQueue.main.async { [weak self] in
+            guard self?.panel.isVisible == true else { return }
+            self?.statusItem.button?.highlight(true)
+        }
     }
 
     private func hidePanel() {
         panel.orderOut(nil)
         removeDismissMonitors()
+        statusItem.button?.highlight(false)
     }
 
     /// Place the panel with its top edge just below the status item and
