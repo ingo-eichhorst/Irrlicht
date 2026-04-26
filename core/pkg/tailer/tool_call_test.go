@@ -1044,12 +1044,39 @@ func TestIDTracking_AgentSurvivesTurnDone(t *testing.T) {
 	}
 }
 
+func TestIDTracking_SendMessageSurvivesTurnDone(t *testing.T) {
+	// Claude Code 2.1.77 replaced Agent({resume}) with SendMessage({to}) for
+	// resuming background sub-agents. SendMessage's tool_result arrives after
+	// turn_done just like Agent's, so it must survive the sweep.
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"type": "tool_use", "id": "tu_send", "name": "SendMessage", "timestamp": ts(0)},
+		{"type": "tool_use", "id": "tu_bash", "name": "Bash", "timestamp": ts(1)}, // leaked
+		{"type": "system", "subtype": "turn_duration", "timestamp": ts(2)},
+	})
+
+	tailer := newTestTailer(path)
+	m, err := tailer.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true with SendMessage still open")
+	}
+	if m.OpenToolCallCount != 1 {
+		t.Errorf("expected OpenToolCallCount=1 (SendMessage only), got %d", m.OpenToolCallCount)
+	}
+	if len(m.LastOpenToolNames) != 1 || m.LastOpenToolNames[0] != "SendMessage" {
+		t.Errorf("expected [SendMessage], got %v", m.LastOpenToolNames)
+	}
+}
+
 func TestSurviveTurnDone(t *testing.T) {
 	tests := []struct {
 		name string
 		want bool
 	}{
 		{"Agent", true},
+		{"SendMessage", true},
 		{"AskUserQuestion", true},
 		{"ExitPlanMode", true},
 		{"Bash", false},
