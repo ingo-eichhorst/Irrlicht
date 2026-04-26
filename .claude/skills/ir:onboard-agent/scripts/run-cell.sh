@@ -165,20 +165,30 @@ ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
 # --- Locate the recording file ------------------------------------------
 RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
 
-# --- Aider session-id mapping -------------------------------------------
-# Aider has no native session-id; the daemon synthesizes proc-<pid> per
-# observed process. The driver wrote a synthesized UUID to session.uuid
-# for fixture-naming parity — replace it with the actual proc-<pid> the
-# daemon used so curate-lifecycle-fixture.sh can filter the recording
-# against real events. When multiple PIDs share one transcript (Python
-# wrapper + worker), we pick the earliest by sequence number; curate's
-# existing pid_discovered scan picks up the other PIDs from there.
-if [[ "$ADAPTER" == "aider" && -n "$RECORDING" && -n "$TRANSCRIPT" ]]; then
-  AIDER_SID="$(jq -r --arg path "$TRANSCRIPT" '
-    select(.adapter=="aider" and .kind=="transcript_new" and .transcript_path==$path)
+# --- Daemon-recorded session-id mapping ---------------------------------
+# The daemon's session_id often differs from the agent's native UUID:
+#   - aider: daemon synthesizes proc-<pid>; agent has no native id
+#   - codex: daemon strips ".jsonl" from "rollout-<ts>-<uuid>.jsonl"
+#   - pi:    daemon strips ".jsonl" from "<ts>_<uuid>.jsonl"
+#   - claudecode: filename IS the UUID, so daemon and driver agree
+# Drivers write the agent's preferred UUID to session.uuid for fixture-
+# naming parity. Look up the actual session_id the daemon recorded for
+# this transcript so curate-lifecycle-fixture.sh can filter the recording
+# against real events. The lookup keys on transcript_path and is a no-op
+# when the IDs already agree (claudecode). When multiple PIDs share one
+# transcript (e.g. aider's Python wrapper + worker), we pick the earliest
+# by sequence number; curate's existing pid_discovered scan picks up the
+# other PIDs from there.
+# The adapter field in transcript_new uses the daemon's canonical name,
+# which matches $ADAPTER for aider/codex/pi but is "claude-code" for
+# claudecode — for that adapter the lookup naturally finds nothing and
+# the original UUID is preserved.
+if [[ -n "$RECORDING" && -n "$TRANSCRIPT" ]]; then
+  RECORDED_SID="$(jq -r --arg path "$TRANSCRIPT" --arg ad "$ADAPTER" '
+    select(.adapter==$ad and .kind=="transcript_new" and .transcript_path==$path)
     | [.seq, .session_id] | @tsv' "$RECORDING" | sort -n | head -n1 | cut -f2)"
-  if [[ -n "$AIDER_SID" ]]; then
-    ACTUAL_UUID="$AIDER_SID"
+  if [[ -n "$RECORDED_SID" ]]; then
+    ACTUAL_UUID="$RECORDED_SID"
     echo "$ACTUAL_UUID" > "$STAGING/session.uuid"
   fi
 fi

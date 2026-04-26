@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "source_transcript": "/Users/ingo/projects/irrlicht/replaydata/agents/claudecode/scenarios/agent-question-pending/transcript.jsonl",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 8,
+    "consumed_events": 8,
+    "total_transitions": 3,
+    "first_event_time": "2026-04-26T09:56:31.14Z",
+    "last_event_time": "2026-04-26T09:56:33.646Z",
+    "wall_clock_session_duration": 2506000000,
+    "state_durations": {
+      "ready": 10000000,
+      "working": 2496000000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "estimated_cost_usd": 0.088126,
+    "cum_input_tokens": 6,
+    "cum_output_tokens": 13,
+    "cum_cache_read_tokens": 16742,
+    "cum_cache_creation_tokens": 12704,
+    "model_name": "claude-opus-4-7"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-04-26T09:56:31.14Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 5,
+      "virtual_time": "2026-04-26T09:56:31.15Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 7,
+      "virtual_time": "2026-04-26T09:56:33.646Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "What would you like me to work on?"
+    }
+  ]
+}

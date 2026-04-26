@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "source_transcript": "/Users/ingo/projects/irrlicht/replaydata/agents/pi/scenarios/baseline-hello/transcript.jsonl",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "pi",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 6,
+    "consumed_events": 6,
+    "total_transitions": 3,
+    "first_event_time": "2026-04-26T09:31:05.967Z",
+    "last_event_time": "2026-04-26T09:31:11.669Z",
+    "wall_clock_session_duration": 5702000000,
+    "state_durations": {
+      "ready": 633000000,
+      "working": 5069000000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "estimated_cost_usd": 0.023275,
+    "cum_input_tokens": 4517,
+    "cum_output_tokens": 23,
+    "model_name": "gpt-5.5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-04-26T09:31:05.967Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 3,
+      "virtual_time": "2026-04-26T09:31:06.6Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 5,
+      "virtual_time": "2026-04-26T09:31:11.669Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
+    }
+  ]
+}

@@ -108,7 +108,7 @@
 
     {
       "name": "multi-turn-conversation",
-      "description": "Three consecutive user prompts in one aider session. Validates state reset between turns and per-turn Contribution accumulation. Aider-only for now because the other adapters' headless drivers are single-shot; multi-turn coverage there comes via session_resume.",
+      "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation. Aider and pi cover this today; claudecode and codex pending interactive drivers.",
       "requires": ["headless_mode"],
       "verify": {
         "min_turns": 3,
@@ -126,13 +126,25 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "pi": {
+          "script": [
+            {"type": "send", "text": "Reply with exactly: turn-one"},
+            {"type": "wait_turn"},
+            {"type": "send", "text": "Reply with exactly: turn-two"},
+            {"type": "wait_turn"},
+            {"type": "send", "text": "Reply with exactly: turn-three"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
 
     {
       "name": "interrupted-turn",
-      "description": "User interrupts aider mid-turn (Ctrl-C before the LLM round completes). The interrupted turn never produces a `> Tokens:` line, so the parser's turnOpen state must reset cleanly on the next `####` user prompt. Aider-only.",
+      "description": "User interrupts the agent mid-turn (interrupt key sent before the LLM round completes — Ctrl-C for aider, Escape for pi). The interrupted turn never produces a turn-done marker, so each adapter's parser must reset cleanly on the next user prompt. Aider and pi cover this today; claudecode and codex pending interactive drivers.",
       "requires": ["headless_mode"],
       "verify": {
         "contains_interrupt": true,
@@ -143,6 +155,18 @@
           "script": [
             {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
             {"type": "sleep", "seconds": 8},
+            {"type": "interrupt"},
+            {"type": "sleep", "seconds": 3},
+            {"type": "send", "text": "Reply with exactly: ok"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 360
+        },
+        "pi": {
+          "script": [
+            {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
+            {"type": "sleep", "seconds": 2},
             {"type": "interrupt"},
             {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: ok"},

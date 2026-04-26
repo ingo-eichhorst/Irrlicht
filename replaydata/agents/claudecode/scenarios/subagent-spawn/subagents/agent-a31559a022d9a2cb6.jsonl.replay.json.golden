@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "source_transcript": "/Users/ingo/projects/irrlicht/replaydata/agents/claudecode/scenarios/subagent-spawn/subagents/agent-a31559a022d9a2cb6.jsonl",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 13,
+    "consumed_events": 13,
+    "total_transitions": 3,
+    "first_event_time": "2026-04-26T09:21:21.331Z",
+    "last_event_time": "2026-04-26T09:21:35.295Z",
+    "wall_clock_session_duration": 13964000000,
+    "state_durations": {
+      "ready": 1754000000,
+      "working": 12210000000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "estimated_cost_usd": 0.03981035,
+    "cum_input_tokens": 23,
+    "cum_output_tokens": 470,
+    "cum_cache_read_tokens": 86361,
+    "cum_cache_creation_tokens": 23041,
+    "model_name": "claude-haiku-4-5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-04-26T09:21:21.331Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 3,
+      "virtual_time": "2026-04-26T09:21:23.085Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 12,
+      "virtual_time": "2026-04-26T09:21:35.295Z",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "**Total: 135 .go files in core/**\n\n**Breakdown by top-level subdirectory:**\n- ad…"
+    }
+  ]
+}
