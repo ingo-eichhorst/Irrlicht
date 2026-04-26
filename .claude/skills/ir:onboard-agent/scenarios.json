@@ -108,7 +108,7 @@
 
     {
       "name": "multi-turn-conversation",
-      "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation. Each interactive driver wires the canonical send/wait_turn step pair to its REPL.",
+      "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation. Aider and pi cover this today; claudecode and codex pending interactive drivers.",
       "requires": ["headless_mode"],
       "verify": {
         "min_turns": 3,
@@ -144,7 +144,7 @@
 
     {
       "name": "interrupted-turn",
-      "description": "User interrupts the agent mid-turn (Ctrl-C before the LLM round completes). The interrupted turn never produces a turn-done marker, so each adapter's parser must reset cleanly on the next user prompt.",
+      "description": "User interrupts the agent mid-turn (interrupt key sent before the LLM round completes — Ctrl-C for aider, Escape for pi). The interrupted turn never produces a turn-done marker, so each adapter's parser must reset cleanly on the next user prompt. Aider and pi cover this today; claudecode and codex pending interactive drivers.",
       "requires": ["headless_mode"],
       "verify": {
         "contains_interrupt": true,

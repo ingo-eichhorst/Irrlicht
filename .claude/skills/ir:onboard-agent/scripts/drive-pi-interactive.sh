@@ -148,8 +148,8 @@ step_wait_turn() {
     EXIT_REASON="readiness_timeout"
     return 1
   }
+  local now=0
   while [[ $(date +%s) -lt $DEADLINE ]]; do
-    local now
     now=$(turn_count)
     if [[ $now -ge $EXPECTED_TURNS ]]; then
       echo "[driver] wait_turn: count=$now (expected ≥ $EXPECTED_TURNS)" >&2
@@ -157,7 +157,7 @@ step_wait_turn() {
     fi
     sleep 1
   done
-  echo "[driver] wait_turn: timeout (count=$(turn_count), expected ≥ $EXPECTED_TURNS)" >&2
+  echo "[driver] wait_turn: timeout (count=$now, expected ≥ $EXPECTED_TURNS)" >&2
   EXIT_REASON="timeout"
   return 1
 }
