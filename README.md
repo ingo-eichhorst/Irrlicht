@@ -15,7 +15,7 @@
 
 > 🟣 working · 🟠 waiting · 🟢 ready — one ambient dot per session, multi-agent, no hooks.
 
-![UI Features](assets/irrlicht-explainer.png)
+![UI Features](assets/explainer.png)
 
 ## Install
 
@@ -47,12 +47,28 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 
 ## Supported agents
 
-| Agent          | Status |
-| -------------- | ------ |
-| Claude Code    | live   |
-| OpenAI Codex   | live   |
-| Pi             | live   |
-| Gas Town       | live   |
+Stages: `stable` production-ready · `beta` feature-complete, edge cases remain · `alpha` core detection works, rough edges · `planned` on the roadmap.
+
+**Coding agents**
+
+| Agent          | Stage   |
+| -------------- | ------- |
+| Claude Code    | beta    |
+| OpenAI Codex   | alpha   |
+| Pi             | alpha   |
+| Aider          | alpha   |
+| OpenCode       | planned |
+| Gemini CLI     | planned |
+| Cursor Agent   | planned |
+| Amp            | planned |
+
+**Orchestrators**
+
+| Orchestrator          | Stage   |
+| --------------------- | ------- |
+| Gas Town              | alpha   |
+| Claude Squad          | planned |
+| Custom (plugin API)   | planned |
 
 → [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html) for watch paths, model detection, and roadmap.
 
