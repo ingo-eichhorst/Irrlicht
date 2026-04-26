@@ -78,7 +78,14 @@ Irrlicht claims a narrower, more opinionated slot in that third camp:
 
 ## Install
 
-**DMG (recommended):**
+**Homebrew (recommended):**
+
+```sh
+brew tap ingo-eichhorst/irrlicht
+brew install --cask irrlicht
+```
+
+**DMG:**
 
 1. Download `Irrlicht-<version>.dmg` from [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases)
 2. Open the DMG and drag **Irrlicht.app** to **Applications**

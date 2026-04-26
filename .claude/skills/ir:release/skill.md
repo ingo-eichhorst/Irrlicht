@@ -166,10 +166,26 @@ cd /tmp && shasum -a 256 \
   > checksums.sha256
 ```
 
+## Step 6.5: Update Homebrew Cask
+
+Bump the cask in `tools/homebrew-tap/Casks/irrlicht.rb` to `$NEW_VERSION`
+with the sha256 of the freshly built DMG. The same script also syncs to the
+external tap repo (`ingo-eichhorst/homebrew-irrlicht`) when
+`IRRLICHT_TAP_DIR` is set — but skip the `--push` flag here so the local
+in-repo template gets committed alongside the release in Step 7 first;
+external publish happens in Step 8.5 after the GitHub release exists.
+
+```bash
+tools/homebrew-tap/update-cask.sh --version "$NEW_VERSION"
+```
+
+Without `IRRLICHT_TAP_DIR` set, this only updates the in-repo template —
+fine for first releases before the tap repo exists.
+
 ## Step 7: Commit, Tag, Push
 
 ```bash
-git add version.json CHANGELOG.md site/ platforms/macos/Irrlicht/Resources/Info.plist
+git add version.json CHANGELOG.md site/ platforms/macos/Irrlicht/Resources/Info.plist tools/homebrew-tap/Casks/irrlicht.rb
 git commit -m "chore: release v$NEW_VERSION"
 git tag v$NEW_VERSION
 git push origin main --tags
@@ -187,6 +203,24 @@ gh release create v$NEW_VERSION \
   --title "v$NEW_VERSION" \
   --notes "<drafted release notes from Step 2>"
 ```
+
+## Step 8.5: Publish Cask to External Tap
+
+Push the bumped cask to `ingo-eichhorst/homebrew-irrlicht` so
+`brew install --cask irrlicht` resolves to the new version. Requires
+`IRRLICHT_TAP_DIR` to point at a clone of the tap repo.
+
+```bash
+tools/homebrew-tap/update-cask.sh --version "$NEW_VERSION" --push
+```
+
+**Failure handling:** if the push fails (tap repo offline, auth issue,
+etc.), log a warning but **do not roll back the GitHub release**. The cask
+can be republished later by re-running the script — version + sha256 are
+already pinned in the in-repo template from Step 6.5.
+
+If the tap repo doesn't exist yet, this step is a no-op (the script exits 0
+when `IRRLICHT_TAP_DIR` isn't set).
 
 ## Step 9: Verify
 

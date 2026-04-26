@@ -97,8 +97,20 @@
         <li><strong>Xcode Command Line Tools</strong> &mdash; install with <code>xcode-select --install</code></li>
       </ul>
 
+      <!-- ── Homebrew Install ── -->
+      <h2>Install via Homebrew (Recommended)</h2>
+
+      <p>For Mac users with <a href="https://brew.sh">Homebrew</a>, this is the simplest path. The cask points at the same signed DMG as the GitHub release, strips the quarantine attribute on first install, and lets <code>brew upgrade</code> handle future versions.</p>
+
+      <pre><code>brew tap ingo-eichhorst/irrlicht
+brew install --cask irrlicht</code></pre>
+
+      <p>To upgrade later:</p>
+
+      <pre><code>brew upgrade --cask irrlicht</code></pre>
+
       <!-- ── Curl Install ── -->
-      <h2>Install via curl (Recommended)</h2>
+      <h2>Install via curl</h2>
 
       <p>One command. No Gatekeeper prompts. The script downloads the signed app, verifies the SHA-256 checksum, strips the quarantine attribute, and launches it.</p>
 
