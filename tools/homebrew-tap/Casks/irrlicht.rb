@@ -26,12 +26,13 @@ cask "irrlicht" do
                    sudo: false
   end
 
-  uninstall launchctl: "io.irrlicht.app.daemon",
-            quit:      "io.irrlicht.app"
+  # The cask install path doesn't register a LaunchAgent — the menu-bar app
+  # spawns the embedded daemon itself. Power users who installed the
+  # optional plist by hand can rm it themselves.
+  uninstall quit: "io.irrlicht.app"
 
   zap trash: [
     "~/Library/Application Support/Irrlicht",
-    "~/Library/LaunchAgents/io.irrlicht.app.daemon.plist",
     "~/Library/Preferences/io.irrlicht.app.plist",
   ]
 end

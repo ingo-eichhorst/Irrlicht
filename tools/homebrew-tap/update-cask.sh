@@ -91,15 +91,24 @@ mkdir -p "$IRRLICHT_TAP_DIR/Casks"
 cp "$CASK_FILE" "$IRRLICHT_TAP_DIR/Casks/irrlicht.rb"
 
 cd "$IRRLICHT_TAP_DIR"
-if git diff --quiet Casks/irrlicht.rb; then
+
+# Stage first, then check the index — `git diff --quiet` reports no diff for
+# untracked files, which would silently no-op a fresh tap clone.
+git add Casks/irrlicht.rb
+if git diff --cached --quiet -- Casks/irrlicht.rb; then
     echo "tap repo already at $VERSION — nothing to commit."
     exit 0
 fi
 
-git add Casks/irrlicht.rb
 git commit -m "irrlicht $VERSION"
 
 if [ "$PUSH" -eq 1 ]; then
+    # Rebase on top of remote first to avoid non-fast-forward push failures
+    # when another machine has already advanced the tap.
+    git pull --rebase --autostash || {
+        echo "ERROR: rebase failed — resolve manually in $IRRLICHT_TAP_DIR" >&2
+        exit 1
+    }
     git push origin HEAD
     echo "pushed to $(git remote get-url origin)"
 else

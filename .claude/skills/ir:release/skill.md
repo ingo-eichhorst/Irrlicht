@@ -210,14 +210,17 @@ Push the bumped cask to `ingo-eichhorst/homebrew-irrlicht` so
 `brew install --cask irrlicht` resolves to the new version. Requires
 `IRRLICHT_TAP_DIR` to point at a clone of the tap repo.
 
-```bash
-tools/homebrew-tap/update-cask.sh --version "$NEW_VERSION" --push
-```
+The `||` fallback below is load-bearing: the script uses `set -e` and exits
+non-zero on tap failures (offline, auth, rebase conflict). The release
+itself is already on GitHub at this point, so we explicitly **do not**
+propagate that failure — log a warning and move on. The cask can be
+republished later by re-running the script; version + sha256 are already
+pinned in the in-repo template from Step 6.5.
 
-**Failure handling:** if the push fails (tap repo offline, auth issue,
-etc.), log a warning but **do not roll back the GitHub release**. The cask
-can be republished later by re-running the script — version + sha256 are
-already pinned in the in-repo template from Step 6.5.
+```bash
+tools/homebrew-tap/update-cask.sh --version "$NEW_VERSION" --push \
+  || echo "WARNING: cask publish failed — re-run later. GitHub release is unaffected."
+```
 
 If the tap repo doesn't exist yet, this step is a no-op (the script exits 0
 when `IRRLICHT_TAP_DIR` isn't set).
