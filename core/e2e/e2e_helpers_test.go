@@ -78,6 +78,19 @@ func startFakeClaudeProcessNamed(t *testing.T, name string) (*exec.Cmd, string) 
 	return cmd, fakeCWD
 }
 
+// assertWatchersExited asserts every named done-channel closes within
+// timeout — used to catch goroutine leaks after context cancellation.
+func assertWatchersExited(t *testing.T, timeout time.Duration, watchers map[string]chan struct{}) {
+	t.Helper()
+	for name, ch := range watchers {
+		select {
+		case <-ch:
+		case <-time.After(timeout):
+			t.Errorf("%s did not exit within %s of context cancel — possible goroutine leak", name, timeout)
+		}
+	}
+}
+
 // realSessionCheckerFor returns a production-equivalent sessionChecker
 // backed by the given memRepo — the same predicate
 // processlifecycle.HasRealSessionForPID used by the daemon.

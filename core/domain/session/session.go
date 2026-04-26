@@ -17,6 +17,12 @@ const (
 	CompactionStatePostCompact   = "post_compact"
 )
 
+// IsCanonicalState reports whether s is one of the three valid lifecycle
+// states. Anything else (empty, "cancelled", a typo) is a domain violation.
+func IsCanonicalState(s string) bool {
+	return s == StateWorking || s == StateWaiting || s == StateReady
+}
+
 // SessionMetrics holds computed performance metrics from transcript analysis.
 type SessionMetrics struct {
 	ElapsedSeconds     int64   `json:"elapsed_seconds"`

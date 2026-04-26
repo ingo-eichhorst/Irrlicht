@@ -73,13 +73,9 @@ func TestScanner_TracksTwoConcurrentProcessesWithSameAgentName(t *testing.T) {
 		t.Errorf("repo session count: got %d (%v), want 2", len(all), ids)
 	}
 
-	// Clean shutdown: both watchers must exit promptly on context cancel.
 	cancel()
-	for label, ch := range map[string]chan struct{}{"scanner": scannerDone, "detector": detectorDone} {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			t.Errorf("%s did not exit within 2s of context cancel — possible goroutine leak", label)
-		}
-	}
+	assertWatchersExited(t, 2*time.Second, map[string]chan struct{}{
+		"scanner":  scannerDone,
+		"detector": detectorDone,
+	})
 }

@@ -62,11 +62,10 @@ func TestFSWatcher_EmitsEventsForTranscriptCreateAndModify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open for append: %v", err)
 	}
+	defer f.Close()
 	if _, err := f.WriteString(`{"type":"assistant"}` + "\n"); err != nil {
-		f.Close()
 		t.Fatalf("append write: %v", err)
 	}
-	f.Close()
 
 	ev = waitForFSEvent(t, ch, 2*time.Second)
 	if ev.Type != agent.EventActivity {

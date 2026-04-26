@@ -72,8 +72,8 @@ func TestSession_NoCancelledState_OnSIGKILL(t *testing.T) {
 			done = true
 			continue
 		}
-		if s.State != session.StateReady && s.State != session.StateWorking && s.State != session.StateWaiting {
-			t.Fatalf("forbidden state observed after SIGKILL: %q (only working/waiting/ready allowed)", s.State)
+		if !session.IsCanonicalState(s.State) {
+			t.Fatalf("forbidden state observed after SIGKILL: %q", s.State)
 		}
 	}
 
@@ -82,14 +82,9 @@ func TestSession_NoCancelledState_OnSIGKILL(t *testing.T) {
 		t.Errorf("pre-session %s still present after SIGKILL: state=%q", preID, s.State)
 	}
 
-	// Cancel the context and assert both watchers exit promptly — a leaked
-	// goroutine would show up as a hung select.
 	cancel()
-	for name, ch := range map[string]chan struct{}{"scanner": scannerDone, "detector": detectorDone} {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			t.Errorf("%s did not exit within 2s of context cancel — possible goroutine leak", name)
-		}
-	}
+	assertWatchersExited(t, 2*time.Second, map[string]chan struct{}{
+		"scanner":  scannerDone,
+		"detector": detectorDone,
+	})
 }
