@@ -5,13 +5,6 @@
 # template). If IRRLICHT_TAP_DIR points at a clone of the external tap repo
 # (ingo-eichhorst/homebrew-irrlicht), the file is also copied there and
 # committed; pass --push to push to origin.
-#
-# Usage:
-#   tools/homebrew-tap/update-cask.sh [--version X.Y.Z] [--dmg path] [--push]
-#
-# Defaults:
-#   --version  read from version.json
-#   --dmg      .build/Irrlicht-<version>.dmg, fallback /tmp/Irrlicht-<version>.dmg
 
 set -euo pipefail
 
@@ -23,13 +16,23 @@ VERSION=""
 DMG_PATH=""
 PUSH=0
 
+usage() {
+    cat <<'HELP'
+Usage: update-cask.sh [--version X.Y.Z] [--dmg path] [--push]
+
+  --version  bump to this version (default: read from version.json)
+  --dmg      DMG path to hash (default: probe .build/ then /tmp/)
+  --push     git push the bumped cask in $IRRLICHT_TAP_DIR
+HELP
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) VERSION="$2"; shift 2 ;;
         --dmg)     DMG_PATH="$2"; shift 2 ;;
         --push)    PUSH=1; shift ;;
-        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
-        *) echo "unknown arg: $1" >&2; exit 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
@@ -37,25 +40,18 @@ if [ -z "$VERSION" ]; then
     VERSION=$(python3 -c "import json; print(json.load(open('$ROOT_DIR/version.json'))['version'])")
 fi
 
+DMG_CANDIDATES=(
+    "$ROOT_DIR/.build/Irrlicht-$VERSION.dmg"
+    "/tmp/Irrlicht-$VERSION.dmg"
+)
 if [ -z "$DMG_PATH" ]; then
-    if [ -f "$ROOT_DIR/.build/Irrlicht-$VERSION.dmg" ]; then
-        DMG_PATH="$ROOT_DIR/.build/Irrlicht-$VERSION.dmg"
-    elif [ -f "/tmp/Irrlicht-$VERSION.dmg" ]; then
-        DMG_PATH="/tmp/Irrlicht-$VERSION.dmg"
-    else
-        echo "DMG not found at .build/ or /tmp/ for version $VERSION" >&2
-        echo "pass --dmg <path>" >&2
-        exit 1
-    fi
+    for candidate in "${DMG_CANDIDATES[@]}"; do
+        [ -f "$candidate" ] && { DMG_PATH="$candidate"; break; }
+    done
 fi
 
-if [ ! -f "$DMG_PATH" ]; then
-    echo "DMG does not exist: $DMG_PATH" >&2
-    exit 1
-fi
-
-if [ ! -f "$CASK_FILE" ]; then
-    echo "cask template missing: $CASK_FILE" >&2
+if [ -z "$DMG_PATH" ] || [ ! -f "$DMG_PATH" ]; then
+    echo "DMG not found for version $VERSION (probed: ${DMG_CANDIDATES[*]}) — pass --dmg <path>" >&2
     exit 1
 fi
 
