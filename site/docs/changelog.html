@@ -78,6 +78,61 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.9 <small>(2026-04-27)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>Aider adapter</strong> &mdash; first agent shipped through the new <code>/ir:onboard-agent</code> discovery flow. Includes parser, tmux-driven interactive driver, scenario fixtures, and a pinned trailing-<code>?</code> waiting-state contract. Aider sessions show alongside Claude Code, Codex, Pi, and Gas Town with the same three-state vocabulary</li>
+        <li><strong><code>/ir:exec</code> skill</strong> &mdash; issue-driven plan generation. Reads a GitHub issue and produces a structured implementation plan to start a fresh worktree</li>
+        <li><strong><code>coverage-viewer</code> dev webview</strong> (#222) &mdash; local web UI for the agent &times; scenario fixture matrix; shows which lifecycle events each adapter has recorded</li>
+        <li><strong><code>tui</code> capability + category taxonomy</strong> &mdash; adapters can declare <code>tui</code> as a discoverable capability so the canonical scenario matrix can target TUI-style agents</li>
+        <li><strong><code>IRRLICHT_DEMO_MODE=1</code></strong> &mdash; daemon flag that disables ProcessWatcher and per-adapter AgentWatchers so <code>tools/seed-demo-sessions</code> can stage screenshot scenarios without live processes leaking into the dropdown</li>
+        <li><strong>Process discovery: <code>CommandLineMatch</code> + <code>TranscriptFilename</code> probes</strong> &mdash; wrapper-launched agents (e.g. invoked via <code>pgrep -f</code>) and per-CWD agents that write their transcript next to the project are now detected without a kqueue race</li>
+        <li><strong>Transcript activity emission for CWD-resident transcripts</strong> &mdash; processlifecycle now emits <code>transcript_activity</code> events for agents whose transcript lives next to the working directory</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>Tailer survives <code>SendMessage</code> tool across <code>turn_done</code></strong> (#81) &mdash; Claude Code emits a <code>turn_done</code> between the assistant message and a follow-up <code>SendMessage</code> tool call; the tailer used to drop the second half. Sessions stay coherent across that boundary now</li>
+        <li><strong>Mid-paragraph question detection + snippet trim</strong> (#236) &mdash; the waiting-state classifier used to require a question at the end of the assistant message. It now picks up questions mid-paragraph and trims the surfaced snippet for the menu bar block</li>
+        <li><strong>Skip rhetorical Q&amp;A pairs in question detection</strong> &mdash; <code>"Did X happen? Yes."</code>-style self-answered questions no longer flip a session to waiting</li>
+        <li><strong>Menu-bar button stays highlighted while panel is open</strong> (#224) &mdash; the NSPanel migration in 0.3.8 lost the button-pressed appearance; restored with explicit highlight-on-show / unhighlight-on-close</li>
+        <li><strong>Tooltips restored after NSPanel migration</strong> (#218) &mdash; switched from SwiftUI <code>.help()</code> (silently dropped inside NSPanel) to an <code>NSView</code>-bridged tooltip modifier</li>
+        <li><strong>History bars align with Context layout; modes renamed to "Min" with tooltips</strong> (#210)</li>
+        <li><strong>Cost display drops cents at &ge;$100</strong> (#214, #215) &mdash; <code>$132.41</code> was line-breaking the row; now renders <code>$132</code></li>
+        <li><strong>Stale session ledger files GC'd</strong> (#185) &mdash; the per-session ledger directory used to grow without bound; now cleaned alongside session expiry</li>
+        <li><strong>Claude Code hook errors silenced when daemon is down</strong> (#221) &mdash; hooks no longer print noisy connection errors when irrlichd isn't running</li>
+        <li><strong>Replay byte-identity test excludes bare <code>events.jsonl</code></strong> &mdash; the bare events file is regenerated and shouldn't be part of the byte-identity check</li>
+        <li><strong>Coverage-viewer rejects path-traversal in API + uses <code>aider.Parser</code> after stub removal</strong></li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong><code>/ir:onboard-agent</code> overhaul</strong> (#199, #200) &mdash; moved from a hardcoded scenario list to a <code>features.json</code> + <code>replaydata</code> layout with 3-subagent discovery, reasoned merge, and cross-agent feature widening. Adds Codex + Pi drivers and scenario columns; gastown gets its own orchestrator scenario axis. Onboarding aider through this flow validated the design end-to-end</li>
+        <li><strong>Canonical scenario &times; adapter fixture matrix</strong> (#228, #231) &mdash; covers the 7 actionable scenario &times; adapter cells plus <code>agent-question-pending</code> for claudecode/codex/pi. Adds <code>drive-pi-interactive.sh</code> and two pi script-based fixtures</li>
+        <li><strong>Dev scripts consolidated under <code>tools/</code></strong> &mdash; standalone tooling (HTTP viewers, fixture generators, homebrew-tap helper) now lives in top-level <code>tools/</code> rather than <code>core/cmd/</code></li>
+        <li><strong><code>tools/homebrew-tap/update-cask.sh</code> simplified</strong> &mdash; single source of truth for cask updates; the in-repo template and external tap repo are bumped from one script</li>
+        <li><strong>Aider parser</strong>: single regex match per line; documented interface contract</li>
+        <li><strong>e2e tests for processlifecycle crash, concurrent sessions, fswatcher</strong> (#205) &mdash; extracts <code>IsCanonicalState</code> and <code>assertWatchersExited</code> helpers</li>
+      </ul>
+
+      <h3>Distribution</h3>
+
+      <ul>
+        <li><strong>Homebrew cask via own tap</strong> (#187) &mdash; <code>brew tap ingo-eichhorst/irrlicht &amp;&amp; brew install --cask irrlicht</code> now resolves to the latest release. The cask is auto-bumped on each release via <code>tools/homebrew-tap/update-cask.sh</code></li>
+      </ul>
+
+      <h3>Site</h3>
+
+      <ul>
+        <li><strong>Landing page rewrite</strong> &mdash; restructured around a "first 30 seconds" pain &rarr; state &rarr; install flow, with stage-tag legend, install stats strip, and expanded "why" section. New menu-bar explainer screenshot and dark-forest backdrop</li>
+        <li><strong>README</strong> restaged for first-30-seconds skim, adapters tagged by stage, explainer image promoted to hero banner</li>
+        <li><strong>Design system reference</strong> added under <code>tools/irrlicht-design-system/</code></li>
+      </ul>
+
       <h2>v0.3.8 <small>(2026-04-24)</small></h2>
 
       <h3>Added</h3>

@@ -112,6 +112,17 @@
         <li>JSONL v3 format with session header, tree-structured entries, and multi-provider support</li>
       </ul>
 
+      <h3>Aider Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/aider/</code></li>
+        <li><strong>Watches:</strong> per-CWD transcript file <code>.aider.chat.history.md</code> (markdown, not JSONL)</li>
+        <li>Process discovery via <code>CommandLineMatch</code> (<code>/aider($| )</code>) since the OS process is <code>python</code></li>
+        <li><strong>Adapter name:</strong> <code>"aider"</code></li>
+        <li>Waiting state is pinned to a trailing <code>?</code> contract on the most recent assistant block</li>
+        <li>Stage: <strong>alpha</strong> &mdash; first agent shipped through the <code>/ir:onboard-agent</code> discovery flow</li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>
