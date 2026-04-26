@@ -2,7 +2,7 @@
 
 # ✦ Irrlicht — Menu-Bar Lights for AI Coding Agents (macOS)
 
-![Banner](assets/banner.png)
+![UI Features](assets/explainer.png)
 
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fingo-eichhorst%2F9f14c8e5f25c1ccf5d6500c1685fd9fb%2Fraw%2Fcoverage.json&color=%238B5CF6)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/coverage.yml)
 [![License](https://img.shields.io/badge/license-MIT-orange?color=%23FF9500)](LICENSE)
@@ -14,8 +14,6 @@
 </div>
 
 > 🟣 working · 🟠 waiting · 🟢 ready — one ambient dot per session, multi-agent, no hooks.
-
-![UI Features](assets/explainer.png)
 
 ## Install
 
