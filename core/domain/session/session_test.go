@@ -32,12 +32,57 @@ func TestIsWaitingForUserInput_TrailingMarkdown(t *testing.T) {
 		{"declarative ending in *", "**Done**", false},
 		{"empty", "", false},
 		{"only delimiters", "***", false},
+		// Mid-paragraph questions — issue #236.
+		{"mid-paragraph question with trailing status", "What would you like? In the meantime I'll move step 7 to blocked.", true},
+		{"question on first line, status after newline", "Do you want me to refactor?\nLet me know.", true},
+		{"two questions, both detected", "What's first? Or what's second?", true},
+		{"URL with ? not a question", "See https://example.com/?foo=bar for details.", false},
+		{"abbreviation e.g. is not a question", "Use a fixture, e.g. small.json. The tests pass.", false},
+		// Rhetorical Q&A — agent answers itself, not waiting on user.
+		{"joke with Because answer", "Why do programmers prefer dark mode? Because light attracts bugs.", false},
+		{"joke with Because answer across newline", "Why do programmers prefer dark mode?\nBecause light attracts bugs.", false},
+		{"Since-prefixed answer is rhetorical", "Why bother? Since the cache already has it, we skip.", false},
+		{"rhetorical Q followed by real Q", "Why? Because reasons. Should I proceed?", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			m := &SessionMetrics{LastAssistantText: c.text}
 			if got := m.IsWaitingForUserInput(); got != c.want {
 				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
+			}
+		})
+	}
+}
+
+func TestExtractQuestionSnippet(t *testing.T) {
+	// Issue #236: when a question is detected, the rendered snippet should be
+	// the question sentence — not the full surrounding paragraph.
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"plain", "What now?", "What now?"},
+		{"mid-paragraph trims trailing status", "What would you like? In the meantime I'll move step 7 to blocked and not touch your daemon.", "What would you like?"},
+		{"multi-question keeps first (top-level question over bullet options)", "What's first? Or what's second?", "What's first?"},
+		{"bullet options after lead question keep lead", "what would you like me to test? For example:\n- run tests?\n- something else?", "what would you like me to test?"},
+		{"newline-separated", "Looking at the code.\nDo you want me to refactor?\nLet me know.", "Do you want me to refactor?"},
+		{"bold-wrapped preserved", "**What now?**", "**What now?**"},
+		{"trailing whitespace stripped", "What now?   \n", "What now?"},
+		{"leading ellipsis from truncation", "…end of context. Hello, what's next?", "Hello, what's next?"},
+		{"no question returns empty", "Done. The tests pass.", ""},
+		{"empty input", "", ""},
+		{"only punctuation", "***", ""},
+		// Rhetorical Q&A is skipped — the agent isn't waiting on the user.
+		{"joke with Because answer returns empty", "Why do programmers prefer dark mode? Because light attracts bugs.", ""},
+		{"joke with Because across newline returns empty", "Why do programmers prefer dark mode?\nBecause light attracts bugs.", ""},
+		{"rhetorical Q followed by real Q returns the real one", "Why? Because reasons. Should I proceed?", "Should I proceed?"},
+		{"non-answer continuation is not rhetorical", "What would you like? In the meantime I'll move on.", "What would you like?"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ExtractQuestionSnippet(c.text); got != c.want {
+				t.Errorf("text=%q: got %q, want %q", c.text, got, c.want)
 			}
 		})
 	}

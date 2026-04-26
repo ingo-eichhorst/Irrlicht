@@ -15,8 +15,8 @@
     "last_event_time": "2026-04-07T23:15:42.607Z",
     "wall_clock_session_duration": 11901617000000,
     "state_durations": {
-      "ready": 3353586000000,
-      "waiting": 998415000000,
+      "ready": 3231325000000,
+      "waiting": 1120676000000,
       "working": 7549616000000
     },
     "flicker_count": 2,
@@ -191,7 +191,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "… as-is,\n- (b) commit only 02/03/04 and drop the 60 MB one,\n- (c) run a secret…"
+      "last_assistant_text_head": "- (d) build a small redactor that strips paths + suspicious strings before commi…"
     },
     {
       "index": 11,
@@ -220,7 +220,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "… to land for the regression numbers to drop.\n\nWant me to start with the Bug B…"
+      "last_assistant_text_head": "Want me to start with the Bug B fix (small, self-contained, immediately visible …"
     },
     {
       "index": 13,
@@ -242,23 +242,23 @@
       "virtual_time": "2026-04-07T20:58:37.445Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "… | 4               | 2           | **0**           |\n\nWant me to ship both fi…"
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "Want me to ship both fixes as two separate commits?"
     },
     {
       "index": 15,
       "event_index": 187,
       "virtual_time": "2026-04-07T21:00:39.706Z",
       "cause": "event",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
@@ -307,7 +307,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "…e scoreboard, then move through the fixes one by one? Or would you prefer I d…"
+      "last_assistant_text_head": "…e scoreboard, then move through the fixes one by one?"
     },
     {
       "index": 19,

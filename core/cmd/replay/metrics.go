@@ -92,6 +92,9 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 			}
 		}
 	}
+	if snippet := session.ExtractQuestionSnippet(result.LastAssistantText); snippet != "" {
+		result.LastAssistantText = snippet
+	}
 	return result
 }
 
