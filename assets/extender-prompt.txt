@@ -1,0 +1,95 @@
+# Explainer Image Prompt
+
+Compose a **16:9 explainer image (1920×1080)** using the two provided reference images.
+
+## Reference Images
+
+- **Image A** (foreground, fixed asset): the menu-bar dropdown screenshot. Treat it as inviolable — preserve its pixels exactly and place it as-is. Do not redraw, recolor, restyle, or reflow any element inside it. **Center** it on the canvas, both horizontally and vertically.
+- **Image B** (background atmosphere): the dark-forest-path photo. Use it as the **full-bleed background** of the canvas. Extend it to fill 1920×1080 by mirroring or generating outward from the supplied frame — keep the moody framing of dark trees on the left and right edges and the misty central clearing receding to a vanishing point. Do not invent stars, lanterns, animals, paths, characters, or signage that are not already in the source.
+
+## Background Treatment
+
+- Darken Image B globally by **~25%** so it reads as backdrop, not subject.
+- Add a soft elliptical vignette darkening the corners further so the screenshot and the callouts have **~70% local contrast**.
+- Underlay the screenshot with a near-black navy wash (`#050a14` at **~85% opacity**, blurred **~80 px**, **~80 px bleed** beyond the screenshot's edge) so the menu-bar art reads cleanly against the trees.
+- The areas where the callout text sits (left and right of the screenshot) get a similar but lighter wash (`#050a14` at **~55% opacity**) so body text stays legible without obliterating the forest.
+- No bright overlays, no light leaks, no aurora.
+- One soft circular wisp of `#8B5CF6` at **~8% opacity** may float behind the canvas, blurred **~120 px**, like distant candlelight.
+- Overlay a fine film-grain noise at **~3% opacity** across the whole canvas.
+
+## Annotation Callouts
+
+**Five labeled callouts** arranged around the screenshot — **3 on the left**, **2 on the right** — with thin 1 px hairline connector lines in `rgba(139, 92, 246, 0.4)` running from each label to its target inside the screenshot. Each connector ends in a **3 px filled purple dot** on the screenshot side. Lines are orthogonal (only horizontal and vertical segments, single 90° bend allowed). Connectors do not cross.
+
+Each callout uses two rows:
+
+- **Eyebrow** (DM Mono, 10 px, all caps, letter-spacing 0.3em — color matches the semantic state when applicable, otherwise `#5a6378`)
+- **Body** (Outfit 300, ~14 px, color `#c8cdd8`)
+
+### Callouts and their targets
+
+**Left (3) — labels right-aligned in the band roughly `x = 80 → 620`, stacked top → bottom:**
+
+1. **PROJECT GROUPS** (mono dim `#5a6378`) / "collapsed sessions, daily cost per group" — connector points right and lands a purple dot on the **`web-app $2.21 / day`** project-group header (the *first* project header, top of the screenshot).
+2. **STATES** (eyebrow rendered as three brand-colored dots `● ● ●` `#8B5CF6` `#FF9500` `#34C759`) / "working, waiting, ready" — connector points right and lands a purple dot on the **leftmost state-icon column** (the column running the hourglass / hammer / check icons). Land the dot on the hammer of the `web-app / 2 main` row for a clear mid-screenshot anchor.
+3. **SUBAGENTS** (purple eyebrow `#8B5CF6`) / "child sessions tracked under the parent" — connector points right and lands a purple dot on the **small purple `3` badge** next to the hammer on the bottom-most `marketing-site / main` row.
+
+**Right (2) — labels left-aligned in the band roughly `x = 1300 → 1840`, stacked top → bottom:**
+
+4. **AGENTS & MODELS** (mono dim) / "claude code, codex, pi" — connector points left and lands a purple dot on the **rightmost column** (model name + agent badge). Land the dot on the `gpt-5.1` cell of the `web-app / 1 feature/c…` row (top session).
+5. **CONTEXT & SESSION COSTS** (mono dim) / "tokens vs window, live USD per session" — connector points left and lands a purple dot on the **green progress bar + `$2.74`** combo on the `web-app / 2 main` row (the most visible bar + cost pair in the screenshot).
+
+### Placement
+
+The screenshot sits centered (`x ≈ 650 → 1270`, `y ≈ 180 → 900`). Place each callout label so its baseline horizontally aligns with its target row, then run a 1 px hairline connector with at most one 90° bend to the dot. The five label-y positions:
+
+| # | Side | Approx. label y (canvas px) | Connector terminates on |
+|---|---|---|---|
+| 1 | LEFT TOP   | y ≈ 290 | `web-app $2.21 / day` header |
+| 2 | LEFT MID   | y ≈ 470 | hammer icon on `web-app / 2 main` (state-icon column) |
+| 3 | LEFT BOT   | y ≈ 720 | small purple `3` badge on `marketing-site / main` |
+| 4 | RIGHT TOP  | y ≈ 350 | `gpt-5.1` + agent badge on `web-app / 1 feature/c…` |
+| 5 | RIGHT MID  | y ≈ 470 | green bar + `$2.74` on `web-app / 2 main` |
+
+**No connector crosses another.** Leave roughly **32 px** between sibling callouts.
+
+```
+┌─ 1920 × 1080 canvas (screenshot centered) ──────────────────────┐
+│                                                                 │
+│  PROJECT GROUPS ──┐                          ┌── AGENTS &       │
+│  collapsed…       ●→ [web-app  $2.21/day]  ←●  MODELS           │
+│                       1 feature/c…   …gpt-5.1                   │
+│                                                                 │
+│  STATES         ──┐                          ┌── CONTEXT &      │
+│  ● ● ●            ●→ [🔨] 2 main   [bar]$2.74←●  SESSION COSTS  │
+│  working,                                                       │
+│  waiting, ready                                                 │
+│                                                                 │
+│                       [marketing-site $1.16/day]                │
+│                       ✓ 1 draft/lau…                            │
+│  SUBAGENTS      ──┐                                             │
+│  child sessions   ●→ [🔨][3] main  …                            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## What Not To Draw
+
+- No mockup of a laptop, monitor, or hand.
+- No 3D perspective.
+- No drop shadows on text.
+- No glassmorphism panels around the callouts — they sit directly on the dark wash.
+- No emoji except the colored dots (●) inside callouts where a state is named.
+- No ASCII flowers, sparkles, or noise patterns beyond the global film grain.
+- No "Get started" or "Download" CTA — this is an explainer, not a marketing CTA.
+- Do not add a colored border around the screenshot — preserve it exactly as provided.
+- Do not add stars, lanterns, fog volumes, fireflies, will-o'-the-wisps, or any new figures into the forest reference; extend it only by mirroring/continuing what is already there.
+- DO NOT print color annotations like: (mono dim `#5a6378`). They are purely for information.
+
+## Type Pairing Reference
+
+- **Cormorant Garamond** (serif, weight 300) — display title
+- **Outfit** (sans 300/500) — body and callout text
+- **DM Mono** (300/400) — tracked uppercase eyebrows and small data labels
+
+UI prose is lowercase. Em-dashes (—) over colons. No exclamation marks.

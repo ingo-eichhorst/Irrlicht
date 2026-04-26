@@ -846,9 +846,255 @@ section {
   color: var(--ready);
 }
 
+.tag-stable {
+  background: rgba(52,199,89,0.12);
+  color: var(--ready);
+  border: 1px solid rgba(52,199,89,0.25);
+}
+
+.tag-beta {
+  background: rgba(139,92,246,0.12);
+  color: #b794f6;
+  border: 1px solid rgba(139,92,246,0.25);
+}
+
+.tag-alpha {
+  background: rgba(255,149,0,0.12);
+  color: var(--waiting);
+  border: 1px solid rgba(255,149,0,0.25);
+}
+
 .tag-planned {
   background: rgba(200,205,216,0.06);
   color: var(--text-dim);
+}
+
+/* ─── Stage legend ─── */
+.stage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.5rem;
+  justify-content: center;
+  margin-top: 2rem;
+}
+
+.stage-legend-item {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  letter-spacing: 0.02em;
+}
+
+.stage-legend-item .si-tag {
+  margin: 0;
+  font-size: 0.6rem;
+}
+
+/* ─── Install stats strip ─── */
+.install-stats {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  text-align: center;
+  margin-top: 0.4rem;
+}
+
+.install-stats span { color: var(--text); }
+.install-stats em {
+  color: var(--text-dim);
+  font-style: normal;
+  margin: 0 0.5rem;
+  opacity: 0.5;
+}
+
+/* ─── Why Irrlicht (pain + three states) ─── */
+.why {
+  padding: 8rem 0 4rem;
+  position: relative;
+}
+
+.why::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1px;
+  height: 80px;
+  background: linear-gradient(to bottom, transparent, var(--border), transparent);
+}
+
+.pain-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+  margin-top: 3rem;
+}
+
+.pain-card {
+  padding: 1.75rem 1.75rem 1.5rem;
+  border-radius: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.3s, transform 0.3s;
+}
+
+.pain-card:hover {
+  border-color: rgba(255, 149, 0, 0.18);
+  transform: translateY(-2px);
+}
+
+.pain-card-wide {
+  grid-column: 1 / -1;
+}
+
+.pain-card .pain-tag {
+  display: inline-block;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--waiting);
+  padding: 0.25rem 0.55rem;
+  border-radius: 4px;
+  background: rgba(255, 149, 0, 0.08);
+  border: 1px solid rgba(255, 149, 0, 0.18);
+  margin-bottom: 0.85rem;
+}
+
+.pain-card h4 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-bright);
+  margin-bottom: 0.4rem;
+}
+
+.pain-card p {
+  font-size: 0.85rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+
+.why .lights-row {
+  margin-top: 4rem;
+}
+
+.why-states-label {
+  text-align: center;
+  margin-top: 4.5rem;
+  margin-bottom: -1rem;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+/* ─── Demo video ─── */
+.demo {
+  padding: 6rem 0 2rem;
+}
+
+.menu-screenshot {
+  display: block;
+  max-width: 1040px;
+  width: 100%;
+  height: auto;
+  margin: 0 auto 2.5rem;
+  border-radius: 14px;
+  border: 1px solid rgba(139, 92, 246, 0.18);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45), 0 0 40px rgba(139, 92, 246, 0.1);
+  background: rgba(5, 10, 20, 0.6);
+}
+
+.menu-screenshot-caption {
+  text-align: center;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 1rem;
+  opacity: 0.7;
+}
+
+/* ─── Features differentiation aside ─── */
+.section-aside {
+  font-size: 0.85rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  font-style: italic;
+  max-width: 560px;
+  line-height: 1.6;
+  margin-top: 0.75rem;
+  opacity: 0.85;
+}
+
+/* ─── Footer mythology line ─── */
+.footer-myth {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  text-align: center;
+  margin-bottom: 1.5rem;
+  opacity: 0.7;
+}
+
+.demo-header {
+  text-align: center;
+  margin-bottom: 3rem;
+}
+
+.demo-header .section-desc {
+  margin: 0 auto;
+}
+
+.video-frame {
+  position: relative;
+  max-width: 960px;
+  margin: 0 auto;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.4), 0 0 60px var(--glow-purple);
+}
+
+.video-frame::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(139,92,246,0.4), rgba(255,149,0,0.3), rgba(52,199,89,0.3), transparent);
+  z-index: 2;
+}
+
+.video-aspect {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%;
+}
+
+.video-aspect iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
 }
 
 /* ─── The Light System ─── */
@@ -1099,6 +1345,7 @@ footer {
   .lights-row { flex-direction: column; }
   .install-options { grid-template-columns: 1fr; }
   .supported-columns { grid-template-columns: 1fr; }
+  .pain-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 600px) {
@@ -1127,9 +1374,9 @@ footer {
     IRRLICHT
   </a>
   <ul class="nav-links">
-    <li class="nav-hide-sm"><a href="#features">Features</a></li>
-    <li class="nav-hide-sm"><a href="#how-it-works">How It Works</a></li>
+    <li class="nav-hide-sm"><a href="#why">Why</a></li>
     <li class="nav-hide-sm"><a href="#supported">Supported</a></li>
+    <li class="nav-hide-sm"><a href="#features">Features</a></li>
     <li class="nav-hide-sm"><a href="landscape/">Landscape</a></li>
     <li class="nav-hide-sm"><a href="docs/">Docs</a></li>
     <li><a href="https://github.com/ingo-eichhorst/Irrlicht" class="btn-nav">GitHub</a></li>
@@ -1144,7 +1391,7 @@ footer {
   <h1><span>Irrlicht</span></h1>
   <p class="hero-meaning">/ eer-likht / &mdash; will-o'-the-wisp</p>
 
-  <p class="tagline">In <em>Faust</em>, an Irrlicht guides the way through the night. This one guides you through your agents &mdash; who's working, who's waiting, and where you're needed next.</p>
+  <p class="tagline">Know who's working, who's waiting, and where you're needed next &mdash; without leaving your menu bar.</p>
 
   <div class="session-viz">
     <div>
@@ -1176,17 +1423,47 @@ footer {
       <button class="copy-btn" type="button" onclick="copyInstallCmd(this)">Copy</button>
     </div>
     <p class="install-meta">macOS 13+ &middot; <a href="#install">other download options</a></p>
+    <p class="install-stats"><span>&lt;1s latency</span><em>·</em><span>5 MB RAM</span><em>·</em><span>100% local</span><em>·</em><span>no telemetry</span></p>
   </div>
 </section>
 
-<!-- ─── The Light System ─── -->
-<section class="light-system" id="lights">
+<!-- ─── Why Irrlicht ─── -->
+<section class="why" id="why">
   <div class="container">
     <div class="reveal">
-      <p class="section-label">The Light System</p>
-      <h2 class="section-title">Three states. No ambiguity.</h2>
-      <p class="section-desc">Each session is a single light. Its color tells you the truth about where your attention should go.</p>
+      <p class="section-label">Why Irrlicht</p>
+      <h2 class="section-title">Your agents got loud.<br>Your menu bar got smarter.</h2>
+      <p class="section-desc">Multiple agents. Multiple projects. Multiple vendors. All running in parallel. Irrlicht turns the chaos into one ambient dot per session &mdash; visible at a glance, clickable to jump straight back.</p>
     </div>
+    <div class="pain-grid reveal">
+      <div class="pain-card">
+        <span class="pain-tag">away</span>
+        <h4>Heads-up while you're not looking</h4>
+        <p>Watching a YouTube video, eating lunch, in a different window. You don't know when an agent is done. The menu-bar dot is the ambient hint that says <em>your turn</em> &mdash; without pulling you back to the terminal until it actually matters.</p>
+      </div>
+      <div class="pain-card">
+        <span class="pain-tag">focus</span>
+        <h4>Which agent, which project, which window?</h4>
+        <p>Six sessions across four projects and three branches &mdash; the mental map breaks fast. Click any Irrlicht dot or notification and you're back in the exact terminal window, ready to type.</p>
+      </div>
+      <div class="pain-card">
+        <span class="pain-tag">per-project cost</span>
+        <h4>What did <em>this</em> project actually cost?</h4>
+        <p>ccusage and friends show one big total. Irrlicht breaks spend down by project, session, and day &mdash; so when you're paid by the project, you finally know.</p>
+      </div>
+      <div class="pain-card">
+        <span class="pain-tag">multi-vendor</span>
+        <h4>Hit your limit? Switch vendors, keep your cockpit.</h4>
+        <p>Burn through Claude at noon, jump to Codex for the afternoon, back to Claude tomorrow. Notifications, layout, shortcuts stay put. The agents change &mdash; the cockpit doesn't.</p>
+      </div>
+      <div class="pain-card pain-card-wide">
+        <span class="pain-tag">timing</span>
+        <h4>Learn when to push, when to wait, when to compact</h4>
+        <p>Per-session context %, model, and a history of state changes show when each agent worked hardest, when waits dragged on, when context started filling. Tune your rhythm with agents &mdash; and stop hitting auto-compact by surprise.</p>
+      </div>
+    </div>
+
+    <p class="why-states-label">Three states. No ambiguity.</p>
     <div class="lights-row reveal">
       <div class="light-card">
         <div class="light-orb orb-working"></div>
@@ -1207,6 +1484,148 @@ footer {
   </div>
 </section>
 
+<!-- ─── Demo (screenshot + video) ─── -->
+<section class="demo" id="demo">
+  <div class="container">
+    <div class="reveal demo-header">
+      <p class="section-label">See it in action</p>
+      <h2 class="section-title">A minute with Irrlicht</h2>
+      <p class="section-desc">A glance at the menu bar tells you where to go next. Watch the demo for the full picture.</p>
+    </div>
+    <div class="reveal">
+      <img src="assets/explainer.png" alt="Irrlicht menu bar explainer: dropdown showing two projects with working/waiting/ready states, subagents badge, per-project cost, agents and models column, and per-session context and cost." class="menu-screenshot" loading="lazy">
+    </div>
+    <div class="video-frame reveal">
+      <div class="video-aspect">
+        <iframe
+          src="https://www.youtube-nocookie.com/embed/wn5irug-fB4?vq=hd1080&amp;rel=0&amp;modestbranding=1"
+          title="Irrlicht demo"
+          loading="lazy"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          referrerpolicy="strict-origin-when-cross-origin"
+          allowfullscreen></iframe>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Supported ─── -->
+<section class="supported" id="supported">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-label">Compatibility</p>
+      <h2 class="section-title">What Irrlicht works with</h2>
+      <p class="section-desc">Monitors the agents you already use, integrates with orchestrators, and runs where you need it.</p>
+      <div class="stage-legend">
+        <span class="stage-legend-item"><span class="si-tag tag-stable">stable</span> production-ready</span>
+        <span class="stage-legend-item"><span class="si-tag tag-beta">beta</span> feature-complete, edge cases remain</span>
+        <span class="stage-legend-item"><span class="si-tag tag-alpha">alpha</span> core detection works, rough edges</span>
+        <span class="stage-legend-item"><span class="si-tag tag-planned">planned</span> on the roadmap</span>
+      </div>
+    </div>
+    <div class="supported-columns reveal">
+
+      <div class="supported-col col-purple">
+        <h3>Coding Agents &amp; Assistants</h3>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Claude Code</span>
+          <span class="si-tag tag-beta">beta</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">OpenAI Codex</span>
+          <span class="si-tag tag-alpha">alpha</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Pi</span>
+          <span class="si-tag tag-alpha">alpha</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Aider</span>
+          <span class="si-tag tag-alpha">alpha</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">OpenCode</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Gemini CLI</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Cursor Agent</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Amp</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+      </div>
+
+      <div class="supported-col col-orange">
+        <h3>Agent Orchestrators</h3>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Gas Town</span>
+          <span class="si-tag tag-alpha">alpha</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Claude Squad</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Custom orchestrators</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+      </div>
+
+      <div class="supported-col col-green">
+        <h3>Platforms</h3>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">macOS (menu bar app)</span>
+          <span class="si-tag tag-beta">beta</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Web dashboard</span>
+          <span class="si-tag tag-alpha">alpha</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">CLI (irrlicht-ls)</span>
+          <span class="si-tag tag-alpha">alpha</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Linux</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">Windows</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+        <div class="supported-item">
+          <div class="si-dot"></div>
+          <span class="si-name">iOS / iPadOS</span>
+          <span class="si-tag tag-planned">planned</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
 <!-- ─── Features ─── -->
 <section class="features" id="features">
   <div class="container">
@@ -1214,6 +1633,7 @@ footer {
       <p class="section-label">Capabilities</p>
       <h2 class="section-title">Everything you need,<br>nothing you don't</h2>
       <p class="section-desc">Zero configuration. Install, run, and Irrlicht discovers your sessions automatically.</p>
+      <p class="section-aside">Not a token counter. Not an observability stack. No SDK wrappers, no collectors, no dashboard tab to keep open &mdash; just the files your agents already write.</p>
     </div>
     <div class="features-grid reveal">
       <div class="feature-card">
@@ -1258,150 +1678,6 @@ footer {
         <h3>Zero Configuration</h3>
         <p>No hooks. No settings. Install the daemon and the app, and it discovers sessions via filesystem watching.</p>
       </div>
-    </div>
-  </div>
-</section>
-
-<!-- ─── How It Works ─── -->
-<section class="how-it-works" id="how-it-works">
-  <div class="container">
-    <div class="reveal">
-      <p class="section-label">Under the hood</p>
-      <h2 class="section-title">Files &rarr; State &rarr; Light</h2>
-      <p class="section-desc">Irrlicht is a deterministic pipeline. Transcript files go in, session states come out. No magic.</p>
-    </div>
-    <div class="pipeline reveal">
-      <div class="pipeline-step">
-        <div class="step-num">01</div>
-        <div class="step-icon">
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="var(--working)" stroke-width="1.5"><path d="M6 4h10l6 6v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2z"/><path d="M16 4v6h6"/><path d="M10 15h8m-8 3h5"/></svg>
-        </div>
-        <h4>Watch Transcripts</h4>
-        <p>Daemon watches <code>.jsonl</code> transcript files via kqueue/FSEvents</p>
-      </div>
-      <div class="pipeline-step">
-        <div class="step-num">02</div>
-        <div class="step-icon">
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="var(--waiting)" stroke-width="1.5"><rect x="4" y="8" width="20" height="12" rx="3"/><path d="M9 14h2m2 0h2m2 0h2"/></svg>
-        </div>
-        <h4>Compute Metrics</h4>
-        <p>Tailer extracts model, tokens, tool state, cost from each event</p>
-      </div>
-      <div class="pipeline-step">
-        <div class="step-num">03</div>
-        <div class="step-icon">
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="var(--ready)" stroke-width="1.5"><path d="M4 14h4m2 0l4-6v12l4-6m2 0h4"/></svg>
-        </div>
-        <h4>Stream Updates</h4>
-        <p>WebSocket pushes state changes to all connected clients in real time</p>
-      </div>
-      <div class="pipeline-step">
-        <div class="step-num">04</div>
-        <div class="step-icon">
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="var(--accent)" stroke-width="1.5"><rect x="6" y="3" width="16" height="22" rx="3"/><circle cx="14" cy="19" r="2"/><path d="M10 8h8"/></svg>
-        </div>
-        <h4>Display</h4>
-        <p>Menu bar app renders colored session indicators, grouped by project</p>
-      </div>
-    </div>
-    <div class="pipeline-code reveal">
-      <span>Transcript Files</span> <span class="arrow">&rarr;</span> FSEvents/kqueue <span class="arrow">&rarr;</span> <span>SessionDetector</span> <span class="arrow">&rarr;</span> State Machine <span class="arrow">&rarr;</span> WebSocket <span class="arrow">&rarr;</span> <span>Menu Bar</span>
-    </div>
-  </div>
-</section>
-
-<!-- ─── Supported ─── -->
-<section class="supported" id="supported">
-  <div class="container">
-    <div class="reveal">
-      <p class="section-label">Compatibility</p>
-      <h2 class="section-title">What Irrlicht works with</h2>
-      <p class="section-desc">Monitors the agents you already use, integrates with orchestrators, and runs where you need it.</p>
-    </div>
-    <div class="supported-columns reveal">
-
-      <div class="supported-col col-purple">
-        <h3>Coding Agents &amp; Assistants</h3>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Claude Code</span>
-          <span class="si-tag tag-live">live</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">OpenAI Codex</span>
-          <span class="si-tag tag-live">live</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Pi</span>
-          <span class="si-tag tag-live">live</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Gemini CLI</span>
-          <span class="si-tag tag-planned">planned</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Cursor Agent</span>
-          <span class="si-tag tag-planned">planned</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Amp</span>
-          <span class="si-tag tag-planned">planned</span>
-        </div>
-      </div>
-
-      <div class="supported-col col-orange">
-        <h3>Agent Orchestrators</h3>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Gas Town</span>
-          <span class="si-tag tag-live">live</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Claude Squad</span>
-          <span class="si-tag tag-planned">planned</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Custom orchestrators</span>
-          <span class="si-tag tag-planned">plugin api</span>
-        </div>
-      </div>
-
-      <div class="supported-col col-green">
-        <h3>Platforms</h3>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">macOS (menu bar app)</span>
-          <span class="si-tag tag-live">live</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Web dashboard</span>
-          <span class="si-tag tag-live">live</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">CLI (irrlicht-ls, irrlicht-focus)</span>
-          <span class="si-tag tag-live">live</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">Linux (daemon only)</span>
-          <span class="si-tag tag-planned">planned</span>
-        </div>
-        <div class="supported-item">
-          <div class="si-dot"></div>
-          <span class="si-name">iOS / iPadOS</span>
-          <span class="si-tag tag-planned">planned</span>
-        </div>
-      </div>
-
     </div>
   </div>
 </section>
@@ -1466,6 +1742,7 @@ footer {
 
 <!-- ─── Footer ─── -->
 <footer>
+  <p class="footer-myth">In Goethe's <em>Faust</em>, an Irrlicht guides the way through the night.</p>
   <div class="footer-inner">
     <div class="footer-left">MIT License &middot; Irrlicht v0.3.8 &middot; Follow the right light.</div>
     <div class="footer-right">
