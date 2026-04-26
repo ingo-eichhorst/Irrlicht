@@ -23,13 +23,6 @@ func TestScanner_TracksTwoConcurrentProcessesWithSameAgentName(t *testing.T) {
 	cmd1, cwd1 := startFakeClaudeProcessNamed(t, name)
 	cmd2, cwd2 := startFakeClaudeProcessNamed(t, name)
 
-	if cmd1.Process.Pid == cmd2.Process.Pid {
-		t.Fatalf("PIDs collided: %d", cmd1.Process.Pid)
-	}
-	if cwd1 == cwd2 {
-		t.Fatalf("CWDs collided: %s", cwd1)
-	}
-
 	scanner := processlifecycle.NewScanner(name, "test", 200*time.Millisecond)
 	repo := newMemRepo()
 
@@ -42,8 +35,10 @@ func TestScanner_TracksTwoConcurrentProcessesWithSameAgentName(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go scanner.Watch(ctx)
-	go detector.Run(ctx)
+	scannerDone := make(chan struct{})
+	detectorDone := make(chan struct{})
+	go func() { _ = scanner.Watch(ctx); close(scannerDone) }()
+	go func() { _ = detector.Run(ctx); close(detectorDone) }()
 
 	id1 := fmt.Sprintf("proc-%d", cmd1.Process.Pid)
 	id2 := fmt.Sprintf("proc-%d", cmd2.Process.Pid)
@@ -76,5 +71,15 @@ func TestScanner_TracksTwoConcurrentProcessesWithSameAgentName(t *testing.T) {
 			ids = append(ids, s.SessionID)
 		}
 		t.Errorf("repo session count: got %d (%v), want 2", len(all), ids)
+	}
+
+	// Clean shutdown: both watchers must exit promptly on context cancel.
+	cancel()
+	for label, ch := range map[string]chan struct{}{"scanner": scannerDone, "detector": detectorDone} {
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Errorf("%s did not exit within 2s of context cancel — possible goroutine leak", label)
+		}
 	}
 }

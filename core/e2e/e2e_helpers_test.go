@@ -55,20 +55,7 @@ func fakeProcessName() string {
 // command and its CWD.
 func startFakeClaudeProcess(t *testing.T) (*exec.Cmd, string) {
 	t.Helper()
-	name := fakeProcessName()
-	binDir := realTempDir(t)
-	binPath := filepath.Join(binDir, name)
-	if err := os.Symlink("/bin/sleep", binPath); err != nil {
-		t.Fatalf("symlink /bin/sleep → %s: %v", binPath, err)
-	}
-	fakeCWD := realTempDir(t)
-	cmd := exec.Command(binPath, "60")
-	cmd.Dir = fakeCWD
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start fake process: %v", err)
-	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	return cmd, fakeCWD
+	return startFakeClaudeProcessNamed(t, fakeProcessName())
 }
 
 // startFakeClaudeProcessNamed is like startFakeClaudeProcess but uses an

@@ -45,7 +45,7 @@ func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 
 	// Wire up: Scanner → SessionDetector (with in-memory stubs).
 	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
-	repo := &memRepo{states: make(map[string]*session.SessionState)}
+	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(
 		[]inbound.AgentWatcher{scanner},
@@ -118,7 +118,7 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 
 	projectsRoot := realTempDir(t)
 	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
-	repo := &memRepo{states: make(map[string]*session.SessionState)}
+	repo := newMemRepo()
 
 	// Also wire a mock transcript watcher so we can inject a real session event.
 	transcriptWatcher := &mockWatcher{ch: make(chan agent.Event, 4)}
@@ -197,7 +197,7 @@ func TestPreSession_CreatedDespiteHistoricalSession(t *testing.T) {
 	if histPID == cmd.Process.Pid {
 		t.Fatalf("test PID unexpectedly matches fake process PID")
 	}
-	repo := &memRepo{states: make(map[string]*session.SessionState)}
+	repo := newMemRepo()
 	repo.Save(&session.SessionState{
 		SessionID:      "historical-aaaa-bbbb-cccc-dddd",
 		State:          session.StateReady,
@@ -255,7 +255,7 @@ func TestPreSession_SurvivesNeighbourSessionActivity(t *testing.T) {
 	now := time.Now()
 	_ = os.Chtimes(neighbourJSONL, now, now)
 
-	repo := &memRepo{states: make(map[string]*session.SessionState)}
+	repo := newMemRepo()
 	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond)
 	scanner.WithSessionChecker(realSessionCheckerFor(repo))
 
@@ -307,7 +307,7 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 	}
 
 	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
-	repo := &memRepo{states: make(map[string]*session.SessionState)}
+	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(
 		[]inbound.AgentWatcher{scanner},

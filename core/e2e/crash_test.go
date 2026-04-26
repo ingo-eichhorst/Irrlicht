@@ -61,17 +61,16 @@ func TestSession_NoCancelledState_OnSIGKILL(t *testing.T) {
 	// Poll for ~3s, recording every state observation. The session must
 	// either stay in a canonical state or get deleted; nothing else.
 	deadline := time.After(3 * time.Second)
-	deleted := false
-	for !deleted {
+	for done := false; !done; {
 		select {
 		case <-deadline:
-			deleted = true // exit loop; final assertion below covers persisted state
+			done = true
 		case <-time.After(50 * time.Millisecond):
 		}
 		s, _ := repo.Load(preID)
 		if s == nil {
-			deleted = true
-			break
+			done = true
+			continue
 		}
 		if s.State != session.StateReady && s.State != session.StateWorking && s.State != session.StateWaiting {
 			t.Fatalf("forbidden state observed after SIGKILL: %q (only working/waiting/ready allowed)", s.State)
