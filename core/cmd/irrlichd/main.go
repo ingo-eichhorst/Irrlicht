@@ -162,24 +162,35 @@ func main() {
 	// SessionDetector.Run() subscribes to AgentWatcher events.
 	var detector *services.SessionDetector
 
+	// IRRLICHT_DEMO_MODE=1 disables ProcessWatcher and per-adapter AgentWatchers
+	// so the daemon serves only what's already on disk in instances/. Used by
+	// tools/seed-demo-sessions to take controlled screenshots without live
+	// agent processes leaking into the dropdown.
+	demoMode := os.Getenv("IRRLICHT_DEMO_MODE") == "1"
+	if demoMode {
+		logger.LogInfo("startup", "", "IRRLICHT_DEMO_MODE=1 — process + agent watchers disabled")
+	}
+
 	// ProcessWatcher: kqueue EVFILT_PROC NOTE_EXIT monitoring.
 	// Exit callback routes to SessionDetector for lifecycle management.
 	var pwPort outbound.ProcessWatcher
-	pw, err := processlifecycle.NewMonitor(func(pid int, sessionID string) {
-		detector.HandleProcessExit(pid, sessionID)
-	})
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("ProcessWatcher init failed (non-fatal): %v", err))
-	} else {
-		pwPort = pw
-		procCtx, procCancel := context.WithCancel(context.Background())
-		defer procCancel()
-		go func() {
-			if err := pw.Run(procCtx); err != nil && err != context.Canceled {
-				logger.LogError("process-watcher", "", fmt.Sprintf("event loop error: %v", err))
-			}
-		}()
-		defer pw.Close()
+	if !demoMode {
+		pw, err := processlifecycle.NewMonitor(func(pid int, sessionID string) {
+			detector.HandleProcessExit(pid, sessionID)
+		})
+		if err != nil {
+			logger.LogError("startup", "", fmt.Sprintf("ProcessWatcher init failed (non-fatal): %v", err))
+		} else {
+			pwPort = pw
+			procCtx, procCancel := context.WithCancel(context.Background())
+			defer procCancel()
+			go func() {
+				if err := pw.Run(procCtx); err != nil && err != context.Canceled {
+					logger.LogError("process-watcher", "", fmt.Sprintf("event loop error: %v", err))
+				}
+			}()
+			defer pw.Close()
+		}
 	}
 
 	// HTTP mux.
@@ -305,22 +316,26 @@ func main() {
 	// Per-adapter inbound wiring: one transcript watcher + one process scanner
 	// per AgentConfig. Scanners detect agent processes before they create a
 	// transcript so the session appears as ready from the moment the app opens.
+	// Skipped entirely under IRRLICHT_DEMO_MODE=1 — daemon serves only what's
+	// already on disk in instances/.
 	var watchers []inbound.AgentWatcher
 	watcherRoots := make([]string, 0, len(agentCfgs))
-	for _, c := range agentCfgs {
-		w := fswatcher.New(c.RootDir, c.Name, cfg.MaxSessionAge)
-		watchers = append(watchers, w)
-		watcherRoots = append(watcherRoots, fmt.Sprintf("%s (%s)", c.Name, w.Root()))
+	if !demoMode {
+		for _, c := range agentCfgs {
+			w := fswatcher.New(c.RootDir, c.Name, cfg.MaxSessionAge)
+			watchers = append(watchers, w)
+			watcherRoots = append(watcherRoots, fmt.Sprintf("%s (%s)", c.Name, w.Root()))
 
-		scanner := processlifecycle.NewScanner(c.ProcessName, c.Name, 0)
-		if c.CommandLineMatch != "" {
-			scanner.WithCommandLineMatch(c.CommandLineMatch)
+			scanner := processlifecycle.NewScanner(c.ProcessName, c.Name, 0)
+			if c.CommandLineMatch != "" {
+				scanner.WithCommandLineMatch(c.CommandLineMatch)
+			}
+			if c.TranscriptFilename != "" {
+				scanner.WithTranscriptFilename(c.TranscriptFilename)
+			}
+			scanner.WithSessionChecker(realSessionCheck)
+			watchers = append(watchers, scanner)
 		}
-		if c.TranscriptFilename != "" {
-			scanner.WithTranscriptFilename(c.TranscriptFilename)
-		}
-		scanner.WithSessionChecker(realSessionCheck)
-		watchers = append(watchers, scanner)
 	}
 
 	pidDiscovers := agents.PIDDiscoverMap(agentCfgs)

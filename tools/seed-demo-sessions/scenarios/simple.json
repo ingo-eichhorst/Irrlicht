@@ -1,0 +1,86 @@
+{
+  "description": "Minimal demo: 3 sessions across 2 projects and 3 adapters. Shows context bars, costs, agent badges — no subagents, tasks, or question UI.",
+  "sessions": [
+    {
+      "version": 1,
+      "session_id": "demo-simple-irrlicht-1",
+      "state": "working",
+      "adapter": "claude-code",
+      "model": "claude-opus-4-7",
+      "cwd": "/Users/demo/projects/web-app",
+      "git_branch": "main",
+      "project_name": "web-app",
+      "confidence": "high",
+      "event_count": 312,
+      "last_event": "transcript_activity",
+      "daemon_version": "0.3.8",
+      "first_seen_offset_seconds": -540,
+      "updated_at_offset_seconds": -2,
+      "metrics": {
+        "elapsed_seconds": 480,
+        "total_tokens": 58400,
+        "model_name": "claude-opus-4-7",
+        "context_window": 200000,
+        "context_utilization_percentage": 29.2,
+        "pressure_level": "safe",
+        "estimated_cost_usd": 0.46,
+        "last_event_type": "assistant",
+        "last_assistant_text": "Refactoring the session detector hot path."
+      }
+    },
+    {
+      "version": 1,
+      "session_id": "demo-simple-irrlicht-2",
+      "state": "ready",
+      "adapter": "codex",
+      "model": "gpt-5.3-codex",
+      "cwd": "/Users/demo/projects/web-app",
+      "git_branch": "main",
+      "project_name": "web-app",
+      "confidence": "high",
+      "event_count": 84,
+      "last_event": "turn_done",
+      "daemon_version": "0.3.8",
+      "first_seen_offset_seconds": -360,
+      "updated_at_offset_seconds": -90,
+      "metrics": {
+        "elapsed_seconds": 180,
+        "total_tokens": 12800,
+        "model_name": "gpt-5.3-codex",
+        "context_window": 400000,
+        "context_utilization_percentage": 3.2,
+        "pressure_level": "safe",
+        "estimated_cost_usd": 0.05,
+        "last_event_type": "assistant",
+        "last_assistant_text": "Build green."
+      }
+    },
+    {
+      "version": 1,
+      "session_id": "demo-simple-landing-1",
+      "state": "ready",
+      "adapter": "pi",
+      "model": "gpt-5.1",
+      "cwd": "/Users/demo/projects/marketing-site",
+      "git_branch": "main",
+      "project_name": "marketing-site",
+      "confidence": "high",
+      "event_count": 47,
+      "last_event": "turn_done",
+      "daemon_version": "0.3.8",
+      "first_seen_offset_seconds": -240,
+      "updated_at_offset_seconds": -45,
+      "metrics": {
+        "elapsed_seconds": 90,
+        "total_tokens": 6400,
+        "model_name": "gpt-5.1",
+        "context_window": 128000,
+        "context_utilization_percentage": 5.0,
+        "pressure_level": "safe",
+        "estimated_cost_usd": 0.02,
+        "last_event_type": "assistant",
+        "last_assistant_text": "Updated the hero copy."
+      }
+    }
+  ]
+}
