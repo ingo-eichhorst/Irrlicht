@@ -74,7 +74,8 @@ case "$ADAPTER" in
 esac
 
 command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"
-CLI_VER="$("$CLI_BIN" --version 2>/dev/null | awk -v f="$VER_FIELD" '{print $f}' | head -n1)"
+# Merge stderr — `pi --version` writes to stderr, others to stdout.
+CLI_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1)"
 [[ -n "$CLI_VER" ]] || fail "could not parse '$CLI_BIN --version' output"
 
 if [[ -n "$MIN_VERSION" ]]; then

@@ -210,7 +210,13 @@ func deriveCell(adapter string, s scenario, caps map[string]any) cell {
 	if _, ok := s.ByAdapter[adapter]; !ok {
 		return cell{State: "missing-prompt", Reason: "no by_adapter." + adapter + " entry in scenarios.json"}
 	}
-	fixture := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", s.Name, "transcript.jsonl")
+	// aider's curated transcript is markdown; all other adapters are jsonl.
+	// Mirrors the convention in .claude/skills/ir:onboard-agent/scripts/run-cell.sh.
+	ext := "jsonl"
+	if adapter == "aider" {
+		ext = "md"
+	}
+	fixture := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", s.Name, "transcript."+ext)
 	if _, err := os.Stat(fixture); err == nil {
 		return cell{State: "covered"}
 	}
