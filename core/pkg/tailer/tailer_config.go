@@ -11,12 +11,15 @@ import (
 // turn_done event. These must not be swept from openToolCalls:
 //
 //   - Agent: sub-agents can still be running when the parent's turn ends.
+//   - SendMessage: continues a previously spawned sub-agent (Claude Code 2.1.77
+//     replaced Agent({resume}) with SendMessage({to}) for resumption). Same
+//     rationale as Agent — the sub-agent runs in the background.
 //   - AskUserQuestion, ExitPlanMode: user-blocking tools whose result only
 //     arrives after the user responds. Also listed in session.isUserBlockingTool;
 //     the overlap is intentional — the two predicates serve different purposes.
 func surviveTurnDone(name string) bool {
 	switch name {
-	case "Agent", "AskUserQuestion", "ExitPlanMode":
+	case "Agent", "SendMessage", "AskUserQuestion", "ExitPlanMode":
 		return true
 	}
 	return false
