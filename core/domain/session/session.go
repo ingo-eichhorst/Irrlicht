@@ -191,21 +191,28 @@ func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	return ExtractQuestionSnippet(m.LastAssistantText) != ""
 }
 
-// ExtractQuestionSnippet returns the first question sentence found in text,
-// or an empty string when no sentence-terminating `?` is present. It preserves
-// any trailing markdown wrappers (e.g. `**Question?**`) so the rendered
-// snippet still reads naturally. URL fragments and other non-sentence `?`
-// occurrences are skipped because the question mark must be followed by
-// whitespace, end-of-string, or markdown wrappers leading to either.
+// ExtractQuestionSnippet returns the first non-rhetorical question sentence
+// found in text, or an empty string when none is present. It preserves any
+// trailing markdown wrappers (e.g. `**Question?**`) so the rendered snippet
+// still reads naturally. URL fragments and other non-sentence `?` occurrences
+// are skipped because the question mark must be followed by whitespace,
+// end-of-string, or markdown wrappers leading to either.
 //
 // First-question-wins is preferred over last-question because agents typically
 // lead with the actual question and follow with examples or status notes; a
 // bullet list of options ending in `?` would otherwise hijack the snippet.
+//
+// Rhetorical questions — Q&A pairs like "Why do programmers prefer dark mode?
+// Because light attracts bugs." — are skipped: the agent isn't actually
+// waiting on the user. Detection is heuristic (the next sentence starts with
+// an answer marker like "Because"); false negatives are preferred over
+// false positives in mid-paragraph waiting detection.
 func ExtractQuestionSnippet(text string) string {
 	if text == "" {
 		return ""
 	}
-	for _, s := range splitSentences(text) {
+	sentences := splitSentences(text)
+	for i, s := range sentences {
 		trimmed := strings.TrimSpace(s)
 		if trimmed == "" {
 			continue
@@ -214,11 +221,54 @@ func ExtractQuestionSnippet(text string) string {
 		if stripped == "" {
 			continue
 		}
-		if stripped[len(stripped)-1] == '?' {
-			return trimmed
+		if stripped[len(stripped)-1] != '?' {
+			continue
 		}
+		if isRhetorical(sentences, i) {
+			continue
+		}
+		return trimmed
 	}
 	return ""
+}
+
+// answerPrefixes flag a sentence as starting with an explanatory answer to a
+// preceding question. Conservative on purpose — connectives that strongly
+// imply "this sentence answers the previous question" rather than continuing
+// the agent's status report. False negatives (rhetorical Qs we miss) are
+// preferable to false positives that would re-break #236's mid-paragraph
+// detection.
+var answerPrefixes = []string{
+	"because ", "because,", "because:",
+	"since ", "since,",
+}
+
+// isRhetorical reports whether the question at sentences[qIdx] is answered
+// by a subsequent sentence in the same paragraph — i.e. a Q&A pair like
+// "Why do programmers prefer dark mode? Because light attracts bugs."
+func isRhetorical(sentences []string, qIdx int) bool {
+	for k := qIdx + 1; k < len(sentences); k++ {
+		next := strings.TrimSpace(sentences[k])
+		if next == "" {
+			continue
+		}
+		return looksLikeAnswer(next)
+	}
+	return false
+}
+
+func looksLikeAnswer(s string) bool {
+	s = strings.TrimLeft(s, markdownWrapper)
+	if s == "" {
+		return false
+	}
+	lower := strings.ToLower(s)
+	for _, p := range answerPrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitSentences splits text on sentence terminators (`.`, `!`, `?`) and

@@ -15,20 +15,20 @@
     "last_event_time": "2026-04-06T20:39:45.037Z",
     "wall_clock_session_duration": 15454196000000,
     "state_durations": {
-      "ready": 11440582000000,
-      "waiting": 1023852000000,
+      "ready": 11811544000000,
+      "waiting": 652890000000,
       "working": 2989762000000
     },
     "flicker_count": 11,
     "flickers_by_category": {
       "ready_between_working": 2,
-      "working_between_ready": 7,
-      "working_between_waiting": 2
+      "working_between_ready": 8,
+      "working_between_waiting": 1
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 2,
-      "force ready→working on first activity": 7,
-      "transcript activity (waiting → working)": 2
+      "force ready→working on first activity": 8,
+      "transcript activity (waiting → working)": 1
     },
     "cum_input_tokens": 910869,
     "cum_output_tokens": 82483,
@@ -1144,23 +1144,23 @@
       "virtual_time": "2026-04-06T20:13:12.359Z",
       "cause": "event",
       "prev_state": "working",
-      "new_state": "waiting",
-      "reason": "turn ended with question → waiting",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": true,
-      "last_assistant_text_head": "Why do programmers prefer dark mode?"
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Why do programmers prefer dark mode?  \nBecause light attracts bugs. 🐛"
     },
     {
       "index": 77,
       "event_index": 538,
       "virtual_time": "2026-04-06T20:19:23.321Z",
       "cause": "event",
-      "prev_state": "waiting",
+      "prev_state": "ready",
       "new_state": "working",
-      "reason": "transcript activity (waiting → working)",
+      "reason": "force ready→working on first activity",
       "last_event_type": "user_message",
       "has_open_tool": false,
       "is_agent_done": false,
