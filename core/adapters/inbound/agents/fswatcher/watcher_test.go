@@ -31,7 +31,7 @@ func setupFakeProjects(t *testing.T) string {
 }
 
 func TestNewWithRoot(t *testing.T) {
-	w := newWithRoot("/tmp/fake", testAdapter, 0)
+	w := NewWithRoot("/tmp/fake", testAdapter, 0)
 	if w.Root() != "/tmp/fake" {
 		t.Errorf("Root() = %q, want /tmp/fake", w.Root())
 	}
@@ -60,7 +60,7 @@ func TestExtractSessionID(t *testing.T) {
 
 func TestWatch_EmitsNewSession(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := newWithRoot(root, testAdapter, 0)
+	w := NewWithRoot(root, testAdapter, 0)
 
 	ch := w.Subscribe()
 
@@ -115,7 +115,7 @@ func TestWatch_EmitsActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := newWithRoot(root, testAdapter, 0)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -174,7 +174,7 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := newWithRoot(root, testAdapter, 0)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -226,7 +226,7 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 
 func TestWatch_NewProjectDir(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := newWithRoot(root, testAdapter, 0)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -282,7 +282,7 @@ func TestWatch_NewProjectDir(t *testing.T) {
 // new subtree and emit events for any .jsonl files anywhere in it.
 func TestWatch_NestedSubdirWithExistingFiles(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := newWithRoot(root, testAdapter, 0)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -343,7 +343,7 @@ func TestWatch_NestedSubdirWithExistingFiles(t *testing.T) {
 
 func TestWatch_IgnoresNonJSONL(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := newWithRoot(root, testAdapter, 0)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -385,7 +385,7 @@ func TestWatch_EmptyRoot_BlocksUntilCancel(t *testing.T) {
 }
 
 func TestSubscribeUnsubscribe(t *testing.T) {
-	w := newWithRoot(t.TempDir(), testAdapter, 0)
+	w := NewWithRoot(t.TempDir(), testAdapter, 0)
 	ch := w.Subscribe()
 
 	w.subMu.Lock()
@@ -408,7 +408,7 @@ func TestWatch_WaitsForRoot(t *testing.T) {
 	root := filepath.Join(tmp, "projects")
 	// root doesn't exist yet.
 
-	w := newWithRoot(root, testAdapter, 0)
+	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -455,7 +455,7 @@ func TestHandleEvent_MaxAge_SkipsStaleFile(t *testing.T) {
 	root := setupFakeProjects(t)
 	projDir := filepath.Join(root, "-Users-test-myproject")
 
-	w := newWithRoot(root, testAdapter, 1*time.Hour)
+	w := NewWithRoot(root, testAdapter, 1*time.Hour)
 	ch := w.Subscribe()
 
 	// Create a transcript file and backdate its mtime to 2 hours ago.
@@ -500,7 +500,7 @@ func TestHandleEvent_MaxAge_Zero_DisablesFilter(t *testing.T) {
 	root := setupFakeProjects(t)
 	projDir := filepath.Join(root, "-Users-test-myproject")
 
-	w := newWithRoot(root, testAdapter, 0) // maxAge=0 → no filtering
+	w := NewWithRoot(root, testAdapter, 0) // maxAge=0 → no filtering
 	ch := w.Subscribe()
 
 	stalePath := filepath.Join(projDir, "old-sess.jsonl")

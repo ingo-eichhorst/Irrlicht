@@ -43,8 +43,10 @@ func New(relDir, adapter string, maxAge time.Duration) *Watcher {
 	}
 }
 
-// newWithRoot creates a Watcher targeting a custom absolute root (for testing).
-func newWithRoot(root, adapter string, maxAge time.Duration) *Watcher {
+// NewWithRoot creates a Watcher targeting a custom absolute root, bypassing
+// the $HOME-relative resolution New() applies. Intended for tests (including
+// cross-package e2e tests) that need to drive the watcher against a temp dir.
+func NewWithRoot(root, adapter string, maxAge time.Duration) *Watcher {
 	return &Watcher{root: root, adapter: adapter, maxAge: maxAge}
 }
 
