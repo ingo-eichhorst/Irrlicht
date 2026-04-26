@@ -15,21 +15,21 @@
     "last_event_time": "2026-04-12T22:29:31.472Z",
     "wall_clock_session_duration": 13030969000000,
     "state_durations": {
-      "ready": 11898016000000,
-      "waiting": 1034872000000,
+      "ready": 11797731000000,
+      "waiting": 1135157000000,
       "working": 98081000000
     },
     "flicker_count": 12,
     "flickers_by_category": {
       "ready_between_working": 2,
       "waiting_between_working": 1,
-      "working_between_ready": 3,
-      "working_between_waiting": 6
+      "working_between_ready": 2,
+      "working_between_waiting": 7
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 2,
-      "force ready→working on first activity": 3,
-      "transcript activity (waiting → working)": 6,
+      "force ready→working on first activity": 2,
+      "transcript activity (waiting → working)": 7,
       "user-blocking tool open → waiting": 1
     },
     "estimated_cost_usd": 1.3103285,
@@ -292,7 +292,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Hi! What can I help you with?"
+      "last_assistant_text_head": "What can I help you with?"
     },
     {
       "index": 17,
@@ -307,7 +307,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Hi! What can I help you with?"
+      "last_assistant_text_head": "What can I help you with?"
     },
     {
       "index": 18,
@@ -336,7 +336,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Hey! What would you like to work on?"
+      "last_assistant_text_head": "What would you like to work on?"
     },
     {
       "index": 20,
@@ -440,7 +440,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "…at would you like me to test? For example:\n\n- Run the Go test suite (`go test…"
+      "last_assistant_text_head": "…at would you like me to test?"
     },
     {
       "index": 27,
@@ -462,23 +462,23 @@
       "virtual_time": "2026-04-12T21:20:39.367Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "assistant",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "What are you looking to test? Give me a bit more context and I'll jump in."
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "What are you looking to test?"
     },
     {
       "index": 29,
       "event_index": 78,
       "virtual_time": "2026-04-12T21:22:19.652Z",
       "cause": "event",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,

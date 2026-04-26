@@ -140,7 +140,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Got it — just chatting. What's on your mind?"
+      "last_assistant_text_head": "What's on your mind?"
     },
     {
       "index": 7,

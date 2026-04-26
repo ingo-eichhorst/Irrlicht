@@ -148,6 +148,12 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	if result.PressureLevel == "" {
 		result.PressureLevel = "unknown"
 	}
+	// Trim the rendered snippet to just the question sentence when one is
+	// present, so the macOS overlay shows "What would you like?" instead of
+	// the full surrounding paragraph (issue #236).
+	if snippet := session.ExtractQuestionSnippet(result.LastAssistantText); snippet != "" {
+		result.LastAssistantText = snippet
+	}
 	return result, nil
 }
 

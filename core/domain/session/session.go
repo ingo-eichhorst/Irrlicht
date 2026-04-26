@@ -172,23 +172,89 @@ func isUserBlockingTool(name string) bool {
 // trailing whitespace.
 const trailingMarkdownNoise = "*_~`\"')] \t\n\r"
 
-// IsWaitingForUserInput returns true when the agent finished its turn but the
-// last assistant message ends with a question mark — indicating the agent is
+// markdownWrapper is the subset of trailingMarkdownNoise excluding whitespace —
+// characters that wrap a sentence terminator like `?**` or `?]` without
+// breaking the sentence.
+const markdownWrapper = "*_~`\"')]"
+
+// IsWaitingForUserInput returns true when the agent finished its turn and the
+// last assistant message contains a question — indicating the agent is
 // waiting for user input even though no user-blocking tool is open.
 //
-// Models routinely wrap questions in markdown for emphasis, e.g.
-// `**Should I do X?**`, leaving the literal final byte as `*` rather
-// than `?`. We strip trailing markdown delimiters and whitespace before
-// the check so the heuristic survives any reasonable formatting.
+// Detects questions anywhere in the text, not just at the trailing position,
+// so phrases like "What would you like? In the meantime I'll move on." are
+// recognized as waiting prompts.
 func (m *SessionMetrics) IsWaitingForUserInput() bool {
-	if m == nil || m.LastAssistantText == "" {
+	if m == nil {
 		return false
 	}
-	trimmed := strings.TrimRight(m.LastAssistantText, trailingMarkdownNoise)
-	if trimmed == "" {
-		return false
+	return ExtractQuestionSnippet(m.LastAssistantText) != ""
+}
+
+// ExtractQuestionSnippet returns the first question sentence found in text,
+// or an empty string when no sentence-terminating `?` is present. It preserves
+// any trailing markdown wrappers (e.g. `**Question?**`) so the rendered
+// snippet still reads naturally. URL fragments and other non-sentence `?`
+// occurrences are skipped because the question mark must be followed by
+// whitespace, end-of-string, or markdown wrappers leading to either.
+//
+// First-question-wins is preferred over last-question because agents typically
+// lead with the actual question and follow with examples or status notes; a
+// bullet list of options ending in `?` would otherwise hijack the snippet.
+func ExtractQuestionSnippet(text string) string {
+	if text == "" {
+		return ""
 	}
-	return trimmed[len(trimmed)-1] == '?'
+	for _, s := range splitSentences(text) {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			continue
+		}
+		stripped := strings.TrimRight(trimmed, trailingMarkdownNoise)
+		if stripped == "" {
+			continue
+		}
+		if stripped[len(stripped)-1] == '?' {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// splitSentences splits text on sentence terminators (`.`, `!`, `?`) and
+// newlines. A terminator only ends a sentence when followed by whitespace,
+// end-of-string, or markdown wrappers leading to either — so URL `?` and
+// abbreviations like `e.g.` don't split. Each returned sentence retains its
+// terminator and any wrapper characters.
+func splitSentences(text string) []string {
+	var sentences []string
+	start := 0
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch c {
+		case '.', '!', '?':
+			j := i + 1
+			for j < len(text) && strings.IndexByte(markdownWrapper, text[j]) >= 0 {
+				j++
+			}
+			if j == len(text) || isSentenceBreak(text[j]) {
+				sentences = append(sentences, text[start:j])
+				start = j
+				i = j - 1
+			}
+		case '\n':
+			sentences = append(sentences, text[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(text) {
+		sentences = append(sentences, text[start:])
+	}
+	return sentences
+}
+
+func isSentenceBreak(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
 
 // IsAgentDone returns true when the agent finished its turn. The primary
