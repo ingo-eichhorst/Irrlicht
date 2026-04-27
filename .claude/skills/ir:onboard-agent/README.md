@@ -81,7 +81,10 @@ replaydata/
   agents/
     features.json                     — canonical feature catalog (WS01)
     <adapter>/
-      capabilities.json               — per-adapter feature support (WS03)
+      capabilities.json               — per-adapter feature support (WS03);
+                                        optional top-level `transcript_extension`
+                                        (default "jsonl") names the curated
+                                        fixture's extension (e.g. "md" for aider)
       scenarios/<scenario>/
         transcript.jsonl              — agent transcript (raw)
         events.jsonl                  — lifecycle events
