@@ -254,7 +254,7 @@ func TestHistoryTracker_EncodeEmptyBuffer(t *testing.T) {
 		t.Fatal("Encode missing for known empty session")
 	}
 	for _, g := range []string{"1", "10", "60"} {
-		s, ok := enc[g]
+		s, ok := enc.History[g]
 		if !ok {
 			t.Fatalf("missing granularity %s", g)
 		}
@@ -284,7 +284,7 @@ func TestHistoryTracker_EncodePartialFillPadsFront(t *testing.T) {
 	if !ok {
 		t.Fatal("Encode failed")
 	}
-	buckets := decodeHistoryString(t, enc["1"])
+	buckets := decodeHistoryString(t, enc.History["1"])
 
 	// Last 4 buckets: ready, working, waiting, waiting (carry-forward open
 	// bucket inherits "waiting"). Front 56 are padding (no-data).
@@ -314,7 +314,7 @@ func TestHistoryTracker_EncodeFullRing(t *testing.T) {
 	if !ok {
 		t.Fatal("Encode failed")
 	}
-	buckets := decodeHistoryString(t, enc["1"])
+	buckets := decodeHistoryString(t, enc.History["1"])
 	for i, p := range buckets {
 		if p != statePriorityWorking {
 			t.Errorf("buckets[%d] = %d, want %d", i, p, statePriorityWorking)
@@ -332,11 +332,11 @@ func TestHistoryTracker_EncodeAll(t *testing.T) {
 		t.Fatalf("len(EncodeAll) = %d, want 2", len(all))
 	}
 	for sid, enc := range all {
-		if len(enc) != 3 {
-			t.Errorf("session %q: granularity count = %d, want 3", sid, len(enc))
+		if len(enc.History) != 3 {
+			t.Errorf("session %q: granularity count = %d, want 3", sid, len(enc.History))
 		}
 		for _, g := range []string{"1", "10", "60"} {
-			if _, ok := enc[g]; !ok {
+			if _, ok := enc.History[g]; !ok {
 				t.Errorf("session %q: missing granularity %s", sid, g)
 			}
 		}
@@ -365,7 +365,7 @@ func TestHistoryTracker_EncodeBitOrder(t *testing.T) {
 	if !ok {
 		t.Fatal("Encode failed")
 	}
-	raw, _ := base64.StdEncoding.DecodeString(enc["1"])
+	raw, _ := base64.StdEncoding.DecodeString(enc.History["1"])
 	// encodePriorities front-pads, so these 4 buckets land at output indices
 	// 56..59 = byte 14. MSB-first: (0<<6)|(1<<4)|(2<<2)|(3) = 0b00_01_10_11 = 0x1B.
 	const want = byte(0x1B)
@@ -414,6 +414,70 @@ func TestHistoryTracker_EmitOnTransitionAndTick(t *testing.T) {
 	}
 	if events[0].Buckets["a"] != statePriorityWorking || events[0].Buckets["b"] != statePriorityWaiting {
 		t.Errorf("Buckets = %+v", events[0].Buckets)
+	}
+}
+
+// TestHistoryTracker_GenerationsMatchBuckets locks down the dedup contract
+// the clients rely on: a snapshot's per-granularity Generations equals the
+// number of ticks already folded into its History buckets, and the next
+// tick after that snapshot carries Generations+1. If this invariant breaks
+// (e.g. tick increments outside the sb.mu critical section), clients double-
+// apply ticks on connect and history bars drift one bucket per reconnect.
+func TestHistoryTracker_GenerationsMatchBuckets(t *testing.T) {
+	ht := NewHistoryTracker()
+	sid := "gens"
+	ht.OnTransition(sid, "working", epoch)
+
+	enc, ok := ht.Encode(sid)
+	if !ok {
+		t.Fatal("Encode failed")
+	}
+	if enc.Generations["1"] != 0 || enc.Generations["10"] != 0 || enc.Generations["60"] != 0 {
+		t.Errorf("pre-tick generations = %+v, want all 0", enc.Generations)
+	}
+
+	var ticks []HistoryEvent
+	ht.SetEmitFunc(func(ev HistoryEvent) {
+		if ev.Kind == HistoryEventTick {
+			ticks = append(ticks, ev)
+		}
+	})
+
+	// One tick: 1s ring rolls; 10s/60s do not.
+	ht.tick()
+	if len(ticks) != 1 {
+		t.Fatalf("tick count = %d, want 1", len(ticks))
+	}
+	if got := ticks[0].BucketGenerations[sid]; got != 1 {
+		t.Errorf("first tick gen = %d, want 1", got)
+	}
+
+	// Snapshot after tick: 1s gen = 1, 10s/60s gen still 0.
+	enc, _ = ht.Encode(sid)
+	if enc.Generations["1"] != 1 || enc.Generations["10"] != 0 || enc.Generations["60"] != 0 {
+		t.Errorf("post-tick generations = %+v, want {1:1, 10:0, 60:0}", enc.Generations)
+	}
+
+	// Ten more ticks: 1s rolls 10×, 10s rolls 1×, 60s still 0.
+	ticks = nil
+	for i := 0; i < 10; i++ {
+		ht.tick()
+	}
+	enc, _ = ht.Encode(sid)
+	if enc.Generations["1"] != 11 || enc.Generations["10"] != 1 || enc.Generations["60"] != 0 {
+		t.Errorf("after 10 ticks generations = %+v, want {1:11, 10:1, 60:0}", enc.Generations)
+	}
+
+	// The most recent 1s tick event must carry the current 1s generation,
+	// so client logic of `gen <= last → skip` deduplicates exactly once.
+	var lastOneSec uint64
+	for _, ev := range ticks {
+		if ev.GranularitySec == 1 {
+			lastOneSec = ev.BucketGenerations[sid]
+		}
+	}
+	if lastOneSec != enc.Generations["1"] {
+		t.Errorf("last 1s tick gen = %d, snapshot gen = %d — must match", lastOneSec, enc.Generations["1"])
 	}
 }
 

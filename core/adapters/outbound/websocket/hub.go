@@ -44,23 +44,27 @@ func loopbackCheckOrigin(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// ConnectSnapshots returns the messages to deliver to a freshly-attached
+// WebSocket client before the live stream takes over. Typically this is one
+// history_snapshot per known session.
+type ConnectSnapshots func() []outbound.PushMessage
+
 // hub manages WebSocket connections and fans out session state updates.
 type hub struct {
-	push           outbound.PushBroadcaster
-	encodeHistory  func() map[string]map[string]string
-	upgrader       websocket.Upgrader
+	push             outbound.PushBroadcaster
+	connectSnapshots ConnectSnapshots
+	upgrader         websocket.Upgrader
 }
 
 // NewHub creates a hub backed by the provided PushBroadcaster. The upgrader
-// enforces a loopback-only origin policy. encodeHistory, when non-nil, is
-// called on each new connection to ship one history_snapshot per session
-// before the live event stream takes over (so freshly-attached clients see
-// the full 60-bucket history without polling).
-func NewHub(push outbound.PushBroadcaster, encodeHistory func() map[string]map[string]string) *hub {
+// enforces a loopback-only origin policy. connectSnapshots, when non-nil, is
+// invoked on each new connection to ship the per-session history snapshots
+// (so freshly-attached clients see the full 60-bucket history without polling).
+func NewHub(push outbound.PushBroadcaster, connectSnapshots ConnectSnapshots) *hub {
 	return &hub{
-		push:          push,
-		encodeHistory: encodeHistory,
-		upgrader:      websocket.Upgrader{CheckOrigin: loopbackCheckOrigin},
+		push:             push,
+		connectSnapshots: connectSnapshots,
+		upgrader:         websocket.Upgrader{CheckOrigin: loopbackCheckOrigin},
 	}
 }
 
@@ -79,14 +83,11 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	// Hydrate the new client with one history_snapshot per known session
 	// before the live stream starts. Subscribe-then-snapshot order ensures
-	// no tick or upgrade emitted between these two operations is lost.
-	if h.encodeHistory != nil {
-		for sid, hist := range h.encodeHistory() {
-			snap := outbound.PushMessage{
-				Type:      outbound.PushTypeHistorySnapshot,
-				SessionID: sid,
-				History:   hist,
-			}
+	// no tick or upgrade emitted between these two operations is lost; per-
+	// session tick generations on snapshot/tick messages let the client
+	// dedupe a tick that's already reflected in its snapshot.
+	if h.connectSnapshots != nil {
+		for _, snap := range h.connectSnapshots() {
 			data, err := json.Marshal(snap)
 			if err != nil {
 				continue

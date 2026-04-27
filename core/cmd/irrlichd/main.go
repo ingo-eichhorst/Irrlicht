@@ -202,7 +202,7 @@ func main() {
 	// Sessions endpoint registered after orchMonitor is available (see below).
 	mux.HandleFunc("GET /state", handleGetState(cachedRepo))
 
-	hub := wshub.NewHub(push, historyTracker.EncodeAll)
+	hub := wshub.NewHub(push, historySnapshotProvider(historyTracker))
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 
 	// pprof debug endpoints for runtime profiling (localhost only).
@@ -625,15 +625,17 @@ func historyEventBroadcaster(push outbound.PushBroadcaster) func(services.Histor
 		switch ev.Kind {
 		case services.HistoryEventSnapshot:
 			push.Broadcast(outbound.PushMessage{
-				Type:      outbound.PushTypeHistorySnapshot,
-				SessionID: ev.SessionID,
-				History:   ev.History,
+				Type:        outbound.PushTypeHistorySnapshot,
+				SessionID:   ev.SessionID,
+				History:     ev.History,
+				Generations: ev.Generations,
 			})
 		case services.HistoryEventTick:
 			push.Broadcast(outbound.PushMessage{
-				Type:           outbound.PushTypeHistoryTick,
-				GranularitySec: ev.GranularitySec,
-				Buckets:        ev.Buckets,
+				Type:              outbound.PushTypeHistoryTick,
+				GranularitySec:    ev.GranularitySec,
+				Buckets:           ev.Buckets,
+				BucketGenerations: ev.BucketGenerations,
 			})
 		case services.HistoryEventUpgrade:
 			p := ev.Priority
@@ -643,6 +645,26 @@ func historyEventBroadcaster(push outbound.PushBroadcaster) func(services.Histor
 				Priority:  &p,
 			})
 		}
+	}
+}
+
+// historySnapshotProvider builds a connect-time hydration list for the
+// WebSocket hub. Each PushMessage carries the snapshot's per-granularity
+// tick generations alongside the bit-packed history so a client can dedupe
+// any tick that fires between subscribe and the first message dispatch.
+func historySnapshotProvider(ht *services.HistoryTracker) wshub.ConnectSnapshots {
+	return func() []outbound.PushMessage {
+		all := ht.EncodeAll()
+		out := make([]outbound.PushMessage, 0, len(all))
+		for sid, enc := range all {
+			out = append(out, outbound.PushMessage{
+				Type:        outbound.PushTypeHistorySnapshot,
+				SessionID:   sid,
+				History:     enc.History,
+				Generations: enc.Generations,
+			})
+		}
+		return out
 	}
 }
 

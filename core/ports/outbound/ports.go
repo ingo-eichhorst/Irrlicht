@@ -24,6 +24,15 @@ type PushMessage struct {
 	GranularitySec int               `json:"granularity_sec,omitempty"`
 	Buckets        map[string]int8   `json:"buckets,omitempty"`
 	Priority       *int8             `json:"priority,omitempty"`
+
+	// Tick generations let the client dedupe a tick that's already
+	// reflected in its snapshot. Captured under the session lock together
+	// with the bucket state, so a snapshot's Generations always match the
+	// History it ships, and a tick's BucketGenerations always match the
+	// post-roll state. Keys: granularity for snapshots ("1"/"10"/"60"),
+	// session_id for ticks (parallel to Buckets).
+	Generations       map[string]uint64 `json:"generations,omitempty"`
+	BucketGenerations map[string]uint64 `json:"bucket_generations,omitempty"`
 }
 
 // Valid PushMessage type constants.

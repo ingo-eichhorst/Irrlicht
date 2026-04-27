@@ -178,6 +178,12 @@ func priorityToState(p int8) string {
 type sessionBuffers struct {
 	mu   sync.Mutex
 	bufs [3]*ringBuffer // index 0=1s, 1=10s, 2=60s
+	// tickGen[i] increments by 1 each time bufs[i] rolls a bucket. Captured
+	// alongside bucket state under mu so snapshots and tick events can be
+	// reconciled by the client (see EncodeWithGens / tick(): if a snapshot
+	// already reflects a tick, the matching tick message arrives with a gen
+	// equal to the snapshot's, and the client skips it).
+	tickGen [3]uint64
 }
 
 func newSessionBuffers() *sessionBuffers {
@@ -222,11 +228,13 @@ const (
 type HistoryEvent struct {
 	Kind HistoryEventKind
 	// Snapshot
-	SessionID string
-	History   map[string]string
+	SessionID   string
+	History     map[string]string // granularity → base64
+	Generations map[string]uint64 // granularity → tick generation that produced History
 	// Tick
-	GranularitySec int
-	Buckets        map[string]int8
+	GranularitySec    int
+	Buckets           map[string]int8   // sessionID → priority of the bucket that just rolled
+	BucketGenerations map[string]uint64 // sessionID → tick generation after this roll
 	// Upgrade
 	Priority int8
 }
@@ -286,7 +294,12 @@ func (h *HistoryTracker) EmitSnapshot(sessionID string) {
 	if !ok {
 		return
 	}
-	emit(HistoryEvent{Kind: HistoryEventSnapshot, SessionID: sessionID, History: enc})
+	emit(HistoryEvent{
+		Kind:        HistoryEventSnapshot,
+		SessionID:   sessionID,
+		History:     enc.History,
+		Generations: enc.Generations,
+	})
 }
 
 func (h *HistoryTracker) OnTransition(sessionID, newState string, _ time.Time) {
@@ -331,36 +344,51 @@ func packPriorities(priorities [HistoryBucketCount]uint8) [historyEncodedBytes]b
 	return out
 }
 
-// Encode bit-packs the session's three rolling buffers into a per-granularity
-// map of base64-std strings (20 chars each, 60 buckets × 2 bits). Returns
-// false if the session is unknown.
-func (h *HistoryTracker) Encode(sessionID string) (map[string]string, bool) {
+// EncodedHistory is one session's bit-packed history together with the
+// per-granularity tick generations that produced it. Both are read under the
+// session's lock so a client receiving a snapshot+tick pair can dedupe by
+// generation: see SessionManager.swift / index.html for the apply-or-skip
+// logic.
+type EncodedHistory struct {
+	History     map[string]string // granularity ("1"/"10"/"60") → 20-char base64
+	Generations map[string]uint64 // same keys as History
+}
+
+// Encode bit-packs the session's three rolling buffers and captures the
+// matching tick generations atomically under the session lock. Returns false
+// if the session is unknown.
+func (h *HistoryTracker) Encode(sessionID string) (EncodedHistory, bool) {
 	h.mu.Lock()
 	sb, ok := h.sessions[sessionID]
 	h.mu.Unlock()
 	if !ok {
-		return nil, false
+		return EncodedHistory{}, false
 	}
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	out := make(map[string]string, 3)
+	out := EncodedHistory{
+		History:     make(map[string]string, 3),
+		Generations: make(map[string]uint64, 3),
+	}
 	for _, g := range validGranularities {
-		bytes := packPriorities(sb.bufs[granularityIndex(g)].encodePriorities())
-		out[strconv.Itoa(g)] = base64.StdEncoding.EncodeToString(bytes[:])
+		gi := granularityIndex(g)
+		bytes := packPriorities(sb.bufs[gi].encodePriorities())
+		key := strconv.Itoa(g)
+		out.History[key] = base64.StdEncoding.EncodeToString(bytes[:])
+		out.Generations[key] = sb.tickGen[gi]
 	}
 	return out, true
 }
 
-// EncodeAll returns the bit-packed history for every known session, keyed by
-// session ID. Inner map shape matches Encode().
-func (h *HistoryTracker) EncodeAll() map[string]map[string]string {
+// EncodeAll returns the bit-packed history for every known session.
+func (h *HistoryTracker) EncodeAll() map[string]EncodedHistory {
 	h.mu.Lock()
 	sids := make([]string, 0, len(h.sessions))
 	for sid := range h.sessions {
 		sids = append(sids, sid)
 	}
 	h.mu.Unlock()
-	out := make(map[string]map[string]string, len(sids))
+	out := make(map[string]EncodedHistory, len(sids))
 	for _, sid := range sids {
 		if enc, ok := h.Encode(sid); ok {
 			out[sid] = enc
@@ -423,9 +451,14 @@ func (h *HistoryTracker) tick() {
 	emit := h.emit
 	h.mu.Unlock()
 
-	// Per-granularity buckets that rolled this tick. Index matches
-	// granularityIndex (0=1s, 1=10s, 2=60s).
+	// Per-granularity buckets that rolled this tick (and the tick generation
+	// at which each session's bucket rolled). Index matches granularityIndex
+	// (0=1s, 1=10s, 2=60s). The generation is captured under sb.mu in the
+	// same critical section that mutates the ring, so a concurrent Encode
+	// either observes pre-tick (gen=N-1, pre-mutated buckets) or post-tick
+	// (gen=N, post-mutated buckets) — never a mismatched pair.
 	var rolled [3]map[string]int8
+	var rolledGens [3]map[string]uint64
 	for _, e := range entries {
 		e.sb.mu.Lock()
 		for gi, rb := range e.sb.bufs {
@@ -433,10 +466,13 @@ func (h *HistoryTracker) tick() {
 			if !ok {
 				continue
 			}
+			e.sb.tickGen[gi]++
 			if rolled[gi] == nil {
 				rolled[gi] = make(map[string]int8)
+				rolledGens[gi] = make(map[string]uint64)
 			}
 			rolled[gi][e.sid] = p
+			rolledGens[gi][e.sid] = e.sb.tickGen[gi]
 		}
 		e.sb.mu.Unlock()
 	}
@@ -449,9 +485,10 @@ func (h *HistoryTracker) tick() {
 			continue
 		}
 		emit(HistoryEvent{
-			Kind:           HistoryEventTick,
-			GranularitySec: validGranularities[gi],
-			Buckets:        m,
+			Kind:              HistoryEventTick,
+			GranularitySec:    validGranularities[gi],
+			Buckets:           m,
+			BucketGenerations: rolledGens[gi],
 		})
 	}
 }

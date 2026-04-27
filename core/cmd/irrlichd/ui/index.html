@@ -865,6 +865,9 @@
     // historyByGranularity[g][sessionID] is a 60-element oldest→newest array of state names
     // (or "" for no-data buckets). Mirrored from the daemon's bit-packed wire format.
     const historyByGranularity = {1: {}, 10: {}, 60: {}};
+    // lastTickGen[sessionID][granularity] = highest applied tick generation. Lets us drop
+    // a tick that's already reflected in our snapshot (closing the connect-time race).
+    const lastTickGen = {};
 
     const HISTORY_PRIORITY_TO_STATE = ['ready', 'working', 'waiting', ''];
     function historyPriorityForState(s) {
@@ -910,7 +913,7 @@
       timelineHistory = newMap;
     }
 
-    function applyHistorySnapshot(sessionID, history) {
+    function applyHistorySnapshot(sessionID, history, generations) {
       for (const granKey of Object.keys(history)) {
         const gran = parseInt(granKey, 10);
         if (![1, 10, 60].includes(gran)) continue;
@@ -918,21 +921,41 @@
         if (!buckets) continue;
         historyByGranularity[gran][sessionID] = buckets;
       }
+      // Seed the dedup high-water-mark from the snapshot so any tick already
+      // folded into this snapshot gets skipped on arrival.
+      if (generations) {
+        const perGran = lastTickGen[sessionID] || {};
+        for (const granKey of Object.keys(generations)) {
+          const gran = parseInt(granKey, 10);
+          if ([1, 10, 60].includes(gran)) perGran[gran] = generations[granKey];
+        }
+        lastTickGen[sessionID] = perGran;
+      }
       rebuildTimelineHistory();
     }
 
-    function applyHistoryTick(granularitySec, buckets) {
+    function applyHistoryTick(granularitySec, buckets, bucketGenerations) {
       if (![1, 10, 60].includes(granularitySec)) return;
       const dict = historyByGranularity[granularitySec];
+      let changed = false;
       for (const sid of Object.keys(buckets)) {
+        // Skip if this tick has already been folded into our snapshot.
+        if (bucketGenerations && bucketGenerations[sid] !== undefined) {
+          const gen = bucketGenerations[sid];
+          const last = (lastTickGen[sid] && lastTickGen[sid][granularitySec]) || 0;
+          if (gen <= last) continue;
+          if (!lastTickGen[sid]) lastTickGen[sid] = {};
+          lastTickGen[sid][granularitySec] = gen;
+        }
         let arr = dict[sid];
         if (!arr) arr = new Array(60).fill('');
         arr.shift();
         arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
         while (arr.length < 60) arr.unshift('');
         dict[sid] = arr;
+        changed = true;
       }
-      if (granularitySec === currentGranularity) rebuildTimelineHistory();
+      if (changed && granularitySec === currentGranularity) rebuildTimelineHistory();
     }
 
     function applyHistoryUpgrade(sessionID, priority) {
@@ -1092,6 +1115,10 @@
 
     function applySessionDelete(sessionId) {
       var entry = sessionIndex.get(sessionId);
+      delete lastTickGen[sessionId];
+      delete historyByGranularity[1][sessionId];
+      delete historyByGranularity[10][sessionId];
+      delete historyByGranularity[60][sessionId];
       if (!entry) return;
       sessionIndex.delete(sessionId);
       if (entry.parent) {
@@ -1743,12 +1770,12 @@
           return;
         }
         if (msg.type === 'history_snapshot' && msg.session_id && msg.history) {
-          applyHistorySnapshot(msg.session_id, msg.history);
+          applyHistorySnapshot(msg.session_id, msg.history, msg.generations);
           repaintHistory();
           return;
         }
         if (msg.type === 'history_tick' && typeof msg.granularity_sec === 'number' && msg.buckets) {
-          applyHistoryTick(msg.granularity_sec, msg.buckets);
+          applyHistoryTick(msg.granularity_sec, msg.buckets, msg.bucket_generations);
           if (msg.granularity_sec === currentGranularity) repaintHistory();
           return;
         }

@@ -34,6 +34,11 @@ class SessionManager: ObservableObject {
     /// instant — the WebSocket streams every granularity continuously, the
     /// view just picks which dict to mirror into `stateHistory`.
     private var historyByGranularity: [Int: [String: [String]]] = [1: [:], 10: [:], 60: [:]]
+    /// Per-session per-granularity high-water-mark of applied tick generations.
+    /// Lets us drop a tick that's already reflected in our snapshot — closing
+    /// the connect-time race where the daemon emits a tick between snapshot
+    /// generation and the WebSocket flushing the snapshot to us.
+    private var lastTickGen: [String: [Int: UInt64]] = [:]
     private var currentHistoryGranularitySec: Int = 1
 
     /// Group names the user has collapsed. Lifted out of GroupView's local
@@ -322,29 +327,50 @@ class SessionManager: ObservableObject {
         return out
     }
 
-    private func applyHistorySnapshot(sessionID: String, history: [String: String]) {
+    private func applyHistorySnapshot(sessionID: String, history: [String: String], generations: [String: UInt64]?) {
         for (granKey, b64) in history {
             guard let gran = Int(granKey),
                   [1, 10, 60].contains(gran),
                   let buckets = decodeHistoryBuckets(b64) else { continue }
             historyByGranularity[gran, default: [:]][sessionID] = buckets
         }
+        // Seed the dedup high-water-mark from the snapshot's generations so
+        // any tick already reflected in this snapshot gets skipped on arrival.
+        if let gens = generations {
+            var perGran = lastTickGen[sessionID] ?? [:]
+            for (granKey, gen) in gens {
+                if let gran = Int(granKey), [1, 10, 60].contains(gran) {
+                    perGran[gran] = gen
+                }
+            }
+            lastTickGen[sessionID] = perGran
+        }
         refreshActiveStateHistory()
     }
 
-    private func applyHistoryTick(granularitySec: Int, buckets: [String: Int8]) {
+    private func applyHistoryTick(granularitySec: Int, buckets: [String: Int8], bucketGenerations: [String: UInt64]?) {
         guard [1, 10, 60].contains(granularitySec) else { return }
         var dict = historyByGranularity[granularitySec] ?? [:]
+        var changedActive = false
         for (sid, prio) in buckets {
+            // Skip if this tick has already been folded into our snapshot.
+            if let gen = bucketGenerations?[sid] {
+                let last = lastTickGen[sid]?[granularitySec] ?? 0
+                if gen <= last { continue }
+                var perGran = lastTickGen[sid] ?? [:]
+                perGran[granularitySec] = gen
+                lastTickGen[sid] = perGran
+            }
             var arr = dict[sid] ?? Array(repeating: "", count: 60)
             if arr.count == 60 { arr.removeFirst() }
             arr.append(historyPriorityToState(prio))
             // Pad to 60 if a previously-unknown session ticks before its snapshot.
             while arr.count < 60 { arr.insert("", at: 0) }
             dict[sid] = arr
+            changedActive = true
         }
         historyByGranularity[granularitySec] = dict
-        if granularitySec == currentHistoryGranularitySec {
+        if changedActive && granularitySec == currentHistoryGranularitySec {
             refreshActiveStateHistory()
         }
     }
@@ -413,15 +439,22 @@ class SessionManager: ObservableObject {
         let granularitySec: Int?
         let buckets: [String: Int8]?
         let priority: Int8?
+        // Tick generations: keyed by granularity for snapshots, by session_id
+        // for ticks (parallel to `buckets`). Optional so older daemons still
+        // decode.
+        let generations: [String: UInt64]?
+        let bucketGenerations: [String: UInt64]?
 
         enum CodingKeys: String, CodingKey {
             case type
             case session
-            case sessionID      = "session_id"
+            case sessionID         = "session_id"
             case history
-            case granularitySec = "granularity_sec"
+            case granularitySec    = "granularity_sec"
             case buckets
             case priority
+            case generations
+            case bucketGenerations = "bucket_generations"
         }
     }
 
@@ -460,6 +493,10 @@ class SessionManager: ObservableObject {
                 if let session = envelope.session {
                     sessionMap.removeValue(forKey: session.id)
                     sessionOrder.removeAll { $0 == session.id }
+                    lastTickGen.removeValue(forKey: session.id)
+                    for gran in [1, 10, 60] {
+                        historyByGranularity[gran]?.removeValue(forKey: session.id)
+                    }
                     rebuildSessionsFromMap()
                     removeFromApiGroups(sessionId: session.id)
                     scheduleRehydration()
@@ -476,11 +513,11 @@ class SessionManager: ObservableObject {
                 }
             case "history_snapshot":
                 if let sid = envelope.sessionID, let hist = envelope.history {
-                    applyHistorySnapshot(sessionID: sid, history: hist)
+                    applyHistorySnapshot(sessionID: sid, history: hist, generations: envelope.generations)
                 }
             case "history_tick":
                 if let gran = envelope.granularitySec, let bks = envelope.buckets {
-                    applyHistoryTick(granularitySec: gran, buckets: bks)
+                    applyHistoryTick(granularitySec: gran, buckets: bks, bucketGenerations: envelope.bucketGenerations)
                 }
             case "history_upgrade":
                 if let sid = envelope.sessionID, let prio = envelope.priority {
