@@ -157,11 +157,6 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     // MARK: - removeFromApiGroups (regression for #244)
 
     func testRemoveFromApiGroups_dropsTopLevelAgentAndEmptyGroup() {
-        // #244: when the daemon broadcasts session_deleted, apiGroups must
-        // shed the agent synchronously so the overlay's empty-state predicate
-        // (apiGroups.isEmpty && sessions.isEmpty) fires before the 0.5 s
-        // debounced rehydrate. Otherwise the menu bar goes idle but the
-        // overlay still shows the last session row.
         let lone = makeSession(id: "live")
         sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [lone])]
         sut.groupedSessionIds = ["live"]
@@ -191,26 +186,9 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertTrue(sut.groupedSessionIds.contains("parent"))
     }
 
-    func testRemoveFromApiGroups_dropsParent_takesChildrenWithIt() {
-        // The daemon emits a separate session_deleted for each subagent, but
-        // if the parent removal lands first the agent entry (and its dangling
-        // children) must vanish — we don't want orphaned subagent rows.
-        let child = makeSession(id: "child")
-        let parent = makeSession(id: "parent", children: [child])
-        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [parent])]
-        sut.groupedSessionIds = ["parent", "child"]
-
-        sut.removeFromApiGroups(sessionId: "parent")
-
-        XCTAssertTrue(sut.apiGroups.isEmpty,
-                      "removing the only top-level agent must drop the group")
-        XCTAssertFalse(sut.groupedSessionIds.contains("parent"))
-    }
-
     func testRemoveFromApiGroups_preservesGasTownGroupWhenEmpty() {
-        // Gas Town renders even with no rigs (menu-bar badge shows whenever
-        // the daemon is running), so the top-level gastown group must not
-        // be pruned even when its last session is removed.
+        // Gas-town's top-level row renders even with no rigs (menu-bar badge
+        // tracks daemon presence, not session count), so it must not prune.
         let rigSession = makeSession(id: "rig-1")
         let rigGroup = AgentGroup(name: "rig-a", agents: [rigSession])
         let gasTown = AgentGroup(
@@ -232,9 +210,8 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     }
 
     func testRemoveFromApiGroups_recursesIntoNestedNonGasTownGroup() {
-        // Locks in the recursion through `group.groups` for plain project
-        // groups (the gas-town test exercises the same path but trips the
-        // isGasTown carve-out, so it doesn't pin generic recursion).
+        // Pins generic `group.groups` recursion — gas-town test exercises the
+        // same path but trips the isGasTown carve-out.
         let nestedSession = makeSession(id: "deep")
         let inner = AgentGroup(name: "inner", agents: [nestedSession])
         let outer = AgentGroup(
@@ -255,10 +232,9 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     }
 
     func testRemoveFromApiGroups_dropsParent_clearsOrphanedChildIds() {
-        // Regression: removing a parent agent also drops its embedded
-        // children from `apiGroups`, so their ids must leave
-        // `groupedSessionIds` too — otherwise a late WS update for a child
-        // would slip past the patchApiGroups guard with no row to land in.
+        // Children embedded in a removed parent vanish from the tree, so
+        // their ids must also leave groupedSessionIds — otherwise a late WS
+        // update slips past the patchApiGroups guard with no row to land in.
         let child = makeSession(id: "child")
         let parent = makeSession(id: "parent", children: [child])
         sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [parent])]

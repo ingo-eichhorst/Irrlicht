@@ -449,23 +449,21 @@ class SessionManager: ObservableObject {
         return group.groups?.contains { groupContains($0, sessionId: sessionId) } ?? false
     }
 
-    /// Synchronously prune a session from `apiGroups` so the overlay's view of
-    /// the world stays consistent with `sessionMap` on `session_deleted`. The
-    /// debounced rehydrate is the safety net; this is the primary path so the
-    /// 0.5 s window doesn't leave a stale row in the popover.
+    /// Synchronously drop a session from `apiGroups` on `session_deleted` —
+    /// the debounced rehydrate is a safety net, not the primary path, so the
+    /// overlay can't render a stale row while the menu bar is already idle.
     func removeFromApiGroups(sessionId: String) {
+        guard groupedSessionIds.contains(sessionId) else { return }
         apiGroups = apiGroups.compactMap { pruneGroup($0, removing: sessionId) }
-        // Rebuild from the post-prune tree so transitively-dropped ids
-        // (a parent's children, a dropped nested group's agents) don't linger
-        // in `groupedSessionIds` and let later WS updates pass the guard at
-        // `patchApiGroups` for sessions that no longer have a row.
+        // Rebuild rather than `remove(sessionId)` — pruning a parent or a
+        // nested group transitively orphans embedded ids that must also leave
+        // `groupedSessionIds`, otherwise `patchApiGroups` will pass the guard
+        // for sessions that no longer have a row.
         groupedSessionIds = Set(apiGroups.flatMap { collectSessionIds(from: $0) })
     }
 
-    /// Drop the session from a group's agents/children/nested-groups, returning
-    /// `nil` when the resulting group is fully empty — except gas-town, which
-    /// renders even with no rigs (the menu bar shows the gas-town badge
-    /// regardless of session count).
+    /// Returns `nil` when the group has nothing left to render — except
+    /// gas-town, which keeps its top-level row even with no rigs.
     func pruneGroup(_ group: AgentGroup, removing sessionId: String) -> AgentGroup? {
         let prunedAgents: [SessionState]? = group.agents?.compactMap { agent in
             if agent.id == sessionId { return nil }
@@ -477,11 +475,8 @@ class SessionManager: ObservableObject {
         }
         let prunedGroups: [AgentGroup]? = group.groups?.compactMap { pruneGroup($0, removing: sessionId) }
 
-        let agentsCount = prunedAgents?.count ?? 0
-        let groupsCount = prunedGroups?.count ?? 0
-        if agentsCount == 0 && groupsCount == 0 && !group.isGasTown {
-            return nil
-        }
+        let isEmpty = (prunedAgents?.isEmpty ?? true) && (prunedGroups?.isEmpty ?? true)
+        if isEmpty && !group.isGasTown { return nil }
 
         return AgentGroup(
             name: group.name,
