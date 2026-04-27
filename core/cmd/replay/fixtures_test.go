@@ -86,8 +86,9 @@ func discoverReplayFixtures(t *testing.T, root string) []string {
 }
 
 // runFixtureReplay dispatches through the same runReplay() path as main(),
-// zeroes GeneratedAt on the returned report so the golden is stable, and
-// returns the indented JSON.
+// zeroes per-run fields (GeneratedAt, SourceTranscript) on the returned
+// report so goldens are stable across worktrees and clones, and returns
+// the indented JSON.
 func runFixtureReplay(t *testing.T, transcriptPath string) []byte {
 	t.Helper()
 	adapter, err := detectAdapter(transcriptPath)
@@ -105,8 +106,6 @@ func runFixtureReplay(t *testing.T, transcriptPath string) []byte {
 		t.Fatalf("runReplay %s: %v", transcriptPath, err)
 	}
 	report.GeneratedAt = time.Time{}
-	// Zero the source path so goldens are portable across worktrees and clones —
-	// the field is informational and the golden already lives next to its fixture.
 	report.SourceTranscript = ""
 
 	var buf bytes.Buffer
