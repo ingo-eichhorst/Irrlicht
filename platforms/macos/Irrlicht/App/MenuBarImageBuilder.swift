@@ -9,7 +9,7 @@ enum MenuBarImageBuilder {
         if let combined = combinedImage(sessionManager: sessionManager, gasTownProvider: gasTownProvider) {
             return combined
         }
-        return sparkleImage()
+        return idleFlameImage()
     }
 
     private static func combinedImage(
@@ -59,12 +59,7 @@ enum MenuBarImageBuilder {
         return combined
     }
 
-    private static func sparkleImage() -> NSImage {
-        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        let base = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Irrlicht")
-            ?? NSImage()
-        let configured = base.withSymbolConfiguration(config) ?? base
-        configured.isTemplate = true
-        return configured
+    private static func idleFlameImage() -> NSImage {
+        OffFlameImage.image(pointSize: 18, variant: .menuBar)
     }
 }

@@ -279,9 +279,7 @@ struct SessionListView: View {
 
     private var emptyStateView: some View {
         VStack(spacing: 8) {
-            Image(systemName: "lightbulb.slash")
-                .font(.system(size: 24))
-                .foregroundColor(.secondary)
+            Image(nsImage: OffFlameImage.image(pointSize: 24, variant: .overlaySlashed))
 
             Text("No coding agent sessions detected")
                 .font(.headline)
