@@ -159,6 +159,75 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 	pm.deleteWithChildren(state)
 }
 
+// startupRecycledPIDGrace is the minimum age before a session with a still-
+// live PID is considered for recycled-PID cleanup at startup. Conservative:
+// avoids clobbering a session whose live process happened to take a recycled
+// PID during a brief daemon restart. Paired with isStaleTranscript so a
+// session whose original process is genuinely still writing its transcript
+// is never deleted.
+const startupRecycledPIDGrace = 5 * time.Minute
+
+// CleanupZombies is a one-shot startup sweep that aggressively deletes any
+// persisted session whose process is provably gone. Unlike CheckPIDLiveness
+// (the periodic, conservative sweep that protects in-flight sessions),
+// CleanupZombies runs before the daemon serves any requests, so it can apply
+// stricter rules without risk of yanking a live session out from under its
+// process. Returns the number of sessions deleted.
+//
+// Three predicates cover the failure modes that survive across daemon restarts:
+//  1. Known PID, syscall.Kill ESRCH                       → process exited.
+//  2. Known PID still alive, record older than the grace
+//     window AND transcript stale                         → recycled PID.
+//  3. Unknown PID (PID==0), not a subagent, transcript
+//     stale                                               → orphan that
+//                                                           never bound.
+func (pm *PIDManager) CleanupZombies() int {
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return 0
+	}
+	deleted := 0
+	for _, state := range states {
+		if !pm.isStartupZombie(state) {
+			continue
+		}
+		pm.log.LogInfo("startup-cleanup", state.SessionID,
+			fmt.Sprintf("zombie session (pid=%d, state=%s, adapter=%s) — deleting", state.PID, state.State, state.Adapter))
+		pm.deleteWithChildren(state)
+		deleted++
+	}
+	if deleted > 0 {
+		pm.log.LogInfo("startup-cleanup", "",
+			fmt.Sprintf("startup: deleted %d zombie session(s)", deleted))
+	}
+	return deleted
+}
+
+// isStartupZombie returns true for sessions whose process is provably gone.
+// Mirrors the predicate documented on CleanupZombies.
+func (pm *PIDManager) isStartupZombie(state *session.SessionState) bool {
+	if state == nil {
+		return false
+	}
+	if state.PID > 0 {
+		if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
+			return true
+		}
+		// Live PID — could be the original process, or a recycled PID owned
+		// by an unrelated process. Treat as recycled only when both guards
+		// are met: the record is past the grace window AND the transcript
+		// hasn't moved within orphanTranscriptAge.
+		age := time.Since(time.Unix(state.UpdatedAt, 0))
+		return age > startupRecycledPIDGrace && isStaleTranscript(state.TranscriptPath)
+	}
+	// PID == 0: subagents share their parent's PID and are cleaned up via
+	// child-specific paths in CheckPIDLiveness, so exempt them here.
+	if state.ParentSessionID != "" {
+		return false
+	}
+	return isStaleTranscript(state.TranscriptPath)
+}
+
 // deleteWithChildren removes a session and all its child sessions (subagents).
 func (pm *PIDManager) deleteWithChildren(state *session.SessionState) {
 	if states, err := pm.repo.ListAll(); err == nil {

@@ -378,6 +378,17 @@ func main() {
 			logger.LogInfo("startup", "", fmt.Sprintf("lifecycle recording enabled: %s", rec.Path()))
 		}
 	}
+	// Synchronous startup zombie sweep. Runs before the detector's event
+	// loop and before the API has anything new to broadcast, so persisted
+	// records inherited from a prior daemon run whose process is gone are
+	// gone from the API too. Skipped under demo mode (which seeds sessions
+	// without backing processes on purpose).
+	if !demoMode {
+		if n := detector.CleanupZombies(); n > 0 {
+			logger.LogInfo("startup", "", fmt.Sprintf("cleaned up %d zombie session(s) inherited from a prior daemon run", n))
+		}
+	}
+
 	{
 		detectorCtx, detectorCancel := context.WithCancel(context.Background())
 		defer detectorCancel()

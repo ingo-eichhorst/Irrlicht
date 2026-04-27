@@ -2,7 +2,9 @@ package services_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -85,6 +87,141 @@ func TestCheckPIDLiveness_StaleTranscript_Deleted(t *testing.T) {
 
 	if repo.states["stale"] != nil {
 		t.Fatal("session should be deleted (stale transcript + ready + pid=0 + >30s)")
+	}
+}
+
+// deadPIDForTest spawns and reaps a short-lived process, returning its PID.
+// Skips the test if the kernel races us and recycles the PID before we can
+// confirm it is dead — keeps the test deterministic.
+func deadPIDForTest(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start true: %v", err)
+	}
+	pid := cmd.Process.Pid
+	_ = cmd.Wait()
+	if err := syscall.Kill(pid, 0); err == nil {
+		t.Skipf("dead PID %d was recycled before test could observe it", pid)
+	}
+	return pid
+}
+
+// TestCleanupZombies covers all three predicates used by the startup sweep:
+// dead PID, recycled PID (alive but old + stale), PID=0 orphan, and the
+// happy-path exemptions (alive + fresh, child sessions).
+func TestCleanupZombies(t *testing.T) {
+	tmp := t.TempDir()
+	freshTranscript := filepath.Join(tmp, "fresh.jsonl")
+	staleTranscript := filepath.Join(tmp, "stale.jsonl")
+	writeTranscript(t, freshTranscript, time.Now())
+	writeTranscript(t, staleTranscript, time.Now().Add(-10*time.Minute))
+
+	deadPID := deadPIDForTest(t)
+	livePID := os.Getpid() // the test process itself is reliably alive
+
+	repo := newMockRepo()
+	// 1. Known PID, dead → deleted.
+	repo.states["dead-pid"] = &session.SessionState{
+		SessionID:      "dead-pid",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		PID:            deadPID,
+		TranscriptPath: freshTranscript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// 2. Known PID, alive, recent UpdatedAt → kept (could still be in-flight).
+	repo.states["alive-fresh"] = &session.SessionState{
+		SessionID:      "alive-fresh",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		PID:            livePID,
+		TranscriptPath: freshTranscript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// 3. Known PID, alive, OLD UpdatedAt + stale transcript → deleted (recycled PID).
+	repo.states["recycled"] = &session.SessionState{
+		SessionID:      "recycled",
+		Adapter:        "claude-code",
+		State:          session.StateWaiting,
+		PID:            livePID,
+		TranscriptPath: staleTranscript,
+		UpdatedAt:      time.Now().Add(-10 * time.Minute).Unix(),
+	}
+	// 4. PID=0, stale transcript, no parent → deleted (orphan).
+	repo.states["orphan"] = &session.SessionState{
+		SessionID:      "orphan",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		PID:            0,
+		TranscriptPath: staleTranscript,
+		UpdatedAt:      time.Now().Add(-10 * time.Minute).Unix(),
+	}
+	// 5. PID=0, fresh transcript → kept (PID discovery may still resolve).
+	repo.states["pid0-fresh"] = &session.SessionState{
+		SessionID:      "pid0-fresh",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		PID:            0,
+		TranscriptPath: freshTranscript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// 6. PID=0 child session → kept (subagent runs inside parent's process).
+	repo.states["child"] = &session.SessionState{
+		SessionID:       "child",
+		ParentSessionID: "alive-fresh",
+		Adapter:         "claude-code",
+		State:           session.StateWorking,
+		PID:             0,
+		TranscriptPath:  staleTranscript,
+		UpdatedAt:       time.Now().Add(-10 * time.Minute).Unix(),
+	}
+
+	deleted := newPIDManagerForTest(repo).CleanupZombies()
+	if deleted != 3 {
+		t.Errorf("CleanupZombies returned %d, want 3 (dead-pid, recycled, orphan)", deleted)
+	}
+
+	wantDeleted := []string{"dead-pid", "recycled", "orphan"}
+	for _, id := range wantDeleted {
+		if repo.states[id] != nil {
+			t.Errorf("session %q should have been deleted but is still present", id)
+		}
+	}
+	wantKept := []string{"alive-fresh", "pid0-fresh", "child"}
+	for _, id := range wantKept {
+		if repo.states[id] == nil {
+			t.Errorf("session %q should have been kept but is gone", id)
+		}
+	}
+}
+
+// TestCleanupZombies_RecycledPID_RecentUpdate_NotDeleted guards against the
+// PID-recycle false-positive: a session whose PID happens to be live and whose
+// UpdatedAt is recent (e.g. the daemon was just restarted seconds ago) must
+// not be wiped, because the original process may genuinely still own it.
+func TestCleanupZombies_RecycledPID_RecentUpdate_NotDeleted(t *testing.T) {
+	tmp := t.TempDir()
+	staleTranscript := filepath.Join(tmp, "stale.jsonl")
+	writeTranscript(t, staleTranscript, time.Now().Add(-10*time.Minute))
+
+	repo := newMockRepo()
+	// Live PID, stale transcript, but UpdatedAt is recent (within the 5m grace).
+	repo.states["just-restarted"] = &session.SessionState{
+		SessionID:      "just-restarted",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		PID:            os.Getpid(),
+		TranscriptPath: staleTranscript,
+		UpdatedAt:      time.Now().Add(-30 * time.Second).Unix(),
+	}
+
+	deleted := newPIDManagerForTest(repo).CleanupZombies()
+	if deleted != 0 {
+		t.Errorf("CleanupZombies returned %d, want 0 — live PID within grace must not be touched", deleted)
+	}
+	if repo.states["just-restarted"] == nil {
+		t.Fatal("session was deleted within grace window — recycled-PID guard failed")
 	}
 }
 
