@@ -163,6 +163,14 @@ func (d *SessionDetector) RunPIDLivenessSweepForTest() {
 	d.pidMgr.CheckPIDLiveness()
 }
 
+// CleanupZombies runs a one-shot startup sweep that deletes persisted
+// sessions whose process is provably gone. Call before the daemon starts
+// serving requests so the API never returns stale records inherited from a
+// prior daemon run. Returns the number of sessions deleted.
+func (d *SessionDetector) CleanupZombies() int {
+	return d.pidMgr.CleanupZombies()
+}
+
 // SetRecorder enables lifecycle event recording. When set, the detector and
 // its PIDManager will emit lifecycle events to the recorder for offline replay.
 func (d *SessionDetector) SetRecorder(r outbound.EventRecorder) {

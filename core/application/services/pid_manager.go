@@ -159,6 +159,63 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 	pm.deleteWithChildren(state)
 }
 
+// CleanupZombies is a one-shot synchronous startup sweep that deletes any
+// persisted session whose process is provably gone. The same dead-PID and
+// PID=0-orphan predicates also run later via SeedPIDs in seedFromDisk, but
+// seedFromDisk executes inside the detector goroutine that starts after the
+// HTTP server is already serving — so without this synchronous pre-pass the
+// API briefly returns zombies inherited from the previous daemon run.
+//
+// Two predicates, both narrower than CheckPIDLiveness so we never delete an
+// in-flight session (at startup nothing is in-flight, but the predicates
+// stay conservative anyway in case CleanupZombies is ever called later):
+//  1. Known PID and syscall.Kill returns ESRCH        → process exited.
+//  2. PID == 0, not a subagent, transcript file has
+//     not been modified within orphanTranscriptAge    → orphan that
+//                                                       never bound.
+//
+// Note: a "live PID, old record" case is intentionally NOT included. A
+// long-idle but still-running agent (user away from keyboard for >2 min)
+// would match that predicate and be wiped on the next daemon restart, even
+// though the process is fine. Detecting recycled PIDs reliably needs an
+// adapter-specific process-name cross-check, which is out of scope here.
+//
+// Returns the number of sessions deleted.
+func (pm *PIDManager) CleanupZombies() int {
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return 0
+	}
+	deleted := 0
+	for _, state := range states {
+		if !isStartupZombie(state) {
+			continue
+		}
+		pm.log.LogInfo("startup-cleanup", state.SessionID,
+			fmt.Sprintf("zombie session (pid=%d, state=%s, adapter=%s) — deleting", state.PID, state.State, state.Adapter))
+		pm.deleteWithChildren(state)
+		deleted++
+	}
+	return deleted
+}
+
+// isStartupZombie returns true for sessions whose process is provably gone.
+// Mirrors the predicate documented on CleanupZombies.
+func isStartupZombie(state *session.SessionState) bool {
+	if state == nil {
+		return false
+	}
+	if state.PID > 0 {
+		return syscall.Kill(state.PID, 0) == syscall.ESRCH
+	}
+	// PID == 0: subagents share their parent's PID and are cleaned up via
+	// child-specific paths in CheckPIDLiveness, so exempt them here.
+	if state.ParentSessionID != "" {
+		return false
+	}
+	return isStaleTranscript(state.TranscriptPath)
+}
+
 // deleteWithChildren removes a session and all its child sessions (subagents).
 func (pm *PIDManager) deleteWithChildren(state *session.SessionState) {
 	if states, err := pm.repo.ListAll(); err == nil {
