@@ -480,24 +480,28 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	// - Child sessions: ready or stale transcript (finished/zombie subagents)
 	if pm.readyTTL > 0 {
 		for _, state := range states {
-			// Child sessions: clean up immediately when ready, or when stale
-			// (transcript stopped updating — zombie from a previous run).
-			if state.ParentSessionID != "" {
-				if state.State == session.StateReady || isStaleTranscript(state.TranscriptPath) {
-					parentID := state.ParentSessionID
-					_ = pm.repo.Delete(state.SessionID)
-					pm.broadcast(outbound.PushTypeDeleted, state)
-					// Re-evaluate the parent: it may have been held in
-					// `working` only because of this child. Without this
-					// nudge the parent stays stuck until its own next
-					// transcript event, which may never come for a
-					// finished session.
-					if pm.onChildDeleted != nil {
-						pm.onChildDeleted(parentID)
-					}
+		// Child sessions: clean up immediately when ready, or when stale
+		// (transcript stopped updating — zombie from a previous run).
+		// Exception: DB-backed adapters (TranscriptPath contains "?session=")
+		// manage their own session lifetime via maxAge; their subagents are
+		// persistent historical records, not transient process-bound children.
+		if state.ParentSessionID != "" {
+			if !strings.Contains(state.TranscriptPath, "?session=") &&
+				(state.State == session.StateReady || isStaleTranscript(state.TranscriptPath)) {
+				parentID := state.ParentSessionID
+				_ = pm.repo.Delete(state.SessionID)
+				pm.broadcast(outbound.PushTypeDeleted, state)
+				// Re-evaluate the parent: it may have been held in
+				// `working` only because of this child. Without this
+				// nudge the parent stays stuck until its own next
+				// transcript event, which may never come for a
+				// finished session.
+				if pm.onChildDeleted != nil {
+					pm.onChildDeleted(parentID)
 				}
-				continue
 			}
+			continue
+		}
 			// Sessions with PID=0 that are ready: the process likely exited
 			// before PID discovery succeeded. Clean up quickly (30s) rather
 			// than waiting the full readyTTL — BUT only if the transcript

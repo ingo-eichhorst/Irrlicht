@@ -189,7 +189,7 @@ func (w *Watcher) scanSessions() {
 	if w.maxAge > 0 {
 		cutoff := time.Now().Add(-w.maxAge).UnixMilli()
 		rows, queryErr = db.Query(`
-			SELECT id, directory, time_updated
+			SELECT id, directory, time_updated, parent_id
 			FROM session
 			WHERE time_archived IS NULL
 			  AND time_updated >= ?
@@ -198,7 +198,7 @@ func (w *Watcher) scanSessions() {
 		`, cutoff)
 	} else {
 		rows, queryErr = db.Query(`
-			SELECT id, directory, time_updated
+			SELECT id, directory, time_updated, parent_id
 			FROM session
 			WHERE time_archived IS NULL
 			ORDER BY time_updated DESC
@@ -214,12 +214,17 @@ func (w *Watcher) scanSessions() {
 		id          string
 		directory   string
 		timeUpdated int64
+		parentID    string // empty string if NULL
 	}
 	var sessions []sessionRow
 	for rows.Next() {
 		var s sessionRow
-		if err := rows.Scan(&s.id, &s.directory, &s.timeUpdated); err != nil {
+		var parentID sql.NullString
+		if err := rows.Scan(&s.id, &s.directory, &s.timeUpdated, &parentID); err != nil {
 			continue
+		}
+		if parentID.Valid {
+			s.parentID = parentID.String
 		}
 		if w.maxAge > 0 {
 			age := time.Since(time.UnixMilli(s.timeUpdated))
@@ -246,12 +251,13 @@ func (w *Watcher) scanSessions() {
 			walPath := w.dbPath + "-wal" + "?session=" + s.id
 			w.cursors[s.id] = 0
 			w.broadcast(agent.Event{
-				Type:           agent.EventNewSession,
-				Adapter:        w.adapter,
-				SessionID:      s.id,
-				ProjectDir:     filepath.Base(s.directory),
-				TranscriptPath: walPath,
-				CWD:            s.directory,
+				Type:            agent.EventNewSession,
+				Adapter:         w.adapter,
+				SessionID:       s.id,
+				ProjectDir:      filepath.Base(s.directory),
+				TranscriptPath:  walPath,
+				CWD:             s.directory,
+				ParentSessionID: s.parentID,
 			})
 		}
 

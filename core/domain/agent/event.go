@@ -22,4 +22,5 @@ type Event struct {
 	TranscriptPath string // Absolute path to the .jsonl file
 	Size           int64  // Current file size in bytes (0 for removals)
 	CWD            string // Working directory of the agent process (set by process scanner)
+	ParentSessionID string // Parent session ID for subagent sessions (empty for top-level)
 }

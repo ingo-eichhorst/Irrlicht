@@ -70,6 +70,10 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
+		parentID := ev.ParentSessionID
+		if parentID == "" {
+			parentID = deriveParentSession(ev.TranscriptPath)
+		}
 		state := &session.SessionState{
 			Version:         1,
 			SessionID:       ev.SessionID,
@@ -78,7 +82,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			TranscriptPath:  ev.TranscriptPath,
 			CWD:             ev.CWD,
 			DaemonVersion:   d.version,
-			ParentSessionID: deriveParentSession(ev.TranscriptPath),
+			ParentSessionID: parentID,
 			FirstSeen:       now,
 			UpdatedAt:       now,
 			Confidence:      "medium",
