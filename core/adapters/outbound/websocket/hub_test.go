@@ -49,7 +49,7 @@ func TestLoopbackCheckOrigin(t *testing.T) {
 // TestServeWS_OriginHandshake exercises the full HTTP upgrade with a custom
 // Origin header to confirm the upgrader rejects cross-site handshakes.
 func TestServeWS_OriginHandshake(t *testing.T) {
-	hub := NewHub(services.NewPushService())
+	hub := NewHub(services.NewPushService(), nil)
 	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
 	defer srv.Close()
 

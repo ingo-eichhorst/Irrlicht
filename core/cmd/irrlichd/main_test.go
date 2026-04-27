@@ -34,7 +34,7 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil))
 	mux.HandleFunc("GET /state", handleGetState(repo))
-	hub := wshub.NewHub(push)
+	hub := wshub.NewHub(push, nil)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 
 	uiSub, _ := fs.Sub(uiFS, "ui")
@@ -53,85 +53,6 @@ func seedSession(t *testing.T, repo *filesystem.SessionRepository, id, state str
 	}
 	if err := repo.Save(s); err != nil {
 		t.Fatalf("seed session %s: %v", id, err)
-	}
-}
-
-// newHistoryTestStack is a variant of newTestStack that also wires the
-// /api/v1/sessions/history handler against a provided HistoryTracker.
-func newHistoryTestStack(t *testing.T, ht *services.HistoryTracker) (*httptest.Server, *filesystem.SessionRepository) {
-	t.Helper()
-
-	repo := filesystem.NewWithDir(t.TempDir())
-	push := services.NewPushService()
-	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil))
-	mux.HandleFunc("GET /api/v1/sessions/history", handleGetSessionsHistory(repo, ht))
-	return httptest.NewServer(mux), repo
-}
-
-// TestGate_GetSessionsHistory_SeedsPerSession verifies the web UI's seed
-// endpoint returns per-session state slices and response-shape fields.
-func TestGate_GetSessionsHistory_SeedsPerSession(t *testing.T) {
-	ht := services.NewHistoryTracker()
-	srv, repo := newHistoryTestStack(t, ht)
-	defer srv.Close()
-
-	seedSession(t, repo, "hist-1", session.StateWorking)
-	seedSession(t, repo, "hist-2", session.StateReady)
-
-	now := time.Now()
-	ht.OnTransition("hist-1", session.StateWorking, now)
-	ht.OnTransition("hist-2", session.StateReady, now)
-
-	resp, err := http.Get(srv.URL + "/api/v1/sessions/history?granularity=1")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-
-	var body struct {
-		GranularitySec int                 `json:"granularity_sec"`
-		BucketCount    int                 `json:"bucket_count"`
-		Sessions       map[string][]string `json:"sessions"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.GranularitySec != 1 {
-		t.Errorf("granularity_sec = %d, want 1", body.GranularitySec)
-	}
-	if body.BucketCount != services.HistoryBucketCount {
-		t.Errorf("bucket_count = %d, want %d", body.BucketCount, services.HistoryBucketCount)
-	}
-	s1, ok := body.Sessions["hist-1"]
-	if !ok {
-		t.Fatalf("sessions missing hist-1: %v", body.Sessions)
-	}
-	if len(s1) == 0 || s1[len(s1)-1] != session.StateWorking {
-		t.Errorf("hist-1 last = %v, want working", s1)
-	}
-	if _, ok := body.Sessions["hist-2"]; !ok {
-		t.Errorf("sessions missing hist-2: %v", body.Sessions)
-	}
-}
-
-func TestGate_GetSessionsHistory_BadGranularity(t *testing.T) {
-	ht := services.NewHistoryTracker()
-	srv, _ := newHistoryTestStack(t, ht)
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/api/v1/sessions/history?granularity=7")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
 

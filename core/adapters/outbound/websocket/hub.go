@@ -44,18 +44,27 @@ func loopbackCheckOrigin(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// ConnectSnapshots returns the messages to deliver to a freshly-attached
+// WebSocket client before the live stream takes over. Typically this is one
+// history_snapshot per known session.
+type ConnectSnapshots func() []outbound.PushMessage
+
 // hub manages WebSocket connections and fans out session state updates.
 type hub struct {
-	push     outbound.PushBroadcaster
-	upgrader websocket.Upgrader
+	push             outbound.PushBroadcaster
+	connectSnapshots ConnectSnapshots
+	upgrader         websocket.Upgrader
 }
 
 // NewHub creates a hub backed by the provided PushBroadcaster. The upgrader
-// enforces a loopback-only origin policy.
-func NewHub(push outbound.PushBroadcaster) *hub {
+// enforces a loopback-only origin policy. connectSnapshots, when non-nil, is
+// invoked on each new connection to ship the per-session history snapshots
+// (so freshly-attached clients see the full 60-bucket history without polling).
+func NewHub(push outbound.PushBroadcaster, connectSnapshots ConnectSnapshots) *hub {
 	return &hub{
-		push:     push,
-		upgrader: websocket.Upgrader{CheckOrigin: loopbackCheckOrigin},
+		push:             push,
+		connectSnapshots: connectSnapshots,
+		upgrader:         websocket.Upgrader{CheckOrigin: loopbackCheckOrigin},
 	}
 }
 
@@ -71,6 +80,24 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	ch := h.push.Subscribe()
 	defer h.push.Unsubscribe(ch)
+
+	// Hydrate the new client with one history_snapshot per known session
+	// before the live stream starts. Subscribe-then-snapshot order ensures
+	// no tick or upgrade emitted between these two operations is lost; per-
+	// session tick generations on snapshot/tick messages let the client
+	// dedupe a tick that's already reflected in its snapshot.
+	if h.connectSnapshots != nil {
+		for _, snap := range h.connectSnapshots() {
+			data, err := json.Marshal(snap)
+			if err != nil {
+				continue
+			}
+			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+		}
+	}
 
 	// Set initial read deadline; reset on each pong.
 	conn.SetReadDeadline(time.Now().Add(pongTimeout))

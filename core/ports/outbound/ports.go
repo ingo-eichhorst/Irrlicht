@@ -9,9 +9,30 @@ import (
 )
 
 // PushMessage is a typed WebSocket envelope for session state fan-out.
+// Session-state messages populate Session; history messages use SessionID +
+// the History/Granularity/Buckets/Priority fields (see PushTypeHistory*).
 type PushMessage struct {
 	Type    string                `json:"type"`
 	Session *session.SessionState `json:"session,omitempty"`
+
+	// History-message fields. SessionID identifies the target row for
+	// snapshot/upgrade messages; tick messages use the per-session entries
+	// in Buckets instead. History maps granularity ("1"/"10"/"60") → 20-char
+	// base64 of 60 bit-packed buckets.
+	SessionID      string            `json:"session_id,omitempty"`
+	History        map[string]string `json:"history,omitempty"`
+	GranularitySec int               `json:"granularity_sec,omitempty"`
+	Buckets        map[string]int8   `json:"buckets,omitempty"`
+	Priority       *int8             `json:"priority,omitempty"`
+
+	// Tick generations let the client dedupe a tick that's already
+	// reflected in its snapshot. Captured under the session lock together
+	// with the bucket state, so a snapshot's Generations always match the
+	// History it ships, and a tick's BucketGenerations always match the
+	// post-roll state. Keys: granularity for snapshots ("1"/"10"/"60"),
+	// session_id for ticks (parallel to Buckets).
+	Generations       map[string]uint64 `json:"generations,omitempty"`
+	BucketGenerations map[string]uint64 `json:"bucket_generations,omitempty"`
 }
 
 // Valid PushMessage type constants.
@@ -20,6 +41,19 @@ const (
 	PushTypeUpdated        = "session_updated"
 	PushTypeDeleted        = "session_deleted"
 	PushTypeFocusRequested = "focus_requested"
+
+	// PushTypeHistorySnapshot delivers the bit-packed 60-bucket history
+	// for one session across all three granularities. Sent on WebSocket
+	// connect, on session creation, and after a client reconnects.
+	PushTypeHistorySnapshot = "history_snapshot"
+	// PushTypeHistoryTick is a bulk per-granularity delta: one entry per
+	// session with the priority of the bucket that just rolled. Emitted
+	// once per granularity-second by the daemon.
+	PushTypeHistoryTick = "history_tick"
+	// PushTypeHistoryUpgrade fires on a state transition mid-bucket. The
+	// client merges the priority into the current bucket of all three
+	// rings using max-priority aggregation.
+	PushTypeHistoryUpgrade = "history_upgrade"
 )
 
 // SessionRepository loads, saves, and deletes session state files.
@@ -112,11 +146,12 @@ type HistoryTracker interface {
 	// OnTransition records a state transition for a session, upgrading the
 	// current bucket's priority if the new state outranks the stored one.
 	OnTransition(sessionID, newState string, ts time.Time)
-	// Snapshot returns the ring-buffer contents for a session at the given
-	// granularity (1, 10, or 60), oldest→newest. Returns nil, false if unknown.
-	Snapshot(sessionID string, granularitySec int) ([]string, bool)
 	// Remove drops all buffers for a session.
 	Remove(sessionID string)
+	// EmitSnapshot ships the current bit-packed history for one session
+	// through the configured emit callback. Used to hydrate newly-created
+	// sessions on the WebSocket without waiting for the next tick.
+	EmitSnapshot(sessionID string)
 }
 
 // ProcessWatcher monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT and

@@ -315,9 +315,7 @@ struct SessionListView: View {
                 let next = displayMode.next()
                 displayModeRaw = next.rawValue
                 if next.isHistory {
-                    sessionManager.startHistoryPolling(granularitySec: next.granularitySec)
-                } else {
-                    sessionManager.stopHistoryPolling()
+                    sessionManager.setHistoryGranularity(next.granularitySec)
                 }
             } label: {
                 Text(displayMode.rawValue)
@@ -340,11 +338,8 @@ struct SessionListView: View {
         .padding(.vertical, 8)
         .onAppear {
             if displayMode.isHistory {
-                sessionManager.startHistoryPolling(granularitySec: displayMode.granularitySec)
+                sessionManager.setHistoryGranularity(displayMode.granularitySec)
             }
-        }
-        .onDisappear {
-            sessionManager.stopHistoryPolling()
         }
     }
     

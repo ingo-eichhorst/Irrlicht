@@ -140,6 +140,10 @@ func main() {
 	// Push broadcaster for WebSocket fan-out.
 	push := services.NewPushService()
 
+	// Stream history events (snapshots, ticks, upgrades) over the same
+	// WebSocket envelope as session-state messages.
+	historyTracker.SetEmitFunc(historyEventBroadcaster(push))
+
 	// Unified registration for every inbound agent adapter. Wiring below
 	// (fswatchers, process scanners, metrics parser map, PID discovery map)
 	// derives from this single slice — the only place new agents need to be
@@ -198,7 +202,7 @@ func main() {
 	// Sessions endpoint registered after orchMonitor is available (see below).
 	mux.HandleFunc("GET /state", handleGetState(cachedRepo))
 
-	hub := wshub.NewHub(push)
+	hub := wshub.NewHub(push, historySnapshotProvider(historyTracker))
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 
 	// pprof debug endpoints for runtime profiling (localhost only).
@@ -296,7 +300,6 @@ func main() {
 
 	// Register API endpoints (after orchMonitor is available).
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker))
-	mux.HandleFunc("GET /api/v1/sessions/history", handleGetSessionsHistory(cachedRepo, historyTracker))
 
 	focusService := services.NewFocusService(cachedRepo, push, logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
@@ -612,6 +615,57 @@ func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepositor
 		}
 	}
 	return costTracker
+}
+
+// historyEventBroadcaster maps HistoryEvent (the in-memory tagged union the
+// tracker emits) onto PushMessage envelopes the WebSocket hub already knows
+// how to serialize.
+func historyEventBroadcaster(push outbound.PushBroadcaster) func(services.HistoryEvent) {
+	return func(ev services.HistoryEvent) {
+		switch ev.Kind {
+		case services.HistoryEventSnapshot:
+			push.Broadcast(outbound.PushMessage{
+				Type:        outbound.PushTypeHistorySnapshot,
+				SessionID:   ev.SessionID,
+				History:     ev.History,
+				Generations: ev.Generations,
+			})
+		case services.HistoryEventTick:
+			push.Broadcast(outbound.PushMessage{
+				Type:              outbound.PushTypeHistoryTick,
+				GranularitySec:    ev.GranularitySec,
+				Buckets:           ev.Buckets,
+				BucketGenerations: ev.BucketGenerations,
+			})
+		case services.HistoryEventUpgrade:
+			p := ev.Priority
+			push.Broadcast(outbound.PushMessage{
+				Type:      outbound.PushTypeHistoryUpgrade,
+				SessionID: ev.SessionID,
+				Priority:  &p,
+			})
+		}
+	}
+}
+
+// historySnapshotProvider builds a connect-time hydration list for the
+// WebSocket hub. Each PushMessage carries the snapshot's per-granularity
+// tick generations alongside the bit-packed history so a client can dedupe
+// any tick that fires between subscribe and the first message dispatch.
+func historySnapshotProvider(ht *services.HistoryTracker) wshub.ConnectSnapshots {
+	return func() []outbound.PushMessage {
+		all := ht.EncodeAll()
+		out := make([]outbound.PushMessage, 0, len(all))
+		for sid, enc := range all {
+			out = append(out, outbound.PushMessage{
+				Type:        outbound.PushTypeHistorySnapshot,
+				SessionID:   sid,
+				History:     enc.History,
+				Generations: enc.Generations,
+			})
+		}
+		return out
+	}
 }
 
 // startHistoryTracker brings up the per-session rolling ring buffers used by
