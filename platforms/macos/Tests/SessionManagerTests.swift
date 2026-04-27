@@ -173,13 +173,16 @@ final class SessionManagerTests: XCTestCase {
     // MARK: - SessionMetrics.formattedCost
 
     private func makeMetrics(cost: Double?) -> SessionMetrics {
+        // totalTokens > 0 so `formattedCost`'s "no activity yet" guard
+        // (SessionState.swift:146) doesn't short-circuit to nil.
         SessionMetrics(
             elapsedSeconds: 0,
-            totalTokens: 0,
+            totalTokens: 1,
             modelName: "",
             contextWindow: nil,
             contextUtilization: 0,
             pressureLevel: "unknown",
+            contextWindowUnknown: nil,
             estimatedCostUSD: cost,
             lastAssistantText: nil,
             tasks: nil

@@ -154,6 +154,95 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertEqual(sut.apiGroups.first?.agents?.first?.metrics?.estimatedCostUSD, 1.00)
     }
 
+    // MARK: - removeFromApiGroups (regression for #244)
+
+    func testRemoveFromApiGroups_dropsTopLevelAgentAndEmptyGroup() {
+        // #244: when the daemon broadcasts session_deleted, apiGroups must
+        // shed the agent synchronously so the overlay's empty-state predicate
+        // (apiGroups.isEmpty && sessions.isEmpty) fires before the 0.5 s
+        // debounced rehydrate. Otherwise the menu bar goes idle but the
+        // overlay still shows the last session row.
+        let lone = makeSession(id: "live")
+        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [lone])]
+        sut.groupedSessionIds = ["live"]
+
+        sut.removeFromApiGroups(sessionId: "live")
+
+        XCTAssertTrue(sut.apiGroups.isEmpty,
+                      "agent-empty non-gas-town group must be dropped")
+        XCTAssertFalse(sut.groupedSessionIds.contains("live"))
+    }
+
+    func testRemoveFromApiGroups_dropsChild_keepsParent() {
+        let child = makeSession(id: "child")
+        let parent = makeSession(id: "parent", cost: 2.00, children: [child])
+        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [parent])]
+        sut.groupedSessionIds = ["parent", "child"]
+
+        sut.removeFromApiGroups(sessionId: "child")
+
+        let patchedParent = sut.apiGroups.first?.agents?.first { $0.id == "parent" }
+        XCTAssertNotNil(patchedParent, "parent must still be present after child removed")
+        XCTAssertNil(patchedParent?.children,
+                     "children should clear to nil when last child is removed")
+        XCTAssertEqual(patchedParent?.metrics?.estimatedCostUSD, 2.00,
+                       "parent metrics untouched")
+        XCTAssertFalse(sut.groupedSessionIds.contains("child"))
+        XCTAssertTrue(sut.groupedSessionIds.contains("parent"))
+    }
+
+    func testRemoveFromApiGroups_dropsParent_takesChildrenWithIt() {
+        // The daemon emits a separate session_deleted for each subagent, but
+        // if the parent removal lands first the agent entry (and its dangling
+        // children) must vanish — we don't want orphaned subagent rows.
+        let child = makeSession(id: "child")
+        let parent = makeSession(id: "parent", children: [child])
+        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [parent])]
+        sut.groupedSessionIds = ["parent", "child"]
+
+        sut.removeFromApiGroups(sessionId: "parent")
+
+        XCTAssertTrue(sut.apiGroups.isEmpty,
+                      "removing the only top-level agent must drop the group")
+        XCTAssertFalse(sut.groupedSessionIds.contains("parent"))
+    }
+
+    func testRemoveFromApiGroups_preservesGasTownGroupWhenEmpty() {
+        // Gas Town renders even with no rigs (menu-bar badge shows whenever
+        // the daemon is running), so the top-level gastown group must not
+        // be pruned even when its last session is removed.
+        let rigSession = makeSession(id: "rig-1")
+        let rigGroup = AgentGroup(name: "rig-a", agents: [rigSession])
+        let gasTown = AgentGroup(
+            name: "Gas Town",
+            type: "gastown",
+            agents: nil,
+            groups: [rigGroup]
+        )
+        sut.apiGroups = [gasTown]
+        sut.groupedSessionIds = ["rig-1"]
+
+        sut.removeFromApiGroups(sessionId: "rig-1")
+
+        XCTAssertEqual(sut.apiGroups.count, 1,
+                       "gas-town top-level group must survive empty rigs")
+        XCTAssertTrue(sut.apiGroups.first?.isGasTown ?? false)
+        XCTAssertEqual(sut.apiGroups.first?.groups?.count, 0,
+                       "empty rig group must be pruned")
+    }
+
+    func testRemoveFromApiGroups_isNoOpForUnknownId() {
+        let original = makeSession(id: "alive", cost: 1.00)
+        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [original])]
+        sut.groupedSessionIds = ["alive"]
+
+        sut.removeFromApiGroups(sessionId: "ghost")
+
+        XCTAssertEqual(sut.apiGroups.first?.agents?.map(\.id), ["alive"])
+        XCTAssertEqual(sut.apiGroups.first?.agents?.first?.metrics?.estimatedCostUSD, 1.00)
+        XCTAssertEqual(sut.groupedSessionIds, ["alive"])
+    }
+
     // MARK: - SessionState.withChildren
 
     func testWithChildren_preservesIdentityAndMetrics() {
@@ -198,6 +287,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
                 contextWindow: nil,
                 contextUtilization: 0,
                 pressureLevel: "safe",
+                contextWindowUnknown: nil,
                 estimatedCostUSD: cost,
                 lastAssistantText: nil,
                 tasks: nil

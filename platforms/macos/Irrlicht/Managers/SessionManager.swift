@@ -371,6 +371,7 @@ class SessionManager: ObservableObject {
                     sessionMap.removeValue(forKey: session.id)
                     sessionOrder.removeAll { $0 == session.id }
                     rebuildSessionsFromMap()
+                    removeFromApiGroups(sessionId: session.id)
                     scheduleRehydration()
                 }
             case "focus_requested":
@@ -446,6 +447,46 @@ class SessionManager: ObservableObject {
         if group.agents?.contains(where: { $0.id == sessionId }) == true { return true }
         if group.agents?.contains(where: { ($0.children ?? []).contains(where: { $0.id == sessionId }) }) == true { return true }
         return group.groups?.contains { groupContains($0, sessionId: sessionId) } ?? false
+    }
+
+    /// Synchronously prune a session from `apiGroups` so the overlay's view of
+    /// the world stays consistent with `sessionMap` on `session_deleted`. The
+    /// debounced rehydrate is the safety net; this is the primary path so the
+    /// 0.5 s window doesn't leave a stale row in the popover.
+    func removeFromApiGroups(sessionId: String) {
+        apiGroups = apiGroups.compactMap { pruneGroup($0, removing: sessionId) }
+        groupedSessionIds.remove(sessionId)
+    }
+
+    /// Drop the session from a group's agents/children/nested-groups, returning
+    /// `nil` when the resulting group is fully empty — except gas-town, which
+    /// renders even with no rigs (the menu bar shows the gas-town badge
+    /// regardless of session count).
+    func pruneGroup(_ group: AgentGroup, removing sessionId: String) -> AgentGroup? {
+        let prunedAgents: [SessionState]? = group.agents?.compactMap { agent in
+            if agent.id == sessionId { return nil }
+            if let kids = agent.children, kids.contains(where: { $0.id == sessionId }) {
+                let filtered = kids.filter { $0.id != sessionId }
+                return agent.withChildren(filtered.isEmpty ? nil : filtered)
+            }
+            return agent
+        }
+        let prunedGroups: [AgentGroup]? = group.groups?.compactMap { pruneGroup($0, removing: sessionId) }
+
+        let agentsCount = prunedAgents?.count ?? 0
+        let groupsCount = prunedGroups?.count ?? 0
+        if agentsCount == 0 && groupsCount == 0 && !group.isGasTown {
+            return nil
+        }
+
+        return AgentGroup(
+            name: group.name,
+            type: group.type,
+            status: group.status,
+            agents: prunedAgents,
+            groups: prunedGroups,
+            costs: group.costs
+        )
     }
 
     private var rehydrationTask: Task<Void, Never>?
