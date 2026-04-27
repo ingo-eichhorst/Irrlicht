@@ -159,28 +159,28 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 	pm.deleteWithChildren(state)
 }
 
-// startupRecycledPIDGrace is the minimum age before a session with a still-
-// live PID is considered for recycled-PID cleanup at startup. Conservative:
-// avoids clobbering a session whose live process happened to take a recycled
-// PID during a brief daemon restart. Paired with isStaleTranscript so a
-// session whose original process is genuinely still writing its transcript
-// is never deleted.
-const startupRecycledPIDGrace = 5 * time.Minute
-
-// CleanupZombies is a one-shot startup sweep that aggressively deletes any
-// persisted session whose process is provably gone. Unlike CheckPIDLiveness
-// (the periodic, conservative sweep that protects in-flight sessions),
-// CleanupZombies runs before the daemon serves any requests, so it can apply
-// stricter rules without risk of yanking a live session out from under its
-// process. Returns the number of sessions deleted.
+// CleanupZombies is a one-shot synchronous startup sweep that deletes any
+// persisted session whose process is provably gone. The same dead-PID and
+// PID=0-orphan predicates also run later via SeedPIDs in seedFromDisk, but
+// seedFromDisk executes inside the detector goroutine that starts after the
+// HTTP server is already serving — so without this synchronous pre-pass the
+// API briefly returns zombies inherited from the previous daemon run.
 //
-// Three predicates cover the failure modes that survive across daemon restarts:
-//  1. Known PID, syscall.Kill ESRCH                       → process exited.
-//  2. Known PID still alive, record older than the grace
-//     window AND transcript stale                         → recycled PID.
-//  3. Unknown PID (PID==0), not a subagent, transcript
-//     stale                                               → orphan that
-//                                                           never bound.
+// Two predicates, both narrower than CheckPIDLiveness so we never delete an
+// in-flight session (at startup nothing is in-flight, but the predicates
+// stay conservative anyway in case CleanupZombies is ever called later):
+//  1. Known PID and syscall.Kill returns ESRCH        → process exited.
+//  2. PID == 0, not a subagent, transcript file has
+//     not been modified within orphanTranscriptAge    → orphan that
+//                                                       never bound.
+//
+// Note: a "live PID, old record" case is intentionally NOT included. A
+// long-idle but still-running agent (user away from keyboard for >2 min)
+// would match that predicate and be wiped on the next daemon restart, even
+// though the process is fine. Detecting recycled PIDs reliably needs an
+// adapter-specific process-name cross-check, which is out of scope here.
+//
+// Returns the number of sessions deleted.
 func (pm *PIDManager) CleanupZombies() int {
 	states, err := pm.repo.ListAll()
 	if err != nil {
@@ -188,7 +188,7 @@ func (pm *PIDManager) CleanupZombies() int {
 	}
 	deleted := 0
 	for _, state := range states {
-		if !pm.isStartupZombie(state) {
+		if !isStartupZombie(state) {
 			continue
 		}
 		pm.log.LogInfo("startup-cleanup", state.SessionID,
@@ -196,29 +196,17 @@ func (pm *PIDManager) CleanupZombies() int {
 		pm.deleteWithChildren(state)
 		deleted++
 	}
-	if deleted > 0 {
-		pm.log.LogInfo("startup-cleanup", "",
-			fmt.Sprintf("startup: deleted %d zombie session(s)", deleted))
-	}
 	return deleted
 }
 
 // isStartupZombie returns true for sessions whose process is provably gone.
 // Mirrors the predicate documented on CleanupZombies.
-func (pm *PIDManager) isStartupZombie(state *session.SessionState) bool {
+func isStartupZombie(state *session.SessionState) bool {
 	if state == nil {
 		return false
 	}
 	if state.PID > 0 {
-		if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-			return true
-		}
-		// Live PID — could be the original process, or a recycled PID owned
-		// by an unrelated process. Treat as recycled only when both guards
-		// are met: the record is past the grace window AND the transcript
-		// hasn't moved within orphanTranscriptAge.
-		age := time.Since(time.Unix(state.UpdatedAt, 0))
-		return age > startupRecycledPIDGrace && isStaleTranscript(state.TranscriptPath)
+		return syscall.Kill(state.PID, 0) == syscall.ESRCH
 	}
 	// PID == 0: subagents share their parent's PID and are cleaned up via
 	// child-specific paths in CheckPIDLiveness, so exempt them here.

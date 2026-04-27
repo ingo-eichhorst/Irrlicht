@@ -107,9 +107,11 @@ func deadPIDForTest(t *testing.T) int {
 	return pid
 }
 
-// TestCleanupZombies covers all three predicates used by the startup sweep:
-// dead PID, recycled PID (alive but old + stale), PID=0 orphan, and the
-// happy-path exemptions (alive + fresh, child sessions).
+// TestCleanupZombies covers the two predicates plus the happy-path
+// exemptions: dead PID is deleted; live PID is kept (regardless of how old
+// the record is — see the comment on isStartupZombie about the deliberate
+// absence of recycled-PID detection); PID=0 + stale transcript + no parent
+// is deleted; PID=0 + fresh transcript is kept; PID=0 child is kept.
 func TestCleanupZombies(t *testing.T) {
 	tmp := t.TempDir()
 	freshTranscript := filepath.Join(tmp, "fresh.jsonl")
@@ -130,7 +132,7 @@ func TestCleanupZombies(t *testing.T) {
 		TranscriptPath: freshTranscript,
 		UpdatedAt:      time.Now().Unix(),
 	}
-	// 2. Known PID, alive, recent UpdatedAt → kept (could still be in-flight).
+	// 2. Known PID, alive, recent → kept.
 	repo.states["alive-fresh"] = &session.SessionState{
 		SessionID:      "alive-fresh",
 		Adapter:        "claude-code",
@@ -139,9 +141,13 @@ func TestCleanupZombies(t *testing.T) {
 		TranscriptPath: freshTranscript,
 		UpdatedAt:      time.Now().Unix(),
 	}
-	// 3. Known PID, alive, OLD UpdatedAt + stale transcript → deleted (recycled PID).
-	repo.states["recycled"] = &session.SessionState{
-		SessionID:      "recycled",
+	// 3. Known PID, alive, idle for a long time + stale transcript → KEPT.
+	// Documents the explicit non-goal: we never delete a session whose
+	// process is alive, because reliably distinguishing a recycled PID from
+	// a long-idle agent needs an adapter-specific process-name check that
+	// this sweep doesn't do.
+	repo.states["alive-idle"] = &session.SessionState{
+		SessionID:      "alive-idle",
 		Adapter:        "claude-code",
 		State:          session.StateWaiting,
 		PID:            livePID,
@@ -178,50 +184,21 @@ func TestCleanupZombies(t *testing.T) {
 	}
 
 	deleted := newPIDManagerForTest(repo).CleanupZombies()
-	if deleted != 3 {
-		t.Errorf("CleanupZombies returned %d, want 3 (dead-pid, recycled, orphan)", deleted)
+	if deleted != 2 {
+		t.Errorf("CleanupZombies returned %d, want 2 (dead-pid, orphan)", deleted)
 	}
 
-	wantDeleted := []string{"dead-pid", "recycled", "orphan"}
+	wantDeleted := []string{"dead-pid", "orphan"}
 	for _, id := range wantDeleted {
 		if repo.states[id] != nil {
 			t.Errorf("session %q should have been deleted but is still present", id)
 		}
 	}
-	wantKept := []string{"alive-fresh", "pid0-fresh", "child"}
+	wantKept := []string{"alive-fresh", "alive-idle", "pid0-fresh", "child"}
 	for _, id := range wantKept {
 		if repo.states[id] == nil {
 			t.Errorf("session %q should have been kept but is gone", id)
 		}
-	}
-}
-
-// TestCleanupZombies_RecycledPID_RecentUpdate_NotDeleted guards against the
-// PID-recycle false-positive: a session whose PID happens to be live and whose
-// UpdatedAt is recent (e.g. the daemon was just restarted seconds ago) must
-// not be wiped, because the original process may genuinely still own it.
-func TestCleanupZombies_RecycledPID_RecentUpdate_NotDeleted(t *testing.T) {
-	tmp := t.TempDir()
-	staleTranscript := filepath.Join(tmp, "stale.jsonl")
-	writeTranscript(t, staleTranscript, time.Now().Add(-10*time.Minute))
-
-	repo := newMockRepo()
-	// Live PID, stale transcript, but UpdatedAt is recent (within the 5m grace).
-	repo.states["just-restarted"] = &session.SessionState{
-		SessionID:      "just-restarted",
-		Adapter:        "claude-code",
-		State:          session.StateWorking,
-		PID:            os.Getpid(),
-		TranscriptPath: staleTranscript,
-		UpdatedAt:      time.Now().Add(-30 * time.Second).Unix(),
-	}
-
-	deleted := newPIDManagerForTest(repo).CleanupZombies()
-	if deleted != 0 {
-		t.Errorf("CleanupZombies returned %d, want 0 — live PID within grace must not be touched", deleted)
-	}
-	if repo.states["just-restarted"] == nil {
-		t.Fatal("session was deleted within grace window — recycled-PID guard failed")
 	}
 }
 
