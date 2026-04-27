@@ -278,13 +278,10 @@ fi
   -d "$STAGING/replaydata/agents" \
   "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
 
-# Aider's curated fixture is markdown (curate-lifecycle-fixture.sh keeps
-# the native extension); other adapters are JSONL.
-if [[ "$ADAPTER" == "aider" ]]; then
-  TRANSCRIPT_EXT="md"
-else
-  TRANSCRIPT_EXT="jsonl"
-fi
+# Adapter declares its curated transcript extension in capabilities.json
+# (default "jsonl"). curate-lifecycle-fixture.sh reads the same field.
+TRANSCRIPT_EXT="$(jq -r '.transcript_extension // "jsonl"' \
+  "$REPO_ROOT/replaydata/agents/$ADAPTER/capabilities.json")"
 STAGED_TRANSCRIPT="$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.$TRANSCRIPT_EXT"
 
 # --- Build replay reports -----------------------------------------------

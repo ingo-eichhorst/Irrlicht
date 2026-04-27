@@ -3,6 +3,7 @@
   "agent": "aider",
   "discovered_at": "2026-04-25",
   "source": "discovery_subagent",
+  "transcript_extension": "md",
   "features": {
     "headless_mode": true,
     "tui": true,
