@@ -9,7 +9,7 @@ enum MenuBarImageBuilder {
         if let combined = combinedImage(sessionManager: sessionManager, gasTownProvider: gasTownProvider) {
             return combined
         }
-        return idleFlameImage()
+        return OffFlameImage.menuBar
     }
 
     private static func combinedImage(
@@ -59,7 +59,4 @@ enum MenuBarImageBuilder {
         return combined
     }
 
-    private static func idleFlameImage() -> NSImage {
-        OffFlameImage.image(pointSize: 18, variant: .menuBar)
-    }
 }
