@@ -22,6 +22,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/fswatcher"
+	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
@@ -150,6 +151,7 @@ func main() {
 		codex.Config(),
 		pi.Config(),
 		aider.Config(),
+		opencode.Config(),
 	}
 
 	// Shared adapters for SessionDetector.
@@ -336,6 +338,12 @@ func main() {
 			scanner.WithSessionChecker(realSessionCheck)
 			watchers = append(watchers, scanner)
 		}
+
+		// OpenCode uses a SQLite database instead of JSONL files, so it needs
+		// its own dedicated watcher in addition to the process scanner above.
+		ocw := opencode.New(cfg.MaxSessionAge)
+		watchers = append(watchers, ocw)
+		watcherRoots = append(watcherRoots, fmt.Sprintf("%s-db (%s)", opencode.AdapterName, ocw.Root()))
 	}
 
 	pidDiscovers := agents.PIDDiscoverMap(agentCfgs)

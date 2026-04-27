@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "agent": "opencode",
+  "discovered_at": "2026-04-27",
+  "source": "manual_bootstrap",
+  "features": {
+    "headless_mode": false,
+    "tui": true,
+    "tool_calls": true,
+    "permission_hooks": true,
+    "subagents": true,
+    "session_id_assignment": false,
+    "settings_file_support": true,
+    "session_resume": true,
+    "mcp_servers": true,
+    "streaming_output": true,
+    "structured_output_jsonl": false,
+    "slash_commands": true,
+    "plan_mode": "unknown",
+    "git_integration": "unknown",
+    "multi_model_orchestration": true,
+    "repo_map": "unknown",
+    "voice_input": false,
+    "multimodal_input": true,
+    "gui_mode": true,
+    "watch_mode": false,
+    "linting_test_automation": "unknown",
+    "edit_strategy_selection": "unknown",
+    "context_curation": "unknown"
+  }
+}

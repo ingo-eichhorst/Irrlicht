@@ -13,6 +13,7 @@ package agents
 
 import (
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -27,6 +28,16 @@ type ParserFactory func() tailer.TranscriptParser
 // children. Claude Code, which tracks subagents inline in the parent
 // transcript's metrics, provides a non-nil counter.
 type SubagentCounter func(m *tailer.SessionMetrics) int
+
+// MetricsProvider is an optional adapter-supplied function that computes
+// session metrics directly from the agent's native storage format, bypassing
+// the JSONL-tailer path. Use this for agents (like OpenCode) that store state
+// in a database rather than append-only JSONL transcript files.
+//
+// transcriptPath is whatever the adapter set in agent.Event.TranscriptPath
+// (e.g. the SQLite database path). sessionID is the session UUID.
+// Returns nil, nil when the session has no data yet.
+type MetricsProvider func(transcriptPath, sessionID string) (*session.SessionMetrics, error)
 
 // Config is the registration record each inbound agent adapter exports.
 //
@@ -61,6 +72,17 @@ type Config struct {
 	// model doesn't fit them. Leave empty for fswatcher-friendly agents
 	// (claude-code, codex, pi).
 	TranscriptFilename string
+
+	// ComputeMetrics is an optional override for metric computation. When
+	// set, the metrics collector calls this function instead of the
+	// JSONL-tailer path for sessions belonging to this adapter. Use this
+	// for agents that store session data in a non-JSONL format (e.g.
+	// OpenCode's SQLite database). transcriptPath is whatever the adapter
+	// set in agent.Event.TranscriptPath; sessionID is the session UUID.
+	//
+	// Leave nil for all JSONL-transcript adapters (claudecode, codex, pi,
+	// aider) — they use the default tailer path.
+	ComputeMetrics MetricsProvider
 }
 
 // ParserMap collapses a slice of Configs into a name → factory map. Callers
@@ -79,6 +101,18 @@ func PIDDiscoverMap(cfgs []Config) map[string]agent.PIDDiscoverFunc {
 	m := make(map[string]agent.PIDDiscoverFunc, len(cfgs))
 	for _, c := range cfgs {
 		m[c.Name] = c.DiscoverPID
+	}
+	return m
+}
+
+// MetricsProviderMap collapses a slice of Configs into an adapter → provider
+// map. Only adapters with a non-nil ComputeMetrics are included.
+func MetricsProviderMap(cfgs []Config) map[string]MetricsProvider {
+	m := make(map[string]MetricsProvider)
+	for _, c := range cfgs {
+		if c.ComputeMetrics != nil {
+			m[c.Name] = c.ComputeMetrics
+		}
 	}
 	return m
 }

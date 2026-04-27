@@ -21,12 +21,16 @@ type lockedTailer struct {
 // Adapter implements ports/outbound.MetricsCollector using the transcript-tailer package.
 // It caches TranscriptTailer instances per path so that lastOffset-based
 // incremental reads work across calls, avoiding re-parsing the full 64KB tail.
+//
+// For adapters that register a MetricsProvider (e.g. OpenCode with its SQLite
+// database), ComputeMetrics delegates to that provider instead of the tailer.
 type Adapter struct {
-	mu          sync.Mutex // protects the tailers map only
-	tailers     map[string]*lockedTailer
-	parsers     map[string]agents.ParserFactory
-	subagents   map[string]agents.SubagentCounter
-	fallback    agents.ParserFactory // used for unknown adapter names
+	mu              sync.Mutex // protects the tailers map only
+	tailers         map[string]*lockedTailer
+	parsers         map[string]agents.ParserFactory
+	subagents       map[string]agents.SubagentCounter
+	metricsProviders map[string]agents.MetricsProvider
+	fallback        agents.ParserFactory // used for unknown adapter names
 }
 
 // New returns a new metrics Adapter configured from the given agent
@@ -36,21 +40,26 @@ type Adapter struct {
 func New(cfgs []agents.Config) *Adapter {
 	parsers := make(map[string]agents.ParserFactory, len(cfgs))
 	subs := make(map[string]agents.SubagentCounter, len(cfgs))
+	providers := make(map[string]agents.MetricsProvider)
 	var fallback agents.ParserFactory
 	for i, c := range cfgs {
 		parsers[c.Name] = c.NewParser
 		if c.CountOpenSubagents != nil {
 			subs[c.Name] = c.CountOpenSubagents
 		}
+		if c.ComputeMetrics != nil {
+			providers[c.Name] = c.ComputeMetrics
+		}
 		if i == 0 {
 			fallback = c.NewParser
 		}
 	}
 	return &Adapter{
-		tailers:   make(map[string]*lockedTailer),
-		parsers:   parsers,
-		subagents: subs,
-		fallback:  fallback,
+		tailers:          make(map[string]*lockedTailer),
+		parsers:          parsers,
+		subagents:        subs,
+		metricsProviders: providers,
+		fallback:         fallback,
 	}
 }
 
@@ -78,10 +87,21 @@ func (a *Adapter) countOpenSubagents(name string, m *tailer.SessionMetrics) int 
 // ComputeMetrics analyses the transcript at transcriptPath and returns session metrics.
 // The adapter parameter selects the correct transcript parser.
 // Returns (nil, nil) when the transcript doesn't exist yet or yields no data.
+//
+// For adapters with a registered MetricsProvider (e.g. OpenCode), the provider
+// is called directly. The transcriptPath for such adapters doubles as a session
+// discriminator: it is formatted as "<dbPath>?session=<sessionID>" so the
+// provider can extract both the database path and the session ID.
 func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.SessionMetrics, error) {
 	if transcriptPath == "" {
 		return nil, nil
 	}
+
+	// Delegate to adapter-specific provider when registered.
+	if provider, ok := a.metricsProviders[adapter]; ok {
+		return provider(transcriptPath, adapter)
+	}
+
 	a.mu.Lock()
 	lt, ok := a.tailers[transcriptPath]
 	if !ok {
