@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/ingo/projects/irrlicht/replaydata/agents/claudecode/scenarios/16-ask-user-question-issue-150/transcript.jsonl",
+  "source_transcript": "",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "claude-code",
