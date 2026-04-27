@@ -9,6 +9,19 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.3.10] — 2026-04-27
+
+### Fixed
+- **Sweep zombie sessions on startup** (#242) — Claude Code sessions no longer linger in the menu bar / UI after the underlying `claude` process has exited. The daemon now reaps stale entries on launch.
+- **Prune deleted sessions from `apiGroups` synchronously** (#244) — when a session is removed, the overlay now updates immediately instead of showing a stale row until the debounced rehydrate lands. Walks agents, child subagents, and nested groups; drops project groups that become fully empty (gas-town excepted, since it renders even with no rigs).
+
+### Changed
+- **Daemon: drop recycled-PID predicate from `CleanupZombies`** — simpler, more reliable startup-cleanup path. Groundwork for #242.
+
+### Tests
+- e2e regression test for the startup zombie sweep (#242).
+- 5 new `SessionManagerApiGroupsTests` cases covering top-level / child / parent removal, gas-town empty-rigs survival, and unknown-id no-op (#244).
+
 ## [0.3.9] — 2026-04-27
 
 ### Added
@@ -555,7 +568,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.9...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.10...HEAD
+[0.3.10]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.10
 [0.3.9]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.9
 [0.3.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.8
 [0.3.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.7
