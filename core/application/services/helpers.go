@@ -5,15 +5,22 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // isStaleTranscript reports whether the transcript file at path has not been
 // modified within orphanTranscriptAge. Returns false for empty paths or
 // stat errors (file missing → not stale, will be caught elsewhere).
+// Any query-string suffix (e.g. "?session=ses_xxx") is stripped before the
+// stat, allowing SQLite-backed adapters to embed session IDs in the path.
 func isStaleTranscript(path string) bool {
 	if path == "" {
 		return false
+	}
+	// Strip query string (e.g. "?session=ses_xxx") before calling os.Stat.
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
 	}
 	info, err := os.Stat(path)
 	if err != nil {

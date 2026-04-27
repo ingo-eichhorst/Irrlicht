@@ -31,9 +31,11 @@ import (
 //   - EventActivity    — new/updated part rows in a known session
 //   - EventRemoved     — a session row was deleted (or archived)
 //
-// TranscriptPath in all emitted events is set to the DB file path so the
-// daemon's tailer infrastructure can address the session. The session ID is
-// the OpenCode session UUID (ses_...).
+// TranscriptPath in all emitted events is set to the WAL file path
+// (opencode.db-wal) rather than the main DB file. This ensures
+// isStaleTranscript() checks the WAL — which is updated on every OpenCode
+// write — rather than the main DB file which is only updated on checkpoint.
+// The session ID is the OpenCode session UUID (ses_...).
 type Watcher struct {
 	dbPath  string        // absolute path to opencode.db
 	adapter string        // always "opencode"
@@ -45,16 +47,24 @@ type Watcher struct {
 	// per-session cursor: last part.time_updated seen, keyed by session ID.
 	mu      sync.Mutex
 	cursors map[string]int64 // session_id → last time_updated ms
+
+	// lastScan tracks when we last ran scanSessions so we can debounce
+	// the fsnotify feedback loop: opening the DB read-only touches the
+	// shared-memory file (.db-shm) which can trigger spurious Write events.
+	lastScan   time.Time
+	scanMu     sync.Mutex
+	minScanGap time.Duration // minimum time between scans
 }
 
 // New creates a Watcher for the OpenCode database relative to $HOME.
 func New(maxAge time.Duration) *Watcher {
 	home, _ := os.UserHomeDir()
 	return &Watcher{
-		dbPath:  filepath.Join(home, dbRelPath),
-		adapter: AdapterName,
-		maxAge:  maxAge,
-		cursors: make(map[string]int64),
+		dbPath:     filepath.Join(home, dbRelPath),
+		adapter:    AdapterName,
+		maxAge:     maxAge,
+		cursors:    make(map[string]int64),
+		minScanGap: 500 * time.Millisecond,
 	}
 }
 
@@ -62,10 +72,11 @@ func New(maxAge time.Duration) *Watcher {
 // Intended for tests.
 func NewWithDBPath(dbPath string, maxAge time.Duration) *Watcher {
 	return &Watcher{
-		dbPath:  dbPath,
-		adapter: AdapterName,
-		maxAge:  maxAge,
-		cursors: make(map[string]int64),
+		dbPath:     dbPath,
+		adapter:    AdapterName,
+		maxAge:     maxAge,
+		cursors:    make(map[string]int64),
+		minScanGap: 500 * time.Millisecond,
 	}
 }
 
@@ -86,7 +97,13 @@ func (w *Watcher) Watch(ctx context.Context) error {
 
 	// Initial scan: emit EventNewSession for existing sessions so the daemon
 	// picks up sessions that were created before it started.
-	w.scanSessions()
+	// Small delay to ensure detector.Run() has called Subscribe() before we
+	// broadcast the first batch of events — Watch() and detector.Run() start
+	// concurrently as goroutines and Subscribe() must win the race.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		w.scanSessions()
+	}()
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -148,25 +165,47 @@ func (w *Watcher) Unsubscribe(ch <-chan agent.Event) {
 }
 
 // scanSessions queries the DB for session and part updates, emitting events
-// to all subscribers. Errors opening the DB are silently ignored (the DB may
-// be locked by a WAL checkpoint).
+// to all subscribers. Debounced: calls closer together than minScanGap are
+// dropped to prevent a feedback loop where our own read-only DB open triggers
+// fsnotify Write events on the shared-memory file (.db-shm).
 func (w *Watcher) scanSessions() {
+	w.scanMu.Lock()
+	if time.Since(w.lastScan) < w.minScanGap {
+		w.scanMu.Unlock()
+		return
+	}
+	w.lastScan = time.Now()
+	w.scanMu.Unlock()
 	db, err := sql.Open("sqlite", w.dbPath+"?mode=ro&_journal=WAL&_timeout=500")
 	if err != nil {
 		return
 	}
 	defer db.Close()
 
-	// Query sessions updated since our last known cursor per session.
+	// Query sessions updated within maxAge (or all if maxAge=0).
 	// We use time_updated to find both new sessions and recently active ones.
-	rows, err := db.Query(`
-		SELECT id, directory, time_updated
-		FROM session
-		WHERE time_archived IS NULL
-		ORDER BY time_updated DESC
-		LIMIT 200
-	`)
-	if err != nil {
+	var rows *sql.Rows
+	var queryErr error
+	if w.maxAge > 0 {
+		cutoff := time.Now().Add(-w.maxAge).UnixMilli()
+		rows, queryErr = db.Query(`
+			SELECT id, directory, time_updated
+			FROM session
+			WHERE time_archived IS NULL
+			  AND time_updated >= ?
+			ORDER BY time_updated DESC
+			LIMIT 200
+		`, cutoff)
+	} else {
+		rows, queryErr = db.Query(`
+			SELECT id, directory, time_updated
+			FROM session
+			WHERE time_archived IS NULL
+			ORDER BY time_updated DESC
+			LIMIT 200
+		`)
+	}
+	if queryErr != nil {
 		return
 	}
 	defer rows.Close()
@@ -199,13 +238,20 @@ func (w *Watcher) scanSessions() {
 		cursor, known := w.cursors[s.id]
 		if !known {
 			// New session — emit EventNewSession.
+			// Encode the session ID into TranscriptPath so that the
+			// MetricsProvider (opencode/metrics.go ComputeMetrics) can
+			// extract it via parseTranscriptPath. The WAL suffix is
+			// preserved so isStaleTranscript() checks the WAL (updated on
+			// every OpenCode write) rather than the main DB (checkpoint-only).
+			walPath := w.dbPath + "-wal" + "?session=" + s.id
 			w.cursors[s.id] = 0
 			w.broadcast(agent.Event{
 				Type:           agent.EventNewSession,
 				Adapter:        w.adapter,
 				SessionID:      s.id,
 				ProjectDir:     filepath.Base(s.directory),
-				TranscriptPath: w.dbPath,
+				TranscriptPath: walPath,
+				CWD:            s.directory,
 			})
 		}
 
@@ -255,7 +301,8 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, lastCursor 
 			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     filepath.Base(directory),
-			TranscriptPath: w.dbPath,
+			TranscriptPath: w.dbPath + "-wal" + "?session=" + sessionID,
+			CWD:            directory,
 		})
 	}
 }

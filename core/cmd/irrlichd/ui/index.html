@@ -219,6 +219,63 @@
       width: 100%;
     }
 
+    .timeline-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+
+    .timeline-gran-label {
+      font-size: 9px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      margin-right: 2px;
+    }
+
+    .timeline-gran-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--muted);
+      font-size: 9px;
+      font-family: var(--font-mono);
+      padding: 1px 5px;
+      cursor: pointer;
+    }
+
+    .timeline-gran-btn:hover { border-color: var(--working); color: var(--text); }
+    .timeline-gran-btn.active { border-color: var(--working); color: var(--working); }
+
+    /* Per-row history bar (wide viewports only) */
+    .row-history {
+      width: 120px;
+      height: 6px;
+      flex-shrink: 0;
+      display: block;
+    }
+
+    /* View-mode toggle (narrow viewports) */
+    .view-mode-bar {
+      display: none;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .view-mode-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--muted);
+      font-size: 9px;
+      font-family: var(--font-mono);
+      padding: 2px 8px;
+      cursor: pointer;
+    }
+
+    .view-mode-btn:hover { border-color: var(--working); color: var(--text); }
+    .view-mode-btn.active { border-color: var(--working); color: var(--working); }
+
     /* --- Session list --- */
     .session-list {
       display: flex;
@@ -286,6 +343,7 @@
     .session-row {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 6px;
       padding: 3px 10px;
       font-family: var(--font-mono);
@@ -427,6 +485,30 @@
       white-space: nowrap;
       max-width: 300px;
       padding: 0 4px;
+    }
+
+    /* Task progress dots */
+    .row-tasks {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 3px;
+    }
+    .task-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      cursor: default;
+    }
+    .task-dot.task-pending    { background: transparent; border: 1.5px solid var(--working); }
+    .task-dot.task-in_progress { background: transparent; border: 1.5px solid var(--working); }
+    .task-dot.task-completed  { background: var(--ready); border: 1.5px solid var(--ready); }
+    .row-task-count {
+      font-size: 9px;
+      color: var(--muted);
+      margin-left: 2px;
+      font-family: var(--font-mono);
     }
 
     /* Pressure alert row */
@@ -674,6 +756,9 @@
       .row-branch { max-width: 80px; }
       .row-ctx-bar { width: 50px; }
       .row-model { max-width: 80px; }
+      /* History bar is hidden on narrow; toggle controls visibility via JS */
+      .row-history { display: none; }
+      .view-mode-bar { display: flex; }
     }
 
     @media (max-width: 480px) {
@@ -682,6 +767,13 @@
       .row-ctx-bar { display: none; }
       .row-ctx-pct { display: none; }
     }
+
+    /* History view mode: hide meta columns, show history bar */
+    body.view-history .row-ctx-bar { display: none !important; }
+    body.view-history .row-ctx-pct { display: none !important; }
+    body.view-history .row-cost    { display: none !important; }
+    body.view-history .row-model   { display: none !important; }
+    body.view-history .row-history { display: block !important; }
   </style>
 </head>
 <body>
@@ -717,7 +809,19 @@
 
     <div id="dashboard-panel" class="tab-panel active">
       <div id="gt-container" style="display:none" aria-label="Gas Town"></div>
-      <div id="timeline-wrap"><canvas id="timeline"></canvas></div>
+      <div class="view-mode-bar">
+        <button class="view-mode-btn active" data-mode="meta">Context/Cost/Model</button>
+        <button class="view-mode-btn" data-mode="history">History</button>
+      </div>
+      <div id="timeline-wrap">
+        <div class="timeline-controls">
+          <span class="timeline-gran-label">Interval:</span>
+          <button class="timeline-gran-btn active" data-gran="1">1s</button>
+          <button class="timeline-gran-btn" data-gran="10">10s</button>
+          <button class="timeline-gran-btn" data-gran="60">60s</button>
+        </div>
+        <canvas id="timeline"></canvas>
+      </div>
       <div id="empty-state">
         <div class="empty-dot"></div>
         <p>awaiting sessions</p>
@@ -753,10 +857,11 @@
     let currentTimeframe = localStorage.getItem('irrlicht_costTimeframe') || 'day';
     if (!COST_TIMEFRAMES.find(t => t.key === currentTimeframe)) currentTimeframe = 'day';
 
-    // --- Timeline history ---
-    const TIMELINE_MAX_TICKS = 150;
-    const TIMELINE_TICK_MS = 2000;
-    const timelineHistory = new Map(); // session_id -> {label, states: string[]}
+    // --- Timeline / history state (server-backed) ---
+    let timelineHistory = new Map(); // session_id -> {label, states: string[]}
+    let currentGranularity = parseInt(localStorage.getItem('irrlicht_granularity') || '1', 10);
+    if (![1, 10, 60].includes(currentGranularity)) currentGranularity = 1;
+    let currentBucketCount = 150;
 
     // --- SVG Icons (compact 12px) ---
     const svgIcons = {
@@ -1116,6 +1221,7 @@
     function createSessionRow(agent, isChild) {
       const el = document.createElement('div');
       el.className = 'session-row' + (isChild ? ' child' : '');
+      el.dataset.sessionId = agent.session_id;
       // Build inner structure
       el.innerHTML =
         '<span class="row-state-icon"></span>' +
@@ -1124,11 +1230,13 @@
         '<span class="row-sub-badge" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
         '<span class="row-question" style="display:none"></span>' +
+        '<div class="row-tasks" style="display:none"></div>' +
         '<span class="row-ctx-bar"><span class="row-ctx-fill"></span></span>' +
         '<span class="row-ctx-pct"></span>' +
         '<span class="row-cost"></span>' +
         '<span class="row-tool" style="display:none"></span>' +
         '<span class="row-spacer"></span>' +
+        '<canvas class="row-history"></canvas>' +
         '<span class="row-model"></span>' +
         '<span class="row-elapsed"></span>' +
         '<span class="row-id"></span>';
@@ -1182,6 +1290,23 @@
         }
       } else {
         questionEl.style.display = 'none';
+      }
+
+      // Task progress dots (Claude Code TaskCreate / TaskUpdate)
+      const tasksEl = el.querySelector('.row-tasks');
+      const tasks = metrics.tasks;
+      const allDone = tasks && tasks.length > 0 && tasks.every(t => t.status === 'completed');
+      if (tasks && tasks.length > 0 && !allDone) {
+        tasksEl.style.display = '';
+        const done = tasks.filter(t => t.status === 'completed').length;
+        const taskLabel = (t) => (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
+        const newHtml = tasks.map(t => {
+          const tip = taskLabel(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+          return '<span class="task-dot task-' + (t.status || 'pending') + '" title="' + tip + '"></span>';
+        }).join('') + '<span class="row-task-count">' + done + ' / ' + tasks.length + '</span>';
+        if (tasksEl.innerHTML !== newHtml) tasksEl.innerHTML = newHtml;
+      } else {
+        tasksEl.style.display = 'none';
       }
 
       // Context bar
@@ -1242,6 +1367,10 @@
       } else {
         toolEl.style.display = 'none';
       }
+
+      // Per-row history bar
+      const histCanvas = el.querySelector('.row-history');
+      paintRowHistory(histCanvas, agent.session_id);
     }
 
     // --- Render ---
@@ -1385,33 +1514,51 @@
       ready: '#34C759',
     };
 
-    function timelineTick() {
-      // Record current state of all sessions
-      const seen = new Set();
-      for (const [sid, entry] of sessionIndex) {
-        seen.add(sid);
-        let rec = timelineHistory.get(sid);
-        if (!rec) {
-          const label = (entry.agent.project_name || '').slice(0, 10) + ' ' + shortID(sid);
-          rec = {label, states: []};
-          timelineHistory.set(sid, rec);
-        }
-        rec.states.push(entry.agent.state || 'ready');
-        if (rec.states.length > TIMELINE_MAX_TICKS) rec.states.shift();
+    // paintRowHistory draws the per-row history mini-bar for a single session.
+    function paintRowHistory(canvas, sessionID) {
+      if (!canvas) return;
+      const rec = timelineHistory.get(sessionID);
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.offsetWidth || 120;
+      const h = canvas.offsetHeight || 6;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, w, h);
+      if (!rec || !rec.states.length) return;
+      const states = rec.states;
+      const colW = w / currentBucketCount;
+      for (let i = 0; i < states.length; i++) {
+        ctx.fillStyle = stateColors[states[i]] || '#1a2340';
+        ctx.fillRect(i * colW, 0, Math.max(colW, 0.5), h);
       }
-      // Mark unseen sessions with null
-      for (const [sid, rec] of timelineHistory) {
-        if (!seen.has(sid)) {
-          rec.states.push(null);
-          if (rec.states.length > TIMELINE_MAX_TICKS) rec.states.shift();
-        }
-      }
-      // Prune fully-null rows
-      for (const [sid, rec] of timelineHistory) {
-        if (rec.states.every(s => s === null)) timelineHistory.delete(sid);
-      }
+    }
 
-      renderTimeline();
+    // pollHistory fetches server-aggregated history and rebuilds timelineHistory.
+    function pollHistory() {
+      fetch('/api/v1/sessions/history?granularity=' + currentGranularity)
+        .then(r => r.json()).catch(() => null)
+        .then(resp => {
+          if (!resp) return;
+          if (resp.bucket_count) currentBucketCount = resp.bucket_count;
+          const newMap = new Map();
+          for (const [sid, states] of Object.entries(resp.sessions || {})) {
+            const entry = sessionIndex.get(sid);
+            const label = entry
+              ? (entry.agent.project_name || '').slice(0, 10) + ' ' + shortID(sid)
+              : shortID(sid);
+            newMap.set(sid, {label, states});
+          }
+          timelineHistory = newMap;
+          renderTimeline();
+          // Repaint per-row bars
+          for (const el of document.querySelectorAll('.session-row')) {
+            const canvas = el.querySelector('.row-history');
+            const sid = el.dataset.sessionId;
+            if (canvas && sid) paintRowHistory(canvas, sid);
+          }
+        });
     }
 
     function renderTimeline() {
@@ -1426,9 +1573,8 @@
 
       const dpr = window.devicePixelRatio || 1;
       const rows = Array.from(timelineHistory.values());
-      // Fixed-width canvas — empty slots stay on the LEFT so new ticks always
-      // land at the rightmost column and older buckets shift leftward.
-      const canvasW = TIMELINE_LABEL_W + TIMELINE_MAX_TICKS * TIMELINE_COL_W;
+      const maxTicks = rows.reduce((m, r) => Math.max(m, r.states.length), 0);
+      const canvasW = TIMELINE_LABEL_W + maxTicks * TIMELINE_COL_W;
       const canvasH = rows.length * (TIMELINE_ROW_H + TIMELINE_GAP);
 
       canvas.width = canvasW * dpr;
@@ -1458,9 +1604,8 @@
         ctx.textBaseline = 'middle';
         ctx.fillText(rec.label, 2, y + TIMELINE_ROW_H / 2);
 
-        // State columns — right-aligned within the fixed TIMELINE_MAX_TICKS
-        // window so every row's newest tick sits at the same right edge.
-        const startCol = TIMELINE_MAX_TICKS - rec.states.length;
+        // State columns — right-aligned so newest is at right
+        const startCol = maxTicks - rec.states.length;
         for (let t = 0; t < rec.states.length; t++) {
           const state = rec.states[t];
           if (!state) continue;
@@ -1471,7 +1616,14 @@
       }
     }
 
-    setInterval(timelineTick, TIMELINE_TICK_MS);
+    // Kick off server history polling — poll at granularity * 1000ms.
+    // Started by applyGranularity() below after DOM buttons are wired up.
+    let historyPollTimer = null;
+    function startHistoryPoll() {
+      if (historyPollTimer) clearInterval(historyPollTimer);
+      pollHistory();
+      historyPollTimer = setInterval(pollHistory, currentGranularity * 1000);
+    }
 
     // --- Initial load ---
     fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
@@ -1479,21 +1631,7 @@
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       rebuildIndex();
       render();
-      // Seed timeline from persisted daemon history before first live tick
-      fetch('/api/v1/sessions/history?granularity=1')
-        .then(r => r.json()).catch(() => null)
-        .then(hist => {
-          if (hist && hist.sessions) {
-            for (const [sid, states] of Object.entries(hist.sessions)) {
-              const entry = sessionIndex.get(sid);
-              const label = entry
-                ? (entry.agent.project_name || '').slice(0, 10) + ' ' + shortID(sid)
-                : shortID(sid);
-              timelineHistory.set(sid, { label, states: states.slice(-TIMELINE_MAX_TICKS) });
-            }
-          }
-          timelineTick(); // First live tick immediately after seeding
-        });
+      pollHistory();
     });
     // Periodic re-hydration so trailing-window costs (carried on each group
     // under `costs`) don't go stale between WebSocket deltas, which only
@@ -1587,6 +1725,37 @@
     }
 
     document.getElementById('raw-refresh').addEventListener('click', fetchRaw);
+
+    // --- Granularity toggle ---
+    function applyGranularity(g) {
+      currentGranularity = g;
+      localStorage.setItem('irrlicht_granularity', g);
+      document.querySelectorAll('.timeline-gran-btn').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.gran, 10) === g);
+      });
+      startHistoryPoll();
+    }
+
+    for (const btn of document.querySelectorAll('.timeline-gran-btn')) {
+      btn.addEventListener('click', function() {
+        applyGranularity(parseInt(this.dataset.gran, 10));
+      });
+    }
+
+    // Restore saved granularity on load
+    applyGranularity(currentGranularity);
+
+    // --- View-mode toggle (narrow viewports) ---
+    for (const btn of document.querySelectorAll('.view-mode-btn')) {
+      btn.addEventListener('click', function() {
+        const mode = this.dataset.mode;
+        document.querySelectorAll('.view-mode-btn').forEach(b => b.classList.toggle('active', b === this));
+        document.body.classList.toggle('view-history', mode === 'history');
+        // Repaint row bars immediately so there's no flash of empty canvases
+        // when switching to history mode (offsetWidth is now non-zero).
+        if (mode === 'history') pollHistory();
+      });
+    }
 
     function fetchRaw() {
       const out = document.getElementById('raw-output');

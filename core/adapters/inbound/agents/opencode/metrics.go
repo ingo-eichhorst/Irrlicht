@@ -38,14 +38,20 @@ func ComputeMetrics(transcriptPath, sessionID string) (*session.SessionMetrics, 
 
 // parseTranscriptPath extracts the database path and session ID from a
 // transcriptPath string. The format is either:
-//   - "<dbPath>"                  — sessionID is passed as a separate arg
-//   - "<dbPath>?session=<id>"     — session ID is embedded in the path
+//   - "<dbPath>"                         — sessionID is passed as a separate arg
+//   - "<dbPath>-wal"                     — WAL path used by watcher; strip suffix
+//   - "<dbPath>-wal?session=<id>"        — session ID embedded; strip WAL suffix
+//   - "<dbPath>?session=<id>"            — session ID embedded, no WAL suffix
 func parseTranscriptPath(transcriptPath, sessionID string) (dbPath, sid string) {
 	if strings.Contains(transcriptPath, "?session=") {
 		parts := strings.SplitN(transcriptPath, "?session=", 2)
-		return parts[0], parts[1]
+		// Strip any -wal suffix from the DB path component.
+		dbPath = strings.TrimSuffix(parts[0], "-wal")
+		return dbPath, parts[1]
 	}
-	return transcriptPath, sessionID
+	// Strip -wal suffix if present (watcher uses WAL path for staleness check).
+	dbPath = strings.TrimSuffix(transcriptPath, "-wal")
+	return dbPath, sessionID
 }
 
 // querySessionMetrics fetches and aggregates part rows for a session.
