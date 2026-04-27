@@ -202,8 +202,6 @@ func buildMatrix() (*matrixResp, error) {
 }
 
 // deriveCell mirrors .claude/skills/ir:onboard-agent/skill.md step 2.
-// transcriptExt is the adapter's curated-fixture extension from
-// capabilities.json (e.g. "jsonl", "md").
 func deriveCell(adapter string, s scenario, caps map[string]any, transcriptExt string) cell {
 	for _, req := range s.Requires {
 		v, ok := caps[req]

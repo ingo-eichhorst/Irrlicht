@@ -279,7 +279,7 @@ fi
   "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$SCENARIO"
 
 # Adapter declares its curated transcript extension in capabilities.json
-# (default "jsonl"). curate-lifecycle-fixture.sh reads the same field.
+# (default "jsonl").
 TRANSCRIPT_EXT="$(jq -r '.transcript_extension // "jsonl"' \
   "$REPO_ROOT/replaydata/agents/$ADAPTER/capabilities.json")"
 STAGED_TRANSCRIPT="$STAGING/replaydata/agents/$ADAPTER/scenarios/$SCENARIO/transcript.$TRANSCRIPT_EXT"
