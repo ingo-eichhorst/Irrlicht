@@ -7,7 +7,7 @@
 - 🟣 **working** — the agent is thinking, building, streaming
 - 🟠 **waiting** — it needs you; the story pauses for your judgment
 - 🟢 **ready** — the path ahead is clear, ready for new work
-- ✦ **no sessions** — clean slate
+- **no sessions** — clean slate, dimmed grey flame
 
 The brand is built entirely around that **three-light vocabulary**. Purple, orange, green — everywhere, always in that semantic role.
 
@@ -239,7 +239,7 @@ Irrlicht is **deliberately icon-light**. Most of what looks like iconography is 
 
 ### 1. The Light System (primary visual vocabulary)
 
-- 🟣 🟠 🟢 ✦ — colored dots (SVG or `<span>` with border-radius:50%) in the three light colors, plus a four-pointed sparkle ✦ for "no sessions."
+- 🟣 🟠 🟢 — colored dots (SVG or `<span>` with border-radius:50%) in the three light colors, plus a dimmed grey flame for "no sessions" (see `assets/favicon-off.svg`).
 - These are the brand. They appear in the menu bar, web dashboard header, session rows, marketing hero, and the favicon.
 - In the macOS menu bar, groups of ≤3 sessions overlap as dots; ≥4 become a pie chart with a number label — see `MenuBarStatusRenderer.swift`.
 
