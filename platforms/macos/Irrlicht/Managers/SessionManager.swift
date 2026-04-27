@@ -27,8 +27,14 @@ class SessionManager: ObservableObject {
     @Published var connectionState: ConnectionState = .disconnected
     @Published var lastError: String?
     @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
-    @Published var stateHistory: [String: [String]] = [:]  // session_id → oldest→newest state strings
-    @Published var historyBucketCount: Int = 150
+    @Published var stateHistory: [String: [String]] = [:]  // session_id → oldest→newest state strings (active granularity)
+    @Published var historyBucketCount: Int = 60          // matches HistoryBucketCount on the daemon
+
+    /// All three granularities held in parallel so toggling 1s/10s/60s is
+    /// instant — the WebSocket streams every granularity continuously, the
+    /// view just picks which dict to mirror into `stateHistory`.
+    private var historyByGranularity: [Int: [String: [String]]] = [1: [:], 10: [:], 60: [:]]
+    private var currentHistoryGranularitySec: Int = 1
 
     /// Group names the user has collapsed. Lifted out of GroupView's local
     /// state so (a) SessionListView's size estimator can skip collapsed
@@ -40,8 +46,6 @@ class SessionManager: ObservableObject {
     /// WebSocket deltas only carry individual session updates.
     private var projectCostsTimer: Timer?
     private let projectCostsRefreshInterval: TimeInterval = 30.0
-
-    private var historyTimer: Timer?
 
     private let instancesPath: URL
     private let orderFilePath: URL
@@ -260,39 +264,108 @@ class SessionManager: ObservableObject {
         }
     }
 
-    /// Starts periodic history polling at the specified granularity (1, 10, or 60 s).
-    func startHistoryPolling(granularitySec: Int) {
-        historyTimer?.invalidate()
-        let interval = TimeInterval(max(1, granularitySec))
-        Task { @MainActor [weak self] in await self?.fetchHistory(granularitySec: granularitySec) }
-        historyTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.fetchHistory(granularitySec: granularitySec)
-            }
+    /// Selects which granularity the history bar renders (1, 10, or 60 s).
+    /// All three streams arrive continuously over the WebSocket, so this is a
+    /// constant-time mirror — no polling kick-off, no cancellation needed.
+    func setHistoryGranularity(_ granularitySec: Int) {
+        guard [1, 10, 60].contains(granularitySec) else { return }
+        currentHistoryGranularitySec = granularitySec
+        refreshActiveStateHistory()
+    }
+
+    private func refreshActiveStateHistory() {
+        let active = historyByGranularity[currentHistoryGranularitySec] ?? [:]
+        // Strip leading no-data buckets so HistoryBarView's right-anchored
+        // rendering leaves the front of the bar empty (matches pre-WS shape).
+        stateHistory = active.mapValues { trimLeadingNoData($0) }
+    }
+
+    private func trimLeadingNoData(_ buckets: [String]) -> [String] {
+        var i = 0
+        while i < buckets.count && buckets[i].isEmpty { i += 1 }
+        return Array(buckets[i...])
+    }
+
+    /// Maps the wire 2-bit priority code back to its state name.
+    /// `""` represents no-data; HistoryBarView treats it as a blank slot.
+    private func historyPriorityToState(_ p: Int8) -> String {
+        switch p {
+        case 0: return "ready"
+        case 1: return "working"
+        case 2: return "waiting"
+        default: return ""
         }
     }
 
-    func stopHistoryPolling() {
-        historyTimer?.invalidate()
-        historyTimer = nil
+    private func historyPriorityForState(_ s: String) -> Int {
+        switch s {
+        case "waiting": return 2
+        case "working": return 1
+        case "ready":   return 0
+        default:        return -1 // no-data — strictly less than any real priority
+        }
     }
 
-    private func fetchHistory(granularitySec: Int) async {
-        guard let url = URL(string: "http://localhost:7837/api/v1/sessions/history?granularity=\(granularitySec)") else { return }
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
-            struct HistoryResponse: Decodable {
-                let sessions: [String: [String]]
-                let bucketCount: Int
+    /// Decodes a 20-char base64 (15 bytes, MSB-first 2-bit codes) into a
+    /// 60-element oldest→newest state-name array. Returns nil on malformed
+    /// input so the caller can drop the message rather than corrupt the ring.
+    private func decodeHistoryBuckets(_ encoded: String) -> [String]? {
+        guard let raw = Data(base64Encoded: encoded), raw.count == 15 else { return nil }
+        var out: [String] = []
+        out.reserveCapacity(60)
+        for byte in raw {
+            for shift in stride(from: 6, through: 0, by: -2) {
+                let code = Int8((byte >> UInt8(shift)) & 0x3)
+                out.append(historyPriorityToState(code))
             }
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let decoded = try decoder.decode(HistoryResponse.self, from: data)
-            stateHistory = decoded.sessions
-            historyBucketCount = decoded.bucketCount
-        } catch {
-            // Non-fatal: history is optional.
+        }
+        return out
+    }
+
+    private func applyHistorySnapshot(sessionID: String, history: [String: String]) {
+        for (granKey, b64) in history {
+            guard let gran = Int(granKey),
+                  [1, 10, 60].contains(gran),
+                  let buckets = decodeHistoryBuckets(b64) else { continue }
+            historyByGranularity[gran, default: [:]][sessionID] = buckets
+        }
+        refreshActiveStateHistory()
+    }
+
+    private func applyHistoryTick(granularitySec: Int, buckets: [String: Int8]) {
+        guard [1, 10, 60].contains(granularitySec) else { return }
+        var dict = historyByGranularity[granularitySec] ?? [:]
+        for (sid, prio) in buckets {
+            var arr = dict[sid] ?? Array(repeating: "", count: 60)
+            if arr.count == 60 { arr.removeFirst() }
+            arr.append(historyPriorityToState(prio))
+            // Pad to 60 if a previously-unknown session ticks before its snapshot.
+            while arr.count < 60 { arr.insert("", at: 0) }
+            dict[sid] = arr
+        }
+        historyByGranularity[granularitySec] = dict
+        if granularitySec == currentHistoryGranularitySec {
+            refreshActiveStateHistory()
+        }
+    }
+
+    private func applyHistoryUpgrade(sessionID: String, priority: Int8) {
+        let newState = historyPriorityToState(priority)
+        let newPrio = historyPriorityForState(newState)
+        var changedActive = false
+        for gran in [1, 10, 60] {
+            var dict = historyByGranularity[gran] ?? [:]
+            guard var arr = dict[sessionID], !arr.isEmpty else { continue }
+            let lastPrio = historyPriorityForState(arr[arr.count - 1])
+            if newPrio > lastPrio {
+                arr[arr.count - 1] = newState
+                dict[sessionID] = arr
+                historyByGranularity[gran] = dict
+                if gran == currentHistoryGranularitySec { changedActive = true }
+            }
+        }
+        if changedActive {
+            refreshActiveStateHistory()
         }
     }
 
@@ -333,6 +406,23 @@ class SessionManager: ObservableObject {
     private struct WsEnvelope: Decodable {
         let type: String
         let session: SessionState?
+
+        // History-message fields (snapshot/tick/upgrade).
+        let sessionID: String?
+        let history: [String: String]?
+        let granularitySec: Int?
+        let buckets: [String: Int8]?
+        let priority: Int8?
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case session
+            case sessionID      = "session_id"
+            case history
+            case granularitySec = "granularity_sec"
+            case buckets
+            case priority
+        }
     }
 
     private func handleWsMessage(_ text: String) {
@@ -383,6 +473,18 @@ class SessionManager: ObservableObject {
                     DispatchQueue.main.async {
                         SessionLauncher.jump(session)
                     }
+                }
+            case "history_snapshot":
+                if let sid = envelope.sessionID, let hist = envelope.history {
+                    applyHistorySnapshot(sessionID: sid, history: hist)
+                }
+            case "history_tick":
+                if let gran = envelope.granularitySec, let bks = envelope.buckets {
+                    applyHistoryTick(granularitySec: gran, buckets: bks)
+                }
+            case "history_upgrade":
+                if let sid = envelope.sessionID, let prio = envelope.priority {
+                    applyHistoryUpgrade(sessionID: sid, priority: prio)
                 }
             default:
                 break

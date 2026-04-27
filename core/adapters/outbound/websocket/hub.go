@@ -46,16 +46,21 @@ func loopbackCheckOrigin(r *http.Request) bool {
 
 // hub manages WebSocket connections and fans out session state updates.
 type hub struct {
-	push     outbound.PushBroadcaster
-	upgrader websocket.Upgrader
+	push           outbound.PushBroadcaster
+	encodeHistory  func() map[string]map[string]string
+	upgrader       websocket.Upgrader
 }
 
 // NewHub creates a hub backed by the provided PushBroadcaster. The upgrader
-// enforces a loopback-only origin policy.
-func NewHub(push outbound.PushBroadcaster) *hub {
+// enforces a loopback-only origin policy. encodeHistory, when non-nil, is
+// called on each new connection to ship one history_snapshot per session
+// before the live event stream takes over (so freshly-attached clients see
+// the full 60-bucket history without polling).
+func NewHub(push outbound.PushBroadcaster, encodeHistory func() map[string]map[string]string) *hub {
 	return &hub{
-		push:     push,
-		upgrader: websocket.Upgrader{CheckOrigin: loopbackCheckOrigin},
+		push:          push,
+		encodeHistory: encodeHistory,
+		upgrader:      websocket.Upgrader{CheckOrigin: loopbackCheckOrigin},
 	}
 }
 
@@ -71,6 +76,27 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	ch := h.push.Subscribe()
 	defer h.push.Unsubscribe(ch)
+
+	// Hydrate the new client with one history_snapshot per known session
+	// before the live stream starts. Subscribe-then-snapshot order ensures
+	// no tick or upgrade emitted between these two operations is lost.
+	if h.encodeHistory != nil {
+		for sid, hist := range h.encodeHistory() {
+			snap := outbound.PushMessage{
+				Type:      outbound.PushTypeHistorySnapshot,
+				SessionID: sid,
+				History:   hist,
+			}
+			data, err := json.Marshal(snap)
+			if err != nil {
+				continue
+			}
+			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+		}
+	}
 
 	// Set initial read deadline; reset on each pong.
 	conn.SetReadDeadline(time.Now().Add(pongTimeout))

@@ -34,6 +34,13 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 	d.refreshSubagentSummary(state)
 	d.broadcaster.Broadcast(outbound.PushMessage{Type: msgType, Session: state})
 
+	// Newly-created sessions get an immediate history_snapshot so any
+	// connected client can hydrate the row's history bars before the first
+	// tick or transition rolls in.
+	if msgType == outbound.PushTypeCreated && d.historyTracker != nil {
+		d.historyTracker.EmitSnapshot(state.SessionID)
+	}
+
 	if state.ParentSessionID == "" {
 		return
 	}

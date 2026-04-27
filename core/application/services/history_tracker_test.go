@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -214,6 +215,261 @@ func TestHistoryTracker_NoSaveWithoutDir(t *testing.T) {
 	ht := NewHistoryTracker()
 	ht.OnTransition("s", "working", epoch)
 	ht.save() // must not panic, must not create any file
+}
+
+// decodeHistoryString unpacks a 20-char base64 string back into 60 priority
+// codes. Mirrors the on-the-wire format the Swift client decodes.
+func decodeHistoryString(t *testing.T, s string) [HistoryBucketCount]uint8 {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	if len(raw) != historyEncodedBytes {
+		t.Fatalf("decoded length = %d, want %d", len(raw), historyEncodedBytes)
+	}
+	var out [HistoryBucketCount]uint8
+	for i := 0; i < HistoryBucketCount; i++ {
+		shift := uint((3 - i%4) * 2)
+		out[i] = (raw[i/4] >> shift) & 0x3
+	}
+	return out
+}
+
+func TestHistoryTracker_EncodeUnknownSession(t *testing.T) {
+	ht := NewHistoryTracker()
+	if _, ok := ht.Encode("nope"); ok {
+		t.Error("Encode for unknown session should return ok=false")
+	}
+}
+
+func TestHistoryTracker_EncodeEmptyBuffer(t *testing.T) {
+	ht := NewHistoryTracker()
+	sid := "empty"
+	// Session exists with all-no-data buffers (no transitions, no ticks yet).
+	ht.sessions[sid] = newSessionBuffers()
+
+	enc, ok := ht.Encode(sid)
+	if !ok {
+		t.Fatal("Encode missing for known empty session")
+	}
+	for _, g := range []string{"1", "10", "60"} {
+		s, ok := enc[g]
+		if !ok {
+			t.Fatalf("missing granularity %s", g)
+		}
+		if len(s) != 20 {
+			t.Errorf("granularity %s: encoded length = %d, want 20", g, len(s))
+		}
+		buckets := decodeHistoryString(t, s)
+		for i, p := range buckets {
+			if p != statePriorityNoData {
+				t.Errorf("granularity %s: bucket[%d] = %d, want %d (no-data)", g, i, p, statePriorityNoData)
+			}
+		}
+	}
+}
+
+func TestHistoryTracker_EncodePartialFillPadsFront(t *testing.T) {
+	ht := NewHistoryTracker()
+	sid := "partial"
+	// Three sealed buckets: ready, working, waiting (matches
+	// TestHistoryTracker_SnapshotOldestNewest setup).
+	for _, s := range []string{"ready", "working", "waiting"} {
+		ht.OnTransition(sid, s, epoch)
+		ht.tick()
+	}
+
+	enc, ok := ht.Encode(sid)
+	if !ok {
+		t.Fatal("Encode failed")
+	}
+	buckets := decodeHistoryString(t, enc["1"])
+
+	// Last 4 buckets: ready, working, waiting, waiting (carry-forward open
+	// bucket inherits "waiting"). Front 56 are padding (no-data).
+	for i := 0; i < HistoryBucketCount-4; i++ {
+		if buckets[i] != statePriorityNoData {
+			t.Errorf("front padding[%d] = %d, want no-data", i, buckets[i])
+		}
+	}
+	want := []uint8{statePriorityReady, statePriorityWorking, statePriorityWaiting, statePriorityWaiting}
+	for i, w := range want {
+		if got := buckets[HistoryBucketCount-4+i]; got != w {
+			t.Errorf("buckets[%d] = %d, want %d", HistoryBucketCount-4+i, got, w)
+		}
+	}
+}
+
+func TestHistoryTracker_EncodeFullRing(t *testing.T) {
+	ht := NewHistoryTracker()
+	sid := "full"
+	// Fill all 60 buckets with "working".
+	ht.OnTransition(sid, "working", epoch)
+	for i := 0; i < HistoryBucketCount; i++ {
+		ht.tick()
+	}
+
+	enc, ok := ht.Encode(sid)
+	if !ok {
+		t.Fatal("Encode failed")
+	}
+	buckets := decodeHistoryString(t, enc["1"])
+	for i, p := range buckets {
+		if p != statePriorityWorking {
+			t.Errorf("buckets[%d] = %d, want %d", i, p, statePriorityWorking)
+		}
+	}
+}
+
+func TestHistoryTracker_EncodeAll(t *testing.T) {
+	ht := NewHistoryTracker()
+	ht.OnTransition("a", "working", epoch)
+	ht.OnTransition("b", "waiting", epoch)
+
+	all := ht.EncodeAll()
+	if len(all) != 2 {
+		t.Fatalf("len(EncodeAll) = %d, want 2", len(all))
+	}
+	for sid, enc := range all {
+		if len(enc) != 3 {
+			t.Errorf("session %q: granularity count = %d, want 3", sid, len(enc))
+		}
+		for _, g := range []string{"1", "10", "60"} {
+			if _, ok := enc[g]; !ok {
+				t.Errorf("session %q: missing granularity %s", sid, g)
+			}
+		}
+	}
+}
+
+func TestHistoryTracker_EncodeBitOrder(t *testing.T) {
+	// Hand-craft a buffer with 4 sealed buckets {ready, working, waiting, no-data}
+	// so we can assert MSB-first byte layout of the trailing byte that holds them.
+	ht := NewHistoryTracker()
+	sid := "bitorder"
+	ht.sessions[sid] = newSessionBuffers()
+	rb := ht.sessions[sid].bufs[0]
+	for i := range rb.buckets {
+		rb.buckets[i] = -1
+	}
+	rb.buckets[0] = 0 // ready
+	rb.buckets[1] = 1 // working
+	rb.buckets[2] = 2 // waiting
+	rb.buckets[3] = -1
+	rb.head = 4
+	rb.size = 4
+	rb.lastState = "waiting"
+
+	enc, ok := ht.Encode(sid)
+	if !ok {
+		t.Fatal("Encode failed")
+	}
+	raw, _ := base64.StdEncoding.DecodeString(enc["1"])
+	// encodePriorities front-pads, so these 4 buckets land at output indices
+	// 56..59 = byte 14. MSB-first: (0<<6)|(1<<4)|(2<<2)|(3) = 0b00_01_10_11 = 0x1B.
+	const want = byte(0x1B)
+	if raw[14] != want {
+		t.Errorf("trailing byte = %#x, want %#x", raw[14], want)
+	}
+	// Front padding bytes must be all-no-data: 4 × 0b11 = 0xFF.
+	for i := 0; i < 14; i++ {
+		if raw[i] != 0xFF {
+			t.Errorf("padding byte[%d] = %#x, want 0xFF", i, raw[i])
+		}
+	}
+}
+
+func TestHistoryTracker_EmitOnTransitionAndTick(t *testing.T) {
+	ht := NewHistoryTracker()
+	var events []HistoryEvent
+	ht.SetEmitFunc(func(ev HistoryEvent) { events = append(events, ev) })
+
+	ht.OnTransition("a", "working", epoch)
+	ht.OnTransition("b", "waiting", epoch)
+
+	// Two upgrades emitted, in order.
+	if len(events) != 2 {
+		t.Fatalf("len(events) after transitions = %d, want 2", len(events))
+	}
+	for i, ev := range events {
+		if ev.Kind != HistoryEventUpgrade {
+			t.Errorf("events[%d].Kind = %d, want Upgrade", i, ev.Kind)
+		}
+	}
+	if events[0].SessionID != "a" || events[0].Priority != statePriorityWorking {
+		t.Errorf("events[0] = %+v", events[0])
+	}
+	if events[1].SessionID != "b" || events[1].Priority != statePriorityWaiting {
+		t.Errorf("events[1] = %+v", events[1])
+	}
+
+	events = nil
+	ht.tick() // 1s ring rolls; 10s/60s do not.
+	if len(events) != 1 {
+		t.Fatalf("len(events) after tick = %d, want 1", len(events))
+	}
+	if events[0].Kind != HistoryEventTick || events[0].GranularitySec != 1 {
+		t.Errorf("events[0] = %+v, want Tick @ 1s", events[0])
+	}
+	if events[0].Buckets["a"] != statePriorityWorking || events[0].Buckets["b"] != statePriorityWaiting {
+		t.Errorf("Buckets = %+v", events[0].Buckets)
+	}
+}
+
+func TestHistoryTracker_TickEmitsAllGranularitiesAt60s(t *testing.T) {
+	ht := NewHistoryTracker()
+	var events []HistoryEvent
+	ht.SetEmitFunc(func(ev HistoryEvent) { events = append(events, ev) })
+	ht.OnTransition("s", "working", epoch)
+	events = nil
+
+	// 60 ticks → 1s rolls 60×, 10s rolls 6×, 60s rolls 1×.
+	for i := 0; i < 60; i++ {
+		ht.tick()
+	}
+	var per [3]int
+	for _, ev := range events {
+		if ev.Kind != HistoryEventTick {
+			continue
+		}
+		per[granularityIndex(ev.GranularitySec)]++
+	}
+	if per[0] != 60 || per[1] != 6 || per[2] != 1 {
+		t.Errorf("tick counts (1s,10s,60s) = %v, want (60,6,1)", per)
+	}
+}
+
+func TestHistoryTracker_EmitSnapshot(t *testing.T) {
+	ht := NewHistoryTracker()
+	var events []HistoryEvent
+	ht.SetEmitFunc(func(ev HistoryEvent) { events = append(events, ev) })
+	ht.OnTransition("s", "working", epoch)
+	events = nil
+
+	ht.EmitSnapshot("s")
+	if len(events) != 1 || events[0].Kind != HistoryEventSnapshot {
+		t.Fatalf("expected one Snapshot event, got %+v", events)
+	}
+	if events[0].SessionID != "s" || len(events[0].History) != 3 {
+		t.Errorf("snapshot event = %+v", events[0])
+	}
+
+	// EmitSnapshot for an unknown session lazy-creates an empty entry and
+	// emits an all-no-data snapshot. That's intentional: session_created
+	// fires before the first state transition, but clients still need a
+	// hydration message so the row's history bar renders.
+	events = nil
+	ht.EmitSnapshot("fresh")
+	if len(events) != 1 || events[0].SessionID != "fresh" || len(events[0].History) != 3 {
+		t.Errorf("unknown-session snapshot = %+v", events)
+	}
+	buckets := decodeHistoryString(t, events[0].History["1"])
+	for i, p := range buckets {
+		if p != statePriorityNoData {
+			t.Errorf("fresh snapshot bucket[%d] = %d, want no-data", i, p)
+		}
+	}
 }
 
 func TestValidGranularity(t *testing.T) {
