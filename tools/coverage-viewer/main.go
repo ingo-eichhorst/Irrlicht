@@ -169,19 +169,21 @@ func buildMatrix() (*matrixResp, error) {
 	}
 
 	caps := make(map[string]map[string]any)
+	exts := make(map[string]string)
 	for _, a := range adapters {
-		c, err := loadCapabilities(a)
+		c, ext, err := loadCapabilities(a)
 		if err != nil {
 			return nil, fmt.Errorf("caps %s: %w", a, err)
 		}
 		caps[a] = c
+		exts[a] = ext
 	}
 
 	cells := make(map[string]map[string]cell, len(adapters))
 	for _, a := range adapters {
 		cells[a] = make(map[string]cell, len(scenarios))
 		for _, s := range scenarios {
-			cells[a][s.Name] = deriveCell(a, s, caps[a])
+			cells[a][s.Name] = deriveCell(a, s, caps[a], exts[a])
 		}
 	}
 
@@ -200,7 +202,7 @@ func buildMatrix() (*matrixResp, error) {
 }
 
 // deriveCell mirrors .claude/skills/ir:onboard-agent/skill.md step 2.
-func deriveCell(adapter string, s scenario, caps map[string]any) cell {
+func deriveCell(adapter string, s scenario, caps map[string]any, transcriptExt string) cell {
 	for _, req := range s.Requires {
 		v, ok := caps[req]
 		if !ok || v != true { // both false and "unknown" block
@@ -210,13 +212,7 @@ func deriveCell(adapter string, s scenario, caps map[string]any) cell {
 	if _, ok := s.ByAdapter[adapter]; !ok {
 		return cell{State: "missing-prompt", Reason: "no by_adapter." + adapter + " entry in scenarios.json"}
 	}
-	// aider's curated transcript is markdown; all other adapters are jsonl.
-	// Mirrors the convention in .claude/skills/ir:onboard-agent/scripts/run-cell.sh.
-	ext := "jsonl"
-	if adapter == "aider" {
-		ext = "md"
-	}
-	fixture := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", s.Name, "transcript."+ext)
+	fixture := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", s.Name, "transcript."+transcriptExt)
 	if _, err := os.Stat(fixture); err == nil {
 		return cell{State: "covered"}
 	}
@@ -268,12 +264,12 @@ func handleScenario(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "scenario not found", http.StatusNotFound)
 		return
 	}
-	caps, err := loadCapabilities(adapter)
+	caps, transcriptExt, err := loadCapabilities(adapter)
 	if err != nil {
 		httpError(w, err)
 		return
 	}
-	c := deriveCell(adapter, *s, caps)
+	c := deriveCell(adapter, *s, caps, transcriptExt)
 
 	resp := drilldownResp{
 		Adapter:     adapter,
@@ -604,19 +600,26 @@ func loadScenarios() ([]scenario, error) {
 	return doc.Scenarios, nil
 }
 
-func loadCapabilities(adapter string) (map[string]any, error) {
+// loadCapabilities returns the adapter's feature map and its curated
+// transcript extension (defaulting to "jsonl" when the field is absent).
+func loadCapabilities(adapter string) (map[string]any, string, error) {
 	path := filepath.Join(*rootDir, replayAgentDir, adapter, "capabilities.json")
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var doc struct {
-		Features map[string]any `json:"features"`
+		Features            map[string]any `json:"features"`
+		TranscriptExtension string         `json:"transcript_extension"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return doc.Features, nil
+	ext := doc.TranscriptExtension
+	if ext == "" {
+		ext = "jsonl"
+	}
+	return doc.Features, ext, nil
 }
 
 // ---------- helpers ----------
