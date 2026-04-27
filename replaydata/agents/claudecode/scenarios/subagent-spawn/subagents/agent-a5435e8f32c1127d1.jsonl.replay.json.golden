@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/ingo/projects/irrlicht/replaydata/agents/claudecode/scenarios/subagent-spawn/subagents/agent-a5435e8f32c1127d1.jsonl",
+  "source_transcript": "",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "claude-code",

@@ -105,6 +105,9 @@ func runFixtureReplay(t *testing.T, transcriptPath string) []byte {
 		t.Fatalf("runReplay %s: %v", transcriptPath, err)
 	}
 	report.GeneratedAt = time.Time{}
+	// Zero the source path so goldens are portable across worktrees and clones —
+	// the field is informational and the golden already lives next to its fixture.
+	report.SourceTranscript = ""
 
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

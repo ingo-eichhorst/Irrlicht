@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/ingo/projects/irrlicht/replaydata/agents/claudecode/scenarios/13-full-lifecycle-continue-8a525d27/subagents/agent-abb993514b4da5e14.jsonl",
+  "source_transcript": "",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "claude-code",
