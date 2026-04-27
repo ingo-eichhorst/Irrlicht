@@ -231,6 +231,47 @@ final class SessionManagerApiGroupsTests: XCTestCase {
                        "empty rig group must be pruned")
     }
 
+    func testRemoveFromApiGroups_recursesIntoNestedNonGasTownGroup() {
+        // Locks in the recursion through `group.groups` for plain project
+        // groups (the gas-town test exercises the same path but trips the
+        // isGasTown carve-out, so it doesn't pin generic recursion).
+        let nestedSession = makeSession(id: "deep")
+        let inner = AgentGroup(name: "inner", agents: [nestedSession])
+        let outer = AgentGroup(
+            name: "outer",
+            agents: [makeSession(id: "sibling")],
+            groups: [inner]
+        )
+        sut.apiGroups = [outer]
+        sut.groupedSessionIds = ["sibling", "deep"]
+
+        sut.removeFromApiGroups(sessionId: "deep")
+
+        XCTAssertEqual(sut.apiGroups.count, 1, "outer group must remain")
+        XCTAssertEqual(sut.apiGroups.first?.agents?.map(\.id), ["sibling"])
+        XCTAssertEqual(sut.apiGroups.first?.groups?.count, 0,
+                       "now-empty inner group must be pruned")
+        XCTAssertEqual(sut.groupedSessionIds, ["sibling"])
+    }
+
+    func testRemoveFromApiGroups_dropsParent_clearsOrphanedChildIds() {
+        // Regression: removing a parent agent also drops its embedded
+        // children from `apiGroups`, so their ids must leave
+        // `groupedSessionIds` too — otherwise a late WS update for a child
+        // would slip past the patchApiGroups guard with no row to land in.
+        let child = makeSession(id: "child")
+        let parent = makeSession(id: "parent", children: [child])
+        sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [parent])]
+        sut.groupedSessionIds = ["parent", "child"]
+
+        sut.removeFromApiGroups(sessionId: "parent")
+
+        XCTAssertTrue(sut.apiGroups.isEmpty)
+        XCTAssertFalse(sut.groupedSessionIds.contains("child"),
+                       "orphaned child id must be cleared from groupedSessionIds")
+        XCTAssertFalse(sut.groupedSessionIds.contains("parent"))
+    }
+
     func testRemoveFromApiGroups_isNoOpForUnknownId() {
         let original = makeSession(id: "alive", cost: 1.00)
         sut.apiGroups = [AgentGroup(name: "irrlicht", agents: [original])]

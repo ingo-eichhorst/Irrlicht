@@ -455,7 +455,11 @@ class SessionManager: ObservableObject {
     /// 0.5 s window doesn't leave a stale row in the popover.
     func removeFromApiGroups(sessionId: String) {
         apiGroups = apiGroups.compactMap { pruneGroup($0, removing: sessionId) }
-        groupedSessionIds.remove(sessionId)
+        // Rebuild from the post-prune tree so transitively-dropped ids
+        // (a parent's children, a dropped nested group's agents) don't linger
+        // in `groupedSessionIds` and let later WS updates pass the guard at
+        // `patchApiGroups` for sessions that no longer have a row.
+        groupedSessionIds = Set(apiGroups.flatMap { collectSessionIds(from: $0) })
     }
 
     /// Drop the session from a group's agents/children/nested-groups, returning
