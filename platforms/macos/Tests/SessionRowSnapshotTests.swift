@@ -53,6 +53,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             contextWindow: 1_000_000,
             contextUtilization: 4.5,
             pressureLevel: pressure,
+            contextWindowUnknown: nil,
             estimatedCostUSD: nil,
             lastAssistantText: lastText,
             tasks: nil
