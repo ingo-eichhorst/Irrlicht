@@ -335,3 +335,184 @@ func TestParser_TimestampExtracted(t *testing.T) {
 		t.Errorf("Timestamp diff = %v, want < 1ms", diff)
 	}
 }
+
+// --- step-finish / interrupted ---
+
+func TestParser_StepFinish_Interrupted_TurnDone(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type":   "step-finish",
+		"reason": "interrupted",
+		"tokens": map[string]interface{}{
+			"input":  float64(500),
+			"output": float64(100),
+			"total":  float64(600),
+		},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.EventType != "turn_done" {
+		t.Errorf("EventType = %q, want turn_done", ev.EventType)
+	}
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution on reason=interrupted (tokens were consumed)")
+	}
+	if ev.Contribution.Usage.Input != 500 {
+		t.Errorf("Contribution.Usage.Input = %d, want 500", ev.Contribution.Usage.Input)
+	}
+}
+
+// --- step-finish / length ---
+
+func TestParser_StepFinish_Length_TurnDone(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type":   "step-finish",
+		"reason": "length",
+		"tokens": map[string]interface{}{
+			"input":  float64(100000),
+			"output": float64(2000),
+			"total":  float64(102000),
+		},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.EventType != "turn_done" {
+		t.Errorf("EventType = %q, want turn_done", ev.EventType)
+	}
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution on reason=length (tokens were consumed)")
+	}
+}
+
+// --- step-finish / error ---
+
+func TestParser_StepFinish_Error_TurnDone(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type":   "step-finish",
+		"reason": "error",
+		"tokens": map[string]interface{}{
+			"input":  float64(200),
+			"output": float64(0),
+			"total":  float64(200),
+		},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.EventType != "turn_done" {
+		t.Errorf("EventType = %q, want turn_done", ev.EventType)
+	}
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution on reason=error (tokens were consumed)")
+	}
+}
+
+// --- step-finish / unknown reason ---
+
+func TestParser_StepFinish_UnknownReason_AssistantMessage(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type":   "step-finish",
+		"reason": "some-future-reason",
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.EventType != "assistant_message" {
+		t.Errorf("EventType = %q, want assistant_message", ev.EventType)
+	}
+}
+
+// --- step-finish / stop without tokens ---
+
+func TestParser_StepFinish_Stop_NoTokens(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type":   "step-finish",
+		"reason": "stop",
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.EventType != "turn_done" {
+		t.Errorf("EventType = %q, want turn_done", ev.EventType)
+	}
+	if ev.Contribution != nil {
+		t.Error("expected no Contribution when tokens are missing")
+	}
+	if ev.Tokens != nil {
+		t.Error("expected nil Tokens when tokens field missing")
+	}
+}
+
+// --- step-finish / zero cost ---
+
+func TestParser_StepFinish_Stop_ZeroCost(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type":   "step-finish",
+		"reason": "stop",
+		"tokens": map[string]interface{}{
+			"input":  float64(100),
+			"output": float64(50),
+			"total":  float64(150),
+		},
+		"cost":   float64(0),
+		"_model": "free-model",
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution even with zero cost")
+	}
+	if ev.Contribution.ProviderCostUSD != nil {
+		t.Error("expected nil ProviderCostUSD when cost is zero")
+	}
+}
+
+// --- step-finish / missing cost field ---
+
+func TestParser_StepFinish_Stop_MissingCost(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type":   "step-finish",
+		"reason": "stop",
+		"tokens": map[string]interface{}{
+			"input":  float64(100),
+			"output": float64(50),
+			"total":  float64(150),
+		},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.Contribution == nil {
+		t.Fatal("expected Contribution even without cost field")
+	}
+	if ev.Contribution.ProviderCostUSD != nil {
+		t.Error("expected nil ProviderCostUSD when cost field missing")
+	}
+}
+
+// --- text part / missing role (defaults to assistant) ---
+
+func TestParser_TextPart_NoRole_DefaultsAssistant(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "text",
+		"text": "some output",
+		"_ts":  float64(time.Now().UnixMilli()),
+		"_cwd": "/tmp",
+	})
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.EventType != "assistant_message" {
+		t.Errorf("EventType = %q, want assistant_message", ev.EventType)
+	}
+}

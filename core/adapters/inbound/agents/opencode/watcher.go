@@ -25,11 +25,13 @@ import (
 //     last poll to discover new sessions.
 //  3. For each known session, query the `part` table for rows updated since
 //     the last cursor to derive activity events and state transitions.
+//  4. Query for recently archived sessions (time_archived IS NOT NULL) to
+//     emit EventRemoved for sessions that were closed by the user.
 //
 // The watcher emits the same agent.Event types as the fswatcher:
 //   - EventNewSession  — a new session row appeared in the DB
 //   - EventActivity    — new/updated part rows in a known session
-//   - EventRemoved     — a session row was deleted (or archived)
+//   - EventRemoved     — a session row was archived or deleted
 //
 // TranscriptPath in all emitted events is set to the WAL file path
 // (opencode.db-wal) rather than the main DB file. This ensures
@@ -44,9 +46,11 @@ type Watcher struct {
 	subMu sync.Mutex
 	subs  []chan agent.Event
 
-	// per-session cursor: last part.time_updated seen, keyed by session ID.
+	// per-session cursor: last part.time_updated and set of already-seen part
+	// IDs at that timestamp. Using seenIDs alongside >= avoids missing parts
+	// that share the same millisecond timestamp (cursor race condition).
 	mu      sync.Mutex
-	cursors map[string]int64 // session_id → last time_updated ms
+	cursors map[string]*sessionCursor // session_id → cursor state
 
 	// lastScan tracks when we last ran scanSessions so we can debounce
 	// the fsnotify feedback loop: opening the DB read-only touches the
@@ -54,6 +58,16 @@ type Watcher struct {
 	lastScan   time.Time
 	scanMu     sync.Mutex
 	minScanGap time.Duration // minimum time between scans
+
+	// lastArchivedCheck is the cut-off for querying newly archived sessions.
+	lastArchivedCheck time.Time
+}
+
+// sessionCursor tracks the last-seen part timestamp and deduplicates parts
+// at that timestamp to prevent a same-millisecond cursor race.
+type sessionCursor struct {
+	lastTS  int64
+	seenIDs map[string]struct{} // part IDs already processed at lastTS
 }
 
 // New creates a Watcher for the OpenCode database relative to $HOME.
@@ -63,7 +77,7 @@ func New(maxAge time.Duration) *Watcher {
 		dbPath:     filepath.Join(home, dbRelPath),
 		adapter:    AdapterName,
 		maxAge:     maxAge,
-		cursors:    make(map[string]int64),
+		cursors:    make(map[string]*sessionCursor),
 		minScanGap: 500 * time.Millisecond,
 	}
 }
@@ -75,7 +89,7 @@ func NewWithDBPath(dbPath string, maxAge time.Duration) *Watcher {
 		dbPath:     dbPath,
 		adapter:    AdapterName,
 		maxAge:     maxAge,
-		cursors:    make(map[string]int64),
+		cursors:    make(map[string]*sessionCursor),
 		minScanGap: 500 * time.Millisecond,
 	}
 }
@@ -240,7 +254,7 @@ func (w *Watcher) scanSessions() {
 	defer w.mu.Unlock()
 
 	for _, s := range sessions {
-		cursor, known := w.cursors[s.id]
+		cur, known := w.cursors[s.id]
 		if !known {
 			// New session — emit EventNewSession.
 			// Encode the session ID into TranscriptPath so that the
@@ -249,7 +263,8 @@ func (w *Watcher) scanSessions() {
 			// preserved so isStaleTranscript() checks the WAL (updated on
 			// every OpenCode write) rather than the main DB (checkpoint-only).
 			walPath := w.dbPath + "-wal" + "?session=" + s.id
-			w.cursors[s.id] = 0
+			cur = &sessionCursor{seenIDs: make(map[string]struct{})}
+			w.cursors[s.id] = cur
 			w.broadcast(agent.Event{
 				Type:            agent.EventNewSession,
 				Adapter:         w.adapter,
@@ -262,22 +277,80 @@ func (w *Watcher) scanSessions() {
 		}
 
 		// Scan for new parts since cursor.
-		w.scanParts(db, s.id, s.directory, cursor)
+		w.scanParts(db, s.id, s.directory, cur)
+	}
+
+	// Emit EventRemoved for sessions that were archived since the last scan.
+	w.emitRemovedForArchivedSessions(db)
+}
+
+// emitRemovedForArchivedSessions queries for sessions whose time_archived
+// column was set since the last check and emits EventRemoved for those
+// that are tracked in our cursors map.
+func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
+	if w.lastArchivedCheck.IsZero() {
+		w.lastArchivedCheck = time.Now()
+		return
+	}
+	cutoff := w.lastArchivedCheck.UnixMilli()
+	w.lastArchivedCheck = time.Now()
+
+	rows, err := db.Query(`
+		SELECT id FROM session
+		WHERE time_archived IS NOT NULL
+		  AND time_archived > ?
+		ORDER BY time_archived DESC
+		LIMIT 200
+	`, cutoff)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		cur, known := w.cursors[id]
+		if !known {
+			continue
+		}
+		walPath := w.dbPath + "-wal" + "?session=" + id
+		w.broadcast(agent.Event{
+			Type:           agent.EventRemoved,
+			Adapter:        w.adapter,
+			SessionID:      id,
+			TranscriptPath: walPath,
+		})
+		delete(w.cursors, id)
+		_ = cur
 	}
 }
 
 // scanParts queries new/updated part rows for a session since lastCursor and
 // emits EventActivity events. Updates the cursor on success.
-func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, lastCursor int64) {
+//
+// Uses >= (not >) on time_updated to avoid missing parts that share the same
+// millisecond timestamp. A per-cursor set of already-seen part IDs prevents
+// re-emitting the same parts on subsequent scans.
+func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessionCursor) {
+	lastTS := int64(0)
+	if cur != nil {
+		lastTS = cur.lastTS
+	}
+
 	// Join with message to get the role context for each part.
+	// Use >= rather than > to catch all parts at the last cursor timestamp
+	// (same-ms race). We deduplicate via cur.seenIDs.
 	rows, err := db.Query(`
 		SELECT p.id, p.data, p.time_updated, m.data as message_data
 		FROM part p
 		JOIN message m ON p.message_id = m.id
 		WHERE p.session_id = ?
-		  AND p.time_updated > ?
-		ORDER BY p.time_updated ASC
-	`, sessionID, lastCursor)
+		  AND p.time_updated >= ?
+		ORDER BY p.time_updated ASC, p.id ASC
+	`, sessionID, lastTS)
 	if err != nil {
 		return
 	}
@@ -285,6 +358,7 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, lastCursor 
 
 	var maxSeen int64
 	hasActivity := false
+	newSeenIDs := make(map[string]struct{})
 
 	for rows.Next() {
 		var partID, partData, msgData string
@@ -292,16 +366,36 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, lastCursor 
 		if err := rows.Scan(&partID, &partData, &timeUpdated, &msgData); err != nil {
 			continue
 		}
+		// Skip parts already seen at the current cursor timestamp.
+		if cur != nil && timeUpdated == lastTS {
+			if _, seen := cur.seenIDs[partID]; seen {
+				continue
+			}
+		}
+		// Track for dedup when the timestamp moves forward.
 		if timeUpdated > maxSeen {
 			maxSeen = timeUpdated
+			newSeenIDs = make(map[string]struct{})
+		}
+		if timeUpdated == maxSeen {
+			newSeenIDs[partID] = struct{}{}
 		}
 		hasActivity = true
 		_ = partData // activity signalled via EventActivity; parsing in metrics collector
 		_ = msgData
 	}
 
-	if hasActivity && maxSeen > lastCursor {
-		w.cursors[sessionID] = maxSeen
+	if hasActivity && maxSeen > lastTS {
+		cur.lastTS = maxSeen
+		cur.seenIDs = newSeenIDs
+	} else if hasActivity && maxSeen == lastTS && maxSeen != 0 {
+		// Same timestamp — merge new IDs into the existing set.
+		for id := range newSeenIDs {
+			cur.seenIDs[id] = struct{}{}
+		}
+	}
+
+	if hasActivity {
 		w.broadcast(agent.Event{
 			Type:           agent.EventActivity,
 			Adapter:        w.adapter,

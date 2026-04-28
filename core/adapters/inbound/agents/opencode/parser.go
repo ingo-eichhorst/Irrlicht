@@ -71,9 +71,13 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 // parseStepFinish handles the step-finish part type.
 // reason="stop"       → agent has finished the turn → emit "turn_done"
+// reason="interrupted"→ user cancelled (Ctrl+C)     → emit "turn_done"
+// reason="length"     → context window exceeded      → emit "turn_done"
+// reason="error"      → API/other error              → emit "turn_done"
 // reason="tool-calls" → agent is about to call tools → emit "assistant_message"
 //
-// Token and cost data from step-finish is used to build a PerTurnContribution.
+// Token and cost data from step-finish is used to build a PerTurnContribution
+// for all reasons except "tool-calls" (which represents a mid-turn pause).
 func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.ParsedEvent {
 	reason, _ := raw["reason"].(string)
 
@@ -101,8 +105,10 @@ func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer
 
 		// Build a PerTurnContribution from the step-finish token data.
 		// OpenCode reports per-step tokens (not cumulative), so each
-		// step-finish with reason="stop" directly represents a billable turn.
-		if reason == "stop" {
+		// step-finish that isn't a mid-turn tool-calls pause directly
+		// represents a billable turn (or a billable partial-step on
+		// interrupt / error / length).
+		if reason != "tool-calls" {
 			usage := tailer.UsageBreakdown{
 				Input:     snap.Input,
 				Output:    snap.Output,
@@ -130,8 +136,17 @@ func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer
 	case "tool-calls":
 		// Agent is about to invoke tools; stay in working state.
 		ev.EventType = "assistant_message"
+	case "interrupted":
+		// User cancelled (Ctrl+C). The agent has genuinely stopped.
+		ev.EventType = "turn_done"
+	case "length":
+		// Context window exceeded — the agent stopped generating.
+		ev.EventType = "turn_done"
+	case "error":
+		// API or other error — the agent stopped generating.
+		ev.EventType = "turn_done"
 	default:
-		// "length", "error", etc. — treat as assistant_message for now.
+		// Unknown reason — conservatively treat as assistant_message.
 		ev.EventType = "assistant_message"
 	}
 	return ev
