@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"embed"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -40,11 +38,6 @@ import (
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
-
-//go:generate sh -c "mkdir -p ui && cp ../../../platforms/web/index.html ui/index.html"
-
-//go:embed ui
-var uiFS embed.FS
 
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
 var Version = "dev"
@@ -212,14 +205,21 @@ func main() {
 	mux.HandleFunc("GET /debug/pprof/symbol", localhostOnly(pprof.Symbol))
 	mux.HandleFunc("GET /debug/pprof/trace", localhostOnly(pprof.Trace))
 
-	// Static web UI: serve the embedded ui/ directory at root.
-	// API routes registered above take precedence over the catch-all "/".
-	uiSub, err := fs.Sub(uiFS, "ui")
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to sub ui fs: %v", err))
-		os.Exit(1)
+	// Static web UI: served from disk so the dashboard ships as an external
+	// file (one copy in the repo at platforms/web/index.html). API routes
+	// registered above take precedence over the catch-all "/".
+	if uiDir := resolveUIDir(); uiDir != "" {
+		logger.LogInfo("startup", "", fmt.Sprintf("serving UI from %s", uiDir))
+		mux.Handle("/", http.FileServer(http.Dir(uiDir)))
+	} else {
+		logger.LogError("startup", "", "UI directory not found — set IRRLICHT_UI_DIR to the directory containing index.html")
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintln(w, "Dashboard UI not found.")
+			fmt.Fprintln(w, "Set IRRLICHT_UI_DIR to the directory containing index.html, or reinstall via the DMG / curl installer.")
+		})
 	}
-	mux.Handle("/", http.FileServer(http.FS(uiSub)))
 
 	// WriteTimeout is intentionally 0: WebSocket streams and long-polling
 	// responses need unbounded writes, and gorilla/websocket sets its own
@@ -479,6 +479,50 @@ func socketPath() string {
 		return "/tmp/irrlichd.sock"
 	}
 	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichd.sock")
+}
+
+// resolveUIDir locates the directory containing the dashboard's index.html.
+// Search order: $IRRLICHT_UI_DIR → <exe>/../Resources/web (production .app
+// bundle) → ~/.local/share/irrlicht/web (daemon-only curl install) → walk up
+// from the executable looking for platforms/web/index.html (dev checkout).
+// Returns "" if none of these contain an index.html.
+func resolveUIDir() string {
+	hasIndex := func(dir string) bool {
+		if dir == "" {
+			return false
+		}
+		_, err := os.Stat(filepath.Join(dir, "index.html"))
+		return err == nil
+	}
+
+	if v := os.Getenv("IRRLICHT_UI_DIR"); hasIndex(v) {
+		return v
+	}
+	exe, _ := os.Executable()
+	if exe != "" {
+		if cand := filepath.Join(filepath.Dir(exe), "..", "Resources", "web"); hasIndex(cand) {
+			return cand
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if cand := filepath.Join(home, ".local", "share", "irrlicht", "web"); hasIndex(cand) {
+			return cand
+		}
+	}
+	if exe != "" {
+		dir := filepath.Dir(exe)
+		for range 8 {
+			if cand := filepath.Join(dir, "platforms", "web"); hasIndex(cand) {
+				return cand
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return ""
 }
 
 // costTimeframeSeconds maps the four supported time-frame keys to their

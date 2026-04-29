@@ -64,12 +64,22 @@ All tests must pass before proceeding.
 
 ## Step 6: Build Artifacts
 
-### Go daemon (universal binary)
+### Go daemon (universal binary + tarball)
+The daemon reads `platforms/web/index.html` from disk at runtime; no embed.
+The standalone curl `--daemon-only` install ships a tarball containing both
+the binary and `web/index.html`.
+
 ```bash
 cd /Users/ingo/projects/irrlicht/core
 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.Version=$NEW_VERSION" -o /tmp/irrlichd-arm64 ./cmd/irrlichd
 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.Version=$NEW_VERSION" -o /tmp/irrlichd-amd64 ./cmd/irrlichd
 lipo -create /tmp/irrlichd-arm64 /tmp/irrlichd-amd64 -output /tmp/irrlichd-darwin-universal
+
+# Tarball for the curl --daemon-only installer
+rm -rf /tmp/irrlichd-tarball && mkdir -p /tmp/irrlichd-tarball/web
+cp /tmp/irrlichd-darwin-universal /tmp/irrlichd-tarball/irrlichd
+cp /Users/ingo/projects/irrlicht/platforms/web/index.html /tmp/irrlichd-tarball/web/index.html
+tar -czf /tmp/irrlichd-darwin-universal.tar.gz -C /tmp/irrlichd-tarball .
 ```
 
 ### Swift app (release build — universal)
@@ -195,7 +205,7 @@ git push origin main --tags
 
 ```bash
 gh release create v$NEW_VERSION \
-  /tmp/irrlichd-darwin-universal \
+  /tmp/irrlichd-darwin-universal.tar.gz \
   /tmp/Irrlicht-$NEW_VERSION.dmg \
   /tmp/Irrlicht-$NEW_VERSION-mac-installer.pkg \
   /tmp/Irrlicht-$NEW_VERSION.zip \
@@ -229,7 +239,7 @@ when `IRRLICHT_TAP_DIR` isn't set).
 
 1. Confirm release URL is returned.
 2. Run `gh release view v$NEW_VERSION` to verify **all five assets** are attached:
-   - `irrlichd-darwin-universal`
+   - `irrlichd-darwin-universal.tar.gz` *(daemon + web/index.html — required by curl --daemon-only)*
    - `Irrlicht-$NEW_VERSION.dmg`
    - `Irrlicht-$NEW_VERSION-mac-installer.pkg`
    - `Irrlicht-$NEW_VERSION.zip` *(required by the curl installer)*
@@ -248,13 +258,15 @@ when `IRRLICHT_TAP_DIR` isn't set).
 ## Step 10: Install script maintenance
 
 The install script at `site/install.sh` is version-agnostic — it queries the
-GitHub API for the latest version and downloads `Irrlicht-<version>.zip` /
-`irrlichd-darwin-universal` from the matching release. **It does not need to
-be edited on every release.**
+GitHub API for the latest version and downloads `Irrlicht-<version>.zip`
+(full install) or `irrlichd-darwin-universal.tar.gz` (daemon-only) from the
+matching release, then extracts the daemon binary plus `web/index.html`.
+**It does not need to be edited on every release.**
 
 However, every release must:
-- Upload `Irrlicht-$NEW_VERSION.zip` (done in Step 6 / Step 8).
-- Include that zip's hash in `checksums.sha256` (the installer verifies it).
+- Upload both `Irrlicht-$NEW_VERSION.zip` and
+  `irrlichd-darwin-universal.tar.gz` (done in Step 6 / Step 8).
+- Include both hashes in `checksums.sha256` (the installer verifies them).
 - Preserve backward compatibility with the script's current download URL
   pattern. If you rename an asset, bump the installer too.
 

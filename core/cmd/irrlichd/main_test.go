@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -37,8 +36,11 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 	hub := wshub.NewHub(push, nil)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 
-	uiSub, _ := fs.Sub(uiFS, "ui")
-	mux.Handle("/", http.FileServer(http.FS(uiSub)))
+	uiDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(uiDir, "index.html"), []byte("<h1>ok</h1>"), 0644); err != nil {
+		t.Fatalf("write stub index.html: %v", err)
+	}
+	mux.Handle("/", http.FileServer(http.Dir(uiDir)))
 
 	return httptest.NewServer(mux), repo
 }
