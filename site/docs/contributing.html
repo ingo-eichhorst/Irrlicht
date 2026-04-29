@@ -284,8 +284,49 @@ test: add table-driven tests for state machine</code></pre>
         <li>Prefer editing existing files over creating new ones</li>
       </ul>
 
+      <!-- ─── Adding an Adapter ─── -->
+      <h2 id="adding-an-adapter">Adding a New Agent Adapter</h2>
+
+      <p>Agent adapters are the most concrete extension path Irrlicht offers. The repo ships a guided onboarding flow so a new adapter can be built, fixtured, and promoted without re-deriving conventions from the source.</p>
+
+      <h3>Start with the onboarding skill</h3>
+
+      <p>Run the <code>/ir:onboard-agent</code> skill (under <code>.claude/skills/ir:onboard-agent/</code>). It drives the agent's CLI through a shared scenario catalogue, records lifecycle events, and stages curated fixtures under <code>.build/refresh/</code> for review.</p>
+
+      <p>The skill unifies three operations -- bootstrap (first time onboarding a new agent), refresh (re-recording fixtures against a newer CLI), and validation (diffing recordings against committed fixtures).</p>
+
+      <h3>Declare capabilities, not behavior</h3>
+
+      <p>Adapters are agent-agnostic in the scenario layer. Each adapter declares what it supports in <code>replaydata/agents/&lt;name&gt;/capabilities.json</code>, drawing from the canonical feature catalogue at <code>replaydata/agents/features.json</code>. Scenarios in <code>.claude/skills/ir:onboard-agent/scenarios.json</code> declare a <code>requires</code> array, and the matrix cells fall out automatically: a scenario applies to an adapter only if the adapter's capabilities cover its requirements.</p>
+
+      <p>This means: never write per-adapter scenarios. Add a missing capability to <code>features.json</code>, declare it in your adapter's <code>capabilities.json</code>, and reuse the canonical scenarios.</p>
+
+      <h3>Aim for a maturity stage</h3>
+
+      <p>The promotion criteria for <code>alpha</code> / <code>beta</code> / <code>stable</code> are documented on the <a href="adapters.html#maturity-stages">Adapters reference</a>. Read them before opening the PR -- the bar your adapter clears determines the stage label that ships with it.</p>
+
+      <h3>Adapter PR checklist (alpha bar)</h3>
+
+      <p>Tick every box below before opening the PR. This is the <a href="adapters.html#stage-alpha"><code>alpha</code> stage</a> rubric, copied verbatim so it can serve as a PR template.</p>
+
+      <ul class="checklist">
+        <li>Adapter package at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
+        <li>Implements the <code>AgentWatcher</code> interface</li>
+        <li>Registered in <code>core/cmd/irrlichd/main.go</code></li>
+        <li>Emits all three lifecycle states (<code>working</code>, <code>waiting</code>, <code>ready</code>)</li>
+        <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against <code>replaydata/agents/features.json</code></li>
+        <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed under <code>replaydata/agents/&lt;name&gt;/scenarios/</code></li>
+        <li><code>tools/replay-fixtures.sh</code> green</li>
+        <li><code>./validate.sh</code> green</li>
+        <li>README compatibility grid updated to <code>alpha</code></li>
+      </ul>
+
+      <p>Promotion to <code>beta</code> and <code>stable</code> happens later, against the additional checklists in the <a href="adapters.html#maturity-stages">Maturity stages</a> section -- promotion is not part of the initial PR.</p>
+
       <!-- ─── Reporting Bugs ─── -->
       <h2>Reporting Bugs</h2>
+
+      <p>Bug reports for Irrlicht (the daemon, the macOS app, or any adapter) live on <a href="https://github.com/ingo-eichhorst/Irrlicht/issues">GitHub Issues</a> and must carry the <code>bug</code> label so they count against the <a href="adapters.html#maturity-stages">maturity-stage criteria</a>.</p>
 
       <h3>Before Filing</h3>
 
