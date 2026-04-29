@@ -220,83 +220,75 @@
 
       <h2 id="maturity-stages">Maturity Stages</h2>
 
-      <p>Each adapter and platform listed in the compatibility grid carries one of four stage labels: <code>planned</code>, <code>alpha</code>, <code>beta</code>, or <code>stable</code>. The criteria below are deliberately binary and time-bounded -- every box can be ticked from public artefacts (the repo, GitHub issues, tagged releases). Stage assignment reduces to running through the checklist.</p>
+      <p>Adapters and platforms in the compatibility grid share the same four-tier ladder: <code>planned</code>, <code>alpha</code>, <code>beta</code>, <code>stable</code>. Each tier states a <strong>common ladder</strong> (time, bug count, real-world use) once and then a small set of component-specific artefact checks. Every box can be ticked from public artefacts (the repo, GitHub issues, tagged releases) -- stage assignment reduces to running through the checklist.</p>
 
-      <p>The shape of the rubric borrows from <a href="https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/">Kubernetes feature stages</a> (alpha experimental, beta opt-out-able, GA stable) and the <a href="https://github.com/cncf/toc/blob/main/process/graduation_criteria.md">CNCF graduation criteria</a> (real adopters, governance, time at the previous tier).</p>
+      <p>The shape borrows from <a href="https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/">Kubernetes feature stages</a> (alpha experimental, beta opt-out-able, GA stable) and the <a href="https://github.com/cncf/toc/blob/main/process/graduation_criteria.md">CNCF graduation criteria</a> (real adopters, time at the previous tier).</p>
 
-      <h3 id="adapter-stages">Adapter stages</h3>
-
-      <h4><code>planned</code></h4>
+      <h3 id="stage-planned"><code>planned</code></h3>
 
       <ul class="checklist">
-        <li>Listed in the README compatibility grid</li>
+        <li>Listed in the compatibility grid (README for adapters, homepage for platforms)</li>
       </ul>
 
-      <h4><code>alpha</code> &mdash; interfaces complete, basic scenarios green</h4>
+      <h3 id="stage-alpha"><code>alpha</code> &mdash; scaffolded, smoke path green</h3>
 
+      <p><strong>Common ladder:</strong></p>
       <ul class="checklist">
-        <li>Adapter package exists at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
+        <li>Code lives in the canonical location for its component type</li>
+        <li>A documented smoke or replay path runs green from a clean checkout</li>
+      </ul>
+
+      <p><strong>For adapters, additionally:</strong></p>
+      <ul class="checklist">
+        <li>Adapter package at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
         <li>Implements the <code>AgentWatcher</code> interface</li>
         <li>Registered in <code>core/cmd/irrlichd/main.go</code></li>
         <li>Emits all three lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code></li>
-        <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against the canonical catalogue at <code>replaydata/agents/features.json</code></li>
+        <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against <code>replaydata/agents/features.json</code></li>
         <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed and replay green via <code>tools/replay-fixtures.sh</code></li>
       </ul>
 
-      <h4><code>beta</code> &mdash; all applicable scenarios + 30 days real use</h4>
-
-      <ul class="checklist">
-        <li>All <code>alpha</code> boxes ticked</li>
-        <li><strong>All</strong> scenarios in <code>.claude/skills/ir:onboard-agent/scenarios.json</code> whose <code>requires</code> is covered by the adapter's capabilities replay green</li>
-        <li>Model + cost extraction wired through <code>core/adapters/outbound/metrics/</code></li>
-        <li>Subagent / parent-child linkage emits <code>ParentSessionID</code> where the agent supports subagents</li>
-        <li>At least <strong>30 days</strong> since the adapter first shipped in a tagged Irrlicht release</li>
-        <li>At least <strong>one</strong> public report of a real-world session run by someone other than the adapter author (GitHub issue, discussion, or PR comment)</li>
-        <li>Zero open <code>bug</code>-labeled issues against the adapter on <a href="https://github.com/ingo-eichhorst/Irrlicht/issues">ingo-eichhorst/Irrlicht</a></li>
-      </ul>
-
-      <h4><code>stable</code> &mdash; 6 months in use, no recent regressions</h4>
-
-      <ul class="checklist">
-        <li>All <code>beta</code> boxes ticked</li>
-        <li>At least <strong>180 days</strong> since the adapter first shipped in a tagged Irrlicht release</li>
-        <li>Zero <code>bug</code>-labeled issues opened against the adapter in the last <strong>30 days</strong></li>
-        <li>Fixtures regenerated against the agent CLI version currently shipping upstream (matches the relevant entry in <code>min_versions</code> in <code>scenarios.json</code>)</li>
-        <li>The adapter package is settled: <code>git log core/adapters/inbound/agents/&lt;name&gt;/ --since=30.days.ago</code> shows no refactors or new features &mdash; only reactive changes (upstream agent CLI format updates, new platform versions)</li>
-      </ul>
-
-      <h3 id="platform-stages">Platform stages</h3>
-
-      <p>The same four labels apply to platforms (macOS app, Web dashboard, CLI, Linux). Platforms have no transcripts to verify, so the criteria are simpler but follow the same time-and-bug-count discipline.</p>
-
-      <h4><code>planned</code></h4>
-
-      <ul class="checklist">
-        <li>Listed in the homepage compatibility grid</li>
-      </ul>
-
-      <h4><code>alpha</code></h4>
-
+      <p><strong>For platforms, additionally:</strong></p>
       <ul class="checklist">
         <li>Builds and launches without manual intervention from the standard build script</li>
         <li>Smoke path works (renders sessions / receives daemon updates)</li>
       </ul>
 
-      <h4><code>beta</code></h4>
+      <h3 id="stage-beta"><code>beta</code> &mdash; feature-complete + 30 days real use</h3>
 
+      <p><strong>Common ladder:</strong></p>
       <ul class="checklist">
         <li>All <code>alpha</code> boxes ticked</li>
-        <li>All currently shipped Irrlicht features render correctly on this platform</li>
-        <li>At least <strong>30 days</strong> since the platform first shipped in a tagged release</li>
-        <li>Zero open <code>Priority-High</code> bugs against this platform</li>
+        <li>At least <strong>30 days</strong> since first shipped in a tagged Irrlicht release</li>
+        <li>At least <strong>one</strong> public report of real-world use by someone other than the author (GitHub issue, discussion, or PR comment)</li>
+        <li>Zero open <code>bug</code>-labeled issues against this component on <a href="https://github.com/ingo-eichhorst/Irrlicht/issues">ingo-eichhorst/Irrlicht</a></li>
       </ul>
 
-      <h4><code>stable</code></h4>
+      <p><strong>For adapters, additionally:</strong></p>
+      <ul class="checklist">
+        <li><strong>All</strong> scenarios in <code>.claude/skills/ir:onboard-agent/scenarios.json</code> whose <code>requires</code> is covered by the adapter's capabilities replay green</li>
+        <li>Model + cost extraction wired through <code>core/adapters/outbound/metrics/</code></li>
+        <li>Subagent / parent-child linkage emits <code>ParentSessionID</code> where the agent supports subagents</li>
+      </ul>
 
+      <p><strong>For platforms, additionally:</strong></p>
+      <ul class="checklist">
+        <li>All currently shipped Irrlicht features render correctly on this platform</li>
+      </ul>
+
+      <h3 id="stage-stable"><code>stable</code> &mdash; 6 months in use, code is settled</h3>
+
+      <p><strong>Common ladder:</strong></p>
       <ul class="checklist">
         <li>All <code>beta</code> boxes ticked</li>
-        <li>At least <strong>180 days</strong> since the platform first shipped in a tagged release</li>
-        <li>Zero <code>bug</code>-labeled issues opened against this platform in the last <strong>30 days</strong></li>
+        <li>At least <strong>180 days</strong> since first shipped in a tagged Irrlicht release</li>
+        <li>Zero <code>bug</code>-labeled issues opened against this component in the last <strong>30 days</strong></li>
+        <li>Component code is settled: <code>git log &lt;component-path&gt; --since=30.days.ago</code> shows no refactors or new features &mdash; only reactive changes (upstream format updates, new platform versions)</li>
+      </ul>
+
+      <p><strong>For adapters, additionally:</strong></p>
+      <ul class="checklist">
+        <li>Fixtures regenerated against the agent CLI version currently shipping upstream (matches the relevant entry in <code>min_versions</code> in <code>scenarios.json</code>)</li>
       </ul>
 
       <h2>Writing a New Adapter</h2>
