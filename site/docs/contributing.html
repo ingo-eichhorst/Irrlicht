@@ -305,16 +305,23 @@ test: add table-driven tests for state machine</code></pre>
 
       <p>The promotion criteria for <code>alpha</code> / <code>beta</code> / <code>stable</code> are documented on the <a href="adapters.html#maturity-stages">Adapters reference</a>. Read them before opening the PR -- the bar your adapter clears determines the stage label that ships with it.</p>
 
-      <h3>What a complete adapter PR looks like</h3>
+      <h3>Adapter PR checklist (alpha bar)</h3>
 
-      <ol>
-        <li>Adapter package under <code>core/adapters/inbound/agents/&lt;name&gt;/</code> implementing <code>AgentWatcher</code></li>
-        <li>Adapter registered in <code>core/cmd/irrlichd/main.go</code></li>
-        <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against the canonical feature list</li>
-        <li>Fixtures recorded for at least the <code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> scenarios under <code>replaydata/agents/&lt;name&gt;/scenarios/</code></li>
-        <li><code>tools/replay-fixtures.sh</code> green; <code>./validate.sh</code> green</li>
-        <li>README compatibility grid updated with the proposed stage label</li>
-      </ol>
+      <p>Tick every box below before opening the PR. This is the <a href="adapters.html#adapter-stages"><code>alpha</code> stage</a> rubric, copied verbatim so it can serve as a PR template.</p>
+
+      <ul class="checklist">
+        <li>Adapter package at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
+        <li>Implements the <code>AgentWatcher</code> interface</li>
+        <li>Registered in <code>core/cmd/irrlichd/main.go</code></li>
+        <li>Emits all three lifecycle states (<code>working</code>, <code>waiting</code>, <code>ready</code>)</li>
+        <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against <code>replaydata/agents/features.json</code></li>
+        <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed under <code>replaydata/agents/&lt;name&gt;/scenarios/</code></li>
+        <li><code>tools/replay-fixtures.sh</code> green</li>
+        <li><code>./validate.sh</code> green</li>
+        <li>README compatibility grid updated to <code>alpha</code></li>
+      </ul>
+
+      <p>Promotion to <code>beta</code> and <code>stable</code> happens later, against the additional checklists in the <a href="adapters.html#maturity-stages">Maturity stages</a> section -- promotion is not part of the initial PR.</p>
 
       <!-- ─── Reporting Bugs ─── -->
       <h2>Reporting Bugs</h2>
