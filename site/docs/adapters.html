@@ -218,16 +218,74 @@
         <li>Auto-rotation at 10MB, 5 files retained</li>
       </ul>
 
+      <h2 id="maturity-stages">Maturity Stages</h2>
+
+      <p>Each agent adapter listed in the README compatibility grid carries a stage label: <code>planned</code>, <code>alpha</code>, <code>beta</code>, or <code>stable</code>. The promotion criteria below are observable -- they reduce stage assignment from a judgment call to a checklist.</p>
+
+      <h3><code>planned</code></h3>
+
+      <ul>
+        <li>Listed in the README compatibility grid</li>
+        <li>No adapter package, no fixtures, no detection</li>
+      </ul>
+
+      <h3><code>alpha</code></h3>
+
+      <ul>
+        <li>Adapter package exists under <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
+        <li>Emits the three lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code></li>
+        <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> declares features against the canonical catalogue at <code>replaydata/agents/features.json</code></li>
+        <li>At minimum the <code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> scenarios replay green via <code>tools/replay-fixtures.sh</code></li>
+      </ul>
+
+      <h3><code>beta</code></h3>
+
+      <ul>
+        <li>Meets the <code>alpha</code> bar, plus:</li>
+        <li>Model and cost extraction wired through <code>core/adapters/outbound/metrics/</code></li>
+        <li>Subagent / parent-child linkage emits <code>ParentSessionID</code> where the agent supports it</li>
+        <li><strong>All</strong> scenarios in <code>.claude/skills/ir:onboard-agent/scenarios.json</code> whose <code>requires</code> is satisfied by the adapter's declared capabilities replay green</li>
+        <li>Has spent at least one release cycle at <code>alpha</code> with no open <code>bug</code>-labeled regression against the adapter</li>
+      </ul>
+
+      <h3><code>stable</code></h3>
+
+      <ul>
+        <li>Meets the <code>beta</code> bar, plus:</li>
+        <li>Zero open <code>bug</code>-labeled issues against the adapter on <a href="https://github.com/ingo-eichhorst/Irrlicht/issues">ingo-eichhorst/Irrlicht</a></li>
+        <li>Fixtures regenerated against the agent's currently shipped CLI version (matches <code>min_versions</code> in <code>scenarios.json</code>)</li>
+        <li>Two consecutive release cycles without a regression bug filed against the adapter</li>
+      </ul>
+
+      <h3>Demotion</h3>
+
+      <p>An adapter drops one tier until repaired when any of the following occurs:</p>
+
+      <ul>
+        <li>An upstream transcript-format change breaks committed fixtures</li>
+        <li>A new lifecycle state appears in the agent that this adapter does not emit</li>
+        <li>A <code>bug</code>-labeled issue with <code>Priority-High</code> is opened against the adapter</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <strong>Demotion is not punishment.</strong>
+        It is a signal that the adapter no longer meets the bar of its current tier. Fix the regression, re-record fixtures, and the adapter is promoted back.
+      </div>
+
+      <h3>Platform Stages</h3>
+
+      <p>The same labels appear on the homepage for platforms (macOS app, Web dashboard, CLI, Linux). Platforms have no transcripts, so they use a separate, simpler rubric:</p>
+
+      <ul>
+        <li><code>planned</code> -- listed only</li>
+        <li><code>alpha</code> -- builds and launches; smoke path works</li>
+        <li><code>beta</code> -- all currently shipped features render correctly; no open <code>Priority-High</code> bugs</li>
+        <li><code>stable</code> -- meets the <code>beta</code> bar and has gone one release cycle clean</li>
+      </ul>
+
       <h2>Writing a New Adapter</h2>
 
-      <p>To add support for a new agent, follow these steps:</p>
-
-      <ol>
-        <li>Create a new package under <code>core/adapters/inbound/agents/</code></li>
-        <li>Implement the <code>AgentWatcher</code> interface</li>
-        <li>Use the shared fswatcher for file-based agents</li>
-        <li>Register the adapter in <code>main.go</code></li>
-      </ol>
+      <p>The end-to-end path for adding an agent adapter -- from process discovery through fixture recording to stage promotion -- is documented under <a href="contributing.html#adding-an-adapter">Adding a new agent adapter</a> on the Contributing page. That section drives the <code>/ir:onboard-agent</code> skill, which produces the canonical scenario fixtures used by the criteria above.</p>
 
       <!-- Bottom nav -->
       <nav class="docs-nav-bottom">

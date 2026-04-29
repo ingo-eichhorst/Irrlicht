@@ -68,7 +68,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | Claude Squad          | planned |
 | Custom (plugin API)   | planned |
 
-→ [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html) for watch paths, model detection, and roadmap.
+→ [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html#maturity-stages) for stage criteria, watch paths, model detection, and roadmap.
 
 ## Posture
 
