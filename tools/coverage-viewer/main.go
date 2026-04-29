@@ -42,6 +42,18 @@ const (
 // hash. Anything else (slashes, dots, ..) is rejected to prevent path escape.
 var safeSegment = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
 
+// withinRoot returns nil iff cleaned candidate stays inside rootAbs. Both
+// arguments must already be absolute paths. Note: this does not resolve
+// symlinks — fine for a localhost dev tool, but anyone reusing these helpers
+// in a network-exposed daemon should `filepath.EvalSymlinks` first.
+func withinRoot(rootAbs, candidate string) error {
+	rel, err := filepath.Rel(rootAbs, filepath.Clean(candidate))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes root")
+	}
+	return nil
+}
+
 // safeJoin joins segments under root and confirms the cleaned result stays
 // inside root. Rejects empty/absolute segments and parent-traversal (..).
 // Use for any path built from request-derived input.
@@ -67,9 +79,8 @@ func safeJoin(root string, segs ...string) (string, error) {
 		return "", err
 	}
 	cleaned := filepath.Clean(filepath.Join(append([]string{rootAbs}, segs...)...))
-	rel, err := filepath.Rel(rootAbs, cleaned)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("safeJoin: path escapes root")
+	if err := withinRoot(rootAbs, cleaned); err != nil {
+		return "", fmt.Errorf("safeJoin: %w", err)
 	}
 	return cleaned, nil
 }
@@ -89,9 +100,8 @@ func ensureUnderRoot(path string) error {
 	if err != nil {
 		return err
 	}
-	rel, err := filepath.Rel(rootAbs, filepath.Clean(pathAbs))
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("ensureUnderRoot: path escapes root")
+	if err := withinRoot(rootAbs, pathAbs); err != nil {
+		return fmt.Errorf("ensureUnderRoot: %w", err)
 	}
 	return nil
 }
@@ -437,7 +447,7 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 			parent := parents[childID]
 			// Fresh parser per subagent file — claudecode.Parser is stateful
 			// (lastRequestID / pendingContrib) and would carry state across files otherwise.
-			subPath, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName, "subagents", filepath.Base(ent.Name()))
+			subPath, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName, "subagents", ent.Name())
 			if err != nil {
 				continue
 			}

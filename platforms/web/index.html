@@ -1153,15 +1153,17 @@
 
     function dotBar(total, done) {
       const maxDots = 7;
-      // Clamp WS-supplied counts so repeat() can never receive an unbounded length,
-      // even if the server sends a malformed convoy work_unit.
-      const t = Math.max(0, Math.min(Number(total) | 0, 1000));
-      const d = Math.max(0, Math.min(Number(done) | 0, 1000));
-      const totalDots = Math.min(t, maxDots);
+      // Coerce inputs to integers and bound the final dot counts by maxDots
+      // (a literal) so repeat() is provably bounded regardless of WS payload.
+      // Behaviour for legitimate inputs is unchanged at any scale: the
+      // done/total ratio still drives filled-vs-empty.
+      const t = Number(total) | 0;
+      const d = Number(done) | 0;
+      const totalDots = Math.max(0, Math.min(t, maxDots));
       if (totalDots <= 0) return '';
       const filled = t <= maxDots ? d : Math.round(d / t * maxDots);
-      const filledDots = Math.max(0, Math.min(filled, totalDots));
-      const emptyDots = Math.max(0, totalDots - filledDots);
+      const filledDots = Math.max(0, Math.min(filled, totalDots, maxDots));
+      const emptyDots = Math.max(0, Math.min(totalDots - filledDots, maxDots));
       return '\u25CF'.repeat(filledDots) + '\u25CB'.repeat(emptyDots);
     }
 
