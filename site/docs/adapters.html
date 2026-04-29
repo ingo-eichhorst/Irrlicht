@@ -262,7 +262,7 @@
         <li>At least <strong>180 days</strong> since the adapter first shipped in a tagged Irrlicht release</li>
         <li>Zero <code>bug</code>-labeled issues opened against the adapter in the last <strong>30 days</strong></li>
         <li>Fixtures regenerated against the agent CLI version currently shipping upstream (matches the relevant entry in <code>min_versions</code> in <code>scenarios.json</code>)</li>
-        <li>The adapter ran cleanly through at least one Irrlicht release tagged in the last 60 days</li>
+        <li>The adapter package is settled: <code>git log core/adapters/inbound/agents/&lt;name&gt;/ --since=30.days.ago</code> shows no refactors or new features &mdash; only reactive changes (upstream agent CLI format updates, new platform versions)</li>
       </ul>
 
       <h4>Demotion</h4>
