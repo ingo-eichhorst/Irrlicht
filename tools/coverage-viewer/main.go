@@ -395,14 +395,17 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
-	eventsPath, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName, "events.jsonl")
+	scenarioDir, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName)
 	if err != nil {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 	resp := timelineResp{Adapter: adapter, Scenario: scenarioName}
 
-	eventEntries, parents, err := loadEvents(eventsPath)
+	// scenarioDir is safeJoin-validated; loadEvents/loadTranscript re-gate via
+	// ensureUnderRoot at their os.Open sinks, and os.ReadDir below has its own
+	// inline gate. Leaf paths can therefore use plain filepath.Join.
+	eventEntries, parents, err := loadEvents(filepath.Join(scenarioDir, "events.jsonl"))
 	if err != nil && !os.IsNotExist(err) {
 		httpError(w, err)
 		return
@@ -413,12 +416,7 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 	if parser == nil {
 		resp.Note = "transcript not parsed for adapter: " + adapter + " (e.g. aider markdown)"
 	} else {
-		transcriptPath, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName, "transcript.jsonl")
-		if err != nil {
-			http.Error(w, "bad path", http.StatusBadRequest)
-			return
-		}
-		txEntries, err := loadTranscript(transcriptPath, parser, laneAgent, primarySessionID(eventEntries))
+		txEntries, err := loadTranscript(filepath.Join(scenarioDir, "transcript.jsonl"), parser, laneAgent, primarySessionID(eventEntries))
 		if err != nil && !os.IsNotExist(err) {
 			httpError(w, err)
 			return
@@ -433,8 +431,8 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subDir, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName, "subagents")
-	if err != nil {
+	subDir := filepath.Join(scenarioDir, "subagents")
+	if err := ensureUnderRoot(subDir); err != nil {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
@@ -447,11 +445,7 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 			parent := parents[childID]
 			// Fresh parser per subagent file — claudecode.Parser is stateful
 			// (lastRequestID / pendingContrib) and would carry state across files otherwise.
-			subPath, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName, "subagents", ent.Name())
-			if err != nil {
-				continue
-			}
-			subEntries, err := loadTranscript(subPath, newParserFor(adapter), laneSubagent, childID)
+			subEntries, err := loadTranscript(filepath.Join(subDir, ent.Name()), newParserFor(adapter), laneSubagent, childID)
 			if err != nil {
 				continue
 			}
