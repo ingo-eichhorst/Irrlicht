@@ -45,6 +45,7 @@ var Version = "dev"
 const (
 	defaultBindAddr = "127.0.0.1:7837"
 	tcpPort         = 7837
+	envUIDir        = "IRRLICHT_UI_DIR"
 )
 
 // resolveBindAddr returns the TCP bind address for the daemon. Default is
@@ -212,12 +213,12 @@ func main() {
 		logger.LogInfo("startup", "", fmt.Sprintf("serving UI from %s", uiDir))
 		mux.Handle("/", http.FileServer(http.Dir(uiDir)))
 	} else {
-		logger.LogError("startup", "", "UI directory not found — set IRRLICHT_UI_DIR to the directory containing index.html")
+		logger.LogError("startup", "", fmt.Sprintf("UI directory not found — set %s to the directory containing index.html", envUIDir))
+		body := fmt.Sprintf("Dashboard UI not found.\nSet %s to the directory containing index.html, or reinstall via the DMG / curl installer.\n", envUIDir)
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintln(w, "Dashboard UI not found.")
-			fmt.Fprintln(w, "Set IRRLICHT_UI_DIR to the directory containing index.html, or reinstall via the DMG / curl installer.")
+			fmt.Fprint(w, body)
 		})
 	}
 
@@ -472,13 +473,23 @@ func runCapacityRefreshLoop(ctx context.Context, logger outbound.Logger, initial
 	}
 }
 
+// dataDir returns the irrlichd state directory (~/.local/share/irrlicht).
+// home should come from os.UserHomeDir(); pass "" only when the lookup
+// failed.
+func dataDir(home string) string {
+	if home == "" {
+		return "/tmp/irrlicht"
+	}
+	return filepath.Join(home, ".local", "share", "irrlicht")
+}
+
 // socketPath returns the Unix socket path for irrlichd.
 func socketPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "/tmp/irrlichd.sock"
 	}
-	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichd.sock")
+	return filepath.Join(dataDir(home), "irrlichd.sock")
 }
 
 // resolveUIDir locates the directory containing the dashboard's index.html.
@@ -486,7 +497,7 @@ func socketPath() string {
 func resolveUIDir() string {
 	exe, _ := os.Executable()
 	home, _ := os.UserHomeDir()
-	return resolveUIDirFor(os.Getenv("IRRLICHT_UI_DIR"), exe, home)
+	return resolveUIDirFor(os.Getenv(envUIDir), exe, home)
 }
 
 // resolveUIDirFor is the pure variant of resolveUIDir for testing. Search
@@ -516,7 +527,7 @@ func resolveUIDirFor(env, exe, home string) string {
 		}
 	}
 	if home != "" {
-		if cand := filepath.Join(home, ".local", "share", "irrlicht", "web"); hasIndex(cand) {
+		if cand := filepath.Join(dataDir(home), "web"); hasIndex(cand) {
 			return cand
 		}
 	}
@@ -733,8 +744,7 @@ func historySnapshotProvider(ht *services.HistoryTracker) wshub.ConnectSnapshots
 // shutdown and history regresses to the last periodic tick.
 func startHistoryTracker(logger outbound.Logger) (*services.HistoryTracker, context.CancelFunc) {
 	home, _ := os.UserHomeDir()
-	histDir := filepath.Join(home, ".local", "share", "irrlicht")
-	ht := services.NewHistoryTrackerWithDir(histDir)
+	ht := services.NewHistoryTrackerWithDir(dataDir(home))
 	ht.Load()
 	ctx, cancel := context.WithCancel(context.Background())
 	go ht.Run(ctx)
