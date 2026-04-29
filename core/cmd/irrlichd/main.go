@@ -482,11 +482,23 @@ func socketPath() string {
 }
 
 // resolveUIDir locates the directory containing the dashboard's index.html.
-// Search order: $IRRLICHT_UI_DIR → <exe>/../Resources/web (production .app
-// bundle) → ~/.local/share/irrlicht/web (daemon-only curl install) → walk up
-// from the executable looking for platforms/web/index.html (dev checkout).
-// Returns "" if none of these contain an index.html.
+// See resolveUIDirFor for the search order.
 func resolveUIDir() string {
+	exe, _ := os.Executable()
+	home, _ := os.UserHomeDir()
+	return resolveUIDirFor(os.Getenv("IRRLICHT_UI_DIR"), exe, home)
+}
+
+// resolveUIDirFor is the pure variant of resolveUIDir for testing. Search
+// order: env → <exe>/../Resources/web (production .app bundle) → <home>/
+// .local/share/irrlicht/web (daemon-only curl install) → walk up from <exe>
+// to the enclosing repo root (a directory containing .git) and check for
+// platforms/web/index.html (dev checkout). Returns "" on miss.
+//
+// The dev walk-up is bounded by .git so it can't escape a git worktree
+// into a parent repo's platforms/web/ — that bug would silently serve the
+// wrong dashboard during dev.
+func resolveUIDirFor(env, exe, home string) string {
 	hasIndex := func(dir string) bool {
 		if dir == "" {
 			return false
@@ -495,16 +507,15 @@ func resolveUIDir() string {
 		return err == nil
 	}
 
-	if v := os.Getenv("IRRLICHT_UI_DIR"); hasIndex(v) {
-		return v
+	if hasIndex(env) {
+		return env
 	}
-	exe, _ := os.Executable()
 	if exe != "" {
 		if cand := filepath.Join(filepath.Dir(exe), "..", "Resources", "web"); hasIndex(cand) {
 			return cand
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	if home != "" {
 		if cand := filepath.Join(home, ".local", "share", "irrlicht", "web"); hasIndex(cand) {
 			return cand
 		}
@@ -512,8 +523,11 @@ func resolveUIDir() string {
 	if exe != "" {
 		dir := filepath.Dir(exe)
 		for range 8 {
-			if cand := filepath.Join(dir, "platforms", "web"); hasIndex(cand) {
-				return cand
+			if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+				if cand := filepath.Join(dir, "platforms", "web"); hasIndex(cand) {
+					return cand
+				}
+				return "" // repo root found, no UI inside — don't escape
 			}
 			parent := filepath.Dir(dir)
 			if parent == dir {
