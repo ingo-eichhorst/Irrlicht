@@ -23,13 +23,7 @@ echo "============================================="
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-# ── 1. Sync web frontend ──────────────────────────────────────────────
-echo ""
-echo "Syncing web frontend..."
-mkdir -p core/cmd/irrlichd/ui
-cp platforms/web/index.html core/cmd/irrlichd/ui/index.html
-
-# ── 2. Build Go binaries (universal) ─────────────────────────────────
+# ── 1. Build Go binaries (universal) ─────────────────────────────────
 echo ""
 echo "Building Go binaries..."
 
@@ -54,6 +48,20 @@ cd ..
 echo "  Testing daemon..."
 "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" --version
 
+# ── 1b. Tarball the standalone daemon with its UI ────────────────────
+# The curl --daemon-only installer downloads this tarball; the daemon
+# resolves the UI from ~/.local/share/irrlicht/web at runtime.
+echo ""
+echo "Creating standalone daemon tarball..."
+TARBALL_STAGING="$BUILD_DIR/tarball-staging"
+rm -rf "$TARBALL_STAGING"
+mkdir -p "$TARBALL_STAGING/web"
+cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$TARBALL_STAGING/${DAEMON_NAME}"
+cp platforms/web/index.html "$TARBALL_STAGING/web/index.html"
+tar -czf "$BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz" -C "$TARBALL_STAGING" .
+rm -rf "$TARBALL_STAGING"
+echo "  Created $BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz"
+
 # ── 3. Build Swift macOS app (.app bundle) ─────────────────────────────
 echo ""
 echo "Building macOS app..."
@@ -77,9 +85,13 @@ echo "  Built: $SWIFT_BIN"
 APP_BUNDLE="$BUILD_DIR/${APP_NAME}.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 mkdir -p "$APP_CONTENTS/MacOS"
-mkdir -p "$APP_CONTENTS/Resources"
+mkdir -p "$APP_CONTENTS/Resources/web"
 
 cp "$SWIFT_BIN" "$APP_CONTENTS/MacOS/${APP_NAME}"
+
+# Web UI lives next to the daemon — resolved by irrlichd at runtime via
+# <exe>/../Resources/web (see resolveUIDir in core/cmd/irrlichd/main.go).
+cp platforms/web/index.html "$APP_CONTENTS/Resources/web/index.html"
 
 # Embed daemon and CLI tools inside the app bundle (single-artifact distribution)
 cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
@@ -243,7 +255,7 @@ echo "  Created $BUILD_DIR/$PKG_NAME"
 echo ""
 echo "Calculating checksums..."
 cd "$BUILD_DIR"
-shasum -a 256 "$DMG_NAME" "$PKG_NAME" ${DAEMON_NAME}-darwin-universal > checksums.sha256
+shasum -a 256 "$DMG_NAME" "$PKG_NAME" ${DAEMON_NAME}-darwin-universal.tar.gz > checksums.sha256
 cd ..
 
 # ── 8. Summary ─────────────────────────────────────────────────────────

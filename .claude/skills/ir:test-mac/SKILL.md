@@ -19,9 +19,9 @@ Build the irrlicht daemon and Swift app, then replace all running instances with
    ```
    All subsequent steps use `$REPO_ROOT` instead of hardcoded paths.
 
-1. **Build the Go daemon** — ensure the embedded `ui/` dir exists (generated file, not committed)
+1. **Build the Go daemon** — the daemon resolves the dashboard from `platforms/web/index.html` at runtime via a walk-up search from its own executable; no embed, no codegen.
    ```bash
-   mkdir -p "$REPO_ROOT/core/cmd/irrlichd/ui" && cp /Users/ingo/projects/irrlicht/core/cmd/irrlichd/ui/index.html "$REPO_ROOT/core/cmd/irrlichd/ui/index.html" 2>/dev/null; cd "$REPO_ROOT/core" && go build -o /Users/ingo/projects/irrlicht/core/bin/irrlichd ./cmd/irrlichd
+   cd "$REPO_ROOT/core" && go build -o /Users/ingo/projects/irrlicht/core/bin/irrlichd ./cmd/irrlichd
    ```
    Note: the binary is always placed in the main repo's `bin/` so the launch step has a stable path.
 
