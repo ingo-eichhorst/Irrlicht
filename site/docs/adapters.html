@@ -265,21 +265,6 @@
         <li>The adapter package is settled: <code>git log core/adapters/inbound/agents/&lt;name&gt;/ --since=30.days.ago</code> shows no refactors or new features &mdash; only reactive changes (upstream agent CLI format updates, new platform versions)</li>
       </ul>
 
-      <h4>Demotion</h4>
-
-      <p>An adapter drops one tier until repaired when any of the following is true:</p>
-
-      <ul>
-        <li>An upstream transcript-format change breaks committed fixtures (drops to <code>alpha</code> until fixtures are re-recorded)</li>
-        <li>A new lifecycle state appears in the agent that this adapter does not emit</li>
-        <li>A <code>bug</code>-labeled issue with <code>Priority-High</code> is opened against the adapter</li>
-      </ul>
-
-      <div class="callout callout-info">
-        <strong>Demotion is not punishment.</strong>
-        It is a signal that the adapter no longer meets the bar of its current tier. Fix the regression, re-record fixtures, and the adapter is promoted back.
-      </div>
-
       <h3 id="platform-stages">Platform stages</h3>
 
       <p>The same four labels apply to platforms (macOS app, Web dashboard, CLI, Linux). Platforms have no transcripts to verify, so the criteria are simpler but follow the same time-and-bug-count discipline.</p>
