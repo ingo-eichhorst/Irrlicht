@@ -864,10 +864,11 @@
     let currentBucketCount = 60;
     // historyByGranularity[g][sessionID] is a 60-element oldest→newest array of state names
     // (or "" for no-data buckets). Mirrored from the daemon's bit-packed wire format.
-    const historyByGranularity = {1: {}, 10: {}, 60: {}};
+    // Inner dicts are null-prototype so server-supplied keys can never reach Object.prototype.
+    const historyByGranularity = {1: Object.create(null), 10: Object.create(null), 60: Object.create(null)};
     // lastTickGen[sessionID][granularity] = highest applied tick generation. Lets us drop
     // a tick that's already reflected in our snapshot (closing the connect-time race).
-    const lastTickGen = {};
+    const lastTickGen = Object.create(null);
 
     const HISTORY_PRIORITY_TO_STATE = ['ready', 'working', 'waiting', ''];
     function historyPriorityForState(s) {
@@ -897,7 +898,7 @@
     // Rebuild `timelineHistory` from the chosen granularity dict. The renderer
     // expects `states` to omit leading no-data slots so the bar right-anchors.
     function rebuildTimelineHistory() {
-      const dict = historyByGranularity[currentGranularity] || {};
+      const dict = historyByGranularity[currentGranularity] || Object.create(null);
       const newMap = new Map();
       for (const sid of Object.keys(dict)) {
         const buckets = dict[sid];
@@ -924,10 +925,10 @@
       // Seed the dedup high-water-mark from the snapshot so any tick already
       // folded into this snapshot gets skipped on arrival.
       if (generations) {
-        const perGran = lastTickGen[sessionID] || {};
+        const perGran = lastTickGen[sessionID] || Object.create(null);
         for (const granKey of Object.keys(generations)) {
           const gran = parseInt(granKey, 10);
-          if ([1, 10, 60].includes(gran)) perGran[gran] = generations[granKey];
+          if (gran === 1 || gran === 10 || gran === 60) perGran[gran] = generations[granKey];
         }
         lastTickGen[sessionID] = perGran;
       }
@@ -944,7 +945,7 @@
           const gen = bucketGenerations[sid];
           const last = (lastTickGen[sid] && lastTickGen[sid][granularitySec]) || 0;
           if (gen <= last) continue;
-          if (!lastTickGen[sid]) lastTickGen[sid] = {};
+          if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
           lastTickGen[sid][granularitySec] = gen;
         }
         let arr = dict[sid];
@@ -1152,10 +1153,18 @@
 
     function dotBar(total, done) {
       const maxDots = 7;
-      const totalDots = Math.min(total, maxDots);
+      // Coerce inputs to integers and bound the final dot counts by maxDots
+      // (a literal) so repeat() is provably bounded regardless of WS payload.
+      // Behaviour for legitimate inputs is unchanged at any scale: the
+      // done/total ratio still drives filled-vs-empty.
+      const t = Number(total) | 0;
+      const d = Number(done) | 0;
+      const totalDots = Math.max(0, Math.min(t, maxDots));
       if (totalDots <= 0) return '';
-      const filled = total <= maxDots ? done : Math.round(done / total * maxDots);
-      return '\u25CF'.repeat(Math.min(filled, totalDots)) + '\u25CB'.repeat(Math.max(totalDots - filled, 0));
+      const filled = t <= maxDots ? d : Math.round(d / t * maxDots);
+      const filledDots = Math.max(0, Math.min(filled, totalDots, maxDots));
+      const emptyDots = Math.max(0, Math.min(totalDots - filledDots, maxDots));
+      return '\u25CF'.repeat(filledDots) + '\u25CB'.repeat(emptyDots);
     }
 
     function renderOrchestrator() {
@@ -1217,7 +1226,7 @@
           html += '<div class="gt-convoy-row">';
           html += '<span class="gt-convoy-name' + (isDone ? ' done' : '') + '">' + esc(c.name) + '</span>';
           html += '<span class="gt-dotbar" style="color:' + (isDone ? 'var(--ready)' : 'var(--working)') + '">' + dotBar(c.total, c.done) + '</span>';
-          html += '<span class="gt-convoy-fraction">' + c.done + ' / ' + c.total + '</span>';
+          html += '<span class="gt-convoy-fraction">' + (Number(c.done) | 0) + ' / ' + (Number(c.total) | 0) + '</span>';
           if (isDone) html += '<span class="gt-convoy-check">\u2713</span>';
           html += '</div>';
         }
