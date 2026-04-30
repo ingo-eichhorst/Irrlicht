@@ -181,8 +181,9 @@ ok
 # ─── Daemon-only path ──────────────────────────────────────────────────────
 
 if [ "$DAEMON_ONLY" -eq 1 ]; then
-    ASSET="irrlichd-darwin-universal"
+    ASSET="irrlichd-darwin-universal.tar.gz"
     DEST="$HOME/.local/bin/irrlichd"
+    UI_DIR="$HOME/.local/share/irrlicht/web"
 
     step "Downloading $ASSET"
     curl -fsSL -o "$TMPDIR/$ASSET" "$BASE/$ASSET" || fail "Download failed"
@@ -193,9 +194,16 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
         || fail "Checksum mismatch — aborting"
     ok
 
+    step "Extracting $ASSET"
+    mkdir -p "$TMPDIR/extract"
+    tar -xzf "$TMPDIR/$ASSET" -C "$TMPDIR/extract" || fail "Extraction failed"
+    ok
+
     step "Installing to $DEST"
     mkdir -p "$(dirname "$DEST")"
-    install -m 755 "$TMPDIR/$ASSET" "$DEST"
+    install -m 755 "$TMPDIR/extract/irrlichd" "$DEST"
+    mkdir -p "$UI_DIR"
+    install -m 644 "$TMPDIR/extract/web/index.html" "$UI_DIR/index.html"
     ok
 
     say ""

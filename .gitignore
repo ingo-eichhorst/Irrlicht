@@ -41,10 +41,6 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
-# Web frontend embed copy (build artifact — source of truth: platforms/web/)
-# Run: go generate ./core/cmd/irrlichd/ or tools/build-release.sh
-core/cmd/irrlichd/ui/
-
 # Go build artifacts
 *.exe
 *.exe~

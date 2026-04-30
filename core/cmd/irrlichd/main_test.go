@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -37,8 +36,11 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 	hub := wshub.NewHub(push, nil)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 
-	uiSub, _ := fs.Sub(uiFS, "ui")
-	mux.Handle("/", http.FileServer(http.FS(uiSub)))
+	uiDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(uiDir, "index.html"), []byte("<h1>ok</h1>"), 0644); err != nil {
+		t.Fatalf("write stub index.html: %v", err)
+	}
+	mux.Handle("/", http.FileServer(http.Dir(uiDir)))
 
 	return httptest.NewServer(mux), repo
 }
@@ -421,4 +423,112 @@ func TestGate_UIServed(t *testing.T) {
 	if !strings.Contains(ct, "text/html") {
 		t.Errorf("Content-Type: got %q, want text/html", ct)
 	}
+}
+
+// TestResolveUIDir covers each branch of the runtime UI lookup and the
+// worktree-isolation guarantee of the dev walk-up.
+func TestResolveUIDir(t *testing.T) {
+	// writeIndex creates dir/index.html and returns dir.
+	writeIndex := func(dir string) string {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", dir, err)
+		}
+		return dir
+	}
+	// markRepo writes a .git marker file in dir (mimics a worktree's .git file).
+	markRepo := func(dir string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: x"), 0o644); err != nil {
+			t.Fatalf("write .git: %v", err)
+		}
+	}
+
+	t.Run("env wins when index present", func(t *testing.T) {
+		envDir := writeIndex(filepath.Join(t.TempDir(), "env"))
+		if got := resolveUIDirFor(envDir, "", ""); got != envDir {
+			t.Errorf("got %q, want %q", got, envDir)
+		}
+	})
+
+	t.Run("env without index falls through", func(t *testing.T) {
+		emptyEnv := t.TempDir()
+		homeDir := t.TempDir()
+		webDir := writeIndex(filepath.Join(homeDir, ".local", "share", "irrlicht", "web"))
+		if got := resolveUIDirFor(emptyEnv, "", homeDir); got != webDir {
+			t.Errorf("got %q, want %q", got, webDir)
+		}
+	})
+
+	t.Run("exe Resources/web (production .app)", func(t *testing.T) {
+		bundle := t.TempDir()
+		exe := filepath.Join(bundle, "MacOS", "irrlichd")
+		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+			t.Fatalf("mkdir MacOS: %v", err)
+		}
+		want := writeIndex(filepath.Join(bundle, "Resources", "web"))
+		got := resolveUIDirFor("", exe, "")
+		// filepath.Join collapses ../, but the lookup uses
+		// <exe>/../Resources/web literally — compare via Clean.
+		if filepath.Clean(got) != filepath.Clean(want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("home .local/share/irrlicht/web (daemon-only install)", func(t *testing.T) {
+		homeDir := t.TempDir()
+		want := writeIndex(filepath.Join(homeDir, ".local", "share", "irrlicht", "web"))
+		if got := resolveUIDirFor("", "", homeDir); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("dev walk-up finds repo platforms/web", func(t *testing.T) {
+		repo := t.TempDir()
+		markRepo(repo)
+		want := writeIndex(filepath.Join(repo, "platforms", "web"))
+		exe := filepath.Join(repo, "core", "bin", "irrlichd")
+		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+			t.Fatalf("mkdir bin: %v", err)
+		}
+		if got := resolveUIDirFor("", exe, ""); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("walk-up does not escape inner repo into outer", func(t *testing.T) {
+		// Outer "fake parent repo" with platforms/web/index.html — must NOT
+		// be served when the binary lives inside an inner repo (worktree).
+		outer := t.TempDir()
+		markRepo(outer)
+		writeIndex(filepath.Join(outer, "platforms", "web"))
+
+		inner := filepath.Join(outer, "worktrees", "wt-1")
+		markRepo(inner) // inner has .git but no platforms/web/
+		exe := filepath.Join(inner, "core", "bin", "irrlichd")
+		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+			t.Fatalf("mkdir bin: %v", err)
+		}
+		if got := resolveUIDirFor("", exe, ""); got != "" {
+			t.Errorf("expected isolation (empty), got %q", got)
+		}
+	})
+
+	t.Run("no source matches returns empty", func(t *testing.T) {
+		// exe in a tree with no .git anywhere → walk-up exhausts → "".
+		emptyHome := t.TempDir()
+		exe := filepath.Join(t.TempDir(), "elsewhere", "irrlichd")
+		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if got := resolveUIDirFor("", exe, emptyHome); got != "" {
+			t.Errorf("expected empty, got %q", got)
+		}
+	})
 }

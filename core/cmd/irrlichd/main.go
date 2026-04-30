@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"embed"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -41,17 +39,13 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-//go:generate sh -c "mkdir -p ui && cp ../../../platforms/web/index.html ui/index.html"
-
-//go:embed ui
-var uiFS embed.FS
-
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
 var Version = "dev"
 
 const (
 	defaultBindAddr = "127.0.0.1:7837"
 	tcpPort         = 7837
+	envUIDir        = "IRRLICHT_UI_DIR"
 )
 
 // resolveBindAddr returns the TCP bind address for the daemon. Default is
@@ -212,14 +206,21 @@ func main() {
 	mux.HandleFunc("GET /debug/pprof/symbol", localhostOnly(pprof.Symbol))
 	mux.HandleFunc("GET /debug/pprof/trace", localhostOnly(pprof.Trace))
 
-	// Static web UI: serve the embedded ui/ directory at root.
-	// API routes registered above take precedence over the catch-all "/".
-	uiSub, err := fs.Sub(uiFS, "ui")
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to sub ui fs: %v", err))
-		os.Exit(1)
+	// Static web UI: served from disk so the dashboard ships as an external
+	// file (one copy in the repo at platforms/web/index.html). API routes
+	// registered above take precedence over the catch-all "/".
+	if uiDir := resolveUIDir(); uiDir != "" {
+		logger.LogInfo("startup", "", fmt.Sprintf("serving UI from %s", uiDir))
+		mux.Handle("/", http.FileServer(http.Dir(uiDir)))
+	} else {
+		logger.LogError("startup", "", fmt.Sprintf("UI directory not found — set %s to the directory containing index.html", envUIDir))
+		body := fmt.Sprintf("Dashboard UI not found.\nSet %s to the directory containing index.html, or reinstall via the DMG / curl installer.\n", envUIDir)
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, body)
+		})
 	}
-	mux.Handle("/", http.FileServer(http.FS(uiSub)))
 
 	// WriteTimeout is intentionally 0: WebSocket streams and long-polling
 	// responses need unbounded writes, and gorilla/websocket sets its own
@@ -472,13 +473,81 @@ func runCapacityRefreshLoop(ctx context.Context, logger outbound.Logger, initial
 	}
 }
 
+// dataDir returns the irrlichd state directory (~/.local/share/irrlicht).
+// home should come from os.UserHomeDir(); pass "" only when the lookup
+// failed.
+func dataDir(home string) string {
+	if home == "" {
+		return "/tmp/irrlicht"
+	}
+	return filepath.Join(home, ".local", "share", "irrlicht")
+}
+
 // socketPath returns the Unix socket path for irrlichd.
 func socketPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "/tmp/irrlichd.sock"
 	}
-	return filepath.Join(home, ".local", "share", "irrlicht", "irrlichd.sock")
+	return filepath.Join(dataDir(home), "irrlichd.sock")
+}
+
+// resolveUIDir locates the directory containing the dashboard's index.html.
+// See resolveUIDirFor for the search order.
+func resolveUIDir() string {
+	exe, _ := os.Executable()
+	home, _ := os.UserHomeDir()
+	return resolveUIDirFor(os.Getenv(envUIDir), exe, home)
+}
+
+// resolveUIDirFor is the pure variant of resolveUIDir for testing. Search
+// order: env → <exe>/../Resources/web (production .app bundle) → <home>/
+// .local/share/irrlicht/web (daemon-only curl install) → walk up from <exe>
+// to the enclosing repo root (a directory containing .git) and check for
+// platforms/web/index.html (dev checkout). Returns "" on miss.
+//
+// The dev walk-up is bounded by .git so it can't escape a git worktree
+// into a parent repo's platforms/web/ — that bug would silently serve the
+// wrong dashboard during dev.
+func resolveUIDirFor(env, exe, home string) string {
+	hasIndex := func(dir string) bool {
+		if dir == "" {
+			return false
+		}
+		_, err := os.Stat(filepath.Join(dir, "index.html"))
+		return err == nil
+	}
+
+	if hasIndex(env) {
+		return env
+	}
+	if exe != "" {
+		if cand := filepath.Join(filepath.Dir(exe), "..", "Resources", "web"); hasIndex(cand) {
+			return cand
+		}
+	}
+	if home != "" {
+		if cand := filepath.Join(dataDir(home), "web"); hasIndex(cand) {
+			return cand
+		}
+	}
+	if exe != "" {
+		dir := filepath.Dir(exe)
+		for range 8 {
+			if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+				if cand := filepath.Join(dir, "platforms", "web"); hasIndex(cand) {
+					return cand
+				}
+				return "" // repo root found, no UI inside — don't escape
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return ""
 }
 
 // costTimeframeSeconds maps the four supported time-frame keys to their
@@ -675,8 +744,7 @@ func historySnapshotProvider(ht *services.HistoryTracker) wshub.ConnectSnapshots
 // shutdown and history regresses to the last periodic tick.
 func startHistoryTracker(logger outbound.Logger) (*services.HistoryTracker, context.CancelFunc) {
 	home, _ := os.UserHomeDir()
-	histDir := filepath.Join(home, ".local", "share", "irrlicht")
-	ht := services.NewHistoryTrackerWithDir(histDir)
+	ht := services.NewHistoryTrackerWithDir(dataDir(home))
 	ht.Load()
 	ctx, cancel := context.WithCancel(context.Background())
 	go ht.Run(ctx)
