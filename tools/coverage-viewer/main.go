@@ -42,6 +42,70 @@ const (
 // hash. Anything else (slashes, dots, ..) is rejected to prevent path escape.
 var safeSegment = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
 
+// withinRoot returns nil iff cleaned candidate stays inside rootAbs. Both
+// arguments must already be absolute paths. Note: this does not resolve
+// symlinks — fine for a localhost dev tool, but anyone reusing these helpers
+// in a network-exposed daemon should `filepath.EvalSymlinks` first.
+func withinRoot(rootAbs, candidate string) error {
+	rel, err := filepath.Rel(rootAbs, filepath.Clean(candidate))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes root")
+	}
+	return nil
+}
+
+// safeJoin joins segments under root and confirms the cleaned result stays
+// inside root. Rejects empty/absolute segments and parent-traversal (..).
+// Use for any path built from request-derived input.
+func safeJoin(root string, segs ...string) (string, error) {
+	if root == "" {
+		return "", fmt.Errorf("safeJoin: empty root")
+	}
+	for _, s := range segs {
+		if s == "" {
+			return "", fmt.Errorf("safeJoin: empty segment")
+		}
+		if filepath.IsAbs(s) {
+			return "", fmt.Errorf("safeJoin: absolute segment")
+		}
+		for _, part := range strings.Split(filepath.ToSlash(s), "/") {
+			if part == ".." {
+				return "", fmt.Errorf("safeJoin: parent traversal")
+			}
+		}
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	cleaned := filepath.Clean(filepath.Join(append([]string{rootAbs}, segs...)...))
+	if err := withinRoot(rootAbs, cleaned); err != nil {
+		return "", fmt.Errorf("safeJoin: %w", err)
+	}
+	return cleaned, nil
+}
+
+// ensureUnderRoot is a defense-in-depth gate at file-open sinks: even if a
+// caller built the path through safeJoin, helpers re-verify that the input
+// path stays inside *rootDir before touching the filesystem.
+func ensureUnderRoot(path string) error {
+	if *rootDir == "" {
+		return fmt.Errorf("ensureUnderRoot: empty root")
+	}
+	rootAbs, err := filepath.Abs(*rootDir)
+	if err != nil {
+		return err
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	if err := withinRoot(rootAbs, pathAbs); err != nil {
+		return fmt.Errorf("ensureUnderRoot: %w", err)
+	}
+	return nil
+}
+
 const (
 	githubRepoURL  = "https://github.com/ingo-eichhorst/Irrlicht"
 	scenariosJSON  = ".claude/skills/ir:onboard-agent/scenarios.json"
@@ -212,7 +276,10 @@ func deriveCell(adapter string, s scenario, caps map[string]any, transcriptExt s
 	if _, ok := s.ByAdapter[adapter]; !ok {
 		return cell{State: "missing-prompt", Reason: "no by_adapter." + adapter + " entry in scenarios.json"}
 	}
-	fixture := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", s.Name, "transcript."+transcriptExt)
+	fixture, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", s.Name, "transcript."+transcriptExt)
+	if err != nil {
+		return cell{State: "n/a", Reason: "invalid path"}
+	}
 	if _, err := os.Stat(fixture); err == nil {
 		return cell{State: "covered"}
 	}
@@ -328,9 +395,16 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
-	scenarioDir := filepath.Join(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName)
+	scenarioDir, err := safeJoin(*rootDir, replayAgentDir, adapter, "scenarios", scenarioName)
+	if err != nil {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
 	resp := timelineResp{Adapter: adapter, Scenario: scenarioName}
 
+	// scenarioDir is safeJoin-validated; loadEvents/loadTranscript re-gate via
+	// ensureUnderRoot at their os.Open sinks, and os.ReadDir below has its own
+	// inline gate. Leaf paths can therefore use plain filepath.Join.
 	eventEntries, parents, err := loadEvents(filepath.Join(scenarioDir, "events.jsonl"))
 	if err != nil && !os.IsNotExist(err) {
 		httpError(w, err)
@@ -358,6 +432,10 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	subDir := filepath.Join(scenarioDir, "subagents")
+	if err := ensureUnderRoot(subDir); err != nil {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
 	if entries, _ := os.ReadDir(subDir); len(entries) > 0 && parser != nil {
 		for _, ent := range entries {
 			if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".jsonl") {
@@ -387,6 +465,9 @@ func handleTimeline(w http.ResponseWriter, r *http.Request) {
 }
 
 func loadEvents(path string) ([]timelineEntry, map[string]string, error) {
+	if err := ensureUnderRoot(path); err != nil {
+		return nil, nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -432,6 +513,9 @@ func loadEvents(path string) ([]timelineEntry, map[string]string, error) {
 }
 
 func loadTranscript(path string, parser tailer.TranscriptParser, lane, sessionID string) ([]timelineEntry, error) {
+	if err := ensureUnderRoot(path); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -603,7 +687,10 @@ func loadScenarios() ([]scenario, error) {
 // loadCapabilities returns the adapter's feature map and its curated
 // transcript extension (defaulting to "jsonl" when the field is absent).
 func loadCapabilities(adapter string) (map[string]any, string, error) {
-	path := filepath.Join(*rootDir, replayAgentDir, adapter, "capabilities.json")
+	path, err := safeJoin(*rootDir, replayAgentDir, adapter, "capabilities.json")
+	if err != nil {
+		return nil, "", err
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, "", err
