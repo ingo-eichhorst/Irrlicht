@@ -857,122 +857,11 @@
     let currentTimeframe = localStorage.getItem('irrlicht_costTimeframe') || 'day';
     if (!COST_TIMEFRAMES.find(t => t.key === currentTimeframe)) currentTimeframe = 'day';
 
-    // --- Timeline / history state (WebSocket-streamed, see history_snapshot/tick/upgrade) ---
-    let timelineHistory = new Map(); // session_id -> {label, states: string[]} for the active granularity
+    // --- Timeline / history state (server-backed) ---
+    let timelineHistory = new Map(); // session_id -> {label, states: string[]}
     let currentGranularity = parseInt(localStorage.getItem('irrlicht_granularity') || '1', 10);
     if (![1, 10, 60].includes(currentGranularity)) currentGranularity = 1;
-    let currentBucketCount = 60;
-    // historyByGranularity[g][sessionID] is a 60-element oldest→newest array of state names
-    // (or "" for no-data buckets). Mirrored from the daemon's bit-packed wire format.
-    const historyByGranularity = {1: {}, 10: {}, 60: {}};
-    // lastTickGen[sessionID][granularity] = highest applied tick generation. Lets us drop
-    // a tick that's already reflected in our snapshot (closing the connect-time race).
-    const lastTickGen = {};
-
-    const HISTORY_PRIORITY_TO_STATE = ['ready', 'working', 'waiting', ''];
-    function historyPriorityForState(s) {
-      switch (s) {
-        case 'waiting': return 2;
-        case 'working': return 1;
-        case 'ready':   return 0;
-        default:        return -1;
-      }
-    }
-    function decodeHistoryBuckets(b64) {
-      // Daemon ships 60 buckets × 2 bits MSB-first = 15 bytes = 20 base64 chars.
-      let raw;
-      try { raw = atob(b64); } catch (e) { return null; }
-      if (raw.length !== 15) return null;
-      const out = new Array(60);
-      for (let i = 0; i < 15; i++) {
-        const byte = raw.charCodeAt(i);
-        out[i * 4 + 0] = HISTORY_PRIORITY_TO_STATE[(byte >> 6) & 0x3];
-        out[i * 4 + 1] = HISTORY_PRIORITY_TO_STATE[(byte >> 4) & 0x3];
-        out[i * 4 + 2] = HISTORY_PRIORITY_TO_STATE[(byte >> 2) & 0x3];
-        out[i * 4 + 3] = HISTORY_PRIORITY_TO_STATE[byte & 0x3];
-      }
-      return out;
-    }
-
-    // Rebuild `timelineHistory` from the chosen granularity dict. The renderer
-    // expects `states` to omit leading no-data slots so the bar right-anchors.
-    function rebuildTimelineHistory() {
-      const dict = historyByGranularity[currentGranularity] || {};
-      const newMap = new Map();
-      for (const sid of Object.keys(dict)) {
-        const buckets = dict[sid];
-        let i = 0;
-        while (i < buckets.length && buckets[i] === '') i++;
-        const states = buckets.slice(i);
-        const entry = sessionIndex.get(sid);
-        const label = entry
-          ? (entry.agent.project_name || '').slice(0, 10) + ' ' + shortID(sid)
-          : shortID(sid);
-        newMap.set(sid, {label, states});
-      }
-      timelineHistory = newMap;
-    }
-
-    function applyHistorySnapshot(sessionID, history, generations) {
-      for (const granKey of Object.keys(history)) {
-        const gran = parseInt(granKey, 10);
-        if (![1, 10, 60].includes(gran)) continue;
-        const buckets = decodeHistoryBuckets(history[granKey]);
-        if (!buckets) continue;
-        historyByGranularity[gran][sessionID] = buckets;
-      }
-      // Seed the dedup high-water-mark from the snapshot so any tick already
-      // folded into this snapshot gets skipped on arrival.
-      if (generations) {
-        const perGran = lastTickGen[sessionID] || {};
-        for (const granKey of Object.keys(generations)) {
-          const gran = parseInt(granKey, 10);
-          if ([1, 10, 60].includes(gran)) perGran[gran] = generations[granKey];
-        }
-        lastTickGen[sessionID] = perGran;
-      }
-      rebuildTimelineHistory();
-    }
-
-    function applyHistoryTick(granularitySec, buckets, bucketGenerations) {
-      if (![1, 10, 60].includes(granularitySec)) return;
-      const dict = historyByGranularity[granularitySec];
-      let changed = false;
-      for (const sid of Object.keys(buckets)) {
-        // Skip if this tick has already been folded into our snapshot.
-        if (bucketGenerations && bucketGenerations[sid] !== undefined) {
-          const gen = bucketGenerations[sid];
-          const last = (lastTickGen[sid] && lastTickGen[sid][granularitySec]) || 0;
-          if (gen <= last) continue;
-          if (!lastTickGen[sid]) lastTickGen[sid] = {};
-          lastTickGen[sid][granularitySec] = gen;
-        }
-        let arr = dict[sid];
-        if (!arr) arr = new Array(60).fill('');
-        arr.shift();
-        arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
-        while (arr.length < 60) arr.unshift('');
-        dict[sid] = arr;
-        changed = true;
-      }
-      if (changed && granularitySec === currentGranularity) rebuildTimelineHistory();
-    }
-
-    function applyHistoryUpgrade(sessionID, priority) {
-      const newState = HISTORY_PRIORITY_TO_STATE[priority & 0x3];
-      const newPrio = historyPriorityForState(newState);
-      let changedActive = false;
-      for (const gran of [1, 10, 60]) {
-        const arr = historyByGranularity[gran][sessionID];
-        if (!arr || arr.length === 0) continue;
-        const lastPrio = historyPriorityForState(arr[arr.length - 1]);
-        if (newPrio > lastPrio) {
-          arr[arr.length - 1] = newState;
-          if (gran === currentGranularity) changedActive = true;
-        }
-      }
-      if (changedActive) rebuildTimelineHistory();
-    }
+    let currentBucketCount = 150;
 
     // --- SVG Icons (compact 12px) ---
     const svgIcons = {
@@ -1115,10 +1004,6 @@
 
     function applySessionDelete(sessionId) {
       var entry = sessionIndex.get(sessionId);
-      delete lastTickGen[sessionId];
-      delete historyByGranularity[1][sessionId];
-      delete historyByGranularity[10][sessionId];
-      delete historyByGranularity[60][sessionId];
       if (!entry) return;
       sessionIndex.delete(sessionId);
       if (entry.parent) {
@@ -1650,16 +1535,30 @@
       }
     }
 
-    // repaintHistory repaints all history-bearing surfaces from `timelineHistory`.
-    // Called after rebuildTimelineHistory() on snapshot/tick/upgrade or when the
-    // user toggles granularity. No network I/O — history rides the WebSocket.
-    function repaintHistory() {
-      renderTimeline();
-      for (const el of document.querySelectorAll('.session-row')) {
-        const canvas = el.querySelector('.row-history');
-        const sid = el.dataset.sessionId;
-        if (canvas && sid) paintRowHistory(canvas, sid);
-      }
+    // pollHistory fetches server-aggregated history and rebuilds timelineHistory.
+    function pollHistory() {
+      fetch('/api/v1/sessions/history?granularity=' + currentGranularity)
+        .then(r => r.json()).catch(() => null)
+        .then(resp => {
+          if (!resp) return;
+          if (resp.bucket_count) currentBucketCount = resp.bucket_count;
+          const newMap = new Map();
+          for (const [sid, states] of Object.entries(resp.sessions || {})) {
+            const entry = sessionIndex.get(sid);
+            const label = entry
+              ? (entry.agent.project_name || '').slice(0, 10) + ' ' + shortID(sid)
+              : shortID(sid);
+            newMap.set(sid, {label, states});
+          }
+          timelineHistory = newMap;
+          renderTimeline();
+          // Repaint per-row bars
+          for (const el of document.querySelectorAll('.session-row')) {
+            const canvas = el.querySelector('.row-history');
+            const sid = el.dataset.sessionId;
+            if (canvas && sid) paintRowHistory(canvas, sid);
+          }
+        });
     }
 
     function renderTimeline() {
@@ -1717,13 +1616,22 @@
       }
     }
 
+    // Kick off server history polling — poll at granularity * 1000ms.
+    // Started by applyGranularity() below after DOM buttons are wired up.
+    let historyPollTimer = null;
+    function startHistoryPoll() {
+      if (historyPollTimer) clearInterval(historyPollTimer);
+      pollHistory();
+      historyPollTimer = setInterval(pollHistory, currentGranularity * 1000);
+    }
+
     // --- Initial load ---
     fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
       if (!resp) return;
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       rebuildIndex();
       render();
-      repaintHistory();
+      pollHistory();
     });
     // Periodic re-hydration so trailing-window costs (carried on each group
     // under `costs`) don't go stale between WebSocket deltas, which only
@@ -1767,21 +1675,6 @@
           orchestrator = orch.running ? orch : null;
           orchFull = orch.running ? orch : null;
           render();
-          return;
-        }
-        if (msg.type === 'history_snapshot' && msg.session_id && msg.history) {
-          applyHistorySnapshot(msg.session_id, msg.history, msg.generations);
-          repaintHistory();
-          return;
-        }
-        if (msg.type === 'history_tick' && typeof msg.granularity_sec === 'number' && msg.buckets) {
-          applyHistoryTick(msg.granularity_sec, msg.buckets, msg.bucket_generations);
-          if (msg.granularity_sec === currentGranularity) repaintHistory();
-          return;
-        }
-        if (msg.type === 'history_upgrade' && msg.session_id && typeof msg.priority === 'number') {
-          applyHistoryUpgrade(msg.session_id, msg.priority);
-          repaintHistory();
           return;
         }
         if (!msg.session) return;
@@ -1840,8 +1733,7 @@
       document.querySelectorAll('.timeline-gran-btn').forEach(b => {
         b.classList.toggle('active', parseInt(b.dataset.gran, 10) === g);
       });
-      rebuildTimelineHistory();
-      repaintHistory();
+      startHistoryPoll();
     }
 
     for (const btn of document.querySelectorAll('.timeline-gran-btn')) {
@@ -1861,7 +1753,7 @@
         document.body.classList.toggle('view-history', mode === 'history');
         // Repaint row bars immediately so there's no flash of empty canvases
         // when switching to history mode (offsetWidth is now non-zero).
-        if (mode === 'history') repaintHistory();
+        if (mode === 'history') pollHistory();
       });
     }
 
