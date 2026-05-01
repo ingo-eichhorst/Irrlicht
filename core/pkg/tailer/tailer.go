@@ -595,13 +595,6 @@ func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
 			if consumed == 0 {
 				return nil, 0, io.EOF
 			}
-			// Partial line at EOF — leave bytes for the next tail pass. This
-			// covers both small in-progress lines and oversized lines whose
-			// '\n' hasn't been flushed yet; in the latter case we'll re-read
-			// the same prefix on subsequent ticks until the line completes,
-			// at which point it surfaces as a single errLineTooLong with the
-			// real total size. Without this, the tail beyond `consumed` would
-			// be silently consumed at the JSON-validity check next tick.
 			return nil, 0, errPartialAtEOF
 		default:
 			return nil, 0, err
