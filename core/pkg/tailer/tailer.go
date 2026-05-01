@@ -545,12 +545,15 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 //
 // Outcomes:
 //   - (line, consumed, nil): full line read.
-//   - (nil, consumed, errLineTooLong): line exceeded max; bytes were
-//     discarded and consumed reflects the skip distance.
+//   - (nil, consumed, errLineTooLong): line exceeded max and ended with '\n';
+//     bytes were discarded and consumed reflects the skip distance.
 //   - (nil, 0, io.EOF): clean EOF, no bytes read.
-//   - (nil, 0, errPartialAtEOF): EOF reached before '\n' with bytes pending;
-//     caller stops without advancing so the partial line is re-read on the
-//     next pass once more data is appended.
+//   - (nil, 0, errPartialAtEOF): EOF reached before '\n' with bytes pending —
+//     either an in-progress line below the cap or one that has already grown
+//     past the cap but the writer hasn't flushed '\n' yet. Caller stops
+//     without advancing so the bytes are re-read once more data is appended;
+//     when the line eventually completes it is reported as either a success
+//     or errLineTooLong with a single accurate consumed count.
 //   - (nil, 0, err): other I/O error.
 func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
 	var (
@@ -562,8 +565,8 @@ func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
 		chunk, err := r.ReadSlice('\n')
 		consumed += int64(len(chunk))
 
-		switch {
-		case err == nil:
+		switch err {
+		case nil:
 			if skipping {
 				return nil, consumed, errLineTooLong
 			}
@@ -578,7 +581,7 @@ func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
 			}
 			buf = append(buf, line...)
 			return buf, consumed, nil
-		case errors.Is(err, bufio.ErrBufferFull):
+		case bufio.ErrBufferFull:
 			if skipping {
 				continue
 			}
@@ -588,17 +591,17 @@ func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
 				continue
 			}
 			buf = append(buf, chunk...)
-		case errors.Is(err, io.EOF):
+		case io.EOF:
 			if consumed == 0 {
 				return nil, 0, io.EOF
 			}
-			if skipping {
-				// Mid-skip EOF: treat as a fully-discarded oversized line so
-				// the caller advances past it — otherwise we'd re-read the
-				// same oversized prefix forever.
-				return nil, consumed, errLineTooLong
-			}
-			// Partial line at EOF — leave bytes for the next tail pass.
+			// Partial line at EOF — leave bytes for the next tail pass. This
+			// covers both small in-progress lines and oversized lines whose
+			// '\n' hasn't been flushed yet; in the latter case we'll re-read
+			// the same prefix on subsequent ticks until the line completes,
+			// at which point it surfaces as a single errLineTooLong with the
+			// real total size. Without this, the tail beyond `consumed` would
+			// be silently consumed at the JSON-validity check next tick.
 			return nil, 0, errPartialAtEOF
 		default:
 			return nil, 0, err

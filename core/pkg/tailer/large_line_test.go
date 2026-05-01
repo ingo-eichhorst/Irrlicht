@@ -184,3 +184,42 @@ func TestReadLineCapped_PartialAtEOF(t *testing.T) {
 		t.Errorf("consumed = %d, want 0", consumed)
 	}
 }
+
+// TestReadLineCapped_PartialOversizedAtEOF locks in the in-progress
+// oversized-line case: bytes already exceed max but the writer hasn't
+// flushed '\n' yet. Must surface as errPartialAtEOF (not errLineTooLong)
+// with consumed == 0 so the caller waits for the writer to finish the line.
+// Otherwise the tail beyond max would be silently swallowed by the
+// JSON-validity check on the next tick.
+func TestReadLineCapped_PartialOversizedAtEOF(t *testing.T) {
+	const max = 1024
+	// 4 KB of bytes, no trailing '\n' — exceeds the cap and is in-progress.
+	input := bytes.Repeat([]byte("a"), max*4)
+	r := bufio.NewReaderSize(bytes.NewReader(input), 256)
+	line, consumed, err := readLineCapped(r, max)
+	if !errors.Is(err, errPartialAtEOF) {
+		t.Fatalf("err = %v, want errPartialAtEOF", err)
+	}
+	if line != nil {
+		t.Errorf("line = %q, want nil", line)
+	}
+	if consumed != 0 {
+		t.Errorf("consumed = %d, want 0 (caller must not advance)", consumed)
+	}
+
+	// Simulate the writer flushing the rest of the line plus '\n'. The next
+	// pass (fresh reader from same underlying bytes) must report a single
+	// errLineTooLong with the full consumed count.
+	complete := append(append([]byte{}, input...), '\n')
+	r2 := bufio.NewReaderSize(bytes.NewReader(complete), 256)
+	line, consumed, err = readLineCapped(r2, max)
+	if !errors.Is(err, errLineTooLong) {
+		t.Fatalf("after completion: err = %v, want errLineTooLong", err)
+	}
+	if line != nil {
+		t.Errorf("after completion: line = %q, want nil", line)
+	}
+	if want := int64(len(complete)); consumed != want {
+		t.Errorf("after completion: consumed = %d, want %d", consumed, want)
+	}
+}
