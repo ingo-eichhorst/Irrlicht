@@ -58,9 +58,10 @@ tmux kill-session -t "$SESSION" 2>/dev/null || true
 
 # Start claude REPL detached. No `claude | tee` pipeline — same reason as
 # the pi/aider drivers: a pipeline would bind interrupt signals to the
-# whole process group.
-tmux new-session -d -s "$SESSION" -c "$RUN_CWD" \
-  "claude --session-id $UUID --settings $SETTINGS_PATH"
+# whole process group. Use tmux's argv-after-`--` form so each flag
+# stays its own word (no inner-string shell-quoting fragility).
+tmux new-session -d -s "$SESSION" -c "$RUN_CWD" -- \
+  claude --session-id "$UUID" --settings "$SETTINGS_PATH"
 tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout'"
 echo "[driver] tmux started: $SESSION (uuid=$UUID, cwd=$RUN_CWD)" >&2
 
@@ -143,6 +144,11 @@ EXPECTED_TURNS=0
 step_send() {
   local text="$1"
   tmux send-keys -t "$SESSION" -l -- "$text"
+  # Brief pause so the TUI's input handler renders the typed text before
+  # Enter lands. Defensive — claudecode hasn't been seen dropping Enter
+  # like codex's Ink-based input does, but the cost is trivial and the
+  # symptom (text in input box, no submit) would be hard to diagnose.
+  sleep 0.3
   tmux send-keys -t "$SESSION" Enter
   EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
   echo "[driver] send: ${text:0:60} (expecting turn $EXPECTED_TURNS)" >&2
