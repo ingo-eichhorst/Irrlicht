@@ -108,7 +108,7 @@
 
     {
       "name": "multi-turn-conversation",
-      "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation. Aider and pi cover this today; claudecode and codex pending interactive drivers.",
+      "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation.",
       "requires": ["headless_mode"],
       "verify": {
         "min_turns": 3,
@@ -116,6 +116,30 @@
       },
       "by_adapter": {
         "aider": {
+          "script": [
+            {"type": "send", "text": "Reply with exactly: turn-one"},
+            {"type": "wait_turn"},
+            {"type": "send", "text": "Reply with exactly: turn-two"},
+            {"type": "wait_turn"},
+            {"type": "send", "text": "Reply with exactly: turn-three"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        },
+        "claudecode": {
+          "script": [
+            {"type": "send", "text": "Reply with exactly: turn-one"},
+            {"type": "wait_turn"},
+            {"type": "send", "text": "Reply with exactly: turn-two"},
+            {"type": "wait_turn"},
+            {"type": "send", "text": "Reply with exactly: turn-three"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        },
+        "codex": {
           "script": [
             {"type": "send", "text": "Reply with exactly: turn-one"},
             {"type": "wait_turn"},
@@ -144,7 +168,7 @@
 
     {
       "name": "interrupted-turn",
-      "description": "User interrupts the agent mid-turn (interrupt key sent before the LLM round completes — Ctrl-C for aider, Escape for pi). The interrupted turn never produces a turn-done marker, so each adapter's parser must reset cleanly on the next user prompt. Aider and pi cover this today; claudecode and codex pending interactive drivers.",
+      "description": "User interrupts the agent mid-turn (interrupt key sent before the LLM round completes — Ctrl-C for aider, Escape for claudecode/codex/pi). The interrupted turn never produces a turn-done marker, so each adapter's parser must reset cleanly on the next user prompt.",
       "requires": ["headless_mode"],
       "verify": {
         "contains_interrupt": true,
@@ -155,6 +179,30 @@
           "script": [
             {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
             {"type": "sleep", "seconds": 8},
+            {"type": "interrupt"},
+            {"type": "sleep", "seconds": 3},
+            {"type": "send", "text": "Reply with exactly: ok"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 360
+        },
+        "claudecode": {
+          "script": [
+            {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
+            {"type": "sleep", "seconds": 4},
+            {"type": "interrupt"},
+            {"type": "sleep", "seconds": 3},
+            {"type": "send", "text": "Reply with exactly: ok"},
+            {"type": "wait_turn"}
+          ],
+          "settings": {},
+          "timeout_seconds": 360
+        },
+        "codex": {
+          "script": [
+            {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
+            {"type": "sleep", "seconds": 4},
             {"type": "interrupt"},
             {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: ok"},
