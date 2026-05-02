@@ -401,6 +401,52 @@ func TestLoadCachedRemoteData_OfflineFallback(t *testing.T) {
 	}
 }
 
+// TestLoadCachedRemoteData_ServesStaleCache pins the rule that pricing
+// data older than cacheTTL is still returned. Returning nil for stale
+// caches silently zeroed every cost downstream — a far worse outcome
+// than serving day-old prices. Refresh decisions stay with IsCacheStale.
+func TestLoadCachedRemoteData_ServesStaleCache(t *testing.T) {
+	withTempHome(t)
+
+	path, _ := cachePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stale := cachedCapacity{
+		FetchedAt: time.Now().Add(-2 * cacheTTL),
+		Config: capacityConfig{
+			Models: map[string]ModelCapacity{
+				"claude-opus-4-6": {
+					ContextWindow: 1000000,
+					Pricing:       &ModelPricing{InputPerMTok: 15, OutputPerMTok: 75},
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(stale)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+
+	got := loadCachedRemoteData()
+	if got == nil {
+		t.Fatal("loadCachedRemoteData returned nil for stale cache; stale pricing must still be served")
+	}
+	cap, ok := got.Models["claude-opus-4-6"]
+	if !ok {
+		t.Fatal("stale cache missing claude-opus-4-6")
+	}
+	if cap.Pricing == nil || cap.Pricing.InputPerMTok != 15 {
+		t.Errorf("stale pricing not preserved: %+v", cap.Pricing)
+	}
+
+	// IsCacheStale must still flag the cache so the daemon's refresh loop
+	// re-fetches; the two checks have different jobs.
+	if !IsCacheStale() {
+		t.Error("IsCacheStale should still report true for past-TTL cache")
+	}
+}
+
 // withTempHome points os.UserHomeDir() at a tempdir so cachePath() writes
 // are isolated per test.
 func withTempHome(t *testing.T) {
