@@ -179,7 +179,12 @@ func deriveFamilyFromLiteLLM(modelID, provider string) string {
 }
 
 // loadCachedRemoteData reads previously cached remote capacity data.
-// Returns nil if cache doesn't exist or is expired.
+// Returns nil only when the cache file is missing or unreadable. Stale
+// caches (older than cacheTTL) are still returned: pricing rarely shifts
+// fast enough to make day-old data dangerous, and serving zero cost
+// silently is worse than serving slightly stale numbers. The daemon's
+// background refresh loop uses IsCacheStale separately to decide when
+// to refetch.
 func loadCachedRemoteData() *capacityConfig {
 	path, err := cachePath()
 	if err != nil {
@@ -193,10 +198,6 @@ func loadCachedRemoteData() *capacityConfig {
 
 	var cached cachedCapacity
 	if err := json.Unmarshal(data, &cached); err != nil {
-		return nil
-	}
-
-	if time.Since(cached.FetchedAt) > cacheTTL {
 		return nil
 	}
 

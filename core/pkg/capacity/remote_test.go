@@ -291,9 +291,15 @@ func TestMaybeReload_PicksUpNewCache(t *testing.T) {
 	}
 }
 
-// writeCacheAt writes a cache file with the given models and sets its mtime.
+// writeCacheAt writes a cache file with the given models, creating parent
+// directories as needed and stamping both FetchedAt (in JSON) and the
+// file's mtime to `when`. Tests that target the real cachePath() rely on
+// the MkdirAll; tests that pass a t.TempDir() get it as a no-op.
 func writeCacheAt(t *testing.T, path string, models map[string]ModelCapacity, when time.Time) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 	cached := cachedCapacity{
 		FetchedAt: when,
 		Config:    capacityConfig{Models: models},
@@ -398,6 +404,62 @@ func TestLoadCachedRemoteData_OfflineFallback(t *testing.T) {
 	}
 	if got.Models["claude-sonnet-4-6"].ContextWindow != 200000 {
 		t.Errorf("cached ContextWindow = %d, want 200000", got.Models["claude-sonnet-4-6"].ContextWindow)
+	}
+}
+
+// staleCacheModels is the fixture both stale-cache tests load. Pricing
+// values are arbitrary but non-zero so a missing-pricing failure is
+// distinguishable from a zero-pricing one.
+var staleCacheModels = map[string]ModelCapacity{
+	"claude-opus-4-6": {
+		ContextWindow: 1000000,
+		Pricing:       &ModelPricing{InputPerMTok: 15, OutputPerMTok: 75},
+	},
+}
+
+// TestLoadCachedRemoteData_ServesStaleCache asserts cached pricing past
+// cacheTTL is still returned, and that IsCacheStale keeps its separate
+// refresh-signal job.
+func TestLoadCachedRemoteData_ServesStaleCache(t *testing.T) {
+	withTempHome(t)
+	path, _ := cachePath()
+	writeCacheAt(t, path, staleCacheModels, time.Now().Add(-2*cacheTTL))
+
+	got := loadCachedRemoteData()
+	if got == nil {
+		t.Fatal("loadCachedRemoteData returned nil for stale cache")
+	}
+	mc, ok := got.Models["claude-opus-4-6"]
+	if !ok {
+		t.Fatal("stale cache missing claude-opus-4-6")
+	}
+	if mc.Pricing == nil || mc.Pricing.InputPerMTok != 15 {
+		t.Errorf("stale pricing not preserved: %+v", mc.Pricing)
+	}
+	if !IsCacheStale() {
+		t.Error("IsCacheStale should still report true for past-TTL cache")
+	}
+}
+
+// TestGetModelCapacity_ServesStaleCache asserts the public API surfaces
+// stale pricing — the path the replay tool and CLI actually traverse.
+// A regression in maybeReload that re-introduced a stale gate would
+// slip past the loadCachedRemoteData-only test above.
+func TestGetModelCapacity_ServesStaleCache(t *testing.T) {
+	withTempHome(t)
+	path, _ := cachePath()
+	writeCacheAt(t, path, staleCacheModels, time.Now().Add(-2*cacheTTL))
+
+	// DefaultCapacityManager is a sync.Once singleton, so build a fresh
+	// manager bound to the same path withTempHome redirected cachePath() to.
+	cm := &CapacityManager{cachePath: path}
+
+	mc := cm.GetModelCapacity("claude-opus-4-6")
+	if mc.Pricing == nil {
+		t.Fatal("GetModelCapacity returned no pricing for stale cache")
+	}
+	if mc.Pricing.InputPerMTok != 15 || mc.Pricing.OutputPerMTok != 75 {
+		t.Errorf("stale pricing not surfaced via GetModelCapacity: %+v", mc.Pricing)
 	}
 }
 
