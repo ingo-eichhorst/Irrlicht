@@ -432,18 +432,60 @@ func TestLoadCachedRemoteData_ServesStaleCache(t *testing.T) {
 	if got == nil {
 		t.Fatal("loadCachedRemoteData returned nil for stale cache; stale pricing must still be served")
 	}
-	cap, ok := got.Models["claude-opus-4-6"]
+	mc, ok := got.Models["claude-opus-4-6"]
 	if !ok {
 		t.Fatal("stale cache missing claude-opus-4-6")
 	}
-	if cap.Pricing == nil || cap.Pricing.InputPerMTok != 15 {
-		t.Errorf("stale pricing not preserved: %+v", cap.Pricing)
+	if mc.Pricing == nil || mc.Pricing.InputPerMTok != 15 {
+		t.Errorf("stale pricing not preserved: %+v", mc.Pricing)
 	}
 
 	// IsCacheStale must still flag the cache so the daemon's refresh loop
 	// re-fetches; the two checks have different jobs.
 	if !IsCacheStale() {
 		t.Error("IsCacheStale should still report true for past-TTL cache")
+	}
+}
+
+// TestCapacityManager_GetModelCapacity_ServesStaleCache pins the bug fix
+// at the public-API layer: a manager whose only cache file is past TTL
+// must still surface that file's pricing through GetModelCapacity. This
+// is what the replay tool, CLI, and any non-daemon caller actually go
+// through; without it, EstimatedCostUSD silently zeroes.
+func TestCapacityManager_GetModelCapacity_ServesStaleCache(t *testing.T) {
+	withTempHome(t)
+
+	path, _ := cachePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stale := cachedCapacity{
+		FetchedAt: time.Now().Add(-2 * cacheTTL),
+		Config: capacityConfig{
+			Models: map[string]ModelCapacity{
+				"claude-opus-4-6": {
+					ContextWindow: 1000000,
+					Pricing:       &ModelPricing{InputPerMTok: 15, OutputPerMTok: 75},
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(stale)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+
+	// Build a fresh manager bound to the same on-disk path the load helper
+	// reads (cachePath() resolves via the temp HOME). DefaultCapacityManager
+	// is a sync.Once singleton, so it can't be safely used here.
+	cm := &CapacityManager{cachePath: path}
+
+	mc := cm.GetModelCapacity("claude-opus-4-6")
+	if mc.Pricing == nil {
+		t.Fatal("GetModelCapacity returned no pricing for stale cache; cost would silently be zero")
+	}
+	if mc.Pricing.InputPerMTok != 15 || mc.Pricing.OutputPerMTok != 75 {
+		t.Errorf("stale pricing not surfaced via GetModelCapacity: %+v", mc.Pricing)
 	}
 }
 
