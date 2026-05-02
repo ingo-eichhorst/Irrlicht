@@ -15,9 +15,12 @@ import (
 // no-op kept only to satisfy the TranscriptParser interface.
 //
 // State machine: a turn begins on a `#### …` line (user prompt). Plain
-// prose lines accumulate as assistant text until the next `> Tokens: …`
-// line, which closes the turn and triggers a turn_done event carrying
-// the buffered text and a PerTurnContribution.
+// prose lines accumulate as assistant text until either:
+//   - a `> Tokens: …` line closes the turn cleanly with usage, or
+//   - an LLM-layer error blockquote (e.g. `> litellm.BadRequestError: …`)
+//     aborts the turn before tokens are reported.
+// Both paths emit a turn_done event so the state classifier returns the
+// session to ready; only the clean path carries a PerTurnContribution.
 type Parser struct {
 	model           string
 	assistantBuffer strings.Builder
@@ -40,6 +43,11 @@ var (
 	appliedEditRE = regexp.MustCompile(`^>\s*Applied edit to\s+`)
 	// `> Running <cmd>` or `> Running shell command:` — shell tool call
 	runningRE = regexp.MustCompile(`^>\s*Running\s+`)
+	// `> litellm.BadRequestError: …` / `> OpenAIException - …` / bare
+	// `> LookupError` — LLM failures that abort a turn before any
+	// `> Tokens: …` line. Gated on turnOpen at the call site so startup
+	// banners can't fabricate a phantom turn.
+	errorRE = regexp.MustCompile(`^>\s*\S*(?:Error|Exception)(?:[: ]|$)`)
 )
 
 // ParseLine satisfies tailer.TranscriptParser but is unused: aider transcripts
@@ -89,6 +97,9 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 	}
 
 	if strings.HasPrefix(line, ">") {
+		if p.turnOpen && errorRE.MatchString(line) {
+			return p.flushErrorTurn(line)
+		}
 		// Other blockquote lines are aider status output (warnings,
 		// confirmation prompts, invocation echo). Ignore.
 		return nil
@@ -142,6 +153,24 @@ func (p *Parser) flushAssistantTurn(m []string) *tailer.ParsedEvent {
 			Output: received,
 			Total:  sent + received,
 		},
+	}
+}
+
+// flushErrorTurn closes the current turn after aider prints an LLM-layer
+// error blockquote. Aider does not emit a `> Tokens: …` line in this case,
+// so without this synthetic turn_done the session would stay stuck in
+// `working`. The error text is surfaced as AssistantText so the dashboard
+// shows what happened. Tokens/Contribution are intentionally nil because
+// no usage was reported.
+func (p *Parser) flushErrorTurn(line string) *tailer.ParsedEvent {
+	errText := strings.TrimSpace(strings.TrimPrefix(line, ">"))
+	p.assistantBuffer.Reset()
+	p.turnOpen = false
+	return &tailer.ParsedEvent{
+		EventType:     "turn_done",
+		ModelName:     p.model,
+		AssistantText: truncate(errText),
+		ContentChars:  int64(len(errText)),
 	}
 }
 
