@@ -221,6 +221,12 @@ type TranscriptTailer struct {
 	// taskSeq is the next sequential ID to assign on TaskCreate.
 	// Invariant: taskSeq == len(tasks) always (tasks are never removed).
 	taskSeq int
+
+	// lastLineSeenAt is the wall-clock time at which the parser last consumed
+	// a transcript line. Used by idleFlusher-implementing parsers (aider) to
+	// synthesize turn_done when the file has been quiet long enough. Zero
+	// means no line has been seen yet.
+	lastLineSeenAt time.Time
 }
 
 // NewTranscriptTailer creates a new tailer for the given transcript path.
@@ -337,6 +343,9 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		t.cumProviderCostUSD = 0
 		t.tasks = nil
 		t.taskSeq = 0
+		// Drop the pre-rotation idle anchor so the post-scan idleFlusher
+		// hook doesn't synthesize a phantom turn_done against stale time.
+		t.lastLineSeenAt = time.Time{}
 	case t.lastOffset > 0:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
@@ -382,6 +391,8 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			continue
 		}
 
+		t.lastLineSeenAt = time.Now()
+
 		var parsed *ParsedEvent
 		if isRawLine {
 			// Markdown / non-JSONL formats: parser sees the trimmed line directly.
@@ -415,111 +426,22 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			}
 			continue
 		}
-		if len(parsed.SubagentCompletions) > 0 {
-			t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
-		}
-
-		// Apply tool tracking deltas from the parser. openToolCalls is an
-		// id-keyed map — tool_use events insert by ID (idempotent: duplicate
-		// IDs from multi-line splits overwrite), tool_result events delete by
-		// ID (orphan IDs with no matching entry are harmless no-ops). This
-		// eliminates the FIFO's structural weakness where out-of-order or
-		// orphan results could pop unrelated entries. See issue #117.
-		for _, tu := range parsed.ToolUses {
-			if tu.ID != "" {
-				t.openToolCalls[tu.ID] = tu.Name
-			}
-		}
-		for _, id := range parsed.ToolResultIDs {
-			if name, ok := t.openToolCalls[id]; ok && isUserBlockingToolName(name) {
-				sawUserBlockingClosedThisPass = true
-			}
-			delete(t.openToolCalls, id)
-		}
-		if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
-			t.openToolCalls = make(map[string]string)
-		}
-		for _, d := range parsed.TaskDeltas {
-			switch d.Op {
-			case TaskOpCreate:
-				t.taskSeq++
-				t.tasks = append(t.tasks, Task{
-					ID:          strconv.Itoa(t.taskSeq),
-					Subject:     d.Subject,
-					Description: d.Description,
-					ActiveForm:  d.ActiveForm,
-					Status:      TaskStatusPending,
-				})
-			case TaskOpUpdate:
-				for i := range t.tasks {
-					if t.tasks[i].ID == d.ID {
-						if d.Status != "" {
-							t.tasks[i].Status = d.Status
-						}
-						break
-					}
-				}
-			}
-		}
-
-		// turn_done is Claude Code's authoritative end-of-turn signal. By
-		// definition most tool_use events opened during the turn have
-		// already received their tool_result, so anything still in
-		// openToolCalls is a stale leak. Sweeping here lets the classifier
-		// see HasOpenToolCall=false and transition working → ready.
-		//
-		// Some tools survive the sweep (see surviveTurnDone): Agent
-		// (sub-agent still running), AskUserQuestion, and ExitPlanMode
-		// (user-blocking tools whose result arrives only after the user
-		// responds). Preserving them ensures NeedsUserAttention() returns
-		// true so the classifier transitions to "waiting" instead of
-		// "ready".
-		if parsed.EventType == "turn_done" && len(t.openToolCalls) > 0 {
-			for id, name := range t.openToolCalls {
-				if !surviveTurnDone(name) {
-					delete(t.openToolCalls, id)
-				}
-			}
-		}
-		// IsUserInterrupt and IsToolDenial each set their own sticky flag;
-		// any subsequent user event that isn't itself the same kind clears
-		// it. The two flags are tracked independently because only ESC
-		// feeds the classifier's cancellation rule — denials are recorded
-		// for observability but don't end the agent's turn.
-		// parsed.IsError is for tool_result errors — not used by the
-		// classifier, so we don't track it.
-		if parsed.IsUserInterrupt {
-			t.lastWasUserInterrupt = true
-		} else if isUserEventType(parsed.EventType) {
-			t.lastWasUserInterrupt = false
-		}
-		if parsed.IsToolDenial {
-			t.lastWasToolDenial = true
-		} else if isUserEventType(parsed.EventType) {
-			t.lastWasToolDenial = false
-		}
-
-		// Apply metadata.
-		t.applyMetadata(parsed)
-
-		// Track assistant text.
-		if parsed.AssistantText != "" {
-			t.lastAssistantText = parsed.AssistantText
-		}
-		if parsed.ClearToolNames {
-			t.lastAssistantText = ""
-		}
-
-		// Accumulate content chars.
-		t.contentChars += parsed.ContentChars
-
-		t.addMessageEvent(MessageEvent{
-			Timestamp: parsed.Timestamp,
-			EventType: parsed.EventType,
-		})
+		t.processParsedEvent(parsed, &sawUserBlockingClosedThisPass)
 	}
 
 	t.lastOffset = currentOffset
+
+	// Idle-flush hook: parsers whose transcript has no in-band end-of-turn
+	// marker (currently aider) synthesize turn_done when the file has been
+	// quiet for long enough. The parser owns the threshold and decides
+	// whether to flush; the tailer just routes the resulting event through
+	// the normal processing path so tool sweeps and LastEventType update
+	// the same way they do for an in-band turn_done.
+	if flusher, ok := t.parser.(idleFlusher); ok && !t.lastLineSeenAt.IsZero() {
+		if ev := flusher.IdleFlush(time.Since(t.lastLineSeenAt)); ev != nil {
+			t.processParsedEvent(ev, &sawUserBlockingClosedThisPass)
+		}
+	}
 
 	// Compute current metrics.
 	t.computeMetrics()
@@ -600,4 +522,146 @@ func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
 			return nil, 0, err
 		}
 	}
+}
+
+// forceIdleFlushDuration is passed to IdleFlush from FlushIdle. Any
+// reasonable parser threshold is comfortably below this, so the flusher
+// returns its synthesized event whenever a turn is open.
+const forceIdleFlushDuration = 24 * time.Hour
+
+// FlushIdle forces the idleFlusher hook regardless of the parser's own
+// wall-clock threshold, processing any synthesized event through the same
+// pipeline TailAndProcess uses. Returns the updated metrics and a bool
+// indicating whether the flusher actually emitted an event (true) or
+// returned nil / wasn't implemented (false). Callers use the bool to
+// decide whether to re-run downstream classification.
+//
+// Production daemons rely on the threshold check inside TailAndProcess;
+// this method exists for callers (the replay tool, end-of-stream
+// shutdown paths) that need to drain the parser's pending turn without
+// waiting real wall-clock time.
+func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
+	flusher, ok := t.parser.(idleFlusher)
+	if !ok {
+		return t.metrics, false
+	}
+	ev := flusher.IdleFlush(forceIdleFlushDuration)
+	if ev == nil {
+		return t.metrics, false
+	}
+	sawUserBlockingClosed := false
+	t.processParsedEvent(ev, &sawUserBlockingClosed)
+	t.computeMetrics()
+	if sawUserBlockingClosed {
+		t.metrics.SawUserBlockingToolClosedThisPass = true
+	}
+	t.computeContextUtilization()
+	return t.metrics, true
+}
+
+// processParsedEvent applies a single non-skipped ParsedEvent to the tailer's
+// running state: tool tracking, task deltas, turn_done sweep, interrupt/denial
+// flags, metadata, assistant-text bookkeeping, content-char accumulation, and
+// message-event recording. Called once per non-Skip event from TailAndProcess
+// — both for events parsed from a transcript line and for events synthesized
+// post-scan via the idleFlusher hook. Caller must have already drained
+// SubagentCompletions if applicable.
+func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlockingClosed *bool) {
+	if len(parsed.SubagentCompletions) > 0 {
+		t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
+	}
+
+	// Apply tool tracking deltas from the parser. openToolCalls is an
+	// id-keyed map — tool_use events insert by ID (idempotent: duplicate
+	// IDs from multi-line splits overwrite), tool_result events delete by
+	// ID (orphan IDs with no matching entry are harmless no-ops). This
+	// eliminates the FIFO's structural weakness where out-of-order or
+	// orphan results could pop unrelated entries. See issue #117.
+	for _, tu := range parsed.ToolUses {
+		if tu.ID != "" {
+			t.openToolCalls[tu.ID] = tu.Name
+		}
+	}
+	for _, id := range parsed.ToolResultIDs {
+		if name, ok := t.openToolCalls[id]; ok && isUserBlockingToolName(name) {
+			*sawUserBlockingClosed = true
+		}
+		delete(t.openToolCalls, id)
+	}
+	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
+		t.openToolCalls = make(map[string]string)
+	}
+	for _, d := range parsed.TaskDeltas {
+		switch d.Op {
+		case TaskOpCreate:
+			t.taskSeq++
+			t.tasks = append(t.tasks, Task{
+				ID:          strconv.Itoa(t.taskSeq),
+				Subject:     d.Subject,
+				Description: d.Description,
+				ActiveForm:  d.ActiveForm,
+				Status:      TaskStatusPending,
+			})
+		case TaskOpUpdate:
+			for i := range t.tasks {
+				if t.tasks[i].ID == d.ID {
+					if d.Status != "" {
+						t.tasks[i].Status = d.Status
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// turn_done is the authoritative end-of-turn signal. By definition most
+	// tool_use events opened during the turn have already received their
+	// tool_result, so anything still in openToolCalls is a stale leak.
+	// Sweeping here lets the classifier see HasOpenToolCall=false and
+	// transition working → ready.
+	//
+	// Some tools survive the sweep (see surviveTurnDone): Agent (sub-agent
+	// still running), AskUserQuestion, and ExitPlanMode (user-blocking tools
+	// whose result arrives only after the user responds). Preserving them
+	// ensures NeedsUserAttention() returns true so the classifier transitions
+	// to "waiting" instead of "ready".
+	if parsed.EventType == "turn_done" && len(t.openToolCalls) > 0 {
+		for id, name := range t.openToolCalls {
+			if !surviveTurnDone(name) {
+				delete(t.openToolCalls, id)
+			}
+		}
+	}
+	// IsUserInterrupt and IsToolDenial each set their own sticky flag; any
+	// subsequent user event that isn't itself the same kind clears it. The
+	// two flags are tracked independently because only ESC feeds the
+	// classifier's cancellation rule — denials are recorded for observability
+	// but don't end the agent's turn. parsed.IsError is for tool_result
+	// errors — not used by the classifier, so we don't track it.
+	if parsed.IsUserInterrupt {
+		t.lastWasUserInterrupt = true
+	} else if isUserEventType(parsed.EventType) {
+		t.lastWasUserInterrupt = false
+	}
+	if parsed.IsToolDenial {
+		t.lastWasToolDenial = true
+	} else if isUserEventType(parsed.EventType) {
+		t.lastWasToolDenial = false
+	}
+
+	t.applyMetadata(parsed)
+
+	if parsed.AssistantText != "" {
+		t.lastAssistantText = parsed.AssistantText
+	}
+	if parsed.ClearToolNames {
+		t.lastAssistantText = ""
+	}
+
+	t.contentChars += parsed.ContentChars
+
+	t.addMessageEvent(MessageEvent{
+		Timestamp: parsed.Timestamp,
+		EventType: parsed.EventType,
+	})
 }

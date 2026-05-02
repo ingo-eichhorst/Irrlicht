@@ -3,6 +3,7 @@ package aider
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"irrlicht/core/pkg/tailer"
 )
@@ -49,7 +50,8 @@ func TestParser_BaselineHello_FullTurn(t *testing.T) {
 		"> Tokens: 771 sent, 1 received.",
 	}
 
-	events := drive(&Parser{}, lines)
+	p := &Parser{}
+	events := drive(p, lines)
 	if len(events) < 3 {
 		t.Fatalf("expected at least 3 events (model, user, assistant), got %d", len(events))
 	}
@@ -77,16 +79,17 @@ func TestParser_BaselineHello_FullTurn(t *testing.T) {
 		t.Error("user_message should clear tool names")
 	}
 
-	// Assistant turn close.
+	// `> Tokens:` emits assistant_message — NOT turn_done. The turn stays
+	// open until IdleFlush fires.
 	var asstEv *tailer.ParsedEvent
 	for _, e := range events {
-		if e.EventType == "turn_done" {
+		if e.EventType == "assistant_message" {
 			asstEv = e
 			break
 		}
 	}
 	if asstEv == nil {
-		t.Fatal("no turn_done emitted")
+		t.Fatal("no assistant_message emitted on `> Tokens:` line")
 	}
 	if asstEv.AssistantText != "ok" {
 		t.Errorf("assistant text mismatch: got %q", asstEv.AssistantText)
@@ -96,6 +99,21 @@ func TestParser_BaselineHello_FullTurn(t *testing.T) {
 	}
 	if asstEv.Contribution.Usage.Input != 771 || asstEv.Contribution.Usage.Output != 1 {
 		t.Errorf("token counts wrong: in=%d out=%d", asstEv.Contribution.Usage.Input, asstEv.Contribution.Usage.Output)
+	}
+	for _, e := range events {
+		if e.EventType == "turn_done" {
+			t.Fatalf("turn_done must NOT be emitted by `> Tokens:`; only IdleFlush synthesizes it. Got %+v", e)
+		}
+	}
+
+	// IdleFlush after the threshold synthesizes turn_done so the state
+	// classifier transitions working → ready.
+	flushed := p.IdleFlush(2 * time.Second)
+	if flushed == nil || flushed.EventType != "turn_done" {
+		t.Fatalf("IdleFlush should emit turn_done after threshold, got %+v", flushed)
+	}
+	if p.turnOpen {
+		t.Error("IdleFlush should clear turnOpen")
 	}
 }
 
@@ -109,6 +127,9 @@ func TestParser_TokensWithCost(t *testing.T) {
 	ev := p.ParseLineRaw("> Tokens: 1.2k sent, 543 received, $0.0123 message, $0.0456 session.")
 	if ev == nil || ev.Contribution == nil {
 		t.Fatal("expected Contribution")
+	}
+	if ev.EventType != "assistant_message" {
+		t.Errorf("expected assistant_message, got %q", ev.EventType)
 	}
 	if ev.Contribution.Usage.Input != 1200 {
 		t.Errorf("expected 1.2k → 1200, got %d", ev.Contribution.Usage.Input)
@@ -156,15 +177,14 @@ func TestParser_EmptyTurn_NoCrash(t *testing.T) {
 		"#### ask",
 		"> Tokens: 10 sent, 0 received.",
 	})
-	// One user_message, one assistant_message (with empty text).
 	var asst *tailer.ParsedEvent
 	for _, e := range events {
-		if e.EventType == "turn_done" {
+		if e.EventType == "assistant_message" {
 			asst = e
 		}
 	}
 	if asst == nil {
-		t.Fatal("expected turn_done even with empty body")
+		t.Fatal("expected assistant_message even with empty body")
 	}
 	if asst.AssistantText != "" {
 		t.Errorf("expected empty assistant text, got %q", asst.AssistantText)
@@ -218,9 +238,11 @@ func TestParser_MainModel_AfterSlashCommand(t *testing.T) {
 
 // TestParser_TrailingQuestionMark_PreservedForWaitingClassification pins the
 // contract with the state classifier: when the assistant's last buffered line
-// ends in `?`, the emitted turn_done event's AssistantText must also end in
-// `?`. session.IsWaitingForUserInput keys off that suffix to flip the session
-// to `waiting`. Don't relax this without updating the classifier.
+// ends in `?`, the emitted assistant_message event's AssistantText must also
+// end in `?`. The tailer feeds assistant_message.AssistantText into
+// LastAssistantText, which session.IsWaitingForUserInput inspects on the
+// subsequent (synthesized) turn_done. Don't relax this without updating the
+// classifier.
 func TestParser_TrailingQuestionMark_PreservedForWaitingClassification(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -248,20 +270,20 @@ func TestParser_TrailingQuestionMark_PreservedForWaitingClassification(t *testin
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			events := drive(&Parser{}, tc.lines)
-			var done *tailer.ParsedEvent
+			var asst *tailer.ParsedEvent
 			for _, e := range events {
-				if e.EventType == "turn_done" {
-					done = e
+				if e.EventType == "assistant_message" {
+					asst = e
 				}
 			}
-			if done == nil {
-				t.Fatal("no turn_done emitted")
+			if asst == nil {
+				t.Fatal("no assistant_message emitted")
 			}
-			if done.AssistantText == "" {
+			if asst.AssistantText == "" {
 				t.Fatal("AssistantText must be non-empty for the classifier to inspect")
 			}
-			if last := done.AssistantText[len(done.AssistantText)-1]; last != '?' {
-				t.Errorf("AssistantText must end in '?', got %q (full=%q)", last, done.AssistantText)
+			if last := asst.AssistantText[len(asst.AssistantText)-1]; last != '?' {
+				t.Errorf("AssistantText must end in '?', got %q (full=%q)", last, asst.AssistantText)
 			}
 		})
 	}
@@ -299,9 +321,10 @@ func TestParser_LLMError_EndsTurn(t *testing.T) {
 }
 
 // TestParser_ErrorTurn_RecoversOnNextPrompt pins the recovery path: after an
-// error closes a turn, a subsequent `####` prompt must reopen a fresh turn
-// and the next `> Tokens: …` must produce a clean turn_done with usage.
-// Without this, a single error would silently break the rest of the session.
+// error closes a turn, a subsequent `####` prompt must reopen a fresh turn,
+// the next `> Tokens: …` must emit assistant_message with usage, and a
+// later IdleFlush must synthesize the clean turn_done. Without this, a
+// single error would silently break the rest of the session.
 func TestParser_ErrorTurn_RecoversOnNextPrompt(t *testing.T) {
 	p := &Parser{}
 	events := drive(p, []string{
@@ -313,26 +336,43 @@ func TestParser_ErrorTurn_RecoversOnNextPrompt(t *testing.T) {
 		"> Tokens: 100 sent, 20 received.",
 	})
 
-	var dones []*tailer.ParsedEvent
+	var errDone *tailer.ParsedEvent
+	var asst *tailer.ParsedEvent
 	for _, e := range events {
-		if e.EventType == "turn_done" {
-			dones = append(dones, e)
+		switch e.EventType {
+		case "turn_done":
+			if errDone != nil {
+				t.Fatalf("only the error path should emit turn_done before IdleFlush, got a second one: %+v", e)
+			}
+			errDone = e
+		case "assistant_message":
+			asst = e
 		}
 	}
-	if len(dones) != 2 {
-		t.Fatalf("expected 2 turn_done events (error + clean), got %d", len(dones))
+	if errDone == nil {
+		t.Fatal("expected a turn_done from the error path")
 	}
-	if !strings.Contains(dones[0].AssistantText, "BadRequestError") {
-		t.Errorf("first turn_done should carry error text, got %q", dones[0].AssistantText)
+	if !strings.Contains(errDone.AssistantText, "BadRequestError") {
+		t.Errorf("error turn_done should carry error text, got %q", errDone.AssistantText)
 	}
-	if dones[0].Contribution != nil {
-		t.Errorf("error turn should have no Contribution, got %+v", dones[0].Contribution)
+	if errDone.Contribution != nil {
+		t.Errorf("error turn should have no Contribution, got %+v", errDone.Contribution)
 	}
-	if dones[1].AssistantText != "this time it works" {
-		t.Errorf("second turn should carry the recovered prose, got %q", dones[1].AssistantText)
+	if asst == nil {
+		t.Fatal("expected assistant_message from the recovered `> Tokens:` line")
 	}
-	if dones[1].Contribution == nil || dones[1].Contribution.Usage.Input != 100 {
-		t.Fatalf("second turn should carry token contribution, got %+v", dones[1].Contribution)
+	if asst.AssistantText != "this time it works" {
+		t.Errorf("recovered assistant_message should carry the new prose, got %q", asst.AssistantText)
+	}
+	if asst.Contribution == nil || asst.Contribution.Usage.Input != 100 {
+		t.Fatalf("recovered assistant_message should carry token contribution, got %+v", asst.Contribution)
+	}
+
+	// IdleFlush after the recovered turn synthesizes the clean turn_done so
+	// the state classifier transitions working → ready.
+	flushed := p.IdleFlush(2 * time.Second)
+	if flushed == nil || flushed.EventType != "turn_done" {
+		t.Fatalf("IdleFlush should emit clean turn_done after recovery, got %+v", flushed)
 	}
 }
 
@@ -374,7 +414,11 @@ func TestParser_ErrorBeforeTurn_NoPhantomEvent(t *testing.T) {
 	}
 }
 
-func TestParser_MultiTurn_StateResets(t *testing.T) {
+// TestParser_MultiTurn_EmitsAssistantMessagePerTurn confirms the parser
+// emits one assistant_message per `> Tokens:` across consecutive turns
+// and never emits an in-band turn_done — the synthesized turn_done only
+// arrives via IdleFlush. Pre-fix this test asserted two turn_done events.
+func TestParser_MultiTurn_EmitsAssistantMessagePerTurn(t *testing.T) {
 	p := &Parser{}
 	events := drive(p, []string{
 		"> Model: openai/gpt-5 with whole edit format",
@@ -388,11 +432,149 @@ func TestParser_MultiTurn_StateResets(t *testing.T) {
 
 	asstCount := 0
 	for _, e := range events {
-		if e.EventType == "turn_done" {
+		if e.EventType == "assistant_message" {
 			asstCount++
 		}
 	}
 	if asstCount != 2 {
-		t.Errorf("expected 2 turn_done events across two turns, got %d", asstCount)
+		t.Errorf("expected 2 assistant_message events across two turns, got %d", asstCount)
+	}
+	// No turn_done in-band — the synthesized one comes from IdleFlush.
+	for _, e := range events {
+		if e.EventType == "turn_done" {
+			t.Errorf("unexpected in-band turn_done: %+v", e)
+		}
 	}
 }
+
+// TestParser_MultiModelCall_KeepsTurnOpen reproduces the issue #263 flow:
+// aider with `--yes-always` emits multiple `> Tokens:` lines within one
+// `####` user turn (one per model call). The parser must keep the turn
+// open across them — emitting assistant_message per call, never an in-band
+// turn_done — so the session stays `working` and prose between token
+// lines is captured. Pre-fix, the first `> Tokens:` flipped the session
+// to `ready` and dropped all subsequent assistant prose.
+func TestParser_MultiModelCall_KeepsTurnOpen(t *testing.T) {
+	p := &Parser{}
+	events := drive(p, []string{
+		"> Model: openai/gpt-5 with whole edit format",
+		"#### can aider work in an agentic loop?",
+		"I need to see the actual files. Please add them to the chat.",
+		"> Tokens: 2.0k sent, 227 received.",
+		"> core/pkg/tailer/parser.go",
+		"> Add file to the chat? (Y)es/(N)o/(A)ll/(S)kip all/(D)on't ask again [Yes]: y",
+		"Now examining the parser. The current implementation buffers prose between markers.",
+		"> Tokens: 5.5k sent, 412 received.",
+	})
+
+	if !p.turnOpen {
+		t.Error("turn must remain open across multiple `> Tokens:` lines within one ####")
+	}
+
+	asstCount := 0
+	var lastAsst *tailer.ParsedEvent
+	for _, e := range events {
+		if e.EventType == "assistant_message" {
+			asstCount++
+			lastAsst = e
+		}
+		if e.EventType == "turn_done" {
+			t.Errorf("turn_done must NOT be emitted in-band on `> Tokens:`; got %+v", e)
+		}
+	}
+	if asstCount != 2 {
+		t.Errorf("expected 2 assistant_message events (one per model call), got %d", asstCount)
+	}
+
+	// The second model call's prose must reach LastAssistantText. Pre-fix,
+	// turnOpen was false after the first `> Tokens:`, so this prose was
+	// silently dropped.
+	if lastAsst == nil {
+		t.Fatal("no assistant_message captured")
+	}
+	if !strings.Contains(lastAsst.AssistantText, "Now examining the parser") {
+		t.Errorf("second-call prose missing from assistant_message; got %q", lastAsst.AssistantText)
+	}
+}
+
+// TestParser_IdleFlush_AfterMultipleModelCalls_EmitsTurnDone is the
+// counterpart to MultiModelCall_KeepsTurnOpen: once aider has truly gone
+// idle (no transcript activity for ≥ aiderIdleTurnDoneAfter), IdleFlush
+// must synthesize the turn_done so the state classifier transitions
+// working → ready. Per-call tokens are already accumulated via the
+// assistant_message events, so this synthesized event carries no payload.
+func TestParser_IdleFlush_AfterMultipleModelCalls_EmitsTurnDone(t *testing.T) {
+	p := &Parser{}
+	drive(p, []string{
+		"#### multi-step",
+		"first step",
+		"> Tokens: 100 sent, 10 received.",
+		"second step",
+		"> Tokens: 200 sent, 20 received.",
+	})
+
+	// Below threshold: no flush.
+	if ev := p.IdleFlush(500 * time.Millisecond); ev != nil {
+		t.Errorf("IdleFlush below threshold should return nil, got %+v", ev)
+	}
+	if !p.turnOpen {
+		t.Fatal("below-threshold IdleFlush must not close the turn")
+	}
+
+	// At/above threshold: synthesize turn_done.
+	ev := p.IdleFlush(aiderIdleTurnDoneAfter)
+	if ev == nil || ev.EventType != "turn_done" {
+		t.Fatalf("IdleFlush at threshold should emit turn_done, got %+v", ev)
+	}
+	if p.turnOpen {
+		t.Error("IdleFlush must clear turnOpen after synthesizing turn_done")
+	}
+
+	// Subsequent calls return nil — turn is closed.
+	if ev := p.IdleFlush(10 * time.Second); ev != nil {
+		t.Errorf("IdleFlush after close should return nil, got %+v", ev)
+	}
+}
+
+func TestParser_IdleFlush_NoTurnOpen(t *testing.T) {
+	p := &Parser{}
+	if ev := p.IdleFlush(10 * time.Second); ev != nil {
+		t.Errorf("IdleFlush on fresh parser should return nil, got %+v", ev)
+	}
+}
+
+// TestParser_NewUserPromptAfterMultiCall_StaysWorking pins that a `####`
+// arriving while a turn is still open (e.g. user typed before IdleFlush
+// fired) opens the new turn cleanly. The previous turn's per-call
+// contributions were already emitted at each `> Tokens:`, so no
+// synthesized turn_done is needed — the session stays `working` across
+// the boundary. Tested separately because the parser does NOT emit a
+// terminal event for the previous turn here.
+func TestParser_NewUserPromptAfterMultiCall_StaysWorking(t *testing.T) {
+	p := &Parser{}
+	events := drive(p, []string{
+		"#### turn one",
+		"reply",
+		"> Tokens: 100 sent, 10 received.",
+		"#### turn two",
+	})
+
+	// Order: user_message, assistant_message, user_message.
+	var types []string
+	for _, e := range events {
+		types = append(types, e.EventType)
+	}
+	want := []string{"user_message", "assistant_message", "user_message"}
+	if len(types) != len(want) {
+		t.Fatalf("event sequence: got %v, want %v", types, want)
+	}
+	for i, wt := range want {
+		if types[i] != wt {
+			t.Errorf("event[%d] = %q, want %q (full %v)", i, types[i], wt, types)
+		}
+	}
+	if !p.turnOpen {
+		t.Error("new #### must open a new turn")
+	}
+}
+

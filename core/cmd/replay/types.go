@@ -10,6 +10,11 @@ const (
 	causeEvent            transitionCause = "event"
 	causeDebounceCoalesce transitionCause = "debounce_coalesce"
 	causeHook             transitionCause = "hook"
+	// causeIdleFlush is emitted when the replay forces the parser's
+	// idleFlusher hook after all transcript batches have been consumed.
+	// This simulates the production daemon's periodic poll catching the
+	// parser past its idle threshold (currently aider-only).
+	causeIdleFlush transitionCause = "idle_flush"
 )
 
 // transition is a single recorded state change emitted by the replay.

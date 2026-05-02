@@ -163,10 +163,14 @@ type TranscriptParser interface {
 // of the TranscriptParser contract; raw-line parsers should make it a no-op
 // returning nil.
 //
-// Implementers must emit EventType="turn_done" (not "assistant_message")
-// when the agent finishes a turn. The state classifier returns the session
-// to ready only on turn_done; an assistant_message alone leaves the session
-// stuck in working. See aider's parser for the reference shape.
+// The state classifier returns the session to ready only on
+// EventType="turn_done"; an assistant_message alone leaves the session
+// working. Parsers whose transcript carries an explicit end-of-turn marker
+// emit turn_done from ParseLineRaw directly. Parsers whose transcript has
+// no such marker (e.g. aider's `.aider.chat.history.md` — aider's idle TUI
+// prompt is not written to the file) should additionally implement
+// idleFlusher to synthesize turn_done when the file has been quiet long
+// enough.
 type RawLineParser interface {
 	ParseLineRaw(line string) *ParsedEvent
 }
@@ -177,6 +181,16 @@ type RawLineParser interface {
 // streaming turn in the live cost display even before the turn is complete.
 type pendingContributor interface {
 	PendingContribution() *PerTurnContribution
+}
+
+// idleFlusher is an optional interface for raw-line parsers whose source
+// format has no in-band end-of-turn marker. The tailer calls IdleFlush after
+// each TailAndProcess pass with the elapsed wall-clock time since the parser
+// last saw a transcript line. Implementations return a synthesized turn_done
+// event when both (a) a turn is open and (b) idleFor exceeds the parser's
+// own threshold; otherwise return nil. See aider/parser.go.
+type idleFlusher interface {
+	IdleFlush(idleFor time.Duration) *ParsedEvent
 }
 
 // ParserLedger holds the durable state a stateful parser checkpoints across

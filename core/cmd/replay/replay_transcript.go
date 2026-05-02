@@ -151,6 +151,21 @@ func (r *transcriptReplayer) runBatches(batches [][]rawEvent) error {
 		}
 		r.classifyBatch(batch[len(batch)-1].Index, nextEventTime, cause, tailerToDomain(metrics))
 	}
+
+	// Force the parser's idle-flush hook after the final batch. In the
+	// production daemon, periodic TailAndProcess passes eventually cross the
+	// parser's wall-clock idle threshold and synthesize a turn_done. The
+	// replay tool consumes every batch back-to-back, so its real wall-clock
+	// idle never crosses the threshold. Forcing the flush here mirrors the
+	// post-idle state the daemon would land in. No-op for parsers that don't
+	// implement idleFlusher (claudecode/codex/pi).
+	if len(batches) > 0 {
+		if metrics, flushed := r.tailer.FlushIdle(); flushed {
+			r.lastMetrics = metrics
+			lastBatch := batches[len(batches)-1]
+			r.classifyBatch(lastBatch[len(lastBatch)-1].Index, lastBatch[len(lastBatch)-1].Time, causeIdleFlush, tailerToDomain(metrics))
+		}
+	}
 	return nil
 }
 
