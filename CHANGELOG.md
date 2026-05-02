@@ -9,6 +9,31 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.3.11] — 2026-05-02
+
+### Fixed
+- **Serve stale LiteLLM cache instead of zeroing all costs** (#275) — when the model-pricing cache was older than 24h, every cost calculation silently fell to zero (and `omitempty` dropped `estimated_cost_usd` from output entirely). Stale pricing is now served to non-daemon callers (replay tool, CLI, tests); `IsCacheStale` keeps its job of driving the daemon's background refresh.
+- **Aider: keep turn open across multiple `> Tokens:` lines** (#274) — under `--yes-always`, aider auto-accepts file-add prompts and re-prompts the model within one user turn. The parser now treats `> Tokens:` as end-of-one-model-call (emitting `assistant_message`) and synthesizes the `turn_done` via an idle-flush hook, so sessions don't flip to `ready` mid-turn.
+- **Aider: emit turn_done on LLM-layer error** (#273) — when aider prints a `> litellm.BadRequestError: …` blockquote without a `> Tokens:` line, the session no longer hangs in `working` forever.
+- **Tailer: drop bufio.Scanner cap so JSONL lines >2 MB don't wedge sessions** (#271) — large transcript lines used to silently stop being processed once they exceeded the default 64 KB scanner buffer.
+- **Close 13 Code Scanning alerts** (#266).
+- **macOS: use brand off-flame for idle/empty state** (#248).
+
+### Changed
+- **Performance: shrink mobile payload, unblock render path** (#272) — image optimization and CSS deferral for the marketing site; meaningful drop in mobile LCP/CLS.
+- **Daemon serves dashboard from disk, drops `//go:embed`** (#267) — runtime walk-up search for `platforms/web/index.html` so the dashboard can be hot-edited in dev and shipped as a separate file in production bundles.
+- **Session history streams over WebSocket; bit-pack 60-bucket rings** (#249) — replaces polling with live updates and a more compact wire format.
+- **Centralize per-adapter transcript extension** (#251).
+
+### Distribution
+- **`onboard-agent` covers claudecode/codex multi-turn + interrupted-turn** (#269) — fixture matrix gains coverage for two real-world replay scenarios.
+
+### Docs
+- **Maturity-stage rubric and adapter onboarding section** (#264).
+
+### Tests
+- **Replay: zero `source_transcript` so goldens are worktree-portable** (#250).
+
 ## [0.3.10] — 2026-04-27
 
 ### Fixed
@@ -568,7 +593,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.10...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.11...HEAD
+[0.3.11]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.11
 [0.3.10]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.10
 [0.3.9]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.9
 [0.3.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.8
