@@ -21,7 +21,7 @@ import (
 // assistant_message event carrying that call's PerTurnContribution. The
 // turn stays open across multiple model calls — under `--yes-always`,
 // aider auto-accepts file-add prompts and re-prompts the model multiple
-// times within a single user turn. See issue #263.
+// times within a single user turn.
 //
 // End-of-turn is signaled out-of-band: aider's idle TUI prompt never
 // lands in the markdown chat history, so the parser implements
@@ -137,7 +137,7 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 // because under `--yes-always` aider may auto-accept file-add prompts and
 // re-prompt the model; multiple `> Tokens:` lines within one `####`
 // user turn are normal. End-of-turn is synthesized later via IdleFlush
-// when the transcript file has been quiet long enough. See issue #263.
+// when the transcript file has been quiet long enough.
 func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 	sent := parseTokenCount(m[1])
 	received := parseTokenCount(m[2])
@@ -182,7 +182,7 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 // accumulated via the assistant_message events emitted at each
 // `> Tokens:` line, so the synthesized turn_done carries no payload —
 // its only job is to flip LastEventType so the state classifier
-// transitions working → ready. See issue #263.
+// transitions working → ready.
 func (p *Parser) IdleFlush(idleFor time.Duration) *tailer.ParsedEvent {
 	if !p.turnOpen {
 		return nil

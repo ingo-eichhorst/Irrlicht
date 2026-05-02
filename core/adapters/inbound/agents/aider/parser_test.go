@@ -80,7 +80,7 @@ func TestParser_BaselineHello_FullTurn(t *testing.T) {
 	}
 
 	// `> Tokens:` emits assistant_message — NOT turn_done. The turn stays
-	// open until IdleFlush fires; see issue #263.
+	// open until IdleFlush fires.
 	var asstEv *tailer.ParsedEvent
 	for _, e := range events {
 		if e.EventType == "assistant_message" {
