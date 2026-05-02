@@ -108,9 +108,14 @@
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32x32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png">
 <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+<link rel="preload" as="image" href="assets/bg_no_lights.avif" type="image/avif" media="(min-width: 769px)">
+<link rel="preload" as="image" href="assets/bg_no_lights-mobile.avif" type="image/avif" media="(max-width: 768px)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://cdn.counter.dev">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet"></noscript>
 
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -261,7 +266,35 @@ section {
   padding: 8rem 2rem 4rem;
   position: relative;
   overflow: hidden;
-  background: url('assets/bg_no_lights.png') center center / cover no-repeat;
+  background-color: #050a14;
+  background-image: image-set(
+    url('assets/bg_no_lights.avif') type('image/avif'),
+    url('assets/bg_no_lights.webp') type('image/webp'),
+    url('assets/bg_no_lights.png') type('image/png')
+  );
+  background-image: -webkit-image-set(
+    url('assets/bg_no_lights.avif') type('image/avif'),
+    url('assets/bg_no_lights.webp') type('image/webp'),
+    url('assets/bg_no_lights.png') type('image/png')
+  );
+  background-position: center center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+@media (max-width: 768px) {
+  .hero {
+    background-image: image-set(
+      url('assets/bg_no_lights-mobile.avif') type('image/avif'),
+      url('assets/bg_no_lights-mobile.webp') type('image/webp'),
+      url('assets/bg_no_lights.png') type('image/png')
+    );
+    background-image: -webkit-image-set(
+      url('assets/bg_no_lights-mobile.avif') type('image/avif'),
+      url('assets/bg_no_lights-mobile.webp') type('image/webp'),
+      url('assets/bg_no_lights.png') type('image/png')
+    );
+  }
 }
 
 .hero::after {
@@ -1493,7 +1526,11 @@ footer {
       <p class="section-desc">A glance at the menu bar tells you where to go next. Watch the demo for the full picture.</p>
     </div>
     <div class="reveal">
-      <img src="assets/explainer.png" alt="Irrlicht menu bar explainer: dropdown showing two projects with working/waiting/ready states, subagents badge, per-project cost, agents and models column, and per-session context and cost." class="menu-screenshot" loading="lazy">
+      <picture>
+        <source type="image/avif" srcset="assets/explainer-mobile.avif 800w, assets/explainer.avif 1672w" sizes="(max-width: 768px) 100vw, 1040px">
+        <source type="image/webp" srcset="assets/explainer-mobile.webp 800w, assets/explainer.webp 1672w" sizes="(max-width: 768px) 100vw, 1040px">
+        <img src="assets/explainer.png" width="1672" height="941" alt="Irrlicht menu bar explainer: dropdown showing two projects with working/waiting/ready states, subagents badge, per-project cost, agents and models column, and per-session context and cost." class="menu-screenshot" loading="lazy" decoding="async">
+      </picture>
     </div>
     <div class="video-frame reveal">
       <div class="video-aspect">
@@ -1773,9 +1810,16 @@ function copyInstallCmd(btn) {
 <script>
 (function() {
   const canvas = document.getElementById('wisp-canvas');
+  if (!canvas) return;
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduceMotion || window.innerWidth <= 600) {
+    canvas.style.display = 'none';
+    return;
+  }
   const ctx = canvas.getContext('2d');
   const hero = canvas.parentElement;
   let W, H;
+  let rafId = 0;
 
   function resize() {
     W = canvas.width = hero.offsetWidth;
@@ -1851,9 +1895,23 @@ function copyInstallCmd(btn) {
       wisp = null;
     }
 
-    requestAnimationFrame(animate);
+    if (rafId) rafId = requestAnimationFrame(animate);
   }
-  animate();
+
+  function start() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(animate);
+  }
+  function stop() {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stop(); else start();
+  });
+
+  start();
 
   const ro = new ResizeObserver(() => resize());
   ro.observe(hero);
@@ -1889,6 +1947,6 @@ function copyInstallCmd(btn) {
 })();
 </script>
 
-<script src="https://cdn.counter.dev/script.js" data-id="2d845c2a-ed61-4410-8850-e6339766176f" data-utcoffset="1"></script>
+<script async src="https://cdn.counter.dev/script.js" data-id="2d845c2a-ed61-4410-8850-e6339766176f" data-utcoffset="1"></script>
 </body>
 </html>

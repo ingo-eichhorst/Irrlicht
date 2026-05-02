@@ -3,14 +3,26 @@ package tailer
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"irrlicht/core/pkg/capacity"
+)
+
+// maxTranscriptLineSize caps a single JSONL line at 64 MB. Lines beyond this
+// are skipped so a malformed or pathological transcript can never wedge the
+// tailer (issue #270).
+const maxTranscriptLineSize = 64 * 1024 * 1024
+
+var (
+	errLineTooLong  = errors.New("transcript line exceeds size cap")
+	errPartialAtEOF = errors.New("transcript ends mid-line")
 )
 
 // MessageEvent represents a single message event from transcript
@@ -346,16 +358,34 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 
 	currentOffset := startPos
 
-	scanner := bufio.NewScanner(file)
-	// Large tool results (especially from Pi/Codex read/bash output) can exceed
-	// bufio.Scanner's 64KB default token size.
-	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	// bufio.Reader (not Scanner) so a single oversized JSONL line can't wedge
+	// the tailer. Lines above maxTranscriptLineSize are skipped: the offset is
+	// advanced past them and processing continues. See issue #270.
+	reader := bufio.NewReaderSize(file, 64*1024)
 
 	rawLineParser, isRawLine := t.parser.(RawLineParser)
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		currentOffset += int64(len(scanner.Bytes()) + 1)
+	var loopErr error
+	for {
+		raw, consumed, lineErr := readLineCapped(reader, maxTranscriptLineSize)
+		if errors.Is(lineErr, io.EOF) || errors.Is(lineErr, errPartialAtEOF) {
+			// EOF (clean) or partial trailing line — stop without advancing
+			// past the partial bytes; they'll be re-read next tick once more
+			// data is appended.
+			break
+		}
+		if errors.Is(lineErr, errLineTooLong) {
+			log.Printf("irrlicht/tailer: skipping oversized line at offset %d (%d bytes) in %s", currentOffset, consumed, t.path)
+			currentOffset += consumed
+			continue
+		}
+		if lineErr != nil {
+			loopErr = lineErr
+			break
+		}
+
+		currentOffset += consumed
+		line := strings.TrimSpace(string(raw))
 
 		if line == "" {
 			continue
@@ -426,7 +456,72 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 
 	t.computeContextUtilization()
 
-	return t.metrics, scanner.Err()
+	return t.metrics, loopErr
+}
+
+// readLineCapped reads a single '\n'-terminated line from r. The returned
+// slice does not include the trailing '\n' (or '\r' before it); consumed is
+// the total bytes drawn from r — the caller advances the file offset by that
+// amount whenever the result represents a fully-handled line (success or
+// errLineTooLong).
+//
+// Outcomes:
+//   - (line, consumed, nil): full line read.
+//   - (nil, consumed, errLineTooLong): line exceeded max and ended with '\n';
+//     bytes were discarded and consumed reflects the skip distance.
+//   - (nil, 0, io.EOF): clean EOF, no bytes read.
+//   - (nil, 0, errPartialAtEOF): EOF reached before '\n' with bytes pending —
+//     either an in-progress line below the cap or one that has already grown
+//     past the cap but the writer hasn't flushed '\n' yet. Caller stops
+//     without advancing so the bytes are re-read once more data is appended;
+//     when the line eventually completes it is reported as either a success
+//     or errLineTooLong with a single accurate consumed count.
+//   - (nil, 0, err): other I/O error.
+func readLineCapped(r *bufio.Reader, max int64) ([]byte, int64, error) {
+	var (
+		buf      []byte
+		consumed int64
+		skipping bool
+	)
+	for {
+		chunk, err := r.ReadSlice('\n')
+		consumed += int64(len(chunk))
+
+		switch err {
+		case nil:
+			if skipping {
+				return nil, consumed, errLineTooLong
+			}
+			line := chunk[:len(chunk)-1] // drop '\n'
+			if len(line) > 0 && line[len(line)-1] == '\r' {
+				line = line[:len(line)-1]
+			}
+			if buf == nil {
+				out := make([]byte, len(line))
+				copy(out, line)
+				return out, consumed, nil
+			}
+			buf = append(buf, line...)
+			return buf, consumed, nil
+		case bufio.ErrBufferFull:
+			if skipping {
+				continue
+			}
+			if consumed > max {
+				buf = nil // release accumulated bytes for GC
+				skipping = true
+				continue
+			}
+			buf = append(buf, chunk...)
+		case io.EOF:
+			if consumed == 0 {
+				return nil, 0, io.EOF
+			}
+			return nil, 0, errPartialAtEOF
+		default:
+			return nil, 0, err
+		}
+	}
 }
 
 // forceIdleFlushDuration is passed to IdleFlush from FlushIdle. Any

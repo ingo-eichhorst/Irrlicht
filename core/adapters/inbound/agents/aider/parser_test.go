@@ -289,6 +289,131 @@ func TestParser_TrailingQuestionMark_PreservedForWaitingClassification(t *testin
 	}
 }
 
+// TestParser_LLMError_EndsTurn pins issue #262: when aider's LLM call fails
+// (e.g. `> litellm.BadRequestError: …`) the turn closes via a synthetic
+// turn_done event rather than hanging because no `> Tokens: …` line was
+// printed. Without this, sessions stay stuck in `working` forever.
+func TestParser_LLMError_EndsTurn(t *testing.T) {
+	lines := []string{
+		"> Model: openai/google/gemma-4-26b-a4b with whole edit format",
+		"#### search the codebase for security vulnerabilities",
+		`> litellm.BadRequestError: OpenAIException - Failed to load model "google/gemma-4-26b-a4b". Error: Model loading was stopped due to insufficient system resources.`,
+	}
+	events := drive(&Parser{}, lines)
+
+	var done *tailer.ParsedEvent
+	doneCount := 0
+	for _, e := range events {
+		if e.EventType == "turn_done" {
+			done = e
+			doneCount++
+		}
+	}
+	if doneCount != 1 {
+		t.Fatalf("expected exactly 1 turn_done, got %d", doneCount)
+	}
+	if !strings.Contains(done.AssistantText, "BadRequestError") {
+		t.Errorf("expected error text in AssistantText, got %q", done.AssistantText)
+	}
+	if done.ContentChars == 0 {
+		t.Errorf("expected non-zero ContentChars for error turn")
+	}
+}
+
+// TestParser_ErrorTurn_RecoversOnNextPrompt pins the recovery path: after an
+// error closes a turn, a subsequent `####` prompt must reopen a fresh turn,
+// the next `> Tokens: …` must emit assistant_message with usage, and a
+// later IdleFlush must synthesize the clean turn_done. Without this, a
+// single error would silently break the rest of the session.
+func TestParser_ErrorTurn_RecoversOnNextPrompt(t *testing.T) {
+	p := &Parser{}
+	events := drive(p, []string{
+		"> Model: openai/gpt-5 with diff edit format",
+		"#### first attempt",
+		"> litellm.BadRequestError: transient failure",
+		"#### retry",
+		"this time it works",
+		"> Tokens: 100 sent, 20 received.",
+	})
+
+	var errDone *tailer.ParsedEvent
+	var asst *tailer.ParsedEvent
+	for _, e := range events {
+		switch e.EventType {
+		case "turn_done":
+			if errDone != nil {
+				t.Fatalf("only the error path should emit turn_done before IdleFlush, got a second one: %+v", e)
+			}
+			errDone = e
+		case "assistant_message":
+			asst = e
+		}
+	}
+	if errDone == nil {
+		t.Fatal("expected a turn_done from the error path")
+	}
+	if !strings.Contains(errDone.AssistantText, "BadRequestError") {
+		t.Errorf("error turn_done should carry error text, got %q", errDone.AssistantText)
+	}
+	if errDone.Contribution != nil {
+		t.Errorf("error turn should have no Contribution, got %+v", errDone.Contribution)
+	}
+	if asst == nil {
+		t.Fatal("expected assistant_message from the recovered `> Tokens:` line")
+	}
+	if asst.AssistantText != "this time it works" {
+		t.Errorf("recovered assistant_message should carry the new prose, got %q", asst.AssistantText)
+	}
+	if asst.Contribution == nil || asst.Contribution.Usage.Input != 100 {
+		t.Fatalf("recovered assistant_message should carry token contribution, got %+v", asst.Contribution)
+	}
+
+	// IdleFlush after the recovered turn synthesizes the clean turn_done so
+	// the state classifier transitions working → ready.
+	flushed := p.IdleFlush(2 * time.Second)
+	if flushed == nil || flushed.EventType != "turn_done" {
+		t.Fatalf("IdleFlush should emit clean turn_done after recovery, got %+v", flushed)
+	}
+}
+
+// TestParser_ErrorWithoutDelimiter_EndsTurn covers the trailing-`$` branch
+// of errorRE: aider/litellm sometimes prints a bare error token with no
+// trailing `:` or argument (e.g. `> LookupError`). Without `|$` in the
+// regex these would fall through to the catch-all and hang the session.
+func TestParser_ErrorWithoutDelimiter_EndsTurn(t *testing.T) {
+	p := &Parser{}
+	events := drive(p, []string{
+		"#### do the thing",
+		"> LookupError",
+	})
+	doneCount := 0
+	for _, e := range events {
+		if e.EventType == "turn_done" {
+			doneCount++
+		}
+	}
+	if doneCount != 1 {
+		t.Fatalf("expected 1 turn_done for bare error token, got %d", doneCount)
+	}
+}
+
+// TestParser_ErrorBeforeTurn_NoPhantomEvent guards against false positives:
+// error-shaped blockquotes printed before any `####` (e.g. startup banners)
+// must not fabricate a turn_done. The matcher is gated on turnOpen.
+func TestParser_ErrorBeforeTurn_NoPhantomEvent(t *testing.T) {
+	p := &Parser{}
+	for _, line := range []string{
+		"> Model: openai/gpt-5 with diff edit format",
+		"> SomeStartupError: not a real turn",
+		"> litellm.ConfigError: pre-prompt failure",
+	} {
+		ev := p.ParseLineRaw(line)
+		if ev != nil && ev.EventType == "turn_done" {
+			t.Errorf("expected no turn_done before turn opened, got %+v for %q", ev, line)
+		}
+	}
+}
+
 // TestParser_MultiTurn_EmitsAssistantMessagePerTurn confirms the parser
 // emits one assistant_message per `> Tokens:` across consecutive turns
 // and never emits an in-band turn_done — the synthesized turn_done only

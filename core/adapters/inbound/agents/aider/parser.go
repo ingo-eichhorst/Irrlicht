@@ -16,18 +16,22 @@ import (
 // no-op kept only to satisfy the TranscriptParser interface.
 //
 // State machine: a turn begins on a `#### …` line (user prompt). Plain
-// prose lines accumulate as assistant text until the next `> Tokens: …`
-// line, which marks end-of-one-model-call (NOT end-of-turn) and emits an
-// assistant_message event carrying that call's PerTurnContribution. The
-// turn stays open across multiple model calls — under `--yes-always`,
-// aider auto-accepts file-add prompts and re-prompts the model multiple
-// times within a single user turn.
+// prose lines accumulate as assistant text. A `> Tokens: …` line marks
+// end-of-one-model-call (NOT end-of-turn) and emits an assistant_message
+// event carrying that call's PerTurnContribution; the turn stays open
+// because aider may re-prompt the model under `--yes-always` after
+// auto-accepting file-add prompts.
 //
-// End-of-turn is signaled out-of-band: aider's idle TUI prompt never
-// lands in the markdown chat history, so the parser implements
-// idleFlusher and synthesizes a turn_done event when the file has been
-// quiet for aiderIdleTurnDoneAfter (1500ms). The tailer drives this via
-// IdleFlush after each TailAndProcess pass.
+// End-of-turn is signaled out-of-band via two paths:
+//   - IdleFlush synthesizes a turn_done once the transcript has been
+//     quiet for aiderIdleTurnDoneAfter (1500ms) — the clean path, since
+//     aider's idle TUI prompt never lands in the markdown history.
+//   - An LLM-layer error blockquote (e.g. `> litellm.BadRequestError: …`)
+//     aborts the turn before any further tokens are reported and emits
+//     turn_done with the error surfaced as AssistantText.
+// Both paths flip LastEventType so the state classifier returns the
+// session to ready; per-call usage is already reported via the
+// assistant_message events emitted at each `> Tokens:` line.
 type Parser struct {
 	model           string
 	assistantBuffer strings.Builder
@@ -64,6 +68,11 @@ var (
 	appliedEditRE = regexp.MustCompile(`^>\s*Applied edit to\s+`)
 	// `> Running <cmd>` or `> Running shell command:` — shell tool call
 	runningRE = regexp.MustCompile(`^>\s*Running\s+`)
+	// `> litellm.BadRequestError: …` / `> OpenAIException - …` / bare
+	// `> LookupError` — LLM failures that abort a turn before any
+	// `> Tokens: …` line. Gated on turnOpen at the call site so startup
+	// banners can't fabricate a phantom turn.
+	errorRE = regexp.MustCompile(`^>\s*\S*(?:Error|Exception)(?:[: ]|$)`)
 )
 
 // ParseLine satisfies tailer.TranscriptParser but is unused: aider transcripts
@@ -115,6 +124,9 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 	}
 
 	if strings.HasPrefix(line, ">") {
+		if p.turnOpen && errorRE.MatchString(line) {
+			return p.flushErrorTurn(line)
+		}
 		// Other blockquote lines are aider status output (warnings,
 		// confirmation prompts, invocation echo). Ignore.
 		return nil
@@ -172,6 +184,24 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 			Output: received,
 			Total:  sent + received,
 		},
+	}
+}
+
+// flushErrorTurn closes the current turn after aider prints an LLM-layer
+// error blockquote. Aider does not emit a `> Tokens: …` line in this case,
+// so without this synthetic turn_done the session would stay stuck in
+// `working`. The error text is surfaced as AssistantText so the dashboard
+// shows what happened. Tokens/Contribution are intentionally nil because
+// no usage was reported.
+func (p *Parser) flushErrorTurn(line string) *tailer.ParsedEvent {
+	errText := strings.TrimSpace(strings.TrimPrefix(line, ">"))
+	p.assistantBuffer.Reset()
+	p.turnOpen = false
+	return &tailer.ParsedEvent{
+		EventType:     "turn_done",
+		ModelName:     p.model,
+		AssistantText: truncate(errText),
+		ContentChars:  int64(len(errText)),
 	}
 }
 
