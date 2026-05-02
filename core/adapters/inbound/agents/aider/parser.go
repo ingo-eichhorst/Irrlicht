@@ -40,6 +40,11 @@ var (
 	appliedEditRE = regexp.MustCompile(`^>\s*Applied edit to\s+`)
 	// `> Running <cmd>` or `> Running shell command:` — shell tool call
 	runningRE = regexp.MustCompile(`^>\s*Running\s+`)
+	// `> litellm.BadRequestError: …`, `> openai.RateLimitError: …`,
+	// `> OpenAIException - …` — LLM-layer failures that abort a turn
+	// without ever printing `> Tokens: …`. Matched only inside an open
+	// turn so we don't fabricate a turn for startup-banner noise.
+	errorRE = regexp.MustCompile(`^>\s*\S*(?:Error|Exception)[: ]`)
 )
 
 // ParseLine satisfies tailer.TranscriptParser but is unused: aider transcripts
@@ -86,6 +91,10 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 	}
 	if runningRE.MatchString(line) {
 		return p.toolCall("Bash")
+	}
+
+	if p.turnOpen && errorRE.MatchString(line) {
+		return p.flushErrorTurn(line)
 	}
 
 	if strings.HasPrefix(line, ">") {
@@ -142,6 +151,24 @@ func (p *Parser) flushAssistantTurn(m []string) *tailer.ParsedEvent {
 			Output: received,
 			Total:  sent + received,
 		},
+	}
+}
+
+// flushErrorTurn closes the current turn after aider prints an LLM-layer
+// error blockquote. Aider does not emit a `> Tokens: …` line in this case,
+// so without this synthetic turn_done the session would stay stuck in
+// `working`. The error text is surfaced as AssistantText so the dashboard
+// shows what happened. Tokens/Contribution are intentionally nil because
+// no usage was reported.
+func (p *Parser) flushErrorTurn(line string) *tailer.ParsedEvent {
+	errText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), ">"))
+	p.assistantBuffer.Reset()
+	p.turnOpen = false
+	return &tailer.ParsedEvent{
+		EventType:     "turn_done",
+		ModelName:     p.model,
+		AssistantText: truncate(errText),
+		ContentChars:  int64(len(errText)),
 	}
 }
 

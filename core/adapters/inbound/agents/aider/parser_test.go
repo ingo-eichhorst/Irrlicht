@@ -1,6 +1,7 @@
 package aider
 
 import (
+	"strings"
 	"testing"
 
 	"irrlicht/core/pkg/tailer"
@@ -263,6 +264,54 @@ func TestParser_TrailingQuestionMark_PreservedForWaitingClassification(t *testin
 				t.Errorf("AssistantText must end in '?', got %q (full=%q)", last, done.AssistantText)
 			}
 		})
+	}
+}
+
+// TestParser_LLMError_EndsTurn pins issue #262: when aider's LLM call fails
+// (e.g. `> litellm.BadRequestError: …`) the turn closes via a synthetic
+// turn_done event rather than hanging because no `> Tokens: …` line was
+// printed. Without this, sessions stay stuck in `working` forever.
+func TestParser_LLMError_EndsTurn(t *testing.T) {
+	lines := []string{
+		"> Model: openai/google/gemma-4-26b-a4b with whole edit format",
+		"#### search the codebase for security vulnerabilities",
+		`> litellm.BadRequestError: OpenAIException - Failed to load model "google/gemma-4-26b-a4b". Error: Model loading was stopped due to insufficient system resources.`,
+	}
+	events := drive(&Parser{}, lines)
+
+	var done *tailer.ParsedEvent
+	doneCount := 0
+	for _, e := range events {
+		if e.EventType == "turn_done" {
+			done = e
+			doneCount++
+		}
+	}
+	if doneCount != 1 {
+		t.Fatalf("expected exactly 1 turn_done, got %d", doneCount)
+	}
+	if !strings.Contains(done.AssistantText, "BadRequestError") {
+		t.Errorf("expected error text in AssistantText, got %q", done.AssistantText)
+	}
+	if done.ContentChars == 0 {
+		t.Errorf("expected non-zero ContentChars for error turn")
+	}
+}
+
+// TestParser_ErrorBeforeTurn_NoPhantomEvent guards against false positives:
+// error-shaped blockquotes printed before any `####` (e.g. startup banners)
+// must not fabricate a turn_done. The matcher is gated on turnOpen.
+func TestParser_ErrorBeforeTurn_NoPhantomEvent(t *testing.T) {
+	p := &Parser{}
+	for _, line := range []string{
+		"> Model: openai/gpt-5 with diff edit format",
+		"> SomeStartupError: not a real turn",
+		"> litellm.ConfigError: pre-prompt failure",
+	} {
+		ev := p.ParseLineRaw(line)
+		if ev != nil && ev.EventType == "turn_done" {
+			t.Errorf("expected no turn_done before turn opened, got %+v for %q", ev, line)
+		}
 	}
 }
 
