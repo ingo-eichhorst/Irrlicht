@@ -1820,7 +1820,6 @@ function copyInstallCmd(btn) {
   const hero = canvas.parentElement;
   let W, H;
   let rafId = 0;
-  let running = false;
 
   function resize() {
     W = canvas.width = hero.offsetWidth;
@@ -1896,17 +1895,15 @@ function copyInstallCmd(btn) {
       wisp = null;
     }
 
-    if (running) rafId = requestAnimationFrame(animate);
+    if (rafId) rafId = requestAnimationFrame(animate);
   }
 
   function start() {
-    if (running) return;
-    running = true;
+    if (rafId) return;
     rafId = requestAnimationFrame(animate);
   }
   function stop() {
-    running = false;
-    if (rafId) cancelAnimationFrame(rafId);
+    cancelAnimationFrame(rafId);
     rafId = 0;
   }
 
