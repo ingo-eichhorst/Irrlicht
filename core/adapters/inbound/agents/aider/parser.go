@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"irrlicht/core/pkg/tailer"
 )
@@ -16,14 +17,30 @@ import (
 //
 // State machine: a turn begins on a `#### …` line (user prompt). Plain
 // prose lines accumulate as assistant text until the next `> Tokens: …`
-// line, which closes the turn and triggers a turn_done event carrying
-// the buffered text and a PerTurnContribution.
+// line, which marks end-of-one-model-call (NOT end-of-turn) and emits an
+// assistant_message event carrying that call's PerTurnContribution. The
+// turn stays open across multiple model calls — under `--yes-always`,
+// aider auto-accepts file-add prompts and re-prompts the model multiple
+// times within a single user turn. See issue #263.
+//
+// End-of-turn is signaled out-of-band: aider's idle TUI prompt never
+// lands in the markdown chat history, so the parser implements
+// idleFlusher and synthesizes a turn_done event when the file has been
+// quiet for aiderIdleTurnDoneAfter (1500ms). The tailer drives this via
+// IdleFlush after each TailAndProcess pass.
 type Parser struct {
 	model           string
 	assistantBuffer strings.Builder
 	turnOpen        bool
 	toolSeq         int
 }
+
+// aiderIdleTurnDoneAfter is the wall-clock idle window the parser waits
+// after the last transcript line before declaring the turn over. Tuned
+// to balance two failure modes: too short flips the session to ready
+// mid-turn during a slow remote model call; too long delays the
+// working→ready transition the user perceives as "aider is finished".
+const aiderIdleTurnDoneAfter = 1500 * time.Millisecond
 
 var (
 	// `> Tokens: 771 sent, 1 received.` (with optional cost suffixes)
@@ -60,7 +77,9 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 
 	if strings.HasPrefix(line, "#### ") {
 		// User prompt. A new turn opens; reset the assistant buffer in case
-		// the previous turn was interrupted before its `> Tokens:` line.
+		// the previous turn was interrupted before its `> Tokens:` line, or
+		// the previous turn closed via IdleFlush but more prose arrived
+		// after IdleFlush ran.
 		p.assistantBuffer.Reset()
 		p.turnOpen = true
 		text := strings.TrimPrefix(line, "#### ")
@@ -78,7 +97,7 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 	}
 
 	if m := tokensRE.FindStringSubmatch(line); m != nil {
-		return p.flushAssistantTurn(m)
+		return p.closeModelCall(m)
 	}
 
 	if appliedEditRE.MatchString(line) {
@@ -94,8 +113,8 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 		return nil
 	}
 
-	// Plain prose: assistant response. Buffer it for the eventual
-	// turn-flush. ContentChars updates run on flush, not per line.
+	// Plain prose: assistant response. Buffer it for the next model-call
+	// flush. ContentChars updates run on flush, not per line.
 	if p.turnOpen {
 		if p.assistantBuffer.Len() > 0 {
 			p.assistantBuffer.WriteString(" ")
@@ -105,7 +124,14 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 	return nil
 }
 
-func (p *Parser) flushAssistantTurn(m []string) *tailer.ParsedEvent {
+// closeModelCall handles a `> Tokens:` line: aider has finished one model
+// call. Emits assistant_message — NOT turn_done — carrying the per-call
+// Contribution and the buffered assistant prose. The turn stays open
+// because under `--yes-always` aider may auto-accept file-add prompts and
+// re-prompt the model; multiple `> Tokens:` lines within one `####`
+// user turn are normal. End-of-turn is synthesized later via IdleFlush
+// when the transcript file has been quiet long enough. See issue #263.
+func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 	sent := parseTokenCount(m[1])
 	received := parseTokenCount(m[2])
 	rest := m[3]
@@ -126,13 +152,10 @@ func (p *Parser) flushAssistantTurn(m []string) *tailer.ParsedEvent {
 	text := strings.TrimSpace(p.assistantBuffer.String())
 	contentChars := int64(len(text))
 	p.assistantBuffer.Reset()
-	p.turnOpen = false
+	// turnOpen intentionally stays true: another model call may follow.
 
-	// Emit turn_done so the state classifier returns the session to ready.
-	// Aider's markdown has no separate "agent finished" marker — the
-	// `> Tokens:` line both reports usage and signals turn completion.
 	return &tailer.ParsedEvent{
-		EventType:     "turn_done",
+		EventType:     "assistant_message",
 		ModelName:     p.model,
 		AssistantText: truncate(text),
 		ContentChars:  contentChars,
@@ -143,6 +166,26 @@ func (p *Parser) flushAssistantTurn(m []string) *tailer.ParsedEvent {
 			Total:  sent + received,
 		},
 	}
+}
+
+// IdleFlush synthesizes a turn_done event when aider has been quiet for
+// at least aiderIdleTurnDoneAfter. Returns nil when no turn is open or
+// the threshold hasn't been reached. The tailer's idleFlusher hook calls
+// this once per TailAndProcess pass; per-call tokens and cost are already
+// accumulated via the assistant_message events emitted at each
+// `> Tokens:` line, so the synthesized turn_done carries no payload —
+// its only job is to flip LastEventType so the state classifier
+// transitions working → ready. See issue #263.
+func (p *Parser) IdleFlush(idleFor time.Duration) *tailer.ParsedEvent {
+	if !p.turnOpen {
+		return nil
+	}
+	if idleFor < aiderIdleTurnDoneAfter {
+		return nil
+	}
+	p.turnOpen = false
+	p.assistantBuffer.Reset()
+	return &tailer.ParsedEvent{EventType: "turn_done"}
 }
 
 func (p *Parser) toolCall(name string) *tailer.ParsedEvent {
