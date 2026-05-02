@@ -40,6 +40,13 @@ type Parser struct {
 // to balance two failure modes: too short flips the session to ready
 // mid-turn during a slow remote model call; too long delays the
 // working→ready transition the user perceives as "aider is finished".
+//
+// This is a floor, not the actual user-visible latency. The daemon's
+// SessionDetector polls working sessions every staleWorkingRefreshInterval
+// (5s in core/application/services/session_detector.go), so the
+// effective working→ready delay after the last transcript line is
+// roughly max(this constant, the next refresh tick) — about 5s in
+// practice when no other fswatcher event arrives.
 const aiderIdleTurnDoneAfter = 1500 * time.Millisecond
 
 var (
@@ -185,7 +192,10 @@ func (p *Parser) IdleFlush(idleFor time.Duration) *tailer.ParsedEvent {
 	}
 	p.turnOpen = false
 	p.assistantBuffer.Reset()
-	return &tailer.ParsedEvent{EventType: "turn_done"}
+	// Stamp the synthesized event with wall-clock time so the tailer's
+	// sliding-window message metrics (MessagesPerMinute, etc.) don't bucket
+	// it at the zero time.
+	return &tailer.ParsedEvent{EventType: "turn_done", Timestamp: time.Now()}
 }
 
 func (p *Parser) toolCall(name string) *tailer.ParsedEvent {

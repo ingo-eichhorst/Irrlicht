@@ -331,6 +331,9 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		t.cumProviderCostUSD = 0
 		t.tasks = nil
 		t.taskSeq = 0
+		// Drop the pre-rotation idle anchor so the post-scan idleFlusher
+		// hook doesn't synthesize a phantom turn_done against stale time.
+		t.lastLineSeenAt = time.Time{}
 	case t.lastOffset > 0:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
@@ -426,6 +429,11 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	return t.metrics, scanner.Err()
 }
 
+// forceIdleFlushDuration is passed to IdleFlush from FlushIdle. Any
+// reasonable parser threshold is comfortably below this, so the flusher
+// returns its synthesized event whenever a turn is open.
+const forceIdleFlushDuration = 24 * time.Hour
+
 // FlushIdle forces the idleFlusher hook regardless of the parser's own
 // wall-clock threshold, processing any synthesized event through the same
 // pipeline TailAndProcess uses. Returns the updated metrics and a bool
@@ -442,9 +450,7 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 	if !ok {
 		return t.metrics, false
 	}
-	// Pass a duration far above any reasonable parser threshold so the
-	// flusher returns its synthesized event if a turn is open.
-	ev := flusher.IdleFlush(24 * time.Hour)
+	ev := flusher.IdleFlush(forceIdleFlushDuration)
 	if ev == nil {
 		return t.metrics, false
 	}

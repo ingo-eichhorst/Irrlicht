@@ -289,7 +289,11 @@ func TestParser_TrailingQuestionMark_PreservedForWaitingClassification(t *testin
 	}
 }
 
-func TestParser_MultiTurn_StateResets(t *testing.T) {
+// TestParser_MultiTurn_EmitsAssistantMessagePerTurn confirms the parser
+// emits one assistant_message per `> Tokens:` across consecutive turns
+// and never emits an in-band turn_done — the synthesized turn_done only
+// arrives via IdleFlush. Pre-fix this test asserted two turn_done events.
+func TestParser_MultiTurn_EmitsAssistantMessagePerTurn(t *testing.T) {
 	p := &Parser{}
 	events := drive(p, []string{
 		"> Model: openai/gpt-5 with whole edit format",
