@@ -43,12 +43,10 @@ var (
 	appliedEditRE = regexp.MustCompile(`^>\s*Applied edit to\s+`)
 	// `> Running <cmd>` or `> Running shell command:` — shell tool call
 	runningRE = regexp.MustCompile(`^>\s*Running\s+`)
-	// `> litellm.BadRequestError: …`, `> openai.RateLimitError: …`,
-	// `> OpenAIException - …`, `> LookupError` — LLM-layer failures that
-	// abort a turn without ever printing `> Tokens: …`. The trailing
-	// alternation `(?:[: ]|$)` covers both delimited forms and bare
-	// error tokens at end-of-line. Matched only inside an open turn so
-	// we don't fabricate a turn for startup-banner noise.
+	// `> litellm.BadRequestError: …` / `> OpenAIException - …` / bare
+	// `> LookupError` — LLM failures that abort a turn before any
+	// `> Tokens: …` line. Gated on turnOpen at the call site so startup
+	// banners can't fabricate a phantom turn.
 	errorRE = regexp.MustCompile(`^>\s*\S*(?:Error|Exception)(?:[: ]|$)`)
 )
 
@@ -98,11 +96,10 @@ func (p *Parser) ParseLineRaw(line string) *tailer.ParsedEvent {
 		return p.toolCall("Bash")
 	}
 
-	if p.turnOpen && errorRE.MatchString(line) {
-		return p.flushErrorTurn(line)
-	}
-
 	if strings.HasPrefix(line, ">") {
+		if p.turnOpen && errorRE.MatchString(line) {
+			return p.flushErrorTurn(line)
+		}
 		// Other blockquote lines are aider status output (warnings,
 		// confirmation prompts, invocation echo). Ignore.
 		return nil
@@ -166,7 +163,7 @@ func (p *Parser) flushAssistantTurn(m []string) *tailer.ParsedEvent {
 // shows what happened. Tokens/Contribution are intentionally nil because
 // no usage was reported.
 func (p *Parser) flushErrorTurn(line string) *tailer.ParsedEvent {
-	errText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), ">"))
+	errText := strings.TrimSpace(strings.TrimPrefix(line, ">"))
 	p.assistantBuffer.Reset()
 	p.turnOpen = false
 	return &tailer.ParsedEvent{
