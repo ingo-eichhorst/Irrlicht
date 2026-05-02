@@ -298,6 +298,65 @@ func TestParser_LLMError_EndsTurn(t *testing.T) {
 	}
 }
 
+// TestParser_ErrorTurn_RecoversOnNextPrompt pins the recovery path: after an
+// error closes a turn, a subsequent `####` prompt must reopen a fresh turn
+// and the next `> Tokens: …` must produce a clean turn_done with usage.
+// Without this, a single error would silently break the rest of the session.
+func TestParser_ErrorTurn_RecoversOnNextPrompt(t *testing.T) {
+	p := &Parser{}
+	events := drive(p, []string{
+		"> Model: openai/gpt-5 with diff edit format",
+		"#### first attempt",
+		"> litellm.BadRequestError: transient failure",
+		"#### retry",
+		"this time it works",
+		"> Tokens: 100 sent, 20 received.",
+	})
+
+	var dones []*tailer.ParsedEvent
+	for _, e := range events {
+		if e.EventType == "turn_done" {
+			dones = append(dones, e)
+		}
+	}
+	if len(dones) != 2 {
+		t.Fatalf("expected 2 turn_done events (error + clean), got %d", len(dones))
+	}
+	if !strings.Contains(dones[0].AssistantText, "BadRequestError") {
+		t.Errorf("first turn_done should carry error text, got %q", dones[0].AssistantText)
+	}
+	if dones[0].Contribution != nil {
+		t.Errorf("error turn should have no Contribution, got %+v", dones[0].Contribution)
+	}
+	if dones[1].AssistantText != "this time it works" {
+		t.Errorf("second turn should carry the recovered prose, got %q", dones[1].AssistantText)
+	}
+	if dones[1].Contribution == nil || dones[1].Contribution.Usage.Input != 100 {
+		t.Fatalf("second turn should carry token contribution, got %+v", dones[1].Contribution)
+	}
+}
+
+// TestParser_ErrorWithoutDelimiter_EndsTurn covers the trailing-`$` branch
+// of errorRE: aider/litellm sometimes prints a bare error token with no
+// trailing `:` or argument (e.g. `> LookupError`). Without `|$` in the
+// regex these would fall through to the catch-all and hang the session.
+func TestParser_ErrorWithoutDelimiter_EndsTurn(t *testing.T) {
+	p := &Parser{}
+	events := drive(p, []string{
+		"#### do the thing",
+		"> LookupError",
+	})
+	doneCount := 0
+	for _, e := range events {
+		if e.EventType == "turn_done" {
+			doneCount++
+		}
+	}
+	if doneCount != 1 {
+		t.Fatalf("expected 1 turn_done for bare error token, got %d", doneCount)
+	}
+}
+
 // TestParser_ErrorBeforeTurn_NoPhantomEvent guards against false positives:
 // error-shaped blockquotes printed before any `####` (e.g. startup banners)
 // must not fabricate a turn_done. The matcher is gated on turnOpen.

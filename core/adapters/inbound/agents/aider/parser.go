@@ -15,9 +15,12 @@ import (
 // no-op kept only to satisfy the TranscriptParser interface.
 //
 // State machine: a turn begins on a `#### …` line (user prompt). Plain
-// prose lines accumulate as assistant text until the next `> Tokens: …`
-// line, which closes the turn and triggers a turn_done event carrying
-// the buffered text and a PerTurnContribution.
+// prose lines accumulate as assistant text until either:
+//   - a `> Tokens: …` line closes the turn cleanly with usage, or
+//   - an LLM-layer error blockquote (e.g. `> litellm.BadRequestError: …`)
+//     aborts the turn before tokens are reported.
+// Both paths emit a turn_done event so the state classifier returns the
+// session to ready; only the clean path carries a PerTurnContribution.
 type Parser struct {
 	model           string
 	assistantBuffer strings.Builder
@@ -41,10 +44,12 @@ var (
 	// `> Running <cmd>` or `> Running shell command:` — shell tool call
 	runningRE = regexp.MustCompile(`^>\s*Running\s+`)
 	// `> litellm.BadRequestError: …`, `> openai.RateLimitError: …`,
-	// `> OpenAIException - …` — LLM-layer failures that abort a turn
-	// without ever printing `> Tokens: …`. Matched only inside an open
-	// turn so we don't fabricate a turn for startup-banner noise.
-	errorRE = regexp.MustCompile(`^>\s*\S*(?:Error|Exception)[: ]`)
+	// `> OpenAIException - …`, `> LookupError` — LLM-layer failures that
+	// abort a turn without ever printing `> Tokens: …`. The trailing
+	// alternation `(?:[: ]|$)` covers both delimited forms and bare
+	// error tokens at end-of-line. Matched only inside an open turn so
+	// we don't fabricate a turn for startup-banner noise.
+	errorRE = regexp.MustCompile(`^>\s*\S*(?:Error|Exception)(?:[: ]|$)`)
 )
 
 // ParseLine satisfies tailer.TranscriptParser but is unused: aider transcripts
