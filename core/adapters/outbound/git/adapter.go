@@ -145,7 +145,6 @@ func (a *Adapter) GetCWDFromTranscript(transcriptPath string) string {
 	return lastCWD
 }
 
-
 // GetBranchFromTranscript tries to extract the gitBranch field from the last
 // few lines of a Claude Code transcript file.
 func (a *Adapter) GetBranchFromTranscript(transcriptPath string) string {

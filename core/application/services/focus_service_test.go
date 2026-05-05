@@ -23,16 +23,16 @@ func (r *stubRepo) ListAll() ([]*session.SessionState, error)    { return nil, n
 
 type stubPush struct{ got []outbound.PushMessage }
 
-func (p *stubPush) Broadcast(m outbound.PushMessage)    { p.got = append(p.got, m) }
-func (p *stubPush) Subscribe() chan outbound.PushMessage { return make(chan outbound.PushMessage) }
+func (p *stubPush) Broadcast(m outbound.PushMessage)        { p.got = append(p.got, m) }
+func (p *stubPush) Subscribe() chan outbound.PushMessage    { return make(chan outbound.PushMessage) }
 func (p *stubPush) Unsubscribe(_ chan outbound.PushMessage) {}
 
 type stubLog struct{}
 
-func (stubLog) LogInfo(_, _, _ string)                          {}
-func (stubLog) LogError(_, _, _ string)                         {}
+func (stubLog) LogInfo(_, _, _ string)                                  {}
+func (stubLog) LogError(_, _, _ string)                                 {}
 func (stubLog) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
-func (stubLog) Close() error                                    { return nil }
+func (stubLog) Close() error                                            { return nil }
 
 // tests
 

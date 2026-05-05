@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,6 +15,8 @@ import (
 
 	"irrlicht/core/domain/agent"
 )
+
+const defaultMinScanGap = 500 * time.Millisecond
 
 // Watcher monitors the OpenCode SQLite database for new and updated sessions.
 // It implements inbound.AgentWatcher.
@@ -72,13 +75,17 @@ type sessionCursor struct {
 
 // New creates a Watcher for the OpenCode database relative to $HOME.
 func New(maxAge time.Duration) *Watcher {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("opencode: $HOME not set, using relative path: %v", err)
+	}
 	return &Watcher{
-		dbPath:     filepath.Join(home, dbRelPath),
-		adapter:    AdapterName,
-		maxAge:     maxAge,
-		cursors:    make(map[string]*sessionCursor),
-		minScanGap: 500 * time.Millisecond,
+		dbPath:            filepath.Join(home, dbRelPath),
+		adapter:           AdapterName,
+		maxAge:            maxAge,
+		cursors:           make(map[string]*sessionCursor),
+		minScanGap:        defaultMinScanGap,
+		lastArchivedCheck: time.Now(),
 	}
 }
 
@@ -86,11 +93,12 @@ func New(maxAge time.Duration) *Watcher {
 // Intended for tests.
 func NewWithDBPath(dbPath string, maxAge time.Duration) *Watcher {
 	return &Watcher{
-		dbPath:     dbPath,
-		adapter:    AdapterName,
-		maxAge:     maxAge,
-		cursors:    make(map[string]*sessionCursor),
-		minScanGap: 500 * time.Millisecond,
+		dbPath:            dbPath,
+		adapter:           AdapterName,
+		maxAge:            maxAge,
+		cursors:           make(map[string]*sessionCursor),
+		minScanGap:        defaultMinScanGap,
+		lastArchivedCheck: time.Now(),
 	}
 }
 
@@ -111,13 +119,9 @@ func (w *Watcher) Watch(ctx context.Context) error {
 
 	// Initial scan: emit EventNewSession for existing sessions so the daemon
 	// picks up sessions that were created before it started.
-	// Small delay to ensure detector.Run() has called Subscribe() before we
-	// broadcast the first batch of events — Watch() and detector.Run() start
-	// concurrently as goroutines and Subscribe() must win the race.
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		w.scanSessions()
-	}()
+	// By the time Watch() is called, Subscribe() has already been called by
+	// the detector, so the inline scan safely reaches registered subscribers.
+	w.scanSessions()
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -144,7 +148,8 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			// React to writes to the DB or WAL file.
 			if ev.Op&fsnotify.Write != 0 {
 				name := filepath.Base(ev.Name)
-				if name == "opencode.db" || name == "opencode.db-wal" {
+				dbFile := filepath.Base(w.dbPath)
+				if name == dbFile || name == dbFile+"-wal" {
 					w.scanSessions()
 				}
 			}
@@ -188,10 +193,11 @@ func (w *Watcher) scanSessions() {
 		w.scanMu.Unlock()
 		return
 	}
-	w.lastScan = time.Now()
 	w.scanMu.Unlock()
+	w.lastScan = time.Now()
 	db, err := sql.Open("sqlite", w.dbPath+"?mode=ro&_journal=WAL&_timeout=500")
 	if err != nil {
+		log.Printf("opencode: sql.Open: %v", err)
 		return
 	}
 	defer db.Close()
@@ -220,6 +226,7 @@ func (w *Watcher) scanSessions() {
 		`)
 	}
 	if queryErr != nil {
+		log.Printf("opencode: db.Query(session): %v", queryErr)
 		return
 	}
 	defer rows.Close()
@@ -235,6 +242,7 @@ func (w *Watcher) scanSessions() {
 		var s sessionRow
 		var parentID sql.NullString
 		if err := rows.Scan(&s.id, &s.directory, &s.timeUpdated, &parentID); err != nil {
+			log.Printf("opencode: rows.Scan(session): %v", err)
 			continue
 		}
 		if parentID.Valid {
@@ -312,7 +320,7 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 		if err := rows.Scan(&id); err != nil {
 			continue
 		}
-		cur, known := w.cursors[id]
+		_, known := w.cursors[id]
 		if !known {
 			continue
 		}
@@ -324,7 +332,6 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 			TranscriptPath: walPath,
 		})
 		delete(w.cursors, id)
-		_ = cur
 	}
 }
 
@@ -465,7 +472,7 @@ func (w *Watcher) waitForDB(ctx context.Context) error {
 				return nil
 			}
 			if ev.Op&fsnotify.Create != 0 {
-				if filepath.Base(ev.Name) == "opencode.db" {
+				if filepath.Base(ev.Name) == filepath.Base(w.dbPath) {
 					return nil
 				}
 			}

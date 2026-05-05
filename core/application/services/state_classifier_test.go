@@ -380,4 +380,3 @@ func TestShouldSynthesizeCollapsedWaiting(t *testing.T) {
 		})
 	}
 }
-

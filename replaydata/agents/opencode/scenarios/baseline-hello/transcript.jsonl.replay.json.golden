@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_transcript": "/Users/marvin.kruse/Source/Irrlicht/replaydata/agents/opencode/scenarios/baseline-hello/transcript.jsonl",
+  "source_transcript": "replaydata/agents/opencode/scenarios/baseline-hello/transcript.jsonl",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
     "adapter": "opencode",

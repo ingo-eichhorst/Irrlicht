@@ -25,12 +25,12 @@ type lockedTailer struct {
 // For adapters that register a MetricsProvider (e.g. OpenCode with its SQLite
 // database), ComputeMetrics delegates to that provider instead of the tailer.
 type Adapter struct {
-	mu              sync.Mutex // protects the tailers map only
-	tailers         map[string]*lockedTailer
-	parsers         map[string]agents.ParserFactory
-	subagents       map[string]agents.SubagentCounter
+	mu               sync.Mutex // protects the tailers map only
+	tailers          map[string]*lockedTailer
+	parsers          map[string]agents.ParserFactory
+	subagents        map[string]agents.SubagentCounter
 	metricsProviders map[string]agents.MetricsProvider
-	fallback        agents.ParserFactory // used for unknown adapter names
+	fallback         agents.ParserFactory // used for unknown adapter names
 }
 
 // New returns a new metrics Adapter configured from the given agent
@@ -99,7 +99,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 
 	// Delegate to adapter-specific provider when registered.
 	if provider, ok := a.metricsProviders[adapter]; ok {
-		return provider(transcriptPath, adapter)
+		return provider(transcriptPath, "")
 	}
 
 	a.mu.Lock()
@@ -127,28 +127,28 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		return nil, nil //nolint:nilerr — absent transcript is not an error
 	}
 	result := &session.SessionMetrics{
-		ElapsedSeconds:         m.ElapsedSeconds,
-		TotalTokens:            m.TotalTokens,
-		ModelName:              m.ModelName,
-		ContextWindow:          m.ContextWindow,
-		ContextUtilization:     m.ContextUtilization,
-		PressureLevel:          m.PressureLevel,
-		ContextWindowUnknown:   m.ContextWindowUnknown,
-		HasOpenToolCall:        m.HasOpenToolCall,
-		OpenToolCallCount:      m.OpenToolCallCount,
-		OpenSubagents:          a.countOpenSubagents(adapter, m),
-		LastEventType:          m.LastEventType,
-		LastOpenToolNames:      m.LastOpenToolNames,
-		LastWasUserInterrupt:   m.LastWasUserInterrupt,
-		LastWasToolDenial:      m.LastWasToolDenial,
-		EstimatedCostUSD:       m.EstimatedCostUSD,
-		CumInputTokens:        m.CumInputTokens,
-		CumOutputTokens:       m.CumOutputTokens,
-		CumCacheReadTokens:    m.CumCacheReadTokens,
-		CumCacheCreationTokens: m.CumCacheCreationTokens,
-		LastCWD:                m.LastCWD,
-		LastAssistantText:      m.LastAssistantText,
-		PermissionMode:         m.PermissionMode,
+		ElapsedSeconds:                    m.ElapsedSeconds,
+		TotalTokens:                       m.TotalTokens,
+		ModelName:                         m.ModelName,
+		ContextWindow:                     m.ContextWindow,
+		ContextUtilization:                m.ContextUtilization,
+		PressureLevel:                     m.PressureLevel,
+		ContextWindowUnknown:              m.ContextWindowUnknown,
+		HasOpenToolCall:                   m.HasOpenToolCall,
+		OpenToolCallCount:                 m.OpenToolCallCount,
+		OpenSubagents:                     a.countOpenSubagents(adapter, m),
+		LastEventType:                     m.LastEventType,
+		LastOpenToolNames:                 m.LastOpenToolNames,
+		LastWasUserInterrupt:              m.LastWasUserInterrupt,
+		LastWasToolDenial:                 m.LastWasToolDenial,
+		EstimatedCostUSD:                  m.EstimatedCostUSD,
+		CumInputTokens:                    m.CumInputTokens,
+		CumOutputTokens:                   m.CumOutputTokens,
+		CumCacheReadTokens:                m.CumCacheReadTokens,
+		CumCacheCreationTokens:            m.CumCacheCreationTokens,
+		LastCWD:                           m.LastCWD,
+		LastAssistantText:                 m.LastAssistantText,
+		PermissionMode:                    m.PermissionMode,
 		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
 	}
 	if len(m.SubagentCompletions) > 0 {

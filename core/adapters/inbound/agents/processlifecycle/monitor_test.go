@@ -164,4 +164,3 @@ func TestUnwatch(t *testing.T) {
 		// Good — handler was not called.
 	}
 }
-

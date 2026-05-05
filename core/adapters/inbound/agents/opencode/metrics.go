@@ -3,12 +3,14 @@ package opencode
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -69,14 +71,15 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		ORDER BY p.time_created ASC, p.id ASC
 	`, sessionID)
 	if err != nil {
+		log.Printf("opencode: db.Query(part): %v", err)
 		return nil, nil
 	}
 	defer rows.Close()
 
 	metrics := &session.SessionMetrics{
-		ModelName:    "unknown",
+		ModelName:     "unknown",
 		PressureLevel: "unknown",
-		LastCWD:      directory,
+		LastCWD:       directory,
 	}
 
 	parser := &Parser{}
@@ -86,16 +89,20 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	var cumCost float64
 	var cumInput, cumOutput, cumCacheRead int64
 	hasData := false
-	var lastTS time.Time
+	var firstTS, lastTS time.Time
 
 	for rows.Next() {
 		var partData, msgData string
 		var timeUpdated int64
 		if err := rows.Scan(&partData, &timeUpdated, &msgData); err != nil {
+			log.Printf("opencode: rows.Scan(part): %v", err)
 			continue
 		}
 		hasData = true
 		ts := time.UnixMilli(timeUpdated)
+		if firstTS.IsZero() {
+			firstTS = ts
+		}
 		if ts.After(lastTS) {
 			lastTS = ts
 		}
@@ -179,6 +186,11 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	metrics.CumInputTokens = cumInput
 	metrics.CumOutputTokens = cumOutput
 	metrics.CumCacheReadTokens = cumCacheRead
+	metrics.ElapsedSeconds = int64(lastTS.Sub(firstTS).Seconds())
+
+	cm := capacity.DefaultCapacityManager()
+	metrics.ContextWindow, metrics.ContextUtilization, metrics.PressureLevel, metrics.ContextWindowUnknown =
+		tailer.ComputeContextUtilization(metrics.ModelName, metrics.TotalTokens, cm, 0)
 
 	return metrics, nil
 }

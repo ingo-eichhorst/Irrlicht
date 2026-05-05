@@ -172,7 +172,7 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 //  1. Known PID and syscall.Kill returns ESRCH        → process exited.
 //  2. PID == 0, not a subagent, transcript file has
 //     not been modified within orphanTranscriptAge    → orphan that
-//                                                       never bound.
+//     never bound.
 //
 // Note: a "live PID, old record" case is intentionally NOT included. A
 // long-idle but still-running agent (user away from keyboard for >2 min)
@@ -237,7 +237,7 @@ func (pm *PIDManager) cleanupChildren(parentID string) {
 		return
 	}
 	for _, s := range states {
-		if s.ParentSessionID == parentID {
+		if s.ParentSessionID == parentID && !strings.Contains(s.TranscriptPath, "?session=") {
 			_ = pm.repo.Delete(s.SessionID)
 			pm.broadcast(outbound.PushTypeDeleted, s)
 		}
@@ -480,28 +480,28 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	// - Child sessions: ready or stale transcript (finished/zombie subagents)
 	if pm.readyTTL > 0 {
 		for _, state := range states {
-		// Child sessions: clean up immediately when ready, or when stale
-		// (transcript stopped updating — zombie from a previous run).
-		// Exception: DB-backed adapters (TranscriptPath contains "?session=")
-		// manage their own session lifetime via maxAge; their subagents are
-		// persistent historical records, not transient process-bound children.
-		if state.ParentSessionID != "" {
-			if !strings.Contains(state.TranscriptPath, "?session=") &&
-				(state.State == session.StateReady || isStaleTranscript(state.TranscriptPath)) {
-				parentID := state.ParentSessionID
-				_ = pm.repo.Delete(state.SessionID)
-				pm.broadcast(outbound.PushTypeDeleted, state)
-				// Re-evaluate the parent: it may have been held in
-				// `working` only because of this child. Without this
-				// nudge the parent stays stuck until its own next
-				// transcript event, which may never come for a
-				// finished session.
-				if pm.onChildDeleted != nil {
-					pm.onChildDeleted(parentID)
+			// Child sessions: clean up immediately when ready, or when stale
+			// (transcript stopped updating — zombie from a previous run).
+			// Exception: DB-backed adapters (TranscriptPath contains "?session=")
+			// manage their own session lifetime via maxAge; their subagents are
+			// persistent historical records, not transient process-bound children.
+			if state.ParentSessionID != "" {
+				if !strings.Contains(state.TranscriptPath, "?session=") &&
+					(state.State == session.StateReady || isStaleTranscript(state.TranscriptPath)) {
+					parentID := state.ParentSessionID
+					_ = pm.repo.Delete(state.SessionID)
+					pm.broadcast(outbound.PushTypeDeleted, state)
+					// Re-evaluate the parent: it may have been held in
+					// `working` only because of this child. Without this
+					// nudge the parent stays stuck until its own next
+					// transcript event, which may never come for a
+					// finished session.
+					if pm.onChildDeleted != nil {
+						pm.onChildDeleted(parentID)
+					}
 				}
+				continue
 			}
-			continue
-		}
 			// Sessions with PID=0 that are ready: the process likely exited
 			// before PID discovery succeeded. Clean up quickly (30s) rather
 			// than waiting the full readyTTL — BUT only if the transcript

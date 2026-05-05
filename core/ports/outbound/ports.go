@@ -132,4 +132,3 @@ type ProcessWatcher interface {
 	// Close releases kqueue resources.
 	Close() error
 }
-

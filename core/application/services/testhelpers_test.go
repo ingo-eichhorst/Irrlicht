@@ -110,9 +110,9 @@ func (g *mockGit) GetProjectName(dir string) string {
 	}
 	return "project"
 }
-func (g *mockGit) GetGitRoot(dir string) string                { return "" }
-func (g *mockGit) GetBranchFromTranscript(path string) string  { return "" }
-func (g *mockGit) GetCWDFromTranscript(path string) string     { return "" }
+func (g *mockGit) GetGitRoot(dir string) string               { return "" }
+func (g *mockGit) GetBranchFromTranscript(path string) string { return "" }
+func (g *mockGit) GetCWDFromTranscript(path string) string    { return "" }
 
 type mockMetrics struct {
 	pruned []string

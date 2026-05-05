@@ -161,13 +161,13 @@ func (m *SessionMetrics) NeedsUserAttention() bool {
 // regardless of permission settings. These are the only tools that should
 // trigger the "waiting" state.
 func isUserBlockingTool(name string) bool {
-	return name == "AskUserQuestion" || name == "ExitPlanMode"
+	return name == "AskUserQuestion" || name == "ExitPlanMode" || name == "question"
 }
 
 // trailingMarkdownNoise are characters that commonly appear AFTER a
 // question mark when models wrap questions in markdown or punctuation.
 // e.g. `**Question?**` (bold), `*Question?*` (italic), `_Question?_`,
-// `~~Question?~~`, `` `Question?` `` (inline code), `"Question?"`
+// `~~Question?~~`, “ `Question?` “ (inline code), `"Question?"`
 // (quoted), `(yes/no?)` (parenthetical), `[link?]` (bracketed), and
 // trailing whitespace.
 const trailingMarkdownNoise = "*_~`\"')] \t\n\r"
@@ -385,12 +385,12 @@ func (l *Launcher) IsEmpty() bool {
 
 // SessionState represents the current state of a Claude Code or Copilot session.
 type SessionState struct {
-	Version         int             `json:"version"`
-	SessionID       string          `json:"session_id"`
-	State           string          `json:"state"`
+	Version   int    `json:"version"`
+	SessionID string `json:"session_id"`
+	State     string `json:"state"`
 	// Adapter identifies the source agent (e.g. "claude-code", "codex").
 	// Empty means Claude Code (for backwards compatibility).
-	Adapter string `json:"adapter,omitempty"`
+	Adapter         string          `json:"adapter,omitempty"`
 	CompactionState string          `json:"compaction_state,omitempty"`
 	Model           string          `json:"model,omitempty"`
 	CWD             string          `json:"cwd,omitempty"`

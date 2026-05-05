@@ -13,10 +13,10 @@ import (
 // stubLogger satisfies outbound.Logger without writing anything.
 type stubLogger struct{}
 
-func (stubLogger) LogInfo(_, _, _ string)                          {}
-func (stubLogger) LogError(_, _, _ string)                         {}
+func (stubLogger) LogInfo(_, _, _ string)                                  {}
+func (stubLogger) LogError(_, _, _ string)                                 {}
 func (stubLogger) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
-func (stubLogger) Close() error                                    { return nil }
+func (stubLogger) Close() error                                            { return nil }
 
 // stubTarget implements focusTarget.
 type stubTarget struct {

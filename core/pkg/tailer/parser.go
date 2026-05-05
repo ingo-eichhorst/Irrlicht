@@ -65,10 +65,10 @@ type ParsedEvent struct {
 	Skip      bool      // true → ignore this line entirely
 
 	// Tool tracking — parser reports deltas, tailer accumulates.
-	ToolUses      []ToolUse // tool invocations from this event (id + name)
-	ToolResultIDs []string  // IDs of completed tool results in this event
-	IsError       bool      // true if the tool result had is_error=true
-	ClearToolNames bool     // true → reset open tool state (on user messages)
+	ToolUses       []ToolUse // tool invocations from this event (id + name)
+	ToolResultIDs  []string  // IDs of completed tool results in this event
+	IsError        bool      // true if the tool result had is_error=true
+	ClearToolNames bool      // true → reset open tool state (on user messages)
 
 	// IsUserInterrupt is true only for real user ESC cancellations — the
 	// exact "[Request interrupted by user]" text marker on a user event,

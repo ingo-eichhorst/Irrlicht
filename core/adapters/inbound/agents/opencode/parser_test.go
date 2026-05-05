@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,8 +145,11 @@ func TestParser_TextPart_LongTruncated(t *testing.T) {
 	if ev == nil || ev.Skip {
 		t.Fatal("expected non-skipped event")
 	}
-	if len(ev.AssistantText) != 200 {
-		t.Errorf("AssistantText len = %d, want 200", len(ev.AssistantText))
+	if len([]rune(ev.AssistantText)) != 201 {
+		t.Errorf("AssistantText rune count = %d, want 201 (… + 200 chars)", len([]rune(ev.AssistantText)))
+	}
+	if !strings.HasPrefix(ev.AssistantText, "…") {
+		t.Errorf("AssistantText = %q, want leading …", ev.AssistantText)
 	}
 	if ev.ContentChars != 300 {
 		t.Errorf("ContentChars = %d, want 300", ev.ContentChars)
@@ -319,9 +323,9 @@ func TestParser_TimestampExtracted(t *testing.T) {
 	p := &Parser{}
 	now := time.Now().Truncate(time.Millisecond)
 	ev := p.ParseLine(rawPart(map[string]interface{}{
-		"type":  "step-finish",
+		"type":   "step-finish",
 		"reason": "stop",
-		"_ts":   float64(now.UnixMilli()),
+		"_ts":    float64(now.UnixMilli()),
 	}))
 	if ev == nil {
 		t.Fatal("expected non-nil event")

@@ -163,8 +163,9 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 	// Assistant text part.
 	ev.EventType = "assistant_message"
 	if text, ok := raw["text"].(string); ok {
-		if len(text) > 200 {
-			ev.AssistantText = text[:200]
+		runes := []rune(text)
+		if len(runes) > 200 {
+			ev.AssistantText = "…" + string(runes[len(runes)-200:])
 		} else {
 			ev.AssistantText = text
 		}
