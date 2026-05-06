@@ -57,15 +57,24 @@ jobs:
           echo "COLOR=$COLOR" >> $GITHUB_ENV
 
       - name: Update Gist with coverage
+        continue-on-error: true
         env:
           GIST_SECRET: ${{ secrets.GIST_SECRET }}
           COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
         run: |
           BADGE_JSON="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"${COLOR}\"}"
           jq -n --arg content "$BADGE_JSON" '{"files":{"coverage.json":{"content":$content}}}' > /tmp/gist-payload.json
-          curl -sf -X PATCH \
+          status=$(curl -s -o /tmp/gist-response.json -w "%{http_code}" -X PATCH \
             -H "Authorization: token $GIST_SECRET" \
             -H "Content-Type: application/json" \
             -d @/tmp/gist-payload.json \
-            "https://api.github.com/gists/$COVERAGE_GIST_ID" > /dev/null
+            "https://api.github.com/gists/$COVERAGE_GIST_ID")
+          echo "Gist API HTTP status: $status"
+          if [ "$status" -ge 400 ]; then
+            echo "Response body:"
+            cat /tmp/gist-response.json
+            echo ""
+            echo "::warning::Coverage badge gist update failed (HTTP $status). Likely GIST_SECRET expired — rotate the token in repo secrets."
+            exit 1
+          fi
 
