@@ -5,14 +5,24 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // isStaleTranscript reports whether the transcript file at path has not been
 // modified within orphanTranscriptAge. Returns false for empty paths or
 // stat errors (file missing → not stale, will be caught elsewhere).
+// Any query-string suffix (e.g. "?session=ses_xxx") signals a DB-backed
+// adapter (e.g. OpenCode) whose staleness is managed by the adapter itself —
+// these paths are never considered stale by this function.
 func isStaleTranscript(path string) bool {
 	if path == "" {
+		return false
+	}
+	// DB-backed adapters embed session ID as a query string. Staleness for
+	// these sessions is handled by the adapter's own maxAge filter, not by
+	// transcript mtime — the WAL is shared across all sessions in the DB.
+	if strings.IndexByte(path, '?') >= 0 {
 		return false
 	}
 	info, err := os.Stat(path)

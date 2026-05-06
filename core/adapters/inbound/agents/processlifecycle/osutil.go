@@ -102,12 +102,12 @@ func CWDToProjectDir(cwd string) string {
 // launcherEnvKeys are the env vars whitelisted for launcher identity capture.
 // Everything else is ignored — we never read the full env, only these keys.
 var launcherEnvKeys = map[string]struct{}{
-	"TERM_PROGRAM":     {},
-	"ITERM_SESSION_ID": {},
-	"TERM_SESSION_ID":  {},
-	"TMUX":             {},
-	"TMUX_PANE":        {},
-	"VSCODE_PID":       {},
+	"TERM_PROGRAM":      {},
+	"ITERM_SESSION_ID":  {},
+	"TERM_SESSION_ID":   {},
+	"TMUX":              {},
+	"TMUX_PANE":         {},
+	"VSCODE_PID":        {},
 	"TERMINAL_EMULATOR": {}, // JetBrains JediTerm sets this to "JetBrains-JediTerm"
 	"KITTY_LISTEN_ON":   {}, // kitty remote-control socket path (e.g. "unix:/tmp/kitty-NNN/sock")
 	"KITTY_WINDOW_ID":   {}, // kitty window ID for precise window targeting
@@ -264,4 +264,3 @@ func parseProcargs2(buf []byte) map[string]string {
 	}
 	return out
 }
-

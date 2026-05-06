@@ -9,7 +9,7 @@ import (
 
 // ModelPricing holds per-token pricing in USD per million tokens.
 type ModelPricing struct {
-	InputPerMTok float64 `json:"input_per_mtok"`
+	InputPerMTok  float64 `json:"input_per_mtok"`
 	OutputPerMTok float64 `json:"output_per_mtok"`
 	// CacheReadPerMTok covers both Anthropic cache hits and OpenAI cached input.
 	CacheReadPerMTok float64 `json:"cache_read_per_mtok"`
@@ -45,12 +45,12 @@ type capacityConfig struct {
 // CapacityManager serves model capacity lookups from the LiteLLM cache,
 // reloading transparently when the cache file's mtime advances.
 type CapacityManager struct {
-	mu              sync.RWMutex
-	config          *capacityConfig
-	cachePath       string
-	lastModified    time.Time
-	loggedMisses    map[string]bool // tracks models already warned about missing pricing
-	loggedMissesMu  sync.Mutex
+	mu             sync.RWMutex
+	config         *capacityConfig
+	cachePath      string
+	lastModified   time.Time
+	loggedMisses   map[string]bool // tracks models already warned about missing pricing
+	loggedMissesMu sync.Mutex
 }
 
 // NewForTest constructs a CapacityManager backed by an in-memory model map.
@@ -186,4 +186,3 @@ func (cm *CapacityManager) EstimateCostFromBreakdown(modelName string, input, ou
 		cacheCreateCost
 	return cost / 1_000_000
 }
-

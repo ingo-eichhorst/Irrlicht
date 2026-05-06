@@ -1,0 +1,4 @@
+{"type":"text","text":"Output exactly the two characters: ok","_role":"user","_cwd":"/Users/ingo/projects/irrlicht","_ts":1745660940296}
+{"type":"step-start","snapshot":"abc123","_role":"assistant","_cwd":"/Users/ingo/projects/irrlicht","_ts":1745660940310}
+{"type":"text","text":"ok","_role":"assistant","_cwd":"/Users/ingo/projects/irrlicht","_ts":1745660941800}
+{"type":"step-finish","reason":"stop","tokens":{"input":23717,"output":26,"reasoning":0,"total":23743,"cache":{"read":3456,"write":0}},"cost":0.012345,"_model":"claude-sonnet-4-5","_role":"assistant","_cwd":"/Users/ingo/projects/irrlicht","_ts":1745660941961}

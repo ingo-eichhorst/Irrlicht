@@ -149,10 +149,10 @@ func TestContextUtilization_Codex53_Uses256KContextWindow(t *testing.T) {
 			"message": map[string]interface{}{
 				"model": "gpt-5.3-codex",
 				"usage": map[string]interface{}{
-					"input":      float64(1093),
-					"output":     float64(509),
-					"cacheRead":  float64(34048),
-					"cacheWrite": float64(0),
+					"input":       float64(1093),
+					"output":      float64(509),
+					"cacheRead":   float64(34048),
+					"cacheWrite":  float64(0),
 					"totalTokens": float64(35650),
 				},
 			},
@@ -265,10 +265,10 @@ func TestContextUtilization_PressureLevels(t *testing.T) {
 		inputTokens  float64
 		wantPressure string
 	}{
-		{"safe", 250000, "safe"},           // 25% of 1M
-		{"caution", 650000, "caution"},     // 65% of 1M
-		{"warning", 825000, "warning"},     // 82.5% of 1M
-		{"critical", 925000, "critical"},   // 92.5% of 1M
+		{"safe", 250000, "safe"},         // 25% of 1M
+		{"caution", 650000, "caution"},   // 65% of 1M
+		{"warning", 825000, "warning"},   // 82.5% of 1M
+		{"critical", 925000, "critical"}, // 92.5% of 1M
 	}
 
 	for _, tt := range tests {

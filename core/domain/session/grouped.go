@@ -76,7 +76,7 @@ func BuildDashboard(sessions []*SessionState, orch *orchestrator.State) []*Agent
 	}
 
 	// 3. Partition top-level sessions into orchestrator vs regular.
-	var orchAgents []*Agent          // global agents (no rig)
+	var orchAgents []*Agent              // global agents (no rig)
 	rigAgentMap := map[string][]*Agent{} // rig name → agents
 	var rigOrder []string
 

@@ -33,7 +33,7 @@ func surviveTurnDone(name string) bool {
 // list also lives at session.isUserBlockingTool.
 func isUserBlockingToolName(name string) bool {
 	switch name {
-	case "AskUserQuestion", "ExitPlanMode":
+	case "AskUserQuestion", "ExitPlanMode", "question":
 		return true
 	}
 	return false

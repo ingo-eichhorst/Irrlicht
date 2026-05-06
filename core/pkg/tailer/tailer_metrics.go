@@ -3,6 +3,8 @@ package tailer
 import (
 	"strings"
 	"time"
+
+	"irrlicht/core/pkg/capacity"
 )
 
 func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
@@ -311,39 +313,28 @@ func (t *TranscriptTailer) computeMetrics() {
 // is only set or cleared in branches that actually computed a window, so the
 // last "real" answer is sticky. MergeMetrics also prefers the older true
 // value over a fresh false (defense in depth).
-func (t *TranscriptTailer) computeContextUtilization() {
-	if t.metrics.TotalTokens == 0 || t.metrics.ModelName == "" {
-		t.metrics.ContextUtilization = 0.0
-		t.metrics.PressureLevel = "unknown"
-		return
+// ComputeContextUtilization calculates context utilization metrics from model
+// name, total tokens, capacity manager, and an optional context window override.
+func ComputeContextUtilization(modelName string, totalTokens int64, capacityMgr *capacity.CapacityManager, contextWindowOverride int64) (contextWindow int64, utilization float64, pressure string, unknown bool) {
+	if totalTokens == 0 || modelName == "" {
+		return 0, 0.0, "unknown", false
 	}
 
 	var effectiveContextWindow int64
 
-	if t.contextWindowOverride > 0 {
-		effectiveContextWindow = t.contextWindowOverride
+	if contextWindowOverride > 0 {
+		effectiveContextWindow = contextWindowOverride
 	}
 
-	if effectiveContextWindow <= 0 && t.capacityMgr != nil {
-		effectiveContextWindow = t.capacityMgr.GetModelCapacity(t.metrics.ModelName).ContextWindow
+	if effectiveContextWindow <= 0 && capacityMgr != nil {
+		effectiveContextWindow = capacityMgr.GetModelCapacity(modelName).ContextWindow
 	}
 
-	// No pricing for this model (capacity manager doesn't know it). We
-	// intentionally do NOT invent a synthetic context window — guessing
-	// wrong (e.g. 100k tokens against an assumed 32k) shows >100%
-	// utilization which is more confusing than honest "unknown". Instead,
-	// the macOS client uses the ContextWindowUnknown flag to render a
-	// tokens-only label without a percentage, so the row still has signal
-	// instead of silently hiding the column.
 	if effectiveContextWindow <= 0 {
-		t.metrics.ContextWindow = 0
-		t.metrics.ContextUtilization = 0
-		t.metrics.PressureLevel = "unknown"
-		t.metrics.ContextWindowUnknown = true
-		return
+		return 0, 0, "unknown", true
 	}
 
-	utilizationPercentage := (float64(t.metrics.TotalTokens) / float64(effectiveContextWindow)) * 100
+	utilizationPercentage := (float64(totalTokens) / float64(effectiveContextWindow)) * 100
 
 	pressureLevel := "safe"
 	if utilizationPercentage >= 90 {
@@ -354,8 +345,20 @@ func (t *TranscriptTailer) computeContextUtilization() {
 		pressureLevel = "caution"
 	}
 
-	t.metrics.ContextWindow = effectiveContextWindow
-	t.metrics.ContextUtilization = utilizationPercentage
-	t.metrics.PressureLevel = pressureLevel
-	t.metrics.ContextWindowUnknown = false
+	return effectiveContextWindow, utilizationPercentage, pressureLevel, false
+}
+
+func (t *TranscriptTailer) computeContextUtilization() {
+	if t.metrics.TotalTokens == 0 || t.metrics.ModelName == "" {
+		t.metrics.ContextUtilization = 0.0
+		t.metrics.PressureLevel = "unknown"
+		return
+	}
+	window, utilPct, pressure, unknown := ComputeContextUtilization(
+		t.metrics.ModelName, t.metrics.TotalTokens, t.capacityMgr, t.contextWindowOverride,
+	)
+	t.metrics.ContextWindow = window
+	t.metrics.ContextUtilization = utilPct
+	t.metrics.PressureLevel = pressure
+	t.metrics.ContextWindowUnknown = unknown
 }

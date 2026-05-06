@@ -116,3 +116,5 @@ replaydata/agents/_reports/
 .pi
 .specs
 .aider*
+# OpenCode session metadata (auto-created by the daemon)
+opencode.json

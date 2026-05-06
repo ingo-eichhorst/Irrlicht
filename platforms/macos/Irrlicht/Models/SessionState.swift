@@ -518,6 +518,7 @@ struct SessionState: Identifiable, Codable {
         case "codex": return "Codex"
         case "pi": return "Pi"
         case "aider": return "Aider"
+        case "opencode": return "OpenCode"
         default: return "Claude Code"
         }
     }
@@ -535,6 +536,8 @@ struct SessionState: Identifiable, Codable {
             svg = SessionState.piSVG(dark: isDark)
         case "aider":
             svg = SessionState.aiderSVG
+        case "opencode":
+            svg = SessionState.openCodeSVG(dark: isDark)
         default:
             svg = SessionState.claudeCodeSVG
         }
@@ -594,6 +597,19 @@ struct SessionState: Identifiable, Codable {
           <line x1="28" y1="30" x2="72" y2="30" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
           <line x1="40" y1="30" x2="40" y2="74" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
           <line x1="60" y1="30" x2="64" y2="74" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
+        </svg>
+        """
+    }
+
+    // OpenCode — curly braces { } in a circle, rendered in OpenCode's brand blue.
+    private static func openCodeSVG(dark: Bool) -> String {
+        let bg = dark ? "#0D1117" : "#F0F6FF"
+        let fg = "#3B82F6"
+        return """
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="44" fill="\(bg)" stroke="\(fg)" stroke-width="6"/>
+          <path d="M42 28 Q30 28 30 38 L30 46 Q30 50 26 50 Q30 50 30 54 L30 62 Q30 72 42 72" fill="none" stroke="\(fg)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M58 28 Q70 28 70 38 L70 46 Q70 50 74 50 Q70 50 70 54 L70 62 Q70 72 58 72" fill="none" stroke="\(fg)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
         """
     }

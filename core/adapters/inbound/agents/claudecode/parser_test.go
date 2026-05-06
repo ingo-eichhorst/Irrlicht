@@ -35,7 +35,7 @@ func TestParser_Contribution_RequestIDDedup(t *testing.T) {
 		}},
 	}
 
-	_ = p.ParseLine(line1) // pending turn 1
+	_ = p.ParseLine(line1)    // pending turn 1
 	ev2 := p.ParseLine(line2) // same requestId — update pending, no Contribution yet
 	if ev2.Contribution != nil {
 		t.Error("same requestId should not emit Contribution yet")
@@ -107,8 +107,8 @@ func TestParser_Contribution_FlatCacheCreationFallback(t *testing.T) {
 		"message": map[string]interface{}{
 			"model": "claude-sonnet-4-6",
 			"usage": map[string]interface{}{
-				"input_tokens":                     float64(500),
-				"cache_creation_input_tokens":       float64(200),
+				"input_tokens":                float64(500),
+				"cache_creation_input_tokens": float64(200),
 			},
 		},
 	}

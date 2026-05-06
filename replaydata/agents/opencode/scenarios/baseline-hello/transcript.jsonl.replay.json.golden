@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "source_transcript": "replaydata/agents/opencode/scenarios/baseline-hello/transcript.jsonl",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "opencode",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 4,
+    "consumed_events": 4,
+    "total_transitions": 3,
+    "first_event_time": "0001-01-01T00:00:00Z",
+    "last_event_time": "0001-01-01T00:00:00Z",
+    "wall_clock_session_duration": 0,
+    "state_durations": {},
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "estimated_cost_usd": 0.012345
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "0001-01-01T00:00:00Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 3,
+      "virtual_time": "0001-01-01T00:00:00Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
+    },
+    {
+      "index": 2,
+      "event_index": 3,
+      "virtual_time": "0001-01-01T00:00:00Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
+    }
+  ]
+}

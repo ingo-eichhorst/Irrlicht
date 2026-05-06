@@ -39,14 +39,14 @@ var termProgramByAppName = map[string]string{
 	"Rider":            "jetbrains",
 	"CLion":            "jetbrains",
 	"RustRover":        "jetbrains",
-	"Zed":       "zed",
-	"kitty":     "kitty",
-	"Rio":       "rio",
-	"Tabby":     "tabby",
-	"Wave":      "waveterm",
-	"Alacritty": "alacritty",
-	"Nova":      "nova",
-	"cmux":      "cmux",
+	"Zed":              "zed",
+	"kitty":            "kitty",
+	"Rio":              "rio",
+	"Tabby":            "tabby",
+	"Wave":             "waveterm",
+	"Alacritty":        "alacritty",
+	"Nova":             "nova",
+	"cmux":             "cmux",
 }
 
 // termProgramForAppPath extracts the host app's canonical TERM_PROGRAM

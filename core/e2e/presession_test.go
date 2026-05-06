@@ -345,4 +345,3 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 		}
 	}
 }
-

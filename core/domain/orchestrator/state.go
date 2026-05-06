@@ -65,7 +65,7 @@ type Worker struct {
 // workUnit represents a trackable unit of work with progress.
 type workUnit struct {
 	ID     string `json:"id"`
-	Type   string `json:"type"`   // "convoy", "task_list"
+	Type   string `json:"type"` // "convoy", "task_list"
 	Name   string `json:"name"`
 	Source string `json:"source"` // "gastown", "claude_tasks"
 	Total  int    `json:"total"`

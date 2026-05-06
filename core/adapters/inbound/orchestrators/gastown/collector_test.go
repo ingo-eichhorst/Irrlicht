@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
 )
 
 // helper: create a minimal Gas Town root with daemon/state.json.

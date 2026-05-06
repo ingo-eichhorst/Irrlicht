@@ -247,4 +247,3 @@ func IsCacheStale() bool {
 
 	return time.Since(cached.FetchedAt) > cacheTTL
 }
-

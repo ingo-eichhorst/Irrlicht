@@ -15,11 +15,12 @@ const (
 
 // Event carries information about a single agent transcript change.
 type Event struct {
-	Type           EventType
-	Adapter        string // Source adapter name (e.g. "claude-code", "codex")
-	SessionID      string // UUID portion of the filename (without .jsonl)
-	ProjectDir     string // Leaf directory name under the watched root
-	TranscriptPath string // Absolute path to the .jsonl file
-	Size           int64  // Current file size in bytes (0 for removals)
-	CWD            string // Working directory of the agent process (set by process scanner)
+	Type            EventType
+	Adapter         string // Source adapter name (e.g. "claude-code", "codex")
+	SessionID       string // UUID portion of the filename (without .jsonl)
+	ProjectDir      string // Leaf directory name under the watched root
+	TranscriptPath  string // Absolute path or DB path; for DB-backed adapters includes "?session=<id>"
+	Size            int64  // Current file size in bytes (0 for removals)
+	CWD             string // Working directory of the agent process (set by process scanner)
+	ParentSessionID string // Parent session ID for subagent sessions (empty for top-level)
 }

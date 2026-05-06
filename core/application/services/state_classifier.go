@@ -131,4 +131,3 @@ func ShouldSynthesizeCollapsedWaiting(currentState, newState string, metrics *se
 	}
 	return metrics.SawUserBlockingToolClosedThisPass
 }
-

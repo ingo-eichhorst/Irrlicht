@@ -172,7 +172,7 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 //  1. Known PID and syscall.Kill returns ESRCH        → process exited.
 //  2. PID == 0, not a subagent, transcript file has
 //     not been modified within orphanTranscriptAge    → orphan that
-//                                                       never bound.
+//     never bound.
 //
 // Note: a "live PID, old record" case is intentionally NOT included. A
 // long-idle but still-running agent (user away from keyboard for >2 min)
@@ -237,7 +237,7 @@ func (pm *PIDManager) cleanupChildren(parentID string) {
 		return
 	}
 	for _, s := range states {
-		if s.ParentSessionID == parentID {
+		if s.ParentSessionID == parentID && !strings.Contains(s.TranscriptPath, "?session=") {
 			_ = pm.repo.Delete(s.SessionID)
 			pm.broadcast(outbound.PushTypeDeleted, s)
 		}
@@ -482,8 +482,12 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 		for _, state := range states {
 			// Child sessions: clean up immediately when ready, or when stale
 			// (transcript stopped updating — zombie from a previous run).
+			// Exception: DB-backed adapters (TranscriptPath contains "?session=")
+			// manage their own session lifetime via maxAge; their subagents are
+			// persistent historical records, not transient process-bound children.
 			if state.ParentSessionID != "" {
-				if state.State == session.StateReady || isStaleTranscript(state.TranscriptPath) {
+				if !strings.Contains(state.TranscriptPath, "?session=") &&
+					(state.State == session.StateReady || isStaleTranscript(state.TranscriptPath)) {
 					parentID := state.ParentSessionID
 					_ = pm.repo.Delete(state.SessionID)
 					pm.broadcast(outbound.PushTypeDeleted, state)

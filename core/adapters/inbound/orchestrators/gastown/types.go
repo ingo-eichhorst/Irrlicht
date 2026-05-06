@@ -28,7 +28,6 @@ var roleMeta = map[string]struct{ Icon, Desc string }{
 	RoleDog:      {"\U0001F415", "Cross-rig infrastructure worker"},
 }
 
-
 // daemonState represents the Gas Town daemon's runtime state
 // as read from $GT_ROOT/daemon/state.json.
 type daemonState struct {
