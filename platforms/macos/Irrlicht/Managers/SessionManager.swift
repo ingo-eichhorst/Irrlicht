@@ -170,6 +170,7 @@ class SessionManager: ObservableObject {
     }
 
     private func connect() async {
+        await hydrateAgents()
         await hydrateSessions()
 
         guard let url = URL(string: "ws://localhost:7837/api/v1/sessions/stream") else { return }
@@ -392,6 +393,25 @@ class SessionManager: ObservableObject {
         }
         if changedActive {
             refreshActiveStateHistory()
+        }
+    }
+
+    /// Fetches the daemon's adapter branding registry into `AgentRegistry.byName`.
+    /// Called once per (re)connect from `connect()` — there's no periodic
+    /// refresh because adapter rollouts require a daemon restart, which
+    /// drops the WebSocket and triggers a reconnect anyway, which calls us.
+    /// If a future change ships hot-loadable adapters, add a refresh hook
+    /// (or push the registry over the WebSocket).
+    private func hydrateAgents() async {
+        guard let url = URL(string: "http://localhost:7837/api/v1/agents") else { return }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            let entries = try JSONDecoder().decode([AgentBranding].self, from: data)
+            AgentRegistry.byName = Dictionary(uniqueKeysWithValues: entries.map { ($0.name, $0) })
+            print("💧 Hydrated \(entries.count) agent brandings from REST API")
+        } catch {
+            print("💧 Agent branding hydration failed: \(error.localizedDescription)")
         }
     }
 

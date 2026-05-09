@@ -54,6 +54,21 @@ type Config struct {
 	DiscoverPID        agent.PIDDiscoverFunc
 	CountOpenSubagents SubagentCounter // optional; nil = always zero
 
+	// DisplayName is the human-readable adapter label shown in frontends
+	// (e.g. "Claude Code", "OpenCode"). Served from GET /api/v1/agents so
+	// frontends look it up dynamically instead of hardcoding switches.
+	DisplayName string
+
+	// IconSVGLight and IconSVGDark are inline SVG markup (raw <svg>…</svg>
+	// strings) used by frontends to render an adapter icon next to sessions.
+	// Two pre-baked variants let the daemon ship theme-matched colors without
+	// frontends needing to inject anything. When dark/light should look
+	// identical, set both fields to the same string.
+	//
+	// Served from GET /api/v1/agents alongside DisplayName.
+	IconSVGLight string
+	IconSVGDark  string
+
 	// CommandLineMatch is an optional regex pattern fed to `pgrep -f` instead
 	// of `pgrep -x ProcessName`. Use this for agents whose process name on
 	// disk doesn't match their CLI name — e.g. Python tools where the OS
