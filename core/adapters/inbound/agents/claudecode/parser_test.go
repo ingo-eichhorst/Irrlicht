@@ -1421,3 +1421,207 @@ func TestTailer_TaskAccumulation(t *testing.T) {
 		t.Errorf("task 2 = %+v", m.Tasks[2])
 	}
 }
+
+// --- task_reminder reconcile tests (issue #282) ---
+
+// makeReminderEvent builds a top-level Claude Code attachment event whose
+// attachment.type is "task_reminder". Pass nil to model the absent-content
+// (defensive) case; pass an empty slice to model the legitimate "nothing
+// active" reminder.
+func makeReminderEvent(content []map[string]interface{}) map[string]interface{} {
+	att := map[string]interface{}{"type": "task_reminder"}
+	if content != nil {
+		arr := make([]interface{}, 0, len(content))
+		for _, c := range content {
+			arr = append(arr, c)
+		}
+		att["content"] = arr
+	}
+	return map[string]interface{}{
+		"type":       "attachment",
+		"timestamp":  "2026-04-05T22:00:00Z",
+		"attachment": att,
+	}
+}
+
+func TestParser_TaskReminder_PopulatesSnapshot(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(makeReminderEvent([]map[string]interface{}{
+		{"id": "1", "subject": "First", "activeForm": "Firsting", "status": "in_progress"},
+		{"id": "2", "subject": "Second", "status": "pending"},
+	}))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if !ev.Skip {
+		t.Errorf("attachment events must skip the message-content pipeline")
+	}
+	if ev.TaskSnapshot == nil {
+		t.Fatal("TaskSnapshot is nil")
+	}
+	snap := *ev.TaskSnapshot
+	if len(snap) != 2 {
+		t.Fatalf("snapshot len = %d, want 2", len(snap))
+	}
+	if snap[0].ID != "1" || snap[0].Subject != "First" || snap[0].Status != "in_progress" || snap[0].ActiveForm != "Firsting" {
+		t.Errorf("snap[0] = %+v", snap[0])
+	}
+	if snap[1].ID != "2" || snap[1].Status != "pending" {
+		t.Errorf("snap[1] = %+v", snap[1])
+	}
+}
+
+func TestParser_TaskReminder_EmptyContentIsAuthoritative(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(makeReminderEvent([]map[string]interface{}{}))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.TaskSnapshot == nil {
+		t.Fatal("empty content[] must produce a non-nil empty snapshot, not absent")
+	}
+	if len(*ev.TaskSnapshot) != 0 {
+		t.Errorf("empty snapshot len = %d, want 0", len(*ev.TaskSnapshot))
+	}
+}
+
+func TestParser_TaskReminder_AbsentContentLeavesSnapshotNil(t *testing.T) {
+	// A task_reminder attachment without a content key is malformed/defensive.
+	// Treat it as no snapshot rather than empty — we don't want to demote
+	// every in_progress on a malformed event.
+	p := &Parser{}
+	ev := p.ParseLine(makeReminderEvent(nil))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.TaskSnapshot != nil {
+		t.Errorf("absent content must leave TaskSnapshot nil, got %+v", *ev.TaskSnapshot)
+	}
+}
+
+func TestParser_TaskReminder_NonTaskReminderIgnored(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "attachment",
+		"timestamp": "2026-04-05T22:00:00Z",
+		"attachment": map[string]interface{}{
+			"type":    "something_else",
+			"content": []interface{}{},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if !ev.Skip {
+		t.Errorf("non-task_reminder attachments still skip the pipeline")
+	}
+	if ev.TaskSnapshot != nil {
+		t.Errorf("non-task_reminder attachments must not populate TaskSnapshot")
+	}
+}
+
+// TestTailer_TaskReminder_DemotesPhantomInProgress models the real-session
+// failure mode from issue #282: TaskUpdate marks task 1 in_progress, then a
+// later task_reminder snapshot that omits task 1 arrives; the tailer must
+// demote the stuck in_progress to completed so allDone goes true in the UI.
+func TestTailer_TaskReminder_DemotesPhantomInProgress(t *testing.T) {
+	events := []map[string]interface{}{
+		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
+			"subject": "Stale task", "activeForm": "Stale-tasking",
+		}),
+		makeToolUseEvent("tu_2", "TaskCreate", map[string]interface{}{
+			"subject": "New task", "activeForm": "New-tasking",
+		}),
+		// Bogus TaskUpdate against a stale ID — never followed by completed.
+		makeToolUseEvent("tu_3", "TaskUpdate", map[string]interface{}{
+			"taskId": "1", "status": "in_progress",
+		}),
+		makeToolUseEvent("tu_4", "TaskUpdate", map[string]interface{}{
+			"taskId": "2", "status": "completed",
+		}),
+		// Snapshot omits task 1 entirely — Claude's view doesn't track it.
+		makeReminderEvent([]map[string]interface{}{
+			{"id": "2", "subject": "New task", "status": "completed"},
+		}),
+	}
+
+	m, err := newCCTailer(writeTranscript(t, events)).TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if len(m.Tasks) != 2 {
+		t.Fatalf("Tasks len = %d, want 2", len(m.Tasks))
+	}
+	if m.Tasks[0].ID != "1" || m.Tasks[0].Status != tailer.TaskStatusCompleted {
+		t.Errorf("phantom task 1 not reconciled: %+v", m.Tasks[0])
+	}
+	if m.Tasks[1].ID != "2" || m.Tasks[1].Status != tailer.TaskStatusCompleted {
+		t.Errorf("task 2 = %+v", m.Tasks[1])
+	}
+	allDone := true
+	for _, task := range m.Tasks {
+		if task.Status != tailer.TaskStatusCompleted {
+			allDone = false
+		}
+	}
+	if !allDone {
+		t.Errorf("expected allDone=true after reconciliation; tasks=%+v", m.Tasks)
+	}
+}
+
+// TestTailer_TaskReminder_EmptySnapshotDemotesAll covers the legitimate
+// "nothing active" reminder — a `content:[]` snapshot must demote every
+// in_progress task to completed.
+func TestTailer_TaskReminder_EmptySnapshotDemotesAll(t *testing.T) {
+	events := []map[string]interface{}{
+		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
+			"subject": "A", "activeForm": "Aing",
+		}),
+		makeToolUseEvent("tu_2", "TaskCreate", map[string]interface{}{
+			"subject": "B", "activeForm": "Bing",
+		}),
+		makeToolUseEvent("tu_3", "TaskUpdate", map[string]interface{}{
+			"taskId": "1", "status": "in_progress",
+		}),
+		makeToolUseEvent("tu_4", "TaskUpdate", map[string]interface{}{
+			"taskId": "2", "status": "in_progress",
+		}),
+		makeReminderEvent([]map[string]interface{}{}),
+	}
+
+	m, err := newCCTailer(writeTranscript(t, events)).TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	for i, task := range m.Tasks {
+		if task.Status != tailer.TaskStatusCompleted {
+			t.Errorf("task[%d] %+v should be completed after empty reminder", i, task)
+		}
+	}
+}
+
+// TestTailer_TaskReminder_SyncsDivergingStatus covers the symmetric case:
+// snapshot says completed but local state still has in_progress (never got
+// the TaskUpdate). Reconcile must trust the snapshot.
+func TestTailer_TaskReminder_SyncsDivergingStatus(t *testing.T) {
+	events := []map[string]interface{}{
+		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
+			"subject": "A", "activeForm": "Aing",
+		}),
+		makeToolUseEvent("tu_2", "TaskUpdate", map[string]interface{}{
+			"taskId": "1", "status": "in_progress",
+		}),
+		// Snapshot disagrees: task 1 is actually completed.
+		makeReminderEvent([]map[string]interface{}{
+			{"id": "1", "subject": "A", "status": "completed"},
+		}),
+	}
+
+	m, err := newCCTailer(writeTranscript(t, events)).TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if len(m.Tasks) != 1 || m.Tasks[0].Status != tailer.TaskStatusCompleted {
+		t.Errorf("expected task 1 reconciled to completed, got %+v", m.Tasks)
+	}
+}

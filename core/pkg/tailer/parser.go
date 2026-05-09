@@ -57,6 +57,17 @@ type TaskDelta struct {
 	Status      string // TaskUpdate only; "pending" on create is applied by tailer
 }
 
+// TaskSnapshotEntry is one row in a Claude Code task_reminder attachment, an
+// authoritative snapshot of which tasks Claude is still actively tracking and
+// their current status. Used by the tailer to reconcile drift after a stale
+// or bogus TaskUpdate that never gets a follow-up `completed`. See issue #282.
+type TaskSnapshotEntry struct {
+	ID         string
+	Subject    string
+	ActiveForm string
+	Status     string // "pending" | "in_progress" | "completed"
+}
+
 // ParsedEvent is the normalized output from a format-specific transcript parser.
 // Each parser maps its native event structure into these fields.
 type ParsedEvent struct {
@@ -96,6 +107,14 @@ type ParsedEvent struct {
 	// TaskDeltas are TaskCreate / TaskUpdate events from the Claude Code
 	// transcript. The tailer folds them into a running tasks slice.
 	TaskDeltas []TaskDelta
+
+	// TaskSnapshot, when non-nil, is the authoritative list of tasks Claude
+	// Code is currently tracking, parsed from a task_reminder attachment.
+	// Pointer-to-slice so an empty list (legitimate "nothing active" signal)
+	// is distinguishable from "no snapshot in this event". The tailer applies
+	// it after TaskDeltas as a defensive reconciliation pass against drift
+	// from stale/bogus TaskUpdate deltas. See issue #282.
+	TaskSnapshot *[]TaskSnapshotEntry
 
 	// Metadata extracted by the parser.
 	ModelName     string
