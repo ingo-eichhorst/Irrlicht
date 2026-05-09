@@ -61,11 +61,25 @@ jobs:
           GIST_SECRET: ${{ secrets.GIST_SECRET }}
           COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
         run: |
+          if [ -z "$GIST_SECRET" ]; then
+            echo "::error::GIST_SECRET is not set in repository secrets"
+            exit 1
+          fi
+          if [ -z "$COVERAGE_GIST_ID" ]; then
+            echo "::error::COVERAGE_GIST_ID is not set in repository secrets"
+            exit 1
+          fi
           BADGE_JSON="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"${COLOR}\"}"
           jq -n --arg content "$BADGE_JSON" '{"files":{"coverage.json":{"content":$content}}}' > /tmp/gist-payload.json
-          curl -sf -X PATCH \
+          http_code=$(curl -sS -o /tmp/gist-response.json -w '%{http_code}' -X PATCH \
             -H "Authorization: token $GIST_SECRET" \
             -H "Content-Type: application/json" \
             -d @/tmp/gist-payload.json \
-            "https://api.github.com/gists/$COVERAGE_GIST_ID" > /dev/null
+            "https://api.github.com/gists/$COVERAGE_GIST_ID")
+          echo "HTTP $http_code"
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "::error::Gist update failed (HTTP $http_code)"
+            cat /tmp/gist-response.json
+            exit 1
+          fi
 
