@@ -17,15 +17,7 @@ import (
 	"irrlicht/core/domain/agent"
 )
 
-const (
-	defaultMinScanGap = 500 * time.Millisecond
-
-	// initialArchiveCleanupWindow is how far back the first archive-cleanup
-	// scan looks. Anything archived in this window before the daemon started
-	// gets an EventRemoved on the first scan; older archives are ignored
-	// (they were never surfaced as live in this daemon process anyway).
-	initialArchiveCleanupWindow = 5 * time.Minute
-)
+const defaultMinScanGap = 500 * time.Millisecond
 
 // Watcher monitors the OpenCode SQLite database for new and updated sessions.
 // It implements inbound.AgentWatcher.
@@ -93,6 +85,13 @@ type sessionCursor struct {
 	// process owning their CWD are tracked (so we don't back-fill activity
 	// if the process later starts) but not emitted.
 	emitted bool
+
+	// lastObserved is the wall-clock time of the most recent scan that saw
+	// this session in the SQL result set. Used by gcExpiredCursors to drop
+	// entries that have aged out of the maxAge window — independent of
+	// lastTS, which only advances when new parts arrive (a session whose
+	// time_updated bumps without new parts would otherwise look stale).
+	lastObserved time.Time
 }
 
 // New creates a Watcher for the OpenCode database relative to $HOME.
@@ -102,12 +101,13 @@ func New(maxAge time.Duration) *Watcher {
 		log.Printf("opencode: $HOME not set, using relative path: %v", err)
 	}
 	return &Watcher{
-		dbPath:     filepath.Join(home, dbRelPath),
-		adapter:    AdapterName,
-		maxAge:     maxAge,
-		cursors:    make(map[string]*sessionCursor),
-		minScanGap: defaultMinScanGap,
-		liveCWDs:   defaultLiveCWDs,
+		dbPath:            filepath.Join(home, dbRelPath),
+		adapter:           AdapterName,
+		maxAge:            maxAge,
+		cursors:           make(map[string]*sessionCursor),
+		minScanGap:        defaultMinScanGap,
+		lastArchivedCheck: time.Now(),
+		liveCWDs:          defaultLiveCWDs,
 	}
 }
 
@@ -115,12 +115,13 @@ func New(maxAge time.Duration) *Watcher {
 // Intended for tests.
 func NewWithDBPath(dbPath string, maxAge time.Duration) *Watcher {
 	return &Watcher{
-		dbPath:     dbPath,
-		adapter:    AdapterName,
-		maxAge:     maxAge,
-		cursors:    make(map[string]*sessionCursor),
-		minScanGap: defaultMinScanGap,
-		liveCWDs:   defaultLiveCWDs,
+		dbPath:            dbPath,
+		adapter:           AdapterName,
+		maxAge:            maxAge,
+		cursors:           make(map[string]*sessionCursor),
+		minScanGap:        defaultMinScanGap,
+		lastArchivedCheck: time.Now(),
+		liveCWDs:          defaultLiveCWDs,
 	}
 }
 
@@ -302,6 +303,7 @@ func (w *Watcher) scanSessions() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	scanWallClock := time.Now()
 	for _, s := range sessions {
 		cur, known := w.cursors[s.id]
 		if !known {
@@ -314,6 +316,10 @@ func (w *Watcher) scanSessions() {
 			}
 			w.cursors[s.id] = cur
 		}
+		// Mark the cursor as observed in this scan so gcExpiredCursors
+		// keeps it alive even if no new parts arrived (lastTS only moves
+		// when scanParts sees a fresher part timestamp).
+		cur.lastObserved = scanWallClock
 
 		if !cur.emitted {
 			if _, alive := live[s.directory]; !alive {
@@ -348,23 +354,50 @@ func (w *Watcher) scanSessions() {
 
 	// Emit EventRemoved for sessions that were archived since the last scan.
 	w.emitRemovedForArchivedSessions(db)
+
+	// GC cursors that have aged out of the maxAge window. The session SQL
+	// query above filters on `time_updated >= now - maxAge`, so any cursor
+	// whose lastTS is older than that cutoff will never appear in a future
+	// scan and is safe to drop. Without this, the map would grow without
+	// bound for users who accumulate many OpenCode sessions over time
+	// (especially when no opencode process is running, since untouched
+	// cursors stay at their initial lastTS forever).
+	w.gcExpiredCursors()
+}
+
+// gcExpiredCursors drops cursor entries whose most recent observation
+// (lastObserved) predates the maxAge window — those sessions cannot
+// reappear in the SQL query, so retaining their cursors only wastes
+// memory. No-op when maxAge == 0 (no upper bound configured).
+func (w *Watcher) gcExpiredCursors() {
+	if w.maxAge <= 0 {
+		return
+	}
+	cutoff := time.Now().Add(-w.maxAge)
+	for id, cur := range w.cursors {
+		if !cur.lastObserved.IsZero() && cur.lastObserved.Before(cutoff) {
+			delete(w.cursors, id)
+		}
+	}
 }
 
 // emitRemovedForArchivedSessions queries for sessions whose time_archived
 // column was set since the last check and emits EventRemoved for those
 // that are tracked in our cursors map.
 //
-// On the first call after daemon start, the cutoff is set to a short window
-// (initialArchiveCleanupWindow) before now so that sessions archived just
-// before startup still get cleaned up — without scanning OpenCode's entire
-// archive history.
+// On the first call after daemon start, the cutoff is seeded to "now" and we
+// return early — pre-startup archives are intentionally ignored here because
+// the cursors map is empty at that point (every emit gates on `if !known`).
+// Carryover archives from a previous daemon run are handled separately by
+// the DB-backed-orphan branch in PIDManager.CleanupZombies, which operates
+// on persisted state files rather than this in-memory cursor set.
 func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
-	now := time.Now()
 	if w.lastArchivedCheck.IsZero() {
-		w.lastArchivedCheck = now.Add(-initialArchiveCleanupWindow)
+		w.lastArchivedCheck = time.Now()
+		return
 	}
 	cutoff := w.lastArchivedCheck.UnixMilli()
-	w.lastArchivedCheck = now
+	w.lastArchivedCheck = time.Now()
 
 	rows, err := db.Query(`
 		SELECT id FROM session
