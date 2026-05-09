@@ -1239,10 +1239,13 @@ class SessionManager: ObservableObject {
         }
         sessionOrder.removeAll { $0 == sessionId }
         saveSessionOrder()
-        if !useFilePolling {
-            sessionMap.removeValue(forKey: sessionId)
-            rebuildSessionsFromMap()
+        sessionMap.removeValue(forKey: sessionId)
+        lastTickGen.removeValue(forKey: sessionId)
+        for gran in [1, 10, 60] {
+            historyByGranularity[gran]?.removeValue(forKey: sessionId)
         }
+        rebuildSessionsFromMap()
+        removeFromApiGroups(sessionId: sessionId)
     }
 
     // MARK: - Debug State Dump (IRRLICHT_DEBUG=1)
