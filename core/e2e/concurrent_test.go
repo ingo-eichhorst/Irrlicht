@@ -29,7 +29,7 @@ func TestScanner_TracksTwoConcurrentProcessesWithSameAgentName(t *testing.T) {
 	detector := services.NewSessionDetector(
 		[]inbound.AgentWatcher{scanner},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, nil,
+		"test", 0, nil, nil, nil,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -352,13 +352,14 @@ func main() {
 	}
 
 	pidDiscovers := agents.PIDDiscoverMap(agentCfgs)
+	processNames := agents.ProcessNameMap(agentCfgs)
 
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
 		watchers, pwPort,
 		cachedRepo, logger, gitResolver, metricsCollector, push,
 		Version, cfg.ReadySessionTTL,
-		pidDiscovers,
+		pidDiscovers, processNames, processlifecycle.LiveCWDs,
 	)
 	if costTracker != nil {
 		detector.SetCostTracker(costTracker)

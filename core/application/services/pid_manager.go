@@ -19,6 +19,14 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// LiveCWDsFunc returns the set of working directories currently held by live
+// processes whose binary name matches processName. Implementations live in
+// the processlifecycle adapter; the function is injected to preserve the
+// hexagonal layering. A nil result with a nil error means "no live processes
+// matched"; a non-nil error means the lookup failed and callers should treat
+// the answer as unknown (do NOT delete sessions on this signal).
+type LiveCWDsFunc func(processName string) (map[string]struct{}, error)
+
 // LauncherEnvReader captures the terminal/IDE identity from the process env
 // of pid. Returns nil when env cannot be read or no launcher is identifiable.
 // Implementations must never block longer than a couple of seconds and must
@@ -38,6 +46,19 @@ type PIDManager struct {
 	// pidDiscovers maps adapter name → PID discovery function.
 	// Nil or missing entry means no PID discovery for that adapter.
 	pidDiscovers map[string]agent.PIDDiscoverFunc
+
+	// processNames maps adapter name → OS process name (the binary `pgrep -x`
+	// would match). Used by the startup zombie sweep to detect orphaned
+	// sessions of DB-backed adapters (OpenCode), where transcript-mtime
+	// staleness can't tell a live session from a historical row.
+	// Nil or missing entry disables the DB-backed-orphan check for that
+	// adapter — those sessions are kept until their PID is discovered.
+	processNames map[string]string
+
+	// liveCWDs is the live-process lookup used by the DB-backed-orphan
+	// branch of the startup zombie sweep. Injected from main.go (typically
+	// processlifecycle.LiveCWDs). Nil disables the branch.
+	liveCWDs LiveCWDsFunc
 
 	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
 	launcherEnv LauncherEnvReader
@@ -67,7 +88,9 @@ type PIDManager struct {
 }
 
 // NewPIDManager creates a PIDManager with the given dependencies.
-// pw and broadcaster may be nil (optional).
+// pw and broadcaster may be nil (optional). processNames + liveCWDs may
+// both be nil — that disables the DB-backed-orphan branch of the startup
+// zombie sweep.
 func NewPIDManager(
 	pw outbound.ProcessWatcher,
 	repo outbound.SessionRepository,
@@ -75,6 +98,8 @@ func NewPIDManager(
 	broadcaster outbound.PushBroadcaster,
 	readyTTL time.Duration,
 	pidDiscovers map[string]agent.PIDDiscoverFunc,
+	processNames map[string]string,
+	liveCWDs LiveCWDsFunc,
 	onSessionDeleted func(sessionID string),
 ) *PIDManager {
 	return &PIDManager{
@@ -84,6 +109,8 @@ func NewPIDManager(
 		broadcaster:      broadcaster,
 		readyTTL:         readyTTL,
 		pidDiscovers:     pidDiscovers,
+		processNames:     processNames,
+		liveCWDs:         liveCWDs,
 		onSessionDeleted: onSessionDeleted,
 		pendingPIDs:      make(map[string]int),
 	}
@@ -166,13 +193,19 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID string) {
 // HTTP server is already serving — so without this synchronous pre-pass the
 // API briefly returns zombies inherited from the previous daemon run.
 //
-// Two predicates, both narrower than CheckPIDLiveness so we never delete an
+// Three predicates, all narrower than CheckPIDLiveness so we never delete an
 // in-flight session (at startup nothing is in-flight, but the predicates
 // stay conservative anyway in case CleanupZombies is ever called later):
 //  1. Known PID and syscall.Kill returns ESRCH        → process exited.
 //  2. PID == 0, not a subagent, transcript file has
 //     not been modified within orphanTranscriptAge    → orphan that
 //     never bound.
+//  3. PID == 0, not a subagent, DB-backed transcript
+//     (path contains "?session="), no live process of
+//     the adapter's binary owns the session's CWD     → DB-backed orphan
+//     (the carryover-state case for OpenCode where
+//     isStaleTranscript can't help — the WAL is shared
+//     across all sessions in the DB).
 //
 // Note: a "live PID, old record" case is intentionally NOT included. A
 // long-idle but still-running agent (user away from keyboard for >2 min)
@@ -188,7 +221,7 @@ func (pm *PIDManager) CleanupZombies() int {
 	}
 	deleted := 0
 	for _, state := range states {
-		if !isStartupZombie(state) {
+		if !pm.isStartupZombie(state) {
 			continue
 		}
 		pm.log.LogInfo("startup-cleanup", state.SessionID,
@@ -201,7 +234,7 @@ func (pm *PIDManager) CleanupZombies() int {
 
 // isStartupZombie returns true for sessions whose process is provably gone.
 // Mirrors the predicate documented on CleanupZombies.
-func isStartupZombie(state *session.SessionState) bool {
+func (pm *PIDManager) isStartupZombie(state *session.SessionState) bool {
 	if state == nil {
 		return false
 	}
@@ -213,7 +246,35 @@ func isStartupZombie(state *session.SessionState) bool {
 	if state.ParentSessionID != "" {
 		return false
 	}
+	// PID == 0 and a DB-backed transcript path: isStaleTranscript can't tell
+	// us anything (the WAL is shared across all sessions in the DB), so use
+	// the adapter's process name as the liveness signal — if no live process
+	// owns the session's CWD, the session is an orphan from a previous
+	// daemon run.
+	if isDBBackedTranscriptPath(state.TranscriptPath) && state.CWD != "" && pm.liveCWDs != nil {
+		if name, ok := pm.processNames[state.Adapter]; ok && name != "" {
+			live, err := pm.liveCWDs(name)
+			// Only mark zombie when the lookup succeeded and returned a
+			// definitive answer (non-nil set). On error, keep the session
+			// — better to leave a stale row than to wipe legitimate state.
+			if err == nil && live != nil {
+				if _, alive := live[state.CWD]; !alive {
+					return true
+				}
+			}
+		}
+		// No process-name registered for this adapter, or the lookup was
+		// inconclusive: don't delete. The standard isStaleTranscript path
+		// below will short-circuit to false for DB-backed paths anyway.
+	}
 	return isStaleTranscript(state.TranscriptPath)
+}
+
+// isDBBackedTranscriptPath reports whether a transcript path encodes a
+// DB-backed adapter session (e.g. OpenCode's
+// "…/opencode.db-wal?session=ses_xxx").
+func isDBBackedTranscriptPath(path string) bool {
+	return strings.IndexByte(path, '?') >= 0
 }
 
 // deleteWithChildren removes a session and all its child sessions (subagents).
