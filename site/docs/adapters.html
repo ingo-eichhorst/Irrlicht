@@ -156,6 +156,136 @@
         <li><strong>State model:</strong> global agents, codebases, worktrees, workers, work units</li>
       </ul>
 
+      <h2 id="adapter-interfaces">Adapter Interfaces</h2>
+
+      <p>Every inbound agent adapter is wired up by exporting a single <code>agents.Config</code> registration record. The daemon's bootstrap in <code>core/cmd/irrlichd/main.go</code> consumes one <code>[]agents.Config</code> slice and derives all per-adapter plumbing from it &mdash; fswatcher roots, process-scanner targets, the parser-factory map consumed by the metrics collector, and the PID-discovery map consumed by the session detector. An adapter package therefore satisfies the contract by:</p>
+
+      <ol>
+        <li>Returning an <code>agents.Config</code> from a top-level <code>Config()</code> function.</li>
+        <li>Providing a <code>tailer.TranscriptParser</code> implementation (the <code>NewParser</code> factory hands back a fresh instance).</li>
+        <li>Providing an <code>agent.PIDDiscoverFunc</code> that maps a session's CWD or transcript path to its owning OS process.</li>
+      </ol>
+
+      <p>Watching the filesystem, scanning processes, and broadcasting events are handled by the shared infrastructure (<code>core/adapters/inbound/agents/fswatcher/</code>, <code>core/adapters/inbound/agents/processlifecycle/</code>) &mdash; adapters do not implement the inbound <code>AgentWatcher</code> port directly.</p>
+
+      <h3 id="iface-config">Registration record &mdash; <code>agents.Config</code></h3>
+
+      <p>Defined in <code>core/adapters/inbound/agents/config.go</code>. Required fields are non-zero on every adapter; optional fields gate adapter-specific behaviour.</p>
+
+<pre><code>// Required
+type Config struct {
+    Name        string                  // adapter label on events, e.g. "claude-code"
+    ProcessName string                  // OS executable for `pgrep -x`, e.g. "claude"
+    RootDir     string                  // transcript root relative to $HOME, e.g. ".claude/projects"
+    NewParser   ParserFactory           // fresh-per-call factory; parsers are stateful
+    DiscoverPID agent.PIDDiscoverFunc   // CWD/transcript -&gt; PID
+
+    // Branding — served from GET /api/v1/agents so frontends render
+    // dynamically instead of hardcoding switches.
+    DisplayName  string                 // human-readable label, e.g. "Claude Code"
+    IconSVGLight string                 // raw &lt;svg&gt;…&lt;/svg&gt; markup, 14×14 (light theme)
+    IconSVGDark  string                 // raw &lt;svg&gt;…&lt;/svg&gt; markup, 14×14 (dark theme)
+
+    // Optional
+    CountOpenSubagents SubagentCounter  // nil =&gt; treated as zero
+    CommandLineMatch   string           // regex for `pgrep -f` when ProcessName != CLI name (e.g. "/aider($| )")
+    TranscriptFilename string           // per-CWD transcript file (e.g. ".aider.chat.history.md")
+    ComputeMetrics     MetricsProvider  // bypass JSONL tailer for DB-backed adapters (OpenCode)
+}
+
+type ParserFactory   func() tailer.TranscriptParser
+type SubagentCounter func(m *tailer.SessionMetrics) int
+type MetricsProvider func(transcriptPath, sessionID string) (*session.SessionMetrics, error)
+</code></pre>
+
+      <p>Per-adapter capability declarations (which canonical scenarios apply to this agent) live alongside as JSON in <code>replaydata/agents/&lt;name&gt;/capabilities.json</code>, keyed against <code>replaydata/agents/features.json</code>. They are read by the <code>/ir:onboard-agent</code> skill, not by Go code.</p>
+
+      <h3 id="iface-parser">Transcript parser &mdash; <code>tailer.TranscriptParser</code></h3>
+
+      <p>Defined in <code>core/pkg/tailer/parser.go</code>. The base contract is one method; raw-text formats (e.g. aider's markdown history) implement the optional <code>RawLineParser</code> in addition.</p>
+
+<pre><code>// Required for every adapter.
+type TranscriptParser interface {
+    // ParseLine maps one decoded JSONL line into a normalized event.
+    // Return nil to silently skip the line.
+    ParseLine(raw map[string]interface{}) *ParsedEvent
+}
+
+// Optional. Implemented by parsers whose source is not JSONL (aider).
+// When present, the tailer skips its JSON pre-parse and hands the
+// trimmed line to ParseLineRaw. ParseLine should be a nil-returning no-op.
+type RawLineParser interface {
+    ParseLineRaw(line string) *ParsedEvent
+}
+</code></pre>
+
+      <p>Three further optional hooks are detected by type assertion inside the tailer; implement only the ones the adapter needs.</p>
+
+<pre><code>// Synthesize turn_done when the source format has no in-band end-of-turn marker
+// (aider's TUI prompt is not written to the file). The tailer calls IdleFlush
+// after each pass with the wall-clock idle time since the last line.
+type IdleFlusher interface {
+    IdleFlush(idleFor time.Duration) *ParsedEvent
+}
+
+// Expose the in-progress turn's cost contribution so the live cost display
+// reflects a streaming turn before it commits (Claude Code).
+type PendingContributor interface {
+    PendingContribution() *PerTurnContribution
+}
+
+// Checkpoint and restore stateful per-turn accumulation across daemon
+// restarts (Claude Code requestId cursor, Codex cumulative-usage cursor).
+type ParserStateProvider interface {
+    GetParserLedger() ParserLedger
+    SetParserLedger(ParserLedger)
+}
+</code></pre>
+
+      <p>The parser's output type, <code>tailer.ParsedEvent</code>, is the normalized contract every transcript format collapses into &mdash; event type, tool deltas, token snapshot / per-turn contribution, model, CWD, task deltas, subagent completions, and the user-interrupt / tool-denial flags consumed by the state classifier. See <code>core/pkg/tailer/parser.go</code> for the full struct.</p>
+
+      <h3 id="iface-piddiscover">PID discovery &mdash; <code>agent.PIDDiscoverFunc</code></h3>
+
+      <p>Defined in <code>core/domain/agent/discovery.go</code>. Each adapter maps a live session back to the OS process that owns it; strategies vary (CWD-based for Claude Code, transcript-writer for Codex/Pi). The <code>disambiguate</code> callback picks one PID when multiple candidates match.</p>
+
+<pre><code>type PIDDiscoverFunc func(
+    cwd, transcriptPath string,
+    disambiguate func([]int) int,
+) (int, error)
+</code></pre>
+
+      <h3 id="iface-event">Watcher output &mdash; <code>agent.Event</code></h3>
+
+      <p>Defined in <code>core/domain/agent/event.go</code>. The shared fswatcher fans these out to subscribers via the <code>inbound.AgentWatcher</code> port (<code>core/ports/inbound/ports.go</code>); per-adapter watchers do not exist today.</p>
+
+<pre><code>type EventType string
+
+const (
+    EventNewSession EventType = "new_session"
+    EventActivity   EventType = "activity"
+    EventRemoved    EventType = "removed"
+)
+
+type Event struct {
+    Type            EventType
+    Adapter         string // e.g. "claude-code"
+    SessionID       string // UUID portion of the filename (no .jsonl)
+    ProjectDir      string // leaf directory under the watched root
+    TranscriptPath  string // absolute path; for DB-backed adapters: "&lt;db&gt;?session=&lt;id&gt;"
+    Size            int64
+    CWD             string // working directory of the agent process
+    ParentSessionID string // empty unless this is a subagent
+}
+
+// The port the daemon consumes — implemented by the shared fswatcher,
+// not by individual adapter packages.
+type AgentWatcher interface {
+    Watch(ctx context.Context) error
+    Subscribe() &lt;-chan agent.Event
+    Unsubscribe(ch &lt;-chan agent.Event)
+}
+</code></pre>
+
       <h2>Outbound Adapters (System Integration)</h2>
 
       <p>Outbound adapters handle persistence, process monitoring, real-time communication, and other side effects that flow out of the core.</p>
