@@ -36,23 +36,62 @@ The argument (if any) is the bump type: `patch` (default), `minor`, or `major`.
 
 ## Step 4: Update Docs
 
-1. **`CHANGELOG.md` (repo root) — REQUIRED every release.** Add a new
-   `## [$NEW_VERSION] — YYYY-MM-DD` section at the top (directly under
-   `## [Unreleased]`), using the Keep a Changelog categories already in the
-   file: **Added**, **Changed**, **Fixed**, **Docs**, **Distribution**, etc.
-   Reuse the release notes drafted in Step 2 — don't paraphrase them into
-   something different. Also add the new version to the reference-link
-   section at the bottom of the file
-   (`[X.Y.Z]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/vX.Y.Z`)
-   and update the `[Unreleased]` compare link to point at `vX.Y.Z...HEAD`.
-   This step is mandatory — never ship a release without updating
-   `CHANGELOG.md`.
-2. `site/docs/changelog.html` — add new version entry at the top (before the
-   previous version entry) with the same categorized changes.
-3. Review other docs pages (`api-reference.html`, `session-detection.html`,
-   `architecture.html`, `cli-tools.html`) — update if any changes in this
-   release affect documented behavior.
-4. Only update pages where content is actually outdated.
+### 4a. CHANGELOG (mandatory)
+
+**`CHANGELOG.md` (repo root) — REQUIRED every release.** Add a new
+`## [$NEW_VERSION] — YYYY-MM-DD` section at the top (directly under
+`## [Unreleased]`), using the Keep a Changelog categories already in the
+file: **Added**, **Changed**, **Fixed**, **Docs**, **Distribution**, etc.
+Reuse the release notes drafted in Step 2 — don't paraphrase them into
+something different. Also add the new version to the reference-link
+section at the bottom of the file
+(`[X.Y.Z]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/vX.Y.Z`)
+and update the `[Unreleased]` compare link to point at `vX.Y.Z...HEAD`.
+This step is mandatory — never ship a release without updating
+`CHANGELOG.md`.
+
+Then mirror the same categorized entries into `site/docs/changelog.html`,
+adding a new version block at the top (before the previous version entry).
+
+### 4b. Doc + README sweep (mandatory)
+
+Walk **every** docs page and every top-level README, check each against the
+release's diff, and update any content that this release made stale. Don't
+rely on a hardcoded list — enumerate the targets dynamically so new pages
+can't be silently missed:
+
+```bash
+# Files in scope for the sweep
+ls site/docs/*.html
+echo README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
+
+# What changed in this release — drives which pages are likely affected
+git diff --name-only $(git describe --tags --abbrev=0)..HEAD
+```
+
+For each file in scope, read it and ask: *does this release's diff
+invalidate anything written here?* Common triggers, with the doc page that
+typically owns the surface:
+
+| Diff touches… | Likely-affected docs |
+|---|---|
+| `core/adapters/inbound/agents/**` | `site/docs/adapters.html`, README compatibility grid |
+| `core/ports/**`, `core/domain/**` | `site/docs/architecture.html`, `site/docs/adapters.html` |
+| `core/cmd/irrlichd/handlers.go` (HTTP routes / payloads) | `site/docs/api-reference.html` |
+| `core/cmd/irrlicht-ls`, `core/cmd/irrlicht-focus` | `site/docs/cli-tools.html` |
+| `core/application/services/**`, `core/domain/session/**` | `site/docs/state-machine.html`, `site/docs/session-detection.html` |
+| `site/install.sh`, `tools/homebrew-tap/**`, install flow | `site/docs/installation.html`, `site/docs/quickstart.html`, `README.md` install section |
+| Config schema / settings files | `site/docs/configuration.html` |
+| New agent adapter shipped | README compatibility grid + `site/docs/adapters.html` per-adapter row |
+| New platform shipped | README + `site/docs/index.html` overview |
+
+Update only where content is actually outdated — do **not** paraphrase
+correct content for the sake of touching the file. If a doc is fine, leave
+it untouched. When in doubt, prefer to update over leaving stale: a
+half-true doc is worse than a slightly chatty one.
+
+When this sweep finishes, every line you read should either be (a) still
+true on `main` after the release, or (b) edited to be true.
 
 ## Step 5: Run Tests
 
@@ -195,7 +234,15 @@ fine for first releases before the tap repo exists.
 ## Step 7: Commit, Tag, Push
 
 ```bash
-git add version.json CHANGELOG.md site/ platforms/macos/Irrlicht/Resources/Info.plist tools/homebrew-tap/Casks/irrlicht.rb
+# Core release artefacts plus any top-level README/doc files the Step 4b
+# sweep edited. The `git add -- ...` form is safe for missing files.
+git add version.json CHANGELOG.md site/ \
+        platforms/macos/Irrlicht/Resources/Info.plist \
+        tools/homebrew-tap/Casks/irrlicht.rb
+git add -- README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md 2>/dev/null || true
+
+# Confirm nothing the sweep edited is left unstaged before committing.
+git status --short
 git commit -m "chore: release v$NEW_VERSION"
 git tag v$NEW_VERSION
 git push origin main --tags
