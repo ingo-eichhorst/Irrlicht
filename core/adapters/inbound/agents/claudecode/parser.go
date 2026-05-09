@@ -93,8 +93,56 @@ func handleEarlyReturn(eventType string, raw map[string]interface{}, ev *tailer.
 		}
 		ev.Skip = true
 		return true
+	case "attachment":
+		handleAttachmentEvent(raw, ev)
+		return true
 	}
 	return false
+}
+
+// handleAttachmentEvent extracts task_reminder snapshots into ev.TaskSnapshot
+// and skips the event from the message-content pipeline. Other attachment
+// kinds are ignored. The reminder is Claude Code's authoritative view of which
+// task IDs it's currently tracking; the tailer uses it to reconcile drift
+// from stale TaskUpdate deltas that never get a `completed` follow-up
+// (issue #282).
+func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	att, ok := raw["attachment"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if kind, _ := att["type"].(string); kind != "task_reminder" {
+		return
+	}
+	contentArr, ok := att["content"].([]interface{})
+	if !ok {
+		// Defensive: an absent content field is not a snapshot. An explicit
+		// `content: []` decodes to a non-nil empty slice and DOES count
+		// (Claude is telling us nothing is active).
+		return
+	}
+	snap := make([]tailer.TaskSnapshotEntry, 0, len(contentArr))
+	for _, item := range contentArr {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, _ := entry["id"].(string)
+		if id == "" {
+			continue
+		}
+		subject, _ := entry["subject"].(string)
+		activeForm, _ := entry["activeForm"].(string)
+		status, _ := entry["status"].(string)
+		snap = append(snap, tailer.TaskSnapshotEntry{
+			ID:         id,
+			Subject:    subject,
+			ActiveForm: activeForm,
+			Status:     status,
+		})
+	}
+	ev.TaskSnapshot = &snap
 }
 
 // handleSystemEvent maps turn_duration / stop_hook_summary subtypes to

@@ -417,12 +417,15 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			// SubagentCompletions — task-notification lines are deliberately
 			// marked Skip=true so they don't pollute message-event tracking,
 			// but the completion signal must still surface to the detector
-			// (issue #134).
+			// (issue #134). Likewise, task_reminder attachments are Skip=true
+			// but carry an authoritative TaskSnapshot the tailer must apply
+			// (issue #282).
 			if parsed != nil {
 				t.applyMetadata(parsed)
 				if len(parsed.SubagentCompletions) > 0 {
 					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
 				}
+				t.reconcileTaskSnapshot(parsed)
 			}
 			continue
 		}
@@ -559,6 +562,37 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 	return t.metrics, true
 }
 
+// reconcileTaskSnapshot applies a Claude Code task_reminder snapshot from
+// parsed (when present) to the running tasks slice. Reminders are
+// authoritative: a local in_progress task whose ID is missing from the
+// snapshot is demoted to completed (Claude has dropped it from active
+// tracking), and an ID present in the snapshot with a divergent status
+// takes the snapshot's value. Defensive safety net for stale/bogus
+// TaskUpdate deltas that never get a `completed` follow-up. See issue #282.
+func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
+	if parsed == nil || parsed.TaskSnapshot == nil {
+		return
+	}
+	snapByID := make(map[string]TaskSnapshotEntry, len(*parsed.TaskSnapshot))
+	for _, entry := range *parsed.TaskSnapshot {
+		snapByID[entry.ID] = entry
+	}
+	for i := range t.tasks {
+		entry, present := snapByID[t.tasks[i].ID]
+		if !present {
+			if t.tasks[i].Status == TaskStatusInProgress {
+				log.Printf("irrlicht/tailer: reconciling phantom in_progress task id=%s subject=%q → completed (not in task_reminder snapshot) in %s", t.tasks[i].ID, t.tasks[i].Subject, t.path)
+				t.tasks[i].Status = TaskStatusCompleted
+			}
+			continue
+		}
+		if entry.Status != "" && entry.Status != t.tasks[i].Status {
+			log.Printf("irrlicht/tailer: reconciling task id=%s status %s → %s from task_reminder in %s", t.tasks[i].ID, t.tasks[i].Status, entry.Status, t.path)
+			t.tasks[i].Status = entry.Status
+		}
+	}
+}
+
 // processParsedEvent applies a single non-skipped ParsedEvent to the tailer's
 // running state: tool tracking, task deltas, turn_done sweep, interrupt/denial
 // flags, metadata, assistant-text bookkeeping, content-char accumulation, and
@@ -613,6 +647,7 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 			}
 		}
 	}
+	t.reconcileTaskSnapshot(parsed)
 
 	// turn_done is the authoritative end-of-turn signal. By definition most
 	// tool_use events opened during the turn have already received their
