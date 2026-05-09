@@ -40,6 +40,38 @@ func DiscoverPIDByCWDAndCmdLine(cmdLinePattern, cwd string, disambiguate func([]
 	return narrowByCWD(pids, cwd, disambiguate), nil
 }
 
+// LiveCWDs returns the set of working directories currently held by live
+// processes whose binary name matches processName (via `pgrep -x`). Excludes
+// the daemon's own PID. PIDs whose CWD cannot be read (race against process
+// exit, restricted permissions) are skipped silently — this is a best-effort
+// snapshot, not a guarantee.
+//
+// Used by the OpenCode adapter to gate EventNewSession on a live process: a
+// session row in the DB is only surfaced if some opencode process currently
+// owns its CWD.
+func LiveCWDs(processName string) (map[string]struct{}, error) {
+	if processName == "" {
+		return nil, nil
+	}
+	pids, err := findProcesses(processName)
+	if err != nil {
+		return nil, fmt.Errorf("find %s processes: %w", processName, err)
+	}
+	myPID := os.Getpid()
+	set := make(map[string]struct{}, len(pids))
+	for _, pid := range pids {
+		if pid == myPID {
+			continue
+		}
+		dir, err := processCWD(pid)
+		if err != nil {
+			continue
+		}
+		set[dir] = struct{}{}
+	}
+	return set, nil
+}
+
 // narrowByCWD filters pids to those whose CWD equals the given path, then
 // resolves to a single PID via disambiguate (falling back to highest PID).
 // Excludes the daemon's own PID. Returns 0 when no match.

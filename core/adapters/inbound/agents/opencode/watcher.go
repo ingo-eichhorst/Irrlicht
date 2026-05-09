@@ -13,10 +13,19 @@ import (
 	"github.com/fsnotify/fsnotify"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver; no CGo required
 
+	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 )
 
-const defaultMinScanGap = 500 * time.Millisecond
+const (
+	defaultMinScanGap = 500 * time.Millisecond
+
+	// initialArchiveCleanupWindow is how far back the first archive-cleanup
+	// scan looks. Anything archived in this window before the daemon started
+	// gets an EventRemoved on the first scan; older archives are ignored
+	// (they were never surfaced as live in this daemon process anyway).
+	initialArchiveCleanupWindow = 5 * time.Minute
+)
 
 // Watcher monitors the OpenCode SQLite database for new and updated sessions.
 // It implements inbound.AgentWatcher.
@@ -64,6 +73,13 @@ type Watcher struct {
 
 	// lastArchivedCheck is the cut-off for querying newly archived sessions.
 	lastArchivedCheck time.Time
+
+	// liveCWDs returns the set of directories currently owned by a live
+	// opencode process. Used to gate EventNewSession so the watcher doesn't
+	// surface historical DB rows as live sessions when no opencode CLI is
+	// actually running. Defaults to processlifecycle.LiveCWDs(ProcessName);
+	// overridable from tests.
+	liveCWDs func() map[string]struct{}
 }
 
 // sessionCursor tracks the last-seen part timestamp and deduplicates parts
@@ -71,6 +87,12 @@ type Watcher struct {
 type sessionCursor struct {
 	lastTS  int64
 	seenIDs map[string]struct{} // part IDs already processed at lastTS
+
+	// emitted is true once EventNewSession has been broadcast for this
+	// session. Sessions that exist in the DB but have no live opencode
+	// process owning their CWD are tracked (so we don't back-fill activity
+	// if the process later starts) but not emitted.
+	emitted bool
 }
 
 // New creates a Watcher for the OpenCode database relative to $HOME.
@@ -80,12 +102,12 @@ func New(maxAge time.Duration) *Watcher {
 		log.Printf("opencode: $HOME not set, using relative path: %v", err)
 	}
 	return &Watcher{
-		dbPath:            filepath.Join(home, dbRelPath),
-		adapter:           AdapterName,
-		maxAge:            maxAge,
-		cursors:           make(map[string]*sessionCursor),
-		minScanGap:        defaultMinScanGap,
-		lastArchivedCheck: time.Now(),
+		dbPath:     filepath.Join(home, dbRelPath),
+		adapter:    AdapterName,
+		maxAge:     maxAge,
+		cursors:    make(map[string]*sessionCursor),
+		minScanGap: defaultMinScanGap,
+		liveCWDs:   defaultLiveCWDs,
 	}
 }
 
@@ -93,13 +115,25 @@ func New(maxAge time.Duration) *Watcher {
 // Intended for tests.
 func NewWithDBPath(dbPath string, maxAge time.Duration) *Watcher {
 	return &Watcher{
-		dbPath:            dbPath,
-		adapter:           AdapterName,
-		maxAge:            maxAge,
-		cursors:           make(map[string]*sessionCursor),
-		minScanGap:        defaultMinScanGap,
-		lastArchivedCheck: time.Now(),
+		dbPath:     dbPath,
+		adapter:    AdapterName,
+		maxAge:     maxAge,
+		cursors:    make(map[string]*sessionCursor),
+		minScanGap: defaultMinScanGap,
+		liveCWDs:   defaultLiveCWDs,
 	}
+}
+
+// defaultLiveCWDs returns the set of CWDs currently held by live opencode
+// processes. Failures are logged and treated as "no live processes" — the
+// scan continues but won't surface ghost sessions.
+func defaultLiveCWDs() map[string]struct{} {
+	set, err := processlifecycle.LiveCWDs(ProcessName)
+	if err != nil {
+		log.Printf("opencode: LiveCWDs: %v", err)
+		return nil
+	}
+	return set
 }
 
 // Root returns the watched database path (satisfies the interface used in
@@ -258,21 +292,44 @@ func (w *Watcher) scanSessions() {
 	}
 	rows.Close()
 
+	// Snapshot the set of CWDs currently owned by a live opencode process.
+	// Used to gate EventNewSession: a row in the session table is just
+	// history unless some opencode CLI is actually running for it. Without
+	// this gate the watcher floods the UI with stale rows on every startup
+	// (every non-archived session within maxAge gets re-emitted as new).
+	live := w.liveCWDs()
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	for _, s := range sessions {
 		cur, known := w.cursors[s.id]
 		if !known {
-			// New session — emit EventNewSession.
+			// First sighting — track the cursor at the current timestamp so
+			// that if the session later becomes live we don't back-fill its
+			// historical parts as fresh activity.
+			cur = &sessionCursor{
+				lastTS:  s.timeUpdated,
+				seenIDs: make(map[string]struct{}),
+			}
+			w.cursors[s.id] = cur
+		}
+
+		if !cur.emitted {
+			if _, alive := live[s.directory]; !alive {
+				// No opencode process owns this CWD — keep the cursor
+				// advanced so we skip historical activity if it ever
+				// becomes live.
+				cur.lastTS = s.timeUpdated
+				continue
+			}
+			// A live process owns this CWD — surface the session.
 			// Encode the session ID into TranscriptPath so that the
 			// MetricsProvider (opencode/metrics.go ComputeMetrics) can
 			// extract it via parseTranscriptPath. The WAL suffix is
 			// preserved so isStaleTranscript() checks the WAL (updated on
 			// every OpenCode write) rather than the main DB (checkpoint-only).
 			walPath := w.dbPath + "-wal" + "?session=" + s.id
-			cur = &sessionCursor{seenIDs: make(map[string]struct{})}
-			w.cursors[s.id] = cur
 			w.broadcast(agent.Event{
 				Type:            agent.EventNewSession,
 				Adapter:         w.adapter,
@@ -282,9 +339,10 @@ func (w *Watcher) scanSessions() {
 				CWD:             s.directory,
 				ParentSessionID: s.parentID,
 			})
+			cur.emitted = true
 		}
 
-		// Scan for new parts since cursor.
+		// Scan for new parts since cursor (only for surfaced sessions).
 		w.scanParts(db, s.id, s.directory, cur)
 	}
 
@@ -295,13 +353,18 @@ func (w *Watcher) scanSessions() {
 // emitRemovedForArchivedSessions queries for sessions whose time_archived
 // column was set since the last check and emits EventRemoved for those
 // that are tracked in our cursors map.
+//
+// On the first call after daemon start, the cutoff is set to a short window
+// (initialArchiveCleanupWindow) before now so that sessions archived just
+// before startup still get cleaned up — without scanning OpenCode's entire
+// archive history.
 func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
+	now := time.Now()
 	if w.lastArchivedCheck.IsZero() {
-		w.lastArchivedCheck = time.Now()
-		return
+		w.lastArchivedCheck = now.Add(-initialArchiveCleanupWindow)
 	}
 	cutoff := w.lastArchivedCheck.UnixMilli()
-	w.lastArchivedCheck = time.Now()
+	w.lastArchivedCheck = now
 
 	rows, err := db.Query(`
 		SELECT id FROM session

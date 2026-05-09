@@ -61,6 +61,23 @@ func setupTestDB(t *testing.T) (*Watcher, *sql.DB) {
 
 	w := NewWithDBPath(dbPath, 1*time.Hour)
 	w.minScanGap = 0 // disable debounce for direct scanSessions() calls in tests
+	// Default test stub: every CWD currently in the DB is "live". Tests that
+	// want to exercise the no-live-process gate override this.
+	w.liveCWDs = func() map[string]struct{} {
+		rows, err := db.Query(`SELECT DISTINCT directory FROM session`)
+		if err != nil {
+			return nil
+		}
+		defer rows.Close()
+		set := make(map[string]struct{})
+		for rows.Next() {
+			var d string
+			if err := rows.Scan(&d); err == nil {
+				set[d] = struct{}{}
+			}
+		}
+		return set
+	}
 	return w, db
 }
 
@@ -201,11 +218,11 @@ func TestScanSessions_Removed(t *testing.T) {
 	now := time.Now().UnixMilli()
 	insertSession(t, db, "ses_rm", "/tmp", now, "")
 
-	// First scan to discover and set lastArchivedCheck.
+	// First scan: surface the session and seed lastArchivedCheck.
 	w.scanSessions()
 	drainEvents(ch)
 
-	// Wait so time_archived is distinctly after lastArchivedCheck.
+	// Wait so time_archived lands strictly after lastArchivedCheck.
 	time.Sleep(10 * time.Millisecond)
 
 	// Archive the session.
@@ -345,27 +362,104 @@ func TestScanSessions_NoArchivedBeforeCheck(t *testing.T) {
 	defer w.Unsubscribe(ch)
 
 	// Create an already-archived session (before watcher knows about it).
+	// Even though the first emitRemovedForArchivedSessions call now does scan
+	// the recent-archive window (initialArchiveCleanupWindow), this session
+	// was never in cursors → no EventRemoved should fire for it.
 	now := time.Now().UnixMilli()
-	insertSessionWithArchive := func() {
-		insertSession(t, db, "ses_already_archived", "/tmp", now, "")
-		_, err := db.Exec(`UPDATE session SET time_archived = ? WHERE id = ?`, now, "ses_already_archived")
-		if err != nil {
-			t.Fatalf("archive session: %v", err)
-		}
+	insertSession(t, db, "ses_already_archived", "/tmp", now, "")
+	if _, err := db.Exec(`UPDATE session SET time_archived = ? WHERE id = ?`, now, "ses_already_archived"); err != nil {
+		t.Fatalf("archive session: %v", err)
 	}
-	insertSessionWithArchive()
-
-	// firstArchivedCheck is zero → emitRemovedForArchivedSessions returns early.
-	// Even if it did run, the session was never in cursors → no event.
 
 	w.scanSessions()
 	events := collectEvents(ch, 500*time.Millisecond)
 
-	// Should not emit EventRemoved for an unknown archived session.
 	for _, ev := range events {
 		if ev.Type == agent.EventRemoved {
 			t.Errorf("unexpected EventRemoved for session not in cursors: %v", ev)
 		}
+	}
+}
+
+// TestScanSessions_NoLiveProcessSuppressesGhosts is the regression for the
+// v0.3.12 ghost-sessions bug: when no opencode CLI is running, historical DB
+// rows must NOT be surfaced as live sessions.
+func TestScanSessions_NoLiveProcessSuppressesGhosts(t *testing.T) {
+	w, db := setupTestDB(t)
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+
+	// No opencode processes are alive.
+	w.liveCWDs = func() map[string]struct{} { return nil }
+
+	now := time.Now().UnixMilli()
+	insertSession(t, db, "ses_ghost1", "/tmp", now, "")
+	insertSession(t, db, "ses_ghost2", "/home/user/projects/foo", now, "")
+	insertSession(t, db, "ses_ghost3", "/home/user/projects/bar", now, "")
+
+	w.scanSessions()
+
+	events := collectEvents(ch, 500*time.Millisecond)
+	for _, ev := range events {
+		if ev.Type == agent.EventNewSession {
+			t.Errorf("expected zero EventNewSession with no live opencode process, got %+v", ev)
+		}
+	}
+}
+
+// TestScanSessions_EmitsWhenProcessBecomesLive verifies that a session
+// initially gated out by the no-live-process check still emits EventNewSession
+// once the user starts opencode in its CWD.
+func TestScanSessions_EmitsWhenProcessBecomesLive(t *testing.T) {
+	w, db := setupTestDB(t)
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+
+	var liveSet map[string]struct{}
+	w.liveCWDs = func() map[string]struct{} { return liveSet }
+
+	now := time.Now().UnixMilli()
+	insertSession(t, db, "ses_dormant", "/tmp/work", now, "")
+	insertMessage(t, db, "msg_d", "ses_dormant", "user", "gpt-4", now)
+	insertPart(t, db, "part_d1", "ses_dormant", "msg_d", "text", `{"text":"hello"}`, now)
+
+	// First scan: process not live → no emit.
+	w.scanSessions()
+	drainEvents(ch)
+
+	// User starts opencode in /tmp/work.
+	liveSet = map[string]struct{}{"/tmp/work": {}}
+
+	// New activity arrives.
+	later := now + 1000
+	insertPart(t, db, "part_d2", "ses_dormant", "msg_d", "text", `{"text":"more"}`, later)
+	if _, err := db.Exec(`UPDATE session SET time_updated = ? WHERE id = ?`, later, "ses_dormant"); err != nil {
+		t.Fatalf("bump time_updated: %v", err)
+	}
+
+	w.scanSessions()
+	events := collectEvents(ch, 500*time.Millisecond)
+
+	var newSessions, activities int
+	for _, ev := range events {
+		switch ev.Type {
+		case agent.EventNewSession:
+			if ev.SessionID == "ses_dormant" {
+				newSessions++
+			}
+		case agent.EventActivity:
+			if ev.SessionID == "ses_dormant" {
+				activities++
+			}
+		}
+	}
+	if newSessions != 1 {
+		t.Errorf("expected 1 EventNewSession after process becomes live, got %d (events=%v)", newSessions, events)
+	}
+	// Activity for the new part should also fire — but not for the historical
+	// part_d1 that landed before the session was surfaced.
+	if activities != 1 {
+		t.Errorf("expected 1 EventActivity (for the post-emit part), got %d (events=%v)", activities, events)
 	}
 }
 
