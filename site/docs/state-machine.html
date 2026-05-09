@@ -335,8 +335,11 @@
       <ul>
         <li><code>claude-code</code> &mdash; Anthropic's Claude Code CLI</li>
         <li><code>codex</code> &mdash; OpenAI's Codex CLI</li>
+        <li><code>pi</code> &mdash; Pi (Inflection) agent</li>
+        <li><code>aider</code> &mdash; Aider (transcript-driven REPL)</li>
+        <li><code>opencode</code> &mdash; OpenCode (SQLite-backed storage)</li>
       </ul>
-      <p>The adapter determines which transcript format is parsed and which process signatures are scanned.</p>
+      <p>The adapter determines which transcript format is parsed and which process signatures are scanned. Frontends should look up adapter display name and icon via <code>GET /api/v1/agents</code> rather than hardcoding switches.</p>
 
       <h3>PressureLevel</h3>
       <p>Tracks context window utilization as a pressure indicator:</p>

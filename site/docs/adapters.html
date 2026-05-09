@@ -126,6 +126,21 @@
         <li>Stage: <strong>alpha</strong> &mdash; first agent shipped through the <code>/ir:onboard-agent</code> discovery flow</li>
       </ul>
 
+      <h3>OpenCode Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/opencode/</code></li>
+        <li><strong>Watches:</strong> SQLite WAL at <code>~/.local/share/opencode/storage/opencode.db-wal</code> via fsnotify; polls <code>session</code>/<code>part</code> tables on writes</li>
+        <li>First adapter on the SQLite-backed monitoring path: storage is a single WAL-mode database, not JSONL</li>
+        <li>Bypasses the JSONL tailer via <code>MetricsProvider</code> (<code>metrics.go</code>) for cost + token snapshots; <code>ComputeMetrics</code> hook on <code>agents.Config</code></li>
+        <li>Parent-child session linking via <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly, no path-based heuristics</li>
+        <li>CWD-based PID discovery via <code>pgrep -x opencode</code></li>
+        <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
+        <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>) all map to <code>turn_done</code></li>
+        <li><strong>Adapter name:</strong> <code>"opencode"</code></li>
+        <li>Stage: <strong>alpha</strong> &mdash; closes #100</li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>
@@ -374,8 +389,8 @@ type AgentWatcher interface {
       <p><strong>For adapters, additionally:</strong></p>
       <ul class="checklist">
         <li>Adapter package at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
-        <li>Implements the <code>AgentWatcher</code> interface</li>
-        <li>Registered in <code>core/cmd/irrlichd/main.go</code></li>
+        <li>Exports an <code>agents.Config</code> from <code>Config()</code> with parser factory + PID-discovery hook (and <code>MetricsProvider</code> for DB-backed adapters)</li>
+        <li>Registered in the <code>agentCfgs</code> slice in <code>core/cmd/irrlichd/main.go</code></li>
         <li>Emits all three lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code></li>
         <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against <code>replaydata/agents/features.json</code></li>
         <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed and replay green via <code>tools/replay-fixtures.sh</code></li>

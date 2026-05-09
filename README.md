@@ -55,7 +55,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | OpenAI Codex   | alpha   |
 | Pi             | alpha   |
 | Aider          | alpha   |
-| OpenCode       | planned |
+| OpenCode       | alpha   |
 | Gemini CLI     | planned |
 | Cursor Agent   | planned |
 | Amp            | planned |
@@ -80,7 +80,7 @@ Local-first · no telemetry · MIT · ~5 MB RAM · signed Homebrew cask · trans
 - **Observability stacks** ([Langfuse](https://langfuse.com/integrations/frameworks/claude-agent-sdk), [SigNoz](https://signoz.io/blog/claude-code-monitoring-with-opentelemetry/)) need SDK instrumentation and a dashboard tab.
 - **Single-agent monitors** ([Claude Status](https://github.com/gmr/claude-status), [Agent Sessions](https://github.com/jazzyalex/agent-sessions)) lock you to one CLI or one terminal.
 
-Irrlicht is ambient (menu bar, not a window), multi-agent (Claude / Codex / Pi / Gas Town in one vocabulary), and transcript-driven — no SDK wrappers, no OpenTelemetry collectors, no dashboard tab to keep open.
+Irrlicht is ambient (menu bar, not a window), multi-agent (Claude / Codex / Pi / Aider / OpenCode / Gas Town in one vocabulary), and transcript-driven — no SDK wrappers, no OpenTelemetry collectors, no dashboard tab to keep open.
 
 ## The problem (why this exists)
 
