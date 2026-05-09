@@ -1,13 +1,10 @@
 ---
 name: ir:triage
 description: >
-  Autonomously triage GitHub issues on ingo-eichhorst/Irrlicht. Scores each
-  issue against a 6-axis readiness rubric and posts a strictly diagnostic
-  assessment — never invents acceptance criteria, never proposes subtasks,
-  never sketches implementation. Lands every issue at ready-for-agent or
-  needs-info, with a one-line justification for every label decision.
-  Use on "/ir:triage" (every untriaged open issue), "/ir:triage #N", or
-  "/ir:triage #N #M ..." for a specific set.
+  Autonomously triage GitHub issues on ingo-eichhorst/Irrlicht. Diagnostic-only:
+  scores each issue against a 6-axis readiness rubric and lands it at
+  ready-for-agent or needs-info, with a one-line justification per label.
+  Triggers: "/ir:triage" (sweep), "/ir:triage #N" (single), "/ir:triage #N #M".
 ---
 
 # Irrlicht Triage (Autonomous, Diagnostic-Only)
@@ -16,7 +13,7 @@ Triage issues on `ingo-eichhorst/Irrlicht` end-to-end without prompting the main
 
 This contract is borrowed from established practice — Chromium's triage guidance ("triage is assessment, categorization, prioritization — not solutioning"), INVEST (Independent / Negotiable / Valuable / Estimable / Small / Testable), Devin's Agents 101 (strong feedback loops, specified outcome, starting points, checkpoints), and mattpocock's AGENT-BRIEF (concrete testable AC, explicit scope boundaries — authored *before* an agent picks up, not by the triage step).
 
-Always pass `--repo ingo-eichhorst/Irrlicht` on every `gh` call so this works from any worktree.
+Every `gh` call passes `--repo ingo-eichhorst/Irrlicht` so the skill works from any worktree.
 
 ## Invocation
 
@@ -37,7 +34,7 @@ gh issue list --repo ingo-eichhorst/Irrlicht --state open --limit 200 \
     ) | .number'
 ```
 
-`ready-for-human` is included in the filter as a defensive guard — the skill no longer applies it, but if a stray issue ever reappears with that label it should not be unconditionally re-triaged. If the label has been deleted from the repo entirely, the line is a harmless no-op.
+`ready-for-human` is in the filter as a defensive guard — the skill no longer applies it, but a stray issue with that label should not be unconditionally re-triaged.
 
 Triage one at a time so a failure on issue N doesn't block N+1.
 
@@ -151,7 +148,7 @@ Single template for both verdicts. The brief is purely diagnostic — short, str
 ## Triage Assessment
 
 **Category:** <bug | enhancement> — <one-liner why>
-**Priority:** <High | Medium | Low> — <one-liner why>
+**Priority:** <High | Medium | Low> — <one-liner why> *(omit if needs-info)*
 **Scope:** <scope:X[, scope:Y]> — <one-liner per scope> *(omit if shared infra)*
 **Flags:** <flag1, flag2> — <one-liner per flag> *(omit if none)*
 **Complexity:** <Low | Medium | High> — <one-liner: files/packages touched, judgment calls required>
