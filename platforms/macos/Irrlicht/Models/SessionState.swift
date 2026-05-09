@@ -486,6 +486,25 @@ struct SessionState: Identifiable, Codable {
         return copy
     }
 
+    /// Return a copy with `state` replaced and `updatedAt` set to now. All
+    /// other fields are preserved — including children, subagents, role, and
+    /// adapter — which a field-by-field reconstruction would silently drop.
+    func withState(_ newState: State) -> SessionState {
+        var copy = SessionState(
+            id: id, state: newState, model: model, cwd: cwd,
+            transcriptPath: transcriptPath, gitBranch: gitBranch,
+            projectName: projectName, firstSeen: firstSeen, updatedAt: Date(),
+            eventCount: eventCount, lastEvent: lastEvent, metrics: metrics,
+            pid: pid, parentSessionId: parentSessionId, subagents: subagents,
+            adapter: adapter, daemonVersion: daemonVersion,
+            role: role, roleIcon: roleIcon, roleDescription: roleDescription,
+            workerName: workerName, workerID: workerID,
+            children: children, launcher: launcher
+        )
+        copy.duplicateIndex = duplicateIndex
+        return copy
+    }
+
     var activeSubagentCount: Int {
         (subagents?.working ?? 0) + (subagents?.waiting ?? 0)
     }
