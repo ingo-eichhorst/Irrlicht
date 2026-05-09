@@ -579,7 +579,7 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 // Snapshots that mention IDs we never saw a TaskCreate for are ignored;
 // the reconcile only updates pre-existing tasks. See issue #282.
 func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
-	if parsed == nil || parsed.TaskSnapshot == nil {
+	if parsed == nil || parsed.TaskSnapshot == nil || len(t.tasks) == 0 {
 		return
 	}
 	snapByID := make(map[string]TaskSnapshotEntry, len(*parsed.TaskSnapshot))

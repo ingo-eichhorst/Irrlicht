@@ -1545,22 +1545,7 @@ func TestTailer_TaskReminder_DemotesPhantomInProgress(t *testing.T) {
 		}),
 	}
 
-	dir := t.TempDir()
-	path := dir + "/reminder.jsonl"
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc := json.NewEncoder(f)
-	for _, e := range events {
-		if err := enc.Encode(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-	f.Close()
-
-	tr := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
-	m, err := tr.TailAndProcess()
+	m, err := newCCTailer(writeTranscript(t, events)).TailAndProcess()
 	if err != nil {
 		t.Fatalf("TailAndProcess: %v", err)
 	}
@@ -1604,22 +1589,7 @@ func TestTailer_TaskReminder_EmptySnapshotDemotesAll(t *testing.T) {
 		makeReminderEvent([]map[string]interface{}{}),
 	}
 
-	dir := t.TempDir()
-	path := dir + "/empty.jsonl"
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc := json.NewEncoder(f)
-	for _, e := range events {
-		if err := enc.Encode(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-	f.Close()
-
-	tr := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
-	m, err := tr.TailAndProcess()
+	m, err := newCCTailer(writeTranscript(t, events)).TailAndProcess()
 	if err != nil {
 		t.Fatalf("TailAndProcess: %v", err)
 	}
@@ -1647,22 +1617,7 @@ func TestTailer_TaskReminder_SyncsDivergingStatus(t *testing.T) {
 		}),
 	}
 
-	dir := t.TempDir()
-	path := dir + "/diverge.jsonl"
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc := json.NewEncoder(f)
-	for _, e := range events {
-		if err := enc.Encode(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-	f.Close()
-
-	tr := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
-	m, err := tr.TailAndProcess()
+	m, err := newCCTailer(writeTranscript(t, events)).TailAndProcess()
 	if err != nil {
 		t.Fatalf("TailAndProcess: %v", err)
 	}
