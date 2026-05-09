@@ -9,20 +9,25 @@ import (
 	"time"
 )
 
+// dbBackedPathSentinel marks a TranscriptPath that encodes a DB-backed
+// session (e.g. OpenCode's "…/opencode.db-wal?session=ses_xxx"). The query
+// string carries the session ID since the WAL itself is shared across all
+// sessions in the DB. Used by isDBBackedTranscriptPath.
+const dbBackedPathSentinel = '?'
+
+// isDBBackedTranscriptPath reports whether path encodes a DB-backed adapter
+// session. Such paths can't be stat'd for mtime-based staleness (the WAL is
+// shared), so callers route them through adapter-specific liveness checks
+// instead.
+func isDBBackedTranscriptPath(path string) bool {
+	return strings.IndexByte(path, dbBackedPathSentinel) >= 0
+}
+
 // isStaleTranscript reports whether the transcript file at path has not been
-// modified within orphanTranscriptAge. Returns false for empty paths or
-// stat errors (file missing → not stale, will be caught elsewhere).
-// Any query-string suffix (e.g. "?session=ses_xxx") signals a DB-backed
-// adapter (e.g. OpenCode) whose staleness is managed by the adapter itself —
-// these paths are never considered stale by this function.
+// modified within orphanTranscriptAge. Returns false for empty paths, stat
+// errors, or DB-backed paths (whose staleness is managed by the adapter).
 func isStaleTranscript(path string) bool {
-	if path == "" {
-		return false
-	}
-	// DB-backed adapters embed session ID as a query string. Staleness for
-	// these sessions is handled by the adapter's own maxAge filter, not by
-	// transcript mtime — the WAL is shared across all sessions in the DB.
-	if strings.IndexByte(path, '?') >= 0 {
+	if path == "" || isDBBackedTranscriptPath(path) {
 		return false
 	}
 	info, err := os.Stat(path)

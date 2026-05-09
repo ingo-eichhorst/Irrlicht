@@ -67,9 +67,7 @@ type Watcher struct {
 	lastArchivedCheck time.Time
 
 	// liveCWDs returns the set of directories currently owned by a live
-	// opencode process. Used to gate EventNewSession so the watcher doesn't
-	// surface historical DB rows as live sessions when no opencode CLI is
-	// actually running. Defaults to processlifecycle.LiveCWDs(ProcessName);
+	// opencode process. Defaults to processlifecycle.LiveCWDs(ProcessName);
 	// overridable from tests.
 	liveCWDs func() map[string]struct{}
 }
@@ -81,16 +79,14 @@ type sessionCursor struct {
 	seenIDs map[string]struct{} // part IDs already processed at lastTS
 
 	// emitted is true once EventNewSession has been broadcast for this
-	// session. Sessions that exist in the DB but have no live opencode
-	// process owning their CWD are tracked (so we don't back-fill activity
-	// if the process later starts) but not emitted.
+	// session. Sessions tracked but not emitted are awaiting a live
+	// opencode process to own their CWD.
 	emitted bool
 
 	// lastObserved is the wall-clock time of the most recent scan that saw
-	// this session in the SQL result set. Used by gcExpiredCursors to drop
-	// entries that have aged out of the maxAge window — independent of
-	// lastTS, which only advances when new parts arrive (a session whose
-	// time_updated bumps without new parts would otherwise look stale).
+	// this session. Drives gcExpiredCursors independently of lastTS, which
+	// only advances on new parts (a session bumped without new parts would
+	// otherwise look stale).
 	lastObserved time.Time
 }
 
@@ -293,11 +289,9 @@ func (w *Watcher) scanSessions() {
 	}
 	rows.Close()
 
-	// Snapshot the set of CWDs currently owned by a live opencode process.
-	// Used to gate EventNewSession: a row in the session table is just
-	// history unless some opencode CLI is actually running for it. Without
-	// this gate the watcher floods the UI with stale rows on every startup
-	// (every non-archived session within maxAge gets re-emitted as new).
+	// Gate EventNewSession on a live opencode process owning the session's
+	// CWD — otherwise every non-archived row in the DB would be re-emitted
+	// as live on each daemon start.
 	live := w.liveCWDs()
 
 	w.mu.Lock()
@@ -307,34 +301,26 @@ func (w *Watcher) scanSessions() {
 	for _, s := range sessions {
 		cur, known := w.cursors[s.id]
 		if !known {
-			// First sighting — track the cursor at the current timestamp so
-			// that if the session later becomes live we don't back-fill its
-			// historical parts as fresh activity.
+			// Seed lastTS so a later live-transition's scanParts doesn't
+			// back-fill historical parts as fresh activity.
 			cur = &sessionCursor{
 				lastTS:  s.timeUpdated,
 				seenIDs: make(map[string]struct{}),
 			}
 			w.cursors[s.id] = cur
 		}
-		// Mark the cursor as observed in this scan so gcExpiredCursors
-		// keeps it alive even if no new parts arrived (lastTS only moves
-		// when scanParts sees a fresher part timestamp).
 		cur.lastObserved = scanWallClock
 
 		if !cur.emitted {
 			if _, alive := live[s.directory]; !alive {
-				// No opencode process owns this CWD — keep the cursor
-				// advanced so we skip historical activity if it ever
-				// becomes live.
 				cur.lastTS = s.timeUpdated
 				continue
 			}
-			// A live process owns this CWD — surface the session.
-			// Encode the session ID into TranscriptPath so that the
-			// MetricsProvider (opencode/metrics.go ComputeMetrics) can
-			// extract it via parseTranscriptPath. The WAL suffix is
-			// preserved so isStaleTranscript() checks the WAL (updated on
-			// every OpenCode write) rather than the main DB (checkpoint-only).
+			// TranscriptPath encodes the session ID so MetricsProvider
+			// (opencode/metrics.go ComputeMetrics) can extract it via
+			// parseTranscriptPath. The WAL suffix routes isStaleTranscript()
+			// at the WAL (updated on every write), not the checkpoint-only
+			// main DB.
 			walPath := w.dbPath + "-wal" + "?session=" + s.id
 			w.broadcast(agent.Event{
 				Type:            agent.EventNewSession,
@@ -348,27 +334,17 @@ func (w *Watcher) scanSessions() {
 			cur.emitted = true
 		}
 
-		// Scan for new parts since cursor (only for surfaced sessions).
 		w.scanParts(db, s.id, s.directory, cur)
 	}
 
-	// Emit EventRemoved for sessions that were archived since the last scan.
 	w.emitRemovedForArchivedSessions(db)
-
-	// GC cursors that have aged out of the maxAge window. The session SQL
-	// query above filters on `time_updated >= now - maxAge`, so any cursor
-	// whose lastTS is older than that cutoff will never appear in a future
-	// scan and is safe to drop. Without this, the map would grow without
-	// bound for users who accumulate many OpenCode sessions over time
-	// (especially when no opencode process is running, since untouched
-	// cursors stay at their initial lastTS forever).
 	w.gcExpiredCursors()
 }
 
 // gcExpiredCursors drops cursor entries whose most recent observation
-// (lastObserved) predates the maxAge window — those sessions cannot
-// reappear in the SQL query, so retaining their cursors only wastes
-// memory. No-op when maxAge == 0 (no upper bound configured).
+// predates the maxAge window — those sessions cannot reappear in the
+// SQL query, so retaining the cursor is pure waste. Bounds map growth
+// for users who accumulate many OpenCode sessions over time.
 func (w *Watcher) gcExpiredCursors() {
 	if w.maxAge <= 0 {
 		return
