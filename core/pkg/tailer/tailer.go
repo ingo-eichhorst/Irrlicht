@@ -564,11 +564,20 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 
 // reconcileTaskSnapshot applies a Claude Code task_reminder snapshot from
 // parsed (when present) to the running tasks slice. Reminders are
-// authoritative: a local in_progress task whose ID is missing from the
-// snapshot is demoted to completed (Claude has dropped it from active
-// tracking), and an ID present in the snapshot with a divergent status
-// takes the snapshot's value. Defensive safety net for stale/bogus
-// TaskUpdate deltas that never get a `completed` follow-up. See issue #282.
+// authoritative over local state in two ways:
+//
+//  1. Phantom demotion: a local in_progress task whose ID is missing from
+//     the snapshot is set to completed (Claude has dropped it from active
+//     tracking) — this is the primary fix for the stale TaskUpdate bug.
+//  2. Present divergence: for any ID present in the snapshot whose status
+//     differs from local state, the snapshot's status wins. Strictly more
+//     than a "phantom only" rule — Claude's view is authoritative whenever
+//     it speaks. Safe under transcript ordering because reminders appear
+//     on user turns, after the assistant tool_use that emitted any deltas
+//     for that turn.
+//
+// Snapshots that mention IDs we never saw a TaskCreate for are ignored;
+// the reconcile only updates pre-existing tasks. See issue #282.
 func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 	if parsed == nil || parsed.TaskSnapshot == nil {
 		return
