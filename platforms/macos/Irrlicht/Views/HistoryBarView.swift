@@ -19,10 +19,8 @@ struct HistoryBarView: View {
         Canvas { context, size in
             guard !states.isEmpty else { return }
             let colW = size.width / CGFloat(bucketCount)
-            // Right-align: keep only the newest `bucketCount` states so the
-            // most recent always lands at the rightmost column. When fewer
-            // states than buckets exist, leave the LEFT slots unfilled so the
-            // background colour shows through.
+            // Right-anchor: draw the newest `bucketCount` states; when fewer
+            // exist, leave the LEFT slots empty.
             let visible = states.suffix(bucketCount)
             let offset = bucketCount - visible.count
             for (i, state) in visible.enumerated() {
