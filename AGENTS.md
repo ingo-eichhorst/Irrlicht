@@ -37,6 +37,24 @@ extracts the tarball into `~/.local/share/irrlicht/web/`.
 - Errors are logged via `Logger` interface, not propagated with `fmt.Errorf`
 - Child sessions (subagents and background agents) use `ParentSessionID` for parent-child linking
 
+## Adding a new agent adapter
+
+Adapters are wired in one place — the `agentCfgs` slice in
+`core/cmd/irrlichd/main.go`. Adding a new adapter is a Go-only change; no
+Swift or web edits are required.
+
+In your adapter package's `Config()` constructor (`core/adapters/inbound/agents/<name>/config.go`),
+fill the branding fields alongside the parser/PID hooks:
+
+- `DisplayName` — human-readable label, e.g. `"OpenCode"`
+- `IconSVGLight` / `IconSVGDark` — raw `<svg>…</svg>` markup, 14×14
+  rendered. Use the same string for both fields when the icon is
+  appearance-agnostic.
+
+The daemon serves these via `GET /api/v1/agents`; the macOS app and web UI
+look them up by `Name` and render automatically. No frontend code knows the
+adapter exists ahead of time.
+
 ## Testing
 
 Before marking a ticket done, run the full suite — all three layers must pass:

@@ -16,12 +16,31 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/adapters/inbound/agents/aider"
+	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/opencode"
+	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/outbound/filesystem"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
 )
+
+// testAgentCfgs mirrors main.go's agentCfgs slice. Tests register the real
+// production Configs so the gate test catches any future adapter that ships
+// without branding fields filled in.
+func testAgentCfgs() []agents.Config {
+	return []agents.Config{
+		claudecode.Config(),
+		codex.Config(),
+		pi.Config(),
+		aider.Config(),
+		opencode.Config(),
+	}
+}
 
 func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository) {
 	t.Helper()
@@ -32,6 +51,7 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil))
+	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(testAgentCfgs()))
 	mux.HandleFunc("GET /state", handleGetState(repo))
 	hub := wshub.NewHub(push, nil)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
@@ -92,6 +112,66 @@ func TestGate_GetSessions(t *testing.T) {
 	}
 	if !found {
 		t.Error("gate-1 session not found in GET /api/v1/sessions")
+	}
+}
+
+// TestGate_GetAgents verifies that GET /api/v1/agents returns every registered
+// adapter with non-empty branding. Catches the original foot-gun (#260): a
+// new adapter that forgets to fill DisplayName / IconSVGLight / IconSVGDark
+// would make this test fail before reaching review.
+func TestGate_GetAgents(t *testing.T) {
+	srv, _ := newTestStack(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/agents")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("Content-Type: got %q, want application/json", ct)
+	}
+
+	var entries []struct {
+		Name         string `json:"name"`
+		DisplayName  string `json:"display_name"`
+		IconSVGLight string `json:"icon_svg_light"`
+		IconSVGDark  string `json:"icon_svg_dark"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	wantNames := map[string]bool{
+		"claude-code": false,
+		"codex":       false,
+		"pi":          false,
+		"aider":       false,
+		"opencode":    false,
+	}
+	for _, e := range entries {
+		if _, expected := wantNames[e.Name]; !expected {
+			t.Errorf("unexpected adapter %q in response", e.Name)
+			continue
+		}
+		wantNames[e.Name] = true
+		if e.DisplayName == "" {
+			t.Errorf("adapter %q: display_name must not be empty", e.Name)
+		}
+		if e.IconSVGLight == "" {
+			t.Errorf("adapter %q: icon_svg_light must not be empty", e.Name)
+		}
+		if e.IconSVGDark == "" {
+			t.Errorf("adapter %q: icon_svg_dark must not be empty", e.Name)
+		}
+	}
+	for name, seen := range wantNames {
+		if !seen {
+			t.Errorf("expected adapter %q in response, missing", name)
+		}
 	}
 }
 

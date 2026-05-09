@@ -200,6 +200,7 @@ func main() {
 
 	hub := wshub.NewHub(push, historySnapshotProvider(historyTracker))
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
+	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(agentCfgs))
 
 	// pprof debug endpoints for runtime profiling (localhost only).
 	mux.HandleFunc("GET /debug/pprof/", localhostOnly(pprof.Index))

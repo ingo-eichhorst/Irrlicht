@@ -2,6 +2,36 @@ import AppKit
 import Foundation
 import os
 
+/// Branding for one inbound agent adapter, served by the daemon's
+/// GET /api/v1/agents endpoint. Co-locating display name + icon SVGs with
+/// the Go adapter (issue #260) lets a Go-only contributor add a new adapter
+/// without touching Swift — `SessionState.adapterName` / `adapterIcon` look
+/// the entry up dynamically.
+struct AgentBranding: Decodable {
+    let name: String
+    let displayName: String
+    let iconSVGLight: String
+    let iconSVGDark: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case displayName = "display_name"
+        case iconSVGLight = "icon_svg_light"
+        case iconSVGDark = "icon_svg_dark"
+    }
+}
+
+/// File-scope holder for the adapter branding registry. Lives outside
+/// `SessionManager`'s @MainActor scope so non-isolated model code
+/// (`SessionState.adapterName/adapterIcon`) can read it without an actor
+/// crossing. The single writer is `SessionManager.hydrateAgents()` which
+/// runs on the main actor and assigns a fresh dictionary in one shot — readers
+/// always see a coherent map (Dictionary assignment is a single CoW reference
+/// swap), so no lock is required.
+enum AgentRegistry {
+    static var byName: [String: AgentBranding] = [:]
+}
+
 /// A single item in the Claude Code task list, derived from TaskCreate / TaskUpdate tool calls.
 struct SessionTask: Codable, Hashable {
     let id: String
@@ -514,32 +544,25 @@ struct SessionState: Identifiable, Codable {
     }
 
     var adapterName: String {
-        switch adapter ?? "claude-code" {
-        case "codex": return "Codex"
-        case "pi": return "Pi"
-        case "aider": return "Aider"
-        case "opencode": return "OpenCode"
-        default: return "Claude Code"
+        let key = adapter ?? ""
+        if let entry = AgentRegistry.byName[key], !entry.displayName.isEmpty {
+            return entry.displayName
         }
+        return key.isEmpty ? "Unknown" : key
     }
 
-    /// SVG icon for the adapter (claude-code, codex, etc.)
+    /// SVG icon for the adapter, looked up from the registry the daemon
+    /// publishes at GET /api/v1/agents. Falls back to a neutral generic icon
+    /// when the registry has no entry for this adapter — e.g. before the
+    /// first hydration completes, or when an adapter is rolled out by a
+    /// daemon newer than this app build.
     var adapterIcon: NSImage? {
         let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let svg: String
-        switch adapter ?? "claude-code" {
-        case "claude-code":
-            svg = SessionState.claudeCodeSVG
-        case "codex":
-            svg = SessionState.codexSVG(dark: isDark)
-        case "pi":
-            svg = SessionState.piSVG(dark: isDark)
-        case "aider":
-            svg = SessionState.aiderSVG
-        case "opencode":
-            svg = SessionState.openCodeSVG(dark: isDark)
-        default:
-            svg = SessionState.claudeCodeSVG
+        if let entry = AgentRegistry.byName[adapter ?? ""] {
+            svg = isDark ? entry.iconSVGDark : entry.iconSVGLight
+        } else {
+            svg = SessionState.genericAdapterSVG
         }
         guard let data = svg.data(using: .utf8),
               let img = NSImage(data: data) else { return nil }
@@ -548,69 +571,13 @@ struct SessionState: Identifiable, Codable {
         return img
     }
 
-    // Claude Code mascot — pixel-art rectangular creature with eyes and legs.
-    private static let claudeCodeSVG = """
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 56 56">
-      <rect x="8" y="4" width="40" height="32" rx="4" fill="#D97757"/>
-      <rect x="4" y="16" width="8" height="12" rx="2" fill="#D97757"/>
-      <rect x="44" y="16" width="8" height="12" rx="2" fill="#D97757"/>
-      <rect x="18" y="12" width="8" height="8" rx="1" fill="#4A2820"/>
-      <rect x="30" y="12" width="8" height="8" rx="1" fill="#4A2820"/>
-      <rect x="12" y="36" width="6" height="14" rx="1" fill="#D97757"/>
-      <rect x="22" y="36" width="6" height="10" rx="1" fill="#D97757"/>
-      <rect x="32" y="36" width="6" height="10" rx="1" fill="#D97757"/>
-      <rect x="42" y="36" width="6" height="14" rx="1" fill="#D97757"/>
-    </svg>
-    """
-
-    // Codex — circle with >_ terminal prompt. Color adapts to appearance.
-    private static func codexSVG(dark: Bool) -> String {
-        let c = dark ? "#E0E0E0" : "#1A1A1A"
-        return """
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="44" fill="none" stroke="\(c)" stroke-width="8"/>
-          <path d="M28 38 L42 50 L28 62" fill="none" stroke="\(c)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-          <line x1="48" y1="62" x2="68" y2="62" stroke="\(c)" stroke-width="7" stroke-linecap="round"/>
-        </svg>
-        """
-    }
-
-    // Aider — VT220-green block cursor on a CRT-screen circle. Mirrors
-    // aider's official wordmark colors (terminal green #14b014 from
-    // aider.chat/assets/logo.svg). Brand-consistent across light/dark
-    // appearances. The fill is a mid-dark green (#1f3a1f), not pure
-    // black, so the icon has visible contrast against macOS dark mode's
-    // ~#1e1e1e backgrounds while still reading as a CRT screen.
-    private static let aiderSVG = """
+    // Neutral placeholder shown when the adapter registry has no entry for
+    // this session's adapter (pre-hydration, or unknown adapter from a newer
+    // daemon). Per-adapter SVGs now live in their Go packages — see
+    // core/adapters/inbound/agents/<name>/config.go.
+    private static let genericAdapterSVG = """
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r="44" fill="#1f3a1f" stroke="#14b014" stroke-width="6"/>
-      <rect x="40" y="32" width="20" height="36" fill="#14b014"/>
+      <circle cx="50" cy="50" r="44" fill="none" stroke="#8E8E93" stroke-width="8"/>
     </svg>
     """
-
-    // Pi coding agent — Greek letter pi in a circle. Color adapts to appearance.
-    private static func piSVG(dark: Bool) -> String {
-        let c = dark ? "#E0E0E0" : "#1A1A1A"
-        return """
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="44" fill="none" stroke="\(c)" stroke-width="8"/>
-          <line x1="28" y1="30" x2="72" y2="30" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
-          <line x1="40" y1="30" x2="40" y2="74" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
-          <line x1="60" y1="30" x2="64" y2="74" stroke="\(c)" stroke-width="8" stroke-linecap="round"/>
-        </svg>
-        """
-    }
-
-    // OpenCode — curly braces { } in a circle, rendered in OpenCode's brand blue.
-    private static func openCodeSVG(dark: Bool) -> String {
-        let bg = dark ? "#0D1117" : "#F0F6FF"
-        let fg = "#3B82F6"
-        return """
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="44" fill="\(bg)" stroke="\(fg)" stroke-width="6"/>
-          <path d="M42 28 Q30 28 30 38 L30 46 Q30 50 26 50 Q30 50 30 54 L30 62 Q30 72 42 72" fill="none" stroke="\(fg)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M58 28 Q70 28 70 38 L70 46 Q70 50 74 50 Q70 50 70 54 L70 62 Q70 72 58 72" fill="none" stroke="\(fg)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        """
-    }
 }
