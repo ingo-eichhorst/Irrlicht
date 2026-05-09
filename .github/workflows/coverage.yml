@@ -71,13 +71,15 @@ jobs:
           fi
           BADGE_JSON="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"${COLOR}\"}"
           jq -n --arg content "$BADGE_JSON" '{"files":{"coverage.json":{"content":$content}}}' > /tmp/gist-payload.json
-          http_code=$(curl -sS -o /tmp/gist-response.json -w '%{http_code}' -X PATCH \
+          # curl writes "000" to %{http_code} when no response was received (DNS/TLS/connect failure).
+          http_code=$(curl -sS -o /tmp/gist-response.json -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            --retry 3 --retry-delay 2 --retry-all-errors \
+            -X PATCH \
             -H "Authorization: token $GIST_SECRET" \
             -H "Content-Type: application/json" \
             -d @/tmp/gist-payload.json \
-            "https://api.github.com/gists/$COVERAGE_GIST_ID") || true
-          # curl emits "000" when no HTTP response was received (DNS/TLS/connect failure).
-          http_code="${http_code:-000}"
+            "https://api.github.com/gists/$COVERAGE_GIST_ID")
           echo "HTTP $http_code"
           if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
             echo "::error::Gist update failed (HTTP $http_code)"
