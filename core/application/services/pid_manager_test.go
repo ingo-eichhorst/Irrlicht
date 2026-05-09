@@ -280,7 +280,9 @@ func TestCleanupZombies_DBBackedOrphan(t *testing.T) {
 		"opencode":       "opencode",
 		"opencode-flaky": "opencode-flaky", // mapped, but lookup will fail
 	}
+	calls := make(map[string]int)
 	liveCWDs := func(name string) (map[string]struct{}, error) {
+		calls[name]++
 		switch name {
 		case "opencode":
 			return map[string]struct{}{
@@ -303,6 +305,16 @@ func TestCleanupZombies_DBBackedOrphan(t *testing.T) {
 		if repo.states[id] == nil {
 			t.Errorf("session %q should have been kept", id)
 		}
+	}
+
+	// Cache assertion: each registered adapter is looked up at most once,
+	// even though "opencode" has two ghost candidates and "opencode-flaky"
+	// errors out. Without the per-sweep cache this would be 3 calls.
+	if calls["opencode"] != 1 {
+		t.Errorf("liveCWDs(opencode) call count = %d, want 1 (cached)", calls["opencode"])
+	}
+	if calls["opencode-flaky"] != 1 {
+		t.Errorf("liveCWDs(opencode-flaky) call count = %d, want 1 (cached error)", calls["opencode-flaky"])
 	}
 }
 

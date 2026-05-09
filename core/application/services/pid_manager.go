@@ -219,9 +219,14 @@ func (pm *PIDManager) CleanupZombies() int {
 	if err != nil {
 		return 0
 	}
+	// Memoize live-CWD lookups per adapter for the duration of this sweep —
+	// when M ghost candidates share an adapter, the lookup is identical and
+	// each call shells out to pgrep. At startup with heavy carryover state,
+	// M can easily reach 10+.
+	liveLookup := pm.newLiveLookupCache()
 	deleted := 0
 	for _, state := range states {
-		if !pm.isStartupZombie(state) {
+		if !pm.isStartupZombie(state, liveLookup) {
 			continue
 		}
 		pm.log.LogInfo("startup-cleanup", state.SessionID,
@@ -232,49 +237,62 @@ func (pm *PIDManager) CleanupZombies() int {
 	return deleted
 }
 
+// newLiveLookupCache returns a memoizing adapter→live-CWDs lookup backed by
+// pm.liveCWDs / pm.processNames. Returns nil when liveCWDs is unset (the
+// DB-backed-orphan branch is disabled). The returned closure caches both
+// successful results and the "no process name registered" / "lookup failed"
+// states so that repeat calls within a single sweep don't re-fork pgrep.
+func (pm *PIDManager) newLiveLookupCache() func(adapter string) map[string]struct{} {
+	if pm.liveCWDs == nil {
+		return nil
+	}
+	cache := make(map[string]map[string]struct{})
+	cached := make(map[string]bool)
+	return func(adapter string) map[string]struct{} {
+		if cached[adapter] {
+			return cache[adapter]
+		}
+		cached[adapter] = true
+		name, ok := pm.processNames[adapter]
+		if !ok || name == "" {
+			return nil
+		}
+		live, err := pm.liveCWDs(name)
+		if err != nil {
+			return nil
+		}
+		cache[adapter] = live
+		return live
+	}
+}
+
 // isStartupZombie returns true for sessions whose process is provably gone.
-// Mirrors the predicate documented on CleanupZombies.
-func (pm *PIDManager) isStartupZombie(state *session.SessionState) bool {
+// Mirrors the predicate documented on CleanupZombies. liveLookup may be nil
+// (disables the DB-backed-orphan branch); callers that need the branch must
+// supply one — typically pm.newLiveLookupCache().
+func (pm *PIDManager) isStartupZombie(state *session.SessionState, liveLookup func(adapter string) map[string]struct{}) bool {
 	if state == nil {
 		return false
 	}
 	if state.PID > 0 {
 		return syscall.Kill(state.PID, 0) == syscall.ESRCH
 	}
-	// PID == 0: subagents share their parent's PID and are cleaned up via
-	// child-specific paths in CheckPIDLiveness, so exempt them here.
+	// Subagents share their parent's PID and are cleaned up via child-
+	// specific paths in CheckPIDLiveness.
 	if state.ParentSessionID != "" {
 		return false
 	}
-	// PID == 0 and a DB-backed transcript path: isStaleTranscript can't tell
-	// us anything (the WAL is shared across all sessions in the DB), so use
-	// the adapter's process name as the liveness signal — if no live process
-	// owns the session's CWD, the session is an orphan from a previous
-	// daemon run.
-	if isDBBackedTranscriptPath(state.TranscriptPath) && state.CWD != "" && pm.liveCWDs != nil {
-		if name, ok := pm.processNames[state.Adapter]; ok && name != "" {
-			live, err := pm.liveCWDs(name)
-			// Only mark zombie when the lookup succeeded and returned a
-			// definitive answer (non-nil set). On error, keep the session
-			// — better to leave a stale row than to wipe legitimate state.
-			if err == nil && live != nil {
-				if _, alive := live[state.CWD]; !alive {
-					return true
-				}
+	// DB-backed adapters: WAL is shared across sessions, so transcript-mtime
+	// staleness is meaningless. Fall back to "is any process of this adapter
+	// owning the session's CWD?" — no owner ⇒ orphan.
+	if isDBBackedTranscriptPath(state.TranscriptPath) && state.CWD != "" && liveLookup != nil {
+		if live := liveLookup(state.Adapter); live != nil {
+			if _, alive := live[state.CWD]; !alive {
+				return true
 			}
 		}
-		// No process-name registered for this adapter, or the lookup was
-		// inconclusive: don't delete. The standard isStaleTranscript path
-		// below will short-circuit to false for DB-backed paths anyway.
 	}
 	return isStaleTranscript(state.TranscriptPath)
-}
-
-// isDBBackedTranscriptPath reports whether a transcript path encodes a
-// DB-backed adapter session (e.g. OpenCode's
-// "…/opencode.db-wal?session=ses_xxx").
-func isDBBackedTranscriptPath(path string) bool {
-	return strings.IndexByte(path, '?') >= 0
 }
 
 // deleteWithChildren removes a session and all its child sessions (subagents).
