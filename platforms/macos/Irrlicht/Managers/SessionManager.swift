@@ -511,14 +511,7 @@ class SessionManager: ObservableObject {
                 }
             case "session_deleted":
                 if let session = envelope.session {
-                    sessionMap.removeValue(forKey: session.id)
-                    sessionOrder.removeAll { $0 == session.id }
-                    lastTickGen.removeValue(forKey: session.id)
-                    for gran in [1, 10, 60] {
-                        historyByGranularity[gran]?.removeValue(forKey: session.id)
-                    }
-                    rebuildSessionsFromMap()
-                    removeFromApiGroups(sessionId: session.id)
+                    purgeSessionState(sessionId: session.id)
                     scheduleRehydration()
                 }
             case "focus_requested":
@@ -1226,8 +1219,10 @@ class SessionManager: ObservableObject {
         }
     }
 
+    /// `scheduleRehydration` is intentionally not called — we're authoritative
+    /// for the local delete, and a rehydrate could re-add the row before the
+    /// daemon's file watcher catches up.
     func deleteSession(sessionId: String) {
-        notifiedThresholds.removeValue(forKey: sessionId)
         let sessionFilePath = instancesPath.appendingPathComponent("\(sessionId).json")
         if FileManager.default.fileExists(atPath: sessionFilePath.path) {
             do {
@@ -1237,9 +1232,14 @@ class SessionManager: ObservableObject {
                 return
             }
         }
-        sessionOrder.removeAll { $0 == sessionId }
+        notifiedThresholds.removeValue(forKey: sessionId)
+        purgeSessionState(sessionId: sessionId)
         saveSessionOrder()
+    }
+
+    private func purgeSessionState(sessionId: String) {
         sessionMap.removeValue(forKey: sessionId)
+        sessionOrder.removeAll { $0 == sessionId }
         lastTickGen.removeValue(forKey: sessionId)
         for gran in [1, 10, 60] {
             historyByGranularity[gran]?.removeValue(forKey: sessionId)

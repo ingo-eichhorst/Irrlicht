@@ -262,22 +262,18 @@ final class SessionManagerApiGroupsTests: XCTestCase {
 
     // MARK: - deleteSession (regression for #287)
 
-    func testDeleteSession_clearsApiGroupsAndGroupedSessionIds() {
-        // Regression: deleteSession used to update only `sessions` (menu bar),
-        // leaving `apiGroups` (list view) stale until a daemon WS event or a
-        // rehydration arrived. The fix wires removeFromApiGroups into the
-        // local-delete path so both surfaces clear together.
-        let id = "regression-287-\(UUID().uuidString)"
+    func testDeleteSession_clearsBothMenuBarAndListViewSurfaces() {
+        let id = UUID().uuidString
         let session = makeSession(id: id, cost: 1.00)
+        sut.sessions = [session]
         sut.apiGroups = [AgentGroup(name: "proj", agents: [session])]
         sut.groupedSessionIds = [id]
 
         sut.deleteSession(sessionId: id)
 
-        XCTAssertTrue(sut.apiGroups.isEmpty,
-                      "apiGroups must be pruned by deleteSession, not just sessions")
-        XCTAssertFalse(sut.groupedSessionIds.contains(id),
-                       "groupedSessionIds must drop the deleted id")
+        XCTAssertTrue(sut.sessions.isEmpty)
+        XCTAssertTrue(sut.apiGroups.isEmpty)
+        XCTAssertFalse(sut.groupedSessionIds.contains(id))
     }
 
     // MARK: - SessionState.withChildren
