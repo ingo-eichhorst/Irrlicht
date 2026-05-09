@@ -277,8 +277,8 @@ func TestCleanupZombies_DBBackedOrphan(t *testing.T) {
 	}
 
 	processNames := map[string]string{
-		"opencode":        "opencode",
-		"opencode-flaky":  "opencode-flaky", // mapped, but lookup will fail
+		"opencode":       "opencode",
+		"opencode-flaky": "opencode-flaky", // mapped, but lookup will fail
 	}
 	liveCWDs := func(name string) (map[string]struct{}, error) {
 		switch name {

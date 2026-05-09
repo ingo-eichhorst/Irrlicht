@@ -362,9 +362,10 @@ func TestScanSessions_NoArchivedBeforeCheck(t *testing.T) {
 	defer w.Unsubscribe(ch)
 
 	// Create an already-archived session (before watcher knows about it).
-	// Even though the first emitRemovedForArchivedSessions call now does scan
-	// the recent-archive window (initialArchiveCleanupWindow), this session
-	// was never in cursors → no EventRemoved should fire for it.
+	// The session was never in cursors → emitRemovedForArchivedSessions's
+	// `if !known` gate skips it, so no EventRemoved should fire. Carryover
+	// archives from a previous daemon run are handled by
+	// PIDManager.CleanupZombies's DB-backed-orphan branch instead.
 	now := time.Now().UnixMilli()
 	insertSession(t, db, "ses_already_archived", "/tmp", now, "")
 	if _, err := db.Exec(`UPDATE session SET time_archived = ? WHERE id = ?`, now, "ses_already_archived"); err != nil {
@@ -405,6 +406,62 @@ func TestScanSessions_NoLiveProcessSuppressesGhosts(t *testing.T) {
 			t.Errorf("expected zero EventNewSession with no live opencode process, got %+v", ev)
 		}
 	}
+}
+
+// TestScanSessions_GCsExpiredCursors verifies that cursors for sessions
+// whose lastTS has aged out of the maxAge window are dropped from memory.
+// Without this GC, the cursors map grows without bound for users who
+// accumulate many OpenCode sessions but rarely run the CLI (every session
+// the watcher ever saw would stick around as a not-emitted cursor).
+func TestScanSessions_GCsExpiredCursors(t *testing.T) {
+	w, db := setupTestDB(t)
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+
+	// Tight maxAge so we don't have to backdate by days.
+	w.maxAge = 100 * time.Millisecond
+
+	// Two sessions with distinct CWDs, both fresh enough to appear in scan.
+	now := time.Now().UnixMilli()
+	insertSession(t, db, "ses_recent", "/tmp/recent", now, "")
+	insertSession(t, db, "ses_will_age", "/tmp/age-out", now, "")
+
+	w.scanSessions()
+	drainEvents(ch)
+
+	w.mu.Lock()
+	if len(w.cursors) != 2 {
+		t.Fatalf("after first scan: cursors=%d, want 2", len(w.cursors))
+	}
+	w.mu.Unlock()
+
+	// Bump only ses_recent's time_updated past the maxAge boundary; leave
+	// ses_will_age frozen at its original timestamp so it ages out.
+	time.Sleep(150 * time.Millisecond)
+	fresh := time.Now().UnixMilli()
+	if _, err := db.Exec(`UPDATE session SET time_updated = ? WHERE id = ?`, fresh, "ses_recent"); err != nil {
+		t.Fatalf("bump time_updated: %v", err)
+	}
+
+	w.scanSessions()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, ok := w.cursors["ses_recent"]; !ok {
+		t.Error("ses_recent cursor was GC'd but it's within maxAge")
+	}
+	if _, ok := w.cursors["ses_will_age"]; ok {
+		t.Errorf("ses_will_age cursor should have been GC'd (lastTS older than maxAge), cursors=%v", keysOf(w.cursors))
+	}
+}
+
+// keysOf returns the keys of m as a slice, for test diagnostic output.
+func keysOf(m map[string]*sessionCursor) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // TestScanSessions_EmitsWhenProcessBecomesLive verifies that a session
