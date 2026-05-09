@@ -1202,7 +1202,7 @@ class SessionManager: ObservableObject {
             updatedJson["updated_at"] = Int64(Date().timeIntervalSince1970)
             let updatedData = try JSONSerialization.data(withJSONObject: updatedJson, options: [])
             try updatedData.write(to: sessionFilePath)
-            if !useFilePolling, var s = sessionMap[sessionId] {
+            if var s = sessionMap[sessionId] {
                 s = SessionState(
                     id: s.id, state: .ready, model: s.model, cwd: s.cwd,
                     transcriptPath: s.transcriptPath, gitBranch: s.gitBranch,
@@ -1213,6 +1213,7 @@ class SessionManager: ObservableObject {
                 )
                 sessionMap[sessionId] = s
                 rebuildSessionsFromMap()
+                patchApiGroups(session: s)
             }
         } catch {
             lastError = "Failed to reset session: \(error.localizedDescription)"
