@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,25 @@ func newPIDManagerForTest(repo *mockRepo) *services.PIDManager {
 		nil, // no broadcaster
 		10*time.Minute,
 		nil, // no pid discovers
+		nil, // no process names
+		nil, // no live-CWDs lookup
+		func(string) {},
+	)
+}
+
+// newPIDManagerForTestWithLiveCWDs builds a PIDManager whose startup zombie
+// sweep can use the DB-backed-orphan branch — the sweep needs both an
+// adapter→process-name map and a live-CWDs lookup.
+func newPIDManagerForTestWithLiveCWDs(repo *mockRepo, processNames map[string]string, liveCWDs services.LiveCWDsFunc) *services.PIDManager {
+	return services.NewPIDManager(
+		nil,
+		repo,
+		&mockLogger{},
+		nil,
+		10*time.Minute,
+		nil,
+		processNames,
+		liveCWDs,
 		func(string) {},
 	)
 }
@@ -198,6 +218,90 @@ func TestCleanupZombies(t *testing.T) {
 	for _, id := range wantKept {
 		if repo.states[id] == nil {
 			t.Errorf("session %q should have been kept but is gone", id)
+		}
+	}
+}
+
+// TestCleanupZombies_DBBackedOrphan covers the carryover-state path for
+// DB-backed adapters (OpenCode): a PID=0 session whose TranscriptPath
+// contains "?session=" is deleted iff the adapter's process name has no
+// live process owning the session's CWD. This is the cleanup half of the
+// v0.3.12 ghost-sessions fix — the watcher gates new emissions, but
+// existing on-disk state from the buggy daemon needs this branch to clear
+// without a manual wipe.
+func TestCleanupZombies_DBBackedOrphan(t *testing.T) {
+	wal := "/Users/test/.local/share/opencode/opencode.db-wal"
+	repo := newMockRepo()
+
+	// 1. DB-backed session whose CWD is NOT held by any live process → deleted.
+	repo.states["opencode-orphan"] = &session.SessionState{
+		SessionID:      "opencode-orphan",
+		Adapter:        "opencode",
+		State:          session.StateWorking,
+		PID:            0,
+		CWD:            "/home/user/orphan-project",
+		TranscriptPath: wal + "?session=ses_orphan",
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// 2. DB-backed session whose CWD IS held by a live process → kept.
+	repo.states["opencode-live"] = &session.SessionState{
+		SessionID:      "opencode-live",
+		Adapter:        "opencode",
+		State:          session.StateWorking,
+		PID:            0,
+		CWD:            "/home/user/active-project",
+		TranscriptPath: wal + "?session=ses_live",
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// 3. DB-backed session whose adapter has no registered process name →
+	//    kept (lookup is inconclusive; safer not to delete).
+	repo.states["unknown-adapter"] = &session.SessionState{
+		SessionID:      "unknown-adapter",
+		Adapter:        "future-db-adapter",
+		State:          session.StateWorking,
+		PID:            0,
+		CWD:            "/home/user/somewhere",
+		TranscriptPath: wal + "?session=ses_unknown",
+		UpdatedAt:      time.Now().Unix(),
+	}
+	// 4. DB-backed session whose lookup fails (lookup returns error) →
+	//    kept (we don't delete on uncertain liveness signals).
+	repo.states["opencode-lookup-error"] = &session.SessionState{
+		SessionID:      "opencode-lookup-error",
+		Adapter:        "opencode-flaky",
+		State:          session.StateWorking,
+		PID:            0,
+		CWD:            "/home/user/whatever",
+		TranscriptPath: wal + "?session=ses_err",
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	processNames := map[string]string{
+		"opencode":        "opencode",
+		"opencode-flaky":  "opencode-flaky", // mapped, but lookup will fail
+	}
+	liveCWDs := func(name string) (map[string]struct{}, error) {
+		switch name {
+		case "opencode":
+			return map[string]struct{}{
+				"/home/user/active-project": {},
+			}, nil
+		case "opencode-flaky":
+			return nil, errors.New("pgrep failed")
+		}
+		return nil, nil
+	}
+
+	deleted := newPIDManagerForTestWithLiveCWDs(repo, processNames, liveCWDs).CleanupZombies()
+	if deleted != 1 {
+		t.Errorf("CleanupZombies returned %d, want 1 (only opencode-orphan)", deleted)
+	}
+	if repo.states["opencode-orphan"] != nil {
+		t.Error("opencode-orphan should have been deleted (no live process for its CWD)")
+	}
+	for _, id := range []string{"opencode-live", "unknown-adapter", "opencode-lookup-error"} {
+		if repo.states[id] == nil {
+			t.Errorf("session %q should have been kept", id)
 		}
 	}
 }

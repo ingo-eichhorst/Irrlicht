@@ -71,7 +71,7 @@ func TestStartupCleanup_DeletesZombieFromPriorDaemonRun(t *testing.T) {
 	detector := services.NewSessionDetector(
 		[]inbound.AgentWatcher{},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, nil,
+		"test", 0, nil, nil, nil,
 	)
 
 	deleted := detector.CleanupZombies()

@@ -127,6 +127,8 @@ func NewSessionDetector(
 	version string,
 	readyTTL time.Duration,
 	pidDiscovers map[string]agent.PIDDiscoverFunc,
+	processNames map[string]string,
+	liveCWDs LiveCWDsFunc,
 ) *SessionDetector {
 	det := &SessionDetector{
 		watchers:          watchers,
@@ -144,7 +146,7 @@ func NewSessionDetector(
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
-		pidDiscovers, det.removeFromProjectSessions,
+		pidDiscovers, processNames, liveCWDs, det.removeFromProjectSessions,
 	)
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det

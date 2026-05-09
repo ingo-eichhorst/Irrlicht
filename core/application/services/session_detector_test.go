@@ -633,7 +633,7 @@ func TestSessionDetector_Removed_PrunesMetricsLedger(t *testing.T) {
 	det := services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, mm, nil,
-		"test", 0, nil,
+		"test", 0, nil, nil, nil,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1449,7 +1449,7 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 	det := services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, discovers,
+		"test", 0, discovers, nil, nil,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2029,7 +2029,7 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testi
 	det := services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 1*time.Second, nil,
+		"test", 1*time.Second, nil, nil, nil,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

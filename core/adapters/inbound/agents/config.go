@@ -120,6 +120,20 @@ func PIDDiscoverMap(cfgs []Config) map[string]agent.PIDDiscoverFunc {
 	return m
 }
 
+// ProcessNameMap collapses a slice of Configs into an adapter → OS process
+// name map. Used by the startup zombie sweep to detect orphaned sessions of
+// DB-backed adapters (OpenCode), where transcript-mtime staleness can't tell
+// a live session from a historical row.
+func ProcessNameMap(cfgs []Config) map[string]string {
+	m := make(map[string]string, len(cfgs))
+	for _, c := range cfgs {
+		if c.ProcessName != "" {
+			m[c.Name] = c.ProcessName
+		}
+	}
+	return m
+}
+
 // MetricsProviderMap collapses a slice of Configs into an adapter → provider
 // map. Only adapters with a non-nil ComputeMetrics are included.
 func MetricsProviderMap(cfgs []Config) map[string]MetricsProvider {

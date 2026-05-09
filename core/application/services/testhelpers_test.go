@@ -204,7 +204,7 @@ func newDetector(
 	return services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, nil,
+		"test", 0, nil, nil, nil,
 	)
 }
 
@@ -219,7 +219,7 @@ func newDetectorWithMetrics(
 	return services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, metrics, nil,
-		"test", 0, nil,
+		"test", 0, nil, nil, nil,
 	)
 }
 
@@ -239,6 +239,6 @@ func newDetectorWithCWDDiscovery(
 	return services.NewSessionDetector(
 		[]inbound.AgentWatcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 0, discovers,
+		"test", 0, discovers, nil, nil,
 	)
 }
