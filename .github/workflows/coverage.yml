@@ -75,11 +75,17 @@ jobs:
             -H "Authorization: token $GIST_SECRET" \
             -H "Content-Type: application/json" \
             -d @/tmp/gist-payload.json \
-            "https://api.github.com/gists/$COVERAGE_GIST_ID")
+            "https://api.github.com/gists/$COVERAGE_GIST_ID") || true
+          # curl emits "000" when no HTTP response was received (DNS/TLS/connect failure).
+          http_code="${http_code:-000}"
           echo "HTTP $http_code"
           if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
             echo "::error::Gist update failed (HTTP $http_code)"
-            cat /tmp/gist-response.json
+            if [ -s /tmp/gist-response.json ]; then
+              cat /tmp/gist-response.json
+            else
+              echo "(no response body — likely transport failure)"
+            fi
             exit 1
           fi
 
