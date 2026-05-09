@@ -276,6 +276,45 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         XCTAssertFalse(sut.groupedSessionIds.contains(id))
     }
 
+    // MARK: - resetSessionState (regression for #287)
+
+    func testResetSessionState_flipsBothSurfacesAndPreservesFields() throws {
+        let id = UUID().uuidString
+        let child = makeSession(id: "\(id)-child")
+        let working = SessionState(
+            id: id, state: .working, model: "test-model", cwd: "/tmp",
+            firstSeen: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0),
+            role: "test-role", children: [child]
+        )
+        let dir = instancesURL()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fixturePath = dir.appendingPathComponent("\(id).json")
+        try Data("{\"state\":\"working\",\"updated_at\":0}".utf8).write(to: fixturePath)
+        defer { try? FileManager.default.removeItem(at: fixturePath) }
+
+        sut.sessionMap[id] = working
+        sut.sessions = [working]
+        sut.apiGroups = [AgentGroup(name: "proj", agents: [working])]
+        sut.groupedSessionIds = [id]
+
+        sut.resetSessionState(sessionId: id)
+
+        XCTAssertEqual(sut.sessions.first?.state, .ready,
+                       "menu-bar surface must flip to ready")
+        XCTAssertEqual(sut.apiGroups.first?.agents?.first?.state, .ready,
+                       "list-view surface must flip to ready")
+        XCTAssertEqual(sut.sessions.first?.role, "test-role",
+                       "withState must preserve role across reset")
+        XCTAssertEqual(sut.sessions.first?.children?.map(\.id), ["\(id)-child"],
+                       "withState must preserve children across reset")
+    }
+
+    private func instancesURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Irrlicht/instances")
+    }
+
     // MARK: - SessionState.withChildren
 
     func testWithChildren_preservesIdentityAndMetrics() {

@@ -78,7 +78,7 @@ class SessionManager: ObservableObject {
     private var connectTask: Task<Void, Never>?
     private var reconnectDelay: TimeInterval = 1.0
     private let maxReconnectDelay: TimeInterval = 30.0
-    private var sessionMap: [String: SessionState] = [:]
+    var sessionMap: [String: SessionState] = [:]
 
     /// GasTownProvider reference for forwarding Gas Town availability.
     weak var gasTownProvider: GasTownProvider? {
@@ -1202,15 +1202,7 @@ class SessionManager: ObservableObject {
             updatedJson["updated_at"] = Int64(Date().timeIntervalSince1970)
             let updatedData = try JSONSerialization.data(withJSONObject: updatedJson, options: [])
             try updatedData.write(to: sessionFilePath)
-            if var s = sessionMap[sessionId] {
-                s = SessionState(
-                    id: s.id, state: .ready, model: s.model, cwd: s.cwd,
-                    transcriptPath: s.transcriptPath, gitBranch: s.gitBranch,
-                    projectName: s.projectName, firstSeen: s.firstSeen,
-                    updatedAt: Date(), eventCount: s.eventCount,
-                    lastEvent: s.lastEvent, metrics: s.metrics,
-                    pid: s.pid, parentSessionId: s.parentSessionId
-                )
+            if let s = sessionMap[sessionId]?.withState(.ready) {
                 sessionMap[sessionId] = s
                 rebuildSessionsFromMap()
                 patchApiGroups(session: s)
@@ -1238,6 +1230,9 @@ class SessionManager: ObservableObject {
         saveSessionOrder()
     }
 
+    /// Caller persists `sessionOrder` if it's authoritative for the deletion;
+    /// the WS handler skips the save because the daemon is the source of truth
+    /// in that path and will re-emit on reconnect.
     private func purgeSessionState(sessionId: String) {
         sessionMap.removeValue(forKey: sessionId)
         sessionOrder.removeAll { $0 == sessionId }
