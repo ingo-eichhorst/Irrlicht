@@ -47,13 +47,13 @@ In scope:
 - The Go daemon (`irrlichd`) and its HTTP/WebSocket API on port 7837
 - The Swift macOS app and its IPC with the daemon
 - Local state files under `~/Library/Application Support/Irrlicht/`
-- Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Gas Town)
+- Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Aider, OpenCode, Gas Town)
 - Build and release scripts in `platforms/`
 
 Out of scope:
 
-- Vulnerabilities in upstream coding agents (Claude Code, Codex, Pi, Gas Town)
-  themselves — please report those to their respective projects
+- Vulnerabilities in upstream coding agents (Claude Code, Codex, Pi, Aider,
+  OpenCode, Gas Town) themselves — please report those to their respective projects
 - Issues that require an attacker already running code as your user on your Mac
 - Social-engineering or physical-access scenarios
 - Findings from automated scanners without a demonstrated impact

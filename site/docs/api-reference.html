@@ -178,9 +178,28 @@
 
       <p>Backward-compatible endpoint for the Gas Town orchestrator state.</p>
 
+      <h3>GET /api/v1/agents</h3>
+
+      <p>Returns the registered adapter branding so frontends can look up an adapter's display name and icon by <code>name</code> instead of hardcoding their own switches. Order mirrors <code>agentCfgs</code> in <code>core/cmd/irrlichd/main.go</code>; frontends should treat ordering as informational only and key by <code>name</code>.</p>
+
+      <pre><code>[
+  {
+    "name": "claude-code",
+    "display_name": "Claude Code",
+    "icon_svg_light": "&lt;svg ...&gt;...&lt;/svg&gt;",
+    "icon_svg_dark":  "&lt;svg ...&gt;...&lt;/svg&gt;"
+  },
+  {
+    "name": "opencode",
+    "display_name": "OpenCode",
+    "icon_svg_light": "&lt;svg ...&gt;...&lt;/svg&gt;",
+    "icon_svg_dark":  "&lt;svg ...&gt;...&lt;/svg&gt;"
+  }
+]</code></pre>
+
       <h3>GET /</h3>
 
-      <p>Serves the embedded web dashboard UI.</p>
+      <p>Serves the web dashboard UI from disk &mdash; <code>resolveUIDir</code> in <code>core/cmd/irrlichd/main.go</code> walks up from the executable to find <code>platforms/web/index.html</code>, with the production .app bundle layout and the curl <code>--daemon-only</code> install path as fallbacks.</p>
 
       <h2>SessionState Schema</h2>
 

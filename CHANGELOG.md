@@ -9,6 +9,30 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.3.12] — 2026-05-09
+
+### Added
+- **OpenCode adapter** (#255) — first agent on the new SQLite-backed monitoring path. OpenCode stores all session data in a single WAL-mode database rather than JSONL files; the adapter ships an fsnotify WAL watcher polling `session`/`part` tables, a parser mapping step-finish / text / tool rows to normalized events, a `MetricsProvider` that bypasses the JSONL tailer for cost + token snapshots, CWD-based PID discovery, parent-child session linking via `parent_id` from the DB, and `EventRemoved` emission on `session.time_archived`. Closes #100.
+- **`ir:triage` skill** (#283) — strictly diagnostic GitHub-issue triage skill that scores each issue against a 6-axis readiness rubric (Scope / Specification / Verifiability / Context / Independence / Reversibility) and lands it at `ready-for-agent` or `needs-info` with a one-line justification per label decision. Never invents acceptance criteria or sketches implementation; bulk sweep skips already-triaged issues but explicit `/ir:triage #N` always re-triages and edits the prior comment in place.
+
+### Fixed
+- **History bar right-anchors when states overflow `bucketCount`** (#286) — `HistoryBarView`'s anchor math only worked when `states.count <= bucketCount`. After #249 lowered `bucketCount` from 150 → 60, the 150-state test fixture started rendering an all-green bar because `offset` collapsed to 0 and the loop drew the *oldest* states inside the canvas while the newest tail was clipped past the right edge. Now takes `states.suffix(bucketCount)` and recomputes offset against the visible slice.
+- **Claude Code: reconcile phantom `in_progress` from `task_reminder` snapshots** (#289) — Claude Code occasionally emits a `TaskUpdate` against a stale taskId and never sends a follow-up `completed`, so the UI hung at `n / total` forever. The tailer now treats the `task_reminder` attachment as authoritative — after the existing TaskDelta loop, any local `in_progress` whose ID is missing from the snapshot is demoted to `completed`, and snapshot status wins on any present-with-divergent-status case. Closes #282.
+- **macOS: sync `apiGroups` on local session delete + reset** (#287) — local deletes/resets only updated `sessions` (menu bar) and `sessionMap` and skipped `apiGroups` (list view), so a deleted session lingered in the list until rehydration and a reset row stayed `working` in the list while the menu bar already showed `ready`. Mirrors the WS handler and adds `SessionState.withState(_:)` so all 10 optional fields (children, role, subagents, adapter, launcher, …) survive the round-trip instead of being silently dropped by field-by-field reconstruction.
+
+### Changed
+- **Co-locate adapter display name + icons with Go adapters** (#284) — adds `DisplayName` + `IconSVGLight`/`IconSVGDark` to `agents.Config` and a new `GET /api/v1/agents` endpoint serving them. Adapter is now the single source of truth for its own branding; adding a new adapter is a Go-only change. The macOS app and web dashboard look up name and icon from the registry — the five Swift `<adapter>SVG` functions and two switch statements in `SessionState.swift` are gone. Web dashboard renders adapter SVGs via `<img src="data:image/svg+xml;base64,...">` so the browser image-loading sandbox blocks scripts even if the daemon binary is tampered with. `AgentRegistry` is `@MainActor`-isolated for Swift 6 strict-concurrency cleanliness. Closes #260.
+
+### Docs
+- **Adapter interfaces documented with exact Go signatures** (#292) — `site/docs/adapters.html` gains an "Adapter Interfaces" section with the actual `agents.Config`, `tailer.TranscriptParser` (plus the optional `RawLineParser`, `IdleFlusher`, `PendingContributor`, `ParserStateProvider` hooks), `agent.PIDDiscoverFunc`, and `agent.Event` / `inbound.AgentWatcher` types, with file paths so readers can jump from doc to source.
+- **Release skill sweeps every docs page on each release** (#293) — `/ir:release` Step 4b now enumerates `site/docs/*.html` and top-level READMEs dynamically (rather than from a hardcoded list) and walks each against the release diff so new pages cannot be silently missed.
+
+### CI
+- **Coverage workflow surfaces badge update failures** (#281) — validates `GIST_SECRET` / `COVERAGE_GIST_ID` up front, captures the gist `PATCH` response so a non-2xx fails the job with the actual error body instead of dying silently inside `curl -sf … > /dev/null`, and adds connect/max-time + retry settings so transient 5xx and stalled handshakes don't hang the step.
+
+### Tests
+- **Replay: refresh stale opencode `baseline-hello` golden** (#285) — golden was committed in #255 with a populated `source_transcript` field that the test zeros before comparison; regenerated via `UPDATE_REPLAY_GOLDENS=1` to bring opencode in line with the other 4 adapters.
+
 ## [0.3.11] — 2026-05-02
 
 ### Fixed
@@ -593,7 +617,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.11...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.12...HEAD
+[0.3.12]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.12
 [0.3.11]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.11
 [0.3.10]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.10
 [0.3.9]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.9

@@ -142,6 +142,27 @@
         <li>Supports multiple LLM providers (Anthropic, OpenAI, Google, xAI, Groq)</li>
       </ul>
 
+      <h3>Aider</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>&lt;cwd&gt;/.aider.chat.history.md</code> (markdown, per-CWD &mdash; not JSONL)</li>
+        <li>Process discovery via <code>CommandLineMatch</code> (<code>/aider($| )</code>) since the OS process is <code>python</code></li>
+        <li>Waiting state pinned to a trailing <code>?</code> contract on the most recent assistant block</li>
+        <li><strong>Adapter name:</strong> <code>aider</code></li>
+      </ul>
+
+      <h3>OpenCode</h3>
+
+      <ul>
+        <li><strong>Storage location:</strong> SQLite WAL at <code>~/.local/share/opencode/storage/opencode.db</code> (watched via <code>opencode.db-wal</code> &mdash; no JSONL files)</li>
+        <li>fsnotify on the WAL file triggers polling of <code>session</code>/<code>part</code> tables; cursor uses <code>(time_created, part_id)</code> for dedup across identical-millisecond timestamps</li>
+        <li>Parent-child linking from the <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly; no path-based heuristics</li>
+        <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
+        <li><code>step-finish</code> reasons (<code>stop</code>, <code>interrupted</code>, <code>length</code>, <code>error</code>) all map to <code>turn_done</code>; cost + token snapshots come from <code>MetricsProvider</code>, bypassing the JSONL tailer</li>
+        <li><strong>Adapter name:</strong> <code>opencode</code></li>
+        <li>PID discovery via <code>pgrep -x opencode</code> + CWD match</li>
+      </ul>
+
       <h2>PID Discovery</h2>
 
       <table>
