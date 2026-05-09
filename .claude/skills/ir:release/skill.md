@@ -61,8 +61,10 @@ rely on a hardcoded list — enumerate the targets dynamically so new pages
 can't be silently missed:
 
 ```bash
-# Files in scope for the sweep
-ls site/docs/*.html
+# Files in scope for the sweep — top-level site/*.html (the landing page
+# carries its own compatibility grid, separate from site/docs/), the docs
+# pages, and every top-level README.
+ls site/*.html site/docs/*.html
 echo README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
 
 # What changed in this release — drives which pages are likely affected
@@ -82,8 +84,9 @@ typically owns the surface:
 | `core/application/services/**`, `core/domain/session/**` | `site/docs/state-machine.html`, `site/docs/session-detection.html` |
 | `site/install.sh`, `tools/homebrew-tap/**`, install flow | `site/docs/installation.html`, `site/docs/quickstart.html`, `README.md` install section |
 | Config schema / settings files | `site/docs/configuration.html` |
-| New agent adapter shipped | README compatibility grid + `site/docs/adapters.html` per-adapter row |
-| New platform shipped | README + `site/docs/index.html` overview |
+| New agent adapter shipped | README compatibility grid + `site/index.html` "Supported Agents & Platforms" grid (search for `tag-planned` / `tag-alpha`) + `site/docs/adapters.html` per-adapter row |
+| Adapter maturity-stage change | Same three places as "new adapter shipped" — README, landing page grid, adapters doc |
+| New platform shipped | README + `site/index.html` "Supported Agents & Platforms" grid (Platforms column) + `site/docs/index.html` overview |
 
 Update only where content is actually outdated — do **not** paraphrase
 correct content for the sake of touching the file. If a doc is fine, leave
