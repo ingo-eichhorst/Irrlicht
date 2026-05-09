@@ -387,7 +387,7 @@
       justify-content: center;
     }
 
-    .row-adapter-icon svg {
+    .row-adapter-icon img {
       width: 12px;
       height: 12px;
       display: block;
@@ -1408,17 +1408,33 @@
       // Adapter icon (issue #260) — looked up in the registry the daemon
       // publishes at /api/v1/agents. Hidden when the registry has no entry
       // for this adapter (e.g. older daemons, or before the registry fetch
-      // completes). The dataset cache only advances on a successful
-      // populate so a late-arriving registry repopulates rows on the next
-      // update without needing a full re-render.
+      // completes); other row columns (project, branch, ID) already
+      // disambiguate, so a missing icon doesn't impair the row's meaning.
+      // The dataset cache only advances on a successful populate so a
+      // late-arriving registry repopulates rows on the next update without
+      // needing a full re-render.
+      //
+      // SVGs are rendered inside an <img> with a base64 data: URL rather
+      // than via innerHTML. The browser's image-loading sandbox blocks
+      // <script> and on*= handlers in SVGs loaded this way, so even a
+      // tampered daemon binary cannot inject script into the dashboard.
+      // (btoa requires Latin-1; current SVGs are pure ASCII. If a future
+      // adapter ships an SVG with non-ASCII glyphs, swap the encoder to
+      // btoa(unescape(encodeURIComponent(svg))).)
       const adapterKey = agent.adapter || '';
       const cachedAdapter = el.dataset.adapter || '';
       const branding = agentRegistry[adapterKey];
       if (branding && (cachedAdapter !== adapterKey || el.dataset.adapterPopulated !== '1')) {
         const adapterEl = el.querySelector('.row-adapter-icon');
-        adapterEl.innerHTML = branding.icon_svg_light || '';
-        adapterEl.title = branding.display_name || adapterKey;
-        adapterEl.style.display = branding.icon_svg_light ? '' : 'none';
+        const svg = branding.icon_svg_light || '';
+        if (svg) {
+          adapterEl.innerHTML = '<img alt="" src="data:image/svg+xml;base64,' + btoa(svg) + '">';
+          adapterEl.title = branding.display_name || adapterKey;
+          adapterEl.style.display = '';
+        } else {
+          adapterEl.innerHTML = '';
+          adapterEl.style.display = 'none';
+        }
         el.dataset.adapter = adapterKey;
         el.dataset.adapterPopulated = '1';
       } else if (!branding && cachedAdapter !== adapterKey) {
@@ -1773,8 +1789,9 @@
     // --- Initial load ---
     // Fetch adapter branding first so the first render of session rows can
     // already show adapter icons. Daemons predating issue #260 won't expose
-    // this endpoint — failure is non-fatal; rows fall back to raw adapter
-    // name / no icon.
+    // this endpoint — failure is non-fatal; rows render with no adapter
+    // icon (the row's other identifying columns — project, branch, ID —
+    // already disambiguate).
     fetch('/api/v1/agents').then(r => r.json()).catch(() => null).then(entries => {
       if (!Array.isArray(entries)) return;
       for (const e of entries) {

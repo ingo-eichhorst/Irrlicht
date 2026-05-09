@@ -396,6 +396,12 @@ class SessionManager: ObservableObject {
         }
     }
 
+    /// Fetches the daemon's adapter branding registry into `AgentRegistry.byName`.
+    /// Called once per (re)connect from `connect()` — there's no periodic
+    /// refresh because adapter rollouts require a daemon restart, which
+    /// drops the WebSocket and triggers a reconnect anyway, which calls us.
+    /// If a future change ships hot-loadable adapters, add a refresh hook
+    /// (or push the registry over the WebSocket).
     private func hydrateAgents() async {
         guard let url = URL(string: "http://localhost:7837/api/v1/agents") else { return }
         do {

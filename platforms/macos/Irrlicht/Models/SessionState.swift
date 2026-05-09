@@ -21,13 +21,15 @@ struct AgentBranding: Decodable {
     }
 }
 
-/// File-scope holder for the adapter branding registry. Lives outside
-/// `SessionManager`'s @MainActor scope so non-isolated model code
-/// (`SessionState.adapterName/adapterIcon`) can read it without an actor
-/// crossing. The single writer is `SessionManager.hydrateAgents()` which
-/// runs on the main actor and assigns a fresh dictionary in one shot — readers
-/// always see a coherent map (Dictionary assignment is a single CoW reference
-/// swap), so no lock is required.
+/// File-scope holder for the adapter branding registry. Marked
+/// `@MainActor` so the compiler enforces single-threaded access — writes
+/// come from `SessionManager.hydrateAgents()` (already on main) and reads
+/// come from `SessionState.adapterName` / `adapterIcon` (callers are all
+/// SwiftUI views and other MainActor code, so we annotate those properties
+/// MainActor too). This is the Swift-6 strict-concurrency-clean shape;
+/// it costs nothing under Swift 5 mode and avoids a `nonisolated(unsafe)`
+/// hatch later.
+@MainActor
 enum AgentRegistry {
     static var byName: [String: AgentBranding] = [:]
 }
@@ -543,6 +545,7 @@ struct SessionState: Identifiable, Codable {
         return short
     }
 
+    @MainActor
     var adapterName: String {
         let key = adapter ?? ""
         if let entry = AgentRegistry.byName[key], !entry.displayName.isEmpty {
@@ -556,8 +559,13 @@ struct SessionState: Identifiable, Codable {
     /// when the registry has no entry for this adapter — e.g. before the
     /// first hydration completes, or when an adapter is rolled out by a
     /// daemon newer than this app build.
+    @MainActor
     var adapterIcon: NSImage? {
-        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        // NSApp can be nil before the app finishes launching (and is always
+        // nil in unit-test contexts that don't bring up an NSApplication).
+        // Default to the light variant in that case — it's the more common
+        // ambient appearance and avoids an implicit-unwrap crash.
+        let isDark = NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let svg: String
         if let entry = AgentRegistry.byName[adapter ?? ""] {
             svg = isDark ? entry.iconSVGDark : entry.iconSVGLight
@@ -573,11 +581,17 @@ struct SessionState: Identifiable, Codable {
 
     // Neutral placeholder shown when the adapter registry has no entry for
     // this session's adapter (pre-hydration, or unknown adapter from a newer
-    // daemon). Per-adapter SVGs now live in their Go packages — see
+    // daemon). Question mark in a circle reads as "unknown" so users don't
+    // confuse a missing-branding icon with a real adapter; the gray
+    // (#9CA3AF) is deliberately distinct from the cancelled-state gray
+    // (#8E8E93) used elsewhere in the dashboard so the two never collide.
+    // Per-adapter SVGs now live in their Go packages — see
     // core/adapters/inbound/agents/<name>/config.go.
     private static let genericAdapterSVG = """
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r="44" fill="none" stroke="#8E8E93" stroke-width="8"/>
+      <circle cx="50" cy="50" r="44" fill="none" stroke="#9CA3AF" stroke-width="8"/>
+      <path d="M38 38 Q38 26 50 26 Q62 26 62 38 Q62 46 54 50 Q50 52 50 60" fill="none" stroke="#9CA3AF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="50" cy="74" r="5" fill="#9CA3AF"/>
     </svg>
     """
 }

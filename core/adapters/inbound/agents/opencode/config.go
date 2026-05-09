@@ -6,20 +6,6 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
-// Config returns the registration record the daemon uses to wire this adapter.
-//
-// OpenCode stores session state in a SQLite database rather than JSONL files.
-// Two deviations from the standard adapter pattern:
-//
-//  1. RootDir is set to the XDG data path containing the DB so the process
-//     scanner still picks up opencode processes by CWD. The fswatcher that
-//     main.go creates from RootDir will watch the DB directory but won't find
-//     any .jsonl files — that's expected and harmless; the real session
-//     discovery happens through the dedicated Watcher registered separately
-//     in main.go.
-//
-//  2. ComputeMetrics is overridden with a SQLite-based provider that queries
-//     the `part` table directly, bypassing the JSONL tailer.
 // OpenCode — curly braces { } in a circle, rendered in OpenCode's brand blue.
 // Background swaps for theme so the icon doesn't blow out against light or
 // dark surrounding chrome; foreground stays brand blue (#3B82F6) in both.
@@ -35,6 +21,20 @@ const iconSVGDark = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="
   <path d="M58 28 Q70 28 70 38 L70 46 Q70 50 74 50 Q70 50 70 54 L70 62 Q70 72 58 72" fill="none" stroke="#3B82F6" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`
 
+// Config returns the registration record the daemon uses to wire this adapter.
+//
+// OpenCode stores session state in a SQLite database rather than JSONL files.
+// Two deviations from the standard adapter pattern:
+//
+//  1. RootDir is set to the XDG data path containing the DB so the process
+//     scanner still picks up opencode processes by CWD. The fswatcher that
+//     main.go creates from RootDir will watch the DB directory but won't find
+//     any .jsonl files — that's expected and harmless; the real session
+//     discovery happens through the dedicated Watcher registered separately
+//     in main.go.
+//
+//  2. ComputeMetrics is overridden with a SQLite-based provider that queries
+//     the `part` table directly, bypassing the JSONL tailer.
 func Config() agents.Config {
 	return agents.Config{
 		Name:        AdapterName,
