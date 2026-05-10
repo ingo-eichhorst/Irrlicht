@@ -72,9 +72,25 @@ PY
 
 echo "updated $CASK_FILE"
 
+# Auto-discover a sibling clone before bailing — the silent no-op when
+# IRRLICHT_TAP_DIR was unset stranded the tap at v0.3.8 across four
+# releases. If the user has cloned the tap next to this repo, just use it.
 if [ -z "${IRRLICHT_TAP_DIR:-}" ]; then
+    SIBLING="$(cd "$ROOT_DIR/.." && pwd)/homebrew-irrlicht"
+    if [ -d "$SIBLING/.git" ]; then
+        IRRLICHT_TAP_DIR="$SIBLING"
+        echo "auto-discovered tap at $IRRLICHT_TAP_DIR"
+    fi
+fi
+
+if [ -z "${IRRLICHT_TAP_DIR:-}" ]; then
+    if [ "$PUSH" -eq 1 ]; then
+        echo "ERROR: --push requires IRRLICHT_TAP_DIR (no sibling homebrew-irrlicht clone found)" >&2
+        echo "       clone with: git clone https://github.com/ingo-eichhorst/homebrew-irrlicht.git \"$ROOT_DIR/../homebrew-irrlicht\"" >&2
+        exit 1
+    fi
     echo "IRRLICHT_TAP_DIR not set — skipping external tap sync."
-    echo "set IRRLICHT_TAP_DIR=<path to homebrew-irrlicht clone> to publish."
+    echo "set IRRLICHT_TAP_DIR=<path to homebrew-irrlicht clone> or clone it next to this repo to publish."
     exit 0
 fi
 
