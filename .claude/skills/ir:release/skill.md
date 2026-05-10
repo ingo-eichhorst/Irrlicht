@@ -222,10 +222,11 @@ cd /tmp && shasum -a 256 \
 
 Bump the cask in `tools/homebrew-tap/Casks/irrlicht.rb` to `$NEW_VERSION`
 with the sha256 of the freshly built DMG. The same script also syncs to the
-external tap repo (`ingo-eichhorst/homebrew-irrlicht`) when
-`IRRLICHT_TAP_DIR` is set — but skip the `--push` flag here so the local
-in-repo template gets committed alongside the release in Step 7 first;
-external publish happens in Step 8.5 after the GitHub release exists.
+external tap repo (`ingo-eichhorst/homebrew-irrlicht`) when either
+`IRRLICHT_TAP_DIR` is set or a sibling `../homebrew-irrlicht` clone exists
+(auto-discovered) — but skip the `--push` flag here so the local in-repo
+template gets committed alongside the release in Step 7 first; external
+publish happens in Step 8.5 after the GitHub release exists.
 
 ```bash
 tools/homebrew-tap/update-cask.sh --version "$NEW_VERSION"
@@ -267,8 +268,9 @@ gh release create v$NEW_VERSION \
 ## Step 8.5: Publish Cask to External Tap
 
 Push the bumped cask to `ingo-eichhorst/homebrew-irrlicht` so
-`brew install --cask irrlicht` resolves to the new version. Requires
-`IRRLICHT_TAP_DIR` to point at a clone of the tap repo.
+`brew install --cask irrlicht` resolves to the new version. The script
+auto-discovers a sibling `../homebrew-irrlicht` clone, or honors
+`IRRLICHT_TAP_DIR` if set explicitly.
 
 The `||` fallback below is load-bearing: the script uses `set -e` and exits
 non-zero on tap failures (offline, auth, rebase conflict). The release
@@ -282,8 +284,21 @@ tools/homebrew-tap/update-cask.sh --version "$NEW_VERSION" --push \
   || echo "WARNING: cask publish failed — re-run later. GitHub release is unaffected."
 ```
 
-If the tap repo doesn't exist yet, this step is a no-op (the script exits 0
-when `IRRLICHT_TAP_DIR` isn't set).
+Then verify the published tap actually advanced — silent skips here
+previously stranded the tap four versions behind:
+
+```bash
+PUBLISHED=$(curl -fsSL "https://raw.githubusercontent.com/ingo-eichhorst/homebrew-irrlicht/main/Casks/irrlicht.rb" \
+  | awk -F\" '/^  version /{print $2; exit}')
+if [ "$PUBLISHED" = "$NEW_VERSION" ]; then
+    echo "tap publishes $PUBLISHED ✓"
+else
+    echo "WARNING: tap still at $PUBLISHED (expected $NEW_VERSION) — re-run update-cask.sh --push"
+fi
+```
+
+If the tap repo doesn't exist yet (first release), the publish step exits 0
+without `--push`; the verification will report a mismatch you can ignore.
 
 ## Step 9: Verify
 
