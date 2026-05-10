@@ -70,12 +70,13 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 
 **Platforms**
 
-| Platform              | Stage   |
-| --------------------- | ------- |
-| macOS (menu bar app)  | beta    |
-| Web dashboard         | alpha   |
-| Linux                 | planned |
-| Windows               | planned |
+| Platform              | Stage   | Access                    |
+| --------------------- | ------- | ------------------------- |
+| macOS (menu bar app)  | beta    | Menu bar                  |
+| Web dashboard         | alpha   | `http://127.0.0.1:7837`   |
+| CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) |
+| Linux                 | planned | —                         |
+| Windows               | planned | —                         |
 
 → [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html#maturity-stages) for stage criteria, watch paths, model detection, and roadmap.
 
