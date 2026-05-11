@@ -34,6 +34,20 @@ func readJSON(t *testing.T, path string) map[string]interface{} {
 // AskUserQuestion / ExitPlanMode expansion.
 const legacyMatcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*"
 
+// makeHookGroup builds a settings.json hook matcher group with the given
+// matcher and command. Used by tests to seed fixtures.
+func makeHookGroup(matcher, command string) map[string]interface{} {
+	return map[string]interface{}{
+		"matcher": matcher,
+		"hooks": []interface{}{
+			map[string]interface{}{
+				"type":    "command",
+				"command": command,
+			},
+		},
+	}
+}
+
 func TestEnsureHooksInstalled_CreatesFileIfAbsent(t *testing.T) {
 	home := withTempHome(t)
 	modified, err := EnsureHooksInstalled()
@@ -82,17 +96,7 @@ func TestEnsureHooksInstalled_PreservesExistingHooks(t *testing.T) {
 	// Pre-populate with an existing foreign hook on PreToolUse.
 	existing := map[string]interface{}{
 		"hooks": map[string]interface{}{
-			"PreToolUse": []interface{}{
-				map[string]interface{}{
-					"matcher": "Bash",
-					"hooks": []interface{}{
-						map[string]interface{}{
-							"type":    "command",
-							"command": "echo custom-hook",
-						},
-					},
-				},
-			},
+			"PreToolUse": []interface{}{makeHookGroup("Bash", "echo custom-hook")},
 		},
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -137,18 +141,9 @@ func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
 	// Legacy install: a single PostToolUse group with the pre-#307 narrow
 	// matcher and the stale command. EnsureHooksInstalled should upgrade
 	// both the command and the matcher in place — no group append.
-	staleGroup := map[string]interface{}{
-		"matcher": legacyMatcher,
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": staleCommand,
-			},
-		},
-	}
 	existing := map[string]interface{}{
 		"hooks": map[string]interface{}{
-			HookPostToolUse: []interface{}{staleGroup},
+			HookPostToolUse: []interface{}{makeHookGroup(legacyMatcher, staleCommand)},
 		},
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -241,17 +236,8 @@ func TestUninstallHooks_PreservesOtherHooks(t *testing.T) {
 	hooksMap := settings["hooks"].(map[string]interface{})
 
 	// Add a foreign matcher group to PermissionRequest.
-	foreignGroup := map[string]interface{}{
-		"matcher": "Bash",
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": "echo foreign",
-			},
-		},
-	}
 	arr := hooksMap["PermissionRequest"].([]interface{})
-	hooksMap["PermissionRequest"] = append(arr, foreignGroup)
+	hooksMap["PermissionRequest"] = append(arr, makeHookGroup("Bash", "echo foreign"))
 	data, _ := json.MarshalIndent(settings, "", "  ")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
@@ -314,22 +300,14 @@ func TestEnsureHooksInstalled_MigratesLegacyMatchers(t *testing.T) {
 	home := withTempHome(t)
 	path := filepath.Join(home, ".claude", "settings.json")
 
-	makeGroup := func() map[string]interface{} {
-		return map[string]interface{}{
-			"matcher": legacyMatcher,
-			"hooks": []interface{}{
-				map[string]interface{}{
-					"type":    "command",
-					"command": installedHookCommand,
-				},
-			},
-		}
+	legacy := func() []interface{} {
+		return []interface{}{makeHookGroup(legacyMatcher, installedHookCommand)}
 	}
 	existing := map[string]interface{}{
 		"hooks": map[string]interface{}{
-			HookPermissionRequest:  []interface{}{makeGroup()},
-			HookPostToolUse:        []interface{}{makeGroup()},
-			HookPostToolUseFailure: []interface{}{makeGroup()},
+			HookPermissionRequest:  legacy(),
+			HookPostToolUse:        legacy(),
+			HookPostToolUseFailure: legacy(),
 		},
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -26,6 +26,13 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	delete(d.projectSessions, ev.SessionID)
 	d.mu.Unlock()
 
+	// Drop any leftover permission-pending flag — otherwise a hook that
+	// fired without a clearing partner (e.g. agent crash mid-overlay) would
+	// keep the entry forever, and a recycled session ID would inherit it.
+	d.permMu.Lock()
+	delete(d.permissionPending, ev.SessionID)
+	d.permMu.Unlock()
+
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
 		return
