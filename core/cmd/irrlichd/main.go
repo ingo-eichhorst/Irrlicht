@@ -351,7 +351,7 @@ func main() {
 
 		// OpenCode uses a SQLite database instead of JSONL files, so it needs
 		// its own dedicated watcher in addition to the process scanner above.
-		ocw := opencode.New(cfg.MaxSessionAge)
+		ocw := opencode.New(cfg.MaxSessionAge).WithIdentity(opencode.Agent().Identity)
 		watchers = append(watchers, ocw)
 		watcherRoots = append(watcherRoots, fmt.Sprintf("%s-db (%s)", opencode.AdapterName, ocw.Root()))
 	}

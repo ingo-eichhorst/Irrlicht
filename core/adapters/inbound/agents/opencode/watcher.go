@@ -43,9 +43,10 @@ const defaultMinScanGap = 500 * time.Millisecond
 // write — rather than the main DB file which is only updated on checkpoint.
 // The session ID is the OpenCode session UUID (ses_...).
 type Watcher struct {
-	dbPath  string        // absolute path to opencode.db
-	adapter string        // always "opencode"
-	maxAge  time.Duration // ignore sessions older than this (0 = no limit)
+	dbPath   string         // absolute path to opencode.db
+	adapter  string         // always "opencode"
+	identity agent.Identity // populated via WithIdentity (#159 Phase A.4)
+	maxAge   time.Duration  // ignore sessions older than this (0 = no limit)
 
 	subMu sync.Mutex
 	subs  []chan agent.Event
@@ -139,6 +140,19 @@ func (w *Watcher) Root() string { return w.dbPath }
 
 // Adapter returns the adapter name.
 func (w *Watcher) Adapter() string { return w.adapter }
+
+// WithIdentity sets the full agent.Identity for this watcher so it
+// satisfies inbound.Watcher. Returns the watcher for chaining.
+func (w *Watcher) WithIdentity(id agent.Identity) *Watcher {
+	w.identity = id
+	return w
+}
+
+// Identity returns the agent.Identity supplied via WithIdentity, or the
+// zero value if WithIdentity was never called.
+func (w *Watcher) Identity() agent.Identity {
+	return w.identity
+}
 
 // Watch begins monitoring the OpenCode database. It blocks until ctx is
 // cancelled.

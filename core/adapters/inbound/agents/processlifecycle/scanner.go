@@ -34,12 +34,14 @@ type trackedProc struct {
 
 // Scanner polls for agent processes and emits synthetic EventNewSession /
 // EventRemoved events so the session can be shown before the first message.
-// It implements inbound.AgentWatcher.
+// It implements inbound.AgentWatcher and (when WithIdentity has been
+// called) inbound.Watcher.
 type Scanner struct {
-	processName        string // exact process name matched by pgrep -x
-	commandLineMatch   string // if non-empty, used with pgrep -f instead of -x ProcessName
-	transcriptFilename string // if non-empty, scanner checks <CWD>/<filename> for the real transcript
-	adapter            string // adapter label placed on emitted events
+	processName        string         // exact process name matched by pgrep -x
+	commandLineMatch   string         // if non-empty, used with pgrep -f instead of -x ProcessName
+	transcriptFilename string         // if non-empty, scanner checks <CWD>/<filename> for the real transcript
+	adapter            string         // adapter label placed on emitted events
+	identity           agent.Identity // populated via WithIdentity (#159 Phase A.4)
 	interval           time.Duration
 
 	// sessionChecker is an optional function that reports whether a real
@@ -82,6 +84,19 @@ func NewScanner(processName, adapter string, interval time.Duration) *Scanner {
 func (s *Scanner) WithCommandLineMatch(pattern string) *Scanner {
 	s.commandLineMatch = pattern
 	return s
+}
+
+// WithIdentity sets the full agent.Identity for this scanner so it
+// satisfies inbound.Watcher. Returns the scanner for chaining.
+func (s *Scanner) WithIdentity(id agent.Identity) *Scanner {
+	s.identity = id
+	return s
+}
+
+// Identity returns the agent.Identity supplied via WithIdentity, or the
+// zero value if WithIdentity was never called.
+func (s *Scanner) Identity() agent.Identity {
+	return s.identity
 }
 
 // WithTranscriptFilename tells the scanner to additionally probe each

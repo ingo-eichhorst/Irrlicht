@@ -17,14 +17,31 @@ import (
 )
 
 // Watcher watches a directory tree for .jsonl transcript file events.
-// It implements inbound.AgentWatcher.
+// It implements inbound.AgentWatcher and (when WithIdentity has been
+// called) inbound.Watcher.
 type Watcher struct {
-	root    string        // resolved absolute path to the watched directory
-	adapter string        // adapter name set on emitted events
-	maxAge  time.Duration // ignore files older than this (0 = no limit)
+	root     string         // resolved absolute path to the watched directory
+	adapter  string         // adapter name set on emitted events
+	identity agent.Identity // populated via WithIdentity (#159 Phase A.4)
+	maxAge   time.Duration  // ignore files older than this (0 = no limit)
 
 	subMu sync.Mutex
 	subs  []chan agent.Event
+}
+
+// WithIdentity sets the full agent.Identity for this watcher so it
+// satisfies inbound.Watcher. Returns the watcher for chaining. Callers
+// in cmd/irrlichd/wiring.go invoke this immediately after New(); test
+// callers (e2e) may omit it because they don't consume the new port.
+func (w *Watcher) WithIdentity(id agent.Identity) *Watcher {
+	w.identity = id
+	return w
+}
+
+// Identity returns the agent.Identity supplied via WithIdentity, or the
+// zero value if WithIdentity was never called.
+func (w *Watcher) Identity() agent.Identity {
+	return w.identity
 }
 
 // New creates a Watcher for the given directory relative to $HOME.
