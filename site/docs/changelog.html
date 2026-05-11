@@ -81,6 +81,31 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.3.13 <small>(2026-05-11)</small></h2>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>OpenCode: suppress ghost sessions when no opencode process is live</strong> &mdash; the OpenCode watcher's startup scan emitted <code>EventNewSession</code> for every non-archived row whose <code>time_updated</code> fell within <code>maxAge</code>, regardless of whether <code>opencode</code> was actually running. On every daemon restart, every historical session in the DB became a "live" row in the menu bar with no path that ever removed them. Now gates emission on a live opencode process owning the session's CWD via <code>processlifecycle.LiveCWDs(processName)</code>. Sessions in the DB with no live process are tracked (cursor seeded so historical activity isn't back-filled if the process later starts) but not surfaced; a new <code>emitted</code> flag enables <code>EventNewSession</code> to fire on the dormant&rarr;live transition</li>
+        <li><strong>OpenCode: clean up carryover ghost state on startup</strong> &mdash; users upgrading from v0.3.12 had ghost session JSON files (<code>PID=0</code>, DB-backed <code>TranscriptPath</code>) that neither <code>syscall.Kill</code> nor <code>isStaleTranscript</code> caught. A new branch in <code>isStartupZombie</code> deletes <code>PID=0</code> sessions whose adapter has a registered process name iff no live process of that name owns the session's CWD. Only deletes when the lookup returns a definitive non-nil result</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>OpenCode: GC stale cursors, drop dead initialArchiveCleanupWindow</strong> &mdash; <code>gcExpiredCursors</code> drops cursor entries whose <code>lastObserved</code> predates <code>maxAge</code> so the cursor map can't grow without bound for users who accumulate many sessions but rarely run the CLI. Tracked separately from <code>cur.lastTS</code> so a session whose <code>time_updated</code> bumps without new parts isn't wiped prematurely</li>
+        <li><strong>OpenCode: consolidate DB-backed predicate, cache liveCWDs lookup</strong> &mdash; DRYs the "is this path DB-backed?" check and caches <code>liveCWDs</code> per adapter inside <code>CleanupZombies</code> so M ghost candidates sharing an adapter pay one <code>pgrep</code> fork, not M</li>
+        <li><strong>Release: keep homebrew tap from silently lagging</strong> (#299) &mdash; the tap was stranded at v0.3.8 across four releases because Step 8.5 no-op'd silently when <code>IRRLICHT_TAP_DIR</code> was unset. <code>update-cask.sh</code> now auto-discovers a sibling <code>../homebrew-irrlicht</code> clone before bailing and hard-fails on <code>--push</code> without a tap dir; the skill's Step 8.5 verifies the published cask version after publish and prints a loud WARNING on mismatch</li>
+      </ul>
+
+      <h3>Docs</h3>
+
+      <ul>
+        <li><strong>README: supported platforms table</strong> (#301, #302, #303) &mdash; adds a Platforms table with CLI access references and links the macOS access cell to the releases page</li>
+        <li><strong>Landing: mark OpenCode alpha; teach release skill the landing-page grid</strong> &mdash; the parallel grid on <code>site/index.html</code> was missed in v0.3.12 because Step 4b only enumerated <code>site/docs/*.html</code>. Extends the dynamic enumeration to scan <code>site/*.html</code> and adds explicit trigger-table rows for adapter maturity-stage changes and new platforms</li>
+        <li><strong>README</strong> &mdash; note codeburn alongside other quota &amp; cost trackers in the positioning section</li>
+      </ul>
+
       <h2>v0.3.12 <small>(2026-05-09)</small></h2>
 
       <h3>Added</h3>

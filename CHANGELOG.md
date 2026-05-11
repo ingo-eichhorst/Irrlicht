@@ -9,6 +9,22 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.3.13] — 2026-05-11
+
+### Fixed
+- **OpenCode: suppress ghost sessions when no opencode process is live** (#22e10ef) — the OpenCode watcher's startup scan emitted `EventNewSession` for every non-archived row whose `time_updated` fell within `maxAge`, regardless of whether `opencode` was actually running. On every daemon restart, every historical session in the DB became a "live" row in the menu bar with no path that ever removed them. Now gates emission on a live opencode process owning the session's CWD via `processlifecycle.LiveCWDs(processName)`. Sessions in the DB with no live process are tracked (cursor seeded so historical activity isn't back-filled if the process later starts) but not surfaced; a new `emitted` flag enables `EventNewSession` to fire on the dormant→live transition. Also drops the "skip first call" branch in `emitRemovedForArchivedSessions` so pre-startup archives get cleaned up correctly.
+- **OpenCode: clean up carryover ghost state on startup** (#fec4a59) — the previous fix gates *new* emissions on a live process, but users upgrading from v0.3.12 whose state directory already contains ghost session JSON files weren't helped: `syscall.Kill` skips `PID=0` and `isStaleTranscript` short-circuits to false for `?session=` paths. Adds a third branch to `isStartupZombie`: `PID=0` sessions whose `TranscriptPath` is DB-backed and whose adapter has a registered process name are deleted iff no live process of that name owns the session's CWD. Safety: only deletes when `liveCWDs` returns a definitive non-nil result; on lookup error or unregistered adapter, the session is kept.
+
+### Changed
+- **OpenCode: GC stale cursors, drop dead initialArchiveCleanupWindow** (#ec2fe04) — `gcExpiredCursors` drops cursor entries whose `lastObserved` predates `maxAge` so the cursor map can't grow without bound for users who accumulate many sessions but rarely run the CLI. Tracked separately from `cur.lastTS` so a session whose `time_updated` bumps without new parts isn't wiped prematurely. Reverts the unused first-call cutoff tweak.
+- **OpenCode: consolidate DB-backed predicate, cache liveCWDs lookup** (#85f4bb4) — DRYs the "is this path DB-backed?" check (one source of truth in `helpers.go`) and caches `liveCWDs` per adapter inside `CleanupZombies` so M ghost candidates sharing an adapter pay one `pgrep` fork, not M. Tightens the `isStartupZombie` testable surface.
+- **Release: keep homebrew tap from silently lagging** (#299) — the tap was stranded at v0.3.8 across four releases because Step 8.5 no-op'd silently when `IRRLICHT_TAP_DIR` was unset. `update-cask.sh` now auto-discovers a sibling `../homebrew-irrlicht` clone before bailing and hard-fails on `--push` without a tap dir instead of exiting 0; the skill's Step 8.5 verifies the published cask version after publish and prints a loud WARNING on mismatch.
+
+### Docs
+- **README: supported platforms table** (#301, #302, #303) — adds a Platforms table with CLI access references and links the macOS access cell to the releases page.
+- **Landing: mark OpenCode alpha; teach release skill the landing-page grid** (#1c78f83) — `site/index.html` listed OpenCode as `planned` even though the adapter shipped in v0.3.12; the parallel grid on the landing page was missed because the Step 4b sweep only enumerated `site/docs/*.html`. Extends the dynamic enumeration to scan `site/*.html` and adds explicit trigger-table rows for adapter maturity-stage changes and new platforms so future stage promotions can't slip through.
+- **README: note codeburn alongside other quota & cost trackers** in the positioning section.
+
 ## [0.3.12] — 2026-05-09
 
 ### Added
@@ -617,7 +633,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.12...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.3.13...HEAD
+[0.3.13]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.13
 [0.3.12]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.12
 [0.3.11]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.11
 [0.3.10]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.10

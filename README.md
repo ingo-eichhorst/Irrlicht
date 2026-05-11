@@ -86,7 +86,7 @@ Local-first · no telemetry · MIT · ~5 MB RAM · signed Homebrew cask · trans
 
 ## Why Irrlicht (vs. the rest)
 
-- **Quota trackers** ([ccusage](https://github.com/ryoppippi/ccusage), [ClaudeBar](https://github.com/tddworks/ClaudeBar), [SessionWatcher](https://www.sessionwatcher.com/)) count tokens, not state.
+- **Quota & cost trackers** ([ccusage](https://github.com/ryoppippi/ccusage), [codeburn](https://github.com/getagentseal/codeburn), [ClaudeBar](https://github.com/tddworks/ClaudeBar), [SessionWatcher](https://www.sessionwatcher.com/)) count tokens and dollars, not state.
 - **Observability stacks** ([Langfuse](https://langfuse.com/integrations/frameworks/claude-agent-sdk), [SigNoz](https://signoz.io/blog/claude-code-monitoring-with-opentelemetry/)) need SDK instrumentation and a dashboard tab.
 - **Single-agent monitors** ([Claude Status](https://github.com/gmr/claude-status), [Agent Sessions](https://github.com/jazzyalex/agent-sessions)) lock you to one CLI or one terminal.
 
