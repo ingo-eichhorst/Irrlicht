@@ -47,7 +47,7 @@ func TestEnsureHooksInstalled_CreatesFileIfAbsent(t *testing.T) {
 		t.Fatal("missing hooks map")
 	}
 
-	for _, event := range installedHookEvents {
+	for _, event := range uniqueHookEvents() {
 		arr, ok := hooksMap[event].([]interface{})
 		if !ok || len(arr) == 0 {
 			t.Errorf("missing hook array for %s", event)
@@ -106,7 +106,7 @@ func TestEnsureHooksInstalled_PreservesExistingHooks(t *testing.T) {
 	hooksMap := settings["hooks"].(map[string]interface{})
 
 	// Our hooks should be added.
-	for _, event := range installedHookEvents {
+	for _, event := range uniqueHookEvents() {
 		if _, ok := hooksMap[event]; !ok {
 			t.Errorf("missing hook for %s", event)
 		}
@@ -130,7 +130,7 @@ func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
 	}
 
 	staleGroup := map[string]interface{}{
-		"matcher": hookMatcher,
+		"matcher": hookMatcherDefault,
 		"hooks": []interface{}{
 			map[string]interface{}{
 				"type":    "command",
@@ -166,12 +166,27 @@ func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing %s array after upgrade", HookPostToolUse)
 	}
-	if len(postArr) != 1 {
-		t.Fatalf("expected 1 %s matcher group (in-place upgrade, no append), got %d", HookPostToolUse, len(postArr))
+	// Two groups expected: the upgraded default-matcher group (in place,
+	// no append) plus the narrow user-input matcher group added on first
+	// install. (#307)
+	if len(postArr) != 2 {
+		t.Fatalf("expected 2 %s matcher groups (default upgrade + user-input add), got %d", HookPostToolUse, len(postArr))
 	}
 
-	group := postArr[0].(map[string]interface{})
-	innerHooks := group["hooks"].([]interface{})
+	// Find the default-matcher group — that's the one that should have been
+	// upgraded in place from the stale command.
+	var defaultGroup map[string]interface{}
+	for _, g := range postArr {
+		group := g.(map[string]interface{})
+		if m, _ := group["matcher"].(string); m == hookMatcherDefault {
+			defaultGroup = group
+			break
+		}
+	}
+	if defaultGroup == nil {
+		t.Fatalf("missing default-matcher %s group after upgrade", HookPostToolUse)
+	}
+	innerHooks := defaultGroup["hooks"].([]interface{})
 	cmd := innerHooks[0].(map[string]interface{})["command"].(string)
 	if cmd != installedHookCommand {
 		t.Fatalf("expected upgraded command, got %q", cmd)
@@ -210,7 +225,7 @@ func TestUninstallHooks_RemovesOurHooks(t *testing.T) {
 		return
 	}
 
-	for _, event := range installedHookEvents {
+	for _, event := range uniqueHookEvents() {
 		if _, ok := hooksMap[event]; ok {
 			t.Errorf("hook for %s should have been removed", event)
 		}
@@ -257,6 +272,141 @@ func TestUninstallHooks_PreservesOtherHooks(t *testing.T) {
 	permArr, ok := hooksMap["PermissionRequest"].([]interface{})
 	if !ok || len(permArr) != 1 {
 		t.Fatalf("expected 1 remaining PermissionRequest group, got %d", len(permArr))
+	}
+}
+
+// TestEnsureHooksInstalled_InstallsUserInputGroups verifies that a fresh
+// install writes both the PreToolUse and a second PostToolUse matcher group
+// scoped to AskUserQuestion|ExitPlanMode. (Issue #307.)
+func TestEnsureHooksInstalled_InstallsUserInputGroups(t *testing.T) {
+	home := withTempHome(t)
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := readJSON(t, filepath.Join(home, ".claude", "settings.json"))
+	hooksMap := settings["hooks"].(map[string]interface{})
+
+	// PreToolUse should have exactly one group with the user-input matcher.
+	pre, ok := hooksMap[HookPreToolUse].([]interface{})
+	if !ok || len(pre) != 1 {
+		t.Fatalf("expected 1 PreToolUse group, got %d", len(pre))
+	}
+	preGroup := pre[0].(map[string]interface{})
+	if m, _ := preGroup["matcher"].(string); m != hookMatcherUserInput {
+		t.Errorf("PreToolUse matcher = %q, want %q", m, hookMatcherUserInput)
+	}
+
+	// PostToolUse should have both the default-matcher group and the
+	// user-input matcher group.
+	post, ok := hooksMap[HookPostToolUse].([]interface{})
+	if !ok || len(post) != 2 {
+		t.Fatalf("expected 2 PostToolUse groups, got %d", len(post))
+	}
+	var sawDefault, sawUserInput bool
+	for _, g := range post {
+		group := g.(map[string]interface{})
+		switch m, _ := group["matcher"].(string); m {
+		case hookMatcherDefault:
+			sawDefault = true
+		case hookMatcherUserInput:
+			sawUserInput = true
+		}
+	}
+	if !sawDefault || !sawUserInput {
+		t.Errorf("PostToolUse groups missing matcher: default=%v userInput=%v", sawDefault, sawUserInput)
+	}
+}
+
+// TestEnsureHooksInstalled_AppendsUserInputToLegacyInstall simulates an
+// existing irrlicht install from before issue #307: settings.json has the
+// default-matcher PostToolUse group but no narrow group. EnsureHooksInstalled
+// should leave the existing group alone and append the new narrow one.
+func TestEnsureHooksInstalled_AppendsUserInputToLegacyInstall(t *testing.T) {
+	home := withTempHome(t)
+	path := filepath.Join(home, ".claude", "settings.json")
+
+	// Legacy install: PermissionRequest, PostToolUse, PostToolUseFailure
+	// each with one default-matcher group containing our sentinel.
+	makeGroup := func() map[string]interface{} {
+		return map[string]interface{}{
+			"matcher": hookMatcherDefault,
+			"hooks": []interface{}{
+				map[string]interface{}{
+					"type":    "command",
+					"command": installedHookCommand,
+				},
+			},
+		}
+	}
+	existing := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			HookPermissionRequest:  []interface{}{makeGroup()},
+			HookPostToolUse:        []interface{}{makeGroup()},
+			HookPostToolUseFailure: []interface{}{makeGroup()},
+		},
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(existing)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true to add the new user-input groups")
+	}
+
+	settings := readJSON(t, path)
+	hooksMap := settings["hooks"].(map[string]interface{})
+
+	// PreToolUse should be brand new.
+	if _, ok := hooksMap[HookPreToolUse].([]interface{}); !ok {
+		t.Errorf("PreToolUse group not installed")
+	}
+
+	// PostToolUse should now have 2 groups: the original (untouched) and the new one.
+	post := hooksMap[HookPostToolUse].([]interface{})
+	if len(post) != 2 {
+		t.Fatalf("expected 2 PostToolUse groups after legacy upgrade, got %d", len(post))
+	}
+
+	// Second install is a no-op (idempotent).
+	modified, err = EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modified {
+		t.Fatal("expected modified=false on second install (idempotent)")
+	}
+}
+
+// TestUninstallHooks_RemovesNarrowGroups verifies uninstall sweeps both the
+// default-matcher and user-input matcher groups.
+func TestUninstallHooks_RemovesNarrowGroups(t *testing.T) {
+	home := withTempHome(t)
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UninstallHooks(); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := readJSON(t, filepath.Join(home, ".claude", "settings.json"))
+	hooksMap, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		return // hooks key removed — acceptable
+	}
+	if _, ok := hooksMap[HookPreToolUse]; ok {
+		t.Error("PreToolUse should have been removed")
+	}
+	if _, ok := hooksMap[HookPostToolUse]; ok {
+		t.Error("PostToolUse should have been removed")
 	}
 }
 

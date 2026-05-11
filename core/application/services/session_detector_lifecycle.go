@@ -79,15 +79,21 @@ func (d *SessionDetector) HandlePIDAssigned(pid int, sessionID string) {
 	d.pidMgr.HandlePIDAssigned(pid, sessionID)
 }
 
-// HandlePermissionHook processes a Claude Code PermissionRequest, PostToolUse,
-// or PostToolUseFailure hook event. It updates the in-memory permission-pending
-// flag and injects a synthetic activity event to trigger re-classification.
+// HandlePermissionHook processes a Claude Code PermissionRequest, PreToolUse,
+// PostToolUse, or PostToolUseFailure hook event. It updates the in-memory
+// permission-pending flag and injects a synthetic activity event to trigger
+// re-classification.
+//
+// PreToolUse fires synchronously when the model emits a tool_use block, before
+// the assistant message is persisted to JSONL. For AskUserQuestion and
+// ExitPlanMode (matched by the installer), this lets the daemon flip
+// working → waiting without depending on transcript flush latency (issue #307).
 //
 // Safe to call from any goroutine (e.g. HTTP handler).
 func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
 	d.permMu.Lock()
 	switch hookEventName {
-	case "PermissionRequest":
+	case "PermissionRequest", "PreToolUse":
 		d.permissionPending[sessionID] = true
 	case "PostToolUse", "PostToolUseFailure":
 		delete(d.permissionPending, sessionID)

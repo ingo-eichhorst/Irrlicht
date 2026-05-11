@@ -1,7 +1,9 @@
 // hooks.go provides the HTTP handler for receiving Claude Code hook events.
-// Claude Code fires hooks on PermissionRequest, PostToolUse, and
-// PostToolUseFailure — the daemon uses these to surface permission-pending
-// state in the classifier (issue #108).
+// Claude Code fires hooks on PermissionRequest, PreToolUse, PostToolUse, and
+// PostToolUseFailure — the daemon uses these to surface user-blocking state
+// in the classifier. PermissionRequest covers permission gates (issue #108);
+// PreToolUse on AskUserQuestion / ExitPlanMode covers user-input overlays
+// that block the agent before the transcript is flushed (issue #307).
 package claudecode
 
 import (
@@ -15,9 +17,10 @@ import (
 )
 
 // Hook event names. Claude Code fires these; the daemon recognizes only
-// these three and ignores everything else.
+// these four and ignores everything else.
 const (
 	HookPermissionRequest  = "PermissionRequest"
+	HookPreToolUse         = "PreToolUse"
 	HookPostToolUse        = "PostToolUse"
 	HookPostToolUseFailure = "PostToolUseFailure"
 )
@@ -79,7 +82,7 @@ func NewHookHandler(target HookTarget, log outbound.Logger) http.HandlerFunc {
 		}
 
 		switch payload.HookEventName {
-		case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
+		case HookPermissionRequest, HookPreToolUse, HookPostToolUse, HookPostToolUseFailure:
 			log.LogInfo("hook-receiver", sessionID,
 				fmt.Sprintf("received %s (tool=%s)", payload.HookEventName, payload.ToolName))
 			target.HandlePermissionHook(sessionID, payload.TranscriptPath, payload.HookEventName)

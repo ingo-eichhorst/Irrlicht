@@ -1,7 +1,7 @@
 // hookinstaller.go manages Claude Code hook entries in ~/.claude/settings.json
-// for the irrlicht daemon. It installs PermissionRequest, PostToolUse, and
-// PostToolUseFailure hooks that POST to the daemon's HTTP endpoint, and can
-// remove them cleanly. (Issue #108.)
+// for the irrlicht daemon. It installs PermissionRequest, PreToolUse,
+// PostToolUse, and PostToolUseFailure hooks that POST to the daemon's HTTP
+// endpoint, and can remove them cleanly. (Issues #108, #307.)
 package claudecode
 
 import (
@@ -25,13 +25,36 @@ const hookSentinel = "localhost:7837/api/v1/hooks/claudecode"
 // doesn't surface "connection refused" as a PostToolUse hook error.
 const installedHookCommand = "curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode || true"
 
-// hookMatcher filters which tools trigger the hooks. PermissionRequest only
-// fires for tools that need permission, but PostToolUse/PostToolUseFailure
-// fire for all completions — the matcher reduces noise for the latter.
-const hookMatcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*"
+// hookMatcherDefault filters which tools trigger the permission-style hooks.
+// PermissionRequest only fires for tools that need permission, but
+// PostToolUse/PostToolUseFailure fire for all completions — the matcher
+// reduces noise for the latter.
+const hookMatcherDefault = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*"
 
-// installedHookEvents are the Claude Code hook events we install handlers for.
-var installedHookEvents = []string{HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure}
+// hookMatcherUserInput is the matcher for user-blocking tools that suspend the
+// agent waiting for user input. PreToolUse fires synchronously when the model
+// emits the tool_use (before the transcript is flushed), so the daemon flips
+// to waiting immediately; the paired PostToolUse group clears the flag once
+// the user answers. (Issue #307.)
+const hookMatcherUserInput = "AskUserQuestion|ExitPlanMode"
+
+// hookSpec is a single (event, matcher) entry we manage in settings.json.
+// We may install multiple groups under the same event (e.g. PostToolUse has
+// both the default matcher and the user-input matcher).
+type hookSpec struct {
+	event   string
+	matcher string
+}
+
+// installedHooks is the set of hook groups irrlicht manages. Each entry maps
+// to one matcher group under the named event in ~/.claude/settings.json.
+var installedHooks = []hookSpec{
+	{HookPermissionRequest, hookMatcherDefault},
+	{HookPostToolUse, hookMatcherDefault},
+	{HookPostToolUseFailure, hookMatcherDefault},
+	{HookPreToolUse, hookMatcherUserInput},
+	{HookPostToolUse, hookMatcherUserInput},
+}
 
 // EnsureHooksInstalled adds irrlicht hook entries to ~/.claude/settings.json
 // if they are not already present. Creates the file if it doesn't exist.
@@ -50,12 +73,16 @@ func EnsureHooksInstalled() (bool, error) {
 	hooksMap := ensureHooksMap(settings)
 
 	modified := false
-	for _, event := range installedHookEvents {
+	// Upgrade stale sentinel commands once per event (matcher-agnostic).
+	for _, event := range uniqueHookEvents() {
 		if upgradeStaleHookCommands(hooksMap, event) {
 			modified = true
 		}
-		if !hasOurHook(hooksMap, event) {
-			addOurHook(hooksMap, event)
+	}
+	// Install any missing (event, matcher) group.
+	for _, spec := range installedHooks {
+		if !hasOurHook(hooksMap, spec.event, spec.matcher) {
+			addOurHook(hooksMap, spec.event, spec.matcher)
 			modified = true
 		}
 	}
@@ -90,7 +117,7 @@ func UninstallHooks() (bool, error) {
 	}
 
 	modified := false
-	for _, event := range installedHookEvents {
+	for _, event := range uniqueHookEvents() {
 		if removeOurHook(hooksMap, event) {
 			modified = true
 		}
@@ -158,9 +185,11 @@ func ensureHooksMap(settings map[string]interface{}) map[string]interface{} {
 	return m
 }
 
-// hasOurHook checks if a matcher group with our sentinel command already exists
-// in the given event's hook array.
-func hasOurHook(hooksMap map[string]interface{}, event string) bool {
+// hasOurHook checks if a matcher group with the given matcher AND our sentinel
+// command already exists in the event's hook array. Both (event, matcher)
+// dimensions are required so we can install multiple groups per event
+// (e.g. PostToolUse has both the default matcher and the user-input matcher).
+func hasOurHook(hooksMap map[string]interface{}, event, matcher string) bool {
 	arr, ok := hooksMap[event]
 	if !ok {
 		return false
@@ -172,6 +201,9 @@ func hasOurHook(hooksMap map[string]interface{}, event string) bool {
 	for _, g := range groups {
 		group, ok := g.(map[string]interface{})
 		if !ok {
+			continue
+		}
+		if m, _ := group["matcher"].(string); m != matcher {
 			continue
 		}
 		innerArr, ok := group["hooks"]
@@ -193,6 +225,22 @@ func hasOurHook(hooksMap map[string]interface{}, event string) bool {
 		}
 	}
 	return false
+}
+
+// uniqueHookEvents returns the distinct event names across installedHooks,
+// preserving order of first appearance. Used for per-event operations
+// (stale-command upgrade, uninstall) that don't depend on the matcher.
+func uniqueHookEvents() []string {
+	seen := make(map[string]bool, len(installedHooks))
+	events := make([]string, 0, len(installedHooks))
+	for _, spec := range installedHooks {
+		if seen[spec.event] {
+			continue
+		}
+		seen[spec.event] = true
+		events = append(events, spec.event)
+	}
+	return events
 }
 
 // upgradeStaleHookCommands rewrites any hook command that contains hookSentinel
@@ -241,9 +289,9 @@ func upgradeStaleHookCommands(hooksMap map[string]interface{}, event string) boo
 }
 
 // addOurHook appends a matcher group with our hook command to the event's array.
-func addOurHook(hooksMap map[string]interface{}, event string) {
+func addOurHook(hooksMap map[string]interface{}, event, matcher string) {
 	entry := map[string]interface{}{
-		"matcher": hookMatcher,
+		"matcher": matcher,
 		"hooks": []interface{}{
 			map[string]interface{}{
 				"type":    "command",

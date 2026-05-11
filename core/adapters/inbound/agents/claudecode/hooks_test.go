@@ -113,6 +113,37 @@ func TestHookHandler_PostToolUse(t *testing.T) {
 	}
 }
 
+func TestHookHandler_PreToolUse(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-pre.jsonl",
+		HookEventName:  "PreToolUse",
+		ToolName:       "AskUserQuestion",
+		ToolUseID:      "toolu_pre",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	calls := target.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1", len(calls))
+	}
+	if calls[0].sessionID != "sess-pre" {
+		t.Errorf("sessionID = %q, want %q", calls[0].sessionID, "sess-pre")
+	}
+	if calls[0].hookEventName != "PreToolUse" {
+		t.Errorf("hookEventName = %q, want %q", calls[0].hookEventName, "PreToolUse")
+	}
+}
+
 func TestHookHandler_PostToolUseFailure(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, mockLogger{})

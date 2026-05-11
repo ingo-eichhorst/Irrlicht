@@ -1101,6 +1101,59 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	}
 }
 
+// TestSessionDetector_HandlePermissionHook_PreToolUseTransitionsToWaiting is
+// the regression test for issue #307. The Claude Code transcript may not yet
+// contain the AskUserQuestion tool_use (assistant message persistence can
+// lag the overlay by minutes), so metrics show no open tool call. A
+// PreToolUse hook fires synchronously when the model emits the tool_use —
+// the detector must transition working → waiting on that signal alone,
+// without depending on the JSONL flush.
+func TestSessionDetector_HandlePermissionHook_PreToolUseTransitionsToWaiting(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	const sessID = "pre-307"
+	const transcript = "/home/.claude/projects/-Users-test/" + sessID + ".jsonl"
+
+	now := time.Now().Unix()
+	repo.states[sessID] = &session.SessionState{
+		SessionID:      sessID,
+		State:          session.StateWorking,
+		TranscriptPath: transcript,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     2,
+		Metrics: &session.SessionMetrics{
+			// Mimics the bug scenario: prior user turn flushed, but the
+			// AskUserQuestion tool_use is still in Claude Code's write
+			// buffer. No open tool call is visible to the classifier.
+			LastEventType:   "user",
+			HasOpenToolCall: false,
+		},
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// Let Run() start so the event loop is reading debouncedEvents.
+	time.Sleep(20 * time.Millisecond)
+
+	det.HandlePermissionHook(sessID, transcript, claudecode.HookPreToolUse)
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load(sessID)
+	if state.State != session.StateWaiting {
+		t.Errorf("state: got %q, want waiting (PreToolUse should flip working→waiting via permissionPending overlay)", state.State)
+	}
+}
+
 func TestNeedsUserAttention(t *testing.T) {
 	tests := []struct {
 		name    string
