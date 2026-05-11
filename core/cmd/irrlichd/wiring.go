@@ -41,12 +41,12 @@ func buildAgentWatchers(
 	)
 
 	if s, ok := a.Source.(agent.FilesUnderRoot); ok {
-		w := fswatcher.New(s.Dir, a.Identity.Name, maxSessionAge)
+		w := fswatcher.New(s.Dir, a.Identity.Name, maxSessionAge).WithIdentity(a.Identity)
 		watchers = append(watchers, w)
 		labels = append(labels, fmt.Sprintf("%s (%s)", a.Identity.Name, w.Root()))
 	}
 
-	scanner := processlifecycle.NewScanner(processNameFor(a), a.Identity.Name, 0)
+	scanner := processlifecycle.NewScanner(processNameFor(a), a.Identity.Name, 0).WithIdentity(a.Identity)
 	if m, ok := a.Process.Match.(agent.CommandPattern); ok {
 		scanner.WithCommandLineMatch(m.Regex.String())
 	}
