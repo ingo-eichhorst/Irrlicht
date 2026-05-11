@@ -25,6 +25,15 @@ const (
 	HookPostToolUseFailure = "PostToolUseFailure"
 )
 
+// Tool names that suspend the agent waiting for user input. PreToolUse hooks
+// must match one of these — anything else is rejected by the handler, even
+// if the matcher in settings.json was edited to be broader. Defense-in-depth
+// against the matcher being the sole filter.
+const (
+	toolAskUserQuestion = "AskUserQuestion"
+	toolExitPlanMode    = "ExitPlanMode"
+)
+
 // hookPayload is the JSON body sent by Claude Code hook events.
 // Only the fields used by the handler are decoded; the rest is ignored.
 type hookPayload struct {
@@ -81,11 +90,24 @@ func NewHookHandler(target HookTarget, log outbound.Logger) http.HandlerFunc {
 			return
 		}
 
-		switch payload.HookEventName {
-		case HookPermissionRequest, HookPreToolUse, HookPostToolUse, HookPostToolUseFailure:
+		dispatch := func() {
 			log.LogInfo("hook-receiver", sessionID,
 				fmt.Sprintf("received %s (tool=%s)", payload.HookEventName, payload.ToolName))
 			target.HandlePermissionHook(sessionID, payload.TranscriptPath, payload.HookEventName)
+		}
+
+		switch payload.HookEventName {
+		case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
+			dispatch()
+		case HookPreToolUse:
+			// Only dispatch for user-input tools; reject anything else even
+			// if the settings.json matcher was misconfigured to be broader.
+			if payload.ToolName == toolAskUserQuestion || payload.ToolName == toolExitPlanMode {
+				dispatch()
+			} else {
+				log.LogInfo("hook-receiver", sessionID,
+					fmt.Sprintf("ignored PreToolUse for unexpected tool %q", payload.ToolName))
+			}
 		default:
 			// Unrecognized hook event — accept but ignore.
 			log.LogInfo("hook-receiver", sessionID,
