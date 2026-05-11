@@ -8,11 +8,9 @@ import (
 	"irrlicht/core/ports/inbound"
 )
 
-// Compile-time assertion that Watcher satisfies both inbound port interfaces.
-var (
-	_ inbound.AgentWatcher = (*Watcher)(nil)
-	_ inbound.Watcher      = (*Watcher)(nil)
-)
+// Compile-time assertion that Watcher satisfies the inbound port. The
+// legacy AgentWatcher port was deleted in #159 Phase A.5.
+var _ inbound.Watcher = (*Watcher)(nil)
 
 func TestOpenCodeWithIdentityRoundTrip(t *testing.T) {
 	w := New(time.Hour)

@@ -121,7 +121,6 @@ func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEv
 		Type:           agent.EventActivity,
 		SessionID:      sessionID,
 		TranscriptPath: transcriptPath,
-		Adapter:        "claude-code",
 	}:
 	default:
 		d.log.LogError("hook-receiver", sessionID,

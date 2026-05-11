@@ -631,7 +631,7 @@ func TestSessionDetector_Removed_PrunesMetricsLedger(t *testing.T) {
 	}
 
 	det := services.NewSessionDetector(
-		[]inbound.AgentWatcher{tw}, pw, repo,
+		[]inbound.Watcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, mm, nil,
 		"test", 0, nil, nil, nil,
 	)
@@ -1334,7 +1334,6 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 	// Send two new sessions in the same project (same CWD).
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
-		Adapter:        "claude-code",
 		SessionID:      "sess-a",
 		ProjectDir:     "-Users-test-project",
 		TranscriptPath: "/home/.claude/projects/-Users-test-project/sess-a.jsonl",
@@ -1346,7 +1345,6 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 
 	tw.ch <- agent.Event{
 		Type:           agent.EventNewSession,
-		Adapter:        "claude-code",
 		SessionID:      "sess-b",
 		ProjectDir:     "-Users-test-project",
 		TranscriptPath: "/home/.claude/projects/-Users-test-project/sess-b.jsonl",
@@ -1500,7 +1498,7 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 		"claude-code": claudecode.DiscoverPID,
 	}
 	det := services.NewSessionDetector(
-		[]inbound.AgentWatcher{tw}, pw, repo,
+		[]inbound.Watcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
 		"test", 0, discovers, nil, nil,
 	)
@@ -2080,7 +2078,7 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testi
 	// so the default newDetector (readyTTL=0) would skip it entirely.
 	// Use a tiny TTL so the sweep actually runs its child-cleanup loop.
 	det := services.NewSessionDetector(
-		[]inbound.AgentWatcher{tw}, pw, repo,
+		[]inbound.Watcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
 		"test", 1*time.Second, nil, nil, nil,
 	)

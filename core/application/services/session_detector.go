@@ -59,12 +59,22 @@ type debounceEntry struct {
 	pending bool // true when timer is running with a coalesced event
 }
 
+// identifiedEvent is the merge-channel element produced by Run(): each
+// per-watcher drain goroutine wraps its inbound agent.Event with its
+// watcher's Identity (captured once via inbound.Watcher.Identity()) so
+// the dispatcher can tag downstream lifecycle records without bouncing
+// the redundant adapter string through every agent.Event payload.
+type identifiedEvent struct {
+	Identity agent.Identity
+	Event    agent.Event
+}
+
 // SessionDetector watches transcript files to detect sessions and orchestrate
 // lifecycle management. It is a thin coordinator that delegates state
 // classification, metadata enrichment, and PID management to focused
 // collaborators.
 type SessionDetector struct {
-	watchers    []inbound.AgentWatcher
+	watchers    []inbound.Watcher
 	repo        outbound.SessionRepository
 	log         outbound.Logger
 	broadcaster outbound.PushBroadcaster // optional
@@ -117,7 +127,7 @@ type SessionDetector struct {
 // NewSessionDetector creates a SessionDetector with all required dependencies.
 // pw and broadcaster may be nil (optional).
 func NewSessionDetector(
-	watchers []inbound.AgentWatcher,
+	watchers []inbound.Watcher,
 	pw outbound.ProcessWatcher,
 	repo outbound.SessionRepository,
 	log outbound.Logger,
@@ -230,19 +240,26 @@ func (d *SessionDetector) record(ev lifecycle.Event) {
 	d.recorder.Record(ev)
 }
 
-// Run subscribes to all AgentWatcher event streams, fans them into a single
+// Run subscribes to all Watcher event streams, fans them into a single
 // channel, and processes events until ctx is cancelled. It blocks for the
 // lifetime of the detector.
+//
+// Each per-watcher drain goroutine captures the watcher's Identity once
+// and tags every event with it as the event flows into the merged
+// channel; this is how the adapter name reaches handleTranscriptEvent
+// for lifecycle recording and SessionState bootstrap (it no longer
+// lives on agent.Event itself — see #159 Phase A.5).
 func (d *SessionDetector) Run(ctx context.Context) error {
-	merged := make(chan agent.Event, 16)
+	merged := make(chan identifiedEvent, 16)
 	var wg sync.WaitGroup
 
 	for _, w := range d.watchers {
 		ch := w.Subscribe()
 		wg.Add(1)
-		go func(watcher inbound.AgentWatcher, ch <-chan agent.Event) {
+		go func(watcher inbound.Watcher, ch <-chan agent.Event) {
 			defer wg.Done()
 			defer watcher.Unsubscribe(ch)
+			id := watcher.Identity()
 			for {
 				select {
 				case <-ctx.Done():
@@ -252,7 +269,7 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 						return
 					}
 					select {
-					case merged <- ev:
+					case merged <- identifiedEvent{Identity: id, Event: ev}:
 					case <-ctx.Done():
 						return
 					}
@@ -288,17 +305,20 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case ev, ok := <-merged:
+		case idEv, ok := <-merged:
 			if !ok {
 				// Watcher goroutines exited (usually because ctx was cancelled).
 				// Return the context error if set, nil otherwise.
 				return ctx.Err()
 			}
-			d.handleTranscriptEvent(ev)
+			d.handleTranscriptEvent(idEv.Identity, idEv.Event)
 		case ev := <-d.debouncedEvents:
 			// Coalesced events from debounce timers — process in the event
 			// loop goroutine so processActivity never runs concurrently.
-			d.processActivity(ev)
+			// Identity isn't carried through the debounce path; processActivity
+			// uses state.Adapter for live sessions and drops the (rare) event
+			// where state is nil and we'd need an identity to bootstrap.
+			d.processActivity(agent.Identity{}, ev)
 		case <-refreshTicker.C:
 			d.refreshStaleSessions()
 		}

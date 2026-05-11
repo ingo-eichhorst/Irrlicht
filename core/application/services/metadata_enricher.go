@@ -52,7 +52,10 @@ func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 	}
 
 	// Compute initial metrics (no-op for pre-sessions with no transcript).
-	if m, _ := e.metrics.ComputeMetrics(ev.TranscriptPath, ev.Adapter); m != nil {
+	// state.Adapter is already populated by the caller in onNewSession
+	// before this enricher runs; metadata_enricher uses it the same way
+	// RefreshOnActivity does (#159 Phase A.5, post-Event.Adapter removal).
+	if m, _ := e.metrics.ComputeMetrics(ev.TranscriptPath, state.Adapter); m != nil {
 		state.Metrics = m
 	}
 }

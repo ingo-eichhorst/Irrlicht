@@ -142,17 +142,35 @@ func (m *funcMetrics) PruneEntry(path string) {}
 
 // --- AgentWatcher mock -------------------------------------------------------
 
-// mockAgentWatcher implements inbound.AgentWatcher for tests.
+// mockAgentWatcher implements inbound.Watcher for tests.
 type mockAgentWatcher struct {
-	ch     chan agent.Event
-	unsubs int
+	ch       chan agent.Event
+	unsubs   int
+	identity agent.Identity
 }
 
+// newMockAgentWatcher returns a mock watcher with the default test
+// identity "claude-code". Tests targeting a different adapter override
+// it via .withIdentity(). The default was chosen so existing tests that
+// previously set Event.Adapter="claude-code" continue to receive the
+// same identity tag from the SessionDetector's merge pipeline.
 func newMockAgentWatcher() *mockAgentWatcher {
 	return &mockAgentWatcher{
-		ch: make(chan agent.Event, 16),
+		ch:       make(chan agent.Event, 16),
+		identity: agent.Identity{Name: "claude-code"},
 	}
 }
+
+// withIdentity tags this watcher with an Identity so events it emits get
+// the supplied adapter name when the SessionDetector wraps them in the
+// merge pipeline. Tests that previously set Event.Adapter inline now call
+// this on the watcher instead.
+func (w *mockAgentWatcher) withIdentity(id agent.Identity) *mockAgentWatcher {
+	w.identity = id
+	return w
+}
+
+func (w *mockAgentWatcher) Identity() agent.Identity { return w.identity }
 
 func (w *mockAgentWatcher) Watch(ctx context.Context) error {
 	<-ctx.Done()
@@ -202,7 +220,7 @@ func newDetector(
 	repo *mockRepo,
 ) *services.SessionDetector {
 	return services.NewSessionDetector(
-		[]inbound.AgentWatcher{tw}, pw, repo,
+		[]inbound.Watcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
 		"test", 0, nil, nil, nil,
 	)
@@ -217,7 +235,7 @@ func newDetectorWithMetrics(
 	metrics *funcMetrics,
 ) *services.SessionDetector {
 	return services.NewSessionDetector(
-		[]inbound.AgentWatcher{tw}, pw, repo,
+		[]inbound.Watcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, metrics, nil,
 		"test", 0, nil, nil, nil,
 	)
@@ -237,7 +255,7 @@ func newDetectorWithCWDDiscovery(
 		},
 	}
 	return services.NewSessionDetector(
-		[]inbound.AgentWatcher{tw}, pw, repo,
+		[]inbound.Watcher{tw}, pw, repo,
 		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
 		"test", 0, discovers, nil, nil,
 	)

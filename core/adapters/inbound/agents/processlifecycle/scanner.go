@@ -34,8 +34,7 @@ type trackedProc struct {
 
 // Scanner polls for agent processes and emits synthetic EventNewSession /
 // EventRemoved events so the session can be shown before the first message.
-// It implements inbound.AgentWatcher and (when WithIdentity has been
-// called) inbound.Watcher.
+// It implements inbound.Watcher.
 type Scanner struct {
 	processName        string         // exact process name matched by pgrep -x
 	commandLineMatch   string         // if non-empty, used with pgrep -f instead of -x ProcessName
@@ -266,8 +265,7 @@ func (s *Scanner) poll() {
 				s.mu.Unlock()
 				s.broadcast(agent.Event{
 					Type:       agent.EventRemoved,
-					Adapter:    s.adapter,
-					SessionID:  proc.sessionID,
+										SessionID:  proc.sessionID,
 					ProjectDir: projectDir,
 				})
 			}
@@ -284,8 +282,7 @@ func (s *Scanner) poll() {
 		sessionID := fmt.Sprintf("proc-%d", pid)
 		ev := agent.Event{
 			Type:       agent.EventNewSession,
-			Adapter:    s.adapter,
-			SessionID:  sessionID,
+						SessionID:  sessionID,
 			ProjectDir: projectDir,
 			CWD:        cwd,
 		}
@@ -333,8 +330,7 @@ func (s *Scanner) poll() {
 				// First sight — announce the transcript.
 				emit = append(emit, agent.Event{
 					Type:           agent.EventNewSession,
-					Adapter:        s.adapter,
-					SessionID:      proc.sessionID,
+						SessionID:      proc.sessionID,
 					ProjectDir:     proc.projectDir,
 					TranscriptPath: path,
 					Size:           size,
@@ -347,8 +343,7 @@ func (s *Scanner) poll() {
 				// File grew (or shrank, e.g. on rotation) — emit activity.
 				emit = append(emit, agent.Event{
 					Type:           agent.EventActivity,
-					Adapter:        s.adapter,
-					SessionID:      proc.sessionID,
+						SessionID:      proc.sessionID,
 					ProjectDir:     proc.projectDir,
 					TranscriptPath: path,
 					Size:           size,
@@ -384,8 +379,7 @@ func (s *Scanner) poll() {
 	for _, proc := range exited {
 		s.broadcast(agent.Event{
 			Type:       agent.EventRemoved,
-			Adapter:    s.adapter,
-			SessionID:  proc.sessionID,
+						SessionID:  proc.sessionID,
 			ProjectDir: proc.projectDir,
 		})
 	}

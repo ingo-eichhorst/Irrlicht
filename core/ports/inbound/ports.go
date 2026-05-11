@@ -1,27 +1,18 @@
 // Package inbound defines inbound port interfaces — contracts that inbound
 // adapters (file watchers, HTTP handlers, etc.) satisfy to drive the
 // application core.
+//
+// The new agent-side port is Watcher (see watcher.go). The historical
+// AgentWatcher was removed in #159 Phase A.5; the daemon now consumes
+// Watcher exclusively and uses Watcher.Identity() to tag events with
+// their adapter name (replacing the agent.Event.Adapter field).
 package inbound
 
 import (
 	"context"
 
-	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/orchestrator"
 )
-
-// AgentWatcher watches a directory tree for agent transcript file changes,
-// emitting events for new sessions, activity, and removals. Each
-// implementation targets a specific agent (Claude Code, Codex, etc.).
-type AgentWatcher interface {
-	// Watch begins watching for transcript changes. It blocks until ctx is
-	// cancelled or an unrecoverable error occurs.
-	Watch(ctx context.Context) error
-	// Subscribe returns a channel that receives agent events.
-	Subscribe() <-chan agent.Event
-	// Unsubscribe removes a previously subscribed channel and closes it.
-	Unsubscribe(ch <-chan agent.Event)
-}
 
 // OrchestratorWatcher monitors a multi-agent orchestration system and
 // produces standardised state snapshots. Each implementation targets a

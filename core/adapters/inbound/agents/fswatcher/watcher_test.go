@@ -84,9 +84,6 @@ func TestWatch_EmitsNewSession(t *testing.T) {
 		if ev.Type != agent.EventNewSession {
 			t.Errorf("event type = %q, want %q", ev.Type, agent.EventNewSession)
 		}
-		if ev.Adapter != testAdapter {
-			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
-		}
 		if ev.SessionID != "abc-123" {
 			t.Errorf("session ID = %q, want %q", ev.SessionID, "abc-123")
 		}
@@ -149,9 +146,6 @@ func TestWatch_EmitsActivity(t *testing.T) {
 		if ev.Type != agent.EventActivity {
 			t.Errorf("event type = %q, want %q", ev.Type, agent.EventActivity)
 		}
-		if ev.Adapter != testAdapter {
-			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
-		}
 		if ev.SessionID != "sess-001" {
 			t.Errorf("session ID = %q, want %q", ev.SessionID, "sess-001")
 		}
@@ -204,9 +198,6 @@ func TestWatch_EmitsRemoved(t *testing.T) {
 	case ev := <-ch:
 		if ev.Type != agent.EventRemoved {
 			t.Errorf("event type = %q, want %q", ev.Type, agent.EventRemoved)
-		}
-		if ev.Adapter != testAdapter {
-			t.Errorf("adapter = %q, want %q", ev.Adapter, testAdapter)
 		}
 		if ev.SessionID != "sess-rm" {
 			t.Errorf("session ID = %q, want %q", ev.SessionID, "sess-rm")

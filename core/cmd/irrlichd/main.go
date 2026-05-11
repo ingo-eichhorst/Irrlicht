@@ -174,10 +174,10 @@ func main() {
 	// --- File-based SessionDetector (primary detection path) ---
 	// Forward-reference: detector is assigned before any callbacks can fire,
 	// because ProcessWatcher only invokes callbacks after
-	// SessionDetector.Run() subscribes to AgentWatcher events.
+	// SessionDetector.Run() subscribes to Watcher events.
 	var detector *services.SessionDetector
 
-	// IRRLICHT_DEMO_MODE=1 disables ProcessWatcher and per-adapter AgentWatchers
+	// IRRLICHT_DEMO_MODE=1 disables ProcessWatcher and per-adapter Watchers
 	// so the daemon serves only what's already on disk in instances/. Used by
 	// tools/seed-demo-sessions to take controlled screenshots without live
 	// agent processes leaking into the dropdown.
@@ -340,7 +340,7 @@ func main() {
 	// fswatcher and a process scanner; FilesUnderCWD and ProcessOwnedStore
 	// adapters get only a scanner. Skipped entirely under IRRLICHT_DEMO_MODE=1
 	// — daemon serves only what's already on disk in instances/.
-	var watchers []inbound.AgentWatcher
+	var watchers []inbound.Watcher
 	watcherRoots := make([]string, 0, len(allAgents))
 	if !demoMode {
 		for _, a := range allAgents {
@@ -359,7 +359,7 @@ func main() {
 	pidDiscovers := agents.PIDDiscoverers(allAgents)
 	processNames := agents.ProcessNames(allAgents)
 
-	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
+	// SessionDetector: orchestrates Watchers + ProcessWatcher.
 	detector = services.NewSessionDetector(
 		watchers, pwPort,
 		cachedRepo, logger, gitResolver, metricsCollector, push,

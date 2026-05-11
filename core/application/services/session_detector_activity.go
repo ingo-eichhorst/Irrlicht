@@ -11,25 +11,28 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-func (d *SessionDetector) handleTranscriptEvent(ev agent.Event) {
-	// Record raw inbound event for lifecycle replay.
+func (d *SessionDetector) handleTranscriptEvent(id agent.Identity, ev agent.Event) {
+	// Record raw inbound event for lifecycle replay. Adapter identity is
+	// sourced from the inbound.Watcher's Identity() — see the per-watcher
+	// drain goroutine in Run() that wraps each event with its watcher's
+	// identity into the merged channel.
 	switch ev.Type {
 	case agent.EventNewSession:
-		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptNew, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath, FileSize: ev.Size, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
-		d.onNewSession(ev)
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptNew, SessionID: ev.SessionID, Adapter: id.Name, TranscriptPath: ev.TranscriptPath, FileSize: ev.Size, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
+		d.onNewSession(id, ev)
 	case agent.EventActivity:
-		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptActivity, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath, FileSize: ev.Size})
-		d.onActivity(ev)
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptActivity, SessionID: ev.SessionID, Adapter: id.Name, TranscriptPath: ev.TranscriptPath, FileSize: ev.Size})
+		d.onActivity(id, ev)
 	case agent.EventRemoved:
-		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptRemoved, SessionID: ev.SessionID, Adapter: ev.Adapter, TranscriptPath: ev.TranscriptPath})
+		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptRemoved, SessionID: ev.SessionID, Adapter: id.Name, TranscriptPath: ev.TranscriptPath})
 		d.onRemoved(ev)
 	}
 }
 
 // onNewSession handles a new transcript file appearing.
-func (d *SessionDetector) onNewSession(ev agent.Event) {
+func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 	d.log.LogInfo("session-detector", ev.SessionID,
-		fmt.Sprintf("new session detected in %s (adapter=%s)", ev.ProjectDir, ev.Adapter))
+		fmt.Sprintf("new session detected in %s (adapter=%s)", ev.ProjectDir, id.Name))
 
 	// Track project directory for parent derivation.
 	d.mu.Lock()
@@ -78,7 +81,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 			Version:         1,
 			SessionID:       ev.SessionID,
 			State:           session.StateReady,
-			Adapter:         ev.Adapter,
+			Adapter:         id.Name,
 			TranscriptPath:  ev.TranscriptPath,
 			CWD:             ev.CWD,
 			DaemonVersion:   d.version,
@@ -108,7 +111,7 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		// Record pre-session detection (proc-* IDs only — real transcript
 		// sessions are already covered by KindTranscriptNew above).
 		if strings.HasPrefix(ev.SessionID, "proc-") {
-			d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionCreated, SessionID: ev.SessionID, Adapter: ev.Adapter, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
+			d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionCreated, SessionID: ev.SessionID, Adapter: id.Name, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
 		}
 
 		// Record initial state transition.
@@ -120,23 +123,35 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 		// the same project. Match by projectDir first (Claude Code layout),
 		// then fall back to CWD (Codex/Pi have different transcript layouts).
 		if ev.TranscriptPath != "" {
-			d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, ev.Adapter)
+			d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, id.Name)
 		}
 	} else {
-		// Session already exists. Update transcript path if missing.
+		// Session already exists. Update transcript path if missing, and
+		// backfill Adapter when it's empty — this happens when an earlier
+		// processActivity fallback (debounce/refresh) created the session
+		// without an identity. The watcher's identity on the next real
+		// transcript event is the authoritative source.
+		changed := false
 		if existing.TranscriptPath == "" {
 			existing.TranscriptPath = ev.TranscriptPath
+			changed = true
+		}
+		if existing.Adapter == "" && id.Name != "" {
+			existing.Adapter = id.Name
+			changed = true
+		}
+		if changed {
 			existing.UpdatedAt = now
 			if err := d.repo.Save(existing); err != nil {
 				d.log.LogError("session-detector", ev.SessionID,
-					fmt.Sprintf("failed to update transcript path: %v", err))
+					fmt.Sprintf("failed to update existing session: %v", err))
 			}
 		}
 	}
 
 	// PID discovery (async). Each adapter has its own strategy:
 	// Claude Code uses CWD-based matching, Codex/Pi use transcript file writer.
-	adapter := ev.Adapter
+	adapter := id.Name
 	if !isNew {
 		adapter = existing.Adapter
 	}
@@ -154,7 +169,11 @@ func (d *SessionDetector) onNewSession(ev agent.Event) {
 // onActivity debounces transcript activity events per session. The first event
 // fires immediately (so the UI stays responsive), then subsequent events
 // within a 2-second window are coalesced into a single processActivity call.
-func (d *SessionDetector) onActivity(ev agent.Event) {
+// Identity is forwarded to processActivity (only needed for the rare
+// startup-race fallback where state is nil and we want to bootstrap a
+// session with a non-empty Adapter). Coalesced events lose identity at the
+// debouncedEvents-channel boundary — see Run() for the rationale.
+func (d *SessionDetector) onActivity(id agent.Identity, ev agent.Event) {
 	sid := ev.SessionID
 
 	d.debounceMu.Lock()
@@ -182,7 +201,7 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 		})
 		d.debounce[sid] = entry
 		d.debounceMu.Unlock()
-		d.processActivity(ev)
+		d.processActivity(id, ev)
 		return
 	}
 
@@ -198,7 +217,15 @@ func (d *SessionDetector) onActivity(ev agent.Event) {
 // processActivity handles a (possibly debounced) transcript activity event.
 // It uses content-based detection to determine whether the agent is working
 // or waiting for user input.
-func (d *SessionDetector) processActivity(ev agent.Event) {
+//
+// id is the watcher's Identity only when this method is invoked directly
+// from handleTranscriptEvent / onActivity (the first event in a debounce
+// window). Coalesced events from the debouncedEvents channel and synthetic
+// refresh events both arrive with an empty Identity — they rely on a
+// pre-existing state record's Adapter field instead. The rare fallback
+// path (state == nil, --continue cooldown expired) drops the event when
+// id is empty rather than bootstrap a session without an adapter name.
+func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 	// Load session state.
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
@@ -221,8 +248,13 @@ func (d *SessionDetector) processActivity(ev agent.Event) {
 			return
 		}
 		// Session not tracked yet — treat as new (startup race where activity
-		// arrives before the initial scan).
-		d.onNewSession(ev)
+		// arrives before the initial scan). Identity carries the adapter
+		// name when invoked from handleTranscriptEvent; debounce/refresh
+		// paths pass an empty Identity, in which case state.Adapter starts
+		// empty and gets backfilled later when handleTranscriptEvent
+		// processes the next transcript event for this session (see the
+		// existing-session branch in onNewSession).
+		d.onNewSession(id, ev)
 		return
 	}
 
@@ -406,9 +438,8 @@ func (d *SessionDetector) refreshStaleSessions() {
 		if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
 			continue
 		}
-		d.processActivity(agent.Event{
+		d.processActivity(agent.Identity{}, agent.Event{
 			Type:           agent.EventActivity,
-			Adapter:        state.Adapter,
 			SessionID:      state.SessionID,
 			TranscriptPath: state.TranscriptPath,
 		})

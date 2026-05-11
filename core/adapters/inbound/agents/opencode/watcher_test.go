@@ -165,9 +165,6 @@ func TestScanSessions_NewSession(t *testing.T) {
 			if ev.SessionID != "ses_abc" {
 				t.Errorf("SessionID = %q, want ses_abc", ev.SessionID)
 			}
-			if ev.Adapter != AdapterName {
-				t.Errorf("Adapter = %q, want %q", ev.Adapter, AdapterName)
-			}
 		}
 	}
 	if newSessions != 1 {

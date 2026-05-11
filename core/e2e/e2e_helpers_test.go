@@ -173,9 +173,11 @@ func (m *stubMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, erro
 func (m *stubMetrics) PruneEntry(_ string) {}
 
 type mockWatcher struct {
-	ch chan agent.Event
+	ch       chan agent.Event
+	identity agent.Identity
 }
 
 func (w *mockWatcher) Watch(ctx context.Context) error  { <-ctx.Done(); return ctx.Err() }
 func (w *mockWatcher) Subscribe() <-chan agent.Event    { return w.ch }
 func (w *mockWatcher) Unsubscribe(_ <-chan agent.Event) {}
+func (w *mockWatcher) Identity() agent.Identity         { return w.identity }

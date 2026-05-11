@@ -7,13 +7,9 @@ import (
 	"irrlicht/core/ports/inbound"
 )
 
-// Compile-time assertion that Watcher satisfies both the legacy and the
-// new inbound port interfaces. PR5 deletes AgentWatcher; until then the
-// concrete type satisfies both, which is checked here at compile time.
-var (
-	_ inbound.AgentWatcher = (*Watcher)(nil)
-	_ inbound.Watcher      = (*Watcher)(nil)
-)
+// Compile-time assertion that Watcher satisfies the inbound port. The
+// legacy AgentWatcher port was deleted in #159 Phase A.5.
+var _ inbound.Watcher = (*Watcher)(nil)
 
 func TestWithIdentityRoundTrip(t *testing.T) {
 	w := New("", "claude-code", 0)
