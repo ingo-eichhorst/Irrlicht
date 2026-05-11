@@ -1,0 +1,66 @@
+{
+  "type": "session_updated",
+  "session": {
+    "version": 1,
+    "session_id": "00000000-0000-0000-0000-000000000001",
+    "state": "working",
+    "adapter": "claude-code",
+    "compaction_state": "not_compacting",
+    "model": "claude-sonnet-4-6",
+    "cwd": "/tmp/test-cwd",
+    "transcript_path": "/tmp/test-transcript.jsonl",
+    "git_branch": "main",
+    "project_name": "test-project",
+    "first_seen": 1700000000,
+    "updated_at": 1700000100,
+    "confidence": "high",
+    "event_count": 42,
+    "last_event": "assistant",
+    "last_matcher": "claude-stop-hook",
+    "metrics": {
+      "elapsed_seconds": 300,
+      "total_tokens": 10000,
+      "model_name": "claude-sonnet-4-6",
+      "context_window": 200000,
+      "context_utilization_percentage": 5,
+      "pressure_level": "low",
+      "has_open_tool_call": true,
+      "open_tool_call_count": 1,
+      "open_subagents": 2,
+      "last_event_type": "tool_use",
+      "last_open_tool_names": [
+        "Bash"
+      ],
+      "estimated_cost_usd": 0.0123,
+      "cum_input_tokens": 8000,
+      "cum_output_tokens": 2000,
+      "cum_cache_read_tokens": 1500,
+      "cum_cache_creation_tokens": 500,
+      "last_assistant_text": "Working on it.",
+      "permission_mode": "default",
+      "tasks": [
+        {
+          "id": "task-1",
+          "subject": "first task",
+          "active_form": "Doing first task",
+          "status": "in_progress"
+        },
+        {
+          "id": "task-2",
+          "subject": "second task",
+          "status": "pending"
+        }
+      ]
+    },
+    "pid": 12345,
+    "launcher": {
+      "term_program": "iTerm.app",
+      "iterm_session_id": "w0t0p0:ABCDEF",
+      "tty": "/dev/ttys001"
+    },
+    "parent_session_id": "00000000-0000-0000-0000-000000000002",
+    "daemon_version": "0.3.13",
+    "last_transcript_size": 1024,
+    "waiting_start_time": 1700000050
+  }
+}
