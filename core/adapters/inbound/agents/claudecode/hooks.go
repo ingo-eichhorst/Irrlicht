@@ -1,7 +1,9 @@
 // hooks.go provides the HTTP handler for receiving Claude Code hook events.
-// Claude Code fires hooks on PermissionRequest, PostToolUse, and
-// PostToolUseFailure — the daemon uses these to surface permission-pending
-// state in the classifier (issue #108).
+// Claude Code fires hooks on PermissionRequest, PreToolUse, PostToolUse, and
+// PostToolUseFailure — the daemon uses these to surface user-blocking state
+// in the classifier. PermissionRequest covers permission gates (issue #108);
+// PreToolUse on AskUserQuestion / ExitPlanMode covers user-input overlays
+// that block the agent before the transcript is flushed (issue #307).
 package claudecode
 
 import (
@@ -15,11 +17,21 @@ import (
 )
 
 // Hook event names. Claude Code fires these; the daemon recognizes only
-// these three and ignores everything else.
+// these four and ignores everything else.
 const (
 	HookPermissionRequest  = "PermissionRequest"
+	HookPreToolUse         = "PreToolUse"
 	HookPostToolUse        = "PostToolUse"
 	HookPostToolUseFailure = "PostToolUseFailure"
+)
+
+// Tool names that suspend the agent waiting for user input. PreToolUse hooks
+// must match one of these — anything else is rejected by the handler, even
+// if the matcher in settings.json was edited to be broader. Defense-in-depth
+// against the matcher being the sole filter.
+const (
+	toolAskUserQuestion = "AskUserQuestion"
+	toolExitPlanMode    = "ExitPlanMode"
 )
 
 // hookPayload is the JSON body sent by Claude Code hook events.
@@ -78,11 +90,24 @@ func NewHookHandler(target HookTarget, log outbound.Logger) http.HandlerFunc {
 			return
 		}
 
-		switch payload.HookEventName {
-		case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
+		dispatch := func() {
 			log.LogInfo("hook-receiver", sessionID,
 				fmt.Sprintf("received %s (tool=%s)", payload.HookEventName, payload.ToolName))
 			target.HandlePermissionHook(sessionID, payload.TranscriptPath, payload.HookEventName)
+		}
+
+		switch payload.HookEventName {
+		case HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure:
+			dispatch()
+		case HookPreToolUse:
+			// Only dispatch for user-input tools; reject anything else even
+			// if the settings.json matcher was misconfigured to be broader.
+			if payload.ToolName == toolAskUserQuestion || payload.ToolName == toolExitPlanMode {
+				dispatch()
+			} else {
+				log.LogInfo("hook-receiver", sessionID,
+					fmt.Sprintf("ignored PreToolUse for unexpected tool %q", payload.ToolName))
+			}
 		default:
 			// Unrecognized hook event — accept but ignore.
 			log.LogInfo("hook-receiver", sessionID,

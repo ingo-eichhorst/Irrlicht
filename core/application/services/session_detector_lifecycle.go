@@ -26,6 +26,13 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	delete(d.projectSessions, ev.SessionID)
 	d.mu.Unlock()
 
+	// Drop any leftover permission-pending flag — otherwise a hook that
+	// fired without a clearing partner (e.g. agent crash mid-overlay) would
+	// keep the entry forever, and a recycled session ID would inherit it.
+	d.permMu.Lock()
+	delete(d.permissionPending, ev.SessionID)
+	d.permMu.Unlock()
+
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {
 		return
@@ -79,15 +86,21 @@ func (d *SessionDetector) HandlePIDAssigned(pid int, sessionID string) {
 	d.pidMgr.HandlePIDAssigned(pid, sessionID)
 }
 
-// HandlePermissionHook processes a Claude Code PermissionRequest, PostToolUse,
-// or PostToolUseFailure hook event. It updates the in-memory permission-pending
-// flag and injects a synthetic activity event to trigger re-classification.
+// HandlePermissionHook processes a Claude Code PermissionRequest, PreToolUse,
+// PostToolUse, or PostToolUseFailure hook event. It updates the in-memory
+// permission-pending flag and injects a synthetic activity event to trigger
+// re-classification.
+//
+// PreToolUse fires synchronously when the model emits a tool_use block, before
+// the assistant message is persisted to JSONL. For AskUserQuestion and
+// ExitPlanMode (matched by the installer), this lets the daemon flip
+// working → waiting without depending on transcript flush latency (issue #307).
 //
 // Safe to call from any goroutine (e.g. HTTP handler).
 func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
 	d.permMu.Lock()
 	switch hookEventName {
-	case "PermissionRequest":
+	case "PermissionRequest", "PreToolUse":
 		d.permissionPending[sessionID] = true
 	case "PostToolUse", "PostToolUseFailure":
 		delete(d.permissionPending, sessionID)

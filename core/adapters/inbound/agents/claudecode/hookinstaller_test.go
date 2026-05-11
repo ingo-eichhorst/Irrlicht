@@ -29,6 +29,25 @@ func readJSON(t *testing.T, path string) map[string]interface{} {
 	return m
 }
 
+// legacyMatcher is the pre-#307 PostToolUse matcher, used to seed test
+// fixtures that simulate an existing irrlicht install from before the
+// AskUserQuestion / ExitPlanMode expansion.
+const legacyMatcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*"
+
+// makeHookGroup builds a settings.json hook matcher group with the given
+// matcher and command. Used by tests to seed fixtures.
+func makeHookGroup(matcher, command string) map[string]interface{} {
+	return map[string]interface{}{
+		"matcher": matcher,
+		"hooks": []interface{}{
+			map[string]interface{}{
+				"type":    "command",
+				"command": command,
+			},
+		},
+	}
+}
+
 func TestEnsureHooksInstalled_CreatesFileIfAbsent(t *testing.T) {
 	home := withTempHome(t)
 	modified, err := EnsureHooksInstalled()
@@ -74,20 +93,10 @@ func TestEnsureHooksInstalled_PreservesExistingHooks(t *testing.T) {
 	home := withTempHome(t)
 	path := filepath.Join(home, ".claude", "settings.json")
 
-	// Pre-populate with an existing hook.
+	// Pre-populate with an existing foreign hook on PreToolUse.
 	existing := map[string]interface{}{
 		"hooks": map[string]interface{}{
-			"PreToolUse": []interface{}{
-				map[string]interface{}{
-					"matcher": "Bash",
-					"hooks": []interface{}{
-						map[string]interface{}{
-							"type":    "command",
-							"command": "echo custom-hook",
-						},
-					},
-				},
-			},
+			"PreToolUse": []interface{}{makeHookGroup("Bash", "echo custom-hook")},
 		},
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -105,17 +114,17 @@ func TestEnsureHooksInstalled_PreservesExistingHooks(t *testing.T) {
 	settings := readJSON(t, path)
 	hooksMap := settings["hooks"].(map[string]interface{})
 
-	// Our hooks should be added.
+	// Our hooks should be added for all managed events.
 	for _, event := range installedHookEvents {
 		if _, ok := hooksMap[event]; !ok {
 			t.Errorf("missing hook for %s", event)
 		}
 	}
 
-	// Existing hook should be preserved.
+	// Foreign PreToolUse group should be preserved (alongside our new one).
 	preToolUse, ok := hooksMap["PreToolUse"].([]interface{})
-	if !ok || len(preToolUse) == 0 {
-		t.Error("existing PreToolUse hook was removed")
+	if !ok || len(preToolUse) < 2 {
+		t.Errorf("expected at least 2 PreToolUse groups (foreign + ours), got %d", len(preToolUse))
 	}
 }
 
@@ -129,18 +138,12 @@ func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
 		t.Fatal("stale command must differ from canonical command for this test to be meaningful")
 	}
 
-	staleGroup := map[string]interface{}{
-		"matcher": hookMatcher,
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": staleCommand,
-			},
-		},
-	}
+	// Legacy install: a single PostToolUse group with the pre-#307 narrow
+	// matcher and the stale command. EnsureHooksInstalled should upgrade
+	// both the command and the matcher in place — no group append.
 	existing := map[string]interface{}{
 		"hooks": map[string]interface{}{
-			HookPostToolUse: []interface{}{staleGroup},
+			HookPostToolUse: []interface{}{makeHookGroup(legacyMatcher, staleCommand)},
 		},
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -171,6 +174,9 @@ func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
 	}
 
 	group := postArr[0].(map[string]interface{})
+	if m, _ := group["matcher"].(string); m != hookMatcher {
+		t.Errorf("expected matcher upgraded to %q, got %q", hookMatcher, m)
+	}
 	innerHooks := group["hooks"].([]interface{})
 	cmd := innerHooks[0].(map[string]interface{})["command"].(string)
 	if cmd != installedHookCommand {
@@ -230,17 +236,8 @@ func TestUninstallHooks_PreservesOtherHooks(t *testing.T) {
 	hooksMap := settings["hooks"].(map[string]interface{})
 
 	// Add a foreign matcher group to PermissionRequest.
-	foreignGroup := map[string]interface{}{
-		"matcher": "Bash",
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": "echo foreign",
-			},
-		},
-	}
 	arr := hooksMap["PermissionRequest"].([]interface{})
-	hooksMap["PermissionRequest"] = append(arr, foreignGroup)
+	hooksMap["PermissionRequest"] = append(arr, makeHookGroup("Bash", "echo foreign"))
 	data, _ := json.MarshalIndent(settings, "", "  ")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
@@ -257,6 +254,130 @@ func TestUninstallHooks_PreservesOtherHooks(t *testing.T) {
 	permArr, ok := hooksMap["PermissionRequest"].([]interface{})
 	if !ok || len(permArr) != 1 {
 		t.Fatalf("expected 1 remaining PermissionRequest group, got %d", len(permArr))
+	}
+}
+
+// TestEnsureHooksInstalled_InstallsPreToolUseAndExpandedMatcher verifies that
+// a fresh install writes the narrow PreToolUse group and uses the expanded
+// matcher (including AskUserQuestion|ExitPlanMode) for the clearing events.
+// (Issue #307.)
+func TestEnsureHooksInstalled_InstallsPreToolUseAndExpandedMatcher(t *testing.T) {
+	home := withTempHome(t)
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := readJSON(t, filepath.Join(home, ".claude", "settings.json"))
+	hooksMap := settings["hooks"].(map[string]interface{})
+
+	// PreToolUse: one group with the narrow matcher.
+	pre, ok := hooksMap[HookPreToolUse].([]interface{})
+	if !ok || len(pre) != 1 {
+		t.Fatalf("expected 1 PreToolUse group, got %d", len(pre))
+	}
+	preGroup := pre[0].(map[string]interface{})
+	if m, _ := preGroup["matcher"].(string); m != hookMatcherPreToolUse {
+		t.Errorf("PreToolUse matcher = %q, want %q", m, hookMatcherPreToolUse)
+	}
+
+	// PostToolUse: one group, matcher includes AskUserQuestion|ExitPlanMode.
+	post, ok := hooksMap[HookPostToolUse].([]interface{})
+	if !ok || len(post) != 1 {
+		t.Fatalf("expected 1 PostToolUse group, got %d", len(post))
+	}
+	postGroup := post[0].(map[string]interface{})
+	if m, _ := postGroup["matcher"].(string); m != hookMatcher {
+		t.Errorf("PostToolUse matcher = %q, want %q", m, hookMatcher)
+	}
+}
+
+// TestEnsureHooksInstalled_MigratesLegacyMatchers simulates a pre-#307
+// install where PermissionRequest/PostToolUse/PostToolUseFailure each have
+// a single managed group with the legacy narrow matcher. EnsureHooksInstalled
+// must rewrite those matchers to the expanded form in place (no group
+// append) and add the new PreToolUse group.
+func TestEnsureHooksInstalled_MigratesLegacyMatchers(t *testing.T) {
+	home := withTempHome(t)
+	path := filepath.Join(home, ".claude", "settings.json")
+
+	legacy := func() []interface{} {
+		return []interface{}{makeHookGroup(legacyMatcher, installedHookCommand)}
+	}
+	existing := map[string]interface{}{
+		"hooks": map[string]interface{}{
+			HookPermissionRequest:  legacy(),
+			HookPostToolUse:        legacy(),
+			HookPostToolUseFailure: legacy(),
+		},
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(existing)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true to migrate matchers and add PreToolUse")
+	}
+
+	settings := readJSON(t, path)
+	hooksMap := settings["hooks"].(map[string]interface{})
+
+	// Legacy groups upgraded in place; still exactly one group per event.
+	for _, event := range []string{HookPermissionRequest, HookPostToolUse, HookPostToolUseFailure} {
+		arr := hooksMap[event].([]interface{})
+		if len(arr) != 1 {
+			t.Errorf("%s: expected 1 group after migration (in-place rewrite), got %d", event, len(arr))
+			continue
+		}
+		group := arr[0].(map[string]interface{})
+		if m, _ := group["matcher"].(string); m != hookMatcher {
+			t.Errorf("%s: matcher = %q, want %q (legacy not migrated)", event, m, hookMatcher)
+		}
+	}
+
+	// PreToolUse is brand new.
+	if pre, ok := hooksMap[HookPreToolUse].([]interface{}); !ok || len(pre) != 1 {
+		t.Errorf("PreToolUse group not installed (groups=%d)", len(pre))
+	}
+
+	// Second install is idempotent.
+	modified, err = EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modified {
+		t.Fatal("expected modified=false on second install (idempotent)")
+	}
+}
+
+// TestUninstallHooks_RemovesPreToolUseGroup ensures uninstall sweeps both
+// the new PreToolUse group and the existing clearing-event groups.
+func TestUninstallHooks_RemovesPreToolUseGroup(t *testing.T) {
+	home := withTempHome(t)
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UninstallHooks(); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := readJSON(t, filepath.Join(home, ".claude", "settings.json"))
+	hooksMap, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		return // hooks key removed — acceptable
+	}
+	if _, ok := hooksMap[HookPreToolUse]; ok {
+		t.Error("PreToolUse should have been removed")
+	}
+	if _, ok := hooksMap[HookPostToolUse]; ok {
+		t.Error("PostToolUse should have been removed")
 	}
 }
 

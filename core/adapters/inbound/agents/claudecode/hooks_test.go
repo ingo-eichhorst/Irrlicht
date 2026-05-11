@@ -113,6 +113,65 @@ func TestHookHandler_PostToolUse(t *testing.T) {
 	}
 }
 
+func TestHookHandler_PreToolUse(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-pre.jsonl",
+		HookEventName:  "PreToolUse",
+		ToolName:       "AskUserQuestion",
+		ToolUseID:      "toolu_pre",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	calls := target.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1", len(calls))
+	}
+	if calls[0].sessionID != "sess-pre" {
+		t.Errorf("sessionID = %q, want %q", calls[0].sessionID, "sess-pre")
+	}
+	if calls[0].hookEventName != "PreToolUse" {
+		t.Errorf("hookEventName = %q, want %q", calls[0].hookEventName, "PreToolUse")
+	}
+}
+
+// TestHookHandler_PreToolUse_RejectsUnexpectedTool verifies the defensive
+// guard: even if settings.json was edited so PreToolUse fires for, say, Bash,
+// the handler refuses to set the permission-pending flag. The matcher is not
+// the sole filter.
+func TestHookHandler_PreToolUse_RejectsUnexpectedTool(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath: "/Users/u/.claude/projects/p/sess-x.jsonl",
+		HookEventName:  "PreToolUse",
+		ToolName:       "Bash",
+		ToolUseID:      "toolu_bash",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (handler should accept but ignore)", rec.Code, http.StatusOK)
+	}
+	if len(target.getCalls()) != 0 {
+		t.Errorf("PreToolUse for Bash should not dispatch; got %d calls", len(target.getCalls()))
+	}
+}
+
 func TestHookHandler_PostToolUseFailure(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, mockLogger{})
