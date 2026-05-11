@@ -33,31 +33,20 @@ type Adapter struct {
 	fallback         agents.ParserFactory // used for unknown adapter names
 }
 
-// New returns a new metrics Adapter configured from the given agent
-// registrations. The adapter uses cfgs[0].NewParser as the fallback parser for
-// unknown adapter names to preserve the historical "default to Claude Code"
-// behavior; callers should pass the Claude Code config first.
-func New(cfgs []agents.Config) *Adapter {
-	parsers := make(map[string]agents.ParserFactory, len(cfgs))
-	subs := make(map[string]agents.SubagentCounter, len(cfgs))
-	providers := make(map[string]agents.MetricsProvider)
-	var fallback agents.ParserFactory
-	for i, c := range cfgs {
-		parsers[c.Name] = c.NewParser
-		if c.CountOpenSubagents != nil {
-			subs[c.Name] = c.CountOpenSubagents
-		}
-		if c.ComputeMetrics != nil {
-			providers[c.Name] = c.ComputeMetrics
-		}
-		if i == 0 {
-			fallback = c.NewParser
-		}
-	}
+// New returns a new metrics Adapter configured from the given per-adapter
+// registries. The fallback parser is used for unknown adapter names to
+// preserve the historical "default to Claude Code" behavior; callers
+// should pass the Claude Code factory.
+//
+// Signature simplified in #159 Phase A.2: previously took []agents.Config
+// and derived the three maps internally. Callers now produce the maps via
+// agents.LegacyParsers / LegacySubagentCounters / LegacyMetricsProviders
+// (themselves removed in Phase A.3 when agents.Config is deleted).
+func New(parsers map[string]agents.ParserFactory, subagents map[string]agents.SubagentCounter, providers map[string]agents.MetricsProvider, fallback agents.ParserFactory) *Adapter {
 	return &Adapter{
 		tailers:          make(map[string]*lockedTailer),
 		parsers:          parsers,
-		subagents:        subs,
+		subagents:        subagents,
 		metricsProviders: providers,
 		fallback:         fallback,
 	}

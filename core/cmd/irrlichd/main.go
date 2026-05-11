@@ -19,7 +19,6 @@ import (
 	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
-	"irrlicht/core/adapters/inbound/agents/fswatcher"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
@@ -34,8 +33,10 @@ import (
 	"irrlicht/core/adapters/outbound/recorder"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/pkg/capacity"
+	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
@@ -144,17 +145,29 @@ func main() {
 	// derives from this single slice — the only place new agents need to be
 	// listed. Order matters: the metrics collector uses the first entry's
 	// parser as the fallback for unknown adapter names.
-	agentCfgs := []agents.Config{
-		claudecode.Config(),
-		codex.Config(),
-		pi.Config(),
-		aider.Config(),
-		opencode.Config(),
+	allAgents := []agent.Agent{
+		claudecode.Agent(),
+		codex.Agent(),
+		pi.Agent(),
+		aider.Agent(),
+		opencode.Agent(),
 	}
+
+	// Build the legacy parser map and patch in the FilesUnderCWD (aider)
+	// and ProcessOwnedStore (opencode) entries that LegacyParsers omits.
+	// Both will go away in PR3 (#159 M4) when agents.Config is deleted.
+	legacyParsers := agents.LegacyParsers(allAgents)
+	legacyParsers[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
+	legacyParsers[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
 
 	// Shared adapters for SessionDetector.
 	gitResolver := git.New()
-	metricsCollector := metrics.New(agentCfgs)
+	metricsCollector := metrics.New(
+		legacyParsers,
+		agents.LegacySubagentCounters(allAgents),
+		agents.LegacyMetricsProviders(allAgents),
+		legacyParsers[allAgents[0].Identity.Name],
+	)
 
 	// --- File-based SessionDetector (primary detection path) ---
 	// Forward-reference: detector is assigned before any callbacks can fire,
@@ -200,7 +213,7 @@ func main() {
 
 	hub := wshub.NewHub(push, historySnapshotProvider(historyTracker))
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
-	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(agentCfgs))
+	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(allAgents))
 
 	// pprof debug endpoints for runtime profiling (localhost only).
 	mux.HandleFunc("GET /debug/pprof/", localhostOnly(pprof.Index))
@@ -320,28 +333,18 @@ func main() {
 		return processlifecycle.HasRealSessionForPID(sessions, projectDir, pid)
 	}
 
-	// Per-adapter inbound wiring: one transcript watcher + one process scanner
-	// per AgentConfig. Scanners detect agent processes before they create a
-	// transcript so the session appears as ready from the moment the app opens.
-	// Skipped entirely under IRRLICHT_DEMO_MODE=1 — daemon serves only what's
-	// already on disk in instances/.
+	// Per-adapter inbound wiring: dispatch on each Agent's Source variant via
+	// buildAgentWatchers (see wiring.go). FilesUnderRoot adapters get both an
+	// fswatcher and a process scanner; FilesUnderCWD and ProcessOwnedStore
+	// adapters get only a scanner. Skipped entirely under IRRLICHT_DEMO_MODE=1
+	// — daemon serves only what's already on disk in instances/.
 	var watchers []inbound.AgentWatcher
-	watcherRoots := make([]string, 0, len(agentCfgs))
+	watcherRoots := make([]string, 0, len(allAgents))
 	if !demoMode {
-		for _, c := range agentCfgs {
-			w := fswatcher.New(c.RootDir, c.Name, cfg.MaxSessionAge)
-			watchers = append(watchers, w)
-			watcherRoots = append(watcherRoots, fmt.Sprintf("%s (%s)", c.Name, w.Root()))
-
-			scanner := processlifecycle.NewScanner(c.ProcessName, c.Name, 0)
-			if c.CommandLineMatch != "" {
-				scanner.WithCommandLineMatch(c.CommandLineMatch)
-			}
-			if c.TranscriptFilename != "" {
-				scanner.WithTranscriptFilename(c.TranscriptFilename)
-			}
-			scanner.WithSessionChecker(realSessionCheck)
-			watchers = append(watchers, scanner)
+		for _, a := range allAgents {
+			aws, labels := buildAgentWatchers(a, cfg.MaxSessionAge, realSessionCheck)
+			watchers = append(watchers, aws...)
+			watcherRoots = append(watcherRoots, labels...)
 		}
 
 		// OpenCode uses a SQLite database instead of JSONL files, so it needs
@@ -351,8 +354,8 @@ func main() {
 		watcherRoots = append(watcherRoots, fmt.Sprintf("%s-db (%s)", opencode.AdapterName, ocw.Root()))
 	}
 
-	pidDiscovers := agents.PIDDiscoverMap(agentCfgs)
-	processNames := agents.ProcessNameMap(agentCfgs)
+	pidDiscovers := agents.LegacyPIDDiscoverers(allAgents)
+	processNames := agents.LegacyProcessNames(allAgents)
 
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(

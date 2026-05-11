@@ -16,7 +16,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
@@ -25,20 +24,21 @@ import (
 	"irrlicht/core/adapters/outbound/filesystem"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
 )
 
-// testAgentCfgs mirrors main.go's agentCfgs slice. Tests register the real
-// production Configs so the gate test catches any future adapter that ships
-// without branding fields filled in.
-func testAgentCfgs() []agents.Config {
-	return []agents.Config{
-		claudecode.Config(),
-		codex.Config(),
-		pi.Config(),
-		aider.Config(),
-		opencode.Config(),
+// testAgents mirrors main.go's agents slice. Tests register the real
+// production Agent declarations so the gate test catches any future
+// adapter that ships without branding fields filled in.
+func testAgents() []agent.Agent {
+	return []agent.Agent{
+		claudecode.Agent(),
+		codex.Agent(),
+		pi.Agent(),
+		aider.Agent(),
+		opencode.Agent(),
 	}
 }
 
@@ -51,7 +51,7 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil))
-	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(testAgentCfgs()))
+	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(testAgents()))
 	mux.HandleFunc("GET /state", handleGetState(repo))
 	hub := wshub.NewHub(push, nil)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)

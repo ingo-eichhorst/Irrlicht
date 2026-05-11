@@ -31,7 +31,7 @@ func TestPruneEntry_RemovesLedgerAndCacheEntry(t *testing.T) {
 		t.Fatalf("write ledger: %v", err)
 	}
 
-	a := New(nil)
+	a := New(nil, nil, nil, nil)
 	a.tailers[transcript] = &lockedTailer{}
 
 	a.PruneEntry(transcript)
@@ -48,12 +48,12 @@ func TestPruneEntry_IdempotentOnMissingFile(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	a := New(nil)
+	a := New(nil, nil, nil, nil)
 	// No file written, no map entry — should not panic or error.
 	a.PruneEntry(filepath.Join(tmpHome, "never-existed.jsonl"))
 }
 
 func TestPruneEntry_EmptyPathNoop(t *testing.T) {
-	a := New(nil)
+	a := New(nil, nil, nil, nil)
 	a.PruneEntry("") // must not panic
 }
