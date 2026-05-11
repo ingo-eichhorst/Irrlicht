@@ -218,24 +218,38 @@ cd /tmp && shasum -a 256 \
   > checksums.sha256
 ```
 
-## Step 6.5: Update Homebrew Cask
+## Step 6.5: Update Homebrew Cask (in-repo only)
 
-Bump the cask in `tools/homebrew-tap/Casks/irrlicht.rb` to `$NEW_VERSION`
-with the sha256 of the freshly built DMG. The same script also syncs to the
-external tap repo (`ingo-eichhorst/homebrew-irrlicht`) when either
-`IRRLICHT_TAP_DIR` is set or a sibling `../homebrew-irrlicht` clone exists
-(auto-discovered) — but skip the `--push` flag here so the local in-repo
-template gets committed alongside the release in Step 7 first; external
-publish happens in Step 8.5 after the GitHub release exists.
+Bump the in-repo cask template `tools/homebrew-tap/Casks/irrlicht.rb` to
+`$NEW_VERSION` with the sha256 of the freshly built DMG. **Do not** touch
+the sibling tap repo yet — Step 8.5 owns that, and committing in the tap
+now would create a local tap commit that the script's "nothing to commit"
+guard then refuses to push.
+
+`update-cask.sh` auto-discovers a sibling `../homebrew-irrlicht` clone and
+commits there unconditionally, so don't run it here. Patch the in-repo
+file directly instead:
 
 ```bash
-tools/homebrew-tap/update-cask.sh --version "$NEW_VERSION"
+DMG_SHA=$(shasum -a 256 "/tmp/Irrlicht-$NEW_VERSION.dmg" | awk '{print $1}')
+CASK=/Users/ingo/projects/irrlicht/tools/homebrew-tap/Casks/irrlicht.rb
+sed -i '' -E "s/^  version \".*\"/  version \"$NEW_VERSION\"/" "$CASK"
+sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$DMG_SHA\"/" "$CASK"
+grep -E '^  (version|sha256) ' "$CASK"   # sanity check
 ```
 
-Without `IRRLICHT_TAP_DIR` set, this only updates the in-repo template —
-fine for first releases before the tap repo exists.
+The bumped template gets committed alongside the release in Step 7;
+external publish happens in Step 8.5 after the GitHub release exists.
 
-## Step 7: Commit, Tag, Push
+## Step 7: Commit, PR, Merge, Tag
+
+`main` is protected by a "Changes must be made through a pull request"
+repo rule — a direct `git push origin main` is rejected with `GH013`.
+Every release commit goes through a short-lived `release/v$NEW_VERSION`
+branch + squash-merged PR, then the tag is pushed to the *merged* commit
+on `main`.
+
+### 7a. Stage and commit on a release branch
 
 ```bash
 # Core release artefacts plus any top-level README/doc files the Step 4b
@@ -247,9 +261,46 @@ git add -- README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md 2>
 
 # Confirm nothing the sweep edited is left unstaged before committing.
 git status --short
+
+git checkout -b "release/v$NEW_VERSION"
 git commit -m "chore: release v$NEW_VERSION"
-git tag v$NEW_VERSION
-git push origin main --tags
+git push -u origin "release/v$NEW_VERSION"
+```
+
+### 7b. Open and merge the release PR
+
+Use the release notes drafted in Step 2 as the PR body so the same prose
+ships in three places (PR, CHANGELOG, GitHub release). Squash-merge so
+`main` gets exactly one commit titled `chore: release v$NEW_VERSION (#N)`.
+
+```bash
+gh pr create --title "chore: release v$NEW_VERSION" \
+  --body "<drafted release notes from Step 2>"
+
+# Wait for mergeability if needed:
+gh pr view --json mergeable,mergeStateStatus \
+  --jq '"mergeable=\(.mergeable) state=\(.mergeStateStatus)"'
+
+gh pr merge --squash --delete-branch
+```
+
+### 7c. Realign local `main` and tag the merged commit
+
+The squash creates a new commit SHA on `origin/main`, so a plain
+`git pull` reports diverged branches. Hard-reset local `main` to the
+remote — your local release commit (the pre-squash one on the deleted
+branch) is now redundant.
+
+```bash
+git checkout main
+git fetch origin main
+git reset --hard origin/main
+
+# v$NEW_VERSION must point at the squashed commit, not the local one.
+# Drop any local tag from before the squash, then re-tag.
+git tag -d "v$NEW_VERSION" 2>/dev/null || true
+git tag "v$NEW_VERSION"
+git push origin "v$NEW_VERSION"
 ```
 
 ## Step 8: Create GitHub Release
@@ -284,6 +335,18 @@ tools/homebrew-tap/update-cask.sh --version "$NEW_VERSION" --push \
   || echo "WARNING: cask publish failed — re-run later. GitHub release is unaffected."
 ```
 
+The script prints `tap repo already at $NEW_VERSION — nothing to commit`
+when a previous run already created the local commit (e.g. a retried
+release). In that state it exits 0 *without* pushing — so push the tap
+defensively from whichever clone the script discovered, before verifying:
+
+```bash
+TAP_DIR="${IRRLICHT_TAP_DIR:-$(cd .. && pwd)/homebrew-irrlicht}"
+if [ -d "$TAP_DIR/.git" ]; then
+  git -C "$TAP_DIR" push origin main 2>&1 | grep -vE '^Everything up-to-date$' || true
+fi
+```
+
 Then verify the published tap actually advanced — silent skips here
 previously stranded the tap four versions behind:
 
@@ -293,7 +356,7 @@ PUBLISHED=$(curl -fsSL "https://raw.githubusercontent.com/ingo-eichhorst/homebre
 if [ "$PUBLISHED" = "$NEW_VERSION" ]; then
     echo "tap publishes $PUBLISHED ✓"
 else
-    echo "WARNING: tap still at $PUBLISHED (expected $NEW_VERSION) — re-run update-cask.sh --push"
+    echo "WARNING: tap still at $PUBLISHED (expected $NEW_VERSION) — re-run update-cask.sh --push, or push the tap clone directly"
 fi
 ```
 
