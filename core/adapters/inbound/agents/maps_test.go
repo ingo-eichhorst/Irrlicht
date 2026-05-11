@@ -13,8 +13,7 @@ import (
 	"irrlicht/core/domain/agent"
 )
 
-// testAgents mirrors the production agentCfgs/agents slice used by main.go
-// and replay.
+// testAgents mirrors the production agents slice used by main.go and replay.
 func testAgents() []agent.Agent {
 	return []agent.Agent{
 		claudecode.Agent(),
@@ -25,74 +24,74 @@ func testAgents() []agent.Agent {
 	}
 }
 
-func TestLegacyParsers_includesJSONLineParserAdapters(t *testing.T) {
-	m := agents.LegacyParsers(testAgents())
+func TestParsers_includesJSONLineParserAdapters(t *testing.T) {
+	m := agents.Parsers(testAgents())
 	for _, name := range []string{claudecode.AdapterName, codex.AdapterName, pi.AdapterName} {
 		if _, ok := m[name]; !ok {
-			t.Errorf("LegacyParsers missing %q", name)
+			t.Errorf("Parsers missing %q", name)
 		}
 	}
 }
 
-func TestLegacyParsers_omitsRawAndStoreAdapters(t *testing.T) {
-	m := agents.LegacyParsers(testAgents())
+func TestParsers_omitsRawAndStoreAdapters(t *testing.T) {
+	m := agents.Parsers(testAgents())
 	// aider (FilesUnderCWD/RawLineParser) and opencode (ProcessOwnedStore)
 	// are intentionally absent — main.go and replay register them
 	// explicitly via adapter-package imports.
 	if _, ok := m[aider.AdapterName]; ok {
-		t.Error("LegacyParsers should not include aider (FilesUnderCWD)")
+		t.Error("Parsers should not include aider (FilesUnderCWD)")
 	}
 	if _, ok := m[opencode.AdapterName]; ok {
-		t.Error("LegacyParsers should not include opencode (ProcessOwnedStore)")
+		t.Error("Parsers should not include opencode (ProcessOwnedStore)")
 	}
 }
 
-func TestLegacyPIDDiscoverers_coversAllAdapters(t *testing.T) {
-	m := agents.LegacyPIDDiscoverers(testAgents())
+func TestPIDDiscoverers_coversAllAdapters(t *testing.T) {
+	m := agents.PIDDiscoverers(testAgents())
 	for _, name := range []string{
 		claudecode.AdapterName, codex.AdapterName, pi.AdapterName,
 		aider.AdapterName, opencode.AdapterName,
 	} {
 		if _, ok := m[name]; !ok {
-			t.Errorf("LegacyPIDDiscoverers missing %q", name)
+			t.Errorf("PIDDiscoverers missing %q", name)
 		}
 	}
 }
 
-func TestLegacyProcessNames_matchesConfigShape(t *testing.T) {
-	got := agents.LegacyProcessNames(testAgents())
+func TestProcessNames_matchesConfigShape(t *testing.T) {
+	got := agents.ProcessNames(testAgents())
 	want := map[string]string{
 		claudecode.AdapterName: "claude",
 		codex.AdapterName:      "codex",
 		pi.AdapterName:         "pi",
-		aider.AdapterName:      "aider",    // CommandPattern fallback to Identity.Name
+		aider.AdapterName:      "aider", // CommandPattern fallback to Identity.Name
 		opencode.AdapterName:   "opencode",
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("LegacyProcessNames: got %v, want %v", got, want)
+		t.Errorf("ProcessNames: got %v, want %v", got, want)
 	}
 }
 
-func TestLegacySubagentCounters_onlyClaudecode(t *testing.T) {
-	m := agents.LegacySubagentCounters(testAgents())
+func TestSubagentCounters_onlyClaudecode(t *testing.T) {
+	m := agents.SubagentCounters(testAgents())
 	if _, ok := m[claudecode.AdapterName]; !ok {
-		t.Errorf("LegacySubagentCounters missing %q", claudecode.AdapterName)
+		t.Errorf("SubagentCounters missing %q", claudecode.AdapterName)
 	}
 	for _, name := range []string{codex.AdapterName, pi.AdapterName, aider.AdapterName, opencode.AdapterName} {
 		if _, ok := m[name]; ok {
-			t.Errorf("LegacySubagentCounters should not include %q", name)
+			t.Errorf("SubagentCounters should not include %q", name)
 		}
 	}
 }
 
-func TestLegacyMetricsProviders_onlyOpencode(t *testing.T) {
-	m := agents.LegacyMetricsProviders(testAgents())
+func TestMetricsProviders_onlyOpencode(t *testing.T) {
+	m := agents.MetricsProviders(testAgents())
 	if _, ok := m[opencode.AdapterName]; !ok {
-		t.Errorf("LegacyMetricsProviders missing %q", opencode.AdapterName)
+		t.Errorf("MetricsProviders missing %q", opencode.AdapterName)
 	}
 	for _, name := range []string{claudecode.AdapterName, codex.AdapterName, pi.AdapterName, aider.AdapterName} {
 		if _, ok := m[name]; ok {
-			t.Errorf("LegacyMetricsProviders should not include %q", name)
+			t.Errorf("MetricsProviders should not include %q", name)
 		}
 	}
 }

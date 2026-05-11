@@ -17,6 +17,14 @@ const (
 	transcriptFilename      = ".aider.chat.history.md"
 )
 
+// Aider — VT220-green block cursor on a CRT-screen circle. Mirrors aider's
+// official wordmark colors (terminal green #14b014 from aider.chat/assets/logo.svg).
+// Brand-consistent across light/dark appearances; the same markup serves both.
+const iconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="44" fill="#1f3a1f" stroke="#14b014" stroke-width="6"/>
+  <rect x="40" y="32" width="20" height="36" fill="#14b014"/>
+</svg>`
+
 // Agent returns the new declaration shape introduced in #159 Phase A.
 // Mirrors Config() for legacy callers and will replace Config() once the
 // daemon switches over (PR2/PR3). Parity tests assert equivalence.

@@ -3,16 +3,15 @@ package agent
 // Agent is the registration record each inbound agent adapter exports.
 // It collapses identity, process recognition, and session source into three
 // orthogonal axes. Each adapter package's Agent() constructor returns one
-// Agent value; the daemon will wire every per-adapter behavior off it.
+// Agent value; the daemon wires every per-adapter behavior off it via the
+// per-adapter map projections in core/adapters/inbound/agents (Parsers,
+// PIDDiscoverers, ProcessNames, SubagentCounters, MetricsProviders) and
+// the Source-variant dispatch in core/cmd/irrlichd/wiring.go.
 //
-// In PR1 of #159 these types are pure additions with no callers — the
-// daemon still consumes the legacy agents.Config slice (see PR2/PR3 for
-// the wiring switch and the eventual deletion of agents.Config).
-//
-// New variants slated for Phase B/C (HostedByEditor for Process.Match,
-// EditorSharedKVStore for Source, DocumentParser for FileParser) will be
-// added as additional cases on their respective sealed sums without
-// breaking adapters targeting the existing shape.
+// New variants slated for Phase B/C of #159 (HostedByEditor for
+// Process.Match, EditorSharedKVStore for Source, DocumentParser for
+// FileParser) will be added as additional cases on their respective
+// sealed sums without breaking adapters targeting the existing shape.
 type Agent struct {
 	Identity Identity
 	Process  Process

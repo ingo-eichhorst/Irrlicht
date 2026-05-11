@@ -40,8 +40,7 @@ type Adapter struct {
 //
 // Signature simplified in #159 Phase A.2: previously took []agents.Config
 // and derived the three maps internally. Callers now produce the maps via
-// agents.LegacyParsers / LegacySubagentCounters / LegacyMetricsProviders
-// (themselves removed in Phase A.3 when agents.Config is deleted).
+// agents.Parsers / SubagentCounters / MetricsProviders.
 func New(parsers map[string]agents.ParserFactory, subagents map[string]agents.SubagentCounter, providers map[string]agents.MetricsProvider, fallback agents.ParserFactory) *Adapter {
 	return &Adapter{
 		tailers:          make(map[string]*lockedTailer),

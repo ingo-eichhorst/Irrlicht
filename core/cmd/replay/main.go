@@ -63,14 +63,13 @@ var allAgents = []agent.Agent{
 	opencode.Agent(),
 }
 
-// parserFactories is the legacy parser map consumed by parserFor() below.
-// Built once at package init via the temporary agents.LegacyParsers shim
-// plus explicit entries for FilesUnderCWD (aider) and ProcessOwnedStore
-// (opencode) adapters — those variants don't carry a parser factory in the
-// new shape compatible with agents.ParserFactory. The shim + the inline
-// entries here both go away in PR3 (#159 M4) when agents.Config is deleted.
+// parserFactories is the per-adapter parser map consumed by parserFor()
+// below. Built once at package init via agents.Parsers plus explicit
+// entries for FilesUnderCWD (aider) and ProcessOwnedStore (opencode)
+// adapters — those variants don't carry a parser factory in the new
+// shape compatible with agents.ParserFactory.
 var parserFactories = func() map[string]agents.ParserFactory {
-	m := agents.LegacyParsers(allAgents)
+	m := agents.Parsers(allAgents)
 	m[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
 	m[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
 	return m
