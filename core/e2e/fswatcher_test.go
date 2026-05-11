@@ -52,10 +52,6 @@ func TestFSWatcher_EmitsEventsForTranscriptCreateAndModify(t *testing.T) {
 	if ev.TranscriptPath != transcriptPath {
 		t.Errorf("transcript path: got %q, want %q", ev.TranscriptPath, transcriptPath)
 	}
-	if ev.Adapter != "test" {
-		t.Errorf("adapter: got %q, want %q", ev.Adapter, "test")
-	}
-
 	// Append to the file — fsnotify should emit a Write, which the watcher
 	// translates into EventActivity.
 	f, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0644)

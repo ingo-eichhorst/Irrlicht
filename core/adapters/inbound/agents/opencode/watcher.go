@@ -20,7 +20,7 @@ import (
 const defaultMinScanGap = 500 * time.Millisecond
 
 // Watcher monitors the OpenCode SQLite database for new and updated sessions.
-// It implements inbound.AgentWatcher.
+// It implements inbound.Watcher.
 //
 // Detection strategy:
 //  1. Watch the database WAL file (opencode.db-wal) via fsnotify — every
@@ -338,7 +338,6 @@ func (w *Watcher) scanSessions() {
 			walPath := w.dbPath + "-wal" + "?session=" + s.id
 			w.broadcast(agent.Event{
 				Type:            agent.EventNewSession,
-				Adapter:         w.adapter,
 				SessionID:       s.id,
 				ProjectDir:      filepath.Base(s.directory),
 				TranscriptPath:  walPath,
@@ -413,7 +412,6 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 		walPath := w.dbPath + "-wal" + "?session=" + id
 		w.broadcast(agent.Event{
 			Type:           agent.EventRemoved,
-			Adapter:        w.adapter,
 			SessionID:      id,
 			TranscriptPath: walPath,
 		})
@@ -491,7 +489,6 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 	if hasActivity {
 		w.broadcast(agent.Event{
 			Type:           agent.EventActivity,
-			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     filepath.Base(directory),
 			TranscriptPath: w.dbPath + "-wal" + "?session=" + sessionID,

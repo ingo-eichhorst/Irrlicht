@@ -14,9 +14,12 @@ const (
 )
 
 // Event carries information about a single agent transcript change.
+//
+// The Adapter field was removed in #159 Phase A.5; adapter identity now
+// flows through the inbound.Watcher port via Watcher.Identity() and is
+// captured in the per-watcher drain goroutine in session_detector.Run().
 type Event struct {
 	Type            EventType
-	Adapter         string // Source adapter name (e.g. "claude-code", "codex")
 	SessionID       string // UUID portion of the filename (without .jsonl)
 	ProjectDir      string // Leaf directory name under the watched root
 	TranscriptPath  string // Absolute path or DB path; for DB-backed adapters includes "?session=<id>"

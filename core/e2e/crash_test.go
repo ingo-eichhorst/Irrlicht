@@ -28,7 +28,7 @@ func TestSession_NoCancelledState_OnSIGKILL(t *testing.T) {
 	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(
-		[]inbound.AgentWatcher{scanner},
+		[]inbound.Watcher{scanner},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
 		"test", 0, nil, nil, nil,
 	)

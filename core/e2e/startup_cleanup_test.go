@@ -47,7 +47,6 @@ func TestStartupCleanup_DeletesZombieFromPriorDaemonRun(t *testing.T) {
 	zombieID := "abc-123-zombie"
 	if err := repo.Save(&session.SessionState{
 		SessionID:      zombieID,
-		Adapter:        "claude-code",
 		State:          session.StateWorking,
 		PID:            deadPID,
 		TranscriptPath: transcript,
@@ -59,7 +58,6 @@ func TestStartupCleanup_DeletesZombieFromPriorDaemonRun(t *testing.T) {
 	livingID := "def-456-living"
 	if err := repo.Save(&session.SessionState{
 		SessionID:      livingID,
-		Adapter:        "claude-code",
 		State:          session.StateWorking,
 		PID:            os.Getpid(),
 		TranscriptPath: transcript,
@@ -69,7 +67,7 @@ func TestStartupCleanup_DeletesZombieFromPriorDaemonRun(t *testing.T) {
 	}
 
 	detector := services.NewSessionDetector(
-		[]inbound.AgentWatcher{},
+		[]inbound.Watcher{},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
 		"test", 0, nil, nil, nil,
 	)

@@ -48,7 +48,7 @@ func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(
-		[]inbound.AgentWatcher{scanner},
+		[]inbound.Watcher{scanner},
 		nil, // no ProcessWatcher needed
 		repo,
 		&nopLogger{},
@@ -124,7 +124,7 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 	transcriptWatcher := &mockWatcher{ch: make(chan agent.Event, 4)}
 
 	detector := services.NewSessionDetector(
-		[]inbound.AgentWatcher{scanner, transcriptWatcher},
+		[]inbound.Watcher{scanner, transcriptWatcher},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
 		"test", 0, nil, nil, nil,
 	)
@@ -156,7 +156,6 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 
 	transcriptWatcher.ch <- agent.Event{
 		Type:           agent.EventNewSession,
-		Adapter:        "test",
 		SessionID:      realID,
 		ProjectDir:     projectDir,
 		TranscriptPath: transcriptPath,
@@ -209,7 +208,7 @@ func TestPreSession_CreatedDespiteHistoricalSession(t *testing.T) {
 	scanner.WithSessionChecker(realSessionCheckerFor(repo))
 
 	detector := services.NewSessionDetector(
-		[]inbound.AgentWatcher{scanner},
+		[]inbound.Watcher{scanner},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
 		"test", 0, nil, nil, nil,
 	)
@@ -260,7 +259,7 @@ func TestPreSession_SurvivesNeighbourSessionActivity(t *testing.T) {
 	scanner.WithSessionChecker(realSessionCheckerFor(repo))
 
 	detector := services.NewSessionDetector(
-		[]inbound.AgentWatcher{scanner},
+		[]inbound.Watcher{scanner},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
 		"test", 0, nil, nil, nil,
 	)
@@ -310,7 +309,7 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(
-		[]inbound.AgentWatcher{scanner},
+		[]inbound.Watcher{scanner},
 		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
 		"test", 0, nil, nil, nil,
 	)

@@ -34,9 +34,9 @@ func buildAgentWatchers(
 	a agent.Agent,
 	maxSessionAge time.Duration,
 	sessionChecker func(projectDir string, pid int) bool,
-) ([]inbound.AgentWatcher, []string) {
+) ([]inbound.Watcher, []string) {
 	var (
-		watchers []inbound.AgentWatcher
+		watchers []inbound.Watcher
 		labels   []string
 	)
 

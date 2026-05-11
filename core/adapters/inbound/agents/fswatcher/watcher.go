@@ -17,8 +17,7 @@ import (
 )
 
 // Watcher watches a directory tree for .jsonl transcript file events.
-// It implements inbound.AgentWatcher and (when WithIdentity has been
-// called) inbound.Watcher.
+// It implements inbound.Watcher.
 type Watcher struct {
 	root     string         // resolved absolute path to the watched directory
 	adapter  string         // adapter name set on emitted events
@@ -191,7 +190,6 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		}
 		w.broadcast(agent.Event{
 			Type:           agent.EventNewSession,
-			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
 			TranscriptPath: name,
@@ -205,7 +203,6 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		}
 		w.broadcast(agent.Event{
 			Type:           agent.EventActivity,
-			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
 			TranscriptPath: name,
@@ -215,7 +212,6 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 	case ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 		w.broadcast(agent.Event{
 			Type:           agent.EventRemoved,
-			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
 			TranscriptPath: name,
@@ -362,7 +358,6 @@ func (w *Watcher) emitExistingFiles(dir string) {
 		}
 		w.broadcast(agent.Event{
 			Type:           agent.EventNewSession,
-			Adapter:        w.adapter,
 			SessionID:      sessionID,
 			ProjectDir:     projectDir,
 			TranscriptPath: fullPath,
