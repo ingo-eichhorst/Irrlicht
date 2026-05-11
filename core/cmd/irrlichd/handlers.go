@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/outbound/httputil"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
@@ -89,22 +89,22 @@ func attachGroupCosts(groups []*session.AgentGroup, tracker outbound.CostTracker
 
 // handleGetAgents serves the registered adapter branding so frontends can look
 // up an adapter's display name and icon by `name` instead of hardcoding their
-// own switches. The slice mirrors the order configured in main.go's agentCfgs;
+// own switches. The slice mirrors the order configured in main.go's agents;
 // frontends should treat ordering as informational only and key by `name`.
-func handleGetAgents(cfgs []agents.Config) http.HandlerFunc {
+func handleGetAgents(allAgents []agent.Agent) http.HandlerFunc {
 	type agentEntry struct {
 		Name         string `json:"name"`
 		DisplayName  string `json:"display_name"`
 		IconSVGLight string `json:"icon_svg_light"`
 		IconSVGDark  string `json:"icon_svg_dark"`
 	}
-	entries := make([]agentEntry, 0, len(cfgs))
-	for _, c := range cfgs {
+	entries := make([]agentEntry, 0, len(allAgents))
+	for _, a := range allAgents {
 		entries = append(entries, agentEntry{
-			Name:         c.Name,
-			DisplayName:  c.DisplayName,
-			IconSVGLight: c.IconSVGLight,
-			IconSVGDark:  c.IconSVGDark,
+			Name:         a.Identity.Name,
+			DisplayName:  a.Identity.DisplayName,
+			IconSVGLight: a.Identity.IconSVGLight,
+			IconSVGDark:  a.Identity.IconSVGDark,
 		})
 	}
 	return func(w http.ResponseWriter, r *http.Request) {

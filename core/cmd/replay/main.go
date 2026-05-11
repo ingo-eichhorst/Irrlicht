@@ -48,21 +48,33 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/pkg/tailer"
 )
 
-// agentConfigs lists every inbound agent adapter the replay CLI knows about.
+// allAgents lists every inbound agent adapter the replay CLI knows about.
 // Kept local to main so this package isn't re-importing a shared registry —
 // the daemon's production wiring lives in cmd/irrlichd/main.go.
-var agentConfigs = []agents.Config{
-	claudecode.Config(),
-	codex.Config(),
-	pi.Config(),
-	aider.Config(),
-	opencode.Config(),
+var allAgents = []agent.Agent{
+	claudecode.Agent(),
+	codex.Agent(),
+	pi.Agent(),
+	aider.Agent(),
+	opencode.Agent(),
 }
 
-var parserFactories = agents.ParserMap(agentConfigs)
+// parserFactories is the legacy parser map consumed by parserFor() below.
+// Built once at package init via the temporary agents.LegacyParsers shim
+// plus explicit entries for FilesUnderCWD (aider) and ProcessOwnedStore
+// (opencode) adapters — those variants don't carry a parser factory in the
+// new shape compatible with agents.ParserFactory. The shim + the inline
+// entries here both go away in PR3 (#159 M4) when agents.Config is deleted.
+var parserFactories = func() map[string]agents.ParserFactory {
+	m := agents.LegacyParsers(allAgents)
+	m[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
+	m[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
+	return m
+}()
 
 // parserFor returns a fresh TranscriptParser for the given adapter name,
 // falling back to Claude Code for unknown names (preserves prior behavior).
