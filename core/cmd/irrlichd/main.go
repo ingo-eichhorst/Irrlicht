@@ -153,20 +153,22 @@ func main() {
 		opencode.Agent(),
 	}
 
-	// Build the legacy parser map and patch in the FilesUnderCWD (aider)
-	// and ProcessOwnedStore (opencode) entries that LegacyParsers omits.
-	// Both will go away in PR3 (#159 M4) when agents.Config is deleted.
-	legacyParsers := agents.LegacyParsers(allAgents)
-	legacyParsers[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
-	legacyParsers[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
+	// Build the per-adapter parser map and patch in the FilesUnderCWD
+	// (aider) and ProcessOwnedStore (opencode) entries that agents.Parsers
+	// omits. The new RawLineParser/ProcessOwnedStore source variants don't
+	// carry a parser factory compatible with agents.ParserFactory, so the
+	// two adapters are wired explicitly via their adapter-package imports.
+	parserFactories := agents.Parsers(allAgents)
+	parserFactories[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
+	parserFactories[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
 
 	// Shared adapters for SessionDetector.
 	gitResolver := git.New()
 	metricsCollector := metrics.New(
-		legacyParsers,
-		agents.LegacySubagentCounters(allAgents),
-		agents.LegacyMetricsProviders(allAgents),
-		legacyParsers[allAgents[0].Identity.Name],
+		parserFactories,
+		agents.SubagentCounters(allAgents),
+		agents.MetricsProviders(allAgents),
+		parserFactories[allAgents[0].Identity.Name],
 	)
 
 	// --- File-based SessionDetector (primary detection path) ---
@@ -354,8 +356,8 @@ func main() {
 		watcherRoots = append(watcherRoots, fmt.Sprintf("%s-db (%s)", opencode.AdapterName, ocw.Root()))
 	}
 
-	pidDiscovers := agents.LegacyPIDDiscoverers(allAgents)
-	processNames := agents.LegacyProcessNames(allAgents)
+	pidDiscovers := agents.PIDDiscoverers(allAgents)
+	processNames := agents.ProcessNames(allAgents)
 
 	// SessionDetector: orchestrates AgentWatchers + ProcessWatcher.
 	detector = services.NewSessionDetector(

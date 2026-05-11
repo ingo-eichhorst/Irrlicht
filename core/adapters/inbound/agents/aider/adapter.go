@@ -7,8 +7,3 @@ const AdapterName = "aider"
 // process scanner via `pgrep -x`.
 const ProcessName = "aider"
 
-// rootDir is the path relative to $HOME where Aider stores chat history.
-// Aider writes `.aider.chat.history.md` per project, so the root is the
-// project working dir; this fallback path is rarely used by the fswatcher
-// because Aider's transcript is markdown, not JSONL.
-const rootDir = ".aider"
