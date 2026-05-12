@@ -66,13 +66,11 @@ func PIDDiscoverers(agents []agent.Agent) map[string]agent.PIDDiscoverFunc {
 }
 
 // ProcessNames produces the adapter-name → OS-process-name map used by
-// the startup zombie sweep. For ExactName matchers, the OS process name
-// IS the matcher name. For CommandPattern matchers (aider), no reliable
-// OS process name exists (aider runs under python), so we fall back to
-// Identity.Name — same value the historical agents.Config.ProcessName
-// carried for that adapter. The zombie sweep does pgrep -x against this
-// and finds nothing for CommandPattern adapters, which is correct
-// behavior.
+// the startup zombie sweep. For ExactName matchers the OS process name
+// IS the matcher name. For CommandPattern matchers no reliable OS
+// process name exists (e.g. aider runs under python), so we fall back
+// to Identity.Name; the zombie sweep does pgrep -x against this and
+// finds nothing, which is correct behavior.
 func ProcessNames(agents []agent.Agent) map[string]string {
 	m := make(map[string]string, len(agents))
 	for _, a := range agents {
@@ -80,7 +78,7 @@ func ProcessNames(agents []agent.Agent) map[string]string {
 			m[a.Identity.Name] = e.Name
 			continue
 		}
-		// CommandPattern: preserve historical Config.ProcessName=Identity.Name.
+		// CommandPattern: fall back to the adapter's Identity.Name.
 		m[a.Identity.Name] = a.Identity.Name
 	}
 	return m

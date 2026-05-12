@@ -1,11 +1,9 @@
-// Package inbound defines inbound port interfaces — contracts that inbound
-// adapters (file watchers, HTTP handlers, etc.) satisfy to drive the
-// application core.
+// Package inbound defines inbound port interfaces — contracts that
+// inbound adapters (file watchers, HTTP handlers, etc.) satisfy to
+// drive the application core.
 //
-// The new agent-side port is Watcher (see watcher.go). The historical
-// AgentWatcher was removed in #159 Phase A.5; the daemon now consumes
-// Watcher exclusively and uses Watcher.Identity() to tag events with
-// their adapter name (replacing the agent.Event.Adapter field).
+// The agent-side port is Watcher (see watcher.go); the orchestrator
+// side is OrchestratorWatcher (below).
 package inbound
 
 import (

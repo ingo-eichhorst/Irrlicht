@@ -44,7 +44,7 @@ func TestPreSession_DetectedBeforeTranscript(t *testing.T) {
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 
 	// Wire up: Scanner → SessionDetector (with in-memory stubs).
-	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond).WithIdentity(agent.Identity{Name: "test"})
 	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(
@@ -117,11 +117,14 @@ func TestPreSession_ReplacedByRealSession(t *testing.T) {
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 
 	projectsRoot := realTempDir(t)
-	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond).WithIdentity(agent.Identity{Name: "test"})
 	repo := newMemRepo()
 
 	// Also wire a mock transcript watcher so we can inject a real session event.
-	transcriptWatcher := &mockWatcher{ch: make(chan agent.Event, 4)}
+	transcriptWatcher := &mockWatcher{
+		ch:       make(chan agent.Event, 4),
+		identity: agent.Identity{Name: "test"},
+	}
 
 	detector := services.NewSessionDetector(
 		[]inbound.Watcher{scanner, transcriptWatcher},
@@ -204,7 +207,7 @@ func TestPreSession_CreatedDespiteHistoricalSession(t *testing.T) {
 		TranscriptPath: filepath.Join(projectsRoot, projectDir, "old.jsonl"),
 	})
 
-	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(agent.Identity{Name: "test"})
 	scanner.WithSessionChecker(realSessionCheckerFor(repo))
 
 	detector := services.NewSessionDetector(
@@ -255,7 +258,7 @@ func TestPreSession_SurvivesNeighbourSessionActivity(t *testing.T) {
 	_ = os.Chtimes(neighbourJSONL, now, now)
 
 	repo := newMemRepo()
-	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(agent.Identity{Name: "test"})
 	scanner.WithSessionChecker(realSessionCheckerFor(repo))
 
 	detector := services.NewSessionDetector(
@@ -305,7 +308,7 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond)
+	scanner := processlifecycle.NewScanner(processName, "test", 200*time.Millisecond).WithIdentity(agent.Identity{Name: "test"})
 	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(

@@ -214,17 +214,26 @@ func (d *SessionDetector) onActivity(id agent.Identity, ev agent.Event) {
 	d.record(lifecycle.Event{Kind: lifecycle.KindDebounceCoalesced, SessionID: ev.SessionID})
 }
 
-// processActivity handles a (possibly debounced) transcript activity event.
-// It uses content-based detection to determine whether the agent is working
-// or waiting for user input.
+// processActivityWithoutIdentity is the entry point for paths where the
+// originating watcher's Identity is not available — coalesced events
+// from the debounce timers and synthetic refresh events injected by
+// refreshStaleSessions. The session is expected to already exist with
+// a populated state.Adapter; for live sessions processActivity uses
+// state.Adapter, and the rare onNewSession fallback runs with empty
+// identity (state.Adapter ends up empty, then is back-filled by the
+// next watcher-driven event for the same session).
+func (d *SessionDetector) processActivityWithoutIdentity(ev agent.Event) {
+	d.processActivity(agent.Identity{}, ev)
+}
+
+// processActivity handles a (possibly debounced) transcript activity
+// event. It uses content-based detection to determine whether the agent
+// is working or waiting for user input.
 //
-// id is the watcher's Identity only when this method is invoked directly
-// from handleTranscriptEvent / onActivity (the first event in a debounce
-// window). Coalesced events from the debouncedEvents channel and synthetic
-// refresh events both arrive with an empty Identity — they rely on a
-// pre-existing state record's Adapter field instead. The rare fallback
-// path (state == nil, --continue cooldown expired) drops the event when
-// id is empty rather than bootstrap a session without an adapter name.
+// id is the watcher's Identity only when invoked directly from
+// handleTranscriptEvent / onActivity (the first event in a debounce
+// window). For the no-identity entry points, call
+// processActivityWithoutIdentity instead.
 func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 	// Load session state.
 	state, err := d.repo.Load(ev.SessionID)
@@ -438,7 +447,7 @@ func (d *SessionDetector) refreshStaleSessions() {
 		if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
 			continue
 		}
-		d.processActivity(agent.Identity{}, agent.Event{
+		d.processActivityWithoutIdentity(agent.Event{
 			Type:           agent.EventActivity,
 			SessionID:      state.SessionID,
 			TranscriptPath: state.TranscriptPath,

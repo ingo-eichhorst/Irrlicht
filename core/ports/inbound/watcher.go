@@ -6,21 +6,14 @@ import (
 	"irrlicht/core/domain/agent"
 )
 
-// Watcher is the new inbound port introduced in #159 Phase A.4. It mirrors
-// AgentWatcher's shape (lifecycle + event stream) and adds Identity() so
-// the daemon can tag events with their watcher's identity without
-// bouncing through the redundant agent.Event.Adapter field. In PR5 the
-// daemon switches to consuming this port exclusively, AgentWatcher is
-// deleted, and agent.Event.Adapter is dropped.
-//
-// PR4 (this PR) leaves AgentWatcher intact and has every existing
-// watcher implementation satisfy both interfaces by gaining an
-// Identity() method.
+// Watcher is the inbound port the daemon consumes for transcript-file
+// events. Identity() lets the daemon tag each event with its watcher's
+// adapter identity instead of stamping the name on every event payload.
 type Watcher interface {
 	// Identity returns the metadata for the agent this watcher serves
-	// (Name, DisplayName, IconSVGLight, IconSVGDark). Stored on the
-	// watcher at construction time via the new WithIdentity() builder
-	// method.
+	// (Name, DisplayName, IconSVGLight, IconSVGDark). Implementations
+	// must return a non-zero Identity before being registered with the
+	// SessionDetector (which panics on zero values).
 	Identity() agent.Identity
 
 	// Watch begins watching for transcript changes. Blocks until ctx is
