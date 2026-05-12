@@ -33,21 +33,27 @@ type Adapter struct {
 	fallback         agents.ParserFactory // used for unknown adapter names
 }
 
-// New returns a new metrics Adapter configured from the given per-adapter
-// registries. The fallback parser is used for unknown adapter names to
-// preserve the historical "default to Claude Code" behavior; callers
-// should pass the Claude Code factory.
-//
-// Signature simplified in #159 Phase A.2: previously took []agents.Config
-// and derived the three maps internally. Callers now produce the maps via
-// agents.Parsers / SubagentCounters / MetricsProviders.
-func New(parsers map[string]agents.ParserFactory, subagents map[string]agents.SubagentCounter, providers map[string]agents.MetricsProvider, fallback agents.ParserFactory) *Adapter {
+// Registry holds the per-adapter behaviour the metrics adapter dispatches
+// on. Callers populate it from an []agent.Agent slice via the helpers in
+// core/adapters/inbound/agents (Parsers, SubagentCounters,
+// MetricsProviders).
+type Registry struct {
+	Parsers          map[string]agents.ParserFactory
+	SubagentCounters map[string]agents.SubagentCounter
+	MetricsProviders map[string]agents.MetricsProvider
+	// FallbackParser is used for unknown adapter names — preserves the
+	// historical "default to Claude Code" behaviour.
+	FallbackParser agents.ParserFactory
+}
+
+// New returns a metrics Adapter configured from the given Registry.
+func New(r Registry) *Adapter {
 	return &Adapter{
 		tailers:          make(map[string]*lockedTailer),
-		parsers:          parsers,
-		subagents:        subagents,
-		metricsProviders: providers,
-		fallback:         fallback,
+		parsers:          r.Parsers,
+		subagents:        r.SubagentCounters,
+		metricsProviders: r.MetricsProviders,
+		fallback:         r.FallbackParser,
 	}
 }
 

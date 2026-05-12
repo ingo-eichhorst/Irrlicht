@@ -21,7 +21,7 @@ import (
 type Watcher struct {
 	root     string         // resolved absolute path to the watched directory
 	adapter  string         // adapter name set on emitted events
-	identity agent.Identity // populated via WithIdentity (#159 Phase A.4)
+	identity agent.Identity // populated via WithIdentity
 	maxAge   time.Duration  // ignore files older than this (0 = no limit)
 
 	subMu sync.Mutex

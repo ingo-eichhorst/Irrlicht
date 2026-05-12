@@ -45,7 +45,7 @@ const defaultMinScanGap = 500 * time.Millisecond
 type Watcher struct {
 	dbPath   string         // absolute path to opencode.db
 	adapter  string         // always "opencode"
-	identity agent.Identity // populated via WithIdentity (#159 Phase A.4)
+	identity agent.Identity // populated via WithIdentity
 	maxAge   time.Duration  // ignore sessions older than this (0 = no limit)
 
 	subMu sync.Mutex

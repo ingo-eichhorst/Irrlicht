@@ -40,7 +40,7 @@ type Scanner struct {
 	commandLineMatch   string         // if non-empty, used with pgrep -f instead of -x ProcessName
 	transcriptFilename string         // if non-empty, scanner checks <CWD>/<filename> for the real transcript
 	adapter            string         // adapter label placed on emitted events
-	identity           agent.Identity // populated via WithIdentity (#159 Phase A.4)
+	identity           agent.Identity // populated via WithIdentity
 	interval           time.Duration
 
 	// sessionChecker is an optional function that reports whether a real

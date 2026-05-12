@@ -164,12 +164,15 @@ func main() {
 
 	// Shared adapters for SessionDetector.
 	gitResolver := git.New()
-	metricsCollector := metrics.New(
-		parserFactories,
-		agents.SubagentCounters(allAgents),
-		agents.MetricsProviders(allAgents),
-		parserFactories[allAgents[0].Identity.Name],
-	)
+	// Claude Code's parser is the documented fallback for unknown adapter
+	// names. Pinning by name rather than allAgents[0] decouples the
+	// fallback from slice ordering.
+	metricsCollector := metrics.New(metrics.Registry{
+		Parsers:          parserFactories,
+		SubagentCounters: agents.SubagentCounters(allAgents),
+		MetricsProviders: agents.MetricsProviders(allAgents),
+		FallbackParser:   parserFactories[claudecode.AdapterName],
+	})
 
 	// --- File-based SessionDetector (primary detection path) ---
 	// Forward-reference: detector is assigned before any callbacks can fire,

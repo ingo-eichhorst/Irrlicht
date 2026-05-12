@@ -10,6 +10,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,8 +125,14 @@ type SessionDetector struct {
 	permissionPending map[string]bool // sessionID → true
 }
 
-// NewSessionDetector creates a SessionDetector with all required dependencies.
-// pw and broadcaster may be nil (optional).
+// NewSessionDetector creates a SessionDetector with all required
+// dependencies. pw and broadcaster may be nil (optional).
+//
+// Panics if any supplied watcher has a zero-value Identity. Every
+// downstream session created from that watcher's events would otherwise
+// have an empty Adapter field — a silent partial-failure mode (the
+// adapter-aware code paths fall back gracefully, but logs and the
+// /api/v1/agents endpoint surface "" instead of the real name).
 func NewSessionDetector(
 	watchers []inbound.Watcher,
 	pw outbound.ProcessWatcher,
@@ -140,6 +147,11 @@ func NewSessionDetector(
 	processNames map[string]string,
 	liveCWDs LiveCWDsFunc,
 ) *SessionDetector {
+	for _, w := range watchers {
+		if w.Identity() == (agent.Identity{}) {
+			panic(fmt.Sprintf("session_detector: watcher %T has no Identity — call .WithIdentity() before passing it to NewSessionDetector", w))
+		}
+	}
 	det := &SessionDetector{
 		watchers:          watchers,
 		repo:              repo,
@@ -247,8 +259,7 @@ func (d *SessionDetector) record(ev lifecycle.Event) {
 // Each per-watcher drain goroutine captures the watcher's Identity once
 // and tags every event with it as the event flows into the merged
 // channel; this is how the adapter name reaches handleTranscriptEvent
-// for lifecycle recording and SessionState bootstrap (it no longer
-// lives on agent.Event itself — see #159 Phase A.5).
+// for lifecycle recording and SessionState bootstrap.
 func (d *SessionDetector) Run(ctx context.Context) error {
 	merged := make(chan identifiedEvent, 16)
 	var wg sync.WaitGroup
@@ -315,10 +326,7 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 		case ev := <-d.debouncedEvents:
 			// Coalesced events from debounce timers — process in the event
 			// loop goroutine so processActivity never runs concurrently.
-			// Identity isn't carried through the debounce path; processActivity
-			// uses state.Adapter for live sessions and drops the (rare) event
-			// where state is nil and we'd need an identity to bootstrap.
-			d.processActivity(agent.Identity{}, ev)
+			d.processActivityWithoutIdentity(ev)
 		case <-refreshTicker.C:
 			d.refreshStaleSessions()
 		}
