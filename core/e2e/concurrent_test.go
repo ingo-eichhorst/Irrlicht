@@ -8,7 +8,6 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/application/services"
-	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/inbound"
 )
 
@@ -24,7 +23,7 @@ func TestScanner_TracksTwoConcurrentProcessesWithSameAgentName(t *testing.T) {
 	cmd1, cwd1 := startFakeClaudeProcessNamed(t, name)
 	cmd2, cwd2 := startFakeClaudeProcessNamed(t, name)
 
-	scanner := processlifecycle.NewScanner(name, "test", 200*time.Millisecond).WithIdentity(agent.Identity{Name: "test"})
+	scanner := processlifecycle.NewScanner(name, "test", 200*time.Millisecond).WithIdentity(testIdentity)
 	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(

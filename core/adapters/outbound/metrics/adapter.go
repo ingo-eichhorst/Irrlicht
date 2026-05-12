@@ -30,7 +30,7 @@ type Adapter struct {
 	parsers          map[string]agents.ParserFactory
 	subagents        map[string]agents.SubagentCounter
 	metricsProviders map[string]agents.MetricsProvider
-	fallback         agents.ParserFactory // used for unknown adapter names
+	fallbackName     string // adapter name to use when the requested name is unknown
 }
 
 // Registry holds the per-adapter behaviour the metrics adapter dispatches
@@ -41,9 +41,12 @@ type Registry struct {
 	Parsers          map[string]agents.ParserFactory
 	SubagentCounters map[string]agents.SubagentCounter
 	MetricsProviders map[string]agents.MetricsProvider
-	// FallbackParser is used for unknown adapter names — preserves the
-	// historical "default to Claude Code" behaviour.
-	FallbackParser agents.ParserFactory
+	// FallbackName is the adapter name whose parser handles unknown
+	// adapters (preserves the "default to Claude Code" behaviour). Looked
+	// up in Parsers at parse time — single source of truth for the
+	// fallback factory, and zero ambiguity if Parsers["claude-code"] is
+	// ever swapped.
+	FallbackName string
 }
 
 // New returns a metrics Adapter configured from the given Registry.
@@ -53,18 +56,19 @@ func New(r Registry) *Adapter {
 		parsers:          r.Parsers,
 		subagents:        r.SubagentCounters,
 		metricsProviders: r.MetricsProviders,
-		fallback:         r.FallbackParser,
+		fallbackName:     r.FallbackName,
 	}
 }
 
 // parserFor returns a fresh TranscriptParser for the given adapter name,
-// falling back to the first registered adapter's parser for unknown names.
+// falling back to the parser registered under fallbackName for unknown
+// names. Returns nil when neither lookup yields a factory.
 func (a *Adapter) parserFor(name string) tailer.TranscriptParser {
 	if f, ok := a.parsers[name]; ok {
 		return f()
 	}
-	if a.fallback != nil {
-		return a.fallback()
+	if f, ok := a.parsers[a.fallbackName]; ok {
+		return f()
 	}
 	return nil
 }
