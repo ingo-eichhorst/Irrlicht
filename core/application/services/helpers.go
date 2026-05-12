@@ -37,13 +37,9 @@ func isStaleTranscript(path string) bool {
 	return time.Since(info.ModTime()) > orphanTranscriptAge
 }
 
-// cwdMissing reports whether cwd refers to a directory that no longer exists.
-// Returns false for empty or relative paths to avoid second-guessing callers
-// when the cwd metadata is incomplete.
-//
-// Used to short-circuit admission of zombie sessions whose worktree was
-// deleted but whose transcript was touched recently (e.g. by `claude --resume`
-// from elsewhere) — see issue #321.
+// cwdMissing reports whether cwd refers to a directory that no longer
+// exists. Returns false for empty or relative paths to avoid second-guessing
+// callers when the cwd metadata is incomplete.
 func cwdMissing(cwd string) bool {
 	if cwd == "" || !filepath.IsAbs(cwd) {
 		return false

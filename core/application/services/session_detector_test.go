@@ -1364,9 +1364,7 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
-	// CWD must exist on disk — the daemon rejects sessions whose worktree
-	// directory has been deleted (see #321).
-	cwd := t.TempDir()
+	cwd := t.TempDir() // see #321 — daemon rejects sessions with missing cwd
 
 	// Mock CWD discovery: always returns the same two candidate PIDs.
 	cwdFn := func(cwd string, disambiguate func([]int) int) (int, error) {
@@ -1434,9 +1432,7 @@ func TestSessionDetector_CWDFallback_CleansUpOldSessionOnClear(t *testing.T) {
 	// Use our own PID so seedFromDisk doesn't delete sess-a as a dead process.
 	myPID := os.Getpid()
 
-	// CWD must exist on disk — the daemon rejects sessions whose worktree
-	// directory has been deleted (see #321).
-	cwd := t.TempDir()
+	cwd := t.TempDir() // see #321 — daemon rejects sessions with missing cwd
 
 	// Mock CWD discovery returns only our PID — simulates the /clear scenario
 	// where the same process starts a new transcript. The new session should
@@ -1564,9 +1560,7 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 
 	now := time.Now().Unix()
 
-	// CWD must exist on disk — the daemon rejects sessions whose worktree
-	// directory has been deleted (see #321).
-	cwd := t.TempDir()
+	cwd := t.TempDir() // see #321 — daemon rejects sessions with missing cwd
 
 	// Old session from before /clear — holds the live PID.
 	repo.Save(&session.SessionState{
