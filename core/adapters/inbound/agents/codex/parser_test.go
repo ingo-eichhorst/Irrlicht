@@ -573,12 +573,6 @@ func TestParser_TurnCompleteEmitsTurnDone(t *testing.T) {
 	}
 }
 
-// TestParser_ProposedPlan_SynthesizesExitPlanMode is a regression test for
-// issue #322: when Codex emits a `<proposed_plan>…</proposed_plan>` block in
-// Plan Mode, it's a blocking prompt for the user to approve — semantically
-// the same as Claude Code's ExitPlanMode tool. The parser must synthesize a
-// user-blocking ExitPlanMode tool-use so the classifier marks the session
-// `waiting` instead of `ready` on the trailing `task_complete` event.
 func TestParser_ProposedPlan_SynthesizesExitPlanMode(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
@@ -606,9 +600,6 @@ func TestParser_ProposedPlan_SynthesizesExitPlanMode(t *testing.T) {
 	}
 }
 
-// TestParser_AssistantMessageWithoutProposedPlan_NoSyntheticTool guards
-// against false positives — ordinary assistant text must not produce a
-// synthetic tool-use.
 func TestParser_AssistantMessageWithoutProposedPlan_NoSyntheticTool(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
@@ -627,9 +618,8 @@ func TestParser_AssistantMessageWithoutProposedPlan_NoSyntheticTool(t *testing.T
 	}
 }
 
-// TestParser_ProposedPlan_DeveloperMessageDoesNotTrigger ensures the
-// detection is role-gated. The Codex developer system prompt contains the
-// literal string `<proposed_plan>` as documentation; that must not fire.
+// The Codex developer system prompt mentions `<proposed_plan>` as
+// documentation — detection must be role-gated to avoid firing on it.
 func TestParser_ProposedPlan_DeveloperMessageDoesNotTrigger(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
@@ -651,12 +641,9 @@ func TestParser_ProposedPlan_DeveloperMessageDoesNotTrigger(t *testing.T) {
 	}
 }
 
-// TestParser_ProposedPlan_EndToEndWaitingState exercises the full transcript
-// path: assistant message with `<proposed_plan>`, then token_count and
-// task_complete. The synthetic ExitPlanMode must survive turn_done so the
-// final tailer state reports HasOpenToolCall=true with ExitPlanMode in the
-// open-tool-names list, which is what drives the daemon's `waiting`
-// classification.
+// The synthetic ExitPlanMode must survive `task_complete`, otherwise
+// IsAgentDone() would route the session to ready before the user gets a
+// chance to respond.
 func TestParser_ProposedPlan_EndToEndWaitingState(t *testing.T) {
 	path := writeLines(t, []map[string]interface{}{
 		{
@@ -714,10 +701,6 @@ func TestParser_ProposedPlan_EndToEndWaitingState(t *testing.T) {
 	}
 }
 
-// TestParser_ProposedPlan_PartialTagDoesNotTrigger guards against
-// false-positives on a streamed or truncated message that carries only the
-// opening tag. Detection requires both open and close in a single content
-// block.
 func TestParser_ProposedPlan_PartialTagDoesNotTrigger(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
@@ -733,12 +716,8 @@ func TestParser_ProposedPlan_PartialTagDoesNotTrigger(t *testing.T) {
 	}
 }
 
-// TestParser_ProposedPlan_TwoConsecutivePlans_DedupesOpenTool guards the
-// fixed synthetic ID strategy: if the agent emits a second
-// `<proposed_plan>` message within the same turn without a user reply in
-// between, the tailer should still report a single open ExitPlanMode by
-// ID (no spurious duplicate). The tailer dedupes opens by ID, so this is
-// a contract-level assertion.
+// Two consecutive proposed_plan messages share the same synthetic ID so
+// the tailer dedupes to a single open ExitPlanMode entry.
 func TestParser_ProposedPlan_TwoConsecutivePlans_DedupesOpenTool(t *testing.T) {
 	path := writeLines(t, []map[string]interface{}{
 		{
@@ -786,9 +765,6 @@ func TestParser_ProposedPlan_TwoConsecutivePlans_DedupesOpenTool(t *testing.T) {
 	}
 }
 
-// TestParser_ProposedPlan_ClosedByUserReply confirms the synthetic open
-// tool is cleared once the user replies — the existing ClearToolNames path
-// on user messages handles this without special-casing.
 func TestParser_ProposedPlan_ClosedByUserReply(t *testing.T) {
 	path := writeLines(t, []map[string]interface{}{
 		{

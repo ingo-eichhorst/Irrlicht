@@ -9,11 +9,8 @@ import (
 
 // assistantContentContainsBlock returns true when a single `text` /
 // `output_text` content block contains both open and close markers, with
-// close appearing after open. Used to detect a complete `<proposed_plan>…
-// </proposed_plan>` block without false-firing on partial stream events
-// that only carry the opening tag. Bypasses tailer.ExtractAssistantText's
-// 200-rune tail truncation, which would drop the leading tag on any
-// non-trivial plan.
+// close appearing after open. Bypasses tailer.ExtractAssistantText's
+// 200-rune tail truncation, which would drop the leading tag.
 func assistantContentContainsBlock(raw map[string]interface{}, open, close string) bool {
 	scan := func(arr []interface{}) bool {
 		for _, item := range arr {
@@ -179,17 +176,8 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 	case "assistant":
 		ev.EventType = "assistant_message"
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
-		// A `<proposed_plan>…</proposed_plan>` block in Plan Mode is Codex's
-		// plan-approval gate — semantically equivalent to Claude Code's
-		// ExitPlanMode tool. Synthesize a user-blocking ExitPlanMode
-		// tool-use so the classifier routes the session through
-		// NeedsUserAttention() → waiting instead of falling through
-		// IsAgentDone() → ready on the trailing task_complete event. The
-		// next user message closes it via the existing ClearToolNames path
-		// below. Require BOTH tags in a single content block: scanning
-		// only for the opening tag would fire on partial-stream events,
-		// and scanning ev.AssistantText would miss the leading tag because
-		// that helper truncates to the last 200 runes.
+		// Codex's `<proposed_plan>` block has no structured tool-use; map
+		// it to ExitPlanMode so the classifier treats it as user-blocking.
 		if assistantContentContainsBlock(raw, "<proposed_plan>", "</proposed_plan>") {
 			ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{
 				ID:   "codex-proposed-plan",
