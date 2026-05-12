@@ -642,10 +642,12 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 					}
 				}
 			}
-		case state.PID == 0 && state.ParentSessionID == "" && isStaleTranscript(state.TranscriptPath):
+		case state.PID == 0 && state.ParentSessionID == "" && (isStaleTranscript(state.TranscriptPath) || cwdMissing(state.CWD)):
 			// Orphan from exited process (PID discovery never succeeded).
 			// Child sessions (ParentSessionID set) are exempt — they run
 			// inside the parent process and never get their own PID.
+			// cwdMissing also catches zombies re-touched by `claude --resume`
+			// after the worktree was deleted (#321).
 			pm.log.LogInfo("session-detector-seed", state.SessionID, "deleting orphan session")
 			pm.deleteWithChildren(state)
 		}

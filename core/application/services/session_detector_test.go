@@ -94,6 +94,50 @@ func TestSessionDetector_NewSession_SkipsOrphanTranscript(t *testing.T) {
 	}
 }
 
+// TestSessionDetector_NewSession_SkipsWhenCWDDeleted is the regression test
+// for issue #321. A long-dead session can have its transcript mtime
+// refreshed by `claude --resume` from elsewhere; on a daemon restart within
+// the 2-minute staleness window the transcript-mtime check admits a ghost.
+// A missing cwd directory is unambiguous: no live process can run there.
+func TestSessionDetector_NewSession_SkipsWhenCWDDeleted(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	// Fresh transcript — would normally be admitted.
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "zombie.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// CWD points at a directory that no longer exists.
+	missingCWD := filepath.Join(tmpDir, "deleted-worktree")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "zombie1",
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: transcriptPath,
+		CWD:            missingCWD,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("zombie1")
+	if state != nil {
+		t.Errorf("zombie session with missing cwd should not be created, got state %q", state.State)
+	}
+}
+
 func TestSessionDetector_Activity_TransitionsToWaiting_WhenToolUseOpen(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -1320,6 +1364,8 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
+	cwd := t.TempDir() // see #321 — daemon rejects sessions with missing cwd
+
 	// Mock CWD discovery: always returns the same two candidate PIDs.
 	cwdFn := func(cwd string, disambiguate func([]int) int) (int, error) {
 		return disambiguate([]int{1000, 1001}), nil
@@ -1337,7 +1383,7 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 		SessionID:      "sess-a",
 		ProjectDir:     "-Users-test-project",
 		TranscriptPath: "/home/.claude/projects/-Users-test-project/sess-a.jsonl",
-		CWD:            "/Users/test/project",
+		CWD:            cwd,
 	}
 
 	// Wait for first session's PID discovery retry goroutine to complete.
@@ -1348,7 +1394,7 @@ func TestSessionDetector_CWDFallback_DoesNotAssignDuplicatePID(t *testing.T) {
 		SessionID:      "sess-b",
 		ProjectDir:     "-Users-test-project",
 		TranscriptPath: "/home/.claude/projects/-Users-test-project/sess-b.jsonl",
-		CWD:            "/Users/test/project",
+		CWD:            cwd,
 	}
 
 	// Wait for second session's PID discovery.
@@ -1386,6 +1432,8 @@ func TestSessionDetector_CWDFallback_CleansUpOldSessionOnClear(t *testing.T) {
 	// Use our own PID so seedFromDisk doesn't delete sess-a as a dead process.
 	myPID := os.Getpid()
 
+	cwd := t.TempDir() // see #321 — daemon rejects sessions with missing cwd
+
 	// Mock CWD discovery returns only our PID — simulates the /clear scenario
 	// where the same process starts a new transcript. The new session should
 	// claim the PID and clean up the old session.
@@ -1411,7 +1459,7 @@ func TestSessionDetector_CWDFallback_CleansUpOldSessionOnClear(t *testing.T) {
 		State:          session.StateWorking,
 		PID:            myPID,
 		TranscriptPath: "/home/.claude/projects/-Users-test/sess-a.jsonl",
-		CWD:            "/Users/test/project",
+		CWD:            cwd,
 		FirstSeen:      now,
 		UpdatedAt:      now,
 	})
@@ -1422,7 +1470,7 @@ func TestSessionDetector_CWDFallback_CleansUpOldSessionOnClear(t *testing.T) {
 		Adapter:        "claude-code",
 		State:          session.StateReady,
 		TranscriptPath: "/home/.claude/projects/-Users-test/sess-b.jsonl",
-		CWD:            "/Users/test/project",
+		CWD:            cwd,
 		FirstSeen:      now,
 		UpdatedAt:      now,
 	})
@@ -1512,6 +1560,8 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 
 	now := time.Now().Unix()
 
+	cwd := t.TempDir() // see #321 — daemon rejects sessions with missing cwd
+
 	// Old session from before /clear — holds the live PID.
 	repo.Save(&session.SessionState{
 		SessionID:      "sess-old",
@@ -1519,7 +1569,7 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 		State:          session.StateWorking,
 		PID:            myPID,
 		TranscriptPath: "/home/.claude/projects/-Users-test/sess-old.jsonl",
-		CWD:            "/Users/test/project",
+		CWD:            cwd,
 		FirstSeen:      now,
 		UpdatedAt:      now,
 	})
@@ -1530,7 +1580,7 @@ func TestSessionDetector_ClearWithStaleMetadata_DeletesOldSessionImmediately(t *
 		Adapter:        "claude-code",
 		State:          session.StateReady,
 		TranscriptPath: newTranscript,
-		CWD:            "/Users/test/project",
+		CWD:            cwd,
 		FirstSeen:      now,
 		UpdatedAt:      now,
 	})

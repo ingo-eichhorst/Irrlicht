@@ -37,6 +37,17 @@ func isStaleTranscript(path string) bool {
 	return time.Since(info.ModTime()) > orphanTranscriptAge
 }
 
+// cwdMissing reports whether cwd refers to a directory that no longer
+// exists. Returns false for empty or relative paths to avoid second-guessing
+// callers when the cwd metadata is incomplete.
+func cwdMissing(cwd string) bool {
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return false
+	}
+	_, err := os.Stat(cwd)
+	return os.IsNotExist(err)
+}
+
 // deriveParentSession tries all known methods to extract a parent session ID.
 // 1. Claude Code path pattern: .../<parent-session-id>/subagents/<agent-id>.jsonl
 // 2. Pi transcript header: {"type": "session", "parentSession": "..."}
