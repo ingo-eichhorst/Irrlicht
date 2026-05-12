@@ -18,9 +18,7 @@ const iconSVGDark = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="
   <line x1="60" y1="30" x2="64" y2="74" stroke="#E0E0E0" stroke-width="8" stroke-linecap="round"/>
 </svg>`
 
-// Agent returns the new declaration shape introduced in #159 Phase A.
-// Mirrors Config() for legacy callers and will replace Config() once the
-// daemon switches over (PR2/PR3). Parity tests assert equivalence.
+// Agent returns the Pi adapter registration.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{

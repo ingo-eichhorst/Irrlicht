@@ -16,9 +16,7 @@ const iconSVGDark = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="
   <line x1="48" y1="62" x2="68" y2="62" stroke="#E0E0E0" stroke-width="7" stroke-linecap="round"/>
 </svg>`
 
-// Agent returns the new declaration shape introduced in #159 Phase A.
-// Mirrors Config() for legacy callers and will replace Config() once the
-// daemon switches over (PR2/PR3). Parity tests assert equivalence.
+// Agent returns the Codex adapter registration.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{

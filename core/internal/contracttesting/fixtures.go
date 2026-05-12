@@ -1,22 +1,49 @@
-// Package contracttesting holds shared test fixtures consumed by the M0
-// contract tests in multiple packages.
-//
-// The same SessionState fixture is exercised by:
-//   - core/adapters/outbound/filesystem/repository_contract_test.go
-//     (snapshots the on-disk JSON written by SessionRepository.Save)
-//   - core/cmd/irrlichd/push_contract_test.go
-//     (snapshots the WebSocket envelope shape for each PushMessage type
-//     that carries a SessionState)
-//
-// Keeping it in one place prevents the goldens in those two packages
-// from drifting silently when the SessionState shape evolves: a change
-// here regenerates both via UPDATE_CONTRACT_GOLDENS=1.
+// Package contracttesting holds shared test fixtures and the byte-identity
+// golden comparator used by the contract tests in multiple packages.
+// Cross-package centralisation here prevents drift between goldens that
+// must move together when a shape changes.
 //
 // The package lives under core/internal/ so production code cannot
 // import it.
 package contracttesting
 
-import "irrlicht/core/domain/session"
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"irrlicht/core/domain/session"
+)
+
+// UpdateGoldensEnv is the env var that flips CompareGolden from
+// byte-identity check into refresh-the-golden-file mode.
+const UpdateGoldensEnv = "UPDATE_CONTRACT_GOLDENS"
+
+// CompareGolden is the byte-identity comparator every contract test
+// invokes. With UpdateGoldensEnv=1 it writes got to goldenPath (creating
+// parents as needed); otherwise it reads the golden and fails the test
+// on any mismatch with a diff hint.
+func CompareGolden(t *testing.T, got []byte, goldenPath string) {
+	t.Helper()
+	if os.Getenv(UpdateGoldensEnv) == "1" {
+		if err := os.MkdirAll(filepath.Dir(goldenPath), 0o755); err != nil {
+			t.Fatalf("mkdir golden dir: %v", err)
+		}
+		if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
+			t.Fatalf("write golden %s: %v", goldenPath, err)
+		}
+		return
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v (run with %s=1 to create)", goldenPath, err, UpdateGoldensEnv)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("contract drift in %s; run %s=1 go test ./... to refresh\n--- want (%d bytes) ---\n%s\n--- got (%d bytes) ---\n%s",
+			goldenPath, UpdateGoldensEnv, len(want), want, len(got), got)
+	}
+}
 
 // BuildFullSessionState produces a deterministic SessionState fixture
 // that exercises every JSON-persisted field. Hardcoded UUIDs and

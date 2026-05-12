@@ -7,8 +7,7 @@ import (
 	"irrlicht/core/ports/inbound"
 )
 
-// Compile-time assertion that Scanner satisfies the inbound port. The
-// legacy AgentWatcher port was deleted in #159 Phase A.5.
+// Compile-time assertion that Scanner satisfies the inbound port.
 var _ inbound.Watcher = (*Scanner)(nil)
 
 func TestScannerWithIdentityRoundTrip(t *testing.T) {
