@@ -127,6 +127,54 @@ func deadPIDForTest(t *testing.T) int {
 	return pid
 }
 
+// TestSeedAlivePIDs_DeletesWhenCWDMissing is the seed-time half of issue
+// #321. On daemon startup, a previously-tracked session whose worktree has
+// been deleted must be cleaned up even when its transcript was touched
+// within the staleness window (e.g. by `claude --resume` from elsewhere).
+// A missing cwd directory is the unambiguous orphan signal.
+func TestSeedAlivePIDs_DeletesWhenCWDMissing(t *testing.T) {
+	tmp := t.TempDir()
+	freshTranscript := filepath.Join(tmp, "zombie.jsonl")
+	writeTranscript(t, freshTranscript, time.Now())
+
+	// CWD that does not exist (worktree was deleted).
+	missingCWD := filepath.Join(tmp, "deleted-worktree")
+
+	repo := newMockRepo()
+	repo.states["zombie"] = &session.SessionState{
+		SessionID:      "zombie",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            0,
+		CWD:            missingCWD,
+		TranscriptPath: freshTranscript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	// Child session with the same missing cwd — should be cleaned up too,
+	// via deleteWithChildren, when the parent is removed.
+	repo.states["zombie-child"] = &session.SessionState{
+		SessionID:       "zombie-child",
+		ParentSessionID: "zombie",
+		Adapter:         "claude-code",
+		State:           session.StateReady,
+		PID:             0,
+		CWD:             missingCWD,
+		TranscriptPath:  freshTranscript,
+		UpdatedAt:       time.Now().Unix(),
+	}
+
+	states := []*session.SessionState{repo.states["zombie"], repo.states["zombie-child"]}
+	newPIDManagerForTest(repo).SeedPIDs(states)
+
+	if repo.states["zombie"] != nil {
+		t.Error("zombie session with missing cwd should have been deleted at seed time")
+	}
+	if repo.states["zombie-child"] != nil {
+		t.Error("child of zombie session should have been deleted via deleteWithChildren")
+	}
+}
+
 // TestCleanupZombies covers the two predicates plus the happy-path
 // exemptions: dead PID is deleted; live PID is kept (regardless of how old
 // the record is — see the comment on isStartupZombie about the deliberate

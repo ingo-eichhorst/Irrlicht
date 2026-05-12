@@ -71,6 +71,18 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 			return
 		}
 
+		// Skip zombie sessions whose worktree has been deleted from disk.
+		// A long-dead session can be re-touched via `claude --resume` from
+		// another worktree, which refreshes the transcript mtime and would
+		// otherwise sneak past the staleness check during a daemon restart
+		// (issue #321). The cwd directory missing on disk is an unambiguous
+		// orphan signal — no live process can be running in a gone cwd.
+		if cwdMissing(ev.CWD) {
+			d.log.LogInfo("session-detector", ev.SessionID,
+				"skipping session with missing cwd")
+			return
+		}
+
 		// All new sessions start as ready. Content-based detection on
 		// subsequent activity events will transition to working/waiting.
 		parentID := ev.ParentSessionID
