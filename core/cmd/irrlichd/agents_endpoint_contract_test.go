@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"testing"
+
+	"irrlicht/core/internal/contracttesting"
 )
 
 // TestContract_AgentsEndpoint locks the shape of GET /api/v1/agents.
@@ -50,6 +52,5 @@ func TestContract_AgentsEndpoint(t *testing.T) {
 		t.Fatalf("indent response: %v\nraw: %s", err, body)
 	}
 
-	goldenPath := filepath.Join("testdata", "agents_endpoint.golden.json")
-	compareContractGolden(t, pretty.Bytes(), goldenPath)
+	contracttesting.CompareGolden(t, pretty.Bytes(), filepath.Join("testdata", "agents_endpoint.golden.json"))
 }
