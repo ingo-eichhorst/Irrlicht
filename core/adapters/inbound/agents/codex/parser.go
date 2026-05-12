@@ -1,9 +1,45 @@
 package codex
 
 import (
+	"strings"
+
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/pkg/transcript"
 )
+
+// assistantContentContains scans the raw content blocks of an assistant
+// message for needle, checking the same `text` / `output_text` shapes that
+// tailer.ExtractAssistantText consumes — but without the 200-rune tail
+// truncation, so leading markers like `<proposed_plan>` are detectable on
+// arbitrarily long messages.
+func assistantContentContains(raw map[string]interface{}, needle string) bool {
+	scan := func(arr []interface{}) bool {
+		for _, item := range arr {
+			block, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			bt, _ := block["type"].(string)
+			if bt != "text" && bt != "output_text" {
+				continue
+			}
+			text, _ := block["text"].(string)
+			if strings.Contains(text, needle) {
+				return true
+			}
+		}
+		return false
+	}
+	if arr, ok := raw["content"].([]interface{}); ok && scan(arr) {
+		return true
+	}
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if arr, ok := msg["content"].([]interface{}); ok && scan(arr) {
+			return true
+		}
+	}
+	return false
+}
 
 // Parser implements tailer.TranscriptParser for OpenAI Codex transcripts.
 // Codex uses top-level "role" fields on "message" events and separate
@@ -137,6 +173,22 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 	case "assistant":
 		ev.EventType = "assistant_message"
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
+		// A `<proposed_plan>` block in Plan Mode is Codex's plan-approval
+		// gate — semantically equivalent to Claude Code's ExitPlanMode tool.
+		// Synthesize a user-blocking ExitPlanMode tool-use so the classifier
+		// routes the session through NeedsUserAttention() → waiting instead
+		// of falling through IsAgentDone() → ready on the trailing
+		// task_complete event. The next user message closes it via the
+		// existing ClearToolNames path below. Scan the raw content blocks
+		// rather than ev.AssistantText: that helper truncates to the last
+		// 200 runes, so the leading `<proposed_plan>` tag is dropped for
+		// any non-trivial plan.
+		if assistantContentContains(raw, "<proposed_plan>") {
+			ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{
+				ID:   "codex-proposed-plan",
+				Name: "ExitPlanMode",
+			})
+		}
 	case "user", "developer":
 		ev.EventType = "user_message"
 		ev.ClearToolNames = true
