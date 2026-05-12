@@ -9,7 +9,6 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/application/services"
-	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
 )
@@ -25,7 +24,7 @@ import (
 func TestSession_NoCancelledState_OnSIGKILL(t *testing.T) {
 	cmd, _ := startFakeClaudeProcess(t)
 
-	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(agent.Identity{Name: "test"})
+	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(testIdentity)
 	repo := newMemRepo()
 
 	detector := services.NewSessionDetector(

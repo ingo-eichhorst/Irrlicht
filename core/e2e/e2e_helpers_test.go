@@ -172,9 +172,25 @@ func (m *stubMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, erro
 
 func (m *stubMetrics) PruneEntry(_ string) {}
 
+// testIdentity is the shared Identity value e2e tests stamp on every
+// watcher they hand to NewSessionDetector. NewSessionDetector's panic
+// guard requires a non-zero Identity; the actual Name doesn't matter to
+// these tests beyond clearing the guard.
+var testIdentity = agent.Identity{Name: "test"}
+
+// mockWatcher's identity defaults to testIdentity so callers that don't
+// care about the adapter name (the common case) don't have to set it.
+// Callers that need a different identity override the field directly.
 type mockWatcher struct {
 	ch       chan agent.Event
 	identity agent.Identity
+}
+
+func newMockWatcher(buf int) *mockWatcher {
+	return &mockWatcher{
+		ch:       make(chan agent.Event, buf),
+		identity: testIdentity,
+	}
 }
 
 func (w *mockWatcher) Watch(ctx context.Context) error  { <-ctx.Done(); return ctx.Err() }

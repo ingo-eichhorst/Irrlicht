@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -20,10 +21,9 @@ func TestNewSessionDetector_PanicsOnZeroIdentity(t *testing.T) {
 		if r == nil {
 			t.Fatal("expected panic when watcher has zero Identity, got none")
 		}
-		msg, ok := r.(string)
-		if !ok {
-			t.Fatalf("panic payload not a string: %T %v", r, r)
-		}
+		// fmt.Sprint handles both string and error payloads, so this test
+		// survives a future refactor that wraps the panic in an error.
+		msg := fmt.Sprint(r)
 		if !strings.Contains(msg, "Identity") || !strings.Contains(msg, "WithIdentity") {
 			t.Errorf("panic message should name Identity and WithIdentity; got %q", msg)
 		}

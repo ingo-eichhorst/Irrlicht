@@ -147,9 +147,9 @@ func NewSessionDetector(
 	processNames map[string]string,
 	liveCWDs LiveCWDsFunc,
 ) *SessionDetector {
-	for _, w := range watchers {
+	for i, w := range watchers {
 		if w.Identity() == (agent.Identity{}) {
-			panic(fmt.Sprintf("session_detector: watcher %T has no Identity — call .WithIdentity() before passing it to NewSessionDetector", w))
+			panic(fmt.Sprintf("session_detector: watchers[%d] (%T) has no Identity — call .WithIdentity() before passing it to NewSessionDetector", i, w))
 		}
 	}
 	det := &SessionDetector{

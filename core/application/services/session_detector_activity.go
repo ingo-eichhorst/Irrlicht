@@ -214,14 +214,9 @@ func (d *SessionDetector) onActivity(id agent.Identity, ev agent.Event) {
 	d.record(lifecycle.Event{Kind: lifecycle.KindDebounceCoalesced, SessionID: ev.SessionID})
 }
 
-// processActivityWithoutIdentity is the entry point for paths where the
-// originating watcher's Identity is not available — coalesced events
-// from the debounce timers and synthetic refresh events injected by
-// refreshStaleSessions. The session is expected to already exist with
-// a populated state.Adapter; for live sessions processActivity uses
-// state.Adapter, and the rare onNewSession fallback runs with empty
-// identity (state.Adapter ends up empty, then is back-filled by the
-// next watcher-driven event for the same session).
+// processActivityWithoutIdentity is the entry point for paths where no
+// watcher identity is available — debounce-coalesced events and synthetic
+// refresh events. See processActivity for what "no identity" implies.
 func (d *SessionDetector) processActivityWithoutIdentity(ev agent.Event) {
 	d.processActivity(agent.Identity{}, ev)
 }
