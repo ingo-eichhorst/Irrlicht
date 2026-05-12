@@ -21,14 +21,15 @@ const iconSVGDark = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="
 </svg>`
 
 // Agent returns the new declaration shape introduced in #159 Phase A.
-// Mirrors Config() for legacy callers and will replace Config() once the
-// daemon switches over (PR2/PR3). Parity tests assert equivalence.
 //
 // OpenCode is the only currently-supported adapter using ProcessOwnedStore
 // — session state lives in a SQLite database rather than JSONL files.
-// PathForPID is a placeholder until PR5 wires the runtime dispatch; the
-// legacy shim in PR2 still drives metric computation through the Reader
-// directly using the adapter-supplied path string.
+// The daemon's wiring today drives metric computation through Reader
+// using the agent.Event.TranscriptPath supplied by the dedicated opencode
+// watcher (constructed inline in cmd/irrlichd/main.go); PathForPID is
+// not yet called. Phase C will introduce a runtime variant-dispatcher
+// that resolves the DB path from PID and installs a real implementation
+// here.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{
@@ -42,12 +43,15 @@ func Agent() agent.Agent {
 			PIDForSession: DiscoverPID,
 		},
 		Source: agent.ProcessOwnedStore{
-			// Placeholder — runtime dispatch (PR5) will replace with the
-			// real PID→DB-path resolver. The legacy shim in PR2 does not
-			// call PathForPID; it uses the agent.Event.TranscriptPath
-			// supplied by the existing opencode watcher.
-			PathForPID: func(int) string { return "" },
-			Reader:     metricsReader{},
+			// Fail loudly if anything ever calls this before the Phase C
+			// runtime dispatcher installs a real resolver. Returning an
+			// empty string here would have caused silent downstream
+			// failures (ComputeMetrics opening "" → no rows → empty
+			// metrics) instead of an obvious crash.
+			PathForPID: func(int) string {
+				panic("opencode.Agent().Source.PathForPID: not wired — Phase C runtime dispatch installs the real resolver")
+			},
+			Reader: metricsReader{},
 		},
 	}
 }

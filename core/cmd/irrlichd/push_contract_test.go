@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"irrlicht/core/internal/contracttesting"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -23,7 +24,7 @@ import (
 // bytes the WebSocket writes" — so json.MarshalIndent is used for golden
 // readability.
 func TestContract_PushMessages(t *testing.T) {
-	state := buildContractSessionState()
+	state := contracttesting.BuildFullSessionState()
 	priority := int8(2)
 
 	cases := []struct {

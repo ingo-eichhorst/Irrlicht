@@ -26,14 +26,16 @@ const iconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" 
 </svg>`
 
 // Agent returns the new declaration shape introduced in #159 Phase A.
-// Mirrors Config() for legacy callers and will replace Config() once the
-// daemon switches over (PR2/PR3). Parity tests assert equivalence.
 //
 // Aider is the only currently-supported adapter using FilesUnderCWD —
 // its transcript lives in each project's working directory rather than
 // under a fixed root, and the format is markdown rather than JSONL.
+//
+// RawLineParser carries a NewParser factory rather than bound method
+// values so each running aider process gets its own Parser instance.
+// Aider's Parser tracks idle-flush state, which must not collide across
+// concurrent processes targeting different project CWDs.
 func Agent() agent.Agent {
-	p := &Parser{}
 	return agent.Agent{
 		Identity: agent.Identity{
 			Name:         AdapterName,
@@ -48,8 +50,7 @@ func Agent() agent.Agent {
 		Source: agent.FilesUnderCWD{
 			Filename: transcriptFilename,
 			Parser: agent.RawLineParser{
-				ParseLineRaw: p.ParseLineRaw,
-				IdleFlush:    p.IdleFlush,
+				NewParser: func() agent.RawParser { return &Parser{} },
 			},
 		},
 	}

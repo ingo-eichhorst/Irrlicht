@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"irrlicht/core/adapters/outbound/filesystem"
-	"irrlicht/core/domain/session"
+	"irrlicht/core/internal/contracttesting"
 )
 
 const updateContractGoldensEnv = "UPDATE_CONTRACT_GOLDENS"
@@ -25,7 +25,7 @@ const updateContractGoldensEnv = "UPDATE_CONTRACT_GOLDENS"
 // intentionally left nil — covering it would require an exported constructor
 // in domain/session, which is out of scope for this safety-net test.
 func TestContract_SessionStateOnDisk(t *testing.T) {
-	state := buildContractSessionState()
+	state := contracttesting.BuildFullSessionState()
 	repo := filesystem.NewWithDir(t.TempDir())
 	if err := repo.Save(state); err != nil {
 		t.Fatalf("save: %v", err)
@@ -37,65 +37,6 @@ func TestContract_SessionStateOnDisk(t *testing.T) {
 
 	goldenPath := filepath.Join("testdata", "session_state.golden.json")
 	compareContractGolden(t, got, goldenPath)
-}
-
-// buildContractSessionState produces a deterministic SessionState fixture that
-// exercises every JSON-persisted field. Hardcoded UUIDs and timestamps make
-// the golden stable across machines and runs.
-func buildContractSessionState() *session.SessionState {
-	waitingStart := int64(1700000050)
-	return &session.SessionState{
-		Version:         1,
-		SessionID:       "00000000-0000-0000-0000-000000000001",
-		State:           session.StateWorking,
-		Adapter:         "claude-code",
-		CompactionState: session.CompactionStateNotCompacting,
-		Model:           "claude-sonnet-4-6",
-		CWD:             "/tmp/test-cwd",
-		TranscriptPath:  "/tmp/test-transcript.jsonl",
-		GitBranch:       "main",
-		ProjectName:     "test-project",
-		FirstSeen:       1700000000,
-		UpdatedAt:       1700000100,
-		Confidence:      "high",
-		EventCount:      42,
-		LastEvent:       "assistant",
-		LastMatcher:     "claude-stop-hook",
-		Metrics: &session.SessionMetrics{
-			ElapsedSeconds:         300,
-			TotalTokens:            10000,
-			ModelName:              "claude-sonnet-4-6",
-			ContextWindow:          200000,
-			ContextUtilization:     5.0,
-			PressureLevel:          "low",
-			HasOpenToolCall:        true,
-			OpenToolCallCount:      1,
-			OpenSubagents:          2,
-			LastEventType:          "tool_use",
-			LastOpenToolNames:      []string{"Bash"},
-			EstimatedCostUSD:       0.0123,
-			CumInputTokens:         8000,
-			CumOutputTokens:        2000,
-			CumCacheReadTokens:     1500,
-			CumCacheCreationTokens: 500,
-			LastAssistantText:      "Working on it.",
-			PermissionMode:         "default",
-			Tasks: []session.Task{
-				{ID: "task-1", Subject: "first task", ActiveForm: "Doing first task", Status: "in_progress"},
-				{ID: "task-2", Subject: "second task", Status: "pending"},
-			},
-		},
-		PID: 12345,
-		Launcher: &session.Launcher{
-			TermProgram:    "iTerm.app",
-			ITermSessionID: "w0t0p0:ABCDEF",
-			TTY:            "/dev/ttys001",
-		},
-		ParentSessionID:    "00000000-0000-0000-0000-000000000002",
-		DaemonVersion:      "0.3.13",
-		LastTranscriptSize: 1024,
-		WaitingStartTime:   &waitingStart,
-	}
 }
 
 // compareContractGolden is the byte-identity comparator shared by every

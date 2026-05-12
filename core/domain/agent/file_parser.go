@@ -27,16 +27,21 @@ type JSONLineParser struct {
 func (JSONLineParser) isFileParser() {}
 
 // RawLineParser is used by adapters whose source format is not JSONL
-// (aider's .aider.chat.history.md is markdown). ParseLineRaw is called for
-// each raw line; IdleFlush synthesizes a turn_done event after the
-// transcript has been quiet for `idleFor` because raw formats typically
-// don't write an explicit end-of-turn marker.
+// (aider's .aider.chat.history.md is markdown). NewParser returns a
+// fresh stateful RawParser instance per transcript file — same factory
+// pattern as JSONLineParser. ParseLineRaw is called for each raw line;
+// IdleFlush synthesizes a turn_done event after the transcript has been
+// quiet for `idleFor` because raw formats typically don't write an
+// explicit end-of-turn marker.
 //
-// FilesUnderCWD always pairs with this type. FilesUnderRoot could in
-// principle carry one, though no currently-supported adapter does so.
+// FilesUnderCWD always pairs with this type, and each running agent
+// process gets its own RawParser instance (idle tracking and similar
+// state must not collide across concurrent processes).
+//
+// FilesUnderRoot could in principle carry one, though no currently-
+// supported adapter does so.
 type RawLineParser struct {
-	ParseLineRaw func(line string) *tailer.ParsedEvent
-	IdleFlush    func(idleFor time.Duration) *tailer.ParsedEvent
+	NewParser func() RawParser
 }
 
 func (RawLineParser) isFileParser() {}
@@ -47,6 +52,17 @@ func (RawLineParser) isFileParser() {}
 // lines that should be silently ignored.
 type LineParser interface {
 	ParseLine(raw map[string]interface{}) *tailer.ParsedEvent
+}
+
+// RawParser extends LineParser with the raw-text methods used by
+// FilesUnderCWD adapters. ParseLine on a RawParser is expected to be a
+// no-op returning nil — the runtime calls ParseLineRaw instead. IdleFlush
+// synthesizes a turn_done event when the transcript has been quiet for
+// `idleFor`; raw formats typically have no end-of-turn marker.
+type RawParser interface {
+	LineParser
+	ParseLineRaw(line string) *tailer.ParsedEvent
+	IdleFlush(idleFor time.Duration) *tailer.ParsedEvent
 }
 
 // PendingContributor is an optional refinement on LineParser. Stateful
