@@ -7,8 +7,7 @@ import (
 )
 
 // FileParser is the sub-sum carried by FilesUnderRoot. It describes how
-// to interpret transcript content: JSONL lines, raw text lines (rare), or
-// (Phase C) whole-document re-parse on every change.
+// to interpret transcript content: JSONL lines or raw text lines.
 //
 // FilesUnderCWD pairs with RawLineParser directly (no sub-sum) because
 // every cwd-resident transcript format we currently support is non-JSONL.
@@ -51,7 +50,7 @@ func (RawLineParser) isFileParser() {}
 // pending turns; Codex tracks a cumulative usage cursor). Returns nil for
 // lines that should be silently ignored.
 type LineParser interface {
-	ParseLine(raw map[string]interface{}) *tailer.ParsedEvent
+	ParseLine(raw map[string]any) *tailer.ParsedEvent
 }
 
 // RawParser extends LineParser with the raw-text methods used by

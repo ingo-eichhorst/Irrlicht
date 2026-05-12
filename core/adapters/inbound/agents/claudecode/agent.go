@@ -20,11 +20,7 @@ const iconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" 
   <rect x="42" y="36" width="6" height="14" rx="1" fill="#D97757"/>
 </svg>`
 
-// Agent returns the new declaration shape introduced in #159 Phase A.
-// Mirrors Config() for legacy callers and will replace Config() once the
-// daemon switches over (PR2/PR3). Parity tests in agent_parity_test.go
-// assert Agent() and Config() produce equivalent data for every
-// downstream-consumed field.
+// Agent returns the Claude Code adapter registration.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{
@@ -46,11 +42,10 @@ func Agent() agent.Agent {
 	}
 }
 
-// OpenSubagents lets the new metrics-collector path (PR3+) discover the
-// subagent counter via type assertion on the LineParser returned by
-// JSONLineParser.NewParser. Delegates to the existing CountOpenSubagents
-// free function so the count produced is identical to what the legacy
-// agents.Config.CountOpenSubagents pipeline produced.
+// OpenSubagents satisfies agent.SubagentCounter so the metrics collector
+// can discover the subagent count via type assertion on the LineParser
+// returned by JSONLineParser.NewParser. The actual counting is a pure
+// function of SessionMetrics and lives in CountOpenSubagents.
 func (p *Parser) OpenSubagents(m *tailer.SessionMetrics) int {
 	return CountOpenSubagents(m)
 }

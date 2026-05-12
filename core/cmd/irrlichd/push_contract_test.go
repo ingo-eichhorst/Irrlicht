@@ -86,8 +86,7 @@ func TestContract_PushMessages(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
-			goldenPath := filepath.Join("testdata", "push", tc.name+".golden.json")
-			compareContractGolden(t, got, goldenPath)
+			contracttesting.CompareGolden(t, got, filepath.Join("testdata", "push", tc.name+".golden.json"))
 		})
 	}
 }
