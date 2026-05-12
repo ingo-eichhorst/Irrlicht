@@ -714,6 +714,78 @@ func TestParser_ProposedPlan_EndToEndWaitingState(t *testing.T) {
 	}
 }
 
+// TestParser_ProposedPlan_PartialTagDoesNotTrigger guards against
+// false-positives on a streamed or truncated message that carries only the
+// opening tag. Detection requires both open and close in a single content
+// block.
+func TestParser_ProposedPlan_PartialTagDoesNotTrigger(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"role":      "assistant",
+		"timestamp": ts(0),
+		"content": []interface{}{
+			map[string]interface{}{"type": "output_text", "text": "<proposed_plan>\n# Half a plan, no close tag yet…"},
+		},
+	})
+	if len(ev.ToolUses) != 0 {
+		t.Errorf("ToolUses = %v, want empty when closing tag is missing", ev.ToolUses)
+	}
+}
+
+// TestParser_ProposedPlan_TwoConsecutivePlans_DedupesOpenTool guards the
+// fixed synthetic ID strategy: if the agent emits a second
+// `<proposed_plan>` message within the same turn without a user reply in
+// between, the tailer should still report a single open ExitPlanMode by
+// ID (no spurious duplicate). The tailer dedupes opens by ID, so this is
+// a contract-level assertion.
+func TestParser_ProposedPlan_TwoConsecutivePlans_DedupesOpenTool(t *testing.T) {
+	path := writeLines(t, []map[string]interface{}{
+		{
+			"timestamp": ts(0),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message", "role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "<proposed_plan>v1</proposed_plan>"},
+				},
+			},
+		},
+		{
+			"timestamp": ts(1),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message", "role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "<proposed_plan>v2 (revised)</proposed_plan>"},
+				},
+			},
+		},
+		{
+			"timestamp": ts(2),
+			"type":      "event_msg",
+			"payload":   map[string]interface{}{"type": "task_complete"},
+		},
+	})
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "codex")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Fatal("expected HasOpenToolCall=true after two proposed_plan messages")
+	}
+	exitPlanModeCount := 0
+	for _, name := range m.LastOpenToolNames {
+		if name == "ExitPlanMode" {
+			exitPlanModeCount++
+		}
+	}
+	if exitPlanModeCount != 1 {
+		t.Errorf("LastOpenToolNames had %d ExitPlanMode entries, want exactly 1 (fixed-ID dedup); got %v", exitPlanModeCount, m.LastOpenToolNames)
+	}
+}
+
 // TestParser_ProposedPlan_ClosedByUserReply confirms the synthetic open
 // tool is cleared once the user replies — the existing ClearToolNames path
 // on user messages handles this without special-casing.

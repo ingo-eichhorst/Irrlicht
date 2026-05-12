@@ -7,12 +7,14 @@ import (
 	"irrlicht/core/pkg/transcript"
 )
 
-// assistantContentContains scans the raw content blocks of an assistant
-// message for needle, checking the same `text` / `output_text` shapes that
-// tailer.ExtractAssistantText consumes — but without the 200-rune tail
-// truncation, so leading markers like `<proposed_plan>` are detectable on
-// arbitrarily long messages.
-func assistantContentContains(raw map[string]interface{}, needle string) bool {
+// assistantContentContainsBlock returns true when a single `text` /
+// `output_text` content block contains both open and close markers, with
+// close appearing after open. Used to detect a complete `<proposed_plan>…
+// </proposed_plan>` block without false-firing on partial stream events
+// that only carry the opening tag. Bypasses tailer.ExtractAssistantText's
+// 200-rune tail truncation, which would drop the leading tag on any
+// non-trivial plan.
+func assistantContentContainsBlock(raw map[string]interface{}, open, close string) bool {
 	scan := func(arr []interface{}) bool {
 		for _, item := range arr {
 			block, ok := item.(map[string]interface{})
@@ -24,7 +26,11 @@ func assistantContentContains(raw map[string]interface{}, needle string) bool {
 				continue
 			}
 			text, _ := block["text"].(string)
-			if strings.Contains(text, needle) {
+			openIdx := strings.Index(text, open)
+			if openIdx < 0 {
+				continue
+			}
+			if strings.Contains(text[openIdx+len(open):], close) {
 				return true
 			}
 		}
@@ -173,17 +179,18 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 	case "assistant":
 		ev.EventType = "assistant_message"
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
-		// A `<proposed_plan>` block in Plan Mode is Codex's plan-approval
-		// gate — semantically equivalent to Claude Code's ExitPlanMode tool.
-		// Synthesize a user-blocking ExitPlanMode tool-use so the classifier
-		// routes the session through NeedsUserAttention() → waiting instead
-		// of falling through IsAgentDone() → ready on the trailing
-		// task_complete event. The next user message closes it via the
-		// existing ClearToolNames path below. Scan the raw content blocks
-		// rather than ev.AssistantText: that helper truncates to the last
-		// 200 runes, so the leading `<proposed_plan>` tag is dropped for
-		// any non-trivial plan.
-		if assistantContentContains(raw, "<proposed_plan>") {
+		// A `<proposed_plan>…</proposed_plan>` block in Plan Mode is Codex's
+		// plan-approval gate — semantically equivalent to Claude Code's
+		// ExitPlanMode tool. Synthesize a user-blocking ExitPlanMode
+		// tool-use so the classifier routes the session through
+		// NeedsUserAttention() → waiting instead of falling through
+		// IsAgentDone() → ready on the trailing task_complete event. The
+		// next user message closes it via the existing ClearToolNames path
+		// below. Require BOTH tags in a single content block: scanning
+		// only for the opening tag would fire on partial-stream events,
+		// and scanning ev.AssistantText would miss the leading tag because
+		// that helper truncates to the last 200 runes.
+		if assistantContentContainsBlock(raw, "<proposed_plan>", "</proposed_plan>") {
 			ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{
 				ID:   "codex-proposed-plan",
 				Name: "ExitPlanMode",
