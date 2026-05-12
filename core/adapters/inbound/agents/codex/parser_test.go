@@ -573,6 +573,239 @@ func TestParser_TurnCompleteEmitsTurnDone(t *testing.T) {
 	}
 }
 
+func TestParser_ProposedPlan_SynthesizesExitPlanMode(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"role":      "assistant",
+		"timestamp": ts(0),
+		"content": []interface{}{
+			map[string]interface{}{"type": "output_text", "text": "<proposed_plan>\n# Plan\n\nDo the thing.\n</proposed_plan>"},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.EventType != "assistant_message" {
+		t.Errorf("EventType = %q, want assistant_message", ev.EventType)
+	}
+	if len(ev.ToolUses) != 1 {
+		t.Fatalf("ToolUses len = %d, want 1; got %v", len(ev.ToolUses), ev.ToolUses)
+	}
+	if ev.ToolUses[0].Name != "ExitPlanMode" {
+		t.Errorf("ToolUses[0].Name = %q, want ExitPlanMode", ev.ToolUses[0].Name)
+	}
+	if ev.ToolUses[0].ID == "" {
+		t.Error("ToolUses[0].ID is empty; need a non-empty ID for the tailer to track the open call")
+	}
+}
+
+func TestParser_AssistantMessageWithoutProposedPlan_NoSyntheticTool(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"role":      "assistant",
+		"timestamp": ts(0),
+		"content": []interface{}{
+			map[string]interface{}{"type": "output_text", "text": "Here's what I'll do next."},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if len(ev.ToolUses) != 0 {
+		t.Errorf("ToolUses = %v, want empty for plain assistant text", ev.ToolUses)
+	}
+}
+
+// The Codex developer system prompt mentions `<proposed_plan>` as
+// documentation — detection must be role-gated to avoid firing on it.
+func TestParser_ProposedPlan_DeveloperMessageDoesNotTrigger(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"role":      "developer",
+		"timestamp": ts(0),
+		"content": []interface{}{
+			map[string]interface{}{"type": "input_text", "text": "...eventually issuing a <proposed_plan> block..."},
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.EventType != "user_message" {
+		t.Errorf("EventType = %q, want user_message", ev.EventType)
+	}
+	if len(ev.ToolUses) != 0 {
+		t.Errorf("ToolUses = %v, want empty for developer message", ev.ToolUses)
+	}
+}
+
+// The synthetic ExitPlanMode must survive `task_complete`, otherwise
+// IsAgentDone() would route the session to ready before the user gets a
+// chance to respond.
+func TestParser_ProposedPlan_EndToEndWaitingState(t *testing.T) {
+	path := writeLines(t, []map[string]interface{}{
+		{
+			"timestamp": ts(0),
+			"type":      "turn_context",
+			"payload":   map[string]interface{}{"model": "gpt-5.2-codex"},
+		},
+		{
+			"timestamp": ts(1),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message",
+				"role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "<proposed_plan>\n# Plan\n\n## Summary\n\nDo X then Y.\n</proposed_plan>"},
+				},
+				"phase": "final_answer",
+			},
+		},
+		{
+			"timestamp": ts(2),
+			"type":      "event_msg",
+			"payload": map[string]interface{}{
+				"type": "token_count",
+				"info": map[string]interface{}{
+					"last_token_usage":     map[string]interface{}{"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+					"model_context_window": 258400,
+				},
+			},
+		},
+		{
+			"timestamp": ts(3),
+			"type":      "event_msg",
+			"payload":   map[string]interface{}{"type": "task_complete"},
+		},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "codex")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Error("expected HasOpenToolCall=true after proposed_plan + task_complete (waiting on user approval)")
+	}
+	foundExitPlanMode := false
+	for _, name := range m.LastOpenToolNames {
+		if name == "ExitPlanMode" {
+			foundExitPlanMode = true
+			break
+		}
+	}
+	if !foundExitPlanMode {
+		t.Errorf("LastOpenToolNames = %v, want to contain ExitPlanMode", m.LastOpenToolNames)
+	}
+}
+
+func TestParser_ProposedPlan_PartialTagDoesNotTrigger(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "message",
+		"role":      "assistant",
+		"timestamp": ts(0),
+		"content": []interface{}{
+			map[string]interface{}{"type": "output_text", "text": "<proposed_plan>\n# Half a plan, no close tag yet…"},
+		},
+	})
+	if len(ev.ToolUses) != 0 {
+		t.Errorf("ToolUses = %v, want empty when closing tag is missing", ev.ToolUses)
+	}
+}
+
+// Two consecutive proposed_plan messages share the same synthetic ID so
+// the tailer dedupes to a single open ExitPlanMode entry.
+func TestParser_ProposedPlan_TwoConsecutivePlans_DedupesOpenTool(t *testing.T) {
+	path := writeLines(t, []map[string]interface{}{
+		{
+			"timestamp": ts(0),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message", "role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "<proposed_plan>v1</proposed_plan>"},
+				},
+			},
+		},
+		{
+			"timestamp": ts(1),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message", "role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "<proposed_plan>v2 (revised)</proposed_plan>"},
+				},
+			},
+		},
+		{
+			"timestamp": ts(2),
+			"type":      "event_msg",
+			"payload":   map[string]interface{}{"type": "task_complete"},
+		},
+	})
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "codex")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasOpenToolCall {
+		t.Fatal("expected HasOpenToolCall=true after two proposed_plan messages")
+	}
+	exitPlanModeCount := 0
+	for _, name := range m.LastOpenToolNames {
+		if name == "ExitPlanMode" {
+			exitPlanModeCount++
+		}
+	}
+	if exitPlanModeCount != 1 {
+		t.Errorf("LastOpenToolNames had %d ExitPlanMode entries, want exactly 1 (fixed-ID dedup); got %v", exitPlanModeCount, m.LastOpenToolNames)
+	}
+}
+
+func TestParser_ProposedPlan_ClosedByUserReply(t *testing.T) {
+	path := writeLines(t, []map[string]interface{}{
+		{
+			"timestamp": ts(0),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message",
+				"role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "<proposed_plan>plan</proposed_plan>"},
+				},
+			},
+		},
+		{
+			"timestamp": ts(1),
+			"type":      "event_msg",
+			"payload":   map[string]interface{}{"type": "task_complete"},
+		},
+		{
+			"timestamp": ts(2),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message",
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{"type": "input_text", "text": "looks good, proceed"},
+				},
+			},
+		},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "codex")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.HasOpenToolCall {
+		t.Errorf("expected HasOpenToolCall=false after user reply, got open tools = %v", m.LastOpenToolNames)
+	}
+}
+
 // TestParser_Contribution_CachedTokensDeductedFromInput verifies that
 // input_tokens_details.cached_tokens is used for CacheRead and deducted from
 // Input so cost isn't double-counted (OpenAI includes cached in input_tokens).

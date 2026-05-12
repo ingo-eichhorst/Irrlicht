@@ -1,9 +1,48 @@
 package codex
 
 import (
+	"strings"
+
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/pkg/transcript"
 )
+
+// assistantContentContainsBlock returns true when a single `text` /
+// `output_text` content block contains both open and close markers, with
+// close appearing after open. Bypasses tailer.ExtractAssistantText's
+// 200-rune tail truncation, which would drop the leading tag.
+func assistantContentContainsBlock(raw map[string]interface{}, open, close string) bool {
+	scan := func(arr []interface{}) bool {
+		for _, item := range arr {
+			block, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			bt, _ := block["type"].(string)
+			if bt != "text" && bt != "output_text" {
+				continue
+			}
+			text, _ := block["text"].(string)
+			openIdx := strings.Index(text, open)
+			if openIdx < 0 {
+				continue
+			}
+			if strings.Contains(text[openIdx+len(open):], close) {
+				return true
+			}
+		}
+		return false
+	}
+	if arr, ok := raw["content"].([]interface{}); ok && scan(arr) {
+		return true
+	}
+	if msg, ok := raw["message"].(map[string]interface{}); ok {
+		if arr, ok := msg["content"].([]interface{}); ok && scan(arr) {
+			return true
+		}
+	}
+	return false
+}
 
 // Parser implements tailer.TranscriptParser for OpenAI Codex transcripts.
 // Codex uses top-level "role" fields on "message" events and separate
@@ -137,6 +176,14 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 	case "assistant":
 		ev.EventType = "assistant_message"
 		ev.AssistantText = tailer.ExtractAssistantText(raw)
+		// Codex's `<proposed_plan>` block has no structured tool-use; map
+		// it to ExitPlanMode so the classifier treats it as user-blocking.
+		if assistantContentContainsBlock(raw, "<proposed_plan>", "</proposed_plan>") {
+			ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{
+				ID:   "codex-proposed-plan",
+				Name: "ExitPlanMode",
+			})
+		}
 	case "user", "developer":
 		ev.EventType = "user_message"
 		ev.ClearToolNames = true
