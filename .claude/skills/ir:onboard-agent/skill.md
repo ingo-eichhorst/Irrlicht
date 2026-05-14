@@ -45,6 +45,21 @@ hermetic and don't need auth.
 - **`/ir:onboard-agent <adapter> <scenario>`** — run one specific cell. E.g.
   `/ir:onboard-agent claudecode baseline-hello` or
   `/ir:onboard-agent gastown agent-discovery`.
+- **`/ir:onboard-agent --attach <adapter> [<scenario>]`** — attached
+  mode. Uses the user's already-running `irrlichd --record` instead of
+  spawning an isolated daemon on port 7837. The dashboard stays
+  connected for the whole recording — the scenario's session shows up
+  live alongside the user's other work. Requirements:
+  - `pgrep -x irrlichd` returns a PID (else the precheck refuses).
+  - The daemon was started with `--record` (else its recordings dir is
+    empty and the precheck refuses).
+  - Optional: `IRRLICHT_RECORDINGS_DIR=<path>` if the daemon's recording
+    dir isn't the default `~/.local/share/irrlicht/recordings/`.
+  
+  After the driver returns, run-cell sleeps 6 seconds for the
+  recorder's 5s periodic flush + 1s slack, then curates the staged
+  fixture from the daemon's recording file. The daemon is never
+  signalled; it keeps observing whatever sessions the user has open.
 - **`/ir:onboard-agent --diff`** — re-summarize the latest staged runs
   (under `.build/refresh/<adapter>/<scenario>-*/`) without re-running.
 - **`/ir:onboard-agent --new <slug>`** — discover mode. Researches a

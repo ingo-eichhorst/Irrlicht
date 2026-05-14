@@ -36,11 +36,21 @@ case "$ADAPTER" in
     ;;
 esac
 
-# 2. No production daemon running — the isolated daemon we launch binds
-#    port 7837, and so does the user's production irrlichd. Racing them
-#    would route hooks to the wrong process.
-if pgrep -x irrlichd >/dev/null 2>&1; then
-  fail "another irrlichd is running (pgrep -x irrlichd); stop it first"
+# 2. Daemon expectation flips with $ATTACH:
+#    - Default (isolated mode): the isolated daemon we launch binds port
+#      7837, and so does the user's production irrlichd — racing them
+#      would route hooks to the wrong process. Refuse if one is running.
+#    - $ATTACH=1: caller wants run-cell to use the running daemon
+#      instead of spawning its own. The dashboard stays connected for the
+#      whole recording. Require that one IS running.
+if [[ "${ATTACH:-0}" == "1" ]]; then
+  if ! pgrep -x irrlichd >/dev/null 2>&1; then
+    fail "ATTACH=1 but no irrlichd is running; start one with --record"
+  fi
+else
+  if pgrep -x irrlichd >/dev/null 2>&1; then
+    fail "another irrlichd is running (pgrep -x irrlichd); stop it first, or rerun with --attach"
+  fi
 fi
 
 # 3. Clean working tree under replaydata/agents/. A dirty tree means the
