@@ -1,0 +1,96 @@
+package viewer
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// TestScenariosList_walksReplaydataTree spins up a temp replaydata tree
+// with one agent in `scenarios/` and one in `regression/`, and asserts
+// /api/scenarios returns both with the correct flags.
+func TestScenariosList_walksReplaydataTree(t *testing.T) {
+	root := t.TempDir()
+	mkRecording(t, root, "claudecode", "scenarios", "baseline-hello",
+		map[string]string{"signals.jsonl": "", "ground_truth.jsonl": "{}"})
+	mkRecording(t, root, "aider", "regression", "llm-error",
+		map[string]string{"transcript.md": ""}) // no signals, no gt
+	s := &Server{RepoRoot: root}
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/api/scenarios", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
+	}
+	var entries []ScenarioListEntry
+	if err := json.Unmarshal(rr.Body.Bytes(), &entries); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %+v", len(entries), entries)
+	}
+	// Sorted by agent then subtree.
+	if entries[0].Agent != "aider" || entries[0].Subtree != "regression" {
+		t.Errorf("entries[0]=%+v", entries[0])
+	}
+	if entries[1].Agent != "claudecode" || !entries[1].HasGroundTruth {
+		t.Errorf("entries[1]=%+v", entries[1])
+	}
+}
+
+func TestScenarioDetail_returnsMetaAndGroundTruth(t *testing.T) {
+	root := t.TempDir()
+	gt := `{"schema_version":1,"agent":"x","scenario":"y","recording_started_at":"2026-05-14T12:00:00Z"}
+{"ts_offset_ms":0,"marker":"a","expected_state":"ready"}
+`
+	mkRecording(t, root, "x", "scenarios", "y", map[string]string{
+		"recording-meta.json": `{"agent":"x","scenario":"y"}`,
+		"ground_truth.jsonl":  gt,
+		"signals.jsonl":       `{"ts":"2026-05-14T12:00:00Z","sensor":"transcript","kind":"line","payload":{"line":"hi"}}` + "\n",
+		"events.jsonl":        `{"kind":"state_transition","ts":"2026-05-14T12:00:00Z","new_state":"ready"}` + "\n",
+	})
+	s := &Server{RepoRoot: root}
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/api/scenarios/x/scenarios/y", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body)
+	}
+	var d ScenarioDetail
+	if err := json.Unmarshal(rr.Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.GroundTruth == nil || len(d.GroundTruth.Labels) != 1 {
+		t.Errorf("ground truth missing or wrong: %+v", d.GroundTruth)
+	}
+	if len(d.Signals) != 1 || len(d.Transitions) != 1 {
+		t.Errorf("signals/transitions wrong: %d / %d", len(d.Signals), len(d.Transitions))
+	}
+}
+
+func TestScenarioDetail_404OnMissing(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "replaydata", "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{RepoRoot: root}
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/api/scenarios/no/scenarios/where", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("want 404, got %d", rr.Code)
+	}
+}
+
+func mkRecording(t *testing.T, root, agent, subtree, id string, files map[string]string) {
+	t.Helper()
+	dir := filepath.Join(root, "replaydata", "agents", agent, subtree, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Irrlicht — Recording Viewer</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; color: #222; background: #fafaf8; }
+  #app { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: 100vh; }
+  #sidebar { background: #f0efe9; border-right: 1px solid #d8d6cc; overflow-y: auto; padding: 8px; }
+  #sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin: 8px 4px; }
+  .scn { cursor: pointer; padding: 4px 8px; border-radius: 3px; display: block; }
+  .scn:hover { background: #e0dfd5; }
+  .scn.active { background: #d8d6cc; font-weight: 600; }
+  .scn.has-gt::after { content: " ●"; color: #2a8d4f; }
+  .scn .agent { color: #888; font-size: 11px; }
+  #main { padding: 16px 20px; overflow-y: auto; }
+  #title { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  #breadcrumb { color: #888; margin-bottom: 16px; font-size: 12px; }
+  .panel { background: white; border: 1px solid #d8d6cc; border-radius: 4px; padding: 12px 16px; margin-bottom: 16px; }
+  .panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin: 0 0 8px; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .controls button { padding: 4px 10px; border: 1px solid #c0bdb1; background: #fff; border-radius: 3px; cursor: pointer; }
+  .controls button:hover { background: #f0efe9; }
+  .speed { background: #eaeae0; padding: 2px 8px; border-radius: 3px; font-family: monospace; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #ece9dd; }
+  th { background: #f5f4ee; font-weight: 600; }
+  tr.hl { background: #fff7d6; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.working { background: #fde7c1; color: #8a4500; }
+  .badge.waiting { background: #f8c8c8; color: #8a0000; }
+  .badge.ready   { background: #d6f0d4; color: #1f5a1d; }
+  .badge.pass { background: #d6f0d4; color: #1f5a1d; }
+  .badge.fail { background: #f8c8c8; color: #8a0000; }
+  .gt-marker { font-family: monospace; color: #555; }
+  pre.snapshot { background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; font-size: 11px; overflow-x: auto; max-height: 240px; }
+  #scrubber-wrap { position: relative; height: 24px; margin: 4px 0; }
+  #scrubber { width: 100%; }
+  #playhead-info { font-family: monospace; font-size: 11px; color: #555; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <h2>Recordings</h2>
+    <div id="scenarios">Loading…</div>
+  </div>
+  <div id="main">
+    <div id="title">Select a recording</div>
+    <div id="breadcrumb">—</div>
+    <div id="detail"></div>
+  </div>
+</div>
+<script src="viewer.js"></script>
+</body>
+</html>
