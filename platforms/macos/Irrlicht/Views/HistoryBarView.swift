@@ -1,10 +1,18 @@
 import SwiftUI
 
 // Colors match the web frontend palette and SessionState.State.color.
+// Exposed via `AppPalette` so other views (e.g. the Settings toggle style)
+// can reuse the same brand greens/oranges/purples without re-stating hex.
+enum AppPalette {
+    static let working = Color(hex: "#8B5CF6")
+    static let waiting = Color(hex: "#FF9500")
+    static let ready   = Color(hex: "#34C759")
+}
+
 private let stateColors: [String: Color] = [
-    "working": Color(hex: "#8B5CF6"),
-    "waiting": Color(hex: "#FF9500"),
-    "ready":   Color(hex: "#34C759"),
+    "working": AppPalette.working,
+    "waiting": AppPalette.waiting,
+    "ready":   AppPalette.ready,
 ]
 
 /// A compact horizontal bar that visualises per-session state history.

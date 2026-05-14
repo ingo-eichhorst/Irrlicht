@@ -21,8 +21,8 @@ final class SettingsViewTests: XCTestCase {
         // deterministically — the test verifies opacity, not hue, but
         // appearance-pinning keeps the render stable across themes.
         hosting.appearance = NSAppearance(named: .darkAqua)
-        // SettingsView hard-codes its own 320×380 frame.
-        hosting.frame = CGRect(x: 0, y: 0, width: 320, height: 380)
+        // SettingsView hard-codes its own 360×520 frame.
+        hosting.frame = CGRect(x: 0, y: 0, width: 360, height: 520)
         hosting.layoutSubtreeIfNeeded()
 
         guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {

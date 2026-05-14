@@ -112,6 +112,17 @@ class SessionManager: ObservableObject {
         self.instancesPath = supportPath.appendingPathComponent("instances")
         self.orderFilePath = supportPath.appendingPathComponent("session-order.json")
 
+        // Out-of-the-box notification defaults: all three events enabled, each
+        // with a distinguishable sound (Ready=Funk, Waiting=Ping, Context=Sosumi).
+        // register(defaults:) only seeds unset keys, so it never overrides a
+        // user who has explicitly picked something else.
+        var notificationDefaults: [String: Any] = [:]
+        for event in NotificationEvent.allCases {
+            notificationDefaults[event.enabledKey] = true
+            notificationDefaults[event.soundKey] = event.defaultSound.rawValue
+        }
+        UserDefaults.standard.register(defaults: notificationDefaults)
+
         Task {
             loadSessionOrder()
             loadProjectGroupOrder()
@@ -952,12 +963,14 @@ class SessionManager: ObservableObject {
     }
 
     private func sendContextPressureNotification(session: SessionState, threshold: Int, utilization: Double) {
+        guard UserDefaults.standard.bool(forKey: NotificationEvent.contextPressure.enabledKey) else { return }
         let label = session.projectName ?? session.shortId
         sendNotification(
             identifier: "irrlicht-context-\(session.id)-\(threshold)",
             title: "Context pressure: \(threshold)% threshold reached",
             body: "\(label) is at \(String(format: "%.1f%%", utilization)) context. Consider switching to a fresh session.",
-            sessionID: session.id
+            sessionID: session.id,
+            event: .contextPressure
         )
     }
 
@@ -971,11 +984,14 @@ class SessionManager: ObservableObject {
         let notifyWaiting = UserDefaults.standard.bool(forKey: "notifyOnWaiting")
 
         let title: String
+        let event: NotificationEvent
         switch session.state {
         case .ready where notifyReady && previousState == .working:
             title = "Agent ready"
+            event = .ready
         case .waiting where notifyWaiting && previousState == .working:
             title = "Agent waiting for input"
+            event = .waiting
         default:
             return
         }
@@ -987,18 +1003,24 @@ class SessionManager: ObservableObject {
             identifier: "irrlicht-state-\(session.id)",
             title: title,
             body: "\(label)\(branch)",
-            sessionID: session.id
+            sessionID: session.id,
+            event: event
         )
     }
 
-    private func sendNotification(identifier: String, title: String, body: String, sessionID: String) {
+    private func sendNotification(
+        identifier: String,
+        title: String,
+        body: String,
+        sessionID: String,
+        event: NotificationEvent
+    ) {
         guard canUseUserNotifications else { return }
+        let choice = Self.choice(for: event)
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
-        // Round-trip the session ID so the click-forwarder can look up
-        // the session and jump back to its launching terminal/IDE.
+        content.sound = Self.notificationSound(for: choice)
         content.userInfo = [NotificationUserInfoKey.sessionID: sessionID]
 
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
@@ -1007,6 +1029,49 @@ class SessionManager: ObservableObject {
                 print("⚠️ Failed to send notification: \(error.localizedDescription)")
             }
         }
+
+        // willPresent is unreliable for LSUIElement menubar-only apps — macOS
+        // skips it when it considers the app not-in-foreground, and Irrlicht
+        // sits in that grey zone. Drive speech from here (on @MainActor) so
+        // it actually fires for real state transitions. The per-event toggle
+        // is the off switch; users who pick a Speak aloud variant have opted in.
+        if case .speak(let voice) = choice {
+            SoundPlayer.speak(title: title, body: body, voice: voice)
+        }
+    }
+
+    /// Pure: turn a SoundChoice into a UNNotificationSound. `.none` / `.speak`
+    /// → nil (no audible alert from the notification center). A `.custom`
+    /// choice whose installed file went missing falls back to Ping.
+    nonisolated static func notificationSound(for choice: SoundChoice) -> UNNotificationSound? {
+        switch choice {
+        case .none, .speak:
+            return nil
+        case .custom(let installedFilename, _):
+            let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+            let path = library?
+                .appendingPathComponent("Sounds")
+                .appendingPathComponent(installedFilename).path
+            if let path, FileManager.default.fileExists(atPath: path) {
+                return UNNotificationSound(named: UNNotificationSoundName(installedFilename))
+            }
+            return UNNotificationSound(named: UNNotificationSoundName("Ping.aiff"))
+        default:
+            guard let name = choice.notificationSoundName else { return .default }
+            return UNNotificationSound(named: UNNotificationSoundName(name))
+        }
+    }
+
+    /// Convenience for tests + callers that want the event → sound lookup in
+    /// a single hop. Production path uses `choice(for:)` + `notificationSound(for:)`
+    /// directly to avoid double-reading UserDefaults.
+    nonisolated static func resolveNotificationSound(for event: NotificationEvent) -> UNNotificationSound? {
+        notificationSound(for: choice(for: event))
+    }
+
+    nonisolated static func choice(for event: NotificationEvent) -> SoundChoice {
+        let raw = UserDefaults.standard.string(forKey: event.soundKey) ?? SoundChoice.default.rawValue
+        return SoundChoice(rawValue: raw) ?? .default
     }
 
     /// Invoked by `NotificationClickForwarder` on the main actor when the user
