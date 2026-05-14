@@ -13,17 +13,22 @@ protocol FocusStateProviding: AnyObject, Sendable {
 ///
 /// **Authorization model.** Requires the `com.apple.developer.focus-status`
 /// entitlement (set in `Irrlicht.entitlements`) plus `NSFocusStatusUsageDescription`
-/// in Info.plist. On first launch with `.notDetermined`, we request authorization
-/// — the system shows a permission dialog. After approval, `focusStatus.isFocused`
-/// returns the live Focus state. Without authorization the property returns nil,
-/// and we fall back to `false` (= pre-fix behavior: TTS plays under Focus).
+/// in Info.plist. On first launch with `.notDetermined`, we call
+/// `requestAuthorization`. In a properly Developer-ID-signed build that surfaces
+/// a system prompt; the user grants → `focusStatus.isFocused` returns the live
+/// Focus state.
 ///
-/// **Dev signing caveat.** Per the same constraint that applies to notification
-/// permission (see `SessionManager.requestWithTemporaryWindow`), ad-hoc-signed
-/// dev builds may not get the prompt at all and silently end up `.denied`. The
-/// dev workflow uses a persistent self-signed identity ("Irrlicht Dev", set up
-/// by `tools/dev-sign-setup.sh`) which is stronger than ad-hoc. Released
-/// Developer-ID-signed builds present the dialog correctly.
+/// **Dev signing caveat (observed on macOS Sequoia 15.7.4).** Self-signed and
+/// ad-hoc builds claiming `com.apple.developer.focus-status` won't launch at
+/// all (launchd refuses the entitlement). Self-signed builds *without* the
+/// entitlement still load the Intents framework: `requestAuthorization` reports
+/// `.authorized` (raw 3) with no prompt — but `focusStatus.isFocused` then
+/// *always returns `Optional(false)`* regardless of the actual system Focus
+/// state. The `auth=.authorized` reading is a misleading no-op; Apple gates the
+/// real read on Developer-ID-signed binaries. Practical consequence: live Focus
+/// suppression is only verifiable in the released DMG, not via `/ir:test-mac`.
+/// The `?? false` fallback in `isFocusActive` therefore covers both the truly-
+/// unauthorized case and the silently-faked-authorized case.
 ///
 /// **Why not the older approach.** Revision 1 of this monitor read
 /// `~/Library/Preferences/com.apple.ncprefs.plist` for `userPref.enabled` and
@@ -32,10 +37,12 @@ protocol FocusStateProviding: AnyObject, Sendable {
 /// `~/Library/DoNotDisturb/DB/Assertions.json`, which is TCC-protected and
 /// requires Full Disk Access. INFocusStatusCenter is the only supported API.
 final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
-    /// True only when running inside the real Irrlicht.app bundle. Test
-    /// binaries (xctest) have a different bundle identifier and crash if we
-    /// poke the Intents framework from them.
-    private static let isAppContext: Bool = Bundle.main.bundleIdentifier == "io.irrlicht.app"
+    /// True when running as a real .app (production or dev bundle); false in
+    /// xctest. The xctest host has no `.app` suffix on its bundle path, so we
+    /// use that to skip Intents-framework calls — those crashed the test
+    /// runner with signal 6 during SessionManager setUp when `FocusMonitor()`
+    /// was constructed back-to-back across tests.
+    private static let isAppContext: Bool = Bundle.main.bundlePath.hasSuffix(".app")
 
     init() {
         guard Self.isAppContext else {
