@@ -340,13 +340,25 @@ function renderPlayback(s) {
   const scrubWrap = document.createElement("div");
   scrubWrap.style.cssText = "margin-top: 8px; position: relative; padding-top: 4px;";
 
+  // Shared tooltip overlay — one DOM node reused across every marker so
+  // we avoid the browser's ~1.5s `title`-attribute delay. Each marker
+  // stores its hover text in data-tip and a delegated listener on
+  // scrubWrap shows/positions/hides this element on mouseenter/leave.
+  const tip = document.createElement("div");
+  tip.style.cssText = "position: absolute; display: none; max-width: 360px; " +
+    "padding: 6px 9px; background: #1f2937; color: #f9fafb; font-size: 11px; " +
+    "line-height: 1.4; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); " +
+    "pointer-events: none; white-space: pre-wrap; z-index: 10;";
+  scrubWrap.appendChild(tip);
+
   // Turn lane sits ABOVE the state band. Renders one tick per user
   // prompt or assistant response from the recording's transcript so the
   // user can see WHERE in the timeline each turn landed. User ticks pin
   // to the top half, assistant ticks to the bottom half — both can
-  // co-exist at the same x without overlap.
+  // co-exist at the same x without overlap. Lane is taller now (22px)
+  // and ticks are wider (5px) so they're easier to land the cursor on.
   const turnLane = document.createElement("div");
-  turnLane.style.cssText = "position: relative; height: 14px; margin-bottom: 2px;";
+  turnLane.style.cssText = "position: relative; height: 22px; margin-bottom: 2px;";
   scrubWrap.appendChild(turnLane);
 
   // Band + scrubber are layered: the band IS the visual track; the
@@ -369,8 +381,44 @@ function renderPlayback(s) {
   scrubWrap.appendChild(bandWrap);
 
   const eventLane = document.createElement("div");
-  eventLane.style.cssText = "position: relative; height: 12px; margin-top: 4px;";
+  eventLane.style.cssText = "position: relative; height: 18px; margin-top: 4px;";
   scrubWrap.appendChild(eventLane);
+
+  // Delegated hover handler: any descendant with a data-tip attribute
+  // shows the shared tooltip immediately on mouseenter (no browser
+  // delay) and hides on mouseleave. Position is computed relative to
+  // scrubWrap so the tooltip sticks near the hovered marker even when
+  // the page scrolls. Clamped to the wrap's width so wide tooltips
+  // don't overflow the panel edge.
+  scrubWrap.addEventListener("mouseover", (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (!el) return;
+    tip.textContent = el.getAttribute("data-tip") || "";
+    tip.style.display = "block";
+    const wrapRect = scrubWrap.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const tipRect = tip.getBoundingClientRect();
+    // Anchor below the marker by default; flip above when there's no
+    // room below (rare, but keeps it visible at the page bottom).
+    let top = elRect.bottom - wrapRect.top + 4;
+    if (top + tipRect.height > wrapRect.height + 200) {
+      top = elRect.top - wrapRect.top - tipRect.height - 4;
+    }
+    let left = elRect.left - wrapRect.left + elRect.width / 2 - tipRect.width / 2;
+    if (left < 0) left = 0;
+    if (left + tipRect.width > wrapRect.width) left = wrapRect.width - tipRect.width;
+    tip.style.left = `${left}px`;
+    tip.style.top = `${top}px`;
+  });
+  scrubWrap.addEventListener("mouseout", (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (!el) return;
+    // Only hide when leaving to a non-marker; mouseover on a sibling
+    // tooltip-bearing element will re-show immediately anyway.
+    const next = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("[data-tip]");
+    if (next) return;
+    tip.style.display = "none";
+  });
 
   const offsetReadout = document.createElement("div");
   offsetReadout.id = "playhead-info";
@@ -527,20 +575,22 @@ function renderPlayback(s) {
       const width = ((seg.end - seg.start) / totalMs) * 100;
       const region = document.createElement("div");
       region.style.cssText = `position: absolute; top: 0; bottom: 0; left: ${left}%; width: ${width}%; background: ${color};`;
-      region.title = `${seg.state}\n+${(seg.start/1000).toFixed(2)}s → +${(seg.end/1000).toFixed(2)}s (${((seg.end-seg.start)/1000).toFixed(2)}s)`;
+      region.setAttribute("data-tip", `${seg.state}\n+${(seg.start/1000).toFixed(2)}s → +${(seg.end/1000).toFixed(2)}s (${((seg.end-seg.start)/1000).toFixed(2)}s)`);
       stateBand.appendChild(region);
     }
   }
 
   // eventStyle classifies an event kind into a (color, size, label)
   // triple. Every kind gets a dot so the lane represents the FULL
-  // recording, not just state-changing events. Salience tiers:
+  // recording, not just state-changing events. Salience tiers — sizes
+  // bumped so they're easier to hit with the cursor inside the 18px
+  // lane:
   //
-  //   lifecycle   (10px blue/gray)  — session/presession appear or vanish
-  //   process     (10px green)      — process identity confirmed / parent linked
-  //   transition  (10px purple)     — state_transition (overlays the state band)
-  //   activity    (7px violet)      — transcript_activity (every transcript line)
-  //   bookkeeping (4px slate, 60%)  — debounce_coalesced, hook_received, file_event
+  //   lifecycle   (14px blue/gray)  — session/presession appear or vanish
+  //   process     (14px green)      — process identity confirmed / parent linked
+  //   transition  (14px purple)     — state_transition (overlays the state band)
+  //   activity    (10px violet)     — transcript_activity (every transcript line)
+  //   bookkeeping (7px slate, 60%)  — debounce_coalesced, hook_received, file_event
   //
   // Smaller / lower-opacity dots for high-volume bookkeeping kinds keep
   // the lane readable when a real recording has dozens of them. Tooltip
@@ -550,26 +600,26 @@ function renderPlayback(s) {
     switch (kind) {
       case "transcript_new":
       case "presession_created":
-        return {color: "#3b82f6", size: 10, opacity: 1, label: "Session detected — new transcript appeared"};
+        return {color: "#3b82f6", size: 14, opacity: 1, label: "Session detected — new transcript appeared"};
       case "transcript_removed":
       case "presession_removed":
-        return {color: "#64748b", size: 10, opacity: 1, label: "Session ended — transcript closed"};
+        return {color: "#64748b", size: 14, opacity: 1, label: "Session ended — transcript closed"};
       case "pid_discovered":
-        return {color: "#22c55e", size: 10, opacity: 1, label: "Process linked — PID matched to this session"};
+        return {color: "#22c55e", size: 14, opacity: 1, label: "Process linked — PID matched to this session"};
       case "parent_linked":
-        return {color: "#22c55e", size: 10, opacity: 1, label: "Linked to parent — child/subagent attached"};
+        return {color: "#22c55e", size: 14, opacity: 1, label: "Linked to parent — child/subagent attached"};
       case "state_transition":
-        return {color: "#8b5cf6", size: 10, opacity: 1, label: "State changed"};
+        return {color: "#8b5cf6", size: 14, opacity: 1, label: "State changed"};
       case "transcript_activity":
-        return {color: "#a78bfa", size: 7, opacity: 0.95, label: "Transcript updated — new lines written"};
+        return {color: "#a78bfa", size: 10, opacity: 0.95, label: "Transcript updated — new lines written"};
       case "debounce_coalesced":
-        return {color: "#94a3b8", size: 4, opacity: 0.6, label: "Bookkeeping — multiple updates coalesced"};
+        return {color: "#94a3b8", size: 7, opacity: 0.6, label: "Bookkeeping — multiple updates coalesced"};
       case "hook_received":
-        return {color: "#94a3b8", size: 5, opacity: 0.7, label: "Hook event received"};
+        return {color: "#94a3b8", size: 8, opacity: 0.7, label: "Hook event received"};
       case "file_event":
-        return {color: "#94a3b8", size: 4, opacity: 0.6, label: "Filesystem event"};
+        return {color: "#94a3b8", size: 7, opacity: 0.6, label: "Filesystem event"};
       default:
-        return {color: "#94a3b8", size: 4, opacity: 0.5, label: kind};
+        return {color: "#94a3b8", size: 7, opacity: 0.5, label: kind};
     }
   }
 
@@ -581,10 +631,10 @@ function renderPlayback(s) {
       const pct = Math.max(0, Math.min(100, (ev.offset_ms / totalMs) * 100));
       const dot = document.createElement("div");
       const sz = st.size;
-      dot.style.cssText = `position: absolute; left: ${pct}%; top: ${(12 - sz) / 2}px; ` +
+      dot.style.cssText = `position: absolute; left: ${pct}%; top: ${(18 - sz) / 2}px; ` +
         `width: ${sz}px; height: ${sz}px; background: ${st.color}; opacity: ${st.opacity}; ` +
         `border-radius: 50%; transform: translateX(-${sz/2}px); ` +
-        `border: 1px solid white; box-shadow: 0 0 0 1px rgba(0,0,0,0.1);`;
+        `border: 1.5px solid white; box-shadow: 0 0 0 1px rgba(0,0,0,0.1); cursor: help;`;
       // Tooltip: plain-English description first, then offset and (when
       // useful) the new state and session id. Suppress session id on
       // bookkeeping kinds where it just adds noise.
@@ -596,7 +646,7 @@ function renderPlayback(s) {
       if (ev.session_id && ev.kind !== "debounce_coalesced" && ev.kind !== "file_event") {
         lines.push(`session: ${ev.session_id}`);
       }
-      dot.title = lines.join("\n");
+      dot.setAttribute("data-tip", lines.join("\n"));
       eventLane.appendChild(dot);
     }
   }
@@ -609,16 +659,16 @@ function renderPlayback(s) {
       const tick = document.createElement("div");
       const isUser = t.role === "user";
       const color = isUser ? "#2563eb" : "#0d9488";
-      // User ticks anchor to top half, assistant to bottom — so a
-      // same-instant user+assistant pair shows as two stacked ticks
-      // rather than overlapping into one.
-      const top = isUser ? "0px" : "7px";
+      // User ticks anchor to top, assistant to bottom — same-instant
+      // pairs stack without overlap. Width bumped to 5px, height to
+      // 10px so the cursor can hit them easily.
+      const top = isUser ? "1px" : "11px";
       tick.style.cssText = `position: absolute; left: ${pct}%; top: ${top}; ` +
-        `width: 2px; height: 7px; background: ${color}; transform: translateX(-1px); ` +
-        `border-radius: 1px;`;
+        `width: 5px; height: 10px; background: ${color}; transform: translateX(-2.5px); ` +
+        `border-radius: 2px; cursor: help;`;
       const roleLabel = isUser ? "User" : "Assistant";
       const offsetLabel = `+${(t.offset_ms / 1000).toFixed(2)}s`;
-      tick.title = `${roleLabel}\n${offsetLabel}\n${t.text || ""}`;
+      tick.setAttribute("data-tip", `${roleLabel}\n${offsetLabel}\n${t.text || ""}`);
       turnLane.appendChild(tick);
     }
   }
