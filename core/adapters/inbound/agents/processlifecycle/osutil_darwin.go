@@ -4,7 +4,9 @@ package processlifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -56,6 +58,117 @@ func resolveTermProgramFromAncestry(pid int) string {
 			return ""
 		}
 		cur = ppid
+	}
+	return ""
+}
+
+// kittyAncestryPID walks the parent-process chain of pid and returns the PID
+// of the first kitty.app ancestor, or 0 when no kitty.app appears within
+// maxAncestry levels. Used to back-fill `KittyPID` for sessions whose own
+// env was unreadable by sysctl — Apple-signed binaries like `pi` (Python
+// signed by Apple) and zsh hide their env even from non-TCC sysctl reads,
+// so KITTY_PID never makes it into the env-derived launcher. Ancestry
+// walking still works because we only read ppid + comm, not env.
+func kittyAncestryPID(pid int) int {
+	cur := pid
+	for i := 0; i < maxAncestry && cur > 1; i++ {
+		ppid, cmd, err := readProcInfo(cur)
+		if err != nil {
+			return 0
+		}
+		if termProgramForAppPath(cmd) == "kitty" {
+			return cur
+		}
+		if ppid == cur || ppid <= 1 {
+			return 0
+		}
+		cur = ppid
+	}
+	return 0
+}
+
+// kittenPath returns the absolute path of the kitten CLI, or "" if not
+// found. Same candidate list as the Swift activator (KittyActivator.swift).
+// Result is cached after first lookup.
+var kittenPath = func() string {
+	candidates := []string{
+		"/Applications/kitty.app/Contents/MacOS/kitten",
+		"/usr/local/bin/kitten",
+		"/opt/homebrew/bin/kitten",
+		os.Getenv("HOME") + "/.local/bin/kitten",
+	}
+	for _, p := range candidates {
+		if info, err := os.Stat(p); err == nil && info.Mode()&0o111 != 0 {
+			return p
+		}
+	}
+	return ""
+}()
+
+// kittyListenOnFor returns the socket path of the kitty.app at kittyPID,
+// or "" if no socket is reachable. Probes the canonical `unix:/tmp/kitty-PID`
+// path documented in the user-facing kitty setup snippet. Doesn't try a
+// connect — just checks the socket file exists; kitten will give a clearer
+// error if it's stale.
+func kittyListenOnFor(kittyPID int) string {
+	if kittyPID <= 0 {
+		return ""
+	}
+	candidates := []string{
+		fmt.Sprintf("/tmp/kitty-%d", kittyPID),
+		fmt.Sprintf("/private/tmp/kitty-%d", kittyPID),
+	}
+	for _, p := range candidates {
+		if fi, err := os.Stat(p); err == nil && fi.Mode()&os.ModeSocket != 0 {
+			return "unix:" + p
+		}
+	}
+	return ""
+}
+
+// kittyWindowIDForPID queries kitty's remote-control socket and returns the
+// id of the kitty-window whose foreground_processes include sessionPID, or
+// "" when no match is found (or kitten fails). Used to back-fill
+// KittyWindowID for sessions whose own env didn't expose KITTY_WINDOW_ID
+// (e.g., the pi adapter — pi's env is unreadable via sysctl). Bounded
+// 2-second timeout; runs at session-birth so latency is acceptable.
+func kittyWindowIDForPID(socket string, sessionPID int) string {
+	if kittenPath == "" || socket == "" || sessionPID <= 0 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, kittenPath, "@", "--to", socket, "ls").Output()
+	if err != nil {
+		return ""
+	}
+	var osWindows []struct {
+		Tabs []struct {
+			Windows []struct {
+				ID                  int `json:"id"`
+				PID                 int `json:"pid"`
+				ForegroundProcesses []struct {
+					PID int `json:"pid"`
+				} `json:"foreground_processes"`
+			} `json:"windows"`
+		} `json:"tabs"`
+	}
+	if err := json.Unmarshal(out, &osWindows); err != nil {
+		return ""
+	}
+	for _, w := range osWindows {
+		for _, t := range w.Tabs {
+			for _, kw := range t.Windows {
+				if kw.PID == sessionPID {
+					return strconv.Itoa(kw.ID)
+				}
+				for _, fg := range kw.ForegroundProcesses {
+					if fg.PID == sessionPID {
+						return strconv.Itoa(kw.ID)
+					}
+				}
+			}
+		}
 	}
 	return ""
 }

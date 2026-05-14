@@ -11,3 +11,8 @@ func readProcessEnv(pid int) (map[string]string, error) {
 // resolveTermProgramFromAncestry is a darwin-only fallback; other platforms
 // return "" and keep whatever the env-based path produced.
 func resolveTermProgramFromAncestry(pid int) string { return "" }
+
+// Stubs for the kitty "no readable env" enrichment helpers — darwin-only.
+func kittyAncestryPID(pid int) int                             { return 0 }
+func kittyListenOnFor(kittyPID int) string                     { return "" }
+func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }

@@ -223,6 +223,51 @@ func TestReadLauncherEnv_Subprocess_Tmux(t *testing.T) {
 	}
 }
 
+// TestReadLauncherEnv_Subprocess_KittyOverridesInheritedTermProgram covers
+// the case where kitty was launched from a process whose env contained
+// TERM_PROGRAM=vscode (e.g. a VS Code integrated terminal). kitty itself
+// sets KITTY_WINDOW_ID but not TERM_PROGRAM, so the inherited value leaks
+// through and would mis-route the focus click to VS Code. The override
+// only fires when kitty actually appears in the process ancestry — this
+// guards against KITTY_WINDOW_ID leaking the other direction (e.g. a kitty
+// shell spawning VS Code).
+//
+// Test logic depends on whether kitty.app is an ancestor of `go test`:
+//   - if yes: override fires, TermProgram normalized to "kitty"
+//   - if no:  override skipped, TermProgram stays "vscode"
+func TestReadLauncherEnv_Subprocess_KittyOverridesInheritedTermProgram(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip()
+	}
+	pid := spawnSleeperWithEnv(t, []string{
+		"PATH=/usr/bin:/bin",
+		"TERM_PROGRAM=vscode",
+		"KITTY_WINDOW_ID=42",
+		"KITTY_PID=4242",
+	})
+	l := ReadLauncherEnv(pid)
+	if l == nil {
+		t.Fatal("expected non-nil launcher when KITTY_WINDOW_ID present")
+	}
+	if l.KittyWindowID != "42" {
+		t.Errorf("KittyWindowID: want 42, got %q", l.KittyWindowID)
+	}
+	if l.KittyPID != 4242 {
+		t.Errorf("KittyPID: want 4242, got %d", l.KittyPID)
+	}
+	// Resolve ancestry of the spawned subprocess to decide which branch we're in.
+	ancestry := resolveTermProgramFromAncestry(pid)
+	if ancestry == "kitty" {
+		if l.TermProgram != "kitty" {
+			t.Errorf("kitty in ancestry: expected TermProgram override to 'kitty', got %q", l.TermProgram)
+		}
+	} else {
+		if l.TermProgram != "vscode" {
+			t.Errorf("no kitty ancestry: expected TermProgram to stay 'vscode', got %q", l.TermProgram)
+		}
+	}
+}
+
 func TestReadLauncherEnv_Subprocess_JetBrainsImpliesTermProgram(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip()

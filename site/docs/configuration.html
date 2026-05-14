@@ -204,6 +204,20 @@
 
       <p>If an external daemon is already running (e.g. from a development build), the app detects it and uses the existing instance instead of spawning a new one.</p>
 
+      <!-- ── Terminal hosts ── -->
+      <h2>Terminal hosts</h2>
+
+      <p>Clicking a session in the menu bar or web UI brings the originating terminal's window &mdash; and where possible the exact tab &mdash; to the front. Most terminals work out of the box. Kitty needs one extra config line for precise tab focus.</p>
+
+      <h3>Kitty</h3>
+
+      <p>Kitty&apos;s inter-process control is opt-in. Without it, Irrlicht can raise the kitty window but cannot switch to the tab that owns the clicked session &mdash; the last-focused tab stays visible. Enable remote control in <code>~/.config/kitty/kitty.conf</code>:</p>
+
+      <pre><code>allow_remote_control yes
+listen_on            unix:/tmp/kitty-{kitty_pid}</code></pre>
+
+      <p>Restart kitty after editing. New sessions started inside kitty will then have <code>KITTY_LISTEN_ON</code> set, and clicks land on the exact tab via <code>kitten @ focus-window</code>. (Note: macOS does not support Linux-style abstract sockets, so a filesystem path is required.)</p>
+
       <!-- ── Bottom nav ── -->
       <nav class="docs-nav-bottom">
         <a href="session-detection.html">

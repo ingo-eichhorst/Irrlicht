@@ -676,8 +676,15 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 }
 
 // backfillLauncher reattempts Launcher capture for pre-existing sessions that
-// shipped before newer fields (e.g. TTY) existed, or retargets a TTY-only
-// refresh to avoid clobbering the stable env-based identity.
+// shipped before newer fields existed. Each missing field is filled in
+// independently from a fresh env read, without clobbering fields that are
+// already populated (the stored env-based identity is the authoritative one).
+//
+// Currently backfills:
+//   - TTY: shipped after the initial Launcher type — older sessions are missing it.
+//   - KittyPID: shipped to support per-process kitty activation (issue #326).
+//     Without it, KittyActivator on macOS falls back to bundle-level activation
+//     which can pick the wrong kitty when multiple kitty.app instances run.
 func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
@@ -687,16 +694,42 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 		}
 		return
 	}
-	if state.Launcher.TTY != "" || pm.launcherEnv == nil {
+	if pm.launcherEnv == nil {
+		return
+	}
+	missingTTY := state.Launcher.TTY == ""
+	isKitty := state.Launcher.TermProgram == "kitty"
+	missingKittyPID := isKitty && state.Launcher.KittyPID == 0
+	missingKittyListen := isKitty && state.Launcher.KittyListenOn == ""
+	missingKittyWindow := isKitty && state.Launcher.KittyWindowID == ""
+	if !missingTTY && !missingKittyPID && !missingKittyListen && !missingKittyWindow {
 		return
 	}
 	fresh := pm.launcherEnv(state.PID)
-	if fresh == nil || fresh.TTY == "" {
+	if fresh == nil {
 		return
 	}
-	state.Launcher.TTY = fresh.TTY
-	state.UpdatedAt = time.Now().Unix()
-	_ = pm.repo.Save(state)
+	updated := false
+	if missingTTY && fresh.TTY != "" {
+		state.Launcher.TTY = fresh.TTY
+		updated = true
+	}
+	if missingKittyPID && fresh.KittyPID != 0 {
+		state.Launcher.KittyPID = fresh.KittyPID
+		updated = true
+	}
+	if missingKittyListen && fresh.KittyListenOn != "" {
+		state.Launcher.KittyListenOn = fresh.KittyListenOn
+		updated = true
+	}
+	if missingKittyWindow && fresh.KittyWindowID != "" {
+		state.Launcher.KittyWindowID = fresh.KittyWindowID
+		updated = true
+	}
+	if updated {
+		state.UpdatedAt = time.Now().Unix()
+		_ = pm.repo.Save(state)
+	}
 }
 
 // dedupeByPID removes non-subagent sessions that share a PID with a newer
