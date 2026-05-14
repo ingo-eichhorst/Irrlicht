@@ -163,15 +163,16 @@ launchctl setenv IRRLICHT_MDNS 1
 
       <h3>The dashboard returned "Dashboard UI not found"</h3>
 
-      <p>The daemon serves the dashboard from disk and looks in three places, in order:</p>
+      <p>The daemon resolves the dashboard's location in this order (first hit wins):</p>
 
       <ol>
+        <li><code>$IRRLICHT_UI_DIR</code> &mdash; escape hatch (what this recipe sets)</li>
         <li><code>&lt;exe&gt;/../Resources/web/</code> &mdash; production <code>.app</code> bundle layout</li>
         <li><code>~/.local/share/irrlicht/web/</code> &mdash; daemon-only curl install</li>
         <li>Walking up from the executable for <code>platforms/web/index.html</code> &mdash; dev checkout</li>
       </ol>
 
-      <p>If all three miss (custom install layout, fork with a moved UI, broken symlink), point the daemon at the right directory:</p>
+      <p>If the three auto-detect paths (2&ndash;4) all miss &mdash; custom install layout, fork with a moved UI, broken symlink &mdash; set the env var so it takes precedence:</p>
 
       <pre><code>IRRLICHT_UI_DIR=/path/to/dir/containing/index.html irrlichd</code></pre>
 
