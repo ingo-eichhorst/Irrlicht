@@ -81,6 +81,38 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.4.1 <small>(2026-05-14)</small></h2>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>kitty: click-to-focus lands on the right window and tab</strong> (#326) &mdash; Three failures in the kitty click-to-focus path, fixed end-to-end. (1) When kitty is launched from a shell whose env contains <code>TERM_PROGRAM=vscode</code> (e.g. a VS Code integrated terminal), kitty inherits that value because kitty itself does not set <code>TERM_PROGRAM</code> (upstream kitty #4793); the daemon captured the inherited value and the click was routed to VS Code's activator. <code>ReadLauncherEnv</code> now overrides <code>TermProgram</code> to <code>"kitty"</code> whenever <code>KITTY_WINDOW_ID</code> is set and process ancestry confirms <code>kitty.app</code> is a parent. (2) With multiple kitty processes running, <code>AppActivator.activate(bundleID:)</code> always picked one &mdash; typically the oldest &mdash; and a post-<code>kitten focus-window</code> re-activate fired <em>async</em>, outside the menu-bar click context, racing macOS yield-focus rules and producing the "raises then drops back" symptom. The daemon now whitelists <code>KITTY_PID</code>; a new <code>Launcher.KittyPID</code> field is plumbed through to the Swift app; <code>KittyActivator</code> calls <code>NSRunningApplication(processIdentifier:).activate(options: [])</code> synchronously inside the click handler. (3) Apple-signed agents like <code>pi</code> (and <code>/bin/zsh</code>) hide their env from <code>sysctl</code>, so <code>KITTY_*</code> env vars never reached their sessions &mdash; every click hit bundle fallback. Three new darwin-only helpers in <code>osutil_darwin.go</code> derive these fields without reading the agent's env: <code>kittyAncestryPID</code>, <code>kittyListenOnFor</code>, <code>kittyWindowIDForPID</code>. <code>backfillLauncher</code> was extended so pre-existing sessions get all four kitty fields refreshed on daemon restart</li>
+      </ul>
+
+      <h3>Security</h3>
+
+      <ul>
+        <li><strong>kitty: uid-check on <code>/tmp/kitty-{PID}</code> socket probe</strong> &mdash; <code>/tmp</code> is world-writable, so <code>kittyListenOnFor</code> could be tricked into trusting a pre-planted Unix socket at the canonical path and sending <code>kitten @ ls</code> to a hostile listener. <code>kittyListenOnFor</code> now stats the candidate socket and skips any whose owner uid doesn't match <code>os.Getuid()</code> &mdash; kitty binds with its own credentials, so a foreign-owned socket at the canonical path is either stale or hostile. Test coverage in <code>osutil_darwin_test.go</code> exercises the current-uid, foreign-uid (root-gated), non-socket, missing-file, and zero-PID branches</li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>kitty: cache ancestry walk in <code>ReadLauncherEnv</code></strong> &mdash; The kitty-via-vscode <code>pi</code> worst-case path was walking the parent-process chain up to three times (each walk shells <code>ps</code> up to <code>maxAncestry</code> times). A new <code>resolveHostFromAncestry</code> returning <code>(termProgram, hostPID)</code> is memoized inside <code>ReadLauncherEnv</code> via a closure, so the chain is walked at most once. <code>resolveTermProgramFromAncestry</code> and <code>kittyAncestryPID</code> become thin wrappers; call-site behavior is unchanged</li>
+      </ul>
+
+      <h3>Docs</h3>
+
+      <ul>
+        <li><strong>api-reference, contributing: catch v0.4.0 sweep gaps</strong> (#332) &mdash; <code>site/docs/api-reference.html</code> still referenced <code>agentCfgs</code> in the <code>GET /api/v1/agents</code> blurb; renamed to <code>allAgents</code> to match <code>cmd/irrlichd/main.go</code>. <code>site/docs/contributing.html</code> adapter-PR checklist still said "Implements the <code>AgentWatcher</code> interface"; replaced with the current <code>Agent()</code> / <code>agent.Agent</code> / <code>allAgents</code> contract</li>
+      </ul>
+
+      <h3>Distribution</h3>
+
+      <ul>
+        <li><strong>Release skill hardening</strong> (#332) &mdash; Step 6 checksum recipe now includes <code>irrlichd-darwin-universal.tar.gz</code> (the curl <code>--daemon-only</code> path verifies it; omitting it shipped a release where the standalone daemon installer failed the integrity check). Step 7b drops <code>--delete-branch</code> from <code>gh pr merge --squash</code> so the release branch remains addressable post-squash. Step 4b trigger table gains rows for adapter-package edits and <code>main.go</code> slice/wiring renames so future Phase-A-style shape changes can't slip past doc sweeps</li>
+      </ul>
+
       <h2>v0.4.0 <small>(2026-05-14)</small></h2>
 
       <h3>Added</h3>

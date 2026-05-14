@@ -9,8 +9,22 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-14
+
 ### Fixed
 - **kitty: click-to-focus lands on the right window and tab** (#326) — Three failures in the kitty click-to-focus path, fixed end-to-end. (1) When kitty is launched from a shell whose env contains `TERM_PROGRAM=vscode` (e.g. a VS Code integrated terminal), kitty inherits that value because kitty itself does not set `TERM_PROGRAM` (upstream kitty #4793); the daemon captured the inherited value and the click was routed to VS Code's activator. `ReadLauncherEnv` now overrides `TermProgram` to `"kitty"` whenever `KITTY_WINDOW_ID` is set and process ancestry confirms kitty.app is a parent — same precedence pattern as the existing `VSCODE_PID` / `TERMINAL_EMULATOR` overrides. (2) With multiple kitty processes running, `AppActivator.activate(bundleID: "net.kovidgoyal.kitty")` always picked one — typically the oldest — and a post-`kitten focus-window` re-activate fired *async*, outside the menu-bar click context, racing macOS yield-focus rules and producing the "raises then drops back" symptom. The daemon now whitelists `KITTY_PID`; a new `Launcher.KittyPID` field is plumbed through to the Swift app; `KittyActivator` calls `NSRunningApplication(processIdentifier:).activate(options: [])` synchronously inside the click handler (right kitty instance, no race) and dispatches `kitten @ focus-window` async with no follow-up re-activate. (3) Apple-signed agents like `pi` (and `/bin/zsh`) hide their env from sysctl, so `KITTY_*` env vars never reached their sessions — every click hit bundle fallback. Three new darwin-only helpers in `osutil_darwin.go` derive these fields without reading the agent's env: `kittyAncestryPID` walks `ppid` to find kitty.app, `kittyListenOnFor` probes the canonical `/tmp/kitty-{kitty_pid}` socket, and `kittyWindowIDForPID` shells `kitten @ ls` and finds the window whose `foreground_processes` contain the session PID. `backfillLauncher` was extended so pre-existing sessions get all four kitty fields refreshed on daemon restart (was previously TTY-only). Docs gain a "Terminal hosts → Kitty" section explaining the required `allow_remote_control yes` + `listen_on unix:/tmp/kitty-{kitty_pid}` kitty.conf config — macOS does not support Linux-style abstract sockets so a filesystem path is required.
+
+### Security
+- **kitty: uid-check on `/tmp/kitty-{PID}` socket probe** — `/tmp` is world-writable, so `kittyListenOnFor` could be tricked into trusting a pre-planted Unix socket at the canonical path and sending `kitten @ ls` to a hostile listener. `kittyListenOnFor` now stats the candidate socket and skips any whose owner uid doesn't match `os.Getuid()` — kitty binds with its own credentials, so a foreign-owned socket at the canonical path is either stale or hostile. Test coverage in `osutil_darwin_test.go` exercises the current-uid, foreign-uid (root-gated), non-socket, missing-file, and zero-PID branches.
+
+### Changed
+- **kitty: cache ancestry walk in `ReadLauncherEnv`** — The kitty-via-vscode `pi` worst-case path was walking the parent-process chain up to three times (each walk shells `ps` up to `maxAncestry` times): once to verify the inherited `TERM_PROGRAM`, once to recover `term_program` from a hardened-env agent, once again to extract kitty's PID. A new `resolveHostFromAncestry` returning `(termProgram, hostPID)` is memoized inside `ReadLauncherEnv` via a closure, so the chain is walked at most once. `resolveTermProgramFromAncestry` and `kittyAncestryPID` become thin wrappers; call-site behavior is unchanged.
+
+### Docs
+- **api-reference, contributing: catch v0.4.0 sweep gaps** (#332) — `site/docs/api-reference.html` still referenced `agentCfgs` in the `GET /api/v1/agents` blurb; renamed to `allAgents` to match `cmd/irrlichd/main.go`. `site/docs/contributing.html` adapter-PR checklist still said "Implements the `AgentWatcher` interface"; replaced with the current `Agent()` / `agent.Agent` / `allAgents` contract.
+
+### Distribution
+- **Release skill hardening** (#332) — Step 6 checksum recipe now includes `irrlichd-darwin-universal.tar.gz` (`site/install.sh` verifies it on the curl `--daemon-only` path; omitting it shipped a release where the standalone daemon installer failed the integrity check). Step 7b drops `--delete-branch` from `gh pr merge --squash` with an explanation, so the release branch remains addressable post-squash. Step 4b trigger table gains rows for adapter-package edits (flag `AGENTS.md`) and `main.go` slice/wiring renames (flag `api-reference.html` + `contributing.html`) so future Phase-A-style shape changes can't slip past doc sweeps.
 
 ## [0.4.0] — 2026-05-14
 
@@ -657,7 +671,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.0
 [0.3.13]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.13
 [0.3.12]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.12
