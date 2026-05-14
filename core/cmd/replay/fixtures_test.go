@@ -76,6 +76,11 @@ func discoverReplayFixtures(t *testing.T, root string) []string {
 		if base == "events.jsonl" || strings.HasSuffix(path, ".events.jsonl") {
 			return nil
 		}
+		// Skip ground_truth.jsonl (#268 Phase 2 — labels, not a transcript)
+		// and signals.jsonl (#268 Phase 1 — sensor signals, not a transcript).
+		if base == "ground_truth.jsonl" || base == "signals.jsonl" || base == "frames.jsonl" {
+			return nil
+		}
 		out = append(out, path)
 		return nil
 	})
