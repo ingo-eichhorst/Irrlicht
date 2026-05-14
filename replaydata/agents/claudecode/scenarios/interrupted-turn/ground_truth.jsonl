@@ -1,0 +1,5 @@
+{"schema_version":1,"agent":"claudecode","scenario":"interrupted-turn","recording_started_at":"2026-05-01T11:12:17.638829Z","notes":"User sends a prompt, ESC-interrupts mid-turn, then sends another prompt. Validator must observe both the interrupt-as-ready transition AND the subsequent resume-to-working."}
+{"ts_offset_ms":0,"marker":"session_created","expected_state":"ready","tolerance_ms":1000,"evidence_kind":"transcript_event_kind"}
+{"ts_offset_ms":15500,"marker":"turn_1_start","expected_state":"working","tolerance_ms":2000,"evidence_kind":"transcript_line"}
+{"ts_offset_ms":19600,"marker":"esc_interrupt","expected_state":"ready","tolerance_ms":2000,"evidence_kind":"interrupt_marker","notes":"user ESC during working → ready (LastWasUserInterrupt)"}
+{"ts_offset_ms":23600,"marker":"turn_2_start","expected_state":"working","tolerance_ms":2000,"evidence_kind":"transcript_line","notes":"new prompt resumes working"}

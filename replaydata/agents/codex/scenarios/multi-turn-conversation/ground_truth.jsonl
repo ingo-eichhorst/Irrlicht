@@ -1,0 +1,4 @@
+{"schema_version":1,"agent":"codex","scenario":"multi-turn-conversation","recording_started_at":"2026-05-01T11:21:02.582533Z","notes":"Codex uses event_msg.type=task_complete as its turn-done signal (not stop_reason=end_turn like claudecode). Labels anchored to the canonical events.jsonl."}
+{"ts_offset_ms":0,"marker":"session_created","expected_state":"ready","tolerance_ms":1000,"evidence_kind":"transcript_event_kind"}
+{"ts_offset_ms":17100,"marker":"turn_1_start","expected_state":"working","tolerance_ms":2000,"evidence_kind":"transcript_line"}
+{"ts_offset_ms":28900,"marker":"turn_1_end","expected_state":"ready","tolerance_ms":2000,"evidence_kind":"transcript_field_value","notes":"task_complete event closes the turn"}

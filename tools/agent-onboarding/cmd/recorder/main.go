@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"irrlicht/tools/agent-onboarding/internal/frames"
+	"irrlicht/tools/agent-onboarding/internal/groundtruth"
 	"irrlicht/tools/agent-onboarding/internal/preflight"
 	"irrlicht/tools/agent-onboarding/internal/sensors"
 )
@@ -35,11 +36,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: agent-onboard <subcommand> [flags]")
 		fmt.Fprintln(os.Stderr, "subcommands:")
 		fmt.Fprintln(os.Stderr, "  record    capture signals + frames against a running agent")
+		fmt.Fprintln(os.Stderr, "  label     convert driver `gt:` sidecar into ground_truth.jsonl")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
 	case "record":
 		os.Exit(cmdRecord(os.Args[2:]))
+	case "label":
+		os.Exit(cmdLabel(os.Args[2:]))
 	case "-h", "--help":
 		fmt.Fprintln(os.Stderr, "usage: agent-onboard <subcommand> [flags]")
 		os.Exit(0)
@@ -47,6 +51,31 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+func cmdLabel(args []string) int {
+	fs := flag.NewFlagSet("label", flag.ContinueOnError)
+	sidecar := fs.String("sidecar", "", "path to driver sidecar containing `gt:<marker>` lines — required")
+	outDir := fs.String("out-dir", "", "scenario directory to write ground_truth.jsonl into — required")
+	agent := fs.String("agent", "", "adapter slug — required")
+	scenario := fs.String("scenario", "", "scenario id — required")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *sidecar == "" || *outDir == "" || *agent == "" || *scenario == "" {
+		fmt.Fprintln(os.Stderr, "error: --sidecar, --out-dir, --agent, --scenario are required")
+		fs.Usage()
+		return 2
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	path, err := groundtruth.Process(ctx, *sidecar, *outDir, *agent, *scenario, time.Time{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s\n", path)
+	return 0
 }
 
 // recordCfg bundles every flag for the record subcommand.

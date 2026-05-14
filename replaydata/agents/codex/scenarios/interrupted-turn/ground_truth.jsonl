@@ -1,0 +1,4 @@
+{"schema_version":1,"agent":"codex","scenario":"interrupted-turn","recording_started_at":"2026-05-01T11:21:39.624453Z","notes":"Codex's interrupt signal is turn_aborted (stop_sequence-style marker). The committed events.jsonl shows only ready→working — the second arc was either not captured or the interrupt didn't emit a state_transition. The validator should still observe the working state and a return to ready within tolerance."}
+{"ts_offset_ms":0,"marker":"session_created","expected_state":"ready","tolerance_ms":1000,"evidence_kind":"transcript_event_kind"}
+{"ts_offset_ms":16900,"marker":"turn_1_start","expected_state":"working","tolerance_ms":2000,"evidence_kind":"transcript_line"}
+{"ts_offset_ms":20000,"marker":"esc_interrupt","expected_state":"ready","tolerance_ms":3000,"evidence_kind":"interrupt_marker","notes":"approximate — committed recording's state_transition log truncated; Phase 1 re-recording with the multi-sensor recorder will sharpen this label"}
