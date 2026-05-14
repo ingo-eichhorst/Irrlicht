@@ -337,8 +337,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// Track whether this pass observed any state-relevant change. Starts
 	// true; flipped to false the moment we route a line through
 	// processParsedEvent or harvest a substantive signal in the skip
-	// branch (subagent completion, task snapshot). Reset to true at the
-	// start of every pass — purely per-pass. See issue #329.
+	// branch (subagent completion, task snapshot). See issue #329.
 	noSubstantiveActivity := true
 
 	// Per-pass signals must be cleared so the detector only drains events
