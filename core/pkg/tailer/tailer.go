@@ -334,11 +334,16 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// case from issue #150).
 	sawUserBlockingClosedThisPass := false
 
-	// Track whether this pass observed any state-relevant change. Starts
-	// true; flipped to false the moment we route a line through
-	// processParsedEvent or harvest a substantive signal in the skip
-	// branch (subagent completion, task snapshot). See issue #329.
-	noSubstantiveActivity := true
+	// Track whether this pass observed any state-relevant change. Set
+	// only when at least one parsed line was seen AND none of them
+	// produced substantive output (no processParsedEvent call, no
+	// subagent completion, no task snapshot). An empty pass (zero
+	// parsed lines, e.g. fswatcher fired on an unchanged file) leaves
+	// the flag at its zero value so the detector's classifier still
+	// runs — needed for hook-driven synthetic activity events that
+	// re-classify against stale metrics. See issue #329.
+	linesParsedThisPass := 0
+	substantiveThisPass := false
 
 	// Per-pass signals must be cleared so the detector only drains events
 	// discovered in this scan (see issue #134).
@@ -438,20 +443,22 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			// but carry an authoritative TaskSnapshot the tailer must apply
 			// (issue #282).
 			if parsed != nil {
+				linesParsedThisPass++
 				t.applyMetadata(parsed)
 				if len(parsed.SubagentCompletions) > 0 {
 					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
-					noSubstantiveActivity = false
+					substantiveThisPass = true
 				}
 				if parsed.TaskSnapshot != nil {
-					noSubstantiveActivity = false
+					substantiveThisPass = true
 				}
 				t.reconcileTaskSnapshot(parsed)
 			}
 			continue
 		}
+		linesParsedThisPass++
+		substantiveThisPass = true
 		t.processParsedEvent(parsed, &sawUserBlockingClosedThisPass)
-		noSubstantiveActivity = false
 	}
 
 	t.lastOffset = currentOffset
@@ -465,14 +472,14 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	if flusher, ok := t.parser.(idleFlusher); ok && !t.lastLineSeenAt.IsZero() {
 		if ev := flusher.IdleFlush(time.Since(t.lastLineSeenAt)); ev != nil {
 			t.processParsedEvent(ev, &sawUserBlockingClosedThisPass)
-			noSubstantiveActivity = false
+			substantiveThisPass = true
 		}
 	}
 
 	// Compute current metrics.
 	t.computeMetrics()
 	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
-	t.metrics.NoSubstantiveActivity = noSubstantiveActivity
+	t.metrics.NoSubstantiveActivity = linesParsedThisPass > 0 && !substantiveThisPass
 
 	// Model config fallback.
 	if t.metrics.ModelName == "" {

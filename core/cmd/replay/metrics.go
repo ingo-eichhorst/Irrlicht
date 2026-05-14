@@ -79,6 +79,7 @@ func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
 		LastAssistantText:                 m.LastAssistantText,
 		PermissionMode:                    m.PermissionMode,
 		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
+		NoSubstantiveActivity:             m.NoSubstantiveActivity,
 	}
 	if len(m.Tasks) > 0 {
 		result.Tasks = make([]session.Task, len(m.Tasks))

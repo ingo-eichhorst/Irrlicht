@@ -314,6 +314,9 @@ func (r *sidecarReplayer) anyChildActive() bool {
 // parent-hold/synth-waiting pipeline. Extracted so hook and orphan events
 // can re-run classification against the last-known metrics.
 func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, virtTime time.Time, eventIdx int, cause transitionCause) {
+	if domainMetrics.NoSubstantiveActivity {
+		return
+	}
 	if r.state == session.StateReady && domainMetrics.LastEventType != "" {
 		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
 			r.state, session.StateWorking, services.ForceReadyToWorkingReason, domainMetrics))
