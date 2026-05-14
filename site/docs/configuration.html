@@ -169,7 +169,11 @@
       <h3>Notifications</h3>
 
       <ul>
-        <li>Context pressure notifications at 80% and 95%</li>
+        <li>Three events &mdash; <code>ready</code>, <code>waiting</code>, and context pressure (80% / 95%) &mdash; each has its own enable toggle and sound picker in Preferences</li>
+        <li>Built-in sounds: Ping, Chime, Funk, Whoosh, Sosumi; defaults Ready=Funk, Waiting=Ping, Context=Sosumi</li>
+        <li><strong>None</strong> &mdash; the banner still appears but plays no sound</li>
+        <li><strong>Speak aloud</strong> &mdash; routes the title and body through <code>AVSpeechSynthesizer</code> (pinned to en-US) with three voice variants: Default, Zoe-Premium (female), Jamie-Premium (male). If a premium voice isn't installed, the row deep-links to System Settings &rarr; Accessibility &rarr; Spoken Content</li>
+        <li><strong>Custom</strong> &mdash; imports <code>aiff/wav/mp3/m4a/caf</code> from disk into <code>~/Library/Sounds/</code>, transcoding <code>mp3</code>/<code>m4a</code> to LPCM-in-CAF so <code>UNNotificationSound</code> can play them</li>
         <li>Requires macOS notification permission (requested on launch)</li>
       </ul>
 

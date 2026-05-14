@@ -81,6 +81,36 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.4.0 <small>(2026-05-14)</small></h2>
+
+      <h3>Added</h3>
+
+      <ul>
+        <li><strong>macOS: per-event notification sound picker</strong> (#253) &mdash; Preferences gains a separate row per notification event (ready / waiting / context-pressure) with its own enable toggle, sound picker (Ping / Chime / Funk / Whoosh / Sosumi / None / Speak aloud / Custom), and preview button. Custom audio (<code>aiff/wav/mp3/m4a/caf</code>) is imported into <code>~/Library/Sounds/</code>, transcoding <code>mp3</code>/<code>m4a</code> to LPCM-in-CAF via <code>AVAudioFile</code> so <code>UNNotificationSound</code> will play it. "Speak aloud" routes title+body through <code>AVSpeechSynthesizer</code>, pinned to en-US, and exposes three voice variants (Default / Zoe-Premium / Jamie-Premium); if a premium voice isn't installed, the row renders an inline "Install &hellip; in System Settings" button that deep-links to Accessibility &rarr; Spoken Content. Defaults: all three events enabled; Ready=Funk, Waiting=Ping, Context=Sosumi. Existing preferences preserved on upgrade</li>
+      </ul>
+
+      <h3>Fixed</h3>
+
+      <ul>
+        <li><strong>Claude Code: don't bounce ready&rarr;working on post-turn <code>away_summary</code></strong> (#329) &mdash; Claude Code writes a <code>system/away_summary</code> recap ~3 minutes after a turn ends. The parser correctly marked it <code>Skip=true</code>, but the fswatcher's mtime trigger still ran the full classification pipeline, and the force-bounce in <code>processActivity</code> saw the stale <code>LastEventType</code> from the prior <code>turn_done</code> and flipped the ready session back to working indefinitely. The tailer now surfaces a <code>NoSubstantiveActivity</code> signal when a pass consumed new content but produced no state-relevant change; the detector short-circuits the force-bounce / re-classify path on that signal while still refreshing <code>LastEvent</code> / <code>EventCount</code> / <code>UpdatedAt</code> and broadcasting so the UI's "last activity" stays current</li>
+        <li><strong>Claude Code: detect AskUserQuestion / ExitPlanMode via <code>PreToolUse</code> hook</strong> (#307) &mdash; Claude Code can lag flushing the assistant <code>tool_use</code> block to JSONL for minutes after rendering an <code>AskUserQuestion</code> / <code>ExitPlanMode</code> overlay; the transcript-driven detector never saw the open tool call, so the session sat in <code>working</code> while the user stared at the prompt. A <code>PreToolUse</code> hook scoped to <code>AskUserQuestion|ExitPlanMode</code> fires synchronously when the model emits the tool_use and flips <code>permissionPending</code>; the existing <code>PostToolUse</code> matcher is widened to include both tools so the same edge clears the flag when the user answers. Legacy installs are migrated in place by <code>upgradeStaleHookMatchers</code></li>
+        <li><strong>Codex: treat <code>&lt;proposed_plan&gt;</code> as user-blocking like <code>ExitPlanMode</code></strong> (#322) &mdash; Codex's Plan Mode ends a turn with a <code>&lt;proposed_plan&gt;&hellip;&lt;/proposed_plan&gt;</code> block &mdash; semantically identical to Claude Code's <code>ExitPlanMode</code>. The block arrives as plain assistant text, so the classifier never saw an open user-blocking tool and fell through to <code>ready</code>, leaving the dashboard green while the agent was actually blocked. When an assistant message contains a fully-closed <code>&lt;proposed_plan&gt;</code> block, the codex parser now synthesizes a virtual <code>ExitPlanMode</code> tool-use &mdash; same user-blocking path as Claude Code; the existing <code>ClearToolNames</code> hook on user messages closes it when the user replies</li>
+        <li><strong>Daemon: reject zombie sessions with missing cwd</strong> (#321) &mdash; A daemon restart within 2 minutes of <code>claude --resume</code> against a session whose worktree had been deleted re-admitted the session as a ghost: the transcript-mtime check treated the refreshed mtime as live, PID discovery failed, and the steady-state sweep only cleaned it up ~75s later. Admission now checks cwd existence alongside the stale-transcript guard at both <code>onNewSession</code> and <code>seedAlivePIDs</code></li>
+      </ul>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>#159 Phase A &mdash; Agent declaration replaces <code>agents.Config</code></strong> &mdash; The legacy <code>agents.Config</code> struct + its five per-adapter <code>Config()</code> constructors and four map helpers are removed. Each adapter now exports a single <code>Agent()</code> constructor returning a sealed-sum declaration: <code>Agent = Identity &times; Process &times; Source</code>, where <code>Process</code> is <code>ExactName | CommandPattern</code>, <code>Source</code> is <code>FilesUnderRoot | FilesUnderCWD | ProcessOwnedStore</code>, and <code>FileParser</code> is <code>JSONLineParser | RawLineParser</code>. The daemon consumes <code>[]agent.Agent</code> directly, with per-projection helpers in <code>adapters/inbound/agents/maps.go</code>. Variant-dispatched watcher wiring in <code>cmd/irrlichd/wiring.go</code> replaces the per-adapter loop. Phase A also lands an M0 contract-test layer (<code>SessionState</code> on-disk, 7 <code>PushMessage</code> shapes, <code>GET /api/v1/agents</code>) to guard the public surface</li>
+        <li><strong>#159 Phase A &mdash; <code>Watcher</code> port replaces <code>AgentWatcher</code>; identity carried on the merge pipeline</strong> &mdash; The inbound watcher port gains an <code>Identity()</code> method and <code>WithIdentity()</code> builder; each per-watcher drain goroutine in <code>SessionDetector.Run()</code> captures identity once and wraps every event with it, so <code>agent.Event.Adapter</code> is removed. The old <code>AgentWatcher</code> interface is deleted. <code>NewSessionDetector</code> panics at construction when any watcher's <code>Identity()</code> is the zero value. <code>metrics.New</code> takes a single <code>Registry</code> struct instead of four positional maps</li>
+      </ul>
+
+      <h3>Docs</h3>
+
+      <ul>
+        <li><strong><code>/ir:release</code> skill &mdash; adapt to PR-required <code>main</code> + fix tap-publish race</strong> (#306) &mdash; <code>main</code> is now protected by a "Changes must be made through a pull request" repo rule. The release flow now stages on a short-lived <code>release/v$NEW_VERSION</code> branch, opens a PR with the drafted release notes, squash-merges, hard-resets local <code>main</code> to <code>origin/main</code>, and tags the merged commit. Step 6.5 patches the in-repo cask template via <code>sed</code> and leaves the sibling tap untouched until Step 8.5</li>
+      </ul>
+
       <h2>v0.3.13 <small>(2026-05-11)</small></h2>
 
       <h3>Fixed</h3>
