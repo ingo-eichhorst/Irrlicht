@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -105,23 +106,42 @@ var kittenPath = func() string {
 	return ""
 }()
 
-// kittyListenOnFor returns the socket path of the kitty.app at kittyPID,
-// or "" if no socket is reachable. Probes the canonical `unix:/tmp/kitty-PID`
-// path documented in the user-facing kitty setup snippet. Doesn't try a
-// connect — just checks the socket file exists; kitten will give a clearer
-// error if it's stale.
-func kittyListenOnFor(kittyPID int) string {
+// kittySocketCandidates returns the filesystem paths a kitty.app at kittyPID
+// might have bound its remote-control socket to, given the canonical
+// `listen_on unix:/tmp/kitty-{kitty_pid}` config documented in the user-facing
+// setup snippet. Both `/tmp` and `/private/tmp` are listed because macOS
+// symlinks the former to the latter and either spelling may appear in
+// filesystem listings depending on how kitty resolved it at bind time.
+func kittySocketCandidates(kittyPID int) []string {
 	if kittyPID <= 0 {
-		return ""
+		return nil
 	}
-	candidates := []string{
+	return []string{
 		fmt.Sprintf("/tmp/kitty-%d", kittyPID),
 		fmt.Sprintf("/private/tmp/kitty-%d", kittyPID),
 	}
-	for _, p := range candidates {
-		if fi, err := os.Stat(p); err == nil && fi.Mode()&os.ModeSocket != 0 {
-			return "unix:" + p
+}
+
+// kittyListenOnFor returns the socket path of the kitty.app at kittyPID, or
+// "" if no socket is reachable.
+//
+// Security: `/tmp` is world-writable, so a malicious local process could
+// pre-plant a unix socket at `/tmp/kitty-{PID}` before kitty itself binds.
+// We require the socket file's owner UID to match the current user — kitty
+// binds with its own credentials, so a foreign-owned socket at that path is
+// either stale or hostile; either way, we skip it.
+func kittyListenOnFor(kittyPID int) string {
+	myUID := uint32(os.Getuid())
+	for _, p := range kittySocketCandidates(kittyPID) {
+		fi, err := os.Stat(p)
+		if err != nil || fi.Mode()&os.ModeSocket == 0 {
+			continue
 		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || st.Uid != myUID {
+			continue
+		}
+		return "unix:" + p
 	}
 	return ""
 }
@@ -142,6 +162,15 @@ func kittyWindowIDForPID(socket string, sessionPID int) string {
 	if err != nil {
 		return ""
 	}
+	return parseKittenLsForPID(out, sessionPID)
+}
+
+// parseKittenLsForPID parses a `kitten @ ls` JSON response and returns the
+// id (as a decimal string) of the kitty-window whose `pid` or
+// `foreground_processes[].pid` matches sessionPID, or "" if no match.
+// Exposed as a separate function so the JSON-handling can be unit-tested
+// without spawning a real kitty.
+func parseKittenLsForPID(out []byte, sessionPID int) string {
 	var osWindows []struct {
 		Tabs []struct {
 			Windows []struct {
