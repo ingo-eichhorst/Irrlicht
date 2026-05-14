@@ -688,6 +688,11 @@ func readTransitionsRaw(path string) []json.RawMessage {
 	defer f.Close()
 	dec := json.NewDecoder(bufio.NewReader(f))
 	var out []json.RawMessage
+	// Track which sessions have already been "ended" so a daemon
+	// re-firing transcript_removed for the same proc-<PID> doesn't
+	// double up. The first of {presession_removed, transcript_removed,
+	// process_exited} per session_id wins.
+	ended := make(map[string]bool)
 	for {
 		var raw map[string]json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
@@ -700,11 +705,35 @@ func readTransitionsRaw(path string) []json.RawMessage {
 		if v, ok := raw["kind"]; ok {
 			_ = json.Unmarshal(v, &kind)
 		}
-		if kind != "state_transition" {
-			continue
+		var sid string
+		if v, ok := raw["session_id"]; ok {
+			_ = json.Unmarshal(v, &sid)
 		}
-		b, _ := json.Marshal(raw)
-		out = append(out, b)
+		// Pick real state_transitions plus the three session-end
+		// lifecycle kinds — the panel renders them as the visible
+		// session disappearing from the dashboard. Without these the
+		// "ready → ∅" tail is invisible and the panel reads as if the
+		// session is still alive at recording end.
+		switch kind {
+		case "state_transition":
+			b, _ := json.Marshal(raw)
+			out = append(out, b)
+		case "transcript_removed", "process_exited", "presession_removed":
+			if ended[sid] {
+				continue
+			}
+			ended[sid] = true
+			// Reshape the lifecycle event into a state_transition-
+			// shaped row so the existing renderer just works. The
+			// synthetic new_state "(ended)" is rendered as a neutral
+			// chip by the frontend — different from working/waiting/
+			// ready so the reader can spot it.
+			raw["kind"] = json.RawMessage(`"state_transition"`)
+			raw["new_state"] = json.RawMessage(`"(ended)"`)
+			raw["reason"] = json.RawMessage(`"` + kind + `"`)
+			b, _ := json.Marshal(raw)
+			out = append(out, b)
+		}
 	}
 }
 

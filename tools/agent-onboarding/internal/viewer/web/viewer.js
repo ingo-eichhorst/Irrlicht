@@ -826,7 +826,7 @@ function renderSessionGroup(sessionID, transitions) {
   const summary = document.createElement("summary");
   summary.style.cssText = "padding: 8px 10px; cursor: pointer; font-family: monospace; font-size: 12px;";
   summary.innerHTML = `<code>${escapeHtml(sessionID)}</code> ` +
-    `<span class="badge ${finalState}">${escapeHtml(finalState)}</span> ` +
+    `<span class="badge ${badgeClass(finalState)}">${escapeHtml(finalState)}</span> ` +
     `<span style="color:#888;">${transitions.length} transition${transitions.length === 1 ? '' : 's'}${dur ? ', ' + dur : ''}</span>`;
   card.appendChild(summary);
 
@@ -837,13 +837,21 @@ function renderSessionGroup(sessionID, transitions) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${escapeHtml(t.ts || "")}</td>
-      <td><span class="badge ${t.prev_state || 'none'}">${t.prev_state || "∅"}</span> →
-          <span class="badge ${t.new_state}">${t.new_state}</span></td>
+      <td><span class="badge ${badgeClass(t.prev_state || 'none')}">${t.prev_state || "∅"}</span> →
+          <span class="badge ${badgeClass(t.new_state)}">${t.new_state}</span></td>
       <td>${escapeHtml(t.reason || "")}</td>`;
     tbl.appendChild(tr);
   }
   card.appendChild(tbl);
   return card;
+}
+
+// badgeClass maps a state name to a CSS-safe class. Synthetic states
+// from session-end events arrive as "(ended)"; strip the parens so
+// `.badge.ended` styling matches. Other states pass through.
+function badgeClass(state) {
+  if (!state) return "none";
+  return String(state).replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
 function renderValidate(data) {
