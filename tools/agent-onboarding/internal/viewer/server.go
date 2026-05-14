@@ -693,6 +693,9 @@ func readTransitionsRaw(path string) []json.RawMessage {
 	// double up. The first of {presession_removed, transcript_removed,
 	// process_exited} per session_id wins.
 	ended := make(map[string]bool)
+	// Track each session's last observed new_state so the synthetic
+	// "ended" row can read as e.g. ready → ∅ instead of ∅ → ∅.
+	lastState := make(map[string]string)
 	for {
 		var raw map[string]json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
@@ -716,6 +719,15 @@ func readTransitionsRaw(path string) []json.RawMessage {
 		// session is still alive at recording end.
 		switch kind {
 		case "state_transition":
+			// Track the running state so a follow-on session-end row
+			// reads as <state> → ∅ instead of ∅ → ∅.
+			var newState string
+			if v, ok := raw["new_state"]; ok {
+				_ = json.Unmarshal(v, &newState)
+			}
+			if newState != "" {
+				lastState[sid] = newState
+			}
 			b, _ := json.Marshal(raw)
 			out = append(out, b)
 		case "transcript_removed", "process_exited", "presession_removed":
@@ -725,12 +737,15 @@ func readTransitionsRaw(path string) []json.RawMessage {
 			ended[sid] = true
 			// Reshape the lifecycle event into a state_transition-
 			// shaped row so the existing renderer just works. The
-			// synthetic new_state "(ended)" is rendered as a neutral
-			// chip by the frontend — different from working/waiting/
-			// ready so the reader can spot it.
+			// synthetic new_state "∅" renders as a neutral grey chip
+			// (.badge.ended) — different from working/waiting/ready
+			// so the reader can spot the lifecycle exit.
 			raw["kind"] = json.RawMessage(`"state_transition"`)
-			raw["new_state"] = json.RawMessage(`"(ended)"`)
+			raw["new_state"] = json.RawMessage(`"∅"`)
 			raw["reason"] = json.RawMessage(`"` + kind + `"`)
+			if prev := lastState[sid]; prev != "" {
+				raw["prev_state"] = json.RawMessage(`"` + prev + `"`)
+			}
 			b, _ := json.Marshal(raw)
 			out = append(out, b)
 		}

@@ -846,12 +846,13 @@ function renderSessionGroup(sessionID, transitions) {
   return card;
 }
 
-// badgeClass maps a state name to a CSS-safe class. Synthetic states
-// from session-end events arrive as "(ended)"; strip the parens so
-// `.badge.ended` styling matches. Other states pass through.
+// badgeClass maps a state name to a CSS-safe class. Synthetic
+// session-end events arrive as the ∅ symbol — map them to .badge.ended
+// (neutral grey italic). Other states strip to alnum for class safety.
 function badgeClass(state) {
   if (!state) return "none";
-  return String(state).replace(/[^a-zA-Z0-9_-]/g, "");
+  if (state === "∅") return "ended";
+  return String(state).replace(/[^a-zA-Z0-9_-]/g, "") || "none";
 }
 
 function renderValidate(data) {
