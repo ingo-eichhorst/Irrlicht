@@ -1022,17 +1022,17 @@ class SessionManager: ObservableObject {
         content.sound = Self.resolveNotificationSound(for: event)
         // Round-trip the session ID so the click-forwarder can look up
         // the session and jump back to its launching terminal/IDE.
-        content.userInfo = [NotificationUserInfoKey.sessionID: sessionID]
+        var userInfo: [AnyHashable: Any] = [NotificationUserInfoKey.sessionID: sessionID]
+        if Self.choice(for: event) == .speak {
+            userInfo[NotificationUserInfoKey.speakText] = "\(title). \(body)"
+        }
+        content.userInfo = userInfo
 
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
                 print("⚠️ Failed to send notification: \(error.localizedDescription)")
             }
-        }
-
-        if Self.choice(for: event) == .speak {
-            SoundPlayer.speak("\(title). \(body)")
         }
     }
 
@@ -1414,6 +1414,11 @@ private struct SessionOrderData: Codable {
 /// can identify the originating session.
 enum NotificationUserInfoKey {
     static let sessionID = "sessionID"
+    /// Present when the user picked "Speak aloud" for this event. The
+    /// willPresent delegate reads it and hands the text to
+    /// `SoundPlayer.speak` — keeps speech tied to actual banner presentation
+    /// rather than to enqueue, so a suppressed notification doesn't speak.
+    static let speakText = "speakText"
 }
 
 /// NSObject-based forwarder that receives `UNUserNotificationCenterDelegate`
@@ -1447,6 +1452,12 @@ final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelega
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        // Only speak when the banner is actually about to be shown. Tying
+        // speech to enqueue would speak even when macOS suppresses the
+        // notification (DND, dedupe, focus mode).
+        if let speakText = notification.request.content.userInfo[NotificationUserInfoKey.speakText] as? String {
+            SoundPlayer.speak(speakText)
+        }
         completionHandler([.banner, .sound])
     }
 }

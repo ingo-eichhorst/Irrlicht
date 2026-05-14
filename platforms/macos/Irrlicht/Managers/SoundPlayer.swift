@@ -107,7 +107,9 @@ enum SoundPlayer {
             return
         }
 
-        // mp3 / m4a → transcode to .caf via AVAssetExportSession.
+        // mp3 / m4a → transcode to LPCM-in-CAF. UNNotificationSound only plays
+        // PCM/MA4/µLaw/aLaw packaged in aiff/wav/caf — it will refuse AAC, so
+        // we must decode to PCM rather than passthrough the source codec.
         let destName = event.customFilename // "IrrlichtCustom-<event>.caf"
         let destURL = destDir.appendingPathComponent(destName)
         do {
@@ -120,23 +122,49 @@ enum SoundPlayer {
             return
         }
 
-        let asset = AVURLAsset(url: srcURL)
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
-            main(.failure(InstallError.exportFailed("no exporter")))
-            return
-        }
-        // `.caf` accepts AAC payload; UNNotificationSound plays CAF reliably.
-        session.outputFileType = .caf
-        session.outputURL = destURL
-        session.exportAsynchronously {
-            switch session.status {
-            case .completed:
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try transcodeToLPCMCAF(src: srcURL, dest: destURL)
                 main(.success(destName))
-            case .failed, .cancelled:
-                main(.failure(InstallError.exportFailed(session.error?.localizedDescription ?? "unknown")))
-            default:
-                main(.failure(InstallError.exportFailed("unexpected status \(session.status.rawValue)")))
+            } catch {
+                main(.failure(InstallError.exportFailed(error.localizedDescription)))
             }
+        }
+    }
+
+    /// Decodes `src` (any AVFoundation-readable audio format — mp3, m4a, etc.)
+    /// and writes 16-bit LPCM into a `.caf` container at `dest`, which is the
+    /// format UNNotificationSound supports. Streams in 4096-frame chunks so a
+    /// 10 MB mp3 doesn't allocate its full PCM expansion in memory.
+    private static func transcodeToLPCMCAF(src: URL, dest: URL) throws {
+        let sourceFile = try AVAudioFile(forReading: src)
+        let processingFormat = sourceFile.processingFormat
+
+        let outputSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: processingFormat.sampleRate,
+            AVNumberOfChannelsKey: processingFormat.channelCount,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        let outputFile = try AVAudioFile(
+            forWriting: dest,
+            settings: outputSettings,
+            commonFormat: .pcmFormatInt16,
+            interleaved: true
+        )
+
+        let chunkFrames: AVAudioFrameCount = 4096
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: processingFormat, frameCapacity: chunkFrames) else {
+            throw InstallError.exportFailed("could not allocate PCM buffer")
+        }
+
+        while sourceFile.framePosition < sourceFile.length {
+            try sourceFile.read(into: buffer)
+            if buffer.frameLength == 0 { break }
+            try outputFile.write(from: buffer)
         }
     }
 

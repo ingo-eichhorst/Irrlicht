@@ -77,6 +77,61 @@ final class SoundPlayerTests: XCTestCase {
         }
     }
 
+    func testInstallCustomTranscodesM4AToLPCMCAF() throws {
+        // Synthesize a short m4a (AAC) at runtime so the test is self-contained.
+        // The transcode path must decode AAC and re-encode as 16-bit LPCM in a
+        // CAF container — anything else (passthrough, AAC-in-CAF) won't play
+        // through UNNotificationSound.
+        let m4aSrc = try makeSilentM4A(durationSec: 0.25)
+        defer { try? FileManager.default.removeItem(at: m4aSrc) }
+
+        let installed = try waitInstall(src: m4aSrc, event: .ready, timeout: 10)
+        let dir = try SoundPlayer.soundsDirectory()
+        let destURL = dir.appendingPathComponent(installed)
+        defer { try? FileManager.default.removeItem(at: destURL) }
+
+        XCTAssertEqual(installed, "IrrlichtCustom-ready.caf")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destURL.path))
+
+        // Verify the output is actually LPCM (UNNotificationSound's requirement),
+        // not AAC-in-CAF or something else.
+        let producedFile = try AVAudioFile(forReading: destURL)
+        let asbd = producedFile.fileFormat.streamDescription.pointee
+        XCTAssertEqual(asbd.mFormatID, kAudioFormatLinearPCM, "transcoded file must be LPCM, got format \(asbd.mFormatID)")
+        XCTAssertGreaterThan(producedFile.length, 0, "transcoded file should have audio frames")
+    }
+
+    /// Writes a short AAC-encoded m4a file to `tmp` and returns its URL. Used
+    /// only to feed `installCustom`'s transcode branch a real non-passthrough
+    /// source.
+    private func makeSilentM4A(durationSec: Double) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("silent-\(UUID().uuidString).m4a")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 44100.0,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: 32_000,
+        ]
+        let outputFile = try AVAudioFile(forWriting: url, settings: settings)
+
+        guard let pcmFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 44100,
+            channels: 1,
+            interleaved: false
+        ) else {
+            throw NSError(domain: "Test", code: 0, userInfo: [NSLocalizedDescriptionKey: "could not build PCM format"])
+        }
+        let frames = AVAudioFrameCount(44100 * durationSec)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: frames) else {
+            throw NSError(domain: "Test", code: 0, userInfo: [NSLocalizedDescriptionKey: "could not build PCM buffer"])
+        }
+        buffer.frameLength = frames
+        // buffer is zero-filled by default → silence.
+        try outputFile.write(from: buffer)
+        return url
+    }
+
     func testInstallCustomReplacesStaleVariant() throws {
         // First install a .aiff, then install a .wav for the same event and
         // confirm the .aiff is gone.

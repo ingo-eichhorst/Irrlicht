@@ -260,12 +260,16 @@ private struct IrrlichtSwitchToggleStyle: ToggleStyle {
             }
             .frame(width: 30, height: 18)
             .animation(.easeInOut(duration: 0.15), value: configuration.isOn)
-            .onTapGesture { configuration.isOn.toggle() }
-            .accessibilityAddTraits(.isButton)
-            .accessibilityValue(configuration.isOn ? "on" : "off")
 
             configuration.label
         }
+        // contentShape extends the hit area across the entire row (pill + gap
+        // + label), so tapping anywhere along the row flips the switch — not
+        // just the small pill itself.
+        .contentShape(Rectangle())
+        .onTapGesture { configuration.isOn.toggle() }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(configuration.isOn ? "on" : "off")
     }
 }
 
