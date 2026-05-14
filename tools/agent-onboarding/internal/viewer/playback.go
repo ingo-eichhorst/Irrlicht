@@ -103,13 +103,13 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 	if subtree != "scenarios" && subtree != "regression" {
 		return nil, fmt.Errorf("subtree must be 'scenarios' or 'regression'")
 	}
-	eventsPath := filepath.Join(m.repoRoot, "replaydata", "agents", agent, subtree, scenario, "events.jsonl")
-	events, err := replay.LoadEvents(eventsPath)
+	scenarioDir := filepath.Join(m.repoRoot, "replaydata", "agents", agent, subtree, scenario)
+	events, err := replay.LoadEventsOrSynthesize(scenarioDir)
 	if err != nil {
 		return nil, fmt.Errorf("load events: %w", err)
 	}
 	if len(events) == 0 {
-		return nil, fmt.Errorf("scenario has no events.jsonl entries")
+		return nil, fmt.Errorf("scenario %s has neither events.jsonl nor a usable transcript", scenario)
 	}
 
 	m.stopCurrent()
