@@ -503,3 +503,32 @@ func (m *StateMachine) TotalDurationMs() int64 {
 	}
 	return m.events[len(m.events)-1].Timestamp.Sub(m.events[0].Timestamp).Milliseconds()
 }
+
+// EventMarker is one point on the scrubber's event-tick lane. The viewer
+// uses these to render colored ticks on the progress bar AND to drive
+// "jump to previous/next event" controls.
+type EventMarker struct {
+	OffsetMs  int64  `json:"offset_ms"`
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id,omitempty"`
+	NewState  string `json:"new_state,omitempty"`
+}
+
+// EventMarkers returns one marker per event, ordered by offset. Offsets
+// are anchored to the recording's first event (events[0]).
+func (m *StateMachine) EventMarkers() []EventMarker {
+	if len(m.events) == 0 {
+		return nil
+	}
+	anchor := m.events[0].Timestamp
+	out := make([]EventMarker, len(m.events))
+	for i, e := range m.events {
+		out[i] = EventMarker{
+			OffsetMs:  e.Timestamp.Sub(anchor).Milliseconds(),
+			Kind:      string(e.Kind),
+			SessionID: e.SessionID,
+			NewState:  e.NewState,
+		}
+	}
+	return out
+}

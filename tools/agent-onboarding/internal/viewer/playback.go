@@ -279,10 +279,11 @@ type startReq struct {
 }
 
 type startResp struct {
-	PlaybackID   string `json:"playback_id"`
-	DashboardURL string `json:"dashboard_url"`
-	Mode         string `json:"mode"`
-	TotalMs      int64  `json:"total_ms"`
+	PlaybackID   string                `json:"playback_id"`
+	DashboardURL string                `json:"dashboard_url"`
+	Mode         string                `json:"mode"`
+	TotalMs      int64                 `json:"total_ms"`
+	Events       []replay.EventMarker  `json:"events,omitempty"`
 }
 
 func (m *PlaybackManager) handleStart(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +309,7 @@ func (m *PlaybackManager) handleStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, startResp{
 			PlaybackID: pb.ID, DashboardURL: pb.DashboardURL, Mode: pb.Mode,
 			TotalMs: pb.machine.TotalDurationMs(),
+			Events:  pb.machine.EventMarkers(),
 		})
 
 	case "isolated-daemon":

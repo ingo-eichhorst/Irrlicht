@@ -307,15 +307,19 @@ function renderPlayback(s) {
   `;
   p.appendChild(modeWrap);
 
-  // Play / Pause / Stop / Speed.
+  // Play / Pause / Stop / Prev / Next / Speed.
   const ctl = document.createElement("div");
   ctl.className = "controls";
   const btnPlay = mkButton("▶ Play");
   const btnPause = mkButton("⏸ Pause"); btnPause.disabled = true;
   const btnStop = mkButton("⏹ Stop"); btnStop.disabled = true;
+  const btnPrev = mkButton("⏮"); btnPrev.disabled = true; btnPrev.title = "previous event";
+  const btnNext = mkButton("⏭"); btnNext.disabled = true; btnNext.title = "next event";
   ctl.appendChild(btnPlay);
   ctl.appendChild(btnPause);
   ctl.appendChild(btnStop);
+  ctl.appendChild(btnPrev);
+  ctl.appendChild(btnNext);
   const speedSpan = document.createElement("span");
   speedSpan.style.marginLeft = "12px";
   speedSpan.innerHTML = `<strong>Speed:</strong> `;
@@ -339,22 +343,61 @@ function renderPlayback(s) {
   }
   p.appendChild(ctl);
 
-  // Scrubber + offset readout.
+  // Scrubber + event-marker overlay + offset readout.
   const scrubWrap = document.createElement("div");
-  scrubWrap.style.cssText = "margin-top: 8px;";
+  scrubWrap.style.cssText = "margin-top: 8px; position: relative;";
+  // The marker lane sits ON TOP of the slider track. Each tick is an
+  // absolutely-positioned 2px-wide div colored by event kind. Tooltips
+  // (title attribute) show kind + session_id on hover.
+  const markerLane = document.createElement("div");
+  markerLane.style.cssText = "position: absolute; left: 0; right: 0; top: 4px; height: 14px; pointer-events: none;";
   const scrub = document.createElement("input");
   scrub.type = "range";
   scrub.min = "0";
   scrub.max = "100";
   scrub.value = "0";
-  scrub.style.width = "100%";
+  scrub.style.cssText = "width: 100%; position: relative; z-index: 2;";
   scrub.disabled = true;
+  scrubWrap.appendChild(markerLane);
   scrubWrap.appendChild(scrub);
   const offsetReadout = document.createElement("div");
   offsetReadout.id = "playhead-info";
   offsetReadout.textContent = "—";
   scrubWrap.appendChild(offsetReadout);
   p.appendChild(scrubWrap);
+
+  // Local state shared by the prev/next buttons and the marker renderer.
+  let eventOffsets = []; // sorted, dedup'd offset_ms values
+  let events = [];       // raw EventMarker list from /api/replay/start
+
+  // colorForKind maps a lifecycle.Event kind to a tick color. The
+  // common high-signal kinds (state_transition, transcript_new/removed,
+  // presession_*) get distinct hues; everything else is a neutral gray.
+  function colorForKind(kind, newState) {
+    if (kind === "state_transition") {
+      if (newState === "working") return "#d97757"; // orange
+      if (newState === "waiting") return "#a04545"; // red
+      return "#2a8d4f";                              // green (ready / unknown)
+    }
+    if (kind === "transcript_new" || kind === "presession_created") return "#4a6fa5";
+    if (kind === "transcript_removed" || kind === "presession_removed") return "#777";
+    if (kind === "pid_discovered") return "#6b6";
+    return "#bbb";
+  }
+
+  function renderMarkers() {
+    markerLane.innerHTML = "";
+    if (!totalMs || events.length === 0) return;
+    for (const ev of events) {
+      const pct = Math.max(0, Math.min(100, (ev.offset_ms / totalMs) * 100));
+      const tick = document.createElement("div");
+      tick.style.cssText = `position: absolute; left: ${pct}%; top: 0; width: 2px; height: 14px; ` +
+        `background: ${colorForKind(ev.kind, ev.new_state)}; transform: translateX(-1px);`;
+      tick.title = `${ev.kind}${ev.new_state ? " → " + ev.new_state : ""}\n+${(ev.offset_ms/1000).toFixed(2)}s` +
+        (ev.session_id ? `\nsession: ${ev.session_id}` : "");
+      markerLane.appendChild(tick);
+    }
+  }
 
   // Dashboard iframe (hidden until playback starts).
   const iframeWrap = document.createElement("div");
@@ -383,6 +426,10 @@ function renderPlayback(s) {
     }
     const body = await resp.json();
     totalMs = body.total_ms || 0;
+    events = Array.isArray(body.events) ? body.events : [];
+    // Deduplicate offsets so a cluster of same-instant events doesn't
+    // ping the prev/next buttons multiple times in one click.
+    eventOffsets = [...new Set(events.map(e => e.offset_ms))].sort((a, b) => a - b);
     // Append a cache-buster so re-clicking Play actually reloads the
     // dashboard inside the iframe (setting iframe.src to the same URL is
     // a no-op in browsers — the WebSocket inside stays open with stale
@@ -391,12 +438,16 @@ function renderPlayback(s) {
     const url = body.dashboard_url;
     iframe.src = url + (url.includes("?") ? "&" : "?") + "pb=" + body.playback_id;
     iframeWrap.style.display = "block";
-    iframeLabel.textContent = `${body.mode} — ${body.dashboard_url}` + (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "");
+    iframeLabel.textContent = `${body.mode} — ${body.dashboard_url}` + (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "") +
+      (events.length ? ` — ${events.length} events` : "");
     btnPlay.disabled = true;
     btnPause.disabled = false;
     btnStop.disabled = false;
+    btnPrev.disabled = eventOffsets.length === 0;
+    btnNext.disabled = eventOffsets.length === 0;
     scrub.disabled = false;
     scrub.max = String(totalMs || 100);
+    renderMarkers();
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(updateStatus, 500);
   }
@@ -428,12 +479,41 @@ function renderPlayback(s) {
     btnPlay.disabled = false;
     btnPause.disabled = true;
     btnStop.disabled = true;
+    btnPrev.disabled = true;
+    btnNext.disabled = true;
     scrub.disabled = true;
     scrub.value = "0";
     offsetReadout.textContent = "—";
+    markerLane.innerHTML = "";
+    events = [];
+    eventOffsets = [];
     iframeWrap.style.display = "none";
     iframe.src = "about:blank";
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  };
+
+  // Jump-to-event handlers. Read the current playhead from the scrubber
+  // (which the poller keeps in sync) and find the closest offset that's
+  // strictly less / greater. Seek there via the existing API.
+  btnPrev.onclick = async () => {
+    if (eventOffsets.length === 0) return;
+    const cur = Number(scrub.value) || 0;
+    // Subtract a small epsilon so clicking Prev when sitting exactly ON
+    // an event lands on the one BEFORE it, not the same one.
+    const target = findOffsetBefore(eventOffsets, cur - 1);
+    if (target == null) return;
+    await fetch(`/api/replay/seek?offset_ms=${target}`, {method: "POST"});
+    // Snap the scrubber immediately so the next poll doesn't visually
+    // bounce back.
+    scrub.value = String(target);
+  };
+  btnNext.onclick = async () => {
+    if (eventOffsets.length === 0) return;
+    const cur = Number(scrub.value) || 0;
+    const target = findOffsetAfter(eventOffsets, cur + 1);
+    if (target == null) return;
+    await fetch(`/api/replay/seek?offset_ms=${target}`, {method: "POST"});
+    scrub.value = String(target);
   };
   scrub.oninput = async () => {
     await fetch(`/api/replay/seek?offset_ms=${scrub.value}`, {method: "POST"});
@@ -497,4 +577,23 @@ function text(s) {
 function escapeHtml(s) {
   if (s == null) return "";
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// findOffsetBefore returns the greatest offset < `cur`, or null if none.
+// Linear scan is fine — typical scenarios have <100 events.
+function findOffsetBefore(sorted, cur) {
+  let best = null;
+  for (const v of sorted) {
+    if (v < cur) best = v;
+    else break;
+  }
+  return best;
+}
+
+// findOffsetAfter returns the smallest offset > `cur`, or null if none.
+function findOffsetAfter(sorted, cur) {
+  for (const v of sorted) {
+    if (v > cur) return v;
+  }
+  return null;
 }
