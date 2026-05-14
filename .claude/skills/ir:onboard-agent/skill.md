@@ -57,6 +57,13 @@ hermetic and don't need auth.
   Maintainer reviews + merges into `.specs/agent-scenarios-coverage.json`.
   See `survey/SKILL.md` for the dispatch recipe. No live agent CLI is
   invoked. Re-run on each agent version bump.
+- **`/ir:onboard-agent pipeline <agent> [<scenario>]`** — full automated
+  onboarding pipeline (Mode B). Orchestrates probe → record → label →
+  synth → gen → validate via `pipeline/run-pipeline.sh`. Produces a
+  generated Go adapter + interactive driver under
+  `.build/agent-onboarding/staged/<agent>/generated/`; maintainer
+  reviews and promotes. See `pipeline/SKILL.md` for the per-stage
+  contract and failure recovery.
 
 The adapter argument disambiguates which axis is being run: agent adapters
 (`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator
@@ -71,6 +78,7 @@ Parse the invocation into one of:
 - `diff_only` — `--diff` flag
 - `discover` — `--new <slug>`; load `discovery-instructions.md` and follow that recipe instead of Steps 2–5 below
 - `survey` — `survey <agent>`; load `survey/SKILL.md` and follow that recipe instead of Steps 2–5 below
+- `pipeline` — `pipeline <agent> [<scenario>]`; load `pipeline/SKILL.md` and follow that recipe instead of Steps 2–5 below
 
 If the invocation is ambiguous, ask the user which mode to run.
 
