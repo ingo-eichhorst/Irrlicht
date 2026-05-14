@@ -29,6 +29,7 @@ import (
 	"irrlicht/tools/agent-onboarding/internal/groundtruth"
 	"irrlicht/tools/agent-onboarding/internal/preflight"
 	"irrlicht/tools/agent-onboarding/internal/sensors"
+	"irrlicht/tools/agent-onboarding/internal/synth"
 )
 
 func main() {
@@ -37,6 +38,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "subcommands:")
 		fmt.Fprintln(os.Stderr, "  record    capture signals + frames against a running agent")
 		fmt.Fprintln(os.Stderr, "  label     convert driver `gt:` sidecar into ground_truth.jsonl")
+		fmt.Fprintln(os.Stderr, "  synth     derive ruleset.json + driver_protocol.json from a recording")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -44,6 +46,8 @@ func main() {
 		os.Exit(cmdRecord(os.Args[2:]))
 	case "label":
 		os.Exit(cmdLabel(os.Args[2:]))
+	case "synth":
+		os.Exit(cmdSynth(os.Args[2:]))
 	case "-h", "--help":
 		fmt.Fprintln(os.Stderr, "usage: agent-onboard <subcommand> [flags]")
 		os.Exit(0)
@@ -51,6 +55,35 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+func cmdSynth(args []string) int {
+	fs := flag.NewFlagSet("synth", flag.ContinueOnError)
+	agent := fs.String("agent", "", "adapter slug — required")
+	scenario := fs.String("scenario", "", "scenario id — required")
+	signalsPath := fs.String("signals", "", "path to signals.jsonl — required")
+	gtPath := fs.String("ground-truth", "", "path to ground_truth.jsonl — required")
+	staging := fs.String("staging", ".build/agent-onboarding/staged", "staging dir (per-agent subdir created automatically)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *agent == "" || *scenario == "" || *signalsPath == "" || *gtPath == "" {
+		fmt.Fprintln(os.Stderr, "error: --agent, --scenario, --signals, --ground-truth are required")
+		fs.Usage()
+		return 2
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stageDir := filepath.Join(*staging, *agent)
+	if err := synth.Run(ctx, synth.Input{
+		Agent: *agent, Scenario: *scenario,
+		SignalsPath: *signalsPath, GroundTruth: *gtPath, StagingDir: stageDir,
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "wrote ruleset.json + driver_protocol.json + synthesis_conflicts.json under %s\n", stageDir)
+	return 0
 }
 
 func cmdLabel(args []string) int {
