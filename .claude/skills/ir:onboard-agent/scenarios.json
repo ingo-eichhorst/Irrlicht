@@ -124,7 +124,8 @@
             {"type": "wait_turn"},
             {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-three"},
-            {"type": "wait_turn"}
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 4}
           ],
           "settings": {},
           "timeout_seconds": 300
@@ -138,7 +139,8 @@
             {"type": "wait_turn"},
             {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-three"},
-            {"type": "wait_turn"}
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 4}
           ],
           "settings": {},
           "timeout_seconds": 300
@@ -152,7 +154,8 @@
             {"type": "wait_turn"},
             {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-three"},
-            {"type": "wait_turn"}
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 4}
           ],
           "settings": {},
           "timeout_seconds": 300
@@ -166,7 +169,8 @@
             {"type": "wait_turn"},
             {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-three"},
-            {"type": "wait_turn"}
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 4}
           ],
           "settings": {},
           "timeout_seconds": 300

@@ -127,8 +127,12 @@ func TestSynthesizeMetaFromEvents_seedScenario(t *testing.T) {
 	if total, _ := doc["total_events"].(float64); total < 20 {
 		t.Errorf("expected lots of events, got %v", doc["total_events"])
 	}
-	// duration should be ~23.8s = 23814ms.
-	if dur, _ := doc["duration_ms"].(float64); dur < 20000 || dur > 30000 {
+	// duration depends on whether multi-turn-conversation was recorded
+	// with inter-turn pauses (post-#268 the scenario sleeps 3s between
+	// each wait_turn + 4s trailing, pushing total to ~34s; older
+	// recordings without those sleeps were ~24s). Either is fine — just
+	// sanity-check we got something plausible.
+	if dur, _ := doc["duration_ms"].(float64); dur < 20000 || dur > 60000 {
 		t.Errorf("duration unexpected: %v ms", dur)
 	}
 	if kinds, _ := doc["kinds"].(map[string]any); kinds["state_transition"] == nil {

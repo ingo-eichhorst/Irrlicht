@@ -418,14 +418,19 @@ same step grammar:
 - `{"type": "wait_turn"}` — block until the agent finishes the current
   turn (criteria differs per adapter; e.g. claudecode waits for
   `stop_reason: "end_turn"` in the transcript).
-- `{"type": "sleep", "seconds": N}` — pause N seconds. Mandatory
-  **between every `wait_turn` and the next `send`** in any multi-turn
-  scenario. Without it, drivers fire the next prompt within 100–800ms of
-  the assistant finishing, which is below the state classifier's
-  transcript-activity debounce window — the recorder coalesces all turns
-  into one `working` → `ready` span and the replayed state band can't
-  show per-turn cycles. 3 seconds is the established minimum and is what
-  `multi-turn-conversation` uses; longer is fine.
+- `{"type": "sleep", "seconds": N}` — pause N seconds. Two mandatory
+  uses in multi-turn scenarios:
+  1. **Between every `wait_turn` and the next `send`** (≥ 3s). Without
+     it, drivers fire the next prompt within 100–800ms of the assistant
+     finishing, which is below the state classifier's transcript-activity
+     debounce window — the recorder coalesces all turns into one
+     `working` → `ready` span and the replayed state band can't show
+     per-turn cycles.
+  2. **After the LAST `wait_turn`** (≥ 4s). `run-cell.sh` kills the
+     daemon as soon as the driver returns. If the final
+     `working`→`ready` transition hasn't fired yet (still within the
+     classifier's dwell window) the recording ends mid-turn. Trailing
+     sleep lets the classifier emit the final `ready` before SIGINT.
 - `{"type": "slash", "text": "/cmd"}` — same as `send`, semantically a
   slash command.
 - `{"type": "interrupt"}` — Escape mid-turn (claudecode only).
