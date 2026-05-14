@@ -49,6 +49,32 @@
   #scrubber-wrap { position: relative; height: 24px; margin: 4px 0; }
   #scrubber { width: 100%; }
   #playhead-info { font-family: monospace; font-size: 11px; color: #555; }
+
+  /* Timeline scrubber: overlaid on the state band. The visual track is
+     the band underneath; we only want the thumb (the playhead) to show.
+     Per-browser rules are needed because <input type="range"> styling
+     is split across pseudo-elements. */
+  .timeline-scrubber {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    -webkit-appearance: none; appearance: none;
+    background: transparent; margin: 0; padding: 0; cursor: pointer;
+    z-index: 2;
+  }
+  .timeline-scrubber:disabled { cursor: default; }
+  .timeline-scrubber::-webkit-slider-runnable-track { background: transparent; height: 100%; }
+  .timeline-scrubber::-moz-range-track { background: transparent; height: 100%; }
+  .timeline-scrubber::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 4px; height: 22px;
+    background: #222; border: 1px solid #fff; border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.2);
+    margin-top: -2px;
+  }
+  .timeline-scrubber::-moz-range-thumb {
+    width: 4px; height: 22px;
+    background: #222; border: 1px solid #fff; border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.2);
+  }
 </style>
 </head>
 <body>

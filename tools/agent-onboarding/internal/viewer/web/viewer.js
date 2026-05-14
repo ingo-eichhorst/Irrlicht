@@ -343,60 +343,154 @@ function renderPlayback(s) {
   }
   p.appendChild(ctl);
 
-  // Scrubber + event-marker overlay + offset readout.
+  // Timeline: state band (colored regions by working/waiting/ready) +
+  // event-dot lane (discrete non-state events like transcript_new) +
+  // the actual <input type="range"> scrubber (kept for keyboard /
+  // accessibility / drag-seek). Styled to look like the macOS state
+  // bar so the user reads "what was the session doing when" at a glance.
   const scrubWrap = document.createElement("div");
-  scrubWrap.style.cssText = "margin-top: 8px; position: relative;";
-  // The marker lane sits ON TOP of the slider track. Each tick is an
-  // absolutely-positioned 2px-wide div colored by event kind. Tooltips
-  // (title attribute) show kind + session_id on hover.
-  const markerLane = document.createElement("div");
-  markerLane.style.cssText = "position: absolute; left: 0; right: 0; top: 4px; height: 14px; pointer-events: none;";
+  scrubWrap.style.cssText = "margin-top: 8px; position: relative; padding-top: 4px;";
+
+  // Band + scrubber are layered: the band IS the visual track; the
+  // <input type="range"> sits on top with a transparent track so only
+  // its thumb shows (the seek handle).
+  const bandWrap = document.createElement("div");
+  bandWrap.style.cssText = "position: relative; height: 18px;";
+  const stateBand = document.createElement("div");
+  stateBand.style.cssText = "position: absolute; inset: 0; background: #eaeae0; border-radius: 4px; overflow: hidden;";
+  bandWrap.appendChild(stateBand);
+
   const scrub = document.createElement("input");
   scrub.type = "range";
   scrub.min = "0";
   scrub.max = "100";
   scrub.value = "0";
-  scrub.style.cssText = "width: 100%; position: relative; z-index: 2;";
+  scrub.className = "timeline-scrubber";
   scrub.disabled = true;
-  scrubWrap.appendChild(markerLane);
-  scrubWrap.appendChild(scrub);
+  bandWrap.appendChild(scrub);
+  scrubWrap.appendChild(bandWrap);
+
+  const eventLane = document.createElement("div");
+  eventLane.style.cssText = "position: relative; height: 12px; margin-top: 4px;";
+  scrubWrap.appendChild(eventLane);
+
   const offsetReadout = document.createElement("div");
   offsetReadout.id = "playhead-info";
   offsetReadout.textContent = "—";
+  offsetReadout.style.cssText = "margin-top: 4px;";
   scrubWrap.appendChild(offsetReadout);
+
+  // Legend — labels for the colors. Cheaper than memorizing a palette.
+  const legend = document.createElement("div");
+  legend.style.cssText = "margin-top: 6px; display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: #555; align-items: center;";
+  const swatch = (color, label) => {
+    const span = document.createElement("span");
+    span.style.cssText = "display: inline-flex; align-items: center; gap: 4px;";
+    span.innerHTML = `<span style="display:inline-block; width:10px; height:10px; background:${color}; border-radius:2px;"></span>${label}`;
+    return span;
+  };
+  const dotSwatch = (color, label) => {
+    const span = document.createElement("span");
+    span.style.cssText = "display: inline-flex; align-items: center; gap: 4px;";
+    span.innerHTML = `<span style="display:inline-block; width:9px; height:9px; background:${color}; border-radius:50%;"></span>${label}`;
+    return span;
+  };
+  legend.appendChild(document.createTextNode("State: "));
+  legend.appendChild(swatch("#4ade80", "ready"));
+  legend.appendChild(swatch("#8b5cf6", "working"));
+  legend.appendChild(swatch("#f59e0b", "waiting"));
+  const sep = document.createElement("span");
+  sep.style.color = "#bbb"; sep.textContent = "·";
+  legend.appendChild(sep);
+  legend.appendChild(document.createTextNode("Events: "));
+  legend.appendChild(dotSwatch("#3b82f6", "session created"));
+  legend.appendChild(dotSwatch("#888", "session removed"));
+  legend.appendChild(dotSwatch("#22c55e", "pid discovered"));
+  scrubWrap.appendChild(legend);
+
   p.appendChild(scrubWrap);
 
-  // Local state shared by the prev/next buttons and the marker renderer.
+  // Local state shared by the prev/next buttons + state-band + event-dot
+  // renderer.
   let eventOffsets = []; // sorted, dedup'd offset_ms values
   let events = [];       // raw EventMarker list from /api/replay/start
 
-  // colorForKind maps a lifecycle.Event kind to a tick color. The
-  // common high-signal kinds (state_transition, transcript_new/removed,
-  // presession_*) get distinct hues; everything else is a neutral gray.
-  function colorForKind(kind, newState) {
-    if (kind === "state_transition") {
-      if (newState === "working") return "#d97757"; // orange
-      if (newState === "waiting") return "#a04545"; // red
-      return "#2a8d4f";                              // green (ready / unknown)
+  // State colors. Consolidated to 3 high-signal colors that match what
+  // the dashboard uses for session badges, plus a neutral gap color.
+  const STATE_COLOR = {
+    ready:   "#4ade80", // green
+    working: "#8b5cf6", // purple
+    waiting: "#f59e0b", // amber
+  };
+
+  function renderStateBand() {
+    stateBand.innerHTML = "";
+    if (!totalMs) return;
+    // Build a sequence of (start_ms, end_ms, state) segments by walking
+    // state_transition events. Sessions start in "ready" by convention.
+    const transitions = events
+      .filter(e => e.kind === "state_transition" && e.new_state)
+      .sort((a, b) => a.offset_ms - b.offset_ms);
+    let curState = "ready";
+    let curStart = 0;
+    const segments = [];
+    for (const t of transitions) {
+      if (t.offset_ms > curStart) segments.push({start: curStart, end: t.offset_ms, state: curState});
+      curState = t.new_state;
+      curStart = t.offset_ms;
     }
-    if (kind === "transcript_new" || kind === "presession_created") return "#4a6fa5";
-    if (kind === "transcript_removed" || kind === "presession_removed") return "#777";
-    if (kind === "pid_discovered") return "#6b6";
-    return "#bbb";
+    segments.push({start: curStart, end: totalMs, state: curState});
+    for (const seg of segments) {
+      const color = STATE_COLOR[seg.state] || "#cfcdc0";
+      const left = (seg.start / totalMs) * 100;
+      const width = ((seg.end - seg.start) / totalMs) * 100;
+      const region = document.createElement("div");
+      region.style.cssText = `position: absolute; top: 0; bottom: 0; left: ${left}%; width: ${width}%; background: ${color};`;
+      region.title = `${seg.state}\n+${(seg.start/1000).toFixed(2)}s → +${(seg.end/1000).toFixed(2)}s (${((seg.end-seg.start)/1000).toFixed(2)}s)`;
+      stateBand.appendChild(region);
+    }
+  }
+
+  // colorForEventKind picks a dot color for a NON-state event. We only
+  // render dots for the four high-signal kinds; everything else is
+  // bookkeeping that would clutter the lane.
+  function colorForEventKind(kind) {
+    if (kind === "transcript_new" || kind === "presession_created") return "#3b82f6";
+    if (kind === "transcript_removed" || kind === "presession_removed") return "#888";
+    if (kind === "pid_discovered") return "#22c55e";
+    return null;
+  }
+
+  function renderEventDots() {
+    eventLane.innerHTML = "";
+    if (!totalMs) return;
+    for (const ev of events) {
+      const color = colorForEventKind(ev.kind);
+      if (!color) continue;
+      const pct = Math.max(0, Math.min(100, (ev.offset_ms / totalMs) * 100));
+      const dot = document.createElement("div");
+      dot.style.cssText = `position: absolute; left: ${pct}%; top: 0; width: 10px; height: 10px; ` +
+        `background: ${color}; border-radius: 50%; transform: translateX(-5px); border: 1.5px solid white; box-shadow: 0 0 0 1px rgba(0,0,0,0.1);`;
+      dot.title = `${kindLabel(ev.kind)}\n+${(ev.offset_ms/1000).toFixed(2)}s` +
+        (ev.session_id ? `\nsession: ${ev.session_id}` : "");
+      eventLane.appendChild(dot);
+    }
+  }
+
+  function kindLabel(kind) {
+    switch (kind) {
+      case "transcript_new":      return "session created (transcript_new)";
+      case "presession_created":  return "presession created";
+      case "transcript_removed":  return "session removed (transcript_removed)";
+      case "presession_removed":  return "presession removed";
+      case "pid_discovered":      return "PID discovered";
+      default:                    return kind;
+    }
   }
 
   function renderMarkers() {
-    markerLane.innerHTML = "";
-    if (!totalMs || events.length === 0) return;
-    for (const ev of events) {
-      const pct = Math.max(0, Math.min(100, (ev.offset_ms / totalMs) * 100));
-      const tick = document.createElement("div");
-      tick.style.cssText = `position: absolute; left: ${pct}%; top: 0; width: 2px; height: 14px; ` +
-        `background: ${colorForKind(ev.kind, ev.new_state)}; transform: translateX(-1px);`;
-      tick.title = `${ev.kind}${ev.new_state ? " → " + ev.new_state : ""}\n+${(ev.offset_ms/1000).toFixed(2)}s` +
-        (ev.session_id ? `\nsession: ${ev.session_id}` : "");
-      markerLane.appendChild(tick);
-    }
+    renderStateBand();
+    renderEventDots();
   }
 
   // Dashboard iframe (hidden until playback starts).
