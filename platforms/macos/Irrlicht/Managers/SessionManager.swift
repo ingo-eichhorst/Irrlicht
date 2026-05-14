@@ -52,6 +52,9 @@ class SessionManager: ObservableObject {
     private var projectCostsTimer: Timer?
     private let projectCostsRefreshInterval: TimeInterval = 30.0
 
+    /// Daemon-owned directory. `irrlichd` creates it and writes session JSON
+    /// files; the app only mutates individual files for explicit user actions
+    /// (`resetSessionState`, `deleteSession`). Reads go through the WebSocket.
     private let instancesPath: URL
     private let orderFilePath: URL
     private var sessionOrder: [String] = []
@@ -63,14 +66,6 @@ class SessionManager: ObservableObject {
     // Tracks which pressure thresholds (80, 95) have already fired a notification
     // for each session ID. Prevents re-firing on every state update.
     private var notifiedThresholds: [String: Set<Int>] = [:]
-
-    // MARK: - File polling (legacy, active when IRRLICHT_USE_FILES=1)
-
-    private var fileSystemWatcher: DispatchSourceFileSystemObject?
-    private var debounceTimer: Timer?
-    private var periodicUpdateTimer: Timer?
-    private let debounceInterval: TimeInterval = 0.2 // 200ms debounce
-    private let updateInterval: TimeInterval = 1.0 // 1 second periodic updates
 
     // MARK: - WebSocket state
 
@@ -95,12 +90,6 @@ class SessionManager: ObservableObject {
     /// Held strongly so UNUserNotificationCenter's weak delegate reference
     /// stays alive.
     private var notificationForwarder: NotificationClickForwarder?
-
-    // MARK: - Mode selection
-
-    private var useFilePolling: Bool {
-        ProcessInfo.processInfo.environment["IRRLICHT_USE_FILES"] == "1"
-    }
 
     init() {
         let homeURL = FileManager.default.homeDirectoryForCurrentUser
@@ -127,12 +116,7 @@ class SessionManager: ObservableObject {
             loadSessionOrder()
             loadProjectGroupOrder()
             requestNotificationPermission()
-            if self.useFilePolling {
-                self.startWatching()
-                self.loadExistingSessions()
-            } else {
-                self.startWebSocket()
-            }
+            self.startWebSocket()
             self.startProjectCostsPolling()
         }
     }
@@ -142,12 +126,6 @@ class SessionManager: ObservableObject {
         connectTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
-        fileSystemWatcher?.cancel()
-        fileSystemWatcher = nil
-        debounceTimer?.invalidate()
-        debounceTimer = nil
-        periodicUpdateTimer?.invalidate()
-        periodicUpdateTimer = nil
         projectCostsTimer?.invalidate()
         projectCostsTimer = nil
     }
@@ -680,151 +658,6 @@ class SessionManager: ObservableObject {
         allSessions = all // includes children for badge counting
         checkContextPressureAlerts(sessions: topLevel)
         writeDebugState()
-    }
-
-    // MARK: - File System Watching (legacy)
-
-    func startWatching() {
-        guard connectionState == .disconnected else { return }
-
-        // Create directory if it doesn't exist
-        createInstancesDirectoryIfNeeded()
-
-        // Set up file system watcher
-        let fileDescriptor = open(instancesPath.path, O_EVTONLY)
-        guard fileDescriptor >= 0 else {
-            lastError = "Failed to open instances directory for watching"
-            return
-        }
-
-        fileSystemWatcher = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
-            eventMask: [.write, .delete, .rename],
-            queue: DispatchQueue.main
-        )
-
-        fileSystemWatcher?.setEventHandler { [weak self] in
-            self?.debouncedReload()
-        }
-
-        fileSystemWatcher?.setCancelHandler {
-            close(fileDescriptor)
-        }
-
-        fileSystemWatcher?.resume()
-
-        // Start periodic update timer
-        periodicUpdateTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.loadExistingSessions()
-            }
-        }
-
-        connectionState = .connected
-    }
-
-    func stopWatching() {
-        fileSystemWatcher?.cancel()
-        fileSystemWatcher = nil
-        debounceTimer?.invalidate()
-        debounceTimer = nil
-        periodicUpdateTimer?.invalidate()
-        periodicUpdateTimer = nil
-        connectionState = .disconnected
-    }
-
-    private func debouncedReload() {
-        debounceTimer?.invalidate()
-        debounceTimer = Timer.scheduledTimer(withTimeInterval: debounceInterval, repeats: false) { [weak self] _ in
-            Task {
-                await self?.loadExistingSessions()
-            }
-        }
-    }
-
-    // MARK: - Session Loading (file polling mode)
-
-    func loadExistingSessions() {
-        print("📂 Loading sessions from: \(instancesPath.path)")
-        do {
-            let fileURLs = try FileManager.default.contentsOfDirectory(
-                at: instancesPath,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ).filter { $0.pathExtension == "json" }
-
-            print("📄 Found \(fileURLs.count) session files")
-
-            var newSessions: [SessionState] = []
-
-            for fileURL in fileURLs {
-                do {
-                    let data = try Data(contentsOf: fileURL)
-                    let session = try JSONDecoder().decode(SessionState.self, from: data)
-
-                    newSessions.append(session)
-                } catch {
-                    print("Failed to decode session file \(fileURL.lastPathComponent): \(error)")
-                    // Continue processing other files
-                }
-            }
-
-            // Auto-cleanup orphaned sessions whose Claude Code process has exited.
-            // This catches the common case where Claude Code is force-quit or crashes
-            // without firing SessionEnd.
-            var orphanedIds: [String] = []
-            let staleTTL: TimeInterval = 3600 // 1 hour — for legacy sessions without PID
-            for session in newSessions {
-                let isOrphaned: Bool
-                if let pid = session.pid, pid > 0 {
-                    // PID-based check: probe with signal 0 (no signal sent, just liveness check)
-                    isOrphaned = kill(pid_t(pid), 0) != 0
-                } else {
-                    // Legacy session: no PID stored; only reap active states after TTL
-                    let isActive = session.state == .working || session.state == .waiting
-                    isOrphaned = isActive && session.updatedAt < Date().addingTimeInterval(-staleTTL)
-                }
-                if isOrphaned {
-                    let filePath = instancesPath.appendingPathComponent("\(session.id).json")
-                    try? FileManager.default.removeItem(at: filePath)
-                    orphanedIds.append(session.id)
-                    let pidDesc = session.pid.map { "pid=\($0)" } ?? "no-pid"
-                    print("🧹 Auto-deleted orphaned session \(session.shortId) (\(pidDesc))")
-                }
-            }
-            if !orphanedIds.isEmpty {
-                newSessions.removeAll { orphanedIds.contains($0.id) }
-            }
-
-            // Sort sessions according to saved order, with new sessions at the end
-            newSessions = sortSessionsByOrder(newSessions)
-
-            // Update session order to include any new sessions and remove deleted ones
-            updateSessionOrder(with: newSessions)
-
-            // Assign duplicate indexes for sessions with same project/branch
-            assignDuplicateIndexes(&newSessions)
-
-            sessions = newSessions
-            checkContextPressureAlerts(sessions: newSessions)
-            writeDebugState()
-
-        } catch {
-            lastError = "Failed to load sessions: \(error.localizedDescription)"
-            print("Session loading error: \(error)")
-        }
-    }
-
-    private func createInstancesDirectoryIfNeeded() {
-        do {
-            try FileManager.default.createDirectory(
-                at: instancesPath,
-                withIntermediateDirectories: true,
-                attributes: nil
-            )
-        } catch {
-            lastError = "Failed to create instances directory: \(error.localizedDescription)"
-        }
     }
 
     // MARK: - Computed Properties for UI
