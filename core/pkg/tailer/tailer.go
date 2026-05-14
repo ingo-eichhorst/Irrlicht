@@ -129,6 +129,17 @@ type SessionMetrics struct {
 	// missing working→waiting step (issue #150).
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
 
+	// NoSubstantiveActivity is true when a TailAndProcess pass consumed new
+	// transcript content but every parsed line was Skip=true and produced no
+	// state-relevant change (no SubagentCompletions, no TaskSnapshot, no
+	// processParsedEvent call). Lets the detector treat post-turn writes
+	// like Claude Code's `system/away_summary` recap as activity for
+	// timestamp purposes only — the state machine must not be re-run, since
+	// LastEventType still carries the prior turn_done and rule 4 would
+	// bounce a ready session back to working. Per-pass transient
+	// (issue #329).
+	NoSubstantiveActivity bool `json:"-"`
+
 	// Tasks is the current task list for this session, accumulated from
 	// TaskCreate / TaskUpdate tool_use events in the Claude Code transcript.
 	// Nil for sessions that have not called TaskCreate.
@@ -323,6 +334,17 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// case from issue #150).
 	sawUserBlockingClosedThisPass := false
 
+	// Track whether this pass observed any state-relevant change. Set
+	// only when at least one parsed line was seen AND none of them
+	// produced substantive output (no processParsedEvent call, no
+	// subagent completion, no task snapshot). An empty pass (zero
+	// parsed lines, e.g. fswatcher fired on an unchanged file) leaves
+	// the flag at its zero value so the detector's classifier still
+	// runs — needed for hook-driven synthetic activity events that
+	// re-classify against stale metrics. See issue #329.
+	linesParsedThisPass := 0
+	substantiveThisPass := false
+
 	// Per-pass signals must be cleared so the detector only drains events
 	// discovered in this scan (see issue #134).
 	t.metrics.SubagentCompletions = nil
@@ -421,14 +443,21 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			// but carry an authoritative TaskSnapshot the tailer must apply
 			// (issue #282).
 			if parsed != nil {
+				linesParsedThisPass++
 				t.applyMetadata(parsed)
 				if len(parsed.SubagentCompletions) > 0 {
 					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
+					substantiveThisPass = true
+				}
+				if parsed.TaskSnapshot != nil {
+					substantiveThisPass = true
 				}
 				t.reconcileTaskSnapshot(parsed)
 			}
 			continue
 		}
+		linesParsedThisPass++
+		substantiveThisPass = true
 		t.processParsedEvent(parsed, &sawUserBlockingClosedThisPass)
 	}
 
@@ -443,12 +472,14 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	if flusher, ok := t.parser.(idleFlusher); ok && !t.lastLineSeenAt.IsZero() {
 		if ev := flusher.IdleFlush(time.Since(t.lastLineSeenAt)); ev != nil {
 			t.processParsedEvent(ev, &sawUserBlockingClosedThisPass)
+			substantiveThisPass = true
 		}
 	}
 
 	// Compute current metrics.
 	t.computeMetrics()
 	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
+	t.metrics.NoSubstantiveActivity = linesParsedThisPass > 0 && !substantiveThisPass
 
 	// Model config fallback.
 	if t.metrics.ModelName == "" {

@@ -308,100 +308,112 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		d.applySubagentCompletions(state.SessionID, state.Metrics.SubagentCompletions)
 	}
 
-	// Force ready→working when metrics show activity so ClassifyState can
-	// properly detect the working→ready transition. Without this, sessions
-	// that start as ready (initial state) and whose first activity event
-	// already shows IsAgentDone()=true would stay ready with no transition
-	// broadcast — the UI would never see the "agent finished" event.
-	if state.State == session.StateReady && state.Metrics != nil && state.Metrics.LastEventType != "" {
-		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: ForceReadyToWorkingReason})
-		state.State = session.StateWorking
-	}
+	// Short-circuit when this pass consumed transcript content but produced
+	// no state-relevant change — e.g. Claude Code's post-turn
+	// `system/away_summary` recap, which the parser marks Skip=true. The
+	// force-bounce below would otherwise see the stale LastEventType from
+	// the prior turn_done and flip a ready session back to working
+	// (issue #329). Still record this as activity (LastEvent / EventCount /
+	// UpdatedAt / broadcast) so the UI's "last activity" stays fresh —
+	// just don't re-run the state machine.
+	skipClassification := state.Metrics != nil && state.Metrics.NoSubstantiveActivity
 
-	// Overlay hook-based permission-pending signal onto metrics. Must happen
-	// after RefreshOnActivity (which recomputes metrics from the transcript)
-	// and before ClassifyState (which reads the flag). The flag persists in
-	// the map until PostToolUse/PostToolUseFailure clears it, so it survives
-	// fswatcher re-evaluations while the permission prompt is shown.
-	d.permMu.Lock()
-	if d.permissionPending[ev.SessionID] && state.Metrics != nil {
-		if state.Metrics.LastWasToolDenial {
-			// Permission was denied — Claude Code doesn't fire
-			// PostToolUseFailure on denial, so clear from transcript
-			// evidence. The denial text "[Request interrupted by user
-			// for tool use]" sets LastWasToolDenial in the parser.
-			delete(d.permissionPending, ev.SessionID)
-		} else {
-			state.Metrics.PermissionPending = true
+	if !skipClassification {
+		// Force ready→working when metrics show activity so ClassifyState can
+		// properly detect the working→ready transition. Without this, sessions
+		// that start as ready (initial state) and whose first activity event
+		// already shows IsAgentDone()=true would stay ready with no transition
+		// broadcast — the UI would never see the "agent finished" event.
+		if state.State == session.StateReady && state.Metrics != nil && state.Metrics.LastEventType != "" {
+			d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: session.StateReady, NewState: session.StateWorking, Reason: ForceReadyToWorkingReason})
+			state.State = session.StateWorking
 		}
-	}
-	d.permMu.Unlock()
 
-	// Content-based state detection.
-	now := time.Now().Unix()
-	newState, reason := ClassifyState(state.State, state.Metrics)
-
-	// Parent-child propagation: if a parent session would transition to
-	// ready but still has active children (working/waiting), hold it in
-	// working. The parent will be re-evaluated when children finish.
-	//
-	// Before holding, fast-forward any "orphaned" children — subagents
-	// whose own tail has no open tool calls but whose transcript ends
-	// with `stop_reason: null` (Claude Code never writes end_turn for
-	// in-process subagents). Since the parent's own turn is done,
-	// those subagents' work is definitionally complete: the parent's
-	// final assistant message already incorporated their results.
-	parentHeldWorking := false
-	if newState == session.StateReady && state.ParentSessionID == "" {
-		d.finishOrphanedChildren(state.SessionID)
-		if d.hasActiveChildren(state.SessionID) {
-			d.log.LogInfo("session-detector", ev.SessionID,
-				"holding parent working — active children still running")
-			newState = session.StateWorking
-			reason = ""
-			parentHeldWorking = true
+		// Overlay hook-based permission-pending signal onto metrics. Must happen
+		// after RefreshOnActivity (which recomputes metrics from the transcript)
+		// and before ClassifyState (which reads the flag). The flag persists in
+		// the map until PostToolUse/PostToolUseFailure clears it, so it survives
+		// fswatcher re-evaluations while the permission prompt is shown.
+		d.permMu.Lock()
+		if d.permissionPending[ev.SessionID] && state.Metrics != nil {
+			if state.Metrics.LastWasToolDenial {
+				// Permission was denied — Claude Code doesn't fire
+				// PostToolUseFailure on denial, so clear from transcript
+				// evidence. The denial text "[Request interrupted by user
+				// for tool use]" sets LastWasToolDenial in the parser.
+				delete(d.permissionPending, ev.SessionID)
+			} else {
+				state.Metrics.PermissionPending = true
+			}
 		}
-	}
+		d.permMu.Unlock()
 
-	// Same-pass user-blocking tool collapse (issue #150): when fswatcher
-	// coalesces the AskUserQuestion / ExitPlanMode tool_use with its
-	// tool_result, the tailer observes both in one pass and HasOpenToolCall
-	// is already false by the time the classifier runs — the brief waiting
-	// episode collapses and observers never see it. Emit a synthetic
-	// working→waiting, then reclassify from waiting so the next transition
-	// carries the correct "while waiting" phrasing.
-	//
-	// Skip when the parent-hold branch above rewrote newState: that parent
-	// has active children and must stay working. Running the synth path
-	// would reclassify from waiting, let rule 3 fire, and transition the
-	// parent to ready despite children still running — undoing the hold.
-	if !parentHeldWorking && ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
-		d.log.LogInfo("session-detector", ev.SessionID, SyntheticWaitingReason)
-		d.record(lifecycle.Event{
-			Kind:      lifecycle.KindStateTransition,
-			SessionID: ev.SessionID,
-			PrevState: session.StateWorking,
-			NewState:  session.StateWaiting,
-			Reason:    SyntheticWaitingReason,
-		})
-		state.State = session.StateWaiting
-		newState, reason = ClassifyState(state.State, state.Metrics)
-	}
+		// Content-based state detection.
+		now := time.Now().Unix()
+		newState, reason := ClassifyState(state.State, state.Metrics)
 
-	if newState != state.State {
-		if reason != "" {
-			d.log.LogInfo("session-detector", ev.SessionID, reason)
+		// Parent-child propagation: if a parent session would transition to
+		// ready but still has active children (working/waiting), hold it in
+		// working. The parent will be re-evaluated when children finish.
+		//
+		// Before holding, fast-forward any "orphaned" children — subagents
+		// whose own tail has no open tool calls but whose transcript ends
+		// with `stop_reason: null` (Claude Code never writes end_turn for
+		// in-process subagents). Since the parent's own turn is done,
+		// those subagents' work is definitionally complete: the parent's
+		// final assistant message already incorporated their results.
+		parentHeldWorking := false
+		if newState == session.StateReady && state.ParentSessionID == "" {
+			d.finishOrphanedChildren(state.SessionID)
+			if d.hasActiveChildren(state.SessionID) {
+				d.log.LogInfo("session-detector", ev.SessionID,
+					"holding parent working — active children still running")
+				newState = session.StateWorking
+				reason = ""
+				parentHeldWorking = true
+			}
 		}
-		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason})
-		state.State = newState
-		state.UpdatedAt = now
 
-		// Side effects for specific transitions.
-		if newState == session.StateWaiting {
-			state.WaitingStartTime = &now
-		} else if newState == session.StateWorking {
-			state.LastTranscriptSize = 0
-			state.WaitingStartTime = nil
+		// Same-pass user-blocking tool collapse (issue #150): when fswatcher
+		// coalesces the AskUserQuestion / ExitPlanMode tool_use with its
+		// tool_result, the tailer observes both in one pass and HasOpenToolCall
+		// is already false by the time the classifier runs — the brief waiting
+		// episode collapses and observers never see it. Emit a synthetic
+		// working→waiting, then reclassify from waiting so the next transition
+		// carries the correct "while waiting" phrasing.
+		//
+		// Skip when the parent-hold branch above rewrote newState: that parent
+		// has active children and must stay working. Running the synth path
+		// would reclassify from waiting, let rule 3 fire, and transition the
+		// parent to ready despite children still running — undoing the hold.
+		if !parentHeldWorking && ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
+			d.log.LogInfo("session-detector", ev.SessionID, SyntheticWaitingReason)
+			d.record(lifecycle.Event{
+				Kind:      lifecycle.KindStateTransition,
+				SessionID: ev.SessionID,
+				PrevState: session.StateWorking,
+				NewState:  session.StateWaiting,
+				Reason:    SyntheticWaitingReason,
+			})
+			state.State = session.StateWaiting
+			newState, reason = ClassifyState(state.State, state.Metrics)
+		}
+
+		if newState != state.State {
+			if reason != "" {
+				d.log.LogInfo("session-detector", ev.SessionID, reason)
+			}
+			d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason})
+			state.State = newState
+			state.UpdatedAt = now
+
+			// Side effects for specific transitions.
+			if newState == session.StateWaiting {
+				state.WaitingStartTime = &now
+			} else if newState == session.StateWorking {
+				state.LastTranscriptSize = 0
+				state.WaitingStartTime = nil
+			}
 		}
 	}
 

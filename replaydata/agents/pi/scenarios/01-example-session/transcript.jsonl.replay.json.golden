@@ -10,24 +10,24 @@
   "summary": {
     "total_events": 614,
     "consumed_events": 614,
-    "total_transitions": 85,
+    "total_transitions": 81,
     "first_event_time": "2026-04-06T16:22:10.841Z",
     "last_event_time": "2026-04-06T20:39:45.037Z",
     "wall_clock_session_duration": 15454196000000,
     "state_durations": {
-      "ready": 11811544000000,
+      "ready": 11872449000000,
       "waiting": 652890000000,
-      "working": 2989762000000
+      "working": 2928857000000
     },
     "flicker_count": 11,
     "flickers_by_category": {
-      "ready_between_working": 2,
-      "working_between_ready": 8,
+      "ready_between_working": 1,
+      "working_between_ready": 9,
       "working_between_waiting": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 2,
-      "force ready→working on first activity": 8,
+      "agent finished turn → ready": 1,
+      "force ready→working on first activity": 9,
       "transcript activity (waiting → working)": 1
     },
     "cum_input_tokens": 910869,
@@ -52,13 +52,13 @@
     },
     {
       "index": 1,
-      "event_index": 2,
-      "virtual_time": "2026-04-06T16:22:10.861Z",
+      "event_index": 13,
+      "virtual_time": "2026-04-06T16:23:11.766Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
-      "reason": "transcript activity (ready → working)",
-      "last_event_type": "",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "tool_result",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
@@ -285,66 +285,6 @@
     },
     {
       "index": 17,
-      "event_index": 128,
-      "virtual_time": "2026-04-06T16:58:16.747Z",
-      "cause": "event",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "I checked that exact Pi session transcript and the detector logic.  \nThe main is…"
-    },
-    {
-      "index": 18,
-      "event_index": 128,
-      "virtual_time": "2026-04-06T16:58:16.747Z",
-      "cause": "event",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "I checked that exact Pi session transcript and the detector logic.  \nThe main is…"
-    },
-    {
-      "index": 19,
-      "event_index": 129,
-      "virtual_time": "2026-04-06T16:58:19.183Z",
-      "cause": "event",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "I checked that exact Pi session transcript and the detector logic.  \nThe main is…"
-    },
-    {
-      "index": 20,
-      "event_index": 129,
-      "virtual_time": "2026-04-06T16:58:19.183Z",
-      "cause": "event",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "I checked that exact Pi session transcript and the detector logic.  \nThe main is…"
-    },
-    {
-      "index": 21,
       "event_index": 130,
       "virtual_time": "2026-04-06T16:58:57.976Z",
       "cause": "event",
@@ -358,7 +298,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 22,
+      "index": 18,
       "event_index": 151,
       "virtual_time": "2026-04-06T17:00:37.736Z",
       "cause": "event",
@@ -373,7 +313,7 @@
       "last_assistant_text_head": "Yes — your instinct is right.\n\n## Verdict\n**Adapter-specific waiting logic is …"
     },
     {
-      "index": 23,
+      "index": 19,
       "event_index": 152,
       "virtual_time": "2026-04-06T17:08:02.289Z",
       "cause": "event",
@@ -387,7 +327,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 24,
+      "index": 20,
       "event_index": 229,
       "virtual_time": "2026-04-06T17:14:19.468Z",
       "cause": "event",
@@ -402,7 +342,7 @@
       "last_assistant_text_head": "Implemented ✅ — adapter-specific waiting logic is now in place.\n\n### What I …"
     },
     {
-      "index": 25,
+      "index": 21,
       "event_index": 230,
       "virtual_time": "2026-04-06T17:17:28.519Z",
       "cause": "event",
@@ -416,7 +356,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 26,
+      "index": 22,
       "event_index": 235,
       "virtual_time": "2026-04-06T17:17:46.555Z",
       "cause": "event",
@@ -431,7 +371,7 @@
       "last_assistant_text_head": "Done — I merged the latest `main` into your branch and pushed it.\n\n- Branch: `…"
     },
     {
-      "index": 27,
+      "index": 23,
       "event_index": 236,
       "virtual_time": "2026-04-06T17:17:50.419Z",
       "cause": "event",
@@ -445,7 +385,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 28,
+      "index": 24,
       "event_index": 253,
       "virtual_time": "2026-04-06T17:19:07.399Z",
       "cause": "event",
@@ -460,7 +400,7 @@
       "last_assistant_text_head": "Done — local dev stack rebuilt and restarted.\n\n### Executed\n- Built daemon: `c…"
     },
     {
-      "index": 29,
+      "index": 25,
       "event_index": 254,
       "virtual_time": "2026-04-06T17:19:20.329Z",
       "cause": "event",
@@ -474,7 +414,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 30,
+      "index": 26,
       "event_index": 257,
       "virtual_time": "2026-04-06T17:19:29.973Z",
       "cause": "event",
@@ -489,7 +429,7 @@
       "last_assistant_text_head": "AGENTS.md  \nassets  \nCLAUDE.md  \ncore  \nevents.md  \nLICENSE  \nplatforms  \nREADME…"
     },
     {
-      "index": 31,
+      "index": 27,
       "event_index": 258,
       "virtual_time": "2026-04-06T17:21:24.106Z",
       "cause": "event",
@@ -503,7 +443,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 32,
+      "index": 28,
       "event_index": 284,
       "virtual_time": "2026-04-06T17:23:35.087Z",
       "cause": "event",
@@ -517,7 +457,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 33,
+      "index": 29,
       "event_index": 285,
       "virtual_time": "2026-04-06T17:25:50.729Z",
       "cause": "event",
@@ -531,7 +471,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 34,
+      "index": 30,
       "event_index": 318,
       "virtual_time": "2026-04-06T17:31:48.617Z",
       "cause": "event",
@@ -546,7 +486,7 @@
       "last_assistant_text_head": "Found the root cause in that session’s latest task.\n\n### What’s wrong\n\nIn tr…"
     },
     {
-      "index": 35,
+      "index": 31,
       "event_index": 319,
       "virtual_time": "2026-04-06T17:34:20.32Z",
       "cause": "event",
@@ -560,7 +500,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 36,
+      "index": 32,
       "event_index": 342,
       "virtual_time": "2026-04-06T17:39:05.899Z",
       "cause": "event",
@@ -574,7 +514,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 37,
+      "index": 33,
       "event_index": 343,
       "virtual_time": "2026-04-06T17:39:25.897Z",
       "cause": "event",
@@ -588,7 +528,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 38,
+      "index": 34,
       "event_index": 362,
       "virtual_time": "2026-04-06T17:41:11.397Z",
       "cause": "event",
@@ -603,7 +543,7 @@
       "last_assistant_text_head": "Continued and applied the fix.\n\nI found this could not be fixed purely in `pi/pa…"
     },
     {
-      "index": 39,
+      "index": 35,
       "event_index": 363,
       "virtual_time": "2026-04-06T17:43:25.095Z",
       "cause": "event",
@@ -617,7 +557,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 40,
+      "index": 36,
       "event_index": 380,
       "virtual_time": "2026-04-06T17:44:34.532Z",
       "cause": "event",
@@ -632,7 +572,7 @@
       "last_assistant_text_head": "Rebuilt and redeployed both ✅\n\n- Daemon rebuilt to: `/tmp/irrlichd`\n- Swift ap…"
     },
     {
-      "index": 41,
+      "index": 37,
       "event_index": 381,
       "virtual_time": "2026-04-06T17:44:53.945Z",
       "cause": "event",
@@ -646,7 +586,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 42,
+      "index": 38,
       "event_index": 382,
       "virtual_time": "2026-04-06T17:45:01.838Z",
       "cause": "event",
@@ -661,7 +601,7 @@
       "last_assistant_text_head": "AGENTS.md  \nassets  \nCLAUDE.md  \ncore  \nevents.md  \nLICENSE  \nplatforms  \nREADME…"
     },
     {
-      "index": 43,
+      "index": 39,
       "event_index": 383,
       "virtual_time": "2026-04-06T17:46:17.389Z",
       "cause": "event",
@@ -675,7 +615,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 44,
+      "index": 40,
       "event_index": 396,
       "virtual_time": "2026-04-06T17:48:12.568Z",
       "cause": "event",
@@ -690,7 +630,7 @@
       "last_assistant_text_head": "Done — I triggered **two very long JSONL tool results in a row** in this same …"
     },
     {
-      "index": 45,
+      "index": 41,
       "event_index": 397,
       "virtual_time": "2026-04-06T17:48:59.028Z",
       "cause": "event",
@@ -705,7 +645,7 @@
       "last_assistant_text_head": "Done — I triggered **two very long JSONL tool results in a row** in this same …"
     },
     {
-      "index": 46,
+      "index": 42,
       "event_index": 397,
       "virtual_time": "2026-04-06T17:48:59.028Z",
       "cause": "event",
@@ -720,7 +660,7 @@
       "last_assistant_text_head": "Done — I triggered **two very long JSONL tool results in a row** in this same …"
     },
     {
-      "index": 47,
+      "index": 43,
       "event_index": 398,
       "virtual_time": "2026-04-06T17:53:50.919Z",
       "cause": "event",
@@ -734,7 +674,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 48,
+      "index": 44,
       "event_index": 415,
       "virtual_time": "2026-04-06T17:54:37.872Z",
       "cause": "event",
@@ -748,7 +688,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 49,
+      "index": 45,
       "event_index": 416,
       "virtual_time": "2026-04-06T18:07:07.164Z",
       "cause": "event",
@@ -762,7 +702,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 50,
+      "index": 46,
       "event_index": 446,
       "virtual_time": "2026-04-06T18:08:53.405Z",
       "cause": "event",
@@ -777,7 +717,7 @@
       "last_assistant_text_head": "Great catch — you’re exactly right.\n\n### Where the data points came from\n\nFo…"
     },
     {
-      "index": 51,
+      "index": 47,
       "event_index": 447,
       "virtual_time": "2026-04-06T18:10:55.412Z",
       "cause": "event",
@@ -791,7 +731,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 52,
+      "index": 48,
       "event_index": 458,
       "virtual_time": "2026-04-06T18:12:00.61Z",
       "cause": "event",
@@ -806,7 +746,7 @@
       "last_assistant_text_head": "Good fix is:\n\n### 1) Add the missing model mapping (root cause)\n`core/pkg/capaci…"
     },
     {
-      "index": 53,
+      "index": 49,
       "event_index": 459,
       "virtual_time": "2026-04-06T18:16:54.205Z",
       "cause": "event",
@@ -820,7 +760,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 54,
+      "index": 50,
       "event_index": 474,
       "virtual_time": "2026-04-06T18:18:38.309Z",
       "cause": "event",
@@ -835,7 +775,7 @@
       "last_assistant_text_head": "Updated ✅ — I applied the fix for the Codex 5.3 context window miscalculatio…"
     },
     {
-      "index": 55,
+      "index": 51,
       "event_index": 475,
       "virtual_time": "2026-04-06T18:21:43.471Z",
       "cause": "event",
@@ -849,7 +789,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 56,
+      "index": 52,
       "event_index": 482,
       "virtual_time": "2026-04-06T18:22:10.183Z",
       "cause": "event",
@@ -864,7 +804,7 @@
       "last_assistant_text_head": "Done — committed and pushed to the PR branch.\n\n### Pushed\n- **Branch:** `fix/p…"
     },
     {
-      "index": 57,
+      "index": 53,
       "event_index": 483,
       "virtual_time": "2026-04-06T18:23:08.531Z",
       "cause": "event",
@@ -878,7 +818,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 58,
+      "index": 54,
       "event_index": 498,
       "virtual_time": "2026-04-06T18:23:52.913Z",
       "cause": "event",
@@ -893,7 +833,7 @@
       "last_assistant_text_head": "Merged and pushed to `main` ✅\n\n- Merged branch: `fix/pi-compaction-working-sta…"
     },
     {
-      "index": 59,
+      "index": 55,
       "event_index": 499,
       "virtual_time": "2026-04-06T18:35:07.391Z",
       "cause": "event",
@@ -907,7 +847,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 60,
+      "index": 56,
       "event_index": 502,
       "virtual_time": "2026-04-06T18:35:14.945Z",
       "cause": "event",
@@ -922,7 +862,7 @@
       "last_assistant_text_head": "AGENTS.md  \nassets  \nCLAUDE.md  \ncore  \nevents.md  \nLICENSE  \nplatforms  \nREADME…"
     },
     {
-      "index": 61,
+      "index": 57,
       "event_index": 503,
       "virtual_time": "2026-04-06T19:02:16.573Z",
       "cause": "event",
@@ -936,7 +876,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 62,
+      "index": 58,
       "event_index": 517,
       "virtual_time": "2026-04-06T19:03:24.203Z",
       "cause": "event",
@@ -951,7 +891,7 @@
       "last_assistant_text_head": "Easy way: add it as a **skill**.\n\nI checked the skills index and found web-searc…"
     },
     {
-      "index": 63,
+      "index": 59,
       "event_index": 518,
       "virtual_time": "2026-04-06T19:10:55.571Z",
       "cause": "event",
@@ -965,7 +905,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 64,
+      "index": 60,
       "event_index": 521,
       "virtual_time": "2026-04-06T19:11:03.855Z",
       "cause": "event",
@@ -980,7 +920,7 @@
       "last_assistant_text_head": "AGENTS.md  \nassets  \nCLAUDE.md  \ncore  \nevents.md  \nLICENSE  \nplatforms  \nREADME…"
     },
     {
-      "index": 65,
+      "index": 61,
       "event_index": 522,
       "virtual_time": "2026-04-06T19:43:04.708Z",
       "cause": "event",
@@ -994,7 +934,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 66,
+      "index": 62,
       "event_index": 525,
       "virtual_time": "2026-04-06T19:43:15.017Z",
       "cause": "event",
@@ -1009,7 +949,7 @@
       "last_assistant_text_head": "AGENTS.md  \nassets  \nCLAUDE.md  \ncore  \nevents.md  \nLICENSE  \nplatforms  \nREADME…"
     },
     {
-      "index": 67,
+      "index": 63,
       "event_index": 526,
       "virtual_time": "2026-04-06T19:47:40.188Z",
       "cause": "event",
@@ -1023,7 +963,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 68,
+      "index": 64,
       "event_index": 529,
       "virtual_time": "2026-04-06T19:47:48.714Z",
       "cause": "event",
@@ -1038,7 +978,7 @@
       "last_assistant_text_head": "AGENTS.md  \nassets  \nCLAUDE.md  \ncore  \nevents.md  \nLICENSE  \nplatforms  \nREADME…"
     },
     {
-      "index": 69,
+      "index": 65,
       "event_index": 530,
       "virtual_time": "2026-04-06T19:52:27.094Z",
       "cause": "event",
@@ -1052,7 +992,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 70,
+      "index": 66,
       "event_index": 531,
       "virtual_time": "2026-04-06T19:52:29.848Z",
       "cause": "event",
@@ -1067,7 +1007,7 @@
       "last_assistant_text_head": "Hey! 👋"
     },
     {
-      "index": 71,
+      "index": 67,
       "event_index": 532,
       "virtual_time": "2026-04-06T20:02:00.096Z",
       "cause": "event",
@@ -1081,7 +1021,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 72,
+      "index": 68,
       "event_index": 533,
       "virtual_time": "2026-04-06T20:02:07.141Z",
       "cause": "event",
@@ -1096,7 +1036,7 @@
       "last_assistant_text_head": "Yep — what do you want to do with **pi**?"
     },
     {
-      "index": 73,
+      "index": 69,
       "event_index": 534,
       "virtual_time": "2026-04-06T20:12:26.732Z",
       "cause": "event",
@@ -1110,7 +1050,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 74,
+      "index": 70,
       "event_index": 535,
       "virtual_time": "2026-04-06T20:12:33.298Z",
       "cause": "event",
@@ -1125,7 +1065,7 @@
       "last_assistant_text_head": "Sure — what question do you want me to ask, and to whom?"
     },
     {
-      "index": 75,
+      "index": 71,
       "event_index": 536,
       "virtual_time": "2026-04-06T20:13:06.597Z",
       "cause": "event",
@@ -1139,7 +1079,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 76,
+      "index": 72,
       "event_index": 537,
       "virtual_time": "2026-04-06T20:13:12.359Z",
       "cause": "event",
@@ -1154,7 +1094,7 @@
       "last_assistant_text_head": "Why do programmers prefer dark mode?  \nBecause light attracts bugs. 🐛"
     },
     {
-      "index": 77,
+      "index": 73,
       "event_index": 538,
       "virtual_time": "2026-04-06T20:19:23.321Z",
       "cause": "event",
@@ -1168,7 +1108,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 78,
+      "index": 74,
       "event_index": 541,
       "virtual_time": "2026-04-06T20:19:30.272Z",
       "cause": "event",
@@ -1183,7 +1123,7 @@
       "last_assistant_text_head": "AGENTS.md  \nassets  \nCLAUDE.md  \ncore  \nevents.md  \nLICENSE  \nplatforms  \nREADME…"
     },
     {
-      "index": 79,
+      "index": 75,
       "event_index": 542,
       "virtual_time": "2026-04-06T20:32:50.428Z",
       "cause": "event",
@@ -1197,7 +1137,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 80,
+      "index": 76,
       "event_index": 599,
       "virtual_time": "2026-04-06T20:37:58.289Z",
       "cause": "event",
@@ -1212,7 +1152,7 @@
       "last_assistant_text_head": "Created both issues in `bd`:\n\n1. **irrlicht-ahy** — *Update README images*  \n2…"
     },
     {
-      "index": 81,
+      "index": 77,
       "event_index": 600,
       "virtual_time": "2026-04-06T20:38:40.126Z",
       "cause": "event",
@@ -1226,7 +1166,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 82,
+      "index": 78,
       "event_index": 609,
       "virtual_time": "2026-04-06T20:39:06.189Z",
       "cause": "debounce_coalesce",
@@ -1240,7 +1180,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 83,
+      "index": 79,
       "event_index": 610,
       "virtual_time": "2026-04-06T20:39:28.951Z",
       "cause": "event",
@@ -1254,7 +1194,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 84,
+      "index": 80,
       "event_index": 613,
       "virtual_time": "2026-04-06T20:39:45.037Z",
       "cause": "event",
