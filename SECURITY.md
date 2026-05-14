@@ -72,11 +72,16 @@ and the daemon-spawning logic in the macOS app.
 - `IRRLICHT_BIND_ADDR` overrides the default loopback bind (e.g.
   `0.0.0.0:7837` to expose on the LAN). Use with care — state files and
   session metadata become reachable to anyone who can reach that address.
+  See [the configuration docs](https://irrlicht.io/docs/configuration.html#when-to-use)
+  for the LAN-exposure recipe and tradeoffs.
 - `IRRLICHT_MDNS=1` enables mDNS/Bonjour advertisement of `_irrlicht._tcp`
-  on the local network. Off by default.
+  on the local network. Off by default. Paired with `IRRLICHT_BIND_ADDR` in
+  the [configuration docs example](https://irrlicht.io/docs/configuration.html#when-to-use).
 - The WebSocket endpoint (`/api/v1/sessions/stream`) rejects cross-site
   handshakes: only requests from loopback origins (or with no `Origin`
   header, as native clients send) are accepted. This holds even when the
   daemon is bound to a non-loopback address.
+- Planned: both knobs will be retired in favor of an explicit hub mode.
+  See the [Relay Server design](https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server).
 
 Thanks for helping keep Irrlicht users safe.
