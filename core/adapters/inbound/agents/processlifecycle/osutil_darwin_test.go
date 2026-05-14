@@ -7,8 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"syscall"
 	"testing"
 )
@@ -52,12 +50,13 @@ func TestKittySocketCandidates(t *testing.T) {
 	}
 }
 
-// uniqueTestPID returns a pid-shaped int unlikely to collide with any real
-// process socket in /tmp. Combines getpid with a constant so two test runs
-// don't fight each other.
+// uniqueTestPID returns an integer well beyond any real macOS PID
+// (kern.maxproc is bounded; values above 2^30 are guaranteed not to be a
+// live process) so the canonical socket path `/tmp/kitty-{PID}` is free.
+// Salted with `os.Getpid()` so two parallel test processes don't collide.
 func uniqueTestPID(t *testing.T) int {
 	t.Helper()
-	return os.Getpid()*10 + 7
+	return 1<<30 + os.Getpid()
 }
 
 func TestKittyListenOnFor_DetectsCurrentUIDSocket(t *testing.T) {
@@ -188,13 +187,11 @@ func TestParseKittenLsForPID(t *testing.T) {
 	}
 }
 
-// sanity: ensure the package-level kittenPath candidate set behaves on the
-// dev machine — either kitten is installed at one of the known locations, or
-// not. If installed, the resolved path must be executable.
+// sanity: if kitten is installed at one of the candidate locations, the
+// resolved path must point at an executable file (not a directory, not a
+// non-executable regular file). If kitten isn't installed, kittenPath is
+// "" and the helper paths short-circuit — also valid.
 func TestKittenPath_ExecutableOrEmpty(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip()
-	}
 	if kittenPath == "" {
 		return
 	}
@@ -205,11 +202,7 @@ func TestKittenPath_ExecutableOrEmpty(t *testing.T) {
 	if info.Mode()&0o111 == 0 {
 		t.Errorf("kittenPath %q has no executable bits: mode=%v", kittenPath, info.Mode())
 	}
-	// Confirm it's not a directory.
 	if info.IsDir() {
 		t.Errorf("kittenPath %q is a directory", kittenPath)
 	}
-	// Quick parse for sanity — strconv.Itoa just to keep the var live in case
-	// linters strip unused imports.
-	_ = strconv.Itoa(int(info.Size()))
 }

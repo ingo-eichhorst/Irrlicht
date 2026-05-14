@@ -37,60 +37,60 @@ func readProcessEnv(pid int) (map[string]string, error) {
 // ten gives generous headroom for tmux / SSH nesting.
 const maxAncestry = 10
 
-// resolveTermProgramFromAncestry walks the parent-process chain of pid and
-// returns the first recognized host app's TERM_PROGRAM string. Returns ""
-// when no supported host appears within maxAncestry levels.
+// resolveHostFromAncestry walks the parent-process chain of pid and returns
+// both the first recognized host app's TERM_PROGRAM string and the PID at
+// which it was found. Returns ("", 0) when no supported host appears within
+// maxAncestry levels.
 //
 // Intentionally ignores tmux: tmux's env vars (TMUX, TMUX_PANE) come from
 // the regular env-capture path when readable, and a tmux-only ancestor
 // (without a known host terminal above it) can't be brought to the front
 // by NSWorkspace.
-func resolveTermProgramFromAncestry(pid int) string {
+func resolveHostFromAncestry(pid int) (termProgram string, hostPID int) {
 	cur := pid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
 		ppid, cmd, err := readProcInfo(cur)
 		if err != nil {
-			return ""
+			return "", 0
 		}
 		if term := termProgramForAppPath(cmd); term != "" {
-			return term
+			return term, cur
 		}
 		if ppid == cur || ppid <= 1 {
-			return ""
+			return "", 0
 		}
 		cur = ppid
 	}
-	return ""
+	return "", 0
 }
 
-// kittyAncestryPID walks the parent-process chain of pid and returns the PID
-// of the first kitty.app ancestor, or 0 when no kitty.app appears within
-// maxAncestry levels. Used to back-fill `KittyPID` for sessions whose own
-// env was unreadable by sysctl — Apple-signed binaries like `pi` (Python
-// signed by Apple) and zsh hide their env even from non-TCC sysctl reads,
-// so KITTY_PID never makes it into the env-derived launcher. Ancestry
-// walking still works because we only read ppid + comm, not env.
+// resolveTermProgramFromAncestry is a thin wrapper that discards the host
+// PID. Kept for the existing call site that only cares whether kitty (or any
+// other host) appears in the chain; callers that also need the host PID
+// should use resolveHostFromAncestry directly to avoid a second walk.
+func resolveTermProgramFromAncestry(pid int) string {
+	term, _ := resolveHostFromAncestry(pid)
+	return term
+}
+
+// kittyAncestryPID is a thin wrapper returning only the kitty.app PID from
+// the ancestry walk, or 0 when kitty is not the host. Used to back-fill
+// `KittyPID` for sessions whose own env was unreadable by sysctl —
+// Apple-signed binaries like `pi` (Python signed by Apple) and zsh hide
+// their env even from non-TCC sysctl reads, so KITTY_PID never makes it
+// into the env-derived launcher. Ancestry walking still works because we
+// only read ppid + comm, not env.
 func kittyAncestryPID(pid int) int {
-	cur := pid
-	for i := 0; i < maxAncestry && cur > 1; i++ {
-		ppid, cmd, err := readProcInfo(cur)
-		if err != nil {
-			return 0
-		}
-		if termProgramForAppPath(cmd) == "kitty" {
-			return cur
-		}
-		if ppid == cur || ppid <= 1 {
-			return 0
-		}
-		cur = ppid
+	term, hostPID := resolveHostFromAncestry(pid)
+	if term != "kitty" {
+		return 0
 	}
-	return 0
+	return hostPID
 }
 
 // kittenPath returns the absolute path of the kitten CLI, or "" if not
-// found. Same candidate list as the Swift activator (KittyActivator.swift).
-// Result is cached after first lookup.
+// found. Resolved once at package init; the daemon does not pick up newly
+// installed kitten without a restart.
 var kittenPath = func() string {
 	candidates := []string{
 		"/Applications/kitty.app/Contents/MacOS/kitten",
