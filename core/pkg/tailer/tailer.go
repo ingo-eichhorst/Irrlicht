@@ -129,6 +129,17 @@ type SessionMetrics struct {
 	// missing working→waiting step (issue #150).
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
 
+	// NoSubstantiveActivity is true when a TailAndProcess pass consumed new
+	// transcript content but every parsed line was Skip=true and produced no
+	// state-relevant change (no SubagentCompletions, no TaskSnapshot, no
+	// processParsedEvent call). Lets the detector treat post-turn writes
+	// like Claude Code's `system/away_summary` recap as activity for
+	// timestamp purposes only — the state machine must not be re-run, since
+	// LastEventType still carries the prior turn_done and rule 4 would
+	// bounce a ready session back to working. Per-pass transient
+	// (issue #329).
+	NoSubstantiveActivity bool `json:"-"`
+
 	// Tasks is the current task list for this session, accumulated from
 	// TaskCreate / TaskUpdate tool_use events in the Claude Code transcript.
 	// Nil for sessions that have not called TaskCreate.
@@ -323,6 +334,13 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// case from issue #150).
 	sawUserBlockingClosedThisPass := false
 
+	// Track whether this pass observed any state-relevant change. Starts
+	// true; flipped to false the moment we route a line through
+	// processParsedEvent or harvest a substantive signal in the skip
+	// branch (subagent completion, task snapshot). Reset to true at the
+	// start of every pass — purely per-pass. See issue #329.
+	noSubstantiveActivity := true
+
 	// Per-pass signals must be cleared so the detector only drains events
 	// discovered in this scan (see issue #134).
 	t.metrics.SubagentCompletions = nil
@@ -424,12 +442,17 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 				t.applyMetadata(parsed)
 				if len(parsed.SubagentCompletions) > 0 {
 					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
+					noSubstantiveActivity = false
+				}
+				if parsed.TaskSnapshot != nil {
+					noSubstantiveActivity = false
 				}
 				t.reconcileTaskSnapshot(parsed)
 			}
 			continue
 		}
 		t.processParsedEvent(parsed, &sawUserBlockingClosedThisPass)
+		noSubstantiveActivity = false
 	}
 
 	t.lastOffset = currentOffset
@@ -443,12 +466,14 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	if flusher, ok := t.parser.(idleFlusher); ok && !t.lastLineSeenAt.IsZero() {
 		if ev := flusher.IdleFlush(time.Since(t.lastLineSeenAt)); ev != nil {
 			t.processParsedEvent(ev, &sawUserBlockingClosedThisPass)
+			noSubstantiveActivity = false
 		}
 	}
 
 	// Compute current metrics.
 	t.computeMetrics()
 	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
+	t.metrics.NoSubstantiveActivity = noSubstantiveActivity
 
 	// Model config fallback.
 	if t.metrics.ModelName == "" {

@@ -147,6 +147,13 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 
 // handleSystemEvent maps turn_duration / stop_hook_summary subtypes to
 // turn_done; everything else is skipped.
+//
+// The skip branch covers purely informational subtypes that Claude Code
+// writes after a turn has already ended — most notably `away_summary`,
+// the idle recap emitted ~3 minutes after end_turn. These must NOT be
+// promoted to turn_done: they describe what happened, they aren't a turn
+// completion themselves. The tailer's per-pass NoSubstantiveActivity flag
+// then lets the detector ignore the resulting mtime touch (issue #329).
 func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
 		ev.EventType = "turn_done"

@@ -109,6 +109,17 @@ type SessionMetrics struct {
 	// episode (issue #150). Transient — per-pass, not persisted.
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
 
+	// NoSubstantiveActivity reflects the last tailer pass: true when the
+	// pass consumed new transcript content but produced no state-relevant
+	// change (every line was Skip=true with no SubagentCompletions and no
+	// TaskSnapshot). The detector uses this to short-circuit the
+	// classification pipeline for post-turn writes like Claude Code's
+	// `system/away_summary` recap — without it, the force-bounce in
+	// processActivity sees the stale LastEventType and flips a ready
+	// session back to working (issue #329). Transient — per-pass, not
+	// persisted.
+	NoSubstantiveActivity bool `json:"-"`
+
 	// SubagentCompletions surfaces parent-side "subagent done" signals
 	// from the most recent transcript scan (origin.kind="task-notification"
 	// lines parsed by the Claude Code adapter). Per-pass and transient —
@@ -479,6 +490,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		CumCacheReadTokens:     newM.CumCacheReadTokens,
 		CumCacheCreationTokens: newM.CumCacheCreationTokens,
 		Tasks:                  newM.Tasks,
+		NoSubstantiveActivity:  newM.NoSubstantiveActivity,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow

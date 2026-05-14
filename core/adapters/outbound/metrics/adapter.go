@@ -148,6 +148,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		LastAssistantText:                 m.LastAssistantText,
 		PermissionMode:                    m.PermissionMode,
 		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
+		NoSubstantiveActivity:             m.NoSubstantiveActivity,
 	}
 	if len(m.SubagentCompletions) > 0 {
 		result.SubagentCompletions = make([]session.SubagentCompletion, len(m.SubagentCompletions))
