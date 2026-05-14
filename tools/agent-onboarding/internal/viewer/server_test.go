@@ -104,6 +104,41 @@ func TestScenarioDetail_404OnMissing(t *testing.T) {
 	}
 }
 
+func TestSynthesizeMetaFromEvents_seedScenario(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "..", "replaydata", "agents",
+		"claudecode", "scenarios", "multi-turn-conversation", "events.jsonl")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("seed corpus not present: %v", err)
+	}
+	b := synthesizeMetaFromEvents(path)
+	if b == nil {
+		t.Fatal("synthesizeMetaFromEvents returned nil for a recording that exists")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["synthesized"] != true {
+		t.Errorf("synthesized flag missing: %+v", doc)
+	}
+	if doc["adapter"] != "claude-code" {
+		t.Errorf("adapter wrong: %v", doc["adapter"])
+	}
+	if total, _ := doc["total_events"].(float64); total < 20 {
+		t.Errorf("expected lots of events, got %v", doc["total_events"])
+	}
+	// duration should be ~23.8s = 23814ms.
+	if dur, _ := doc["duration_ms"].(float64); dur < 20000 || dur > 30000 {
+		t.Errorf("duration unexpected: %v ms", dur)
+	}
+	if kinds, _ := doc["kinds"].(map[string]any); kinds["state_transition"] == nil {
+		t.Errorf("kinds breakdown missing state_transition: %+v", kinds)
+	}
+	if sc, _ := doc["session_count"].(map[string]any); sc["presession"] == nil || sc["real"] == nil {
+		t.Errorf("session_count missing presession/real breakdown: %+v", sc)
+	}
+}
+
 func mkRecording(t *testing.T, root, agent, subtree, id string, files map[string]string) {
 	t.Helper()
 	dir := filepath.Join(root, "replaydata", "agents", agent, subtree, id)

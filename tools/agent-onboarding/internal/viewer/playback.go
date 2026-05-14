@@ -115,6 +115,12 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 	m.stopCurrent()
 
 	machine := replay.New(events, m.broadcaster, speed)
+	// Apply event 0 synchronously BEFORE returning to the frontend so
+	// the dashboard's initial /api/v1/sessions fetch sees a non-empty
+	// snapshot. Otherwise there's a race window where Run()'s
+	// goroutine hasn't yet scheduled and the dashboard renders
+	// "AWAITING SESSIONS" until the next state change ~15s later.
+	machine.PrimeFirstEvent()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	pb := &Playback{
@@ -375,7 +381,12 @@ func (m *PlaybackManager) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"paused":      pb.Paused,
 	}
 	if pb.machine != nil {
-		resp["offset_ms"] = pb.machine.CursorOffsetMs()
+		// offset_ms is the live wall-clock-driven scrubber position so
+		// the bar advances every poll instead of freezing between events.
+		// cursor_offset_ms is the last-applied-event timestamp, kept for
+		// debugging and as a future "snap to event" affordance.
+		resp["offset_ms"] = pb.machine.LivePlayheadMs()
+		resp["cursor_offset_ms"] = pb.machine.CursorOffsetMs()
 		resp["total_ms"] = pb.machine.TotalDurationMs()
 	}
 	if pb.DaemonPort > 0 {
@@ -446,6 +457,13 @@ func (m *PlaybackManager) handleSessions(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	groups := session.BuildDashboard(snap, nil)
+	if groups == nil {
+		// The dashboard's initial fetch handler bails on `null` (early
+		// return; never sets dashboardGroups). Coerce to an empty array
+		// so the frontend keeps a valid state and the WebSocket can
+		// hydrate it from session_created messages.
+		groups = []*session.AgentGroup{}
+	}
 	writeJSON(w, groups)
 }
 

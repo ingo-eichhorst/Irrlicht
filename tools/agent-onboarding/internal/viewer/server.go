@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"irrlicht/tools/agent-onboarding/internal/groundtruth"
 )
@@ -197,6 +198,15 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	d.Signals = readJSONLRaw(filepath.Join(scenarioDir, "signals.jsonl"))
 	d.Transitions = readTransitionsRaw(filepath.Join(scenarioDir, "events.jsonl"))
 	d.Frames = readFrames(filepath.Join(scenarioDir, "frames.jsonl"))
+	// Synthesize meta from events.jsonl when the recording predates the
+	// recorder (no recording-meta.json on disk). 27/27 committed recordings
+	// fall into this bucket today — without synthesis, the Recording
+	// Metadata panel is always empty.
+	if d.Meta == nil {
+		if synth := synthesizeMetaFromEvents(filepath.Join(scenarioDir, "events.jsonl")); synth != nil {
+			d.Meta = synth
+		}
+	}
 	if b, err := os.ReadFile(filepath.Join(scenarioDir, fmt.Sprintf("%s-%s-validate.json", agent, id))); err == nil {
 		d.Validate = b
 	}
@@ -238,6 +248,111 @@ func readJSONLRaw(path string) []json.RawMessage {
 		out = append(out, cp)
 	}
 	return out
+}
+
+// synthesizeMetaFromEvents builds a recording-meta.json-compatible
+// summary by scanning events.jsonl. Used as a fallback when the actual
+// recording-meta.json doesn't exist (the case for every committed
+// pre-Phase-1 recording). Marked `synthesized: true` so the frontend
+// can render the panel with an honest provenance label.
+//
+// Output shape (compact JSON):
+//
+//	{
+//	  "synthesized": true,
+//	  "adapter": "<first transcript_new's adapter>",
+//	  "started_at": "<events[0].ts>",
+//	  "ended_at":   "<events[last].ts>",
+//	  "duration_ms": <int>,
+//	  "total_events": <int>,
+//	  "kinds":        {"transcript_new": 2, ...},
+//	  "presession_session_ids": ["proc-XXXX"],
+//	  "real_session_ids":       ["8f4d493a-..."]
+//	}
+func synthesizeMetaFromEvents(path string) json.RawMessage {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	type rawEvent struct {
+		Ts        string `json:"ts"`
+		Kind      string `json:"kind"`
+		SessionID string `json:"session_id"`
+		Adapter   string `json:"adapter,omitempty"`
+	}
+	var (
+		adapter            string
+		firstTs, lastTs    string
+		total              int
+		kinds              = map[string]int{}
+		presessionSet      = map[string]struct{}{}
+		realSet            = map[string]struct{}{}
+	)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		b := scanner.Bytes()
+		if len(strings.TrimSpace(string(b))) == 0 {
+			continue
+		}
+		var ev rawEvent
+		if err := json.Unmarshal(b, &ev); err != nil {
+			continue
+		}
+		total++
+		if firstTs == "" {
+			firstTs = ev.Ts
+		}
+		lastTs = ev.Ts
+		if ev.Kind != "" {
+			kinds[ev.Kind]++
+		}
+		if adapter == "" && ev.Adapter != "" {
+			adapter = ev.Adapter
+		}
+		if ev.SessionID != "" {
+			if strings.HasPrefix(ev.SessionID, "proc-") {
+				presessionSet[ev.SessionID] = struct{}{}
+			} else {
+				realSet[ev.SessionID] = struct{}{}
+			}
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+	var durationMs int64
+	if t0, err0 := time.Parse(time.RFC3339Nano, firstTs); err0 == nil {
+		if t1, err1 := time.Parse(time.RFC3339Nano, lastTs); err1 == nil {
+			durationMs = t1.Sub(t0).Milliseconds()
+		}
+	}
+	keys := func(m map[string]struct{}) []string {
+		out := make([]string, 0, len(m))
+		for k := range m {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return out
+	}
+	doc := map[string]any{
+		"synthesized":            true,
+		"adapter":                adapter,
+		"started_at":             firstTs,
+		"ended_at":               lastTs,
+		"duration_ms":            durationMs,
+		"total_events":           total,
+		"kinds":                  kinds,
+		"presession_session_ids": keys(presessionSet),
+		"real_session_ids":       keys(realSet),
+		"session_count":          map[string]int{"presession": len(presessionSet), "real": len(realSet)},
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 func readTransitionsRaw(path string) []json.RawMessage {

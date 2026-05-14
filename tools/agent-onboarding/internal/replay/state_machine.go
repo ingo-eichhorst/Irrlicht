@@ -39,6 +39,14 @@ type StateMachine struct {
 	playStart      time.Time
 	recordingStart time.Time
 
+	// playhead is the live virtual-time offset in ms — the scrubber's
+	// value. Decoupled from `cursor` (which is event-based) so the
+	// scrubber advances smoothly between events instead of freezing.
+	// Updated by tickPlayhead(); guarded by mu.
+	playheadMs       float64
+	lastTickWall     time.Time
+	playheadRunning  bool
+
 	speedMu sync.RWMutex
 	speed   float64 // 1.0, 2.0, 5.0, …; >0 always
 
@@ -75,12 +83,57 @@ func (m *StateMachine) Speed() float64 {
 	return m.speed
 }
 
+// tickPlayheadLocked accumulates wall-clock-elapsed-since-last-tick into
+// the live playhead, scaled by the CURRENT speed. Called before any read
+// of m.playheadMs and on every state change (pause/resume/setspeed/seek)
+// so the playhead reflects the right value for the active speed/state.
+// Caller MUST hold m.mu.
+func (m *StateMachine) tickPlayheadLocked() {
+	now := time.Now()
+	if m.playheadRunning && !m.lastTickWall.IsZero() {
+		elapsed := now.Sub(m.lastTickWall).Seconds()
+		m.playheadMs += elapsed * 1000.0 * m.Speed()
+		if total := m.totalDurationMsLocked(); total > 0 && m.playheadMs > float64(total) {
+			m.playheadMs = float64(total)
+		}
+	}
+	m.lastTickWall = now
+}
+
+// totalDurationMsLocked returns the recording's total span in ms.
+// Caller MUST hold m.mu.
+func (m *StateMachine) totalDurationMsLocked() int64 {
+	if len(m.events) < 2 {
+		return 0
+	}
+	return m.events[len(m.events)-1].Timestamp.Sub(m.events[0].Timestamp).Milliseconds()
+}
+
+// LivePlayheadMs returns the scrubber's continuous playhead offset in
+// milliseconds (virtual time, anchored to the recording's first event).
+// Continuous between events — increments every call by wall-clock delta
+// since the last tick, scaled by current speed. The pause / resume /
+// SetSpeed methods all call tickPlayheadLocked() so the playhead doesn't
+// jump when speed changes or pauses end.
+func (m *StateMachine) LivePlayheadMs() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tickPlayheadLocked()
+	return int64(m.playheadMs)
+}
+
 // SetSpeed changes playback speed live. Subsequent inter-event waits
 // are recomputed against the new value.
 func (m *StateMachine) SetSpeed(s float64) {
 	if s <= 0 {
 		return
 	}
+	// Lock playhead state first to flush the accumulated offset at the
+	// OLD speed before changing speed — otherwise the next tick would
+	// retroactively scale the elapsed time at the new speed.
+	m.mu.Lock()
+	m.tickPlayheadLocked()
+	m.mu.Unlock()
 	m.speedMu.Lock()
 	m.speed = s
 	m.speedMu.Unlock()
@@ -115,6 +168,29 @@ func (m *StateMachine) sendCmd(c command) {
 	}
 }
 
+// PrimeFirstEvent applies events[0] synchronously and advances the
+// cursor to 1. Used by StartViewerInternal to close the race window
+// where /start returns before Run()'s goroutine has scheduled and the
+// dashboard's initial /api/v1/sessions fetch sees an empty snapshot.
+//
+// After this call, m.sessions has the first-event-derived state and
+// Snapshot() returns a non-empty slice. Subsequent Run() begins at
+// cursor=1.
+func (m *StateMachine) PrimeFirstEvent() {
+	if len(m.events) == 0 {
+		return
+	}
+	m.mu.Lock()
+	if m.cursor > 0 {
+		m.mu.Unlock()
+		return
+	}
+	ev := m.events[0]
+	m.cursor = 1
+	m.mu.Unlock()
+	m.apply(ev)
+}
+
 // Run drives the playback. Returns when ctx is cancelled, Stop is
 // called, or all events are consumed. Safe to call once per StateMachine.
 //
@@ -129,6 +205,9 @@ func (m *StateMachine) Run(ctx context.Context) {
 	m.mu.Lock()
 	m.playStart = time.Now().UTC()
 	m.recordingStart = anchor
+	m.lastTickWall = time.Now()
+	m.playheadRunning = true
+	m.playheadMs = 0
 	m.mu.Unlock()
 	paused := false
 
@@ -136,12 +215,28 @@ func (m *StateMachine) Run(ctx context.Context) {
 		switch c.kind {
 		case "pause":
 			paused = true
+			m.mu.Lock()
+			m.tickPlayheadLocked()
+			m.playheadRunning = false
+			m.mu.Unlock()
 		case "resume":
 			paused = false
+			m.mu.Lock()
+			m.lastTickWall = time.Now()
+			m.playheadRunning = true
+			m.mu.Unlock()
 		case "stop":
+			m.mu.Lock()
+			m.tickPlayheadLocked()
+			m.playheadRunning = false
+			m.mu.Unlock()
 			return true
 		case "seek":
 			m.seekTo(c.seekToMs, anchor)
+			m.mu.Lock()
+			m.playheadMs = float64(c.seekToMs)
+			m.lastTickWall = time.Now()
+			m.mu.Unlock()
 		}
 		return false
 	}

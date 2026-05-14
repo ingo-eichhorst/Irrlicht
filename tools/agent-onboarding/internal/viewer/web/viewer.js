@@ -13,24 +13,35 @@ const SPEED_PRESETS = [1, 2, 5, 10, 20, 25, 100];
     sidebar.textContent = "No recordings found under replaydata/agents/.";
     return;
   }
-  const grouped = {};
+  // Group by subtree (scenarios vs regression) first, then by agent.
+  // Each top-level h1 splits the sidebar into two visually distinct
+  // sections so pipeline-managed recordings and regression captures
+  // don't sit next to each other unannounced.
+  const bySubtree = {scenarios: {}, regression: {}};
   for (const s of scenarios) {
-    (grouped[s.agent] ||= []).push(s);
+    if (!bySubtree[s.subtree]) bySubtree[s.subtree] = {};
+    (bySubtree[s.subtree][s.agent] ||= []).push(s);
   }
-  for (const agent of Object.keys(grouped).sort()) {
-    const h = document.createElement("h2");
-    h.textContent = agent;
-    sidebar.appendChild(h);
-    for (const s of grouped[agent]) {
-      // <button> rather than <a> so the element is reliably
-      // click-triggerable from any input source (mouse, keyboard,
-      // accessibility tools, Chrome MCP). <a> without href is a
-      // placeholder element whose click semantics vary.
-      const el = document.createElement("button");
-      el.className = "scn" + (s.has_ground_truth ? " has-gt" : "");
-      el.innerHTML = `<span class="agent">${s.subtree}/</span>${s.id}`;
-      el.addEventListener("click", () => loadScenario(s, el));
-      sidebar.appendChild(el);
+  for (const subtree of ["scenarios", "regression"]) {
+    const agents = bySubtree[subtree];
+    if (!agents || Object.keys(agents).length === 0) continue;
+    const h1 = document.createElement("h1");
+    h1.textContent = subtree;
+    sidebar.appendChild(h1);
+    for (const agent of Object.keys(agents).sort()) {
+      const h2 = document.createElement("h2");
+      h2.textContent = agent;
+      sidebar.appendChild(h2);
+      for (const s of agents[agent]) {
+        // <button> rather than <a> so the element is reliably
+        // click-triggerable from any input source (mouse, keyboard,
+        // accessibility tools, Chrome MCP).
+        const el = document.createElement("button");
+        el.className = "scn" + (s.has_ground_truth ? " has-gt" : "");
+        el.textContent = s.id;  // subtree is implied by the section header
+        el.addEventListener("click", () => loadScenario(s, el));
+        sidebar.appendChild(el);
+      }
     }
   }
 })();
@@ -50,7 +61,12 @@ async function loadScenario(s, linkEl) {
   detail.appendChild(renderGroundTruth(data));
   detail.appendChild(renderTransitions(data));
   detail.appendChild(renderValidate(data));
-  detail.appendChild(renderSignalsPreview(data));
+  // Signals preview only makes sense for recordings made by Phase 1's
+  // multi-sensor recorder. All committed pre-recorder recordings have
+  // data.signals = []; rendering the panel for them is dead weight.
+  if (Array.isArray(data.signals) && data.signals.length > 0) {
+    detail.appendChild(renderSignalsPreview(data));
+  }
 }
 
 function renderMeta(data) {
@@ -59,15 +75,64 @@ function renderMeta(data) {
     p.appendChild(text("No recording-meta.json — this recording predates Phase 1's recorder."));
     return p;
   }
+  let meta;
   try {
-    const meta = typeof data.meta === "string" ? JSON.parse(data.meta) : data.meta;
-    const pre = document.createElement("pre");
-    pre.className = "snapshot";
-    pre.textContent = JSON.stringify(meta, null, 2);
-    p.appendChild(pre);
+    meta = typeof data.meta === "string" ? JSON.parse(data.meta) : data.meta;
   } catch (e) {
     p.appendChild(text("(could not parse meta)"));
+    return p;
   }
+  // Synthesized-from-events form: render a tidy two-column table with a
+  // provenance tag so the maintainer knows the data isn't from the real
+  // recorder.
+  if (meta.synthesized === true) {
+    const tag = document.createElement("div");
+    tag.style.cssText = "display: inline-block; padding: 2px 8px; background: #f0efe9; border: 1px solid #d8d6cc; border-radius: 3px; font-size: 11px; color: #555; margin-bottom: 8px;";
+    tag.textContent = "synthesized from events.jsonl";
+    p.appendChild(tag);
+    const tbl = document.createElement("table");
+    tbl.innerHTML = "";
+    const dur = (meta.duration_ms || 0) / 1000;
+    const rows = [
+      ["adapter", meta.adapter || "(unknown)"],
+      ["started at", meta.started_at || "—"],
+      ["ended at", meta.ended_at || "—"],
+      ["duration", dur.toFixed(2) + "s"],
+      ["total events", meta.total_events || 0],
+      ["session count", `${(meta.session_count?.presession || 0)} presession, ${(meta.session_count?.real || 0)} real`],
+    ];
+    for (const [k, v] of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td style="width: 140px; color: #666;">${escapeHtml(k)}</td><td><code>${escapeHtml(String(v))}</code></td>`;
+      tbl.appendChild(tr);
+    }
+    // Kinds row — collapse the map into a tidy chip list.
+    if (meta.kinds && Object.keys(meta.kinds).length > 0) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 2;
+      td.innerHTML = `<div style="margin-top: 8px; color: #666; font-size: 11px;">event kinds:</div>`;
+      const chips = document.createElement("div");
+      chips.style.cssText = "display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;";
+      const sorted = Object.entries(meta.kinds).sort((a, b) => b[1] - a[1]);
+      for (const [k, n] of sorted) {
+        const c = document.createElement("span");
+        c.style.cssText = "padding: 2px 8px; background: #f5f4ee; border: 1px solid #ece9dd; border-radius: 10px; font-size: 11px; font-family: monospace;";
+        c.textContent = `${k}: ${n}`;
+        chips.appendChild(c);
+      }
+      td.appendChild(chips);
+      tr.appendChild(td);
+      tbl.appendChild(tr);
+    }
+    p.appendChild(tbl);
+    return p;
+  }
+  // Real recording-meta.json: keep the raw JSON dump.
+  const pre = document.createElement("pre");
+  pre.className = "snapshot";
+  pre.textContent = JSON.stringify(meta, null, 2);
+  p.appendChild(pre);
   return p;
 }
 
@@ -318,7 +383,13 @@ function renderPlayback(s) {
     }
     const body = await resp.json();
     totalMs = body.total_ms || 0;
-    iframe.src = body.dashboard_url;
+    // Append a cache-buster so re-clicking Play actually reloads the
+    // dashboard inside the iframe (setting iframe.src to the same URL is
+    // a no-op in browsers — the WebSocket inside stays open with stale
+    // state). The query param is harmless to the dashboard's relative
+    // fetches.
+    const url = body.dashboard_url;
+    iframe.src = url + (url.includes("?") ? "&" : "?") + "pb=" + body.playback_id;
     iframeWrap.style.display = "block";
     iframeLabel.textContent = `${body.mode} — ${body.dashboard_url}` + (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "");
     btnPlay.disabled = true;
