@@ -12,6 +12,7 @@
     {
       "name": "baseline-hello",
       "description": "Smallest possible round-trip. Verifies session detection and a clean ready→working→ready cycle.",
+      "coverage_id": "basic-turn",
       "requires": ["headless_mode"],
       "verify": {
         "transitions_topology": ["ready", "working", "ready"],
@@ -45,6 +46,7 @@
     {
       "name": "full-lifecycle-toolcall",
       "description": "Tool use triggers a working↔waiting cycle via the PostToolUse hook. Mirrors the shape of the committed 10-full-lifecycle-* fixture. The session ends in waiting (not ready) because the hook keeps the session permission-pending after the tool completes; that's the behavior we want to lock down.",
+      "coverage_id": "auto-executed-tool-call",
       "requires": ["headless_mode", "tool_calls"],
       "verify": {
         "contains_tool_call": true,
@@ -77,6 +79,7 @@
     {
       "name": "agent-question-pending",
       "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a).",
+      "coverage_id": "user-blocking-question",
       "requires": ["headless_mode"],
       "verify": {
         "has_waiting_state": true,
@@ -109,6 +112,7 @@
     {
       "name": "multi-turn-conversation",
       "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation.",
+      "coverage_id": "basic-turn",
       "requires": ["headless_mode"],
       "verify": {
         "min_turns": 3,
@@ -181,6 +185,7 @@
     {
       "name": "interrupted-turn",
       "description": "User interrupts the agent mid-turn (interrupt key sent before the LLM round completes — Ctrl-C for aider, Escape for claudecode/codex/pi). The interrupted turn never produces a turn-done marker, so each adapter's parser must reset cleanly on the next user prompt.",
+      "coverage_id": "user-esc-interrupt",
       "requires": ["headless_mode"],
       "verify": {
         "contains_interrupt": true,
@@ -241,6 +246,7 @@
     {
       "name": "model-switch",
       "description": "User invokes /model mid-session to swap the LLM. Validates that the parser's per-turn Contribution.Model follows the latest `> Model:` line in the transcript. Aider-only — claude/codex/pi don't expose runtime model switching this way.",
+      "coverage_id": "model-switch-midsession",
       "requires": ["headless_mode", "multi_model_orchestration"],
       "verify": {
         "model_changed": true,
@@ -265,6 +271,7 @@
     {
       "name": "permission-hook-denial",
       "description": "A failing Bash invocation fires the PostToolUseFailure hook, which drives a working→waiting→working→ready transition arc. Mirrors the committed 15-permission-hooks-* fixture. Uses a runtime failure (cat on a nonexistent file), not settings-based denial — settings-based deny just removes the tool from claude's toolset and no hook fires at all.",
+      "coverage_id": "tool-gate-permission-prompt",
       "requires": ["headless_mode", "tool_calls", "permission_hooks"],
       "verify": {
         "contains_hook": "PostToolUseFailure",
@@ -283,6 +290,7 @@
     {
       "name": "subagent-spawn",
       "description": "Parent emits multiple Agent tool calls; daemon links each child via parent_linked. Verifies subagent transcripts land under <parent>/subagents/ and the curator bundles them into <fixture>.subagents/. Mirrors the shape of the committed 13-full-lifecycle-continue-* fixture but reproducible.",
+      "coverage_id": "foreground-subagent",
       "requires": ["headless_mode", "subagents"],
       "verify": {
         "contains_tool_call": "Agent",

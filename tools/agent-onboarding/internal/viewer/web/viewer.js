@@ -10,18 +10,27 @@ const SPEED_PRESETS = [1, 2, 5, 10, 20, 25, 100];
 let scenariosList = [];   // live recordings from /api/scenarios
 let catalog = null;       // /api/catalog payload (coverage or scenarios)
 let catalogSource = "";   // "coverage" | "scenarios" — drives the matrix shape
+let recipes = null;       // /api/recipes payload — scenarios.json verbatim
+let recipesByCoverageId = new Map(); // coverage_id → recipe entry
 
 (async function init() {
-  const [scenarios, catResp] = await Promise.all([
+  const [scenarios, catResp, recipesResp] = await Promise.all([
     fetch("/api/scenarios").then(r => r.json()),
     fetch("/api/catalog").then(async r => {
       if (!r.ok) return {body: null, source: ""};
       return {body: await r.json(), source: r.headers.get("X-Catalog-Source") || ""};
     }).catch(() => ({body: null, source: ""})),
+    fetch("/api/recipes").then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   scenariosList = scenarios || [];
   catalog = catResp.body;
   catalogSource = catResp.source;
+  recipes = recipesResp;
+  if (recipes && Array.isArray(recipes.scenarios)) {
+    for (const r of recipes.scenarios) {
+      if (r.coverage_id) recipesByCoverageId.set(r.coverage_id, r);
+    }
+  }
   const sidebar = document.getElementById("scenarios");
   sidebar.innerHTML = "";
 
@@ -181,8 +190,13 @@ function renderCoverageMatrix(detail) {
     }
     const row = document.createElement("tr");
     const nameCell = document.createElement("td");
-    nameCell.style.fontWeight = "600";
-    nameCell.innerHTML = `${sc.id}<br><span style="font-weight: normal; color: #666; font-size: 11px;">${sc.feature || ""}</span>`;
+    nameCell.style.cssText = "cursor: pointer;";
+    const nameLink = document.createElement("button");
+    nameLink.style.cssText = "background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit;";
+    nameLink.innerHTML = `<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span><br>` +
+      `<span style="font-weight: normal; color: #666; font-size: 11px;">${sc.feature || ""}</span>`;
+    nameLink.addEventListener("click", () => loadCoverageDetail(sc.id));
+    nameCell.appendChild(nameLink);
     row.appendChild(nameCell);
     for (const agent of agents) {
       const cov = sc.coverage && sc.coverage[agent];
@@ -260,6 +274,197 @@ function renderCoverageMatrix(detail) {
     <span><span style="background:#e5e5e5;color:#555;padding:1px 6px;border-radius:8px;">?</span> unknown</span>
   `;
   panel.appendChild(legend);
+}
+
+// loadCoverageDetail shows the per-agent testing plan for one
+// scenario from the coverage catalog. Combines:
+//   - Coverage data (.specs/agent-scenarios-coverage.json) — verdicts
+//     and maintainer notes per agent.
+//   - Recording recipe (scenarios.json) — joined by coverage_id —
+//     showing the actual driver (interactive tmux vs headless print),
+//     step-script or prompt, settings, and which committed recordings
+//     exist for each agent.
+function loadCoverageDetail(scenarioId) {
+  if (!catalog || !Array.isArray(catalog.scenarios)) return;
+  const sc = catalog.scenarios.find(s => s.id === scenarioId);
+  if (!sc) return;
+
+  document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
+  document.getElementById("title").textContent = sc.feature || sc.id;
+  document.getElementById("breadcrumb").textContent = `${sc.section || ""} → ${sc.id}`;
+  const detail = document.getElementById("detail");
+  detail.innerHTML = "";
+
+  // Back-to-matrix link
+  const back = document.createElement("button");
+  back.textContent = "← Back to overview";
+  back.style.cssText = "background: transparent; border: 0; color: #1f56a8; padding: 0 0 10px; cursor: pointer; font-size: 12px;";
+  back.addEventListener("click", () => {
+    const overviewBtn = document.querySelector(".overview-btn");
+    loadOverview(overviewBtn);
+  });
+  detail.appendChild(back);
+
+  // Header — what the scenario is + identifiers
+  const header = document.createElement("div");
+  header.className = "panel";
+  header.innerHTML = `
+    <h3 style="margin-top:0;">${sc.feature || sc.id}</h3>
+    <div style="font-size: 11px; color: #888; margin-bottom: 6px;">
+      <code>${sc.id}</code> · ${sc.section || ""}
+    </div>
+  `;
+  detail.appendChild(header);
+
+  // Recipe lookup by coverage_id
+  const recipe = recipesByCoverageId.get(sc.id);
+  if (recipe) {
+    const recipePanel = document.createElement("div");
+    recipePanel.className = "panel";
+    let recHTML = `<h3>Recording recipe — <code>${recipe.name}</code></h3>`;
+    if (recipe.description) {
+      recHTML += `<p style="font-size: 12px; color: #444; margin: 0 0 8px;">${recipe.description}</p>`;
+    }
+    if (Array.isArray(recipe.requires) && recipe.requires.length) {
+      recHTML += `<div style="font-size: 11px; color: #888;">requires: <code>${recipe.requires.join(", ")}</code></div>`;
+    }
+    if (recipe.verify && Object.keys(recipe.verify).length) {
+      recHTML += `<div style="font-size: 11px; color: #888;">verify: <code>${escapeHtml(JSON.stringify(recipe.verify))}</code></div>`;
+    }
+    recipePanel.innerHTML = recHTML;
+    detail.appendChild(recipePanel);
+  } else {
+    const stub = document.createElement("div");
+    stub.className = "panel";
+    stub.innerHTML = `
+      <h3>Recording recipe</h3>
+      <p style="font-size: 12px; color: #888; margin: 0;">
+        No recording recipe configured yet for this coverage scenario.
+        To add one, edit <code>.claude/skills/ir:onboard-agent/scenarios.json</code>
+        and set <code>coverage_id: "${sc.id}"</code> on a new or existing
+        entry under <code>scenarios[]</code>.
+      </p>
+    `;
+    detail.appendChild(stub);
+  }
+
+  // Per-agent plan panels
+  const agents = (catalog.agents || []).map(a => typeof a === "string" ? a : a.id);
+  for (const agent of agents) {
+    detail.appendChild(buildAgentPlanPanel(sc, agent, recipe));
+  }
+}
+
+// buildAgentPlanPanel composes one card per agent showing how this
+// scenario is (or would be) recorded for that agent: coverage verdict,
+// notes, driver choice, step-script or prompt, and any existing
+// recording.
+function buildAgentPlanPanel(sc, agent, recipe) {
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.style.marginBottom = "12px";
+
+  const cov = sc.coverage && sc.coverage[agent];
+  const sup = cov && cov.agent_supports || "unknown";
+  const obs = cov && cov.irrlicht_observes || "unknown";
+  const {label, bg, fg} = coverageBadge(sup, obs);
+
+  const headerHTML = `
+    <h3 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
+      ${agent}
+      <span style="background: ${bg}; color: ${fg}; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">${label}</span>
+    </h3>
+    <div style="font-size: 11px; color: #555; margin-bottom: 6px;">
+      agent_supports: <b>${sup}</b> · irrlicht_observes: <b>${obs}</b>
+    </div>
+  `;
+  let html = headerHTML;
+  if (cov && cov.notes) {
+    html += `<div style="font-size: 12px; color: #444; padding: 6px 8px; background: #fafaf2; border-left: 3px solid #d8d6cc; margin-bottom: 8px;">${escapeHtml(cov.notes)}</div>`;
+  }
+
+  // Recipe section per agent. Two shapes in scenarios.json:
+  //   - by_adapter.<agent>.prompt → headless driver (drive-<adapter>.sh)
+  //   - by_adapter.<agent>.script → interactive tmux driver (drive-<adapter>-interactive.sh)
+  if (recipe && recipe.by_adapter && recipe.by_adapter[agent]) {
+    const a = recipe.by_adapter[agent];
+    if (Array.isArray(a.script)) {
+      html += `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
+        <b>Driver:</b> Interactive (tmux REPL) — <code>drive-${agent}-interactive.sh</code>
+      </div>`;
+      html += renderStepScript(a.script);
+    } else if (a.prompt) {
+      html += `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
+        <b>Driver:</b> Headless (<code>--print</code>) — <code>drive-${agent}.sh</code>
+      </div>`;
+      html += `<pre style="background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; margin: 0;">${escapeHtml(a.prompt)}</pre>`;
+    } else {
+      html += `<div style="font-size: 12px; color: #888;">Recipe entry exists but has no prompt or script.</div>`;
+    }
+    const timeout = a.timeout_seconds;
+    const settings = a.settings || {};
+    const meta = [];
+    if (typeof timeout === "number") meta.push(`timeout: ${timeout}s`);
+    if (Object.keys(settings).length) meta.push(`settings: <code>${escapeHtml(JSON.stringify(settings))}</code>`);
+    if (meta.length) {
+      html += `<div style="font-size: 11px; color: #888; margin-top: 6px;">${meta.join(" · ")}</div>`;
+    }
+  } else if (recipe) {
+    html += `<div style="font-size: 12px; color: #888; padding: 6px 0;">
+      No <code>by_adapter.${agent}</code> entry on the recipe — adapter doesn't
+      currently drive this scenario. Either the capability is missing, or the
+      recipe just hasn't been written yet.
+    </div>`;
+  } else {
+    html += `<div style="font-size: 12px; color: #888; padding: 6px 0;">
+      No recording recipe wired to this scenario (no <code>coverage_id: "${sc.id}"</code>
+      in scenarios.json yet).
+    </div>`;
+  }
+
+  // Existing recording link if one is committed
+  const rec = scenariosList.find(r => r.subtree === "scenarios" && r.agent === agent && recipe && r.id === recipe.name);
+  if (rec) {
+    html += `<div style="margin-top: 8px;">`;
+    html += `<button class="open-rec" data-agent="${agent}" data-id="${rec.id}" style="background: #1f56a8; color: white; border: 0; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 11px;">↻ Open recording: ${agent}/${rec.id}</button>`;
+    html += `</div>`;
+  }
+
+  panel.innerHTML = html;
+  // Wire button after innerHTML (can't pass closure through innerHTML)
+  panel.querySelectorAll(".open-rec").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const sidebar = document.getElementById("scenarios");
+      for (const el of sidebar.querySelectorAll(".scn")) {
+        if (el.textContent === btn.dataset.id) { el.click(); el.scrollIntoView({block: "nearest"}); return; }
+      }
+      if (rec) loadScenario(rec, null);
+    });
+  });
+  return panel;
+}
+
+function renderStepScript(steps) {
+  let html = `<ol style="font-size: 12px; padding-left: 22px; margin: 4px 0; color: #333;">`;
+  for (const step of steps) {
+    if (step.type === "send" || step.type === "slash") {
+      html += `<li><b>${step.type === "slash" ? "Slash command" : "Send prompt"}:</b> <code style="background:#f5f4ee;padding:1px 4px;border-radius:2px;">${escapeHtml(step.text || "")}</code></li>`;
+    } else if (step.type === "wait_turn") {
+      html += `<li><b>Wait for turn</b> — block until the agent finishes the current LLM round</li>`;
+    } else if (step.type === "sleep") {
+      html += `<li><b>Sleep ${step.seconds}s</b> — let the state classifier settle / next turn settle</li>`;
+    } else if (step.type === "interrupt") {
+      html += `<li><b>Interrupt</b> — send Escape (claudecode/codex/pi) or Ctrl-C (aider) mid-turn</li>`;
+    } else {
+      html += `<li><code>${escapeHtml(JSON.stringify(step))}</code></li>`;
+    }
+  }
+  html += `</ol>`;
+  return html;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[c]);
 }
 
 function coverageBadge(sup, obs) {

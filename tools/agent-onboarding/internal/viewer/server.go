@@ -66,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/scenarios/", s.handleScenarioDetail) // path with trailing parts
 	mux.HandleFunc("/api/scenarios", s.handleScenariosList)
 	mux.HandleFunc("/api/catalog", s.handleCatalog)
+	mux.HandleFunc("/api/recipes", s.handleRecipes)
 	s.playback.registerPlaybackRoutes(mux)
 	mux.Handle("/", s.staticHandler())
 	return mux
@@ -121,6 +122,23 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Catalog-Source", "scenarios")
+	w.Write(b)
+}
+
+// handleRecipes serves the run-cell.sh scenario recipe catalog
+// (.claude/skills/ir:onboard-agent/scenarios.json) verbatim. This is
+// always the worktree's copy — recipes are version-controlled. Used
+// alongside /api/catalog: the catalog is the maintainer's "what could
+// be tested" matrix, recipes is the "how it's actually driven" recipe
+// book joined by each entry's `coverage_id` field.
+func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.RepoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read scenarios.json: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Write(b)
 }
 
