@@ -28,23 +28,17 @@ type Playback struct {
 	Agent    string
 	Subtree  string // "scenarios" | "regression"
 	Scenario string
-	Mode     string // "viewer-internal" | "isolated-daemon"
+	Mode     string // "viewer-internal" — kept as a field for future modes
 	Speed    float64
 
 	StartedAt time.Time
 
-	// Viewer-internal mode plumbing.
 	broadcaster outbound.PushBroadcaster
 	machine     *replay.StateMachine
 	cancel      context.CancelFunc
 
-	// DashboardURL is what the frontend opens in an iframe. For
-	// viewer-internal mode it's `/dashboard`; for isolated-daemon it's
-	// `http://127.0.0.1:<port>/`.
+	// DashboardURL is what the frontend opens in an iframe.
 	DashboardURL string
-
-	// Isolated-daemon mode plumbing (populated by daemon_launcher).
-	DaemonPort int
 
 	// Paused tracks the UI-perceived state; the state machine handles
 	// the actual pause via its command channel.
@@ -299,32 +293,24 @@ func (m *PlaybackManager) handleStart(w http.ResponseWriter, r *http.Request) {
 		req.Mode = "viewer-internal"
 	}
 
-	switch req.Mode {
-	case "viewer-internal":
-		pb, err := m.StartViewerInternal(req.Agent, req.Subtree, req.Scenario, req.Speed)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, startResp{
-			PlaybackID: pb.ID, DashboardURL: pb.DashboardURL, Mode: pb.Mode,
-			TotalMs: pb.machine.TotalDurationMs(),
-			Events:  pb.machine.EventMarkers(),
-		})
-
-	case "isolated-daemon":
-		pb, err := m.StartIsolatedDaemon(req.Agent, req.Subtree, req.Scenario, req.Speed)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, startResp{
-			PlaybackID: pb.ID, DashboardURL: pb.DashboardURL, Mode: pb.Mode,
-		})
-
-	default:
-		http.Error(w, "mode must be 'viewer-internal' or 'isolated-daemon'", http.StatusBadRequest)
+	// Mode is currently a single-value field reserved for future
+	// extension (e.g. a real isolated-daemon mode someday). Anything
+	// other than empty / "viewer-internal" is rejected so a caller
+	// doesn't silently get a different behavior than they expected.
+	if req.Mode != "" && req.Mode != "viewer-internal" {
+		http.Error(w, "unsupported mode: "+req.Mode, http.StatusBadRequest)
+		return
 	}
+	pb, err := m.StartViewerInternal(req.Agent, req.Subtree, req.Scenario, req.Speed)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, startResp{
+		PlaybackID: pb.ID, DashboardURL: pb.DashboardURL, Mode: pb.Mode,
+		TotalMs: pb.machine.TotalDurationMs(),
+		Events:  pb.machine.EventMarkers(),
+	})
 }
 
 func (m *PlaybackManager) handlePause(w http.ResponseWriter, r *http.Request) {
@@ -391,10 +377,7 @@ func (m *PlaybackManager) handleStatus(w http.ResponseWriter, r *http.Request) {
 		resp["cursor_offset_ms"] = pb.machine.CursorOffsetMs()
 		resp["total_ms"] = pb.machine.TotalDurationMs()
 	}
-	if pb.DaemonPort > 0 {
-		resp["daemon_port"] = pb.DaemonPort
-		resp["dashboard_url"] = pb.DashboardURL
-	}
+	resp["dashboard_url"] = pb.DashboardURL
 	writeJSON(w, resp)
 }
 

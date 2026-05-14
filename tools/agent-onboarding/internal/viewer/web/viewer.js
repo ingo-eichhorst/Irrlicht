@@ -296,17 +296,6 @@ function renderValidate(data) {
 function renderPlayback(s) {
   const p = panel("Playback");
 
-  // Mode toggle.
-  const modeWrap = document.createElement("div");
-  modeWrap.className = "controls";
-  modeWrap.style.marginBottom = "8px";
-  modeWrap.innerHTML = `
-    <strong>Mode:</strong>
-    <label><input type="radio" name="mode" value="viewer-internal" checked> Viewer-internal (in this tab)</label>
-    <label><input type="radio" name="mode" value="isolated-daemon"> Isolated subprocess (separate port)</label>
-  `;
-  p.appendChild(modeWrap);
-
   // Play / Pause / Stop / Prev / Next / Speed.
   const ctl = document.createElement("div");
   ctl.className = "controls";
@@ -508,11 +497,10 @@ function renderPlayback(s) {
   let totalMs = 0;
 
   async function startPlayback() {
-    const mode = document.querySelector('input[name="mode"]:checked').value;
     const resp = await fetch("/api/replay/start", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({agent: s.agent, subtree: s.subtree, scenario: s.id, mode, speed: currentSpeed}),
+      body: JSON.stringify({agent: s.agent, subtree: s.subtree, scenario: s.id, speed: currentSpeed}),
     });
     if (!resp.ok) {
       alert(`start failed: ${resp.status} ${await resp.text()}`);
@@ -532,7 +520,8 @@ function renderPlayback(s) {
     const url = body.dashboard_url;
     iframe.src = url + (url.includes("?") ? "&" : "?") + "pb=" + body.playback_id;
     iframeWrap.style.display = "block";
-    iframeLabel.textContent = `${body.mode} — ${body.dashboard_url}` + (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "") +
+    iframeLabel.textContent = `${body.dashboard_url}` +
+      (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "") +
       (events.length ? ` — ${events.length} events` : "");
     btnPlay.disabled = true;
     btnPause.disabled = false;
@@ -612,6 +601,11 @@ function renderPlayback(s) {
   scrub.oninput = async () => {
     await fetch(`/api/replay/seek?offset_ms=${scrub.value}`, {method: "POST"});
   };
+
+  // Auto-start playback when the scenario opens. The user can still
+  // Stop and re-Play; they just don't have to click Play to see the
+  // dashboard for the first time.
+  startPlayback();
 
   return p;
 }
