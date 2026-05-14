@@ -77,8 +77,9 @@ typically owns the surface:
 
 | Diff touches… | Likely-affected docs |
 |---|---|
-| `core/adapters/inbound/agents/**` | `site/docs/adapters.html`, README compatibility grid |
-| `core/ports/**`, `core/domain/**` | `site/docs/architecture.html`, `site/docs/adapters.html` |
+| `core/adapters/inbound/agents/**` | `site/docs/adapters.html`, README compatibility grid, `AGENTS.md` "Adding a new agent adapter" section |
+| `core/ports/**`, `core/domain/**` | `site/docs/architecture.html`, `site/docs/adapters.html`, `AGENTS.md` if the adapter contract shape changes |
+| `core/cmd/irrlichd/main.go` slice/wiring rename (e.g. `agentCfgs` → `allAgents`) | `site/docs/api-reference.html` (the `GET /api/v1/agents` blurb references the slice name), `site/docs/contributing.html` adapter-PR checklist, `AGENTS.md` |
 | `core/cmd/irrlichd/handlers.go` (HTTP routes / payloads) | `site/docs/api-reference.html` |
 | `core/cmd/irrlicht-ls`, `core/cmd/irrlicht-focus` | `site/docs/cli-tools.html` |
 | `core/application/services/**`, `core/domain/session/**` | `site/docs/state-machine.html`, `site/docs/session-detection.html` |
@@ -209,9 +210,15 @@ ditto -c -k --sequesterRsrc --keepParent /tmp/Irrlicht.app /tmp/Irrlicht-$NEW_VE
 ```
 
 ### Checksums
+
+Include the daemon-only tarball alongside the zip — `site/install.sh`
+verifies it on the curl `--daemon-only` path. Omitting it ships a
+release where the standalone daemon installer fails the integrity check.
+
 ```bash
 cd /tmp && shasum -a 256 \
   irrlichd-darwin-universal \
+  irrlichd-darwin-universal.tar.gz \
   Irrlicht-$NEW_VERSION.dmg \
   Irrlicht-$NEW_VERSION-mac-installer.pkg \
   Irrlicht-$NEW_VERSION.zip \
@@ -281,8 +288,13 @@ gh pr create --title "chore: release v$NEW_VERSION" \
 gh pr view --json mergeable,mergeStateStatus \
   --jq '"mergeable=\(.mergeable) state=\(.mergeStateStatus)"'
 
-gh pr merge --squash --delete-branch
+gh pr merge --squash
 ```
+
+Do **not** pass `--delete-branch`. The release branch is intentionally
+kept after merge so the pre-squash commit and its CI history remain
+addressable (e.g. for forensic comparison against the squashed commit
+if a regression surfaces).
 
 ### 7c. Realign local `main` and tag the merged commit
 
