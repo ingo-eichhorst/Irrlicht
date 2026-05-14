@@ -31,6 +31,7 @@ import (
 	"irrlicht/tools/agent-onboarding/internal/preflight"
 	"irrlicht/tools/agent-onboarding/internal/sensors"
 	"irrlicht/tools/agent-onboarding/internal/synth"
+	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
 func main() {
@@ -41,6 +42,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  label     convert driver `gt:` sidecar into ground_truth.jsonl")
 		fmt.Fprintln(os.Stderr, "  synth     derive ruleset.json + driver_protocol.json from a recording")
 		fmt.Fprintln(os.Stderr, "  gen       generate adapter Go files + interactive driver from synth output")
+		fmt.Fprintln(os.Stderr, "  validate  compare emitted transitions to ground_truth.jsonl")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -52,6 +54,8 @@ func main() {
 		os.Exit(cmdSynth(os.Args[2:]))
 	case "gen":
 		os.Exit(cmdGen(os.Args[2:]))
+	case "validate":
+		os.Exit(cmdValidate(os.Args[2:]))
 	case "-h", "--help":
 		fmt.Fprintln(os.Stderr, "usage: agent-onboard <subcommand> [flags]")
 		os.Exit(0)
@@ -59,6 +63,57 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+func cmdValidate(args []string) int {
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	agent := fs.String("agent", "", "adapter slug — required")
+	scenario := fs.String("scenario", "", "scenario id — required")
+	eventsPath := fs.String("events", "", "path to events.jsonl — required")
+	gtPath := fs.String("ground-truth", "", "path to ground_truth.jsonl — required")
+	agentVersion := fs.String("agent-version", "", "recorded into result for staleness")
+	adapterVersion := fs.String("adapter-version", "", "recorded into result for staleness")
+	outDir := fs.String("out", ".build/agent-onboarding/validate", "directory for the per-scenario verdict JSON")
+	coverage := fs.String("coverage", "", "optional path to .specs/agent-scenarios-coverage.json for writeback")
+	coverageID := fs.String("coverage-id", "", "canonical scenario id in coverage.json (required with --coverage)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *agent == "" || *scenario == "" || *eventsPath == "" || *gtPath == "" {
+		fmt.Fprintln(os.Stderr, "error: --agent, --scenario, --events, --ground-truth are required")
+		fs.Usage()
+		return 2
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result, err := validate.Run(ctx, validate.Input{
+		Agent: *agent, Scenario: *scenario,
+		EventsPath: *eventsPath, GroundTruth: *gtPath,
+		AgentVersion: *agentVersion, AdapterVersion: *adapterVersion,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	path, _ := validate.WriteResultJSON(*outDir, result)
+	fmt.Fprintf(os.Stderr, "result: %s (wrote %s)\n", result.Result(), path)
+	if *coverage != "" && *coverageID != "" {
+		err := validate.WriteCoverage(*coverage, *coverageID, *agent, validate.CoverageCell{
+			LastTested:     time.Now().UTC(),
+			AgentVersion:   *agentVersion,
+			AdapterVersion: *adapterVersion,
+			Result:         result.Result(),
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "coverage writeback:", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "coverage writeback OK")
+	}
+	if !result.Pass {
+		return 1
+	}
+	return 0
 }
 
 func cmdGen(args []string) int {
