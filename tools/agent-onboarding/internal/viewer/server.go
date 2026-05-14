@@ -40,13 +40,31 @@ var webFS embed.FS
 // Server is the viewer HTTP server.
 type Server struct {
 	RepoRoot string // path containing replaydata/
+
+	// playback manages the single active replay session. Lazily created
+	// on Handler() so callers can construct a Server with just RepoRoot
+	// (matching the pre-playback API).
+	playback *PlaybackManager
+}
+
+// PlaybackManager returns the server's playback manager, initialising it
+// if necessary. Used by main.go to seed an auto-playback at boot.
+func (s *Server) PlaybackManager() *PlaybackManager {
+	if s.playback == nil {
+		s.playback = NewPlaybackManager(s.RepoRoot)
+	}
+	return s.playback
 }
 
 // Handler returns the http.Handler the CLI wires into ListenAndServe.
 func (s *Server) Handler() http.Handler {
+	if s.playback == nil {
+		s.playback = NewPlaybackManager(s.RepoRoot)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/scenarios/", s.handleScenarioDetail) // path with trailing parts
 	mux.HandleFunc("/api/scenarios", s.handleScenariosList)
+	s.playback.registerPlaybackRoutes(mux)
 	mux.Handle("/", s.staticHandler())
 	return mux
 }

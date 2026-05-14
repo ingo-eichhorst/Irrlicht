@@ -9,7 +9,12 @@
   #app { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: 100vh; }
   #sidebar { background: #f0efe9; border-right: 1px solid #d8d6cc; overflow-y: auto; padding: 8px; }
   #sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin: 8px 4px; }
-  .scn { cursor: pointer; padding: 4px 8px; border-radius: 3px; display: block; }
+  .scn {
+    cursor: pointer; padding: 4px 8px; border-radius: 3px;
+    display: block; width: 100%; text-align: left;
+    background: transparent; border: 0; color: inherit;
+    font: inherit; font-size: 13px;
+  }
   .scn:hover { background: #e0dfd5; }
   .scn.active { background: #d8d6cc; font-weight: 600; }
   .scn.has-gt::after { content: " ●"; color: #2a8d4f; }
