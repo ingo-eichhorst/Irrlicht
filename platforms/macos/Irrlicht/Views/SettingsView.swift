@@ -6,9 +6,9 @@ struct SettingsView: View {
     @Binding var isPresented: Bool
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
-    @AppStorage("notifyOnReady") private var notifyOnReady: Bool = true
-    @AppStorage("notifyOnWaiting") private var notifyOnWaiting: Bool = true
-    @AppStorage("notifyOnContextPressure") private var notifyOnContextPressure: Bool = true
+    @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = true
+    @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = true
+    @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = true
     @State private var notificationsDenied = false
     @State private var customImportError: String?
 
@@ -108,7 +108,7 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 360, height: 480)
+        .frame(width: 360, height: 520)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
     }
@@ -123,10 +123,10 @@ struct SettingsView: View {
             }
             // If user just toggled a notification setting and we've never asked,
             // show the "blocked" banner so the user knows to enable in System Settings.
-            if settings.authorizationStatus == .notDetermined,
-               (UserDefaults.standard.bool(forKey: "notifyOnReady") ||
-                UserDefaults.standard.bool(forKey: "notifyOnWaiting") ||
-                UserDefaults.standard.bool(forKey: "notifyOnContextPressure")) {
+            let anyEnabled = NotificationEvent.allCases.contains {
+                UserDefaults.standard.bool(forKey: $0.enabledKey)
+            }
+            if settings.authorizationStatus == .notDetermined, anyEnabled {
                 DispatchQueue.main.async {
                     center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
                         DispatchQueue.main.async {
@@ -159,7 +159,9 @@ private struct NotificationEventRow: View {
                     }
                     Divider()
                     Text("None").tag(SoundChoice.none)
-                    Text("Speak aloud").tag(SoundChoice.speak)
+                    ForEach(SoundChoice.speakChoices, id: \.self) { choice in
+                        Text(choice.displayName).tag(choice)
+                    }
                     if case .custom = selection {
                         Text(selection.displayName).tag(selection)
                     }
@@ -183,8 +185,38 @@ private struct NotificationEventRow: View {
                 .disabled(!enabled || selection == .none)
                 .tooltip("Preview")
             }
+
+            if case .speak(let voice) = selection,
+               voice != .default,
+               !voice.isInstalled {
+                Button {
+                    Self.openSpokenContentSettings()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle")
+                        Text("Install \(voice.displayName) in System Settings")
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.link)
+                .foregroundColor(.orange)
+                .tooltip("Open System Settings → Accessibility → Spoken Content")
+            }
         }
         .onAppear { loadFromDefaults() }
+    }
+
+    private static func openSpokenContentSettings() {
+        // macOS 14/15 expose Spoken Content as an anchor inside the
+        // Accessibility settings extension. Older macOS opens the general
+        // Accessibility pane (no Spoken Content anchor, but close enough).
+        let candidates = [
+            "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent",
+            "x-apple.systempreferences:com.apple.preference.universalaccess",
+        ]
+        for raw in candidates {
+            if let url = URL(string: raw), NSWorkspace.shared.open(url) { return }
+        }
     }
 
     private func loadFromDefaults() {
@@ -245,14 +277,11 @@ private struct LeadingToggle: View {
 /// switch ignores `.tint(_:)` — its on color is locked to the system accent.
 /// Drawing the pill ourselves makes the color independent of System Settings.
 private struct IrrlichtSwitchToggleStyle: ToggleStyle {
-    /// Same green that HistoryBarView uses for the "ready" state.
-    private static let onColor = Color(hex: "#34C759")
-
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 8) {
             ZStack(alignment: configuration.isOn ? .trailing : .leading) {
                 Capsule()
-                    .fill(configuration.isOn ? Self.onColor : Color.secondary.opacity(0.35))
+                    .fill(configuration.isOn ? AppPalette.ready : Color.secondary.opacity(0.35))
                 Circle()
                     .fill(Color.white)
                     .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)

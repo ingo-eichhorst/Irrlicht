@@ -4,11 +4,17 @@ import XCTest
 final class SoundChoiceTests: XCTestCase {
 
     func testBuiltInRoundTrip() {
-        for choice in SoundChoice.builtIns + [.none, .speak] {
+        for choice in SoundChoice.builtIns + [.none] + SoundChoice.speakChoices {
             let raw = choice.rawValue
             let decoded = SoundChoice(rawValue: raw)
             XCTAssertEqual(decoded, choice, "round-trip failed for \(choice)")
         }
+    }
+
+    func testBareSpeakDecodesToDefaultVoice() {
+        // Backwards-compat: the earlier single-voice encoding stored "speak".
+        // Existing users must keep working without losing their selection.
+        XCTAssertEqual(SoundChoice(rawValue: "speak"), .speak(.default))
     }
 
     func testCustomRoundTrip() {
@@ -41,7 +47,9 @@ final class SoundChoiceTests: XCTestCase {
 
     func testSpeakAndNoneHaveNoNotificationSoundName() {
         XCTAssertNil(SoundChoice.none.notificationSoundName)
-        XCTAssertNil(SoundChoice.speak.notificationSoundName)
+        for choice in SoundChoice.speakChoices {
+            XCTAssertNil(choice.notificationSoundName, "speak variant \(choice) must have no notification sound")
+        }
     }
 
     func testCustomNotificationSoundUsesInstalledFilename() {

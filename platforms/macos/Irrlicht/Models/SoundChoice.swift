@@ -5,7 +5,10 @@ import Foundation
 ///
 /// Raw-value grammar:
 ///   - built-in / mode tokens: `"ping"`, `"chime"`, `"funk"`, `"whoosh"`,
-///     `"sosumi"`, `"none"`, `"speak"`
+///     `"sosumi"`, `"none"`
+///   - speak: `"speak:default" | "speak:female" | "speak:male"`. Bare
+///     `"speak"` is accepted for backwards compatibility with the earlier
+///     single-voice design and decodes to `.speak(.default)`.
 ///   - custom file: `"custom:<installedFilename>|<displayPath>"`
 ///     `installedFilename` is the basename inside `~/Library/Sounds/`;
 ///     `displayPath` is the user-facing source path shown in the UI.
@@ -16,7 +19,7 @@ enum SoundChoice: Hashable {
     case whoosh
     case sosumi
     case none
-    case speak
+    case speak(SpokenVoice)
     case custom(installedFilename: String, displayPath: String)
 
     static let `default`: SoundChoice = .ping
@@ -31,7 +34,8 @@ enum SoundChoice: Hashable {
         case .whoosh: return "Whoosh"
         case .sosumi: return "Sosumi"
         case .none: return "None"
-        case .speak: return "Speak aloud"
+        case .speak(let voice):
+            return "Speak aloud (\(voice.displayName))"
         case .custom(_, let displayPath):
             return "Custom: \((displayPath as NSString).lastPathComponent)"
         }
@@ -64,6 +68,11 @@ enum SoundChoice: Hashable {
         }
     }
 
+    /// Convenience: speak-aloud variants ignore the embedded voice for picker
+    /// presentation purposes — listing them out by hand reads cleaner than
+    /// open-coding `[.speak(.default), .speak(.female), .speak(.male)]`.
+    static let speakChoices: [SoundChoice] = [.speak(.default), .speak(.female), .speak(.male)]
+
     /// File URL used for in-app preview playback via `NSSound(contentsOf:)`.
     var previewURL: URL? {
         switch self {
@@ -88,7 +97,13 @@ extension SoundChoice: RawRepresentable {
         case "whoosh": self = .whoosh
         case "sosumi": self = .sosumi
         case "none": self = .none
-        case "speak": self = .speak
+        // Bare "speak" was the previous (single-voice) encoding — keep it
+        // decoding so users with the old preference don't lose speech.
+        case "speak": self = .speak(.default)
+        case let s where s.hasPrefix("speak:"):
+            let voiceRaw = String(s.dropFirst("speak:".count))
+            guard let voice = SpokenVoice(rawValue: voiceRaw) else { return nil }
+            self = .speak(voice)
         default:
             guard rawValue.hasPrefix("custom:") else { return nil }
             let payload = String(rawValue.dropFirst("custom:".count))
@@ -109,7 +124,7 @@ extension SoundChoice: RawRepresentable {
         case .whoosh: return "whoosh"
         case .sosumi: return "sosumi"
         case .none: return "none"
-        case .speak: return "speak"
+        case .speak(let voice): return "speak:\(voice.rawValue)"
         case .custom(let installed, let display):
             return "custom:\(installed)|\(display)"
         }

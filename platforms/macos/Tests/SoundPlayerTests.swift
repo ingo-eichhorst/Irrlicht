@@ -25,8 +25,31 @@ final class SoundPlayerTests: XCTestCase {
         defaults.set(SoundChoice.none.rawValue, forKey: event.soundKey)
         XCTAssertNil(SessionManager.resolveNotificationSound(for: event))
 
-        defaults.set(SoundChoice.speak.rawValue, forKey: event.soundKey)
+        defaults.set(SoundChoice.speak(.default).rawValue, forKey: event.soundKey)
         XCTAssertNil(SessionManager.resolveNotificationSound(for: event))
+    }
+
+    // MARK: - SpokenVoice / voice(for:)
+
+    func testSpokenVoiceRawValueRoundTrip() {
+        for v in SpokenVoice.allCases {
+            XCTAssertEqual(SpokenVoice(rawValue: v.rawValue), v)
+        }
+    }
+
+    func testVoiceForEachSpokenVoiceIsNonNil() {
+        // Every variant must resolve to a usable voice: when the canonical
+        // name (Ava / Tom) is installed we get the best-quality variant of
+        // it; when it isn't, we fall back to AVSpeechSynthesisVoice(
+        // language: "en-US") which is always present.
+        for v in SpokenVoice.allCases {
+            XCTAssertNotNil(SoundPlayer.voice(for: v), "voice missing for \(v)")
+        }
+    }
+
+    func testSpokenVoiceIsInstalledForDefaultAlwaysTrue() {
+        XCTAssertTrue(SpokenVoice.default.isInstalled,
+            ".default has no canonical name and must always report installed")
     }
 
     func testResolveMissingCustomFallsBackToPing() {

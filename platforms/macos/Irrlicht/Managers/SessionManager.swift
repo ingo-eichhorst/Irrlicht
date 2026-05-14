@@ -1016,17 +1016,12 @@ class SessionManager: ObservableObject {
         event: NotificationEvent
     ) {
         guard canUseUserNotifications else { return }
+        let choice = Self.choice(for: event)
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = Self.resolveNotificationSound(for: event)
-        // Round-trip the session ID so the click-forwarder can look up
-        // the session and jump back to its launching terminal/IDE.
-        var userInfo: [AnyHashable: Any] = [NotificationUserInfoKey.sessionID: sessionID]
-        if Self.choice(for: event) == .speak {
-            userInfo[NotificationUserInfoKey.speakText] = "\(title). \(body)"
-        }
-        content.userInfo = userInfo
+        content.sound = Self.notificationSound(for: choice)
+        content.userInfo = [NotificationUserInfoKey.sessionID: sessionID]
 
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
@@ -1034,14 +1029,21 @@ class SessionManager: ObservableObject {
                 print("⚠️ Failed to send notification: \(error.localizedDescription)")
             }
         }
+
+        // willPresent is unreliable for LSUIElement menubar-only apps — macOS
+        // skips it when it considers the app not-in-foreground, and Irrlicht
+        // sits in that grey zone. Drive speech from here (on @MainActor) so
+        // it actually fires for real state transitions. The per-event toggle
+        // is the off switch; users who pick a Speak aloud variant have opted in.
+        if case .speak(let voice) = choice {
+            SoundPlayer.speak(title: title, body: body, voice: voice)
+        }
     }
 
-    /// Reads the user's per-event sound choice, then turns it into a
-    /// `UNNotificationSound`. `.none` and `.speak` return `nil` (no audible
-    /// alert from the notification center). A `.custom` choice whose
-    /// installed file went missing falls back to the default Ping.
-    nonisolated static func resolveNotificationSound(for event: NotificationEvent) -> UNNotificationSound? {
-        let choice = choice(for: event)
+    /// Pure: turn a SoundChoice into a UNNotificationSound. `.none` / `.speak`
+    /// → nil (no audible alert from the notification center). A `.custom`
+    /// choice whose installed file went missing falls back to Ping.
+    nonisolated static func notificationSound(for choice: SoundChoice) -> UNNotificationSound? {
         switch choice {
         case .none, .speak:
             return nil
@@ -1058,6 +1060,13 @@ class SessionManager: ObservableObject {
             guard let name = choice.notificationSoundName else { return .default }
             return UNNotificationSound(named: UNNotificationSoundName(name))
         }
+    }
+
+    /// Convenience for tests + callers that want the event → sound lookup in
+    /// a single hop. Production path uses `choice(for:)` + `notificationSound(for:)`
+    /// directly to avoid double-reading UserDefaults.
+    nonisolated static func resolveNotificationSound(for event: NotificationEvent) -> UNNotificationSound? {
+        notificationSound(for: choice(for: event))
     }
 
     nonisolated static func choice(for event: NotificationEvent) -> SoundChoice {
@@ -1414,11 +1423,6 @@ private struct SessionOrderData: Codable {
 /// can identify the originating session.
 enum NotificationUserInfoKey {
     static let sessionID = "sessionID"
-    /// Present when the user picked "Speak aloud" for this event. The
-    /// willPresent delegate reads it and hands the text to
-    /// `SoundPlayer.speak` — keeps speech tied to actual banner presentation
-    /// rather than to enqueue, so a suppressed notification doesn't speak.
-    static let speakText = "speakText"
 }
 
 /// NSObject-based forwarder that receives `UNUserNotificationCenterDelegate`
@@ -1452,12 +1456,6 @@ final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelega
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Only speak when the banner is actually about to be shown. Tying
-        // speech to enqueue would speak even when macOS suppresses the
-        // notification (DND, dedupe, focus mode).
-        if let speakText = notification.request.content.userInfo[NotificationUserInfoKey.speakText] as? String {
-            SoundPlayer.speak(speakText)
-        }
         completionHandler([.banner, .sound])
     }
 }

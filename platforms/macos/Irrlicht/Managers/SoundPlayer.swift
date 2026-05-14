@@ -34,24 +34,53 @@ enum SoundPlayer {
         switch choice {
         case .none:
             return
-        case .speak:
-            speak(sampleText)
+        case .speak(let voice):
+            speak(sampleText, voice: voice)
         default:
             guard let url = choice.previewURL else { return }
             NSSound(contentsOf: url, byReference: true)?.play()
         }
     }
 
-    /// Synthesizes speech. Holds onto a long-lived synthesizer so utterances
-    /// aren't cut off when the local goes out of scope.
-    static func speak(_ text: String) {
+    /// Synthesizes a single utterance with the given voice. Long-lived
+    /// synthesizer keeps utterances from being cut short when the local
+    /// reference goes out of scope.
+    static func speak(_ text: String, voice spoken: SpokenVoice = .default) {
         let utterance = AVSpeechUtterance(string: text)
-        // Notification titles/bodies are produced in English elsewhere in
-        // the app, so pin the voice to en-US regardless of the system speech
-        // locale. If the voice catalogue lacks en-US, AVSpeechSynthesisVoice
-        // returns nil and the synthesizer falls back to its default voice.
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.voice = voice(for: spoken)
         synthesizer.speak(utterance)
+    }
+
+    /// Speaks `title`, then `body`, with a short pause between. The pause
+    /// gives the listener a beat to register what's about to be detailed —
+    /// "Agent ready" then "<project> (<branch>)" lands better than running
+    /// them together as one sentence.
+    static func speak(title: String, body: String, voice spoken: SpokenVoice = .default) {
+        let v = voice(for: spoken)
+        let titleUtterance = AVSpeechUtterance(string: title)
+        titleUtterance.voice = v
+        let bodyUtterance = AVSpeechUtterance(string: body)
+        bodyUtterance.voice = v
+        bodyUtterance.preUtteranceDelay = 0.4
+        synthesizer.speak(titleUtterance)
+        synthesizer.speak(bodyUtterance)
+    }
+
+    /// Resolves a SpokenVoice to a concrete AVSpeechSynthesisVoice. Picks
+    /// the highest-installed quality (premium > enhanced > default) for the
+    /// canonical name, so once the user downloads Ava-Premium / Tom-Premium
+    /// in System Settings the upgrade is automatic. Falls back to the
+    /// system en-US voice when no name match exists at all.
+    static func voice(for spoken: SpokenVoice) -> AVSpeechSynthesisVoice? {
+        guard let name = spoken.canonicalName else {
+            return AVSpeechSynthesisVoice(language: "en-US")
+        }
+        if let best = AVSpeechSynthesisVoice.speechVoices()
+            .filter({ $0.name == name })
+            .max(by: { $0.quality.rawValue < $1.quality.rawValue }) {
+            return best
+        }
+        return AVSpeechSynthesisVoice(language: "en-US")
     }
 
     /// Copies (or transcodes) `srcURL` into `~/Library/Sounds/` under the
@@ -96,9 +125,7 @@ enum SoundPlayer {
             let destURL = destDir.appendingPathComponent(destName)
             do {
                 try removeStaleVariants(for: event, in: destDir, keeping: destName)
-                if FileManager.default.fileExists(atPath: destURL.path) {
-                    try FileManager.default.removeItem(at: destURL)
-                }
+                try? FileManager.default.removeItem(at: destURL)
                 try FileManager.default.copyItem(at: srcURL, to: destURL)
                 main(.success(destName))
             } catch {
@@ -110,13 +137,11 @@ enum SoundPlayer {
         // mp3 / m4a → transcode to LPCM-in-CAF. UNNotificationSound only plays
         // PCM/MA4/µLaw/aLaw packaged in aiff/wav/caf — it will refuse AAC, so
         // we must decode to PCM rather than passthrough the source codec.
-        let destName = event.customFilename // "IrrlichtCustom-<event>.caf"
+        let destName = transcodeFilename(for: event)
         let destURL = destDir.appendingPathComponent(destName)
         do {
             try removeStaleVariants(for: event, in: destDir, keeping: destName)
-            if FileManager.default.fileExists(atPath: destURL.path) {
-                try FileManager.default.removeItem(at: destURL)
-            }
+            try? FileManager.default.removeItem(at: destURL)
         } catch {
             main(.failure(InstallError.writeFailed(error.localizedDescription)))
             return
@@ -133,27 +158,27 @@ enum SoundPlayer {
     }
 
     /// Decodes `src` (any AVFoundation-readable audio format — mp3, m4a, etc.)
-    /// and writes 16-bit LPCM into a `.caf` container at `dest`, which is the
-    /// format UNNotificationSound supports. Streams in 4096-frame chunks so a
-    /// 10 MB mp3 doesn't allocate its full PCM expansion in memory.
+    /// and writes LPCM into a `.caf` container at `dest`. CAF + LPCM is
+    /// the combination UNNotificationSound plays reliably.
+    ///
+    /// The output mirrors the source's *processing format* (typically
+    /// 32-bit float PCM) rather than forcing a fixed Int16/interleaved
+    /// layout — forcing one combination produced
+    /// `com.apple.coreaudio.avfaudio -50` (paramErr) for mp3s whose
+    /// decoded frame layout didn't match. Float32 PCM is still LPCM and
+    /// UNNotificationSound accepts it.
+    ///
+    /// Streams in 4096-frame chunks so a 10 MB mp3 doesn't allocate its
+    /// full PCM expansion in memory.
     private static func transcodeToLPCMCAF(src: URL, dest: URL) throws {
         let sourceFile = try AVAudioFile(forReading: src)
         let processingFormat = sourceFile.processingFormat
 
-        let outputSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: processingFormat.sampleRate,
-            AVNumberOfChannelsKey: processingFormat.channelCount,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-        ]
         let outputFile = try AVAudioFile(
             forWriting: dest,
-            settings: outputSettings,
-            commonFormat: .pcmFormatInt16,
-            interleaved: true
+            settings: processingFormat.settings,
+            commonFormat: processingFormat.commonFormat,
+            interleaved: processingFormat.isInterleaved
         )
 
         let chunkFrames: AVAudioFrameCount = 4096
@@ -166,6 +191,13 @@ enum SoundPlayer {
             if buffer.frameLength == 0 { break }
             try outputFile.write(from: buffer)
         }
+    }
+
+    /// Output filename for the transcode branch: always `.caf` because we
+    /// always emit LPCM-in-CAF. Kept inside SoundPlayer because callers
+    /// outside the transcode flow shouldn't need to know the extension.
+    private static func transcodeFilename(for event: NotificationEvent) -> String {
+        "IrrlichtCustom-\(event.rawValue).caf"
     }
 
     /// Resolves `~/Library/Sounds/`, creating it if necessary.

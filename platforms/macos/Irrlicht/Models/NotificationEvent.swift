@@ -31,12 +31,6 @@ enum NotificationEvent: String, CaseIterable {
         }
     }
 
-    /// Filename used when a custom audio file is installed into
-    /// `~/Library/Sounds/` — UNNotificationSound resolves by basename there.
-    var customFilename: String {
-        "IrrlichtCustom-\(rawValue).caf"
-    }
-
     /// Out-of-the-box sound for each event. New installs pick these up via
     /// `UserDefaults.register(defaults:)`; existing users keep whatever they
     /// already chose.
