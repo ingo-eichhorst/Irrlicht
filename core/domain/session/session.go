@@ -116,8 +116,9 @@ type SessionMetrics struct {
 	// classification pipeline for post-turn writes like Claude Code's
 	// `system/away_summary` recap — without it, the force-bounce in
 	// processActivity sees the stale LastEventType and flips a ready
-	// session back to working (issue #329). Transient — per-pass, not
-	// persisted.
+	// session back to working (issue #329). Per-pass: MergeMetrics copies
+	// it from newM with no fallback, and json:"-" keeps it out of
+	// serialized state.
 	NoSubstantiveActivity bool `json:"-"`
 
 	// SubagentCompletions surfaces parent-side "subagent done" signals
