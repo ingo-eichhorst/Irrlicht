@@ -51,6 +51,12 @@ hermetic and don't need auth.
   previously unknown agent on the web via subagents and proposes a
   `capabilities.json`. See `discovery-instructions.md` for the dispatch
   recipe. No live agent CLI is invoked.
+- **`/ir:onboard-agent survey <agent>`** — applicability survey mode.
+  Researches the agent's docs / changelog / source and proposes a candidate
+  `coverage[<agent>]` column for every scenario in `.specs/agent-scenarios.md`.
+  Maintainer reviews + merges into `.specs/agent-scenarios-coverage.json`.
+  See `survey/SKILL.md` for the dispatch recipe. No live agent CLI is
+  invoked. Re-run on each agent version bump.
 
 The adapter argument disambiguates which axis is being run: agent adapters
 (`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator
@@ -64,6 +70,7 @@ Parse the invocation into one of:
 - `run_one` — one adapter + one scenario
 - `diff_only` — `--diff` flag
 - `discover` — `--new <slug>`; load `discovery-instructions.md` and follow that recipe instead of Steps 2–5 below
+- `survey` — `survey <agent>`; load `survey/SKILL.md` and follow that recipe instead of Steps 2–5 below
 
 If the invocation is ambiguous, ask the user which mode to run.
 
