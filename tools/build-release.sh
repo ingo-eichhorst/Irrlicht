@@ -100,7 +100,11 @@ cp "$BUILD_DIR/irrlicht-focus-darwin-universal" "$APP_CONTENTS/MacOS/irrlicht-fo
 chmod 755 "$APP_CONTENTS/MacOS/irrlicht-focus"
 echo "  Embedded daemon and irrlicht-focus in app bundle"
 
-# Generate Info.plist with resolved variables
+# Generate Info.plist with resolved variables.
+# NOTE: this script does NOT codesign the bundle — signing (and applying
+# Irrlicht.entitlements) happens in the `/ir:release` skill flow. Without
+# that sign step, entitlements like com.apple.developer.focus-status carry
+# no privileges in the produced bundle.
 cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -132,6 +136,8 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
     <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Irrlicht uses AppleScript to bring the correct iTerm2 or Terminal.app window and tab to the front when you click a session row.</string>
+    <key>NSFocusStatusUsageDescription</key>
+    <string>Irrlicht uses macOS Focus status to silence notification sounds and spoken alerts while you're in Do Not Disturb, Sleep, or any other Focus mode.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2024 Anthropic. All rights reserved.</string>
     <key>NSPrincipalClass</key>

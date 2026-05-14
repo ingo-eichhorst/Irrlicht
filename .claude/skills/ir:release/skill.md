@@ -178,10 +178,15 @@ NEWEST_SRC=$(find /Users/ingo/projects/irrlicht/platforms/macos/Irrlicht -name '
          /tmp/Irrlicht.app/Contents/Resources/Irrlicht_Irrlicht.bundle
    ```
 6. Write a **resolved** `Info.plist` to `Contents/Info.plist` (no Xcode variables — use actual values: `CFBundleExecutable=Irrlicht`, `CFBundleIdentifier=io.irrlicht.app`, `CFBundlePackageType=APPL`, version from `$NEW_VERSION`).
-7. Ad-hoc code sign:
+7. Ad-hoc code sign. App entitlements come from
+   `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements` (currently
+   `get-task-allow` + `com.apple.developer.focus-status`). `--entitlements` is
+   required at sign time; Apple-gated entitlements carry no privileges in the
+   produced bundle without it.
    ```bash
+   ENTITLEMENTS="/Users/ingo/projects/irrlicht/platforms/macos/Irrlicht/Resources/Irrlicht.entitlements"
    codesign --force --deep --sign - /tmp/Irrlicht.app/Contents/MacOS/irrlichd
-   codesign --force --deep --sign - /tmp/Irrlicht.app
+   codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" /tmp/Irrlicht.app
    codesign --verify --deep --strict /tmp/Irrlicht.app
    ```
 8. **Smoke test before packaging** — launch the built app, wait ~2s, confirm

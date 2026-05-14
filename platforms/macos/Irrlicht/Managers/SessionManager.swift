@@ -91,7 +91,14 @@ class SessionManager: ObservableObject {
     /// stays alive.
     private var notificationForwarder: NotificationClickForwarder?
 
-    init() {
+    /// Source of truth for "is macOS Focus / DND active right now". Consulted
+    /// when emitting notifications so we suppress sound + TTS alongside the
+    /// system-suppressed banner. Injectable for tests.
+    private let focusMonitor: FocusStateProviding
+
+    init(focusMonitor: FocusStateProviding = FocusMonitor()) {
+        self.focusMonitor = focusMonitor
+
         let homeURL = FileManager.default.homeDirectoryForCurrentUser
         let supportPath = homeURL
             .appendingPathComponent("Library")
@@ -712,9 +719,12 @@ class SessionManager: ObservableObject {
         // Register the click-forwarder delegate before the first notification
         // is scheduled, otherwise macOS drops notification taps silently.
         if notificationForwarder == nil {
-            let forwarder = NotificationClickForwarder { [weak self] sessionID in
-                self?.handleNotificationTap(sessionID: sessionID)
-            }
+            let forwarder = NotificationClickForwarder(
+                onTap: { [weak self] sessionID in
+                    self?.handleNotificationTap(sessionID: sessionID)
+                },
+                focusMonitor: focusMonitor
+            )
             notificationForwarder = forwarder
             center.delegate = forwarder
         }
@@ -868,9 +878,20 @@ class SessionManager: ObservableObject {
         // sits in that grey zone. Drive speech from here (on @MainActor) so
         // it actually fires for real state transitions. The per-event toggle
         // is the off switch; users who pick a Speak aloud variant have opted in.
-        if case .speak(let voice) = choice {
+        // TTS bypasses UNNotificationContent entirely, so we must also gate on
+        // Focus here — otherwise the loudest sound option leaks through DND.
+        if let voice = Self.voiceForSpeak(choice: choice, focusActive: focusMonitor.isFocusActive) {
             SoundPlayer.speak(title: title, body: body, voice: voice)
         }
+    }
+
+    /// Pure decision helper: returns the voice to speak with when the chosen
+    /// SoundChoice is `.speak(_)` AND Focus is not active. Anything else → nil.
+    /// Extracted so the Focus-gating branch in `sendNotification` has direct
+    /// unit-test coverage without needing to stub `SoundPlayer`.
+    nonisolated static func voiceForSpeak(choice: SoundChoice, focusActive: Bool) -> SpokenVoice? {
+        if case .speak(let voice) = choice, !focusActive { return voice }
+        return nil
     }
 
     /// Pure: turn a SoundChoice into a UNNotificationSound. `.none` / `.speak`
@@ -1263,9 +1284,11 @@ enum NotificationUserInfoKey {
 /// of making `SessionManager` itself inherit from NSObject.
 final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelegate {
     private let onTap: @MainActor (String) -> Void
+    private let focusMonitor: FocusStateProviding
 
-    init(onTap: @escaping @MainActor (String) -> Void) {
+    init(onTap: @escaping @MainActor (String) -> Void, focusMonitor: FocusStateProviding) {
         self.onTap = onTap
+        self.focusMonitor = focusMonitor
     }
 
     nonisolated func userNotificationCenter(
@@ -1284,11 +1307,21 @@ final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelega
 
     // Show banners for notifications delivered while the app is foregrounded
     // — without this, in-app notifications are silently suppressed on macOS.
+    // Under Focus / DND, suppress both banner and sound: the user has asked
+    // macOS for quiet, and forcing `.sound` here is what lets the sound leak
+    // through even when the OS is suppressing the banner.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        completionHandler(Self.presentationOptions(focusActive: focusMonitor.isFocusActive))
+    }
+
+    /// Pure decision helper for `willPresent`. Extracted so tests can verify
+    /// the Focus-gating branch without needing a real UNUserNotificationCenter
+    /// instance (which can't be constructed outside an app bundle).
+    nonisolated static func presentationOptions(focusActive: Bool) -> UNNotificationPresentationOptions {
+        focusActive ? [] : [.banner, .sound]
     }
 }
