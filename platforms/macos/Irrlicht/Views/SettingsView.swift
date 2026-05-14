@@ -281,14 +281,14 @@ private struct IrrlichtSwitchToggleStyle: ToggleStyle {
         HStack(spacing: 8) {
             ZStack(alignment: configuration.isOn ? .trailing : .leading) {
                 Capsule()
-                    .fill(configuration.isOn ? AppPalette.ready : Color.secondary.opacity(0.35))
+                    .fill(configuration.isOn ? IrrColors.ready : IrrColors.cancelled.opacity(0.4))
                 Circle()
                     .fill(Color.white)
                     .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)
                     .padding(2)
             }
             .frame(width: 30, height: 18)
-            .animation(.easeInOut(duration: 0.15), value: configuration.isOn)
+            .animation(IrrMotion.easeOut(duration: IrrMotion.fast), value: configuration.isOn)
 
             configuration.label
         }

@@ -105,9 +105,9 @@ final class SessionManagerTests: XCTestCase {
     }
 
     func testStateColors() {
-        XCTAssertEqual(SessionState.State.working.color, "#8B5CF6")
-        XCTAssertEqual(SessionState.State.waiting.color, "#FF9500")
-        XCTAssertEqual(SessionState.State.ready.color, "#34C759")
+        XCTAssertEqual(SessionState.State.working.hexColor, "8B5CF6")
+        XCTAssertEqual(SessionState.State.waiting.hexColor, "FF9500")
+        XCTAssertEqual(SessionState.State.ready.hexColor, "34C759")
     }
 
     func testUnknownStateFallsBackToReady() throws {

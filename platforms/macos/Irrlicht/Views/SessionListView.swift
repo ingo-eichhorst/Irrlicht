@@ -216,7 +216,7 @@ struct SessionListView: View {
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(isSettingsButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                            .background(isSettingsButtonHovered ? IrrColors.surfaceHover : Color.clear)
                             .contentShape(Rectangle())
                             .onHover { hovering in
                                 isSettingsButtonHovered = hovering
@@ -232,7 +232,7 @@ struct SessionListView: View {
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(isQuitButtonHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+                            .background(isQuitButtonHovered ? IrrColors.surfaceHover : Color.clear)
                             .contentShape(Rectangle())
                             .onHover { hovering in
                                 isQuitButtonHovered = hovering
@@ -325,17 +325,17 @@ struct SessionListView: View {
             .buttonStyle(.plain)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(displayMode.isHistory ? Color.accentColor.opacity(0.15) : Color.clear)
-            .cornerRadius(4)
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
+            .background(displayMode.isHistory ? IrrColors.working.opacity(0.15) : Color.clear)
+            .cornerRadius(IrrRadius.sm)
+            .overlay(RoundedRectangle(cornerRadius: IrrRadius.sm).stroke(Color.secondary.opacity(0.4)))
             .contentShape(Rectangle())
             .tooltip(displayMode.tooltip)
             .id("mode-cycle-btn")
 
             statusIndicator
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, IrrSpacing.sp3)
+        .padding(.vertical, IrrSpacing.sp2)
         .onAppear {
             if displayMode.isHistory {
                 sessionManager.setHistoryGranularity(displayMode.granularitySec)
@@ -352,7 +352,7 @@ struct SessionListView: View {
             } else if sessionManager.sessions.count <= 3 {
                 ForEach(sessionManager.sessions.prefix(3)) { session in
                     Image(systemName: session.state.glyph)
-                        .foregroundColor(Color(hex: session.state.color))
+                        .foregroundColor(session.state.color)
                         .font(.system(size: 12))
                 }
             } else {
@@ -368,6 +368,7 @@ struct SessionListView: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 6, height: 6)
+                .shadow(color: statusColor.opacity(0.5), radius: 3)
             Text(statusLabel)
                 .font(.caption2)
                 .foregroundColor(.secondary)
@@ -377,9 +378,9 @@ struct SessionListView: View {
 
     private var statusColor: Color {
         switch sessionManager.connectionState {
-        case .connected: return .green
-        case .connecting, .reconnecting: return .yellow
-        case .disconnected: return .red
+        case .connected: return IrrColors.wsConnected
+        case .connecting, .reconnecting: return IrrColors.wsConnecting
+        case .disconnected: return IrrColors.wsDisconnected
         }
     }
 
@@ -395,18 +396,20 @@ struct SessionListView: View {
     // MARK: - Error View
     
     private func errorView(_ error: String) -> some View {
+        // System .orange (not IrrColors.waiting) — this is generic warning
+        // chrome, not the agent-waiting surface.
         HStack {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundColor(.orange)
-            
+
             Text(error)
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .lineLimit(2)
-            
+
             Spacer()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, IrrSpacing.sp3)
         .padding(.vertical, 6)
         .background(Color.orange.opacity(0.1))
     }
@@ -416,16 +419,16 @@ struct SessionListView: View {
 
 struct ContextBar: View {
     let utilization: Double
-    let pressureColor: String
+    let pressureColor: Color
     var label: String? = nil
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.secondary.opacity(0.15))
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color(hex: pressureColor))
+                RoundedRectangle(cornerRadius: IrrRadius.xs)
+                    .fill(IrrColors.trackFill)
+                RoundedRectangle(cornerRadius: IrrRadius.xs)
+                    .fill(pressureColor)
                     .frame(width: geo.size.width * min(CGFloat(utilization) / 100, 1.0))
                 if let label {
                     Text(label)
@@ -457,7 +460,7 @@ struct SessionRowView: View {
                 // State icon
                 Image(systemName: session.state.glyph)
                     .font(.system(size: 10))
-                    .foregroundColor(Color(hex: session.state.color))
+                    .foregroundColor(session.state.color)
                     .frame(width: 12)
                     .tooltip(session.state.label)
                     .accessibilityIdentifier("session-state-icon-\(session.id)")
@@ -481,7 +484,7 @@ struct SessionRowView: View {
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
                         .frame(width: 14, height: 14)
-                        .background(Color.purple)
+                        .background(IrrColors.working)
                         .clipShape(Circle())
                         .tooltip("\(activeSubagentCount) active subagent\(activeSubagentCount == 1 ? "" : "s")")
                 }
@@ -515,7 +518,7 @@ struct SessionRowView: View {
                         } else {
                             Text(metrics.formattedContextUtilization)
                                 .font(.system(size: 9, design: .monospaced))
-                                .foregroundColor(Color(hex: metrics.contextPressureColor))
+                                .foregroundColor(metrics.contextPressureColor)
                                 .frame(width: 32, alignment: .leading)
                         }
                     } else if let metrics = session.metrics, metrics.totalTokens > 0 {
@@ -587,14 +590,14 @@ struct SessionRowView: View {
                let text = session.metrics?.lastAssistantText, !text.isEmpty {
                 Text(text)
                     .font(.system(size: 9))
-                    .foregroundColor(.orange)
+                    .foregroundColor(IrrColors.waiting)
                     .lineLimit(3)
                     .truncationMode(.head)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 3)
-                    .background(Color.orange.opacity(0.12))
-                    .cornerRadius(4)
+                    .background(IrrColors.waitingDim)
+                    .cornerRadius(IrrRadius.sm)
                     .padding(.top, 2)
                     // Surface the full prompt — head-truncation hides the start.
                     .tooltip(text)
@@ -605,19 +608,20 @@ struct SessionRowView: View {
                (session.state == .working || session.state == .waiting),
                metrics.contextUtilization >= 80 {
                 let isCritical = metrics.contextUtilization >= 95
+                let alertColor = isCritical ? IrrColors.pressureCritical : IrrColors.pressureHigh
                 HStack(spacing: 4) {
                     Image(systemName: isCritical ? "exclamationmark.triangle.fill" : "exclamationmark.triangle")
                         .font(.system(size: 9))
-                        .foregroundColor(isCritical ? .red : .orange)
+                        .foregroundColor(alertColor)
                     Text("Switch to a fresh session soon")
                         .font(.system(size: 9))
-                        .foregroundColor(isCritical ? .red : .orange)
+                        .foregroundColor(alertColor)
                     Spacer()
                 }
                 .padding(.horizontal, 4)
                 .padding(.vertical, 2)
-                .background((isCritical ? Color.red : Color.orange).opacity(0.08))
-                .cornerRadius(4)
+                .background(alertColor.opacity(0.08))
+                .cornerRadius(IrrRadius.sm)
                 .padding(.top, 2)
                 .tooltip(isCritical ? "Context window critically full" : "Context window nearing limit")
             }
@@ -652,10 +656,10 @@ struct SessionRowView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .background(isHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+        .background(isHovered ? IrrColors.surfaceHover : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(IrrMotion.easeOut(duration: IrrMotion.fast)) {
                 isHovered = hovering
             }
         }
@@ -748,9 +752,9 @@ private struct TaskListView: View {
             ForEach(tasks, id: \.id) { task in
                 Group {
                     if task.isCompleted {
-                        Circle().fill(Color.green.opacity(0.85))
+                        Circle().fill(IrrColors.ready.opacity(0.85))
                     } else {
-                        Circle().strokeBorder(Color(hex: "#8B5CF6"), lineWidth: 1.5)
+                        Circle().strokeBorder(IrrColors.working, lineWidth: 1.5)
                     }
                 }
                 .frame(width: 7, height: 7)
@@ -811,7 +815,7 @@ struct SubagentRowView: View {
             // State indicator (small)
             Image(systemName: session.state.glyph)
                 .font(.system(size: 9))
-                .foregroundColor(Color(hex: session.state.color))
+                .foregroundColor(session.state.color)
                 .frame(width: 12)
                 .tooltip(session.state.label)
 
@@ -819,7 +823,7 @@ struct SubagentRowView: View {
             if let metrics = session.metrics, metrics.hasContextData {
                 Text(metrics.formattedContextUtilization)
                     .font(.caption2)
-                    .foregroundColor(Color(hex: metrics.contextPressureColor))
+                    .foregroundColor(metrics.contextPressureColor)
             } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
                 Text(metrics.formattedTokenUsage)
                     .font(.caption2)
@@ -851,9 +855,9 @@ struct SubagentRowView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 3)
-        .background(isHovered ? Color.accentColor.opacity(0.05) : Color.clear)
+        .background(isHovered ? IrrColors.surfaceHoverSubtle : Color.clear)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(IrrMotion.easeOut(duration: IrrMotion.fast)) {
                 isHovered = hovering
             }
         }
@@ -1005,7 +1009,7 @@ struct GroupView: View {
 
     private func reorderButton(icon: String, tooltip: String, disabled: Bool, action: @escaping () -> Void) -> some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.22)) { action() }
+            withAnimation(IrrMotion.easeOut(duration: IrrMotion.fast)) { action() }
         } label: {
             Image(systemName: icon)
                 .font(.system(size: 10))
@@ -1042,35 +1046,6 @@ enum CostTimeframe: String, CaseIterable {
         let all = Self.allCases
         let idx = all.firstIndex(of: self) ?? 0
         return all[(idx + 1) % all.count]
-    }
-}
-
-// MARK: - Color Extension
-
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3: // RGB (12-bit)
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6: // RGB (24-bit)
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8: // ARGB (32-bit)
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (1, 1, 1, 0)
-        }
-
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue:  Double(b) / 255,
-            opacity: Double(a) / 255
-        )
     }
 }
 

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import os
 
 /// Branding for one inbound agent adapter, served by the daemon's
@@ -151,20 +152,13 @@ struct SessionMetrics: Codable {
         }
     }
     
-    var contextPressureColor: String {
+    var contextPressureColor: Color {
         switch pressureLevel {
-        case "safe":
-            return "#34C759"   // system green
-        case "caution":
-            return "#FF9500"   // system orange
-        case "warning":
-            return "#FF3B30"   // system red
-        case "critical":
-            return "#D70015"   // darker red
-        case "unknown", "":
-            return "#8E8E93"   // system gray
-        default:
-            return "#8E8E93"   // system gray
+        case "safe":     return IrrColors.pressureLow
+        case "caution":  return IrrColors.pressureMedium
+        case "warning":  return IrrColors.pressureHigh
+        case "critical": return IrrColors.pressureCritical
+        default:         return IrrColors.cancelled
         }
     }
     
@@ -419,17 +413,21 @@ struct SessionState: Identifiable, Codable {
             }
         }
 
-        var color: String {
+        var color: Color {
             switch self {
-            case .working: return "#8B5CF6"   // purple to match 🟣
-            case .waiting: return "#FF9500"   // system orange
-            case .ready: return "#34C759"  // system green
+            case .working: return IrrColors.working
+            case .waiting: return IrrColors.waiting
+            case .ready:   return IrrColors.ready
             }
         }
 
-        /// Hex color without leading `#`, for SVG markup.
+        /// Hex without leading `#`, for inline SVG `fill="#..."` markup.
         var hexColor: String {
-            String(color.dropFirst())
+            switch self {
+            case .working: return IrrSVG.working
+            case .waiting: return IrrSVG.waiting
+            case .ready:   return IrrSVG.ready
+            }
         }
 
         /// Highest-priority state in a collection (waiting > working > ready).
