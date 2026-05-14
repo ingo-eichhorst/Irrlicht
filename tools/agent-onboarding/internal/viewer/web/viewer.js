@@ -340,6 +340,15 @@ function renderPlayback(s) {
   const scrubWrap = document.createElement("div");
   scrubWrap.style.cssText = "margin-top: 8px; position: relative; padding-top: 4px;";
 
+  // Turn lane sits ABOVE the state band. Renders one tick per user
+  // prompt or assistant response from the recording's transcript so the
+  // user can see WHERE in the timeline each turn landed. User ticks pin
+  // to the top half, assistant ticks to the bottom half — both can
+  // co-exist at the same x without overlap.
+  const turnLane = document.createElement("div");
+  turnLane.style.cssText = "position: relative; height: 14px; margin-bottom: 2px;";
+  scrubWrap.appendChild(turnLane);
+
   // Band + scrubber are layered: the band IS the visual track; the
   // <input type="range"> sits on top with a transparent track so only
   // its thumb shows (the seek handle).
@@ -392,9 +401,16 @@ function renderPlayback(s) {
   sep.style.color = "#bbb"; sep.textContent = "·";
   legend.appendChild(sep);
   legend.appendChild(document.createTextNode("Events: "));
-  legend.appendChild(dotSwatch("#3b82f6", "session created"));
-  legend.appendChild(dotSwatch("#888", "session removed"));
-  legend.appendChild(dotSwatch("#22c55e", "pid discovered"));
+  legend.appendChild(dotSwatch("#3b82f6", "lifecycle"));
+  legend.appendChild(dotSwatch("#22c55e", "process"));
+  legend.appendChild(dotSwatch("#a78bfa", "activity"));
+  legend.appendChild(dotSwatch("#94a3b8", "bookkeeping"));
+  const sep2 = document.createElement("span");
+  sep2.style.color = "#bbb"; sep2.textContent = "·";
+  legend.appendChild(sep2);
+  legend.appendChild(document.createTextNode("Turns: "));
+  legend.appendChild(swatch("#2563eb", "user"));
+  legend.appendChild(swatch("#0d9488", "assistant"));
   scrubWrap.appendChild(legend);
 
   p.appendChild(scrubWrap);
@@ -403,6 +419,7 @@ function renderPlayback(s) {
   // renderer.
   let eventOffsets = []; // sorted, dedup'd offset_ms values
   let events = [];       // raw EventMarker list from /api/replay/start
+  let turns = [];        // raw TurnMarker list from /api/replay/start
 
   // State colors. Consolidated to 3 high-signal colors that match what
   // the dashboard uses for session badges, plus a neutral gap color.
@@ -412,23 +429,98 @@ function renderPlayback(s) {
     waiting: "#f59e0b", // amber
   };
 
+  // STATE_PRIORITY drives the aggregation rule when multiple sessions
+  // are alive at the same moment (parent + subagents). The band shows
+  // the highest-priority state among active sessions, so the user sees
+  // "working" for the entire span any session is working — matching how
+  // the macOS app's state bar treats the whole run.
+  const STATE_PRIORITY = {working: 3, waiting: 2, ready: 1};
+
   function renderStateBand() {
     stateBand.innerHTML = "";
     if (!totalMs) return;
-    // Build a sequence of (start_ms, end_ms, state) segments by walking
-    // state_transition events. Sessions start in "ready" by convention.
-    const transitions = events
-      .filter(e => e.kind === "state_transition" && e.new_state)
-      .sort((a, b) => a.offset_ms - b.offset_ms);
-    let curState = "ready";
-    let curStart = 0;
-    const segments = [];
-    for (const t of transitions) {
-      if (t.offset_ms > curStart) segments.push({start: curStart, end: t.offset_ms, state: curState});
-      curState = t.new_state;
-      curStart = t.offset_ms;
+
+    // 1. Build per-session timelines.
+    //    aliveFrom[sid] = offset of first event for the session
+    //    aliveUntil[sid] = offset of transcript_removed/presession_removed (or +∞ if still alive)
+    //    transitions[sid] = sorted [{offset, state}, ...]
+    const aliveFrom = {};
+    const aliveUntil = {};
+    const transitionsBySid = {};
+    for (const e of events) {
+      if (!e.session_id) continue;
+      if (aliveFrom[e.session_id] === undefined) aliveFrom[e.session_id] = e.offset_ms;
+      if (e.kind === "transcript_removed" || e.kind === "presession_removed") {
+        aliveUntil[e.session_id] = e.offset_ms;
+      }
+      if (e.kind === "state_transition" && e.new_state) {
+        (transitionsBySid[e.session_id] = transitionsBySid[e.session_id] || [])
+          .push({offset: e.offset_ms, state: e.new_state});
+      }
     }
-    segments.push({start: curStart, end: totalMs, state: curState});
+    for (const sid of Object.keys(transitionsBySid)) {
+      transitionsBySid[sid].sort((a, b) => a.offset - b.offset);
+    }
+
+    // 2. Collect every distinct boundary offset. The aggregate state is
+    //    constant between consecutive boundaries, so segments are bound
+    //    by these points.
+    const boundarySet = new Set([0, totalMs]);
+    for (const sid of Object.keys(aliveFrom)) {
+      boundarySet.add(aliveFrom[sid]);
+      if (aliveUntil[sid] !== undefined) boundarySet.add(aliveUntil[sid]);
+      for (const t of (transitionsBySid[sid] || [])) boundarySet.add(t.offset);
+    }
+    const boundaries = [...boundarySet].sort((a, b) => a - b);
+
+    // 3. For each interval [boundaries[i], boundaries[i+1]), compute the
+    //    aggregate state by taking the max-priority state across active
+    //    sessions. A session's state at offset T is its last
+    //    state_transition.new_state at or before T, defaulting to ready
+    //    (sessions start in ready by convention).
+    function sessionStateAt(sid, t) {
+      const list = transitionsBySid[sid] || [];
+      let st = "ready";
+      for (const trans of list) {
+        if (trans.offset <= t) st = trans.state;
+        else break;
+      }
+      return st;
+    }
+
+    function aggregateAt(t) {
+      let best = null;
+      let bestPriority = 0;
+      for (const sid of Object.keys(aliveFrom)) {
+        if (t < aliveFrom[sid]) continue;
+        if (aliveUntil[sid] !== undefined && t >= aliveUntil[sid]) continue;
+        const st = sessionStateAt(sid, t);
+        const pri = STATE_PRIORITY[st] || 0;
+        if (pri > bestPriority) { bestPriority = pri; best = st; }
+      }
+      return best;
+    }
+
+    // 4. Walk boundaries and emit one segment per change.
+    const segments = [];
+    let curStart = boundaries[0];
+    let curState = aggregateAt(curStart);
+    for (let i = 1; i < boundaries.length; i++) {
+      const t = boundaries[i];
+      const st = aggregateAt(t);
+      if (st !== curState) {
+        if (curState !== null) segments.push({start: curStart, end: t, state: curState});
+        curStart = t;
+        curState = st;
+      }
+    }
+    if (curState !== null && curStart < totalMs) {
+      segments.push({start: curStart, end: totalMs, state: curState});
+    }
+
+    // 5. Render. Coalesce so the user sees a single working span instead
+    //    of many short ones when subagents finish in sequence under a
+    //    still-working parent.
     for (const seg of segments) {
       const color = STATE_COLOR[seg.state] || "#cfcdc0";
       const left = (seg.start / totalMs) * 100;
@@ -440,46 +532,101 @@ function renderPlayback(s) {
     }
   }
 
-  // colorForEventKind picks a dot color for a NON-state event. We only
-  // render dots for the four high-signal kinds; everything else is
-  // bookkeeping that would clutter the lane.
-  function colorForEventKind(kind) {
-    if (kind === "transcript_new" || kind === "presession_created") return "#3b82f6";
-    if (kind === "transcript_removed" || kind === "presession_removed") return "#888";
-    if (kind === "pid_discovered") return "#22c55e";
-    return null;
+  // eventStyle classifies an event kind into a (color, size, label)
+  // triple. Every kind gets a dot so the lane represents the FULL
+  // recording, not just state-changing events. Salience tiers:
+  //
+  //   lifecycle   (10px blue/gray)  — session/presession appear or vanish
+  //   process     (10px green)      — process identity confirmed / parent linked
+  //   transition  (10px purple)     — state_transition (overlays the state band)
+  //   activity    (7px violet)      — transcript_activity (every transcript line)
+  //   bookkeeping (4px slate, 60%)  — debounce_coalesced, hook_received, file_event
+  //
+  // Smaller / lower-opacity dots for high-volume bookkeeping kinds keep
+  // the lane readable when a real recording has dozens of them. Tooltip
+  // text is plain English — no raw event_kind strings — so the user
+  // doesn't need to memorize colors.
+  function eventStyle(kind) {
+    switch (kind) {
+      case "transcript_new":
+      case "presession_created":
+        return {color: "#3b82f6", size: 10, opacity: 1, label: "Session detected — new transcript appeared"};
+      case "transcript_removed":
+      case "presession_removed":
+        return {color: "#64748b", size: 10, opacity: 1, label: "Session ended — transcript closed"};
+      case "pid_discovered":
+        return {color: "#22c55e", size: 10, opacity: 1, label: "Process linked — PID matched to this session"};
+      case "parent_linked":
+        return {color: "#22c55e", size: 10, opacity: 1, label: "Linked to parent — child/subagent attached"};
+      case "state_transition":
+        return {color: "#8b5cf6", size: 10, opacity: 1, label: "State changed"};
+      case "transcript_activity":
+        return {color: "#a78bfa", size: 7, opacity: 0.95, label: "Transcript updated — new lines written"};
+      case "debounce_coalesced":
+        return {color: "#94a3b8", size: 4, opacity: 0.6, label: "Bookkeeping — multiple updates coalesced"};
+      case "hook_received":
+        return {color: "#94a3b8", size: 5, opacity: 0.7, label: "Hook event received"};
+      case "file_event":
+        return {color: "#94a3b8", size: 4, opacity: 0.6, label: "Filesystem event"};
+      default:
+        return {color: "#94a3b8", size: 4, opacity: 0.5, label: kind};
+    }
   }
 
   function renderEventDots() {
     eventLane.innerHTML = "";
     if (!totalMs) return;
     for (const ev of events) {
-      const color = colorForEventKind(ev.kind);
-      if (!color) continue;
+      const st = eventStyle(ev.kind);
       const pct = Math.max(0, Math.min(100, (ev.offset_ms / totalMs) * 100));
       const dot = document.createElement("div");
-      dot.style.cssText = `position: absolute; left: ${pct}%; top: 0; width: 10px; height: 10px; ` +
-        `background: ${color}; border-radius: 50%; transform: translateX(-5px); border: 1.5px solid white; box-shadow: 0 0 0 1px rgba(0,0,0,0.1);`;
-      dot.title = `${kindLabel(ev.kind)}\n+${(ev.offset_ms/1000).toFixed(2)}s` +
-        (ev.session_id ? `\nsession: ${ev.session_id}` : "");
+      const sz = st.size;
+      dot.style.cssText = `position: absolute; left: ${pct}%; top: ${(12 - sz) / 2}px; ` +
+        `width: ${sz}px; height: ${sz}px; background: ${st.color}; opacity: ${st.opacity}; ` +
+        `border-radius: 50%; transform: translateX(-${sz/2}px); ` +
+        `border: 1px solid white; box-shadow: 0 0 0 1px rgba(0,0,0,0.1);`;
+      // Tooltip: plain-English description first, then offset and (when
+      // useful) the new state and session id. Suppress session id on
+      // bookkeeping kinds where it just adds noise.
+      var lines = [st.label];
+      if (ev.kind === "state_transition" && ev.new_state) {
+        lines[0] = `State changed → ${ev.new_state}`;
+      }
+      lines.push(`+${(ev.offset_ms / 1000).toFixed(2)}s`);
+      if (ev.session_id && ev.kind !== "debounce_coalesced" && ev.kind !== "file_event") {
+        lines.push(`session: ${ev.session_id}`);
+      }
+      dot.title = lines.join("\n");
       eventLane.appendChild(dot);
     }
   }
 
-  function kindLabel(kind) {
-    switch (kind) {
-      case "transcript_new":      return "session created (transcript_new)";
-      case "presession_created":  return "presession created";
-      case "transcript_removed":  return "session removed (transcript_removed)";
-      case "presession_removed":  return "presession removed";
-      case "pid_discovered":      return "PID discovered";
-      default:                    return kind;
+  function renderTurns() {
+    turnLane.innerHTML = "";
+    if (!totalMs || !turns.length) return;
+    for (const t of turns) {
+      const pct = Math.max(0, Math.min(100, (t.offset_ms / totalMs) * 100));
+      const tick = document.createElement("div");
+      const isUser = t.role === "user";
+      const color = isUser ? "#2563eb" : "#0d9488";
+      // User ticks anchor to top half, assistant to bottom — so a
+      // same-instant user+assistant pair shows as two stacked ticks
+      // rather than overlapping into one.
+      const top = isUser ? "0px" : "7px";
+      tick.style.cssText = `position: absolute; left: ${pct}%; top: ${top}; ` +
+        `width: 2px; height: 7px; background: ${color}; transform: translateX(-1px); ` +
+        `border-radius: 1px;`;
+      const roleLabel = isUser ? "User" : "Assistant";
+      const offsetLabel = `+${(t.offset_ms / 1000).toFixed(2)}s`;
+      tick.title = `${roleLabel}\n${offsetLabel}\n${t.text || ""}`;
+      turnLane.appendChild(tick);
     }
   }
 
   function renderMarkers() {
     renderStateBand();
     renderEventDots();
+    renderTurns();
   }
 
   // Dashboard iframe (hidden until playback starts).
@@ -509,6 +656,7 @@ function renderPlayback(s) {
     const body = await resp.json();
     totalMs = body.total_ms || 0;
     events = Array.isArray(body.events) ? body.events : [];
+    turns = Array.isArray(body.turns) ? body.turns : [];
     // Deduplicate offsets so a cluster of same-instant events doesn't
     // ping the prev/next buttons multiple times in one click.
     eventOffsets = [...new Set(events.map(e => e.offset_ms))].sort((a, b) => a - b);
@@ -567,9 +715,12 @@ function renderPlayback(s) {
     scrub.disabled = true;
     scrub.value = "0";
     offsetReadout.textContent = "—";
-    markerLane.innerHTML = "";
+    eventLane.innerHTML = "";
+    stateBand.innerHTML = "";
+    turnLane.innerHTML = "";
     events = [];
     eventOffsets = [];
+    turns = [];
     iframeWrap.style.display = "none";
     iframe.src = "about:blank";
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }

@@ -152,6 +152,51 @@ func extractLineRole(raw map[string]any) string {
 	return ""
 }
 
+// extractLineText returns the user-visible text content of a transcript
+// line, or "" if none. Handles the three shapes we've seen:
+//
+//	opencode:   {"text": "..."}
+//	claudecode: {"message": {"content": "..."}}                       (string)
+//	claudecode: {"message": {"content": [{"type": "text", "text": "..."}, ...]}} (block array)
+//
+// For block arrays we concatenate the first two text blocks; tool_use
+// and tool_result blocks are skipped so the lane shows the conversation
+// the user actually wrote/read, not tool internals.
+func extractLineText(raw map[string]any) string {
+	if v, ok := raw["text"].(string); ok && v != "" {
+		return v
+	}
+	msg, ok := raw["message"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	switch c := msg["content"].(type) {
+	case string:
+		return c
+	case []any:
+		var parts []string
+		for _, blk := range c {
+			if len(parts) >= 2 {
+				break
+			}
+			b, ok := blk.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, _ := b["type"].(string); t != "" && t != "text" {
+				continue
+			}
+			if s, _ := b["text"].(string); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, " ")
+		}
+	}
+	return ""
+}
+
 // extractLineSession picks up the session id from the various places
 // adapters put it. Returns "" if none found (caller falls back to a
 // synthetic id).
@@ -269,6 +314,91 @@ func clampMonotonic(ts, floor time.Time) time.Time {
 		return ts
 	}
 	return floor.Add(time.Millisecond)
+}
+
+// TurnMarker is one user prompt or assistant response, placed on the
+// viewer's timeline track above the state band. Anchored to the same
+// recording start the EventMarker stream uses so the lanes line up
+// visually.
+type TurnMarker struct {
+	OffsetMs  int64  `json:"offset_ms"`
+	Role      string `json:"role"` // "user" or "assistant"
+	Text      string `json:"text,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// LoadTurnMarkers walks the scenario's transcript and emits one
+// TurnMarker per user / assistant line. Offsets are computed against
+// `anchor` (the EventMarker anchor) and clamped to >= 0 so a transcript
+// line predating events[0] by a few ms still renders at position 0.
+//
+// Returns nil for transcripts without per-line timestamps (aider's
+// transcript.md) and for transcripts with no user/assistant lines.
+func LoadTurnMarkers(scenarioDir string, anchor time.Time) []TurnMarker {
+	for _, name := range []string{"transcript.jsonl"} {
+		path := filepath.Join(scenarioDir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		return loadTurnsFromJSONL(path, anchor)
+	}
+	return nil
+}
+
+const turnTextMax = 240
+
+func loadTurnsFromJSONL(path string, anchor time.Time) []TurnMarker {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var out []TurnMarker
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		var raw map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
+			continue
+		}
+		role := extractLineRole(raw)
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		ts, ok := extractLineTime(raw)
+		if !ok {
+			continue
+		}
+		text := extractLineText(raw)
+		if text == "" {
+			continue
+		}
+		offset := ts.Sub(anchor).Milliseconds()
+		if offset < 0 {
+			offset = 0
+		}
+		out = append(out, TurnMarker{
+			OffsetMs:  offset,
+			Role:      role,
+			Text:      truncateForTooltip(text, turnTextMax),
+			SessionID: extractLineSession(raw),
+		})
+	}
+	return out
+}
+
+// truncateForTooltip caps text length and folds whitespace so a long
+// multi-line prompt fits a single-line title attribute. Replaces both
+// "\r\n" and "\n" with "↵ " so the user can still see paragraph breaks
+// in the tooltip without it growing vertically.
+func truncateForTooltip(s string, max int) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\n", "↵ ")
+	if len(s) > max {
+		return s[:max-1] + "…"
+	}
+	return s
 }
 
 // LoadEventsOrSynthesize returns events.jsonl contents if they exist,

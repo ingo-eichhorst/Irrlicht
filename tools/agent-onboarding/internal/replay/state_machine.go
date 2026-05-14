@@ -532,3 +532,13 @@ func (m *StateMachine) EventMarkers() []EventMarker {
 	}
 	return out
 }
+
+// Anchor returns the timestamp used as offset=0 for EventMarkers. The
+// viewer uses this to align other lanes (e.g. TurnMarkers from the
+// transcript) to the same timeline origin.
+func (m *StateMachine) Anchor() time.Time {
+	if len(m.events) == 0 {
+		return time.Time{}
+	}
+	return m.events[0].Timestamp
+}
