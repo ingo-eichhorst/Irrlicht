@@ -64,11 +64,13 @@ struct SettingsView: View {
                 Text("Pick a sound per event, choose your own audio file, or have the message read aloud.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if let error = customImportError {
                     Text(error)
                         .font(.caption)
                         .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if notificationsDenied && (notifyOnReady || notifyOnWaiting || notifyOnContextPressure) {
@@ -107,6 +109,7 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 360, height: 480)
         .background(Color(NSColor.windowBackgroundColor))
+        .toggleStyle(.switch)
     }
 
     private func checkNotificationAuth() {
