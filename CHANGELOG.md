@@ -9,6 +9,19 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-15
+
+### Changed
+- **macOS app: drop legacy file-polling, retire vaporware `IRRLICHT_DISABLED` env var** (#337) — `IRRLICHT_DISABLED` was never wired into any code path, and `IRRLICHT_USE_FILES` gated a fallback path in `SessionManager` that the WebSocket transport has fully replaced; both are removed. ~165 lines of dead Swift in `SessionManager.swift` go with them (file watcher, debounce/periodic timers, `loadExistingSessions`, `createInstancesDirectoryIfNeeded`); init unconditionally uses WebSocket. Equivalent orphan reaping still happens daemon-side via `PIDManager`'s `syscall.Kill(pid, 0)` sweep — no safety net was lost. The macOS app no longer reads from the daemon-owned `instancesPath`; that ordering dependency is now documented inline.
+
+### Docs
+- **configuration: document four real env vars with concrete recipes** (#337) — `site/docs/configuration.html` drops the `USE_FILES` / `DISABLED` rows and adds rows for the four env vars that exist in code but were undocumented: `IRRLICHT_UI_DIR`, `IRRLICHT_BIND_ADDR`, `IRRLICHT_MDNS`, `IRRLICHT_DEBUG`. A "When to use these" section walks three real recipes — LAN phone access (with both shell-env and `launchctl setenv` flows so it works whether the daemon is shell-launched or auto-spawned by the macOS app), "Dashboard UI not found" recovery (showing the full four-place auto-detect order so the override slots in clearly), and a debug state dump. The original `IRRLICHT_DEBUG=1 open -a Irrlicht` example was broken on macOS — LaunchServices spawns GUI apps without inheriting shell env — and is replaced with three working alternatives (direct binary invocation, `open --env`, `launchctl setenv`).
+- **architecture, SECURITY: drop vaporware kill-switch bullet, cross-link network-exposure docs** (#337) — `site/docs/architecture.html` no longer mentions the `IRRLICHT_DISABLED` kill switch (which never existed). `SECURITY.md` cross-links the network-exposure paragraphs to `configuration.html` and to the planned hub-mode design.
+
+### Distribution
+- **Release skill: enforce long-line paragraphs in release notes / PR body** (#335) — GitHub renders release-body markdown with the GFM "breaks" extension, so every soft line break inside a paragraph or bullet becomes `<br>`. The v0.4.0 and v0.4.1 release bodies were hand-wrapped at ~75 cols and shipped as a stack of short ragged lines on the release page (both since fixed via `gh release edit --notes-file`). Step 2 of `/ir:release` now carries an explicit line-wrap rule explaining the difference between GFM-with-breaks (release notes, PR body, issue body) and standard CommonMark (`CHANGELOG.md`); Step 8 switches the example from `--notes` to `--notes-file` pointing at a tempfile, so the body is reviewable, re-runnable, and the long lines survive shell escaping.
+- **assets: version reference screenshots** (#336) — `assets/session_limits.png` and `assets/straeter_light.png` are now versioned alongside the other reference shots used in README drafts and social posts.
+
 ## [0.4.1] — 2026-05-14
 
 ### Fixed
@@ -671,7 +684,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.0
 [0.3.13]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.3.13
