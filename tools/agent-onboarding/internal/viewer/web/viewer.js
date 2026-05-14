@@ -580,10 +580,21 @@ function renderPlayback(s) {
     }
   }
 
-  // eventStyle classifies an event kind into a (color, size, label)
-  // triple. Every kind gets a dot so the lane represents the FULL
-  // recording, not just state-changing events. Salience tiers — sizes
-  // bumped so they're easier to hit with the cursor inside the 18px
+  // isPresession returns true for "proc-<PID>" session ids — irrlicht's
+  // convention for a sighting before any transcript file exists. A real
+  // session gets a UUID id once its transcript appears. Distinguishing
+  // the two matters for the tooltip language: a transcript_removed on a
+  // pre-session is a *handoff* (the UUID transcript took over), not an
+  // ended conversation.
+  function isPresession(sid) {
+    return typeof sid === "string" && sid.startsWith("proc-");
+  }
+
+  // eventStyle classifies an event into a (color, size, label) triple.
+  // Takes the WHOLE event so it can disambiguate by session id — e.g.
+  // pid_discovered on proc-* (initial PID sighting) vs. pid_discovered
+  // on a UUID (the same PID being re-bound to the upgraded session).
+  // Salience tiers — bumped so the cursor lands them easily in the 18px
   // lane:
   //
   //   lifecycle   (14px blue/gray)  — session/presession appear or vanish
@@ -592,24 +603,36 @@ function renderPlayback(s) {
   //   activity    (10px violet)     — transcript_activity (every transcript line)
   //   bookkeeping (7px slate, 60%)  — debounce_coalesced, hook_received, file_event
   //
-  // Smaller / lower-opacity dots for high-volume bookkeeping kinds keep
-  // the lane readable when a real recording has dozens of them. Tooltip
-  // text is plain English — no raw event_kind strings — so the user
-  // doesn't need to memorize colors.
-  function eventStyle(kind) {
+  // Tooltip text is plain English — no raw event_kind strings — so the
+  // user doesn't need to memorize colors.
+  function eventStyle(ev) {
+    const kind = ev.kind;
+    const pre = isPresession(ev.session_id);
     switch (kind) {
       case "transcript_new":
+        return pre
+          ? {color: "#3b82f6", size: 14, opacity: 1, label: "Process detected — waiting for transcript"}
+          : {color: "#3b82f6", size: 14, opacity: 1, label: "Session started — transcript created"};
       case "presession_created":
-        return {color: "#3b82f6", size: 14, opacity: 1, label: "Session detected — new transcript appeared"};
-      case "transcript_removed":
+        return {color: "#3b82f6", size: 14, opacity: 1, label: "Pre-session opened — process matched before transcript"};
       case "presession_removed":
-        return {color: "#64748b", size: 14, opacity: 1, label: "Session ended — transcript closed"};
+        return {color: "#64748b", size: 14, opacity: 1, label: "Pre-session handed off — UUID session took over"};
+      case "transcript_removed":
+        return pre
+          ? {color: "#64748b", size: 14, opacity: 1, label: "Pre-session transcript dropped"}
+          : {color: "#64748b", size: 14, opacity: 1, label: "Session ended — transcript closed"};
+      case "process_exited":
+        return {color: "#64748b", size: 14, opacity: 1, label: "Process exited"};
+      case "process_spawned":
+        return {color: "#22c55e", size: 14, opacity: 1, label: "Process spawned"};
       case "pid_discovered":
-        return {color: "#22c55e", size: 14, opacity: 1, label: "Process linked — PID matched to this session"};
+        return pre
+          ? {color: "#22c55e", size: 14, opacity: 1, label: "PID identified for pre-session"}
+          : {color: "#22c55e", size: 14, opacity: 1, label: "PID re-bound to UUID session (handoff)"};
       case "parent_linked":
         return {color: "#22c55e", size: 14, opacity: 1, label: "Linked to parent — child/subagent attached"};
       case "state_transition":
-        return {color: "#8b5cf6", size: 14, opacity: 1, label: "State changed"};
+        return {color: "#8b5cf6", size: 14, opacity: 1, label: ev.new_state ? `State changed → ${ev.new_state}` : "State changed"};
       case "transcript_activity":
         return {color: "#a78bfa", size: 10, opacity: 0.95, label: "Transcript updated — new lines written"};
       case "debounce_coalesced":
@@ -627,7 +650,7 @@ function renderPlayback(s) {
     eventLane.innerHTML = "";
     if (!totalMs) return;
     for (const ev of events) {
-      const st = eventStyle(ev.kind);
+      const st = eventStyle(ev);
       const pct = Math.max(0, Math.min(100, (ev.offset_ms / totalMs) * 100));
       const dot = document.createElement("div");
       const sz = st.size;
@@ -635,14 +658,7 @@ function renderPlayback(s) {
         `width: ${sz}px; height: ${sz}px; background: ${st.color}; opacity: ${st.opacity}; ` +
         `border-radius: 50%; transform: translateX(-${sz/2}px); ` +
         `border: 1.5px solid white; box-shadow: 0 0 0 1px rgba(0,0,0,0.1); cursor: help;`;
-      // Tooltip: plain-English description first, then offset and (when
-      // useful) the new state and session id. Suppress session id on
-      // bookkeeping kinds where it just adds noise.
-      var lines = [st.label];
-      if (ev.kind === "state_transition" && ev.new_state) {
-        lines[0] = `State changed → ${ev.new_state}`;
-      }
-      lines.push(`+${(ev.offset_ms / 1000).toFixed(2)}s`);
+      const lines = [st.label, `+${(ev.offset_ms / 1000).toFixed(2)}s`];
       if (ev.session_id && ev.kind !== "debounce_coalesced" && ev.kind !== "file_event") {
         lines.push(`session: ${ev.session_id}`);
       }
