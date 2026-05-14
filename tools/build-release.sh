@@ -102,10 +102,9 @@ echo "  Embedded daemon and irrlicht-focus in app bundle"
 
 # Generate Info.plist with resolved variables.
 # NOTE: this script does NOT codesign the bundle — signing (and applying
-# Irrlicht.entitlements, which carries com.apple.developer.focus-status used
-# by #338's Focus-suppression fix) happens in the `/ir:release` skill flow.
-# Without that sign step, INFocusStatusCenter won't actually read Focus state
-# in the produced bundle.
+# Irrlicht.entitlements) happens in the `/ir:release` skill flow. Without
+# that sign step, entitlements like com.apple.developer.focus-status carry
+# no privileges in the produced bundle.
 cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

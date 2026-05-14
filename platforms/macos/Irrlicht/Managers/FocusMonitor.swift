@@ -51,8 +51,7 @@ final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
         }
 
         let status = INFocusStatusCenter.default.authorizationStatus
-        let focused = INFocusStatusCenter.default.focusStatus.isFocused ?? false
-        print("🌙 FocusMonitor init: auth=\(status.rawValue) focused=\(focused)")
+        print("🌙 FocusMonitor init: auth=\(status.rawValue) focused=\(INFocusStatusCenter.default.focusStatus.isFocused ?? false)")
 
         switch status {
         case .notDetermined:
