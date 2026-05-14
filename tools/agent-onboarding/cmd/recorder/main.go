@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"irrlicht/tools/agent-onboarding/internal/codegen"
 	"irrlicht/tools/agent-onboarding/internal/frames"
 	"irrlicht/tools/agent-onboarding/internal/groundtruth"
 	"irrlicht/tools/agent-onboarding/internal/preflight"
@@ -39,6 +40,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  record    capture signals + frames against a running agent")
 		fmt.Fprintln(os.Stderr, "  label     convert driver `gt:` sidecar into ground_truth.jsonl")
 		fmt.Fprintln(os.Stderr, "  synth     derive ruleset.json + driver_protocol.json from a recording")
+		fmt.Fprintln(os.Stderr, "  gen       generate adapter Go files + interactive driver from synth output")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -48,6 +50,8 @@ func main() {
 		os.Exit(cmdLabel(os.Args[2:]))
 	case "synth":
 		os.Exit(cmdSynth(os.Args[2:]))
+	case "gen":
+		os.Exit(cmdGen(os.Args[2:]))
 	case "-h", "--help":
 		fmt.Fprintln(os.Stderr, "usage: agent-onboard <subcommand> [flags]")
 		os.Exit(0)
@@ -55,6 +59,34 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+func cmdGen(args []string) int {
+	fs := flag.NewFlagSet("gen", flag.ContinueOnError)
+	agent := fs.String("agent", "", "adapter slug — required")
+	staging := fs.String("staging", "", "staging dir containing ruleset.json + driver_protocol.json — required")
+	adapterOut := fs.String("adapter-out", "", "directory to write adapter Go files — required")
+	driverOut := fs.String("driver-out", ".claude/skills/ir:onboard-agent/scripts", "directory to write drive-<agent>-interactive.sh")
+	displayName := fs.String("display-name", "", "human-readable agent name; defaults to titlecase of agent")
+	processName := fs.String("process-name", "", "OS process name to match; defaults to agent slug")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *agent == "" || *staging == "" || *adapterOut == "" {
+		fmt.Fprintln(os.Stderr, "error: --agent, --staging, --adapter-out are required")
+		fs.Usage()
+		return 2
+	}
+	if err := codegen.Generate(codegen.Input{
+		Agent: *agent, StagingDir: *staging,
+		AdapterOutDir: *adapterOut, DriverOutDir: *driverOut,
+		DisplayName: *displayName, ProcessName: *processName,
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "generated adapter in %s and driver in %s\n", *adapterOut, *driverOut)
+	return 0
 }
 
 func cmdSynth(args []string) int {
