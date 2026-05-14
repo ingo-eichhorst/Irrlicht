@@ -3,6 +3,7 @@ package validate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,6 +99,25 @@ func TestRun_failsOnTolerance(t *testing.T) {
 	}
 	if r.Pass {
 		t.Error("expected fail on tolerance breach")
+	}
+}
+
+func TestWriteCoverage_unknownScenarioIDIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	coveragePath := filepath.Join(dir, "coverage.json")
+	initial := map[string]any{
+		"scenarios": []any{
+			map[string]any{"id": "basic-turn", "coverage": map[string]any{}},
+		},
+	}
+	b, _ := json.MarshalIndent(initial, "", "  ")
+	os.WriteFile(coveragePath, b, 0o644)
+
+	err := WriteCoverage(coveragePath, "not-a-real-id", "claudecode", CoverageCell{
+		LastTested: time.Now(), Result: "pass",
+	})
+	if !errors.Is(err, ErrCoverageScenarioNotFound) {
+		t.Errorf("expected ErrCoverageScenarioNotFound; got %v", err)
 	}
 }
 

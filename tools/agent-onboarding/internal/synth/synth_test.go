@@ -76,6 +76,61 @@ func TestRun_emitsRulesetAndConflictReportForSeedShape(t *testing.T) {
 	}
 }
 
+// TestRun_anchorsLabelsAgainstMetaNotFirstSignal exercises the fix for the
+// timing-anchor bug: labels are written relative to meta.RecordingStartedAt,
+// but pre-fix synth used signals[0].Ts. If the first sensor signal lands
+// later than the recording's start (the realistic case), labels would be
+// systematically off by that drift.
+//
+// Setup: meta says recording started at t=0; signals[0] is at t=+2s; a
+// label at offset 2000ms (matching signals[0]) should match — and IT DOES
+// match only if synth anchors against meta, not against signals[0].
+func TestRun_anchorsLabelsAgainstMetaNotFirstSignal(t *testing.T) {
+	dir := t.TempDir()
+	signalsPath := filepath.Join(dir, "signals.jsonl")
+	gtPath := filepath.Join(dir, "ground_truth.jsonl")
+	stagingDir := filepath.Join(dir, "staging")
+
+	metaStart := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	firstSignalTs := metaStart.Add(2 * time.Second)
+
+	signals := []Signal{
+		{Ts: firstSignalTs, Sensor: "transcript", Kind: "line",
+			Payload: mustJSON(t, map[string]string{"line": `{"stop_reason":"end_turn"}`})},
+	}
+	if err := writeJSONL(signalsPath, signals); err != nil {
+		t.Fatal(err)
+	}
+
+	// Label at +2000ms from meta — this matches the signal IFF the
+	// anchor is meta. With anchor=signals[0].Ts, the label would resolve
+	// to firstSignalTs+2s, which is past every signal → conflict.
+	meta := groundtruth.Meta{SchemaVersion: 1, Agent: "x", Scenario: "y", RecordingStartedAt: metaStart}
+	labels := []groundtruth.Label{
+		{TsOffsetMs: 2000, Marker: "turn_done", ExpectedState: "ready", ToleranceMs: 500},
+	}
+	f, _ := os.Create(gtPath)
+	groundtruth.Write(f, meta, labels)
+	f.Close()
+
+	if err := Run(context.Background(), Input{
+		Agent: "x", Scenario: "y",
+		SignalsPath: signalsPath, GroundTruth: gtPath, StagingDir: stagingDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var cr ConflictReport
+	loadJSON(t, filepath.Join(stagingDir, "synthesis_conflicts.json"), &cr)
+	if len(cr.Conflicts) != 0 {
+		t.Errorf("anchor mismatch: expected no conflicts (label aligned with signal) but got %+v", cr.Conflicts)
+	}
+	var rs Ruleset
+	loadJSON(t, filepath.Join(stagingDir, "ruleset.json"), &rs)
+	if len(rs.Rules) != 1 {
+		t.Errorf("expected 1 rule from the in-window signal, got %d", len(rs.Rules))
+	}
+}
+
 func TestRun_reportsConflictsWhenSignalsMissing(t *testing.T) {
 	dir := t.TempDir()
 	signalsPath := filepath.Join(dir, "signals.jsonl")

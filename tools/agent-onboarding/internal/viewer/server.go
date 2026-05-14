@@ -22,11 +22,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"irrlicht/tools/agent-onboarding/internal/groundtruth"
 )
+
+// slugRE constrains user-supplied URL components (agent, scenario id) so
+// they can never traverse out of replaydata/agents/. Matches the same
+// shape the survey schema enforces for agent slugs.
+var slugRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 //go:embed web/*
 var webFS embed.FS
@@ -143,6 +149,10 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	agent, subtree, id := parts[0], parts[1], parts[2]
 	if subtree != "scenarios" && subtree != "regression" {
 		http.Error(w, "subtree must be 'scenarios' or 'regression'", http.StatusBadRequest)
+		return
+	}
+	if !slugRE.MatchString(agent) || !slugRE.MatchString(id) {
+		http.Error(w, "agent and id must match ^[a-z0-9][a-z0-9_-]*$", http.StatusBadRequest)
 		return
 	}
 	scenarioDir := filepath.Join(s.RepoRoot, "replaydata", "agents", agent, subtree, id)

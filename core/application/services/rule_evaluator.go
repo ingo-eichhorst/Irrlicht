@@ -11,9 +11,35 @@ package services
 
 import (
 	"encoding/json"
+	"regexp"
+	"strings"
 
 	"irrlicht/core/domain/session"
 )
+
+// RuntimeSupportedKinds lists the rule kinds matchRuntime can evaluate
+// from SessionMetrics alone (no per-signal sensor context available at
+// runtime). Codegen reads this set to filter the synthesizer's output
+// down to what the live daemon can actually fire on.
+//
+// Kinds NOT in this list (pane_substring_present, network_request_active,
+// file_event_burst, process_spawned, etc.) need raw signals.jsonl
+// inspection and are validator-only — they're useful for offline
+// regression but don't drive live state.
+var RuntimeSupportedKinds = map[string]struct{}{
+	"transcript_field_value": {},
+	"transcript_event_kind":  {},
+	"transcript_tail_regex":  {},
+	"interrupt_marker":       {},
+	"hook_fired":             {},
+}
+
+// IsRuntimeSupported reports whether the given rule kind can be
+// evaluated by the live runtime (vs. being validator-only).
+func IsRuntimeSupported(kind string) bool {
+	_, ok := RuntimeSupportedKinds[kind]
+	return ok
+}
 
 // ClassifierRule is the runtime representation of one synthesized rule.
 // Generated adapters export a []ClassifierRule from their classifier_rules.go.
@@ -74,7 +100,11 @@ func EvaluateRules(rules []ClassifierRule, currentState string, ec EvalContext) 
 // matchRuntime evaluates a rule against EvalContext. Kinds that need
 // per-signal evidence (pane snapshots, network probes, etc.) are skipped
 // at runtime — the validator catches those via signals.jsonl replay.
+// See RuntimeSupportedKinds for the authoritative list.
 func matchRuntime(r ClassifierRule, ec EvalContext) bool {
+	if ec.Metrics == nil {
+		return false
+	}
 	switch r.Kind {
 	case "transcript_field_value":
 		var p struct {
@@ -85,11 +115,9 @@ func matchRuntime(r ClassifierRule, ec EvalContext) bool {
 			return false
 		}
 		// Heuristic mapping over SessionMetrics. The synthesizer's most
-		// common emit is `stop_reason=end_turn` for ready and similar
-		// for working; we approximate by checking IsAgentDone.
-		if ec.Metrics == nil {
-			return false
-		}
+		// common emit is `stop_reason=end_turn` for ready and
+		// `event_msg.type=task_complete` for codex; both are turn-done
+		// signals routed through IsAgentDone.
 		if p.Field == "stop_reason" && p.Value == "end_turn" {
 			return ec.Metrics.IsAgentDone()
 		}
@@ -98,19 +126,60 @@ func matchRuntime(r ClassifierRule, ec EvalContext) bool {
 		}
 		return false
 
-	case "interrupt_marker":
-		// Match if the metrics record a user interrupt or tool denial in
-		// the most-recent pass.
-		if ec.Metrics == nil {
+	case "transcript_event_kind":
+		// Synthesis emits this for `kind` / `event_type` / `type` field
+		// matches on the most recent transcript line. The daemon tracks
+		// `LastEventType` for the same purpose.
+		var p struct {
+			EventKind string `json:"event_kind"`
+		}
+		if err := json.Unmarshal(r.Params, &p); err != nil {
 			return false
 		}
-		return ec.Metrics.LastWasUserInterrupt || ec.Metrics.LastWasToolDenial
+		return ec.Metrics.LastEventType == p.EventKind
+
+	case "transcript_tail_regex":
+		// Match the last transcript line's raw text against the pattern.
+		// Cheap-and-cached: the daemon plumbs the last line into
+		// EvalContext.LastEventTxt at metrics-collection time.
+		if ec.LastEventTxt == "" {
+			return false
+		}
+		var p struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return false
+		}
+		re, err := regexp.Compile(p.Pattern)
+		if err != nil {
+			return false
+		}
+		return re.MatchString(ec.LastEventTxt)
+
+	case "interrupt_marker":
+		// Match if the metrics record a user interrupt or tool denial in
+		// the most-recent pass. The synth-derived marker_substring is
+		// not consulted at runtime — SessionMetrics has already classified
+		// the interrupt; whichever substring drove it doesn't matter.
+		if ec.Metrics.LastWasUserInterrupt || ec.Metrics.LastWasToolDenial {
+			return true
+		}
+		// Fallback: if the synth emitted a substring and we have the last
+		// line text, do a contains check.
+		if ec.LastEventTxt == "" {
+			return false
+		}
+		var p struct {
+			MarkerSubstring string `json:"marker_substring"`
+		}
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return false
+		}
+		return p.MarkerSubstring != "" && strings.Contains(ec.LastEventTxt, p.MarkerSubstring)
 
 	case "hook_fired":
 		// Adapter wired its own hook signal into SessionMetrics.PermissionPending.
-		if ec.Metrics == nil {
-			return false
-		}
 		return ec.Metrics.PermissionPending
 	}
 	return false

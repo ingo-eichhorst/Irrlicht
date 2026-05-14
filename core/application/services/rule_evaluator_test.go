@@ -71,6 +71,60 @@ func TestEvaluateRules_priorityOrder(t *testing.T) {
 	}
 }
 
+func TestEvaluateRules_transcriptEventKind(t *testing.T) {
+	rules := []ClassifierRule{
+		mkClsRule("transcript_event_kind", session.StateReady,
+			map[string]string{"event_kind": "task_complete"}),
+	}
+	m := &session.SessionMetrics{LastEventType: "task_complete"}
+	st, ev, ok := EvaluateRules(rules, session.StateWorking, EvalContext{Metrics: m})
+	if !ok || st != session.StateReady {
+		t.Errorf("want fired→ready; got fired=%v st=%s", ok, st)
+	}
+	if ev.RuleID != "transcript_event_kind" {
+		t.Errorf("evidence rule_id wrong: %+v", ev)
+	}
+
+	m2 := &session.SessionMetrics{LastEventType: "tool_use"}
+	if _, _, fired := EvaluateRules(rules, session.StateWorking, EvalContext{Metrics: m2}); fired {
+		t.Error("expected non-fire on different event_kind")
+	}
+}
+
+func TestEvaluateRules_transcriptTailRegex(t *testing.T) {
+	rules := []ClassifierRule{
+		mkClsRule("transcript_tail_regex", session.StateWorking,
+			map[string]string{"pattern": `"role":"user"`}),
+	}
+	m := &session.SessionMetrics{}
+	ec := EvalContext{Metrics: m, LastEventTxt: `{"role":"user","content":"hi"}`}
+	st, _, ok := EvaluateRules(rules, session.StateReady, ec)
+	if !ok || st != session.StateWorking {
+		t.Errorf("expected match→working; got ok=%v st=%s", ok, st)
+	}
+}
+
+func TestRuntimeSupportedKinds_matchesEvaluator(t *testing.T) {
+	// Every kind in the supported map must have a matching case in
+	// matchRuntime. We can't introspect cases directly, so we exercise
+	// each kind with a no-op params payload and verify it doesn't panic.
+	for kind := range RuntimeSupportedKinds {
+		t.Run(kind, func(t *testing.T) {
+			r := mkClsRule(kind, session.StateReady, map[string]string{})
+			_ = matchRuntime(r, EvalContext{Metrics: &session.SessionMetrics{}})
+		})
+	}
+}
+
+func TestIsRuntimeSupported(t *testing.T) {
+	if !IsRuntimeSupported("transcript_field_value") {
+		t.Error("transcript_field_value should be runtime-supported")
+	}
+	if IsRuntimeSupported("pane_substring_present") {
+		t.Error("pane_substring_present is validator-only, not runtime")
+	}
+}
+
 func TestEvaluateRules_transcriptFieldValue_endTurn(t *testing.T) {
 	rules := []ClassifierRule{
 		mkClsRule("transcript_field_value", session.StateReady, map[string]string{

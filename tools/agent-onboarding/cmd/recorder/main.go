@@ -346,6 +346,17 @@ func runRecord(cfg recordCfg) error {
 	merged := sensors.Merge(sources...)
 	writeErr := sensors.WriteSignals(ctx, sigWriter, merged)
 
+	// On context cancellation WriteSignals returns immediately, but the
+	// sensor goroutines feeding `merged` may still be racing to push
+	// final values into the 64-element merge buffer. If nobody drains
+	// `merged`, those goroutines block on send forever and Merge's
+	// wg.Wait()→close(out) never runs. Spawn a drain so every sensor
+	// finishes cleanly before we tear down.
+	go func() {
+		for range merged {
+		}
+	}()
+
 	// Update meta with end time on shutdown.
 	meta.EndedAt = time.Now().UTC()
 	if err := writeMeta(cfg.outDir, meta); err != nil {

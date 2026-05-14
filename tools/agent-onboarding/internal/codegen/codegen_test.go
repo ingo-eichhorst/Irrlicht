@@ -71,6 +71,79 @@ func TestGenerate_endToEndEmitsCompilableAdapter(t *testing.T) {
 	}
 }
 
+// TestGenerate_preservesAngleBracketsInPatterns confirms readCompactJSON
+// doesn't HTML-escape `<` / `>` / `&` — a regression test for the bug
+// where embedded rulesets contained `<proposed_plan>` instead
+// of `<proposed_plan>` (legitimate match target for Codex output).
+func TestGenerate_preservesAngleBracketsInPatterns(t *testing.T) {
+	stage := t.TempDir()
+	rs := `{"schema_version":1,"agent":"toy","generated_at":"2026-05-14T00:00:00Z","rules":[
+{"rule_id":"x","kind":"transcript_tail_regex","target_state":"working",
+ "params":{"pattern":"<proposed_plan>"},"priority":0}]}`
+	os.WriteFile(filepath.Join(stage, "ruleset.json"), []byte(rs), 0o644)
+	os.WriteFile(filepath.Join(stage, "driver_protocol.json"), []byte(`{"schema_version":1,"agent":"toy"}`), 0o644)
+
+	out := filepath.Join(t.TempDir(), "adapter")
+	driver := filepath.Join(t.TempDir(), "driver")
+	if err := Generate(Input{Agent: "toy", StagingDir: stage, AdapterOutDir: out, DriverOutDir: driver}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(out, "classifier_rules.go"))
+	// Default json.Marshal HTML-escapes angle brackets into 6-byte unicode
+	// escapes. We construct the bad-form sentinels at runtime so the
+	// source isn't itself rendered ambiguously by terminal output.
+	escapedLT := "\\u00" + "3c"
+	escapedGT := "\\u00" + "3e"
+	if strings.Contains(string(b), escapedLT) || strings.Contains(string(b), escapedGT) {
+		t.Errorf("classifier_rules.go contains \\u-escaped angle brackets — readCompactJSON regression:\n%s", b)
+	}
+	if !strings.Contains(string(b), "<proposed_plan>") {
+		t.Errorf("expected literal <proposed_plan> in classifier_rules.go:\n%s", b)
+	}
+}
+
+// TestGenerate_handlesBacktickInRulesetParams confirms the codegen survives
+// a ruleset.json whose embedded params contain a backtick (which would
+// break the legacy `...` raw-string embedding). Synthesis can produce
+// such patterns when transcript content uses backticks (markdown code
+// fences, shell quoting, etc.).
+func TestGenerate_handlesBacktickInRulesetParams(t *testing.T) {
+	stage := t.TempDir()
+	// Hand-build a ruleset.json containing a backtick in a pattern field.
+	rs := `{
+  "schema_version": 1,
+  "agent": "toy",
+  "generated_at": "2026-05-14T00:00:00Z",
+  "rules": [
+    {"rule_id": "x", "kind": "transcript_tail_regex", "target_state": "ready",
+     "params": {"pattern": "code fence ` + "`example`" + ` here"}, "priority": 0}
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(stage, "ruleset.json"), []byte(rs), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dp := `{"schema_version":1,"agent":"toy"}`
+	if err := os.WriteFile(filepath.Join(stage, "driver_protocol.json"), []byte(dp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "adapter")
+	driver := filepath.Join(t.TempDir(), "driver")
+	err := Generate(Input{Agent: "toy", StagingDir: stage, AdapterOutDir: out, DriverOutDir: driver})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// The generated classifier_rules.go must parse via go/format.Source
+	// (Generate already runs gofmt; a syntax error there would surface as
+	// an error). Read it back and confirm the backtick survives.
+	b, err := os.ReadFile(filepath.Join(out, "classifier_rules.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "code fence") {
+		t.Errorf("backtick-bearing pattern lost from generated source:\n%s", b)
+	}
+}
+
 // prepareSeed writes a tiny signals.jsonl + ground_truth.jsonl, runs synth,
 // and leaves ruleset.json + driver_protocol.json in stage/.
 func prepareSeed(t *testing.T, stage string) {

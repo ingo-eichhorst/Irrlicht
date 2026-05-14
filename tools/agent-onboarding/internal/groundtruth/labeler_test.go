@@ -78,6 +78,26 @@ func TestWriteRead_roundtrip(t *testing.T) {
 	}
 }
 
+func TestRead_sortsLabelsByTsOffsetMs(t *testing.T) {
+	// Intentionally out-of-order labels; Read should sort them.
+	content := `{"schema_version":1,"agent":"x","scenario":"y"}
+{"ts_offset_ms":2000,"marker":"b","expected_state":"working"}
+{"ts_offset_ms":1000,"marker":"a","expected_state":"ready"}
+{"ts_offset_ms":3000,"marker":"c","expected_state":"ready"}
+`
+	_, labels, err := Read(strings.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != 3 {
+		t.Fatalf("want 3 labels, got %d", len(labels))
+	}
+	if labels[0].Marker != "a" || labels[1].Marker != "b" || labels[2].Marker != "c" {
+		t.Errorf("labels not sorted by ts_offset_ms: %v %v %v",
+			labels[0].Marker, labels[1].Marker, labels[2].Marker)
+	}
+}
+
 func TestRead_noMetaHeaderIsTolerated(t *testing.T) {
 	// File with only labels, no meta header.
 	content := `{"ts_offset_ms":0,"marker":"x","expected_state":"working"}` + "\n" +

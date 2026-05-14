@@ -201,6 +201,13 @@ func Read(r io.Reader) (Meta, []Label, error) {
 		}
 		labels = append(labels, l)
 	}
+	// Phase 3's greedyCompose assigns priority by iteration order, and
+	// the validator iterates in label order looking for the closest
+	// emitted transition. A hand-edited ground_truth.jsonl with rows
+	// out of chronological order would silently produce a ruleset whose
+	// priorities don't match temporal order — sort defensively so the
+	// invariant holds regardless of authoring discipline.
+	sort.SliceStable(labels, func(i, j int) bool { return labels[i].TsOffsetMs < labels[j].TsOffsetMs })
 	return meta, labels, nil
 }
 

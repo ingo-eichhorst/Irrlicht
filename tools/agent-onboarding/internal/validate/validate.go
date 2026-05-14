@@ -23,6 +23,11 @@ import (
 	"irrlicht/tools/agent-onboarding/internal/groundtruth"
 )
 
+// ErrCoverageScenarioNotFound is returned by WriteCoverage when the
+// caller's scenarioID doesn't appear in the coverage matrix. Surfaced
+// rather than silently no-op'd so a typoed --coverage-id is visible.
+var ErrCoverageScenarioNotFound = errors.New("coverage: scenario id not found in matrix")
+
 // EmittedTransition is one state_transition event from the daemon's
 // events.jsonl. Fields mirror the legacy record format.
 type EmittedTransition struct {
@@ -268,7 +273,7 @@ func WriteCoverage(coveragePath, scenarioID, agent string, cell CoverageCell) er
 		break
 	}
 	if !updated {
-		return nil // silent no-op; caller may want to log
+		return fmt.Errorf("%w: id=%q agent=%q", ErrCoverageScenarioNotFound, scenarioID, agent)
 	}
 	// Write back with stable indent.
 	out, err := json.MarshalIndent(root, "", "  ")

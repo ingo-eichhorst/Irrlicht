@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -103,9 +104,12 @@ func Run(ctx context.Context, in Input) error {
 	if err != nil {
 		return fmt.Errorf("read ground-truth: %w", err)
 	}
-	_ = meta // not used yet; reserved for cross-validation
-
-	rules, conflicts := greedyCompose(signals, labels)
+	// Anchor labels against meta.RecordingStartedAt when available — labels
+	// are authored relative to wall-clock recording start, NOT to the
+	// first signal's arrival (which may lag by hundreds of ms depending
+	// on sensor cadence). Fall back to signals[0].Ts only when meta is
+	// zero, e.g. for a recording that predates the multi-sensor recorder.
+	rules, conflicts := greedyCompose(signals, labels, meta.RecordingStartedAt)
 	protocol := derivedProtocol(in.Agent, signals)
 
 	if err := writeJSON(filepath.Join(in.StagingDir, "ruleset.json"), Ruleset{
@@ -126,13 +130,22 @@ func Run(ctx context.Context, in Input) error {
 
 // greedyCompose is the heart of synthesis. For each ground-truth label,
 // it scans signals within the tolerance window around the label's
-// ts_offset_ms and picks the most specific rule that fires consistently
-// with the expected state. If nothing fires, the label becomes a Conflict.
-func greedyCompose(signals []Signal, labels []groundtruth.Label) ([]rulelib.Rule, []Conflict) {
+// ts_offset_ms (measured from anchor) and picks the most specific rule
+// that fires consistently with the expected state. If nothing fires,
+// the label becomes a Conflict.
+//
+// anchor is the recording's wall-clock start (from
+// ground_truth.jsonl's meta.recording_started_at). If zero, falls back
+// to signals[0].Ts — older recordings without meta still produce
+// usable (if drift-prone) anchors.
+func greedyCompose(signals []Signal, labels []groundtruth.Label, anchor time.Time) ([]rulelib.Rule, []Conflict) {
 	if len(signals) == 0 {
 		return nil, allConflicts(labels, "no signals.jsonl entries")
 	}
-	startTs := signals[0].Ts
+	startTs := anchor
+	if startTs.IsZero() {
+		startTs = signals[0].Ts
+	}
 	var rules []rulelib.Rule
 	var conflicts []Conflict
 	seen := map[string]bool{}
@@ -233,7 +246,7 @@ func proposeCandidates(signals []Signal, nearby []int, targetState string) []rul
 				continue
 			}
 			if len(pl.Args) > 0 {
-				out = append(out, mkRule(rulelib.KindProcessSpawned, targetState, map[string]string{"name_pattern": "^" + regexEscape(pl.Args[0])}))
+				out = append(out, mkRule(rulelib.KindProcessSpawned, targetState, map[string]string{"name_pattern": "^" + regexp.QuoteMeta(pl.Args[0])}))
 			}
 		case "pane":
 			if s.Kind != "snapshot" {
@@ -405,15 +418,4 @@ func firstNonEmpty(lines []string) string {
 	return ""
 }
 
-func regexEscape(s string) string {
-	const meta = `\.+*?()|[]{}^$`
-	var b strings.Builder
-	for _, r := range s {
-		if strings.ContainsRune(meta, r) {
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
 

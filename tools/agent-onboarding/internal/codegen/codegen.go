@@ -20,10 +20,13 @@ import (
 	"go/format"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
 
+	"irrlicht/core/application/services"
 	"irrlicht/tools/agent-onboarding/internal/synth"
 )
 
@@ -60,6 +63,15 @@ func Generate(in Input) error {
 	if err != nil {
 		return fmt.Errorf("read ruleset: %w", err)
 	}
+	// Partition the ruleset into rules the live runtime can evaluate vs.
+	// rules that are validator-only (per-signal evidence kinds like
+	// pane_substring_present). The embedded `rulesetJSON` const carries
+	// only the runtime set; the validator-only set is emitted as a
+	// comment so reviewers can see what was synthesized but skipped.
+	rs, validatorOnly, err := filterRulesetByRuntime(rs)
+	if err != nil {
+		return fmt.Errorf("filter ruleset: %w", err)
+	}
 	dp, err := readProtocol(filepath.Join(in.StagingDir, "driver_protocol.json"))
 	if err != nil {
 		return fmt.Errorf("read driver_protocol: %w", err)
@@ -81,30 +93,36 @@ func Generate(in Input) error {
 		return err
 	}
 
+	// RulesetJSON is embedded into a Go source file. Raw-string backticks
+	// can't contain backticks, so we strconv.Quote the JSON bytes to get
+	// a safe interpreted-string literal that survives any character
+	// (including backticks, quotes, and control bytes).
 	data := struct {
-		Agent          string
-		PackageName    string
-		DisplayName    string
-		ProcessName    string
-		GeneratedAt    string
-		RulesetJSON    string
-		ProtocolJSON   string
-		HasReadiness   bool
-		HasTurnDone    bool
-		HasTrustDialog bool
-		ReadinessSig   string
-		TurnDoneSig    string
-		TrustKeys      string
-		InterruptKey   string
-		TypingMinMs    int
+		Agent              string
+		PackageName        string
+		DisplayName        string
+		ProcessName        string
+		GeneratedAt        string
+		RulesetJSONQuoted  string // strconv.Quote'd; emitted as a Go string literal
+		ValidatorOnlyKinds string // comma-joined list of skipped kinds, for the source comment
+		ProtocolJSON       string
+		HasReadiness      bool
+		HasTurnDone       bool
+		HasTrustDialog    bool
+		ReadinessSig      string
+		TurnDoneSig       string
+		TrustKeys         string
+		InterruptKey      string
+		TypingMinMs       int
 	}{
-		Agent:          in.Agent,
-		PackageName:    in.Agent,
-		DisplayName:    displayName,
-		ProcessName:    processName,
-		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
-		RulesetJSON:    string(rs),
-		ProtocolJSON:   string(dp),
+		Agent:             in.Agent,
+		PackageName:       in.Agent,
+		DisplayName:       displayName,
+		ProcessName:       processName,
+		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
+		RulesetJSONQuoted:  strconv.Quote(string(rs)),
+		ValidatorOnlyKinds: strings.Join(validatorOnly, ", "),
+		ProtocolJSON:       string(dp),
 		HasReadiness:   gjsonString(dp, "readiness_signal") != "",
 		HasTurnDone:    gjsonString(dp, "turn_done_signal") != "",
 		HasTrustDialog: gjsonString(dp, "trust_dialog_keys") != "",
@@ -164,20 +182,16 @@ func renderTemplate(path, tmpl string, data any, gofmt bool) error {
 	return os.WriteFile(path, out, 0o644)
 }
 
-func readRuleset(path string) (json.RawMessage, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	// Compact for embedding.
-	var v any
-	if err := json.Unmarshal(b, &v); err != nil {
-		return nil, err
-	}
-	return json.Marshal(v)
-}
+func readRuleset(path string) (json.RawMessage, error) { return readCompactJSON(path) }
+func readProtocol(path string) (json.RawMessage, error) { return readCompactJSON(path) }
 
-func readProtocol(path string) (json.RawMessage, error) {
+// readCompactJSON reads a JSON file, parses + re-emits it compactly, and
+// preserves literal `<`, `>`, `&` instead of escaping them to <
+// etc. The default `json.Marshal` HTML-escapes these because it assumes
+// it might be writing into a web page; we're writing into Go source +
+// later UI rendering where the literal form is what reviewers expect to
+// read.
+func readCompactJSON(path string) (json.RawMessage, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -186,7 +200,15 @@ func readProtocol(path string) (json.RawMessage, error) {
 	if err := json.Unmarshal(b, &v); err != nil {
 		return nil, err
 	}
-	return json.Marshal(v)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	// json.Encoder.Encode appends a trailing \n — strip so the compact
+	// form round-trips byte-for-byte through a downstream marshaler.
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 // gjsonString is a tiny JSON-path accessor used by the template builder.
@@ -248,3 +270,55 @@ func firstNonEmpty(a, b string) string {
 // Use synth import to make compile-time dep explicit; codegen reads
 // synth's output schemas but doesn't call its functions directly today.
 var _ = synth.Ruleset{}
+
+// filterRulesetByRuntime splits a synthesized ruleset.json into:
+//
+//	out:           a new ruleset.json containing only rules whose Kind is
+//	               in services.RuntimeSupportedKinds (the runtime can
+//	               actually evaluate these)
+//	skippedKinds:  sorted unique list of the kinds that were filtered out
+//	               (each appears in the generated source as a comment so
+//	               reviewers can see what synthesis produced)
+//
+// This closes the gap the reviewer surfaced: synth happily emits all 12
+// kinds, but the live runtime can only fire on the metrics-derived
+// ones. Without this filter, generated adapters carry rules that never
+// fire, which is confusing and risks silent miscoverage.
+func filterRulesetByRuntime(rs json.RawMessage) (json.RawMessage, []string, error) {
+	var doc struct {
+		SchemaVersion int                    `json:"schema_version"`
+		Agent         string                 `json:"agent"`
+		GeneratedAt   string                 `json:"generated_at"`
+		Rules         []map[string]any       `json:"rules"`
+	}
+	if err := json.Unmarshal(rs, &doc); err != nil {
+		return nil, nil, err
+	}
+	var kept []map[string]any
+	skipped := map[string]struct{}{}
+	for _, r := range doc.Rules {
+		kindV, ok := r["kind"].(string)
+		if !ok {
+			continue
+		}
+		if services.IsRuntimeSupported(kindV) {
+			kept = append(kept, r)
+		} else {
+			skipped[kindV] = struct{}{}
+		}
+	}
+	doc.Rules = kept
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(doc); err != nil {
+		return nil, nil, err
+	}
+	out := bytes.TrimRight(buf.Bytes(), "\n")
+	skippedList := make([]string, 0, len(skipped))
+	for k := range skipped {
+		skippedList = append(skippedList, k)
+	}
+	sort.Strings(skippedList)
+	return out, skippedList, nil
+}

@@ -69,6 +69,28 @@ func TestScenarioDetail_returnsMetaAndGroundTruth(t *testing.T) {
 	}
 }
 
+func TestScenarioDetail_rejectsPathTraversal(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "replaydata", "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{RepoRoot: root}
+	// Each of these would, without validation, escape into /etc or ../
+	for _, target := range []string{
+		"/api/scenarios/..%2Fetc/scenarios/passwd",
+		"/api/scenarios/../etc/scenarios/passwd",
+		"/api/scenarios/ok/scenarios/..%2F..",
+		"/api/scenarios/AGENT/scenarios/id", // uppercase rejected
+		"/api/scenarios/a$gent/scenarios/id",
+	} {
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, httptest.NewRequest("GET", target, nil))
+		if rr.Code == http.StatusOK {
+			t.Errorf("target %q was accepted (code=%d) — path traversal not blocked", target, rr.Code)
+		}
+	}
+}
+
 func TestScenarioDetail_404OnMissing(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "replaydata", "agents"), 0o755); err != nil {
