@@ -352,7 +352,7 @@ struct SessionListView: View {
             } else if sessionManager.sessions.count <= 3 {
                 ForEach(sessionManager.sessions.prefix(3)) { session in
                     Image(systemName: session.state.glyph)
-                        .foregroundColor(Color(hex: session.state.color))
+                        .foregroundColor(session.state.color)
                         .font(.system(size: 12))
                 }
             } else {
@@ -419,7 +419,7 @@ struct SessionListView: View {
 
 struct ContextBar: View {
     let utilization: Double
-    let pressureColor: String
+    let pressureColor: Color
     var label: String? = nil
 
     var body: some View {
@@ -428,7 +428,7 @@ struct ContextBar: View {
                 RoundedRectangle(cornerRadius: IrrRadius.xs)
                     .fill(IrrColors.trackFill)
                 RoundedRectangle(cornerRadius: IrrRadius.xs)
-                    .fill(Color(hex: pressureColor))
+                    .fill(pressureColor)
                     .frame(width: geo.size.width * min(CGFloat(utilization) / 100, 1.0))
                 if let label {
                     Text(label)
@@ -460,7 +460,7 @@ struct SessionRowView: View {
                 // State icon
                 Image(systemName: session.state.glyph)
                     .font(.system(size: 10))
-                    .foregroundColor(Color(hex: session.state.color))
+                    .foregroundColor(session.state.color)
                     .frame(width: 12)
                     .tooltip(session.state.label)
                     .accessibilityIdentifier("session-state-icon-\(session.id)")
@@ -518,7 +518,7 @@ struct SessionRowView: View {
                         } else {
                             Text(metrics.formattedContextUtilization)
                                 .font(.system(size: 9, design: .monospaced))
-                                .foregroundColor(Color(hex: metrics.contextPressureColor))
+                                .foregroundColor(metrics.contextPressureColor)
                                 .frame(width: 32, alignment: .leading)
                         }
                     } else if let metrics = session.metrics, metrics.totalTokens > 0 {
@@ -815,7 +815,7 @@ struct SubagentRowView: View {
             // State indicator (small)
             Image(systemName: session.state.glyph)
                 .font(.system(size: 9))
-                .foregroundColor(Color(hex: session.state.color))
+                .foregroundColor(session.state.color)
                 .frame(width: 12)
                 .tooltip(session.state.label)
 
@@ -823,7 +823,7 @@ struct SubagentRowView: View {
             if let metrics = session.metrics, metrics.hasContextData {
                 Text(metrics.formattedContextUtilization)
                     .font(.caption2)
-                    .foregroundColor(Color(hex: metrics.contextPressureColor))
+                    .foregroundColor(metrics.contextPressureColor)
             } else if debugMode, let metrics = session.metrics, metrics.totalTokens > 0 {
                 Text(metrics.formattedTokenUsage)
                     .font(.caption2)

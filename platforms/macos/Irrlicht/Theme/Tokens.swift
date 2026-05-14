@@ -27,6 +27,9 @@ enum IrrHex {
 /// so the two formats stay paired; consumers that need a leading `#` use
 /// `IrrHex.*` directly with `Color(hex:)`.
 enum IrrSVG {
+    static let working   = "8B5CF6"
+    static let waiting   = "FF9500"
+    static let ready     = "34C759"
     static let cancelled = "8E8E93"
 }
 

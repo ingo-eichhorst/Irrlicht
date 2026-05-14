@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import os
 
 /// Branding for one inbound agent adapter, served by the daemon's
@@ -151,13 +152,13 @@ struct SessionMetrics: Codable {
         }
     }
     
-    var contextPressureColor: String {
+    var contextPressureColor: Color {
         switch pressureLevel {
-        case "safe":     return IrrHex.pressureLow
-        case "caution":  return IrrHex.pressureMedium
-        case "warning":  return IrrHex.pressureHigh
-        case "critical": return IrrHex.pressureCritical
-        default:         return IrrHex.cancelled
+        case "safe":     return IrrColors.pressureLow
+        case "caution":  return IrrColors.pressureMedium
+        case "warning":  return IrrColors.pressureHigh
+        case "critical": return IrrColors.pressureCritical
+        default:         return IrrColors.cancelled
         }
     }
     
@@ -412,17 +413,21 @@ struct SessionState: Identifiable, Codable {
             }
         }
 
-        var color: String {
+        var color: Color {
             switch self {
-            case .working: return IrrHex.working
-            case .waiting: return IrrHex.waiting
-            case .ready:   return IrrHex.ready
+            case .working: return IrrColors.working
+            case .waiting: return IrrColors.waiting
+            case .ready:   return IrrColors.ready
             }
         }
 
-        /// Hex color without leading `#`, for SVG markup.
+        /// Hex without leading `#`, for inline SVG `fill="#..."` markup.
         var hexColor: String {
-            String(color.dropFirst())
+            switch self {
+            case .working: return IrrSVG.working
+            case .waiting: return IrrSVG.waiting
+            case .ready:   return IrrSVG.ready
+            }
         }
 
         /// Highest-priority state in a collection (waiting > working > ready).
