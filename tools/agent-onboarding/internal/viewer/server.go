@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/scenarios/", s.handleScenarioDetail) // path with trailing parts
 	mux.HandleFunc("/api/scenarios", s.handleScenariosList)
+	mux.HandleFunc("/api/catalog", s.handleCatalog)
 	s.playback.registerPlaybackRoutes(mux)
 	mux.Handle("/", s.staticHandler())
 	return mux
@@ -80,6 +81,23 @@ func (s *Server) staticHandler() http.Handler {
 		})
 	}
 	return http.FileServerFS(sub)
+}
+
+// handleCatalog serves the canonical scenario catalog —
+// `.claude/skills/ir:onboard-agent/scenarios.json` — verbatim. The
+// viewer's Overview tab joins this against the live recording list
+// from /api/scenarios to compute the per-adapter coverage matrix.
+// Re-reading on every request guarantees "always the latest state"
+// when the maintainer edits the file.
+func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.RepoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read scenarios.json: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Write(b)
 }
 
 // ScenarioListEntry is one row in /api/scenarios.
