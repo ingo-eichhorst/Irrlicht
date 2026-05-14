@@ -52,6 +52,9 @@ class SessionManager: ObservableObject {
     private var projectCostsTimer: Timer?
     private let projectCostsRefreshInterval: TimeInterval = 30.0
 
+    /// Daemon-owned directory. `irrlichd` creates it and writes session JSON
+    /// files; the app only mutates individual files for explicit user actions
+    /// (`resetSessionState`, `deleteSession`). Reads go through the WebSocket.
     private let instancesPath: URL
     private let orderFilePath: URL
     private var sessionOrder: [String] = []

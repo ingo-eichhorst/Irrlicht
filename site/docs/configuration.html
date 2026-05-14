@@ -145,11 +145,17 @@
 
       <h3>I want to peek at sessions from my phone on the same WiFi</h3>
 
-      <p>Run the daemon with both LAN binding and Bonjour discovery enabled:</p>
+      <p>If you run <code>irrlichd</code> yourself from a terminal, set both vars inline:</p>
 
       <pre><code>IRRLICHT_BIND_ADDR=0.0.0.0:7837 IRRLICHT_MDNS=1 irrlichd</code></pre>
 
-      <p>Then open <code>http://&lt;hostname&gt;.local:7837</code> in any browser on the same network. mDNS lets the phone find the host without you typing an IP.</p>
+      <p>If the macOS app auto-spawns the daemon for you (the default for DMG / Homebrew installs), shell env vars never reach it. Set them in the per-user launchd context first, then relaunch the app:</p>
+
+      <pre><code>launchctl setenv IRRLICHT_BIND_ADDR 0.0.0.0:7837
+launchctl setenv IRRLICHT_MDNS 1
+# quit Irrlicht.app from the menu bar, then reopen it</code></pre>
+
+      <p>Either way, then open <code>http://&lt;hostname&gt;.local:7837</code> in any browser on the same network. mDNS lets the phone find the host without you typing an IP.</p>
 
       <p><strong>Security note:</strong> the daemon has no authentication today. Anyone on the network you bind to can read all your transcripts. Only do this on networks you trust (your home LAN, your tailnet) &mdash; never on a coffee-shop WiFi. See <a href="https://github.com/ingo-eichhorst/Irrlicht/blob/main/SECURITY.md">SECURITY.md</a> for the full posture.</p>
 
@@ -171,9 +177,17 @@
 
       <h3>The macOS app is misbehaving and I want to see its session state</h3>
 
-      <p>Launch the app with debug state dumps enabled:</p>
+      <p>Env vars set in your shell do <em>not</em> reach a GUI app launched via <code>open -a</code> &mdash; LaunchServices spawns the app without inheriting them. Use one of these instead:</p>
 
-      <pre><code>IRRLICHT_DEBUG=1 open -a Irrlicht</code></pre>
+      <pre><code># Most reliable: invoke the binary directly
+IRRLICHT_DEBUG=1 /Applications/Irrlicht.app/Contents/MacOS/Irrlicht
+
+# Or, on macOS 13+: forward via open's --env flag
+open -a Irrlicht --env IRRLICHT_DEBUG=1
+
+# Or, persist for the launchd session and relaunch normally
+launchctl setenv IRRLICHT_DEBUG 1
+# quit Irrlicht.app, then reopen it</code></pre>
 
       <p>The current session list, connection state, and history buckets are written to <code>~/.irrlicht/debug-state.json</code> on every update. Useful when filing a bug report.</p>
 
