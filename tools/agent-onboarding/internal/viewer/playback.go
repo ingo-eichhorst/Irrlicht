@@ -72,14 +72,46 @@ type PlaybackManager struct {
 // NewPlaybackManager wires the manager and its shared WebSocket hub.
 // repoRoot is needed to read platforms/web/index.html for the embedded
 // dashboard view.
+//
+// connectSnapshots: when a new WebSocket client (the dashboard inside
+// the iframe) connects, we ship session_created for every currently
+// live session. Without this, fast-speed playbacks (≥10×) burn through
+// their events BEFORE the WS connection completes, leaving the
+// dashboard stuck on "AWAITING SESSIONS". With it, late connections
+// always see the current state.
 func NewPlaybackManager(repoRoot string) *PlaybackManager {
 	broadcaster := services.NewPushService()
-	hub := websocket.NewHub(broadcaster, nil) // no per-session history snapshots in replay mode
-	return &PlaybackManager{
+	m := &PlaybackManager{
 		repoRoot:    repoRoot,
 		broadcaster: broadcaster,
-		hub:         hub,
 	}
+	m.hub = websocket.NewHub(broadcaster, m.connectSnapshots)
+	return m
+}
+
+// connectSnapshots is invoked by the WebSocket hub when a new client
+// attaches. It returns one session_created PushMessage per session
+// currently in the active playback's state map, so a dashboard that
+// connects mid-playback (or after a fast-speed playback completed)
+// still renders the right view.
+func (m *PlaybackManager) connectSnapshots() []outbound.PushMessage {
+	snap := m.Snapshot()
+	if len(snap) == 0 {
+		return nil
+	}
+	out := make([]outbound.PushMessage, 0, len(snap))
+	for _, s := range snap {
+		s.Adapter = normalizeAdapter(s.Adapter)
+		if s.ProjectName == "" {
+			s.ProjectName = inferProjectName(s)
+		}
+		cp := *s
+		out = append(out, outbound.PushMessage{
+			Type:    outbound.PushTypeCreated,
+			Session: &cp,
+		})
+	}
+	return out
 }
 
 // Current returns the active playback, or nil if none.
