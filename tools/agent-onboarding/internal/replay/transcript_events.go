@@ -42,8 +42,11 @@ func SynthesizeEventsFromTranscript(scenarioDir string) []lifecycle.Event {
 }
 
 // synthesizeFromJSONL handles claudecode / codex / pi / opencode style
-// transcripts where each line is a JSON object with `timestamp` and an
-// optional `sessionId` / `type` field.
+// transcripts where each line is a JSON object describing one message
+// or event. Adapter shapes diverge — claudecode uses `timestamp` +
+// `sessionId` + top-level `type`; opencode uses `_ts` (unix ms) +
+// `_role`; codex/pi vary further. extractLineTime + extractLineRole +
+// extractLineSession normalize them.
 func synthesizeFromJSONL(path string) []lifecycle.Event {
 	f, err := os.Open(path)
 	if err != nil {
@@ -52,33 +55,27 @@ func synthesizeFromJSONL(path string) []lifecycle.Event {
 	defer f.Close()
 
 	var (
-		sessionID  string
-		firstTs    time.Time
-		lastTs     time.Time
-		userTs     []time.Time
-		asstTs     []time.Time
-		anyTsSeen  bool
+		sessionID string
+		firstTs   time.Time
+		lastTs    time.Time
+		userTs    []time.Time
+		asstTs    []time.Time
+		anyTsSeen bool
 	)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
-		var line struct {
-			Timestamp string          `json:"timestamp"`
-			SessionID string          `json:"sessionId"`
-			Type      string          `json:"type"`
-			Message   json.RawMessage `json:"message"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+		var raw map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
 			continue
 		}
-		if sessionID == "" && line.SessionID != "" {
-			sessionID = line.SessionID
+		if sessionID == "" {
+			if sid := extractLineSession(raw); sid != "" {
+				sessionID = sid
+			}
 		}
-		if line.Timestamp == "" {
-			continue
-		}
-		ts, err := time.Parse(time.RFC3339Nano, line.Timestamp)
-		if err != nil {
+		ts, ok := extractLineTime(raw)
+		if !ok {
 			continue
 		}
 		if !anyTsSeen {
@@ -86,10 +83,7 @@ func synthesizeFromJSONL(path string) []lifecycle.Event {
 			anyTsSeen = true
 		}
 		lastTs = ts
-		// Classify the line as user-ish or assistant-ish so we can
-		// stitch together a state arc.
-		role := classifyRole(line.Type, line.Message)
-		switch role {
+		switch extractLineRole(raw) {
 		case "user":
 			userTs = append(userTs, ts)
 		case "assistant":
@@ -103,6 +97,71 @@ func synthesizeFromJSONL(path string) []lifecycle.Event {
 		sessionID = "synthetic-" + filepath.Base(filepath.Dir(path))
 	}
 	return buildArc(sessionID, firstTs, lastTs, userTs, asstTs)
+}
+
+// extractLineTime tries the two timestamp conventions we've seen:
+// claudecode's RFC3339 `timestamp` and opencode's `_ts` unix-ms number.
+func extractLineTime(raw map[string]any) (time.Time, bool) {
+	if v, ok := raw["timestamp"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			return t, true
+		}
+	}
+	if v, ok := raw["_ts"].(float64); ok {
+		return time.UnixMilli(int64(v)).UTC(), true
+	}
+	if v, ok := raw["ts"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// extractLineRole returns "user" / "assistant" / "" based on whichever
+// adapter-specific role field is populated.
+func extractLineRole(raw map[string]any) string {
+	for _, key := range []string{"_role"} {
+		if v, ok := raw[key].(string); ok {
+			switch v {
+			case "user":
+				return "user"
+			case "assistant":
+				return "assistant"
+			}
+		}
+	}
+	if v, ok := raw["type"].(string); ok {
+		switch v {
+		case "user":
+			return "user"
+		case "assistant":
+			return "assistant"
+		}
+	}
+	if msg, ok := raw["message"].(map[string]any); ok {
+		if r, ok := msg["role"].(string); ok {
+			switch r {
+			case "user":
+				return "user"
+			case "assistant":
+				return "assistant"
+			}
+		}
+	}
+	return ""
+}
+
+// extractLineSession picks up the session id from the various places
+// adapters put it. Returns "" if none found (caller falls back to a
+// synthetic id).
+func extractLineSession(raw map[string]any) string {
+	for _, key := range []string{"sessionId", "session_id"} {
+		if v, ok := raw[key].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // synthesizeFromMarkdown handles aider's transcript.md. Aider lacks
@@ -125,33 +184,6 @@ func synthesizeFromMarkdown(path string) []lifecycle.Event {
 		{Seq: 4, Timestamp: end.Add(-2 * time.Second), Kind: lifecycle.KindStateTransition, SessionID: sessionID, PrevState: "working", NewState: "ready", Reason: "synthetic assistant turn"},
 		{Seq: 5, Timestamp: end, Kind: lifecycle.KindTranscriptRemoved, SessionID: sessionID},
 	}
-}
-
-// classifyRole inspects a transcript line and returns "user",
-// "assistant", or "" depending on what we can infer. claudecode uses
-// `type: user|assistant`; codex uses message.role; etc.
-func classifyRole(typ string, message json.RawMessage) string {
-	switch typ {
-	case "user":
-		return "user"
-	case "assistant":
-		return "assistant"
-	}
-	if len(message) == 0 {
-		return ""
-	}
-	var m struct {
-		Role string `json:"role"`
-	}
-	if err := json.Unmarshal(message, &m); err == nil && m.Role != "" {
-		switch m.Role {
-		case "user":
-			return "user"
-		case "assistant":
-			return "assistant"
-		}
-	}
-	return ""
 }
 
 // buildArc converts a (firstTs, lastTs, userTs, asstTs) summary into a
