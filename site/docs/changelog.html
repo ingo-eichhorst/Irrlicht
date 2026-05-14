@@ -81,6 +81,28 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.4.2 <small>(2026-05-15)</small></h2>
+
+      <h3>Changed</h3>
+
+      <ul>
+        <li><strong>macOS app: drop legacy file-polling, retire vaporware <code>IRRLICHT_DISABLED</code> env var</strong> (#337) &mdash; <code>IRRLICHT_DISABLED</code> was never wired into any code path, and <code>IRRLICHT_USE_FILES</code> gated a fallback path in <code>SessionManager</code> that the WebSocket transport has fully replaced; both are removed. ~165 lines of dead Swift in <code>SessionManager.swift</code> go with them (file watcher, debounce/periodic timers, <code>loadExistingSessions</code>, <code>createInstancesDirectoryIfNeeded</code>); init unconditionally uses WebSocket. Equivalent orphan reaping still happens daemon-side via <code>PIDManager</code>'s <code>syscall.Kill(pid, 0)</code> sweep &mdash; no safety net was lost. The macOS app no longer reads from the daemon-owned <code>instancesPath</code>; that ordering dependency is now documented inline</li>
+      </ul>
+
+      <h3>Docs</h3>
+
+      <ul>
+        <li><strong>configuration: document four real env vars with concrete recipes</strong> (#337) &mdash; <code>site/docs/configuration.html</code> drops the <code>USE_FILES</code> / <code>DISABLED</code> rows and adds rows for the four env vars that exist in code but were undocumented: <code>IRRLICHT_UI_DIR</code>, <code>IRRLICHT_BIND_ADDR</code>, <code>IRRLICHT_MDNS</code>, <code>IRRLICHT_DEBUG</code>. A "When to use these" section walks three real recipes &mdash; LAN phone access (with both shell-env and <code>launchctl setenv</code> flows so it works whether the daemon is shell-launched or auto-spawned by the macOS app), "Dashboard UI not found" recovery (showing the full four-place auto-detect order so the override slots in clearly), and a debug state dump. The original <code>IRRLICHT_DEBUG=1 open -a Irrlicht</code> example was broken on macOS &mdash; LaunchServices spawns GUI apps without inheriting shell env &mdash; and is replaced with three working alternatives (direct binary invocation, <code>open --env</code>, <code>launchctl setenv</code>)</li>
+        <li><strong>architecture, SECURITY: drop vaporware kill-switch bullet, cross-link network-exposure docs</strong> (#337) &mdash; <code>site/docs/architecture.html</code> no longer mentions the <code>IRRLICHT_DISABLED</code> kill switch (which never existed). <code>SECURITY.md</code> cross-links the network-exposure paragraphs to <code>configuration.html</code> and to the planned hub-mode design</li>
+      </ul>
+
+      <h3>Distribution</h3>
+
+      <ul>
+        <li><strong>Release skill: enforce long-line paragraphs in release notes / PR body</strong> (#335) &mdash; GitHub renders release-body markdown with the GFM "breaks" extension, so every soft line break inside a paragraph or bullet becomes <code>&lt;br&gt;</code>. The v0.4.0 and v0.4.1 release bodies were hand-wrapped at ~75 cols and shipped as a stack of short ragged lines on the release page (both since fixed via <code>gh release edit --notes-file</code>). Step 2 of <code>/ir:release</code> now carries an explicit line-wrap rule explaining the difference between GFM-with-breaks (release notes, PR body, issue body) and standard CommonMark (<code>CHANGELOG.md</code>); Step 8 switches the example from <code>--notes</code> to <code>--notes-file</code> pointing at a tempfile, so the body is reviewable, re-runnable, and the long lines survive shell escaping</li>
+        <li><strong>assets: version reference screenshots</strong> (#336) &mdash; <code>assets/session_limits.png</code> and <code>assets/straeter_light.png</code> are now versioned alongside the other reference shots used in README drafts and social posts</li>
+      </ul>
+
       <h2>v0.4.1 <small>(2026-05-14)</small></h2>
 
       <h3>Fixed</h3>
