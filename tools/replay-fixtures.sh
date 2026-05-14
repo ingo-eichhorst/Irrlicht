@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# replay-fixtures.sh — run the offline replay against every transcript in
-# replaydata/agents/<adapter>/scenarios/<scenario>/transcript.{jsonl,md}
+# replay-fixtures.sh — run the offline replay against every transcript under
+# replaydata/agents/<adapter>/{scenarios,regression}/<id>/transcript.{jsonl,md}
 # and emit JSON + Markdown reports into replaydata/agents/_reports/.
+#
+# `scenarios/` holds pipeline-managed recordings tied to the skill's
+# scenarios.json catalog. `regression/` holds legacy orphans and ad-hoc
+# captures (introduced by #268, Phase 1). Both subtrees are walked by the
+# same find; reports are named `<adapter>-<id>.{json,md}` regardless of
+# subtree (the markdown title carries the subtree label for clarity).
+#
 # Aider fixtures use transcript.md (markdown source); other adapters use
 # transcript.jsonl.
 #
@@ -52,21 +59,22 @@ while IFS= read -r fix; do
   [[ -z "$fix" ]] && continue
   [[ "$fix" == */subagents/* ]] && continue
   found_any=1
-  # Path shape: replaydata/agents/<adapter>/scenarios/<scenario>/transcript.jsonl
+  # Path shape: replaydata/agents/<adapter>/<scenarios|regression>/<id>/transcript.<ext>
   scenario_dir="$(dirname "$fix")"
   name="$(basename "$scenario_dir")"
+  kind="$(basename "$(dirname "$scenario_dir")")"          # scenarios | regression
   adapter="$(basename "$(dirname "$(dirname "$scenario_dir")")")"
   json="$REPORTS_DIR/${adapter}-${name}.json"
   md="$REPORTS_DIR/${adapter}-${name}.md"
 
-  echo ">> replaying ${adapter}/${name}" >&2
+  echo ">> replaying ${adapter}/${kind}/${name}" >&2
   "./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix"
 
-  python3 - "$json" "$md" "$fix" <<'PY'
+  python3 - "$json" "$md" "$fix" "$kind" <<'PY'
 import json, sys, os
 from datetime import datetime, timezone
 
-report_path, md_path, transcript = sys.argv[1], sys.argv[2], sys.argv[3]
+report_path, md_path, transcript, kind = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(report_path) as f:
     r = json.load(f)
 s = r["summary"]
@@ -89,6 +97,7 @@ trs = r["transitions"]
 with open(md_path, "w") as out:
     name = os.path.basename(transcript)
     out.write(f"# Replay report — {name}\n\n")
+    out.write(f"_Subtree_: `{kind}` ({'pipeline-managed scenario' if kind == 'scenarios' else 'regression / ad-hoc capture'})\n\n")
     out.write(f"_Source_: `{transcript}`\n\n")
     out.write(f"_Generated_: {r['generated_at']}\n\n")
 
