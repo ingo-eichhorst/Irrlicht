@@ -113,6 +113,9 @@ For the chosen agent, read in order:
 3. `.claude/skills/ir:onboard-agent/install-instructions.md` — any
    per-agent gates (LM Studio for aider, API auth for codex/claudecode,
    etc.). These become `preconditions` entries.
+4. Existing recipes under `scenarios.json -> scenarios[].by_adapter`
+   for the same agent — they encode hard-won quirks (CLI flags,
+   trust dialogs, timing) you should reuse rather than re-discover.
 
 For the headless variant (`drive-<agent>.sh`, single-shot
 `--print`-style invocation), the recipe uses `prompt: "..."` instead
@@ -125,6 +128,38 @@ of `script`. Pick interactive when:
 
 Pick headless for single-turn deterministic prompts where the model's
 output doesn't matter.
+
+#### Adapter quirks that change the recipe shape
+
+Some agents have transport behaviors that turn a pure-idle scenario
+into something that needs a minimal interaction. Check these before
+finalizing the script:
+
+- **Lazy transcript materialization** — `claudecode` and `aider` only
+  create the per-session transcript file once the first user input
+  lands. A pure-idle launch (no `send`) leaves the UUID-keyed
+  transcript missing, and `run-cell.sh`'s curator can't find events
+  for the session. **Fix:** add a 1-token nudge (e.g. `send "Reply
+  ok"` + `wait_turn`) so the UUID transcript materializes. The
+  pre-session (`proc-<PID>`) is still observable from launch
+  independent of the nudge — that's where the spec's "Session
+  appears in ready within 1s" assertion is grounded. Document the
+  nudge in the recipe's top-level `description` so the deviation
+  from the spec's "sits idle" wording is explicit.
+
+- **No PID binding** — `opencode` uses a SQLite watcher; there's no
+  process to bind, so PID-related Expected bullets don't translate
+  literally. Recipe should drop PID-specific `verify` items and
+  note in `preconditions` that the daemon must have SQLite
+  watching enabled.
+
+- **Idle-flush turn-end** — `aider` settles `working → ready` only
+  after a ~5 s idle window. Recipes for any aider scenario need a
+  trailing sleep ≥6 s (one full idle-flush cycle plus slack) before
+  daemon shutdown, otherwise the final ready transition is missed.
+
+If you discover a new quirk while translating a cell, add it here so
+the next translator doesn't have to re-discover it.
 
 ### Step 4 — Translate Expected bullets into verify strings
 
@@ -156,6 +191,44 @@ If the agent's row already exists (e.g. you're translating a second
 cell for the same scenario), add to `by_adapter` instead of creating a
 duplicate entry.
 
+### Step 6 — Record and write the ground-truth file
+
+Run the recording once to validate the recipe end-to-end:
+
+```bash
+.claude/skills/ir:onboard-agent/scripts/run-cell.sh --attach <agent> <scenario-id>
+```
+
+If it succeeds and the recording's structural events match the
+recipe's `verify` list, promote it:
+
+```bash
+STAGE=.build/refresh/<agent>/<scenario-id>-<timestamp>
+TARGET=replaydata/agents/<agent>/scenarios/<scenario-id>
+mkdir -p $TARGET
+cp $STAGE/replaydata/agents/<agent>/scenarios/<scenario-id>/events.jsonl $TARGET/
+cp $STAGE/replaydata/agents/<agent>/scenarios/<scenario-id>/transcript.jsonl $TARGET/
+```
+
+Then write `$TARGET/ground_truth.jsonl` with labels anchored to the
+actual offsets you measured. The schema (one meta line + N label
+lines, each with `ts_offset_ms` / `marker` / `expected_state` /
+`tolerance_ms` / `evidence_kind` / `notes`):
+
+```jsonl
+{"schema_version":1,"agent":"<agent>","scenario":"<scenario-id>","recording_started_at":"<UTC>","notes":"..."}
+{"ts_offset_ms":60,"marker":"presession_ready","expected_state":"ready","tolerance_ms":1000,"evidence_kind":"transcript_event_kind","notes":"..."}
+...
+```
+
+The recipe's plain-English `verify` items are the operator-facing
+docs; this JSONL is what the validator runs against. Both should
+agree on the same set of assertions.
+
+The viewer's "Ground truth" panel on the scenario playback page
+renders this file directly — if it's missing, the panel says "No
+ground_truth.jsonl" and the validator skips the scenario.
+
 ## Determinism budget
 
 A re-execution should produce a recording whose **structural** events
@@ -182,9 +255,12 @@ the driver controls completion timing instead of inferring it from
 
 ## Anti-patterns
 
-- **Don't add `send` steps to an idle-observation scenario.** The
-  model's reply is variance you don't need; the spec didn't ask for
-  it.
+- **Don't add `send` steps to an idle-observation scenario *unless*
+  the adapter has lazy-transcript behavior** (see "Adapter quirks"
+  above). For agents that write the transcript on launch (e.g.
+  `codex`, `pi`), a sleep-only script is the right shape. For
+  `claudecode` / `aider`, a 1-token nudge is needed to make the
+  UUID-keyed session observable.
 - **Don't list internal event kinds in `verify` that the spec didn't
   imply.** "state_transition → working" is fair when the spec says
   "ready → working"; "rule_15a fired" is not.
@@ -195,6 +271,15 @@ the driver controls completion timing instead of inferring it from
 - **Don't translate a scenario whose verdict is `agent_supports:
   "no"`.** Mark `applicable: false` and move on — fabricating a
   recipe just produces a recording that proves the wrong thing.
+- **Don't write `verify` items in ground-truth form.** The recipe's
+  `verify` field is plain-English for the operator to spot-check
+  (e.g. "events.jsonl contains a transcript_new event within 1000 ms");
+  the structured machine-checkable form belongs in
+  `replaydata/agents/<agent>/scenarios/<id>/ground_truth.jsonl`. Both
+  exist — the recipe `verify` is the maintainer-facing docs; the
+  `ground_truth.jsonl` is what the validator runs against. After
+  promoting a fresh recording, write a matching `ground_truth.jsonl`
+  with offsets anchored to the new fixture.
 
 ## When to re-run
 
