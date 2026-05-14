@@ -23,6 +23,13 @@ enum IrrHex {
     static let wsDisconnected = "#FF3B30"
 }
 
+/// Bare hex (no `#`) for inline SVG `fill="#..."` markup. Mirrors `IrrHex`
+/// so the two formats stay paired; consumers that need a leading `#` use
+/// `IrrHex.*` directly with `Color(hex:)`.
+enum IrrSVG {
+    static let cancelled = "8E8E93"
+}
+
 enum IrrColors {
     static let working   = Color(hex: IrrHex.working)
     static let waiting   = Color(hex: IrrHex.waiting)
@@ -52,20 +59,11 @@ enum IrrColors {
     // adapt to light/dark mode automatically. The macOS overlay keeps native
     // chrome (system window background, primary/secondary text) — brand
     // tokens are scoped to semantic surfaces (state dots, pressure, badges).
-    static let surfaceHover = Color.primary.opacity(0.06)
-    static let trackFill    = Color.primary.opacity(0.08)
-
-    /// Pressure-scale color for a context-utilization percentage (0–100).
-    /// Thresholds mirror the SessionRow.jsx `pressureClass()` helper in
-    /// tools/irrlicht-design-system/ui_kits/dashboard/.
-    static func pressure(utilization: Double) -> Color {
-        switch utilization {
-        case ..<50:  return pressureLow
-        case ..<75:  return pressureMedium
-        case ..<90:  return pressureHigh
-        default:     return pressureCritical
-        }
-    }
+    static let surfaceHover       = Color.primary.opacity(0.06)
+    // Subtler hover for nested rows (subagents) so parent vs. child
+    // hierarchy stays legible.
+    static let surfaceHoverSubtle = Color.primary.opacity(0.04)
+    static let trackFill          = Color.primary.opacity(0.08)
 }
 
 enum IrrSpacing {
@@ -93,5 +91,35 @@ enum IrrMotion {
     /// Decelerate-settle ease-out matching --ease-out: cubic-bezier(0.16,1,0.3,1).
     static func easeOut(duration: Double = base) -> Animation {
         .timingCurve(0.16, 1, 0.3, 1, duration: duration)
+    }
+}
+
+extension Color {
+    /// Initialise from a hex string (`#RGB`, `#RRGGBB`, or `#AARRGGBB` — `#`
+    /// optional). The token namespaces above are the canonical source; this
+    /// initializer exists so they can be expressed as literal hex.
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3:
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6:
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8:
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (1, 1, 1, 0)
+        }
+
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }
