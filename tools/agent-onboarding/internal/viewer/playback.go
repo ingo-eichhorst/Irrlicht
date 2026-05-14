@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,12 @@ type PlaybackManager struct {
 	// session_deleted as the old playback's sessions roll off.
 	broadcaster outbound.PushBroadcaster
 	hub         wsHandler
+
+	// diag exposes the logged broadcaster's ring buffer for the
+	// /api/replay/diag endpoint. Same underlying value as broadcaster;
+	// kept as a separate field so we don't lose the concrete type behind
+	// the PushBroadcaster interface.
+	diag *loggedBroadcaster
 }
 
 // NewPlaybackManager wires the manager and its shared WebSocket hub.
@@ -80,13 +87,97 @@ type PlaybackManager struct {
 // dashboard stuck on "AWAITING SESSIONS". With it, late connections
 // always see the current state.
 func NewPlaybackManager(repoRoot string) *PlaybackManager {
-	broadcaster := services.NewPushService()
+	push := services.NewPushService()
+	logged := newLoggedBroadcaster(push)
 	m := &PlaybackManager{
 		repoRoot:    repoRoot,
-		broadcaster: broadcaster,
+		broadcaster: logged,
+		diag:        logged,
 	}
-	m.hub = websocket.NewHub(broadcaster, m.connectSnapshots)
+	m.hub = websocket.NewHub(logged, m.connectSnapshots)
 	return m
+}
+
+// loggedBroadcaster wraps a PushBroadcaster and records the last N
+// broadcasts in a ring buffer. Used by the viewer's diagnostic endpoint
+// to verify what the state machine actually emitted vs. what the
+// dashboard received over the wire.
+type loggedBroadcaster struct {
+	inner outbound.PushBroadcaster
+
+	mu      sync.Mutex
+	entries []broadcastEntry
+}
+
+type subscriberCounter interface {
+	Subscribers() int
+}
+
+type broadcastEntry struct {
+	Ts        time.Time `json:"ts"`
+	Type      string    `json:"type"`
+	SessionID string    `json:"session_id"`
+	State     string    `json:"state"`
+	SubCount  int       `json:"subs"`
+}
+
+const broadcastLogCap = 200
+
+func newLoggedBroadcaster(inner outbound.PushBroadcaster) *loggedBroadcaster {
+	return &loggedBroadcaster{
+		inner:   inner,
+		entries: make([]broadcastEntry, 0, broadcastLogCap),
+	}
+}
+
+func (l *loggedBroadcaster) Broadcast(msg outbound.PushMessage) {
+	// Normalize the broadcast session shape so live WS updates carry the
+	// same fields as the initial /api/v1/sessions fetch. Without this,
+	// the dashboard's Object.assign(a, s) on a session_updated rewrites
+	// the agent's adapter from "claudecode" (set by handleSessions) back
+	// to the raw "claude-code" string, losing the brand icon. We also
+	// fill in ProjectName so freshly-arrived sessions land in the right
+	// group instead of "unknown".
+	if msg.Session != nil {
+		cp := *msg.Session
+		cp.Adapter = normalizeAdapter(cp.Adapter)
+		if cp.ProjectName == "" {
+			cp.ProjectName = inferProjectName(&cp)
+		}
+		msg.Session = &cp
+	}
+	entry := broadcastEntry{Ts: time.Now().UTC(), Type: msg.Type}
+	if msg.Session != nil {
+		entry.SessionID = msg.Session.SessionID
+		entry.State = msg.Session.State
+	}
+	if sc, ok := l.inner.(subscriberCounter); ok {
+		entry.SubCount = sc.Subscribers()
+	}
+	l.mu.Lock()
+	if len(l.entries) >= broadcastLogCap {
+		copy(l.entries, l.entries[1:])
+		l.entries = l.entries[:broadcastLogCap-1]
+	}
+	l.entries = append(l.entries, entry)
+	l.mu.Unlock()
+	l.inner.Broadcast(msg)
+}
+
+func (l *loggedBroadcaster) Subscribe() chan outbound.PushMessage {
+	return l.inner.Subscribe()
+}
+
+func (l *loggedBroadcaster) Unsubscribe(ch chan outbound.PushMessage) {
+	l.inner.Unsubscribe(ch)
+}
+
+func (l *loggedBroadcaster) snapshot() []broadcastEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]broadcastEntry, len(l.entries))
+	copy(out, l.entries)
+	return out
 }
 
 // connectSnapshots is invoked by the WebSocket hub when a new client
@@ -287,6 +378,7 @@ func (m *PlaybackManager) registerPlaybackRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/replay/seek", m.handleSeek)
 	mux.HandleFunc("POST /api/replay/speed", m.handleSpeed)
 	mux.HandleFunc("GET /api/replay/status", m.handleStatus)
+	mux.HandleFunc("GET /api/replay/diag", m.handleDiag)
 
 	// Daemon-compatible endpoints the embedded dashboard consumes.
 	mux.HandleFunc("GET /api/v1/agents", m.handleAgents)
@@ -501,6 +593,13 @@ func inferProjectName(s *session.SessionState) string {
 // platforms/web/index.html from the repo root at request time so a
 // `git pull` of dashboard changes Just Works without restarting the
 // viewer.
+//
+// We inject a tiny "ws-diag" script that wraps window.WebSocket so
+// every received message is mirrored to the console with prefix
+// "[ws-diag]". This makes it possible to compare what the server
+// broadcasts (recorded in /api/replay/diag) against what the dashboard
+// inside the iframe actually receives, without modifying the
+// production index.html.
 func (m *PlaybackManager) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(m.repoRoot, "platforms", "web", "index.html")
 	b, err := os.ReadFile(path)
@@ -508,6 +607,64 @@ func (m *PlaybackManager) handleDashboard(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("could not read %s: %v", path, err), http.StatusInternalServerError)
 		return
 	}
+	html := string(b)
+	if i := strings.Index(html, "</head>"); i >= 0 {
+		html = html[:i] + wsDiagScript + html[i:]
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(b)
+	w.Write([]byte(html))
 }
+
+// handleDiag returns the recent broadcast log captured by the
+// loggedBroadcaster decorator. Pair this output with the dashboard
+// iframe's console (the wsDiagScript prints every received message) to
+// see where messages diverge between server and client.
+func (m *PlaybackManager) handleDiag(w http.ResponseWriter, r *http.Request) {
+	subs := 0
+	if l := m.diag; l != nil {
+		if sc, ok := l.inner.(subscriberCounter); ok {
+			subs = sc.Subscribers()
+		}
+	}
+	out := map[string]any{
+		"subscribers_now": subs,
+	}
+	if m.diag != nil {
+		out["broadcasts"] = m.diag.snapshot()
+	}
+	writeJSON(w, out)
+}
+
+// wsDiagScript is injected into the served dashboard HTML to mirror every
+// WebSocket message to console.debug with prefix "[ws-diag]". It is a
+// non-invasive wrapper: the dashboard's `new WebSocket(...)` call hits
+// the wrapper, which forwards to the real constructor and attaches a
+// listener BEFORE returning to caller. The dashboard's own onmessage
+// handler still fires normally.
+const wsDiagScript = `<script>
+(function(){
+  if (typeof window === 'undefined' || !window.WebSocket) return;
+  var Orig = window.WebSocket;
+  function Tapped(url, protocols) {
+    var s = protocols === undefined ? new Orig(url) : new Orig(url, protocols);
+    try {
+      console.debug('[ws-diag] open(req)', url);
+      s.addEventListener('open', function(){ console.debug('[ws-diag] open'); });
+      s.addEventListener('close', function(e){ console.debug('[ws-diag] close', e && e.code, e && e.reason); });
+      s.addEventListener('error', function(){ console.debug('[ws-diag] error'); });
+      s.addEventListener('message', function(e){
+        var preview = e && e.data ? String(e.data).slice(0, 220) : '';
+        console.debug('[ws-diag] msg', preview);
+      });
+    } catch (err) {
+      console.debug('[ws-diag] tap-failed', err && err.message);
+    }
+    return s;
+  }
+  Tapped.prototype = Orig.prototype;
+  for (var k in Orig) { try { Tapped[k] = Orig[k]; } catch(_) {} }
+  window.WebSocket = Tapped;
+})();
+</script>
+`
+
