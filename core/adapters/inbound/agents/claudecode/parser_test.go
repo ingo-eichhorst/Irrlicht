@@ -1259,10 +1259,23 @@ func TestParser_TaskNotification_EmitsSubagentCompletion(t *testing.T) {
 // test: the fixture from issue #134 must produce a SubagentCompletion in
 // SessionMetrics.SubagentCompletions after a single TailAndProcess pass.
 func TestTailer_TaskNotification_SurfacedThroughMetrics(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "..", "..", "replaydata", "agents", "claudecode",
-		"scenarios", "13-full-lifecycle-continue-8a525d27", "transcript.jsonl")
-	if _, err := os.Stat(path); err != nil {
-		t.Skipf("fixture not present at %s: %v", path, err)
+	// Fixture moved from scenarios/ to regression/ in #268 Phase 1. Try both
+	// so this test stays useful through follow-up migrations or restores.
+	candidates := []string{
+		filepath.Join("..", "..", "..", "..", "..", "replaydata", "agents", "claudecode",
+			"regression", "13-full-lifecycle-continue-8a525d27", "transcript.jsonl"),
+		filepath.Join("..", "..", "..", "..", "..", "replaydata", "agents", "claudecode",
+			"scenarios", "13-full-lifecycle-continue-8a525d27", "transcript.jsonl"),
+	}
+	var path string
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			path = c
+			break
+		}
+	}
+	if path == "" {
+		t.Skipf("fixture not present at any of %v", candidates)
 	}
 	m, err := newCCTailer(path).TailAndProcess()
 	if err != nil {

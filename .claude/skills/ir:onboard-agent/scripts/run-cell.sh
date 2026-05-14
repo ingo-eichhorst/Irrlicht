@@ -34,12 +34,46 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
 SCENARIOS_JSON="$SKILL_DIR/scenarios.json"
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: run-cell.sh <adapter> <scenario-name>" >&2
+RECORDER="off"
+positional=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --recorder=on)  RECORDER="on"; shift ;;
+    --recorder=off) RECORDER="off"; shift ;;
+    --recorder)
+      echo "use --recorder=on or --recorder=off (no separate value)" >&2; exit 2 ;;
+    -h|--help)
+      echo "usage: run-cell.sh [--recorder=on|off] <adapter> <scenario-name>" >&2; exit 0 ;;
+    --) shift; positional+=("$@"); break ;;
+    -*) echo "unknown flag: $1" >&2; exit 2 ;;
+    *)  positional+=("$1"); shift ;;
+  esac
+done
+if [[ ${#positional[@]} -ne 2 ]]; then
+  echo "usage: run-cell.sh [--recorder=on|off] <adapter> <scenario-name>" >&2
   exit 2
 fi
-ADAPTER="$1"
-SCENARIO="$2"
+ADAPTER="${positional[0]}"
+SCENARIO="${positional[1]}"
+
+# --recorder=on is recognized but currently a no-op flag.
+#
+# Phase 1 of #268 ships the recorder binary (`agent-onboard record`) as a
+# standalone observer that takes paths and a PID it can attach to. The
+# existing run-cell flow uses an isolated daemon + driver and does not
+# directly expose the agent CLI's PID or live transcript path back to this
+# script, so wiring the recorder in requires deeper integration that is
+# Phase 6's responsibility.
+#
+# When --recorder=on is passed today the flag is acknowledged so callers
+# can adopt the surface immediately; Phase 6's `pipeline/run-pipeline.sh`
+# will be the integration point that actually spawns `agent-onboard record`
+# alongside the driver and captures signals.jsonl + frames/ into staging.
+if [[ "$RECORDER" == "on" ]]; then
+  echo "note: --recorder=on accepted but the live recorder is wired up in Phase 6 (#268)." >&2
+  echo "      To capture signals.jsonl today, run \`agent-onboard record\` directly against" >&2
+  echo "      a live agent. See tools/agent-onboarding/cmd/recorder/main.go for flags." >&2
+fi
 
 # Look up the cell from scenarios.json. Absent cell → refuse.
 # A cell carries either `prompt` (single-shot, headless driver) or `script`
