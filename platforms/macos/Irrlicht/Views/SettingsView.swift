@@ -20,7 +20,7 @@ struct SettingsView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Debug Mode", isOn: $debugMode)
+                LeadingToggle(isOn: $debugMode, label: "Debug Mode")
 
                 Text("Show session IDs, creation time, and time since last update.")
                     .font(.caption)
@@ -28,11 +28,12 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Show Estimated Cost", isOn: $showCostDisplay)
+                LeadingToggle(isOn: $showCostDisplay, label: "Show Estimated Cost")
 
                 Text("Display estimated USD cost per session and per project group. Cost estimates are approximate.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()
@@ -109,7 +110,7 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 360, height: 480)
         .background(Color(NSColor.windowBackgroundColor))
-        .toggleStyle(.switch)
+        .toggleStyle(IrrlichtSwitchToggleStyle())
     }
 
     private func checkNotificationAuth() {
@@ -150,7 +151,7 @@ private struct NotificationEventRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Toggle(event.displayName, isOn: $enabled)
+            LeadingToggle(isOn: $enabled, label: event.displayName)
             HStack(spacing: 8) {
                 Picker("", selection: $selection) {
                     ForEach(SoundChoice.builtIns, id: \.self) { choice in
@@ -222,6 +223,48 @@ private struct NotificationEventRow: View {
             case .failure(let error):
                 onImportError("Could not import audio file: \(error.localizedDescription)")
             }
+        }
+    }
+}
+
+/// Left-aligned switch + label, rendered by `IrrlichtSwitchToggleStyle`.
+private struct LeadingToggle: View {
+    @Binding var isOn: Bool
+    let label: String
+
+    var body: some View {
+        HStack {
+            Toggle(isOn: $isOn) { Text(label) }
+            Spacer()
+        }
+    }
+}
+
+/// Custom switch style: a green-on / neutral-off capsule with a sliding
+/// white knob. Replaces `ToggleStyle.switch` because macOS's NSSwitch-backed
+/// switch ignores `.tint(_:)` — its on color is locked to the system accent.
+/// Drawing the pill ourselves makes the color independent of System Settings.
+private struct IrrlichtSwitchToggleStyle: ToggleStyle {
+    /// Same green that HistoryBarView uses for the "ready" state.
+    private static let onColor = Color(hex: "#34C759")
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                Capsule()
+                    .fill(configuration.isOn ? Self.onColor : Color.secondary.opacity(0.35))
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)
+                    .padding(2)
+            }
+            .frame(width: 30, height: 18)
+            .animation(.easeInOut(duration: 0.15), value: configuration.isOn)
+            .onTapGesture { configuration.isOn.toggle() }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(configuration.isOn ? "on" : "off")
+
+            configuration.label
         }
     }
 }
