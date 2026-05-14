@@ -30,7 +30,15 @@ func readProcessEnv(pid int) (map[string]string, error) {
 	return out, nil
 }
 
-// resolveTermProgramFromAncestry is a darwin-only fallback for hardened-
-// runtime processes that hide env from sysctl. Linux reads /proc/<pid>/environ
-// directly, so this stub is unused on linux.
-func resolveTermProgramFromAncestry(pid int) string { return "" }
+// resolveTermProgramFromAncestry / resolveHostFromAncestry are darwin-only
+// fallbacks for hardened-runtime processes that hide env from sysctl. Linux
+// reads /proc/<pid>/environ directly, so these stubs are unused.
+func resolveTermProgramFromAncestry(pid int) string             { return "" }
+func resolveHostFromAncestry(pid int) (term string, host int)   { return "", 0 }
+
+// Stubs for the kitty "no readable env" enrichment helpers. Linux can read
+// /proc/<pid>/environ for any process the user owns, so the back-fill path
+// these support isn't needed here.
+func kittyAncestryPID(pid int) int                        { return 0 }
+func kittyListenOnFor(kittyPID int) string                { return "" }
+func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }

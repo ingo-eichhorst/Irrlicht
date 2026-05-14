@@ -383,6 +383,7 @@ type Launcher struct {
 	TTY            string `json:"tty,omitempty"`              // controlling TTY of the agent process, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this
 	KittyListenOn  string `json:"kitty_listen_on,omitempty"`  // $KITTY_LISTEN_ON — kitty remote-control socket path
 	KittyWindowID  string `json:"kitty_window_id,omitempty"`  // $KITTY_WINDOW_ID — kitty window identifier
+	KittyPID       int    `json:"kitty_pid,omitempty"`        // $KITTY_PID — kitty.app process id (lets the activator target this specific instance when multiple kitties run)
 }
 
 // IsEmpty reports whether the launcher carries no identifying information
@@ -392,7 +393,7 @@ func (l *Launcher) IsEmpty() bool {
 	return l == nil || (l.TermProgram == "" && l.ITermSessionID == "" &&
 		l.TermSessionID == "" && l.TmuxPane == "" &&
 		l.TmuxSocket == "" && l.VSCodePID == 0 && l.TTY == "" &&
-		l.KittyListenOn == "" && l.KittyWindowID == "")
+		l.KittyListenOn == "" && l.KittyWindowID == "" && l.KittyPID == 0)
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.

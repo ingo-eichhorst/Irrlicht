@@ -30,18 +30,20 @@ final class LauncherHarnessTests: XCTestCase {
         tty: String? = nil,
         kittyListenOn: String? = nil,
         kittyWindowID: String? = nil,
+        kittyPID: Int? = nil,
         tmuxPane: String? = nil,
         tmuxSocket: String? = nil
     ) -> SessionState {
         // Build the JSON we'd receive from the daemon so we rely on the actual
         // Codable path rather than synthesising via initializer.
-        var launcherFields: [String: String] = [
+        var launcherFields: [String: Any] = [
             "term_program": termProgram,
         ]
         if let v = itermSessionID  { launcherFields["iterm_session_id"] = v }
         if let v = tty             { launcherFields["tty"] = v }
         if let v = kittyListenOn   { launcherFields["kitty_listen_on"] = v }
         if let v = kittyWindowID   { launcherFields["kitty_window_id"] = v }
+        if let v = kittyPID        { launcherFields["kitty_pid"] = v }
         if let v = tmuxPane        { launcherFields["tmux_pane"] = v }
         if let v = tmuxSocket      { launcherFields["tmux_socket"] = v }
 
@@ -140,5 +142,24 @@ final class LauncherHarnessTests: XCTestCase {
         // We can only assert no crash; activated may be true or false depending
         // on whether kitty is installed on the developer's machine.
         _ = activated
+    }
+
+    /// Round-trips the new `kitty_pid` JSON field through the SessionState
+    /// decoder to confirm the field is exposed to the activator. The activator
+    /// itself reads `session.launcher?.kittyPID` to pick between the
+    /// PID-targeted path and the bundle-fallback path; if this field doesn't
+    /// decode, every click silently degrades to the bundle fallback (which is
+    /// what issue #326 was actually exhibiting before the fix).
+    func testKittyLauncherDecodesKittyPID() throws {
+        let session = makeSession(
+            termProgram: "kitty",
+            cwd: "/tmp/kitty-decode-test",
+            kittyListenOn: "unix:/tmp/kitty-12345",
+            kittyWindowID: "2",
+            kittyPID: 12345
+        )
+        XCTAssertEqual(session.launcher?.kittyPID, 12345)
+        XCTAssertEqual(session.launcher?.kittyListenOn, "unix:/tmp/kitty-12345")
+        XCTAssertEqual(session.launcher?.kittyWindowID, "2")
     }
 }

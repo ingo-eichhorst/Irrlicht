@@ -231,6 +231,7 @@ struct Launcher: Codable, Hashable {
     let tty: String?
     let kittyListenOn: String?
     let kittyWindowID: String?
+    let kittyPID: Int?
 
     enum CodingKeys: String, CodingKey {
         case termProgram    = "term_program"
@@ -241,6 +242,7 @@ struct Launcher: Codable, Hashable {
         case tty            = "tty"
         case kittyListenOn  = "kitty_listen_on"
         case kittyWindowID  = "kitty_window_id"
+        case kittyPID       = "kitty_pid"
     }
 }
 
