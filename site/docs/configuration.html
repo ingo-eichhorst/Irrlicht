@@ -112,19 +112,85 @@
             <td>Override path to Gas Town <code>gt</code> CLI binary</td>
           </tr>
           <tr>
-            <td><code>IRRLICHT_USE_FILES</code></td>
-            <td>Boolean (1/0)</td>
-            <td>unset</td>
-            <td>Enable file polling mode in macOS app (legacy, not recommended)</td>
+            <td><code>IRRLICHT_UI_DIR</code></td>
+            <td>Path</td>
+            <td>auto-detect</td>
+            <td>Directory containing the dashboard's <code>index.html</code>; escape hatch when auto-detection fails (see <a href="#when-to-use">When to use these</a>)</td>
           </tr>
           <tr>
-            <td><code>IRRLICHT_DISABLED</code></td>
+            <td><code>IRRLICHT_BIND_ADDR</code></td>
+            <td>host:port</td>
+            <td><code>127.0.0.1:7837</code></td>
+            <td>Override the daemon's TCP bind &mdash; use <code>0.0.0.0:7837</code> to expose on the LAN</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_MDNS</code></td>
             <td>Boolean (1/0)</td>
             <td>unset</td>
-            <td>Disable the daemon entirely (kill switch)</td>
+            <td>Advertise <code>_irrlicht._tcp</code> via Bonjour so other devices on the LAN can discover the daemon</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_DEBUG</code></td>
+            <td>Boolean (1/0)</td>
+            <td>unset</td>
+            <td>macOS app dumps session state to <code>~/.irrlicht/debug-state.json</code> on every update</td>
           </tr>
         </tbody>
       </table>
+
+      <!-- ── When to use these ── -->
+      <h2 id="when-to-use">When to use these</h2>
+
+      <p>The defaults work for solo, single-machine use. Reach for these overrides when one of the following describes you:</p>
+
+      <h3>I want to peek at sessions from my phone on the same WiFi</h3>
+
+      <p>If you run <code>irrlichd</code> yourself from a terminal, set both vars inline:</p>
+
+      <pre><code>IRRLICHT_BIND_ADDR=0.0.0.0:7837 IRRLICHT_MDNS=1 irrlichd</code></pre>
+
+      <p>If the macOS app auto-spawns the daemon for you (the default for DMG / Homebrew installs), shell env vars never reach it. Set them in the per-user launchd context first, then relaunch the app:</p>
+
+      <pre><code>launchctl setenv IRRLICHT_BIND_ADDR 0.0.0.0:7837
+launchctl setenv IRRLICHT_MDNS 1
+# quit Irrlicht.app from the menu bar, then reopen it</code></pre>
+
+      <p>Either way, then open <code>http://&lt;hostname&gt;.local:7837</code> in any browser on the same network. mDNS lets the phone find the host without you typing an IP.</p>
+
+      <p><strong>Security note:</strong> the daemon has no authentication today. Anyone on the network you bind to can read all your transcripts. Only do this on networks you trust (your home LAN, your tailnet) &mdash; never on a coffee-shop WiFi. See <a href="https://github.com/ingo-eichhorst/Irrlicht/blob/main/SECURITY.md">SECURITY.md</a> for the full posture.</p>
+
+      <p><strong>Future:</strong> these two knobs will be replaced by a single explicit <em>hub mode</em>. See the <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server">Relay Server design</a> for the planned consolidation.</p>
+
+      <h3>The dashboard returned "Dashboard UI not found"</h3>
+
+      <p>The daemon resolves the dashboard's location in this order (first hit wins):</p>
+
+      <ol>
+        <li><code>$IRRLICHT_UI_DIR</code> &mdash; escape hatch (what this recipe sets)</li>
+        <li><code>&lt;exe&gt;/../Resources/web/</code> &mdash; production <code>.app</code> bundle layout</li>
+        <li><code>~/.local/share/irrlicht/web/</code> &mdash; daemon-only curl install</li>
+        <li>Walking up from the executable for <code>platforms/web/index.html</code> &mdash; dev checkout</li>
+      </ol>
+
+      <p>If the three auto-detect paths (2&ndash;4) all miss &mdash; custom install layout, fork with a moved UI, broken symlink &mdash; set the env var so it takes precedence:</p>
+
+      <pre><code>IRRLICHT_UI_DIR=/path/to/dir/containing/index.html irrlichd</code></pre>
+
+      <h3>The macOS app is misbehaving and I want to see its session state</h3>
+
+      <p>Env vars set in your shell do <em>not</em> reach a GUI app launched via <code>open -a</code> &mdash; LaunchServices spawns the app without inheriting them. Use one of these instead:</p>
+
+      <pre><code># Most reliable: invoke the binary directly
+IRRLICHT_DEBUG=1 /Applications/Irrlicht.app/Contents/MacOS/Irrlicht
+
+# Or, on macOS 13+: forward via open's --env flag
+open -a Irrlicht --env IRRLICHT_DEBUG=1
+
+# Or, persist for the launchd session and relaunch normally
+launchctl setenv IRRLICHT_DEBUG 1
+# quit Irrlicht.app, then reopen it</code></pre>
+
+      <p>The current session list, connection state, and history buckets are written to <code>~/.irrlicht/debug-state.json</code> on every update. Useful when filing a bug report.</p>
 
       <!-- ── Filesystem Paths ── -->
       <h2>Filesystem Paths</h2>
