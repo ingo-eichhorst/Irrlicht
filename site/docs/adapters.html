@@ -132,7 +132,7 @@
         <li><strong>Package:</strong> <code>core/adapters/inbound/agents/opencode/</code></li>
         <li><strong>Watches:</strong> SQLite WAL at <code>~/.local/share/opencode/storage/opencode.db-wal</code> via fsnotify; polls <code>session</code>/<code>part</code> tables on writes</li>
         <li>First adapter on the SQLite-backed monitoring path: storage is a single WAL-mode database, not JSONL</li>
-        <li>Bypasses the JSONL tailer via <code>MetricsProvider</code> (<code>metrics.go</code>) for cost + token snapshots; <code>ComputeMetrics</code> hook on <code>agents.Config</code></li>
+        <li>Bypasses the JSONL tailer via a <code>MetricsReader</code> on its <code>ProcessOwnedStore</code> source variant for cost + token snapshots</li>
         <li>Parent-child session linking via <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly, no path-based heuristics</li>
         <li>CWD-based PID discovery via <code>pgrep -x opencode</code></li>
         <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
@@ -173,44 +173,81 @@
 
       <h2 id="adapter-interfaces">Adapter Interfaces</h2>
 
-      <p>Every inbound agent adapter is wired up by exporting a single <code>agents.Config</code> registration record. The daemon's bootstrap in <code>core/cmd/irrlichd/main.go</code> consumes one <code>[]agents.Config</code> slice and derives all per-adapter plumbing from it &mdash; fswatcher roots, process-scanner targets, the parser-factory map consumed by the metrics collector, and the PID-discovery map consumed by the session detector. An adapter package therefore satisfies the contract by:</p>
+      <p>Every inbound agent adapter is wired up by exporting a single <code>agent.Agent</code> declaration. The daemon's bootstrap in <code>core/cmd/irrlichd/main.go</code> consumes one <code>[]agent.Agent</code> slice; <code>core/cmd/irrlichd/wiring.go</code> dispatches each declaration on its <code>Source</code> variant to build the right combination of fswatcher and process scanner. The per-projection helpers in <code>core/adapters/inbound/agents/maps.go</code> derive the parser, PID-discovery, process-name, subagent-count, and metrics-reader maps the rest of the daemon consumes.</p>
 
-      <ol>
-        <li>Returning an <code>agents.Config</code> from a top-level <code>Config()</code> function.</li>
-        <li>Providing a <code>tailer.TranscriptParser</code> implementation (the <code>NewParser</code> factory hands back a fresh instance).</li>
-        <li>Providing an <code>agent.PIDDiscoverFunc</code> that maps a session's CWD or transcript path to its owning OS process.</li>
-      </ol>
+      <p>An adapter package therefore satisfies the contract by exporting a single top-level <code>Agent()</code> function that returns a fully-populated <code>agent.Agent</code>. Watching the filesystem, scanning processes, and broadcasting events are handled by the shared infrastructure (<code>core/adapters/inbound/agents/fswatcher/</code>, <code>core/adapters/inbound/agents/processlifecycle/</code>) plus the per-adapter watcher when the source needs one (e.g. OpenCode's SQLite WAL watcher).</p>
 
-      <p>Watching the filesystem, scanning processes, and broadcasting events are handled by the shared infrastructure (<code>core/adapters/inbound/agents/fswatcher/</code>, <code>core/adapters/inbound/agents/processlifecycle/</code>) &mdash; adapters do not implement the inbound <code>AgentWatcher</code> port directly.</p>
+      <h3 id="iface-config">Adapter declaration &mdash; <code>agent.Agent</code></h3>
 
-      <h3 id="iface-config">Registration record &mdash; <code>agents.Config</code></h3>
+      <p>Defined as a sealed-sum across three orthogonal axes in <code>core/domain/agent/</code>: <code>Identity</code> (name + branding), <code>Process</code> (how to find the OS process), and <code>Source</code> (where the conversation lives).</p>
 
-      <p>Defined in <code>core/adapters/inbound/agents/config.go</code>. Required fields are non-zero on every adapter; optional fields gate adapter-specific behaviour.</p>
-
-<pre><code>// Required
-type Config struct {
-    Name        string                  // adapter label on events, e.g. "claude-code"
-    ProcessName string                  // OS executable for `pgrep -x`, e.g. "claude"
-    RootDir     string                  // transcript root relative to $HOME, e.g. ".claude/projects"
-    NewParser   ParserFactory           // fresh-per-call factory; parsers are stateful
-    DiscoverPID agent.PIDDiscoverFunc   // CWD/transcript -&gt; PID
-
-    // Branding — served from GET /api/v1/agents so frontends render
-    // dynamically instead of hardcoding switches.
-    DisplayName  string                 // human-readable label, e.g. "Claude Code"
-    IconSVGLight string                 // raw &lt;svg&gt;…&lt;/svg&gt; markup, 14×14 (light theme)
-    IconSVGDark  string                 // raw &lt;svg&gt;…&lt;/svg&gt; markup, 14×14 (dark theme)
-
-    // Optional
-    CountOpenSubagents SubagentCounter  // nil =&gt; treated as zero
-    CommandLineMatch   string           // regex for `pgrep -f` when ProcessName != CLI name (e.g. "/aider($| )")
-    TranscriptFilename string           // per-CWD transcript file (e.g. ".aider.chat.history.md")
-    ComputeMetrics     MetricsProvider  // bypass JSONL tailer for DB-backed adapters (OpenCode)
+<pre><code>// Top-level declaration — Identity × Process × Source.
+type Agent struct {
+    Identity Identity
+    Process  Process
+    Source   Source
 }
 
-type ParserFactory   func() tailer.TranscriptParser
-type SubagentCounter func(m *tailer.SessionMetrics) int
-type MetricsProvider func(transcriptPath, sessionID string) (*session.SessionMetrics, error)
+type Identity struct {
+    Name         string // adapter label on events, e.g. "claude-code"
+    DisplayName  string // human-readable label, e.g. "Claude Code"
+    IconSVGLight string // raw &lt;svg&gt;…&lt;/svg&gt; markup, 14×14 (light theme)
+    IconSVGDark  string // raw &lt;svg&gt;…&lt;/svg&gt; markup, 14×14 (dark theme)
+}
+
+// Process bundles process-recognition with session-to-PID resolution.
+// PIDForSession lives here rather than on Source so every variant gets
+// it uniformly.
+type Process struct {
+    Match         ProcessMatcher
+    PIDForSession PIDDiscoverFunc
+}
+
+type PIDDiscoverFunc func(
+    cwd, transcriptPath string,
+    disambiguate func([]int) int,
+) (int, error)
+
+// ProcessMatcher — sealed sum, exactly one of:
+type ProcessMatcher interface{ isProcessMatcher() }
+
+type ExactName struct {
+    Name string // e.g. "claude" — runs as `pgrep -x claude`
+}
+
+type CommandPattern struct {
+    Regex *regexp.Regexp // matched against the full command line
+                        // via `pgrep -f`, e.g. "/aider($| )"
+}
+
+// Source — sealed sum, exactly one of:
+type Source interface{ isSource() }
+
+// JSONL transcripts under a fixed $HOME-relative directory tree
+// (Claude Code, Codex, Pi).
+type FilesUnderRoot struct {
+    Dir    string     // path relative to $HOME, e.g. ".claude/projects"
+    Parser FileParser // JSONLineParser or RawLineParser
+}
+
+// One transcript per running process inside its CWD (aider).
+type FilesUnderCWD struct {
+    Filename string        // basename only, e.g. ".aider.chat.history.md"
+    Parser   RawLineParser // FilesUnderCWD always pairs with raw
+}
+
+// Session state lives in a structured store, typically SQLite
+// (OpenCode → SQLite WAL).
+type ProcessOwnedStore struct {
+    PathForPID func(pid int) string // resolves the store path for a PID
+    Reader     MetricsReader        // bypasses the JSONL-tailer path
+}
+
+// File-format dispatch carried inside FilesUnderRoot — JSONL or raw text.
+type FileParser interface{ isFileParser() }
+
+type JSONLineParser struct { NewParser func() LineParser }
+type RawLineParser  struct { NewParser func() RawParser }
 </code></pre>
 
       <p>Per-adapter capability declarations (which canonical scenarios apply to this agent) live alongside as JSON in <code>replaydata/agents/&lt;name&gt;/capabilities.json</code>, keyed against <code>replaydata/agents/features.json</code>. They are read by the <code>/ir:onboard-agent</code> skill, not by Go code.</p>
@@ -271,7 +308,7 @@ type ParserStateProvider interface {
 
       <h3 id="iface-event">Watcher output &mdash; <code>agent.Event</code></h3>
 
-      <p>Defined in <code>core/domain/agent/event.go</code>. The shared fswatcher fans these out to subscribers via the <code>inbound.AgentWatcher</code> port (<code>core/ports/inbound/ports.go</code>); per-adapter watchers do not exist today.</p>
+      <p>Defined in <code>core/domain/agent/event.go</code>. Events carry no adapter field; identity flows through the merge pipeline via <code>Watcher.Identity()</code> (<code>core/ports/inbound/watcher.go</code>).</p>
 
 <pre><code>type EventType string
 
@@ -283,7 +320,6 @@ const (
 
 type Event struct {
     Type            EventType
-    Adapter         string // e.g. "claude-code"
     SessionID       string // UUID portion of the filename (no .jsonl)
     ProjectDir      string // leaf directory under the watched root
     TranscriptPath  string // absolute path; for DB-backed adapters: "&lt;db&gt;?session=&lt;id&gt;"
@@ -292,9 +328,12 @@ type Event struct {
     ParentSessionID string // empty unless this is a subagent
 }
 
-// The port the daemon consumes — implemented by the shared fswatcher,
-// not by individual adapter packages.
-type AgentWatcher interface {
+// The port the daemon consumes. Each per-watcher drain goroutine in
+// SessionDetector.Run() captures Identity() once and wraps every event
+// with it, so per-adapter identity is a property of the watcher rather
+// than the event payload.
+type Watcher interface {
+    Identity() agent.Identity
     Watch(ctx context.Context) error
     Subscribe() &lt;-chan agent.Event
     Unsubscribe(ch &lt;-chan agent.Event)
@@ -389,8 +428,8 @@ type AgentWatcher interface {
       <p><strong>For adapters, additionally:</strong></p>
       <ul class="checklist">
         <li>Adapter package at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
-        <li>Exports an <code>agents.Config</code> from <code>Config()</code> with parser factory + PID-discovery hook (and <code>MetricsProvider</code> for DB-backed adapters)</li>
-        <li>Registered in the <code>agentCfgs</code> slice in <code>core/cmd/irrlichd/main.go</code></li>
+        <li>Exports an <code>agent.Agent</code> from <code>Agent()</code> with the right <code>Source</code> variant (<code>FilesUnderRoot</code> / <code>FilesUnderCWD</code> / <code>ProcessOwnedStore</code>), parser, and PID-discovery hook</li>
+        <li>Registered in the <code>allAgents</code> slice in <code>core/cmd/irrlichd/main.go</code></li>
         <li>Emits all three lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code></li>
         <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against <code>replaydata/agents/features.json</code></li>
         <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed and replay green via <code>tools/replay-fixtures.sh</code></li>
