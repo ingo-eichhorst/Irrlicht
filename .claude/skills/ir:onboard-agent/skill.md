@@ -406,6 +406,33 @@ Do NOT run the `cp`, `-update-goldens`, or `git commit` yourself. The
 maintainer reviews and commits by hand — this skill never touches
 `replaydata/` directly.
 
+## Authoring scenarios
+
+When adding a new entry to `scenarios.json` or fixing an existing one,
+keep these step-script rules in mind. The four interactive drivers
+(`drive-claudecode-interactive.sh`, `drive-aider-interactive.sh`,
+`drive-codex-interactive.sh`, `drive-pi-interactive.sh`) all share the
+same step grammar:
+
+- `{"type": "send", "text": "…"}` — type text + press Enter.
+- `{"type": "wait_turn"}` — block until the agent finishes the current
+  turn (criteria differs per adapter; e.g. claudecode waits for
+  `stop_reason: "end_turn"` in the transcript).
+- `{"type": "sleep", "seconds": N}` — pause N seconds. Mandatory
+  **between every `wait_turn` and the next `send`** in any multi-turn
+  scenario. Without it, drivers fire the next prompt within 100–800ms of
+  the assistant finishing, which is below the state classifier's
+  transcript-activity debounce window — the recorder coalesces all turns
+  into one `working` → `ready` span and the replayed state band can't
+  show per-turn cycles. 3 seconds is the established minimum and is what
+  `multi-turn-conversation` uses; longer is fine.
+- `{"type": "slash", "text": "/cmd"}` — same as `send`, semantically a
+  slash command.
+- `{"type": "interrupt"}` — Escape mid-turn (claudecode only).
+
+Single-turn scenarios (`baseline-hello`, `permission-hook-denial`, etc.)
+use the simpler `"prompt": "…"` field — no script needed.
+
 ## Anti-patterns
 
 - **Don't** skip normalization in Step 4. UUID/timestamp drift will make
@@ -419,6 +446,11 @@ maintainer reviews and commits by hand — this skill never touches
 - **Don't** invent prompts for adapters that don't have `by_adapter`
   entries. Report "missing-prompt" as actionable state — the user adds the
   prompt by editing `scenarios.json` and runs again.
+- **Don't** author a multi-turn script with back-to-back `wait_turn` →
+  `send` steps. The classifier won't register the intermediate `ready`
+  state and the recording loses per-turn fidelity. Insert
+  `{"type":"sleep","seconds":3}` after every `wait_turn` that is
+  followed by another `send`.
 - **Don't** diff exact text from transition reasons, assistant output, or
   tool-call arguments. Only structural invariants are stable across runs.
 - **Don't** run `go test -update-goldens` against `replaydata/orchestrators/`

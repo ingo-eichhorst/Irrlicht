@@ -119,8 +119,10 @@
           "script": [
             {"type": "send", "text": "Reply with exactly: turn-one"},
             {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-two"},
             {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-three"},
             {"type": "wait_turn"}
           ],
@@ -131,8 +133,10 @@
           "script": [
             {"type": "send", "text": "Reply with exactly: turn-one"},
             {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-two"},
             {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-three"},
             {"type": "wait_turn"}
           ],
@@ -143,8 +147,10 @@
           "script": [
             {"type": "send", "text": "Reply with exactly: turn-one"},
             {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-two"},
             {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-three"},
             {"type": "wait_turn"}
           ],
@@ -155,8 +161,10 @@
           "script": [
             {"type": "send", "text": "Reply with exactly: turn-one"},
             {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-two"},
             {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
             {"type": "send", "text": "Reply with exactly: turn-three"},
             {"type": "wait_turn"}
           ],
