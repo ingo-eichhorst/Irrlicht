@@ -83,13 +83,36 @@ func (s *Server) staticHandler() http.Handler {
 	return http.FileServerFS(sub)
 }
 
-// handleCatalog serves the canonical scenario catalog —
-// `.claude/skills/ir:onboard-agent/scenarios.json` — verbatim. The
-// viewer's Overview tab joins this against the live recording list
-// from /api/scenarios to compute the per-adapter coverage matrix.
-// Re-reading on every request guarantees "always the latest state"
-// when the maintainer edits the file.
+// handleCatalog serves the maintainer-curated scenario coverage
+// catalog at `.specs/agent-scenarios-coverage.json` — the source of
+// truth for the per-agent applicability matrix (38 scenarios × 5
+// agents, each with agent_supports / irrlicht_observes verdicts and
+// notes). Falls back to `.claude/skills/ir:onboard-agent/scenarios.json`
+// (which only carries the 8 actively-driven cells) when the coverage
+// file isn't available.
+//
+// `.specs/` is gitignored, so in a git worktree (`.git` is a file
+// pointing back to the common `.git/worktrees/<id>/`) the coverage
+// file lives in the user's main checkout, not the worktree. We
+// resolve the main checkout via `git rev-parse --git-common-dir`
+// equivalent — read the worktree's .git file, follow its gitdir, and
+// walk back up to find the main worktree.
+//
+// Re-reads on every request so maintainer edits land on next page
+// refresh without a server rebuild.
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	// 1. Prefer the richer coverage file when it's reachable.
+	if covPath := s.resolveCoveragePath(); covPath != "" {
+		if b, err := os.ReadFile(covPath); err == nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("X-Catalog-Source", "coverage")
+			w.Write(b)
+			return
+		}
+	}
+	// 2. Fall back to scenarios.json — the run-cell.sh catalog. Smaller
+	//    surface (only declared cells, no verdicts), but always present
+	//    in the repo so the matrix is never empty.
 	path := filepath.Join(s.RepoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -97,7 +120,47 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("X-Catalog-Source", "scenarios")
 	w.Write(b)
+}
+
+// resolveCoveragePath finds the maintainer's
+// .specs/agent-scenarios-coverage.json. Looks in the repo root first,
+// then in the main checkout when the repo root is a git worktree.
+// Returns "" if neither has the file.
+func (s *Server) resolveCoveragePath() string {
+	// Direct hit (main checkout, or a worktree the user has populated).
+	direct := filepath.Join(s.RepoRoot, ".specs", "agent-scenarios-coverage.json")
+	if _, err := os.Stat(direct); err == nil {
+		return direct
+	}
+	// Worktree: <repo>/.git is a file containing "gitdir: <path>" where
+	// <path> is <main>/.git/worktrees/<id>. The main checkout is the
+	// parent of <path>/../.. (two levels up: workouts/<id> → workouts/
+	// → .git/), then one more for the .git dir itself.
+	gitMeta := filepath.Join(s.RepoRoot, ".git")
+	st, err := os.Stat(gitMeta)
+	if err != nil || st.IsDir() {
+		return ""
+	}
+	data, err := os.ReadFile(gitMeta)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(data))
+	const prefix = "gitdir:"
+	if !strings.HasPrefix(line, prefix) {
+		return ""
+	}
+	gitdir := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+	// gitdir = <main>/.git/worktrees/<id>; main checkout = grandparent
+	// of grandparent (worktrees/<id> → worktrees → .git → <main>).
+	main := filepath.Dir(filepath.Dir(filepath.Dir(gitdir)))
+	candidate := filepath.Join(main, ".specs", "agent-scenarios-coverage.json")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	return ""
 }
 
 // ScenarioListEntry is one row in /api/scenarios.

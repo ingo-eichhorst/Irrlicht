@@ -8,15 +8,20 @@ const SPEED_PRESETS = [1, 2, 5, 10, 20, 25, 100];
 // Module-level handles populated during init() and reused by the
 // Overview button + scenario clicks to swap views in the main pane.
 let scenariosList = [];   // live recordings from /api/scenarios
-let catalog = null;       // canonical scenarios.json contents
+let catalog = null;       // /api/catalog payload (coverage or scenarios)
+let catalogSource = "";   // "coverage" | "scenarios" — drives the matrix shape
 
 (async function init() {
-  const [scenarios, cat] = await Promise.all([
+  const [scenarios, catResp] = await Promise.all([
     fetch("/api/scenarios").then(r => r.json()),
-    fetch("/api/catalog").then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch("/api/catalog").then(async r => {
+      if (!r.ok) return {body: null, source: ""};
+      return {body: await r.json(), source: r.headers.get("X-Catalog-Source") || ""};
+    }).catch(() => ({body: null, source: ""})),
   ]);
   scenariosList = scenarios || [];
-  catalog = cat;
+  catalog = catResp.body;
+  catalogSource = catResp.source;
   const sidebar = document.getElementById("scenarios");
   sidebar.innerHTML = "";
 
@@ -75,21 +80,30 @@ let catalog = null;       // canonical scenarios.json contents
   loadOverview(overviewBtn);
 })();
 
-// loadOverview swaps the main pane to a coverage matrix built from
-// the canonical catalog (scenarios.json) joined against the live
-// recording list. Cells:
-//   ✓  scenario defines this adapter AND a recording exists
-//   ○  scenario defines this adapter BUT no recording yet
-//   —  scenario does not declare this adapter (N/A by design)
-// Clicking ✓ jumps to that recording. Hovering shows the requires/
-// description from the catalog so the maintainer can see why a cell
-// is N/A without opening the file.
+// loadOverview swaps the main pane to the scenario coverage matrix.
+// Two catalog shapes are supported:
+//
+//   coverage  (.specs/agent-scenarios-coverage.json, source of truth):
+//     38 scenarios × 5 agents. Each cell has agent_supports +
+//     irrlicht_observes verdicts (yes/no/partial/unknown) plus a notes
+//     field. Cell badge colors reflect the verdict combo.
+//
+//   scenarios (.claude/skills/ir:onboard-agent/scenarios.json, fallback):
+//     8 actively-driven cells with by_adapter prompts. Cell badge =
+//     ✓/○/— based on whether a recording exists.
+//
+// In both modes, hovering a cell explains it, and where a recording
+// exists for the (agent, scenario) pair the cell is clickable and
+// jumps to that recording.
 function loadOverview(btnEl) {
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
   if (btnEl) btnEl.classList.add("active");
   document.getElementById("title").textContent = "Scenario coverage";
+  const sourceLabel = catalogSource === "coverage"
+    ? ".specs/agent-scenarios-coverage.json (source of truth)"
+    : ".claude/skills/ir:onboard-agent/scenarios.json (fallback)";
   document.getElementById("breadcrumb").textContent =
-    catalog ? "from .claude/skills/ir:onboard-agent/scenarios.json — refresh to pick up edits" : "catalog unavailable";
+    catalog ? `from ${sourceLabel} — refresh to pick up edits` : "catalog unavailable";
   const detail = document.getElementById("detail");
   detail.innerHTML = "";
 
@@ -100,21 +114,177 @@ function loadOverview(btnEl) {
     return;
   }
 
-  // Union of all adapters declared anywhere in by_adapter, sorted.
+  if (catalogSource === "coverage") {
+    renderCoverageMatrix(detail);
+  } else {
+    renderScenariosMatrix(detail);
+  }
+}
+
+// renderCoverageMatrix paints the 38×5 maintainer coverage matrix.
+// Each cell colored by the (agent_supports, irrlicht_observes) combo:
+//   both yes        → green
+//   both partial    → amber
+//   either no       → red
+//   any unknown     → gray
+//   either partial  → light amber
+// Notes (if any) show in the tooltip.
+function renderCoverageMatrix(detail) {
+  // catalog.agents is [{id, onboarded}, …] — extract ids for column iteration.
+  const agents = (catalog.agents || []).map(a => typeof a === "string" ? a : a.id);
+  // Recording lookup: only "scenarios" subtree counts here; regression
+  // captures are not part of the coverage matrix.
+  const recIndex = new Map();
+  for (const r of scenariosList) {
+    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
+  }
+
+  // Group by section so the table visually breaks at "Session
+  // lifecycle", "Tool calls", etc.
+  const bySection = new Map();
+  for (const sc of catalog.scenarios) {
+    const sec = sc.section || "(other)";
+    if (!bySection.has(sec)) bySection.set(sec, []);
+    bySection.get(sec).push(sc);
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  const h3 = document.createElement("h3");
+  h3.textContent = `Scenario coverage — ${catalog.scenarios.length} scenarios × ${agents.length} agents`;
+  panel.appendChild(h3);
+
+  const table = document.createElement("table");
+  table.className = "overview-matrix";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  ["Scenario", ...agents].forEach(h => {
+    const th = document.createElement("th");
+    th.textContent = h;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  let currentSection = "";
+  for (const sc of catalog.scenarios) {
+    if (sc.section && sc.section !== currentSection) {
+      currentSection = sc.section;
+      const sectionRow = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 1 + agents.length;
+      td.style.cssText = "background: #f5f4ee; font-size: 11px; font-weight: 600; color: #555; padding: 6px 8px;";
+      td.textContent = sc.section;
+      sectionRow.appendChild(td);
+      tbody.appendChild(sectionRow);
+    }
+    const row = document.createElement("tr");
+    const nameCell = document.createElement("td");
+    nameCell.style.fontWeight = "600";
+    nameCell.innerHTML = `${sc.id}<br><span style="font-weight: normal; color: #666; font-size: 11px;">${sc.feature || ""}</span>`;
+    row.appendChild(nameCell);
+    for (const agent of agents) {
+      const cov = sc.coverage && sc.coverage[agent];
+      const cell = document.createElement("td");
+      cell.style.textAlign = "center";
+      if (!cov) {
+        cell.textContent = "—";
+        cell.style.color = "#ccc";
+        cell.title = `${agent}: no entry`;
+        row.appendChild(cell);
+        continue;
+      }
+      const sup = cov.agent_supports || "unknown";
+      const obs = cov.irrlicht_observes || "unknown";
+      const {label, bg, fg} = coverageBadge(sup, obs);
+      const rec = recIndex.get(`${agent}/${sc.id}`);
+      const badge = document.createElement(rec ? "button" : "span");
+      badge.textContent = label;
+      badge.style.cssText = `display: inline-block; padding: 2px 8px; border-radius: 10px; ` +
+        `font-size: 11px; font-weight: 600; background: ${bg}; color: ${fg}; ` +
+        `border: 0; cursor: ${rec ? "pointer" : "default"};`;
+      // Build a multi-line tooltip
+      const lines = [`${agent}: agent_supports=${sup}, irrlicht_observes=${obs}`];
+      if (cov.notes) lines.push(cov.notes);
+      lines.push(rec ? `↻ click to open recording` : `(no recording committed)`);
+      badge.title = lines.join("\n");
+      if (rec) {
+        badge.addEventListener("click", () => {
+          const sidebar = document.getElementById("scenarios");
+          for (const el of sidebar.querySelectorAll(".scn")) {
+            if (el.textContent === sc.id) { el.click(); el.scrollIntoView({block: "nearest"}); return; }
+          }
+          loadScenario(rec, null);
+        });
+      }
+      cell.appendChild(badge);
+      row.appendChild(cell);
+    }
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  panel.appendChild(table);
+  detail.appendChild(panel);
+
+  // Summary chips
+  const sum = document.createElement("div");
+  sum.style.cssText = "margin-top: 8px; display: flex; gap: 14px; font-size: 11px; color: #555;";
+  let recorded = 0, observableNow = 0, supported = 0, total = 0;
+  for (const sc of catalog.scenarios) {
+    for (const agent of agents) {
+      total++;
+      const cov = sc.coverage && sc.coverage[agent];
+      if (!cov) continue;
+      if (cov.agent_supports === "yes") supported++;
+      if (cov.agent_supports === "yes" && cov.irrlicht_observes === "yes") observableNow++;
+      if (recIndex.has(`${agent}/${sc.id}`)) recorded++;
+    }
+  }
+  sum.innerHTML = `
+    <span><b>${recorded}</b> recordings committed</span>
+    <span><b>${observableNow}</b> fully observable now</span>
+    <span><b>${supported}</b> agent-supported</span>
+    <span><b>${total}</b> total cells</span>
+  `;
+  panel.appendChild(sum);
+
+  // Legend
+  const legend = document.createElement("div");
+  legend.style.cssText = "margin-top: 8px; display: flex; gap: 12px; font-size: 11px; color: #555; flex-wrap: wrap;";
+  legend.innerHTML = `
+    <span>Legend:</span>
+    <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 6px;border-radius:8px;">●●</span> agent supports + irrlicht observes</span>
+    <span><span style="background:#fde7c1;color:#8a4500;padding:1px 6px;border-radius:8px;">●◐</span> partial somewhere</span>
+    <span><span style="background:#f8c8c8;color:#8a0000;padding:1px 6px;border-radius:8px;">✗</span> no</span>
+    <span><span style="background:#e5e5e5;color:#555;padding:1px 6px;border-radius:8px;">?</span> unknown</span>
+  `;
+  panel.appendChild(legend);
+}
+
+function coverageBadge(sup, obs) {
+  if (sup === "no" || obs === "no") return {label: "✗", bg: "#f8c8c8", fg: "#8a0000"};
+  if (sup === "yes" && obs === "yes") return {label: "●●", bg: "#d6f0d4", fg: "#1f5a1d"};
+  if (sup === "unknown" || obs === "unknown") return {label: "?", bg: "#e5e5e5", fg: "#555"};
+  if (sup === "partial" || obs === "partial") return {label: "●◐", bg: "#fde7c1", fg: "#8a4500"};
+  return {label: "—", bg: "transparent", fg: "#ccc"};
+}
+
+// renderScenariosMatrix paints the older 8×5 by_adapter view from
+// scenarios.json (fallback when .specs/agent-scenarios-coverage.json
+// isn't reachable).
+function renderScenariosMatrix(detail) {
   const adapterSet = new Set();
   for (const sc of catalog.scenarios) {
     for (const a of Object.keys(sc.by_adapter || {})) adapterSet.add(a);
   }
   const adapters = [...adapterSet].sort();
 
-  // Recording lookup: key "<agent>/<subtree>/<id>" → entry, so a click
-  // on a ✓ cell can reuse the existing loadScenario flow.
   const recIndex = new Map();
   for (const r of scenariosList) {
-    recIndex.set(`${r.agent}/scenarios/${r.id}`, r);
+    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
   }
 
-  // --- Agent scenarios table ---
   const panel = document.createElement("div");
   panel.className = "panel";
   const h3 = document.createElement("h3");
@@ -153,27 +323,19 @@ function loadOverview(btnEl) {
       if (!declares) {
         cell.textContent = "—";
         cell.style.color = "#ccc";
-        cell.title = `${adapter}: not declared (capability mismatch or missing-prompt)`;
+        cell.title = `${adapter}: not declared`;
       } else {
-        const rec = recIndex.get(`${adapter}/scenarios/${sc.name}`);
+        const rec = recIndex.get(`${adapter}/${sc.name}`);
         if (rec) {
           const btn = document.createElement("button");
           btn.textContent = "✓";
           btn.title = `Open ${adapter}/${sc.name}`;
           btn.style.cssText = "background: transparent; border: 0; color: #2a8d4f; font-size: 16px; cursor: pointer; padding: 0;";
           btn.addEventListener("click", () => {
-            // Find the sidebar button for this recording and reuse
-            // the existing click path so active state syncs up.
             const sidebar = document.getElementById("scenarios");
             for (const el of sidebar.querySelectorAll(".scn")) {
-              if (el.textContent === sc.name) {
-                el.click();
-                el.scrollIntoView({block: "nearest"});
-                return;
-              }
+              if (el.textContent === sc.name) { el.click(); el.scrollIntoView({block: "nearest"}); return; }
             }
-            // Fallback if the recording exists but the sidebar button
-            // wasn't found (different subtree, etc.) — load directly.
             loadScenario(rec, null);
           });
           cell.appendChild(btn);
@@ -190,44 +352,6 @@ function loadOverview(btnEl) {
   table.appendChild(tbody);
   panel.appendChild(table);
   detail.appendChild(panel);
-
-  // Coverage summary chip strip
-  const sum = document.createElement("div");
-  sum.style.cssText = "margin-top: 8px; display: flex; gap: 14px; font-size: 11px; color: #555;";
-  let recorded = 0, declared = 0;
-  for (const sc of catalog.scenarios) {
-    for (const adapter of adapters) {
-      if (sc.by_adapter && sc.by_adapter[adapter]) {
-        declared++;
-        if (recIndex.has(`${adapter}/scenarios/${sc.name}`)) recorded++;
-      }
-    }
-  }
-  sum.innerHTML = `<span><b>${recorded}</b> / ${declared} cells recorded</span>
-    <span><b>${catalog.scenarios.length}</b> scenarios × <b>${adapters.length}</b> adapters</span>`;
-  panel.appendChild(sum);
-
-  // --- Orchestrator scenarios (if present) ---
-  const orch = catalog.orchestrator_scenarios;
-  if (Array.isArray(orch) && orch.length > 0) {
-    const orchPanel = document.createElement("div");
-    orchPanel.className = "panel";
-    const h = document.createElement("h3");
-    h.textContent = `Orchestrator scenarios (${orch.length})`;
-    orchPanel.appendChild(h);
-    const list = document.createElement("ul");
-    list.style.margin = "0";
-    list.style.paddingLeft = "20px";
-    for (const o of orch) {
-      const li = document.createElement("li");
-      li.style.marginBottom = "4px";
-      const adapters = Object.keys(o.by_orchestrator || {}).join(", ");
-      li.innerHTML = `<b>${o.name}</b> — ${o.description || ""} <span style="color: #888;">(${adapters})</span>`;
-      list.appendChild(li);
-    }
-    orchPanel.appendChild(list);
-    detail.appendChild(orchPanel);
-  }
 }
 
 async function loadScenario(s, linkEl) {
