@@ -88,10 +88,19 @@ import (
 	"strings"
 )
 
-// DiscoverPID returns the OS PID for the named agent process. The
-// generator default is a pgrep-style match against ProcessName; richer
-// adapters override this with cwd-based session matching.
-func DiscoverPID(sessionID string) (int, error) {
+// DiscoverPID returns the OS PID for the named agent process. Signature
+// matches agent.PIDDiscoverFunc so the generated adapter.go can wire it
+// into Process.PIDForSession. The generator default is a pgrep-style
+// match against ProcessName; richer adapters override this with
+// cwd-based session matching.
+//
+// cwd/transcriptPath/disambiguate are ignored by the default
+// implementation. Codegen output is the right place to specialize when
+// a recorded scenario shows the agent binds PIDs by cwd rather than
+// process name.
+func DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+	_ = cwd
+	_ = transcriptPath
 	out, err := exec.Command("pgrep", "-f", ProcessName).Output()
 	if err != nil {
 		return 0, nil // not running
@@ -100,13 +109,22 @@ func DiscoverPID(sessionID string) (int, error) {
 	if line == "" {
 		return 0, nil
 	}
-	// pgrep may return multiple PIDs; take the first.
+	var pids []int
 	for _, f := range strings.Fields(line) {
 		if n, err := strconv.Atoi(f); err == nil {
-			return n, nil
+			pids = append(pids, n)
 		}
 	}
-	return 0, nil
+	switch {
+	case len(pids) == 0:
+		return 0, nil
+	case len(pids) == 1:
+		return pids[0], nil
+	case disambiguate != nil:
+		return disambiguate(pids), nil
+	default:
+		return pids[0], nil
+	}
 }
 `
 
