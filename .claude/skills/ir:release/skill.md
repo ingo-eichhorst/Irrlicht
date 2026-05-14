@@ -28,6 +28,19 @@ The argument (if any) is the bump type: `patch` (default), `minor`, or `major`.
 2. Categorize into: Features, Fixes, Architecture/Refactoring, Docs, Distribution.
 3. Draft release notes in the style of previous releases (see `gh release view` for format).
 
+**Line-wrap rule (load-bearing — don't skip):** GitHub renders the release
+body with GFM "breaks": soft line breaks (single newlines) become `<br>`.
+A paragraph hand-wrapped at 80 columns therefore lands on the release page
+as a stack of short ragged lines (the v0.4.1 release shipped this bug).
+Write each paragraph and each bullet as **one long line, no hard wraps**,
+and rely on the reader's browser to wrap it. Only insert a newline when
+you actually want a paragraph break or a new list item. This rule applies
+to the release notes drafted here, the PR body in Step 7b, and the
+`--notes` body in Step 8 — they all use GFM-with-breaks rendering. It does
+**not** apply to `CHANGELOG.md`, which renders as standard CommonMark
+where soft breaks collapse to spaces; CHANGELOG entries can stay
+one-long-line too, but 80-col wrap there is harmless.
+
 ## Step 3: Update Version References
 
 1. `version.json` — update version string.
@@ -317,6 +330,15 @@ git push origin "v$NEW_VERSION"
 
 ## Step 8: Create GitHub Release
 
+**Before posting**: the release notes you pass to `gh release` render with
+GitHub's GFM "breaks" extension, so any soft line break becomes `<br>` on
+the release page. Confirm the body you're about to ship has each paragraph
+and each bullet on **one long line, no hard wraps at 80 columns** (see the
+line-wrap rule in Step 2). Write the body to a tempfile and pass it via
+`--notes-file`, not `--notes`, so the wrap discipline is reviewable and
+re-runnable; a single shell heredoc with a long-line paragraph survives
+better in a file than inline-escaped.
+
 ```bash
 gh release create v$NEW_VERSION \
   /tmp/irrlichd-darwin-universal.tar.gz \
@@ -325,8 +347,13 @@ gh release create v$NEW_VERSION \
   /tmp/Irrlicht-$NEW_VERSION.zip \
   /tmp/checksums.sha256 \
   --title "v$NEW_VERSION" \
-  --notes "<drafted release notes from Step 2>"
+  --notes-file /tmp/release-notes-v$NEW_VERSION.md
 ```
+
+If the body was hand-wrapped by mistake, fix it without re-shipping
+artifacts: rewrite `/tmp/release-notes-v$NEW_VERSION.md` with long-line
+paragraphs and run `gh release edit v$NEW_VERSION --notes-file ...` to
+update only the body.
 
 ## Step 8.5: Publish Cask to External Tap
 
