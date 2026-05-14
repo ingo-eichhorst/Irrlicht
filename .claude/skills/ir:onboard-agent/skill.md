@@ -79,6 +79,17 @@ hermetic and don't need auth.
   `.build/agent-onboarding/staged/<agent>/generated/`; maintainer
   reviews and promotes. See `pipeline/SKILL.md` for the per-stage
   contract and failure recovery.
+- **`/ir:onboard-agent translate <agent> <scenario-id>`** — per-cell
+  translation mode (Mode D). Reads the prose spec in
+  `.specs/agent-scenarios.md`, looks up the coverage verdict, and
+  emits a deterministic recipe (preconditions, exact driver steps,
+  irrlicht-side verify assertions) into
+  `.claude/skills/ir:onboard-agent/scenarios.json`. The viewer's
+  scenario detail page renders the new fields automatically. See
+  `translate/SKILL.md` for the per-step recipe and the worked example
+  (`claudecode × session-start`). Run before
+  `/ir:onboard-agent <agent> <scenario>` so the cell has a recipe to
+  drive against.
 
 The adapter argument disambiguates which axis is being run: agent adapters
 (`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator

@@ -284,7 +284,7 @@ function renderCoverageMatrix(detail) {
 //     showing the actual driver (interactive tmux vs headless print),
 //     step-script or prompt, settings, and which committed recordings
 //     exist for each agent.
-function loadCoverageDetail(scenarioId) {
+async function loadCoverageDetail(scenarioId) {
   if (!catalog || !Array.isArray(catalog.scenarios)) return;
   const sc = catalog.scenarios.find(s => s.id === scenarioId);
   if (!sc) return;
@@ -315,6 +315,18 @@ function loadCoverageDetail(scenarioId) {
     </div>
   `;
   detail.appendChild(header);
+
+  // Spec panel — straight from .specs/agent-scenarios.md if the file
+  // is reachable. Shows the maintainer's prose scenario text + the
+  // Expected bullets that any agent's recipe must satisfy. Always
+  // re-fetched so edits to the spec land on next page refresh.
+  try {
+    const spec = await fetch("/api/scenario-spec/" + encodeURIComponent(sc.id))
+      .then(r => r.ok ? r.json() : null);
+    if (spec && Array.isArray(spec.scenarios) && spec.scenarios.length > 0) {
+      detail.appendChild(renderSpecPanel(spec));
+    }
+  } catch (_) { /* spec unavailable — show recipe-only */ }
 
   // Recipe lookup by coverage_id
   const recipe = recipesByCoverageId.get(sc.id);
@@ -355,6 +367,40 @@ function loadCoverageDetail(scenarioId) {
   }
 }
 
+// renderSpecPanel turns the parsed .specs/agent-scenarios.md block
+// into a card showing the maintainer's prose scenario text + the
+// Expected bullets. Multiple Scenario:/Expected: sub-blocks under one
+// Feature (e.g. session-end has three) each get their own sub-heading.
+function renderSpecPanel(spec) {
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  let html = `<h3 style="margin-top:0;">Scenario description <span style="font-weight: normal; color: #888; font-size: 11px;">— from <code>.specs/agent-scenarios.md</code></span></h3>`;
+  if (spec.scenarios.length === 1) {
+    const sc = spec.scenarios[0];
+    html += `<div style="font-size: 12px; color: #333; margin-bottom: 8px;">${escapeHtml(sc.text)}</div>`;
+    if (sc.expected && sc.expected.length) {
+      html += `<div style="font-size: 11px; color: #666; margin-bottom: 4px;"><b>Expected (user-observable)</b></div>`;
+      html += "<ul style=\"font-size: 12px; padding-left: 22px; margin: 0; color: #333;\">";
+      for (const e of sc.expected) html += `<li>${escapeHtml(e)}</li>`;
+      html += "</ul>";
+    }
+  } else {
+    spec.scenarios.forEach((sc, i) => {
+      html += `<div style="margin-bottom: 12px;">`;
+      html += `<div style="font-size: 11px; color: #888; font-weight: 600; margin-bottom: 3px;">Variant ${i + 1}</div>`;
+      html += `<div style="font-size: 12px; color: #333; margin-bottom: 4px;">${escapeHtml(sc.text)}</div>`;
+      if (sc.expected && sc.expected.length) {
+        html += "<ul style=\"font-size: 12px; padding-left: 22px; margin: 0; color: #333;\">";
+        for (const e of sc.expected) html += `<li>${escapeHtml(e)}</li>`;
+        html += "</ul>";
+      }
+      html += `</div>`;
+    });
+  }
+  panel.innerHTML = html;
+  return panel;
+}
+
 // buildAgentPlanPanel composes one card per agent showing how this
 // scenario is (or would be) recorded for that agent: coverage verdict,
 // notes, driver choice, step-script or prompt, and any existing
@@ -388,14 +434,18 @@ function buildAgentPlanPanel(sc, agent, recipe) {
   //   - by_adapter.<agent>.script → interactive tmux driver (drive-<adapter>-interactive.sh)
   if (recipe && recipe.by_adapter && recipe.by_adapter[agent]) {
     const a = recipe.by_adapter[agent];
+    // Idle-only badge when the recipe is observation-only (no prompts sent).
+    const idleTag = recipe.idle_only
+      ? ` <span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; margin-left: 6px;">idle observation</span>`
+      : "";
     if (Array.isArray(a.script)) {
       html += `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
-        <b>Driver:</b> Interactive (tmux REPL) — <code>drive-${agent}-interactive.sh</code>
+        <b>Driver:</b> Interactive (tmux REPL) — <code>drive-${agent}-interactive.sh</code>${idleTag}
       </div>`;
       html += renderStepScript(a.script);
     } else if (a.prompt) {
       html += `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
-        <b>Driver:</b> Headless (<code>--print</code>) — <code>drive-${agent}.sh</code>
+        <b>Driver:</b> Headless (<code>--print</code>) — <code>drive-${agent}.sh</code>${idleTag}
       </div>`;
       html += `<pre style="background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; margin: 0;">${escapeHtml(a.prompt)}</pre>`;
     } else {
@@ -408,6 +458,17 @@ function buildAgentPlanPanel(sc, agent, recipe) {
     if (Object.keys(settings).length) meta.push(`settings: <code>${escapeHtml(JSON.stringify(settings))}</code>`);
     if (meta.length) {
       html += `<div style="font-size: 11px; color: #888; margin-top: 6px;">${meta.join(" · ")}</div>`;
+    }
+    // Preconditions / setup / verify — only present on recipes that
+    // have been translated by the per-cell workflow (see translate/SKILL.md).
+    if (Array.isArray(a.preconditions) && a.preconditions.length) {
+      html += renderChecklistBlock("Preconditions", a.preconditions, "□");
+    }
+    if (Array.isArray(a.setup) && a.setup.length) {
+      html += renderChecklistBlock("Setup (run-cell.sh handles this)", a.setup, "•");
+    }
+    if (Array.isArray(a.verify) && a.verify.length) {
+      html += renderChecklistBlock("Verify after recording", a.verify, "□");
     }
   } else if (recipe) {
     html += `<div style="font-size: 12px; color: #888; padding: 6px 0;">
@@ -442,6 +503,19 @@ function buildAgentPlanPanel(sc, agent, recipe) {
     });
   });
   return panel;
+}
+
+// renderChecklistBlock paints a labelled bullet list of plain-English
+// items. `glyph` is the bullet — use "□" for things the operator should
+// tick off (preconditions, verify), "•" for plain facts (setup).
+function renderChecklistBlock(label, items, glyph) {
+  let html = `<div style="font-size: 11px; color: #666; margin: 12px 0 4px;"><b>${label}</b></div>`;
+  html += `<ul style="font-size: 12px; padding-left: 22px; margin: 0; color: #333; list-style: none;">`;
+  for (const it of items) {
+    html += `<li style="margin-bottom: 4px;"><span style="display: inline-block; width: 16px; color: #888;">${glyph}</span>${escapeHtml(it)}</li>`;
+  }
+  html += `</ul>`;
+  return html;
 }
 
 function renderStepScript(steps) {
