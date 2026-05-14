@@ -153,18 +153,11 @@ struct SessionMetrics: Codable {
     
     var contextPressureColor: String {
         switch pressureLevel {
-        case "safe":
-            return "#34C759"   // system green
-        case "caution":
-            return "#FF9500"   // system orange
-        case "warning":
-            return "#FF3B30"   // system red
-        case "critical":
-            return "#D70015"   // darker red
-        case "unknown", "":
-            return "#8E8E93"   // system gray
-        default:
-            return "#8E8E93"   // system gray
+        case "safe":     return IrrHex.pressureLow
+        case "caution":  return IrrHex.pressureMedium
+        case "warning":  return IrrHex.pressureHigh
+        case "critical": return IrrHex.pressureCritical
+        default:         return IrrHex.cancelled
         }
     }
     
@@ -421,9 +414,9 @@ struct SessionState: Identifiable, Codable {
 
         var color: String {
             switch self {
-            case .working: return "#8B5CF6"   // purple to match 🟣
-            case .waiting: return "#FF9500"   // system orange
-            case .ready: return "#34C759"  // system green
+            case .working: return IrrHex.working
+            case .waiting: return IrrHex.waiting
+            case .ready:   return IrrHex.ready
             }
         }
 

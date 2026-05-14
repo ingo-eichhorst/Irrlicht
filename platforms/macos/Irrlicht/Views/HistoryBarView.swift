@@ -1,18 +1,9 @@
 import SwiftUI
 
-// Colors match the web frontend palette and SessionState.State.color.
-// Exposed via `AppPalette` so other views (e.g. the Settings toggle style)
-// can reuse the same brand greens/oranges/purples without re-stating hex.
-enum AppPalette {
-    static let working = Color(hex: "#8B5CF6")
-    static let waiting = Color(hex: "#FF9500")
-    static let ready   = Color(hex: "#34C759")
-}
-
 private let stateColors: [String: Color] = [
-    "working": AppPalette.working,
-    "waiting": AppPalette.waiting,
-    "ready":   AppPalette.ready,
+    "working": IrrColors.working,
+    "waiting": IrrColors.waiting,
+    "ready":   IrrColors.ready,
 ]
 
 /// A compact horizontal bar that visualises per-session state history.
@@ -42,7 +33,7 @@ struct HistoryBarView: View {
                 context.fill(Path(rect), with: .color(color))
             }
         }
-        .background(Color.secondary.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 2))
+        .background(IrrColors.trackFill)
+        .clipShape(RoundedRectangle(cornerRadius: IrrRadius.xs))
     }
 }
