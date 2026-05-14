@@ -314,8 +314,8 @@ test: add table-driven tests for state machine</code></pre>
 
       <ul class="checklist">
         <li>Adapter package at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
-        <li>Implements the <code>AgentWatcher</code> interface</li>
-        <li>Registered in <code>core/cmd/irrlichd/main.go</code></li>
+        <li>Exports an <code>agent.Agent</code> from <code>Agent()</code> with the right <code>Source</code> variant (<code>FilesUnderRoot</code> / <code>FilesUnderCWD</code> / <code>ProcessOwnedStore</code>)</li>
+        <li>Registered in the <code>allAgents</code> slice in <code>core/cmd/irrlichd/main.go</code></li>
         <li>Emits all three lifecycle states (<code>working</code>, <code>waiting</code>, <code>ready</code>)</li>
         <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against <code>replaydata/agents/features.json</code></li>
         <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed under <code>replaydata/agents/&lt;name&gt;/scenarios/</code></li>
