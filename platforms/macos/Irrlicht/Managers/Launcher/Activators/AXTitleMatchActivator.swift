@@ -68,33 +68,51 @@ struct AXTitleMatchActivator: HostActivator {
     }
 
     /// Returns (menuItem, title) pairs for every entry in the app's Window
-    /// menu. The Window menu is identified by title — locale-resilient
-    /// enough for English-default users; we additionally accept a few
-    /// common localizations. Items with empty titles or that match common
-    /// command names (Minimize, Zoom, Close, Bring All to Front) are
-    /// filtered so they never compete with real window entries.
+    /// menu. The Window menu is identified by its localized title; if
+    /// the app's locale isn't in our list we fail gracefully (returns
+    /// `[]`) rather than guessing at a positional fallback that might
+    /// land on a non-Window menu and press a destructive item.
+    ///
+    /// Non-window entries in the menu (Minimize, Zoom, …) are not
+    /// filtered explicitly — `bestMatchIndex` scores them 0 against any
+    /// real cwd, so they never win regardless of locale.
     private static let windowMenuTitles: Set<String> = [
-        "Window", "Fenster", "Fenêtre", "Ventana", "ウィンドウ", "窗口", "창",
-    ]
-    private static let windowMenuCommandTitles: Set<String> = [
-        "Minimize", "Zoom", "Close", "Bring All to Front",
-        "Minimieren", "Zoomen", "Schließen", "Alle nach vorne bringen",
+        "Window",       // en
+        "Fenster",      // de
+        "Fenêtre",      // fr
+        "Ventana",      // es
+        "Finestra",     // it
+        "Janela",       // pt (BR & PT)
+        "Venster",      // nl
+        "Fönster",      // sv
+        "Vindue",       // da
+        "Vindu",        // no/nb
+        "Ikkuna",       // fi
+        "Okno",         // pl/cs
+        "Окно",         // ru
+        "Pencere",      // tr
+        "ウィンドウ",      // ja
+        "窗口",          // zh-Hans
+        "視窗",          // zh-Hant
+        "창",           // ko
     ]
 
     private static func windowMenuItems(axApp: AXUIElement) -> [(menuItem: AXUIElement, title: String)] {
         var menuBarRef: CFTypeRef?
+        // Unwrap to a non-optional before CFGetTypeID — Swift's CF bridging
+        // does not allow `as? AXUIElement` (always-succeed); the runtime
+        // check has to go through CFGetTypeID, and that crashes on NULL.
         guard AXUIElementCopyAttributeValue(axApp, kAXMenuBarAttribute as CFString, &menuBarRef) == .success,
+              let menuBarRef,
               CFGetTypeID(menuBarRef) == AXUIElementGetTypeID()
         else { return [] }
         let menuBar = menuBarRef as! AXUIElement
 
-        var menusRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(menuBar, kAXChildrenAttribute as CFString, &menusRef) == .success,
-              let menus = menusRef as? [AXUIElement]
-        else { return [] }
+        let menus = axChildren(menuBar)
 
-        // Find the Window menu by title (locale-tolerant). Fallback: the
-        // second-to-last top-level menu (Cocoa convention: …Window, Help).
+        // Find the Window menu by localized title. No positional fallback —
+        // pressing the first item of an unknown menu in a non-Cocoa-standard
+        // app could trigger a destructive action.
         var windowMenu: AXUIElement?
         for menu in menus {
             var t: CFTypeRef?
@@ -104,34 +122,29 @@ struct AXTitleMatchActivator: HostActivator {
                 break
             }
         }
-        if windowMenu == nil, menus.count >= 2 {
-            windowMenu = menus[menus.count - 2]
-        }
         guard let windowMenu else { return [] }
 
-        // The menu's children contain a single AXMenu (the popup); its
+        // Each top-level menu has a single AXMenu child (the popup); its
         // children are the menu items.
-        var popupChildrenRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(windowMenu, kAXChildrenAttribute as CFString, &popupChildrenRef) == .success,
-              let popupChildren = popupChildrenRef as? [AXUIElement],
-              let popup = popupChildren.first
-        else { return [] }
-
-        var itemsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(popup, kAXChildrenAttribute as CFString, &itemsRef) == .success,
-              let items = itemsRef as? [AXUIElement]
-        else { return [] }
+        guard let popup = axChildren(windowMenu).first else { return [] }
 
         var out: [(menuItem: AXUIElement, title: String)] = []
-        for item in items {
+        for item in axChildren(popup) {
             var t: CFTypeRef?
             guard AXUIElementCopyAttributeValue(item, kAXTitleAttribute as CFString, &t) == .success,
-                  let title = t as? String, !title.isEmpty,
-                  !windowMenuCommandTitles.contains(title)
+                  let title = t as? String, !title.isEmpty
             else { continue }
             out.append((item, title))
         }
         return out
+    }
+
+    private static func axChildren(_ element: AXUIElement) -> [AXUIElement] {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &ref) == .success,
+              let children = ref as? [AXUIElement]
+        else { return [] }
+        return children
     }
 
     private static func windowTitle(_ window: AXUIElement) -> String {
