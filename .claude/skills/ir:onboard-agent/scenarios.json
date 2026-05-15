@@ -288,6 +288,54 @@
     },
 
     {
+      "name": "session-resume",
+      "description": "Claude session is launched, runs one no-op turn, exits cleanly, then re-launches with the SAME --session-id and same cwd. The daemon should observe the same UUID re-appearing (not a new session row) and the second turn driving ready→working on that same session. Adapter-specific note: claudecode's resume mechanism is implicit — passing the same --session-id <UUID> at relaunch and using the same cwd causes claude to append to the existing transcript at ~/.claude/projects/<slug>/<UUID>.jsonl. The driver's new `resume` step does exactly that.",
+      "coverage_id": "session-resume",
+      "requires": ["headless_mode"],
+      "verify": {
+        "transitions_topology": ["ready", "working", "ready", "working", "ready"],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "no other claudecode session uses the recipe's UUID"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID; the resume step reuses it.",
+            "Driver creates one cwd under <staging>/cwd/ and reuses it across both launches — claude caches trust per directory, so the second launch skips the trust dialog naturally."
+          ],
+          "script": [
+            {"type": "send", "text": "Reply with exactly the word: ok"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 2},
+            {"type": "exit_clean"},
+            {"type": "sleep", "seconds": 5},
+            {"type": "resume"},
+            {"type": "send", "text": "Reply with exactly the word: again"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 4}
+          ],
+          "verify": [
+            "events.jsonl shows the FIRST launch's pre-session entering ready, then the UUID handing off to ready, then the working/ready cycle for turn 1",
+            "events.jsonl contains a process_exited event for the UUID after turn 1 (clean exit)",
+            "events.jsonl shows a SECOND pre-session entering ready (proc-<PID2>) after the first lifetime ends",
+            "the SAME UUID session_id re-appears in events.jsonl after the resume — NOT a new UUID. This proves the session row persisted across PID lifetimes (spec: 'Same session_id reappears')",
+            "second-lifetime working transition fires on the SAME UUID, then back to ready",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 2 user lines and 2 assistant lines — appended across both lifetimes since claude re-opens the existing transcript file"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+
+    {
       "name": "long-idle-live-session",
       "description": "Claude session enters ready, sits idle past readyTTL, and resumes working on the next user prompt. The recording proves irrlicht's PID-liveness check keeps the session alive past the TTL cutoff (the session would otherwise be swept on idle). Note: the production readyTTL is 30 min; this recording uses IRRLICHT_READY_SESSION_TTL=15s on the daemon so the assertion 'session stayed past readyTTL' is testable in ~45s instead of 32min. The shortened TTL only affects the recording — production behavior is unchanged.",
       "coverage_id": "long-idle-live-session",

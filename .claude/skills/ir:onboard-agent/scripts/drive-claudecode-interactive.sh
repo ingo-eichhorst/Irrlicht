@@ -241,6 +241,27 @@ step_restart() {
   init_session
 }
 
+step_resume() {
+  # Resume the current session — same UUID + same cwd as the previous
+  # launch, so claude appends to the existing transcript file rather
+  # than creating a new one. The pre-session/PID lifetime is fresh
+  # (new tmux, new claude process), but the UUID-keyed session row in
+  # irrlicht's dashboard should be the same one. The init_session
+  # call's wait-for-trust loop will fall through naturally on the
+  # second visit (claude caches trust per cwd so no dialog appears).
+  SESSION_UUIDS+=("$CURRENT_UUID")
+  SESSION_TRANSCRIPTS+=("$TRANSCRIPT")
+  tmux kill-session -t "$CURRENT_TMUX" 2>/dev/null || true
+  sleep 1
+  local idx=$(( ${#SESSION_UUIDS[@]} + 1 ))
+  # CURRENT_UUID UNCHANGED — that's the whole point of resume.
+  CURRENT_TMUX="claudecode-onboard-$(date +%s)-$$-${idx}"
+  # CURRENT_CWD UNCHANGED — claude uses the cwd's slug to find the
+  # existing transcript at ~/.claude/projects/<slug>/<UUID>.jsonl
+  echo "[driver] resume: same uuid=$CURRENT_UUID, same cwd=$CURRENT_CWD, new tmux=$CURRENT_TMUX" >&2
+  init_session
+}
+
 step_sigkill() {
   # Find claude's PID by matching --session-id $CURRENT_UUID in argv.
   # Restrict to this session so concurrent claude instances aren't
@@ -292,6 +313,9 @@ while read -r step; do
       ;;
     restart)
       step_restart
+      ;;
+    resume)
+      step_resume
       ;;
     sigkill)
       step_sigkill
