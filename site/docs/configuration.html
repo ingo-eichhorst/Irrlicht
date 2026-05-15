@@ -136,6 +136,24 @@
             <td>unset</td>
             <td>macOS app dumps session state to <code>~/.irrlicht/debug-state.json</code> on every update</td>
           </tr>
+          <tr>
+            <td><code>PI_CODING_AGENT_SESSION_DIR</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.pi/coding-agent/sessions</code></td>
+            <td>Relocate the Pi adapter's transcript root. Read once at daemon startup; restart required after changing. Non-absolute values are rejected with a log warning</td>
+          </tr>
+          <tr>
+            <td><code>CLAUDE_CONFIG_DIR</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.claude</code></td>
+            <td>Relocate the Claude Code adapter's transcript root (the daemon appends <code>/projects</code>). PID-metadata directory at <code>~/.claude/sessions/</code> remains hardcoded</td>
+          </tr>
+          <tr>
+            <td><code>CODEX_HOME</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.codex</code></td>
+            <td>Relocate the Codex adapter's transcript root (the daemon appends <code>/sessions</code>)</td>
+          </tr>
         </tbody>
       </table>
 
