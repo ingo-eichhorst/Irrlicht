@@ -249,16 +249,28 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    </plist>
    ```
 
-6. Ad-hoc code sign. App entitlements come from
-   `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements` (currently
-   `get-task-allow` + `com.apple.developer.focus-status`). `--entitlements` is
-   required at sign time; Apple-gated entitlements carry no privileges in the
-   produced bundle without it.
+6. Ad-hoc code sign. **Do not pass `--entitlements`.** AMFI (Apple Mobile
+   File Integrity) rejects ad-hoc-signed binaries that claim Apple-restricted
+   entitlements; `com.apple.developer.focus-status` (in
+   `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements`) is one such
+   entitlement. Applying the entitlements file at sign time bakes that claim
+   into the binary, which `amfid` then refuses to launch — surfacing as
+   `launchd POSIX 153` / `Launchd job spawn failed` on first launch. This
+   shipped a broken v0.4.3 that the curl installer couldn't open on any end
+   user's machine; the assets were re-cut without entitlements applied.
+   The `Irrlicht.entitlements` file is preserved in the repo for the future
+   Developer-ID-signed + notarized path (separate work, tracked under #233);
+   until that lands, it must not be applied. `INFocusStatusCenter` works at
+   runtime on macOS without the entitlement — only `NSFocusStatusUsageDescription`
+   in `Info.plist` (already written in step 5 above) is required for TCC.
    ```bash
-   ENTITLEMENTS="/Users/ingo/projects/irrlicht/platforms/macos/Irrlicht/Resources/Irrlicht.entitlements"
    codesign --force --deep --sign - "$APP_STAGING/Contents/MacOS/irrlichd"
-   codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP_STAGING"
+   codesign --force --deep --sign - "$APP_STAGING"
    codesign --verify --deep --strict "$APP_STAGING"
+   # Sanity check — must be empty (matches v0.4.2 working behavior).
+   codesign -d --entitlements - "$APP_STAGING" 2>&1 | grep -q '\[Key\]' \
+     && { echo "FAIL: entitlements baked into ad-hoc binary"; exit 1; } \
+     || echo "OK no entitlements (AMFI won't reject)"
    ```
 7. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
    the process is still alive and has spawned `irrlichd`. Missing resources
