@@ -713,33 +713,18 @@ async function loadScenario(s) {
     fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
   ]);
   detail.innerHTML = "";
-  detail.appendChild(renderPlayback(s, data));
-  detail.appendChild(renderMeta(data));
-  const exp = renderExpected(data);
-  exp.classList.add("expected-host");
-  detail.appendChild(exp);
-  if (Array.isArray(data.tools) && data.tools.length > 0) {
-    detail.appendChild(renderToolCalls(data));
-  }
-  // Recording history picker — only render when there are archived
-  // recordings (recordings/ dir is empty for first-time-recorded
-  // scenarios; rendering an empty dropdown would just be noise).
-  if (Array.isArray(archives) && archives.length > 0) {
-    detail.appendChild(renderRecordingHistory(s, data, archives));
-  }
-  const gt = renderGroundTruth(data);
-  gt.classList.add("ground-truth-host");
-  detail.appendChild(gt);
-  const tr = renderTransitions(data);
-  tr.classList.add("transitions-host");
-  detail.appendChild(tr);
-  detail.appendChild(renderValidate(data));
-  // Signals preview only makes sense for recordings made by Phase 1's
-  // multi-sensor recorder. All committed pre-recorder recordings have
-  // data.signals = []; rendering the panel for them is dead weight.
-  if (Array.isArray(data.signals) && data.signals.length > 0) {
-    detail.appendChild(renderSignalsPreview(data));
-  }
+
+  // Page hierarchy (iteration 13):
+  //   1. Recording history selector — TOP, decisive control. Owns
+  //      the container of recording-derived panels below it.
+  //   2. Spec expectations — ALWAYS visible; content depends on
+  //      whether the dropdown is on (none)/Latest (validate
+  //      latest's events) or an archive (re-evaluate spec against
+  //      archive events).
+  //   3. Container below — holds Playback / Meta / GT / Transitions
+  //      / Tools / Validate / Signals. Rendered conditionally based
+  //      on dropdown state; empty when "(none)" is selected.
+  detail.appendChild(renderRecordingHistory(s, data, archives));
 }
 
 function renderMeta(data) {
@@ -900,29 +885,47 @@ function truncate(s, n) {
   return s.slice(0, n - 1) + "…";
 }
 
-// renderRecordingHistory paints a picker for the scenario's archived
-// recordings (under replaydata/.../recordings/). Default selection is
-// "Latest" — the top-level events.jsonl that drives every other
-// panel. Picking an archived recording re-fetches its
-// events/transcript/ground_truth and updates the transitions +
-// ground-truth panels in place. The state band on the playback view
-// keeps showing latest for now — retargeting playback to an archive
-// is a bigger lift.
+// renderRecordingHistory is now the TOP-LEVEL controller for the
+// scenario detail page (iteration 13). It owns:
+//   - a selector with options [(none), Latest, ...archives newest-first]
+//   - the Spec expectations panel (always visible; content swaps
+//     with the selected recording — for archives, the validator
+//     re-runs against the archive's events to surface drift)
+//   - a container of recording-derived panels (Playback, Meta,
+//     Ground truth, Transitions, Tool calls, Validate, Signals)
+//     rendered only when a recording is selected
+//
+// State machine for the selector:
+//   "(none)"  → only Spec expectations renders (against latest's events).
+//   ""        → "Latest": full feature set including live Playback.
+//   "<name>"  → archive: panels reflect that archive; Playback hidden
+//               (retargeting playback to archive events is Phase 4
+//               work still out of scope).
 function renderRecordingHistory(s, latestData, archives) {
-  const p = panel("Recording history");
+  const wrap = document.createElement("div");
+
+  // 1. The selector panel (top, controls everything below).
+  const selPanel = panel("Recording");
   const intro = document.createElement("div");
   intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
-  intro.innerHTML = `<b>${archives.length}</b> previous recording${archives.length === 1 ? "" : "s"} archived. ` +
-    `Select an archive to view its captured behavior; expected.jsonl is the constant benchmark across all of them.`;
-  p.appendChild(intro);
+  const archCount = (archives || []).length;
+  intro.innerHTML = `Select which recording to inspect. <b>expected.jsonl</b> is the constant benchmark across all of them — picking an archive re-evaluates the current spec against that archive's events (drift signal).` +
+    (archCount > 0
+      ? ` <b>${archCount}</b> archived recording${archCount === 1 ? "" : "s"} available.`
+      : ` No archived recordings yet — the next re-record promotes the current one into <code>recordings/</code>.`);
+  selPanel.appendChild(intro);
 
   const select = document.createElement("select");
   select.style.cssText = "padding: 4px 8px; font: inherit; font-size: 12px; border: 1px solid #c0bdb1; border-radius: 3px;";
+  const noneOpt = document.createElement("option");
+  noneOpt.value = "__none__";
+  noneOpt.textContent = "— No recording (spec only) —";
+  select.appendChild(noneOpt);
   const latestOpt = document.createElement("option");
   latestOpt.value = "";
   latestOpt.textContent = "Latest (current events.jsonl)";
   select.appendChild(latestOpt);
-  for (const a of archives) {
+  for (const a of (archives || [])) {
     const opt = document.createElement("option");
     opt.value = a.name;
     const verLabel = a.daemon_version ? ` · daemon ${a.daemon_version}` : "";
@@ -930,25 +933,56 @@ function renderRecordingHistory(s, latestData, archives) {
     opt.textContent = `${a.promoted_at || a.name}${verLabel}${passLabel}`;
     select.appendChild(opt);
   }
-  p.appendChild(select);
+  // Default = Latest. URL deep-links (#/recording/...) imply
+  // "show me this recording" so Latest is the natural starting
+  // point; users explicitly switch to (none) for spec-only view.
+  select.value = "";
+  selPanel.appendChild(select);
 
   const manifestBox = document.createElement("div");
   manifestBox.style.cssText = "margin-top: 10px; font-size: 11px; color: #666;";
-  p.appendChild(manifestBox);
+  selPanel.appendChild(manifestBox);
+  wrap.appendChild(selPanel);
 
-  select.addEventListener("change", async () => {
-    const name = select.value;
-    // Remove any panels we previously injected so a re-selection
-    // doesn't stack them.
-    document.querySelectorAll(".archive-injected").forEach(el => el.remove());
+  // 2. Spec expectations panel — always visible. Re-rendered on
+  //    selection change. Initial render against latest.
+  const expHost = document.createElement("div");
+  expHost.appendChild(renderExpected(latestData));
+  wrap.appendChild(expHost);
 
-    if (!name) {
-      // Latest — restore the original panels.
-      manifestBox.innerHTML = "<i>Latest — no archive metadata.</i>";
-      reRenderForLatest(latestData);
+  // 3. Container for recording-derived panels — populated on
+  //    selection. Empty when "(none)" is chosen.
+  const below = document.createElement("div");
+  wrap.appendChild(below);
+
+  async function selectionChanged() {
+    const value = select.value;
+
+    // Reset the spec panel and the below-container before deciding
+    // what to render. The Spec expectations panel always re-renders;
+    // below-container is conditionally populated.
+    manifestBox.innerHTML = "";
+    below.innerHTML = "";
+
+    if (value === "__none__") {
+      // Spec-only view. Refresh expectations against latest's
+      // events (because the current spec is what matters — the
+      // latest events are just the recording we have).
+      expHost.replaceChildren(renderExpected(latestData));
+      manifestBox.innerHTML = `<i>No recording selected — only Spec expectations rendered. Pick "Latest" or an archive to see captured behavior.</i>`;
       return;
     }
-    const arch = archives.find(a => a.name === name);
+
+    if (value === "") {
+      // Latest — full feature set.
+      expHost.replaceChildren(renderExpected(latestData));
+      manifestBox.innerHTML = `<i>Showing the current top-level recording (<code>events.jsonl</code>, <code>transcript.jsonl</code>, <code>ground_truth.jsonl</code>).</i>`;
+      renderRecordingPanels(latestData, /*isLatest=*/true);
+      return;
+    }
+
+    // Archive selected.
+    const arch = (archives || []).find(a => a.name === value);
     if (arch) {
       manifestBox.innerHTML = `
         <b>promoted_at:</b> ${escapeHtml(arch.promoted_at || "")}<br>
@@ -960,63 +994,73 @@ function renderRecordingHistory(s, latestData, archives) {
       `;
     }
     const archDetail = await fetch(
-      `/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings/${encodeURIComponent(name)}`
+      `/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings/${encodeURIComponent(value)}`
     ).then(r => r.json());
-    // archDetail has the archive's transitions + ground_truth +
-    // a fresh validation against the CURRENT top-level expected.jsonl.
-    // Build a synthetic detail-like object so the existing render
-    // functions work unchanged.
     const archData = {
       ...latestData,
       transitions: archDetail.transitions || [],
       ground_truth: archDetail.ground_truth || null,
       expected: archDetail.expected || null,
+      tools: archDetail.tools || [],
     };
-    // Drift annotation: compare the archive's frozen pass rate
-    // (manifest, captured at promote time) against the FRESH eval
-    // (current spec applied to the archived events). Same string ↔
-    // no spec drift; mismatch ↔ either the spec moved or the daemon
-    // moved between promote-time and now.
+    // Drift annotation: archive's frozen pass rate (manifest) vs
+    // fresh eval (current spec re-run on archived events).
     const frozenRate = (arch && arch.expected_pass_rate) || "";
     const freshRate = (archDetail.expected && archDetail.expected.summary) || "";
-    const driftNote = document.createElement("div");
-    driftNote.style.cssText = "margin-top: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;";
     if (frozenRate && freshRate) {
+      const driftNote = document.createElement("div");
+      driftNote.style.cssText = "margin-top: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;";
       if (frozenRate === freshRate) {
         driftNote.style.background = "#fafaf2";
         driftNote.style.color = "#555";
-        driftNote.innerHTML = `<b>No drift:</b> archive's frozen pass rate (${escapeHtml(frozenRate)}) matches a fresh evaluation against today's spec. The spec hasn't moved relative to what was true at promote time.`;
+        driftNote.innerHTML = `<b>No drift:</b> archive's frozen pass rate (${escapeHtml(frozenRate)}) matches a fresh evaluation against today's spec.`;
       } else {
         driftNote.style.background = "#fff7d6";
         driftNote.style.color = "#8a4500";
-        driftNote.innerHTML = `<b>Drift detected:</b> at promote time the archive showed <code>${escapeHtml(frozenRate)}</code> against expected.jsonl; today's spec rates the same archive as <code>${escapeHtml(freshRate)}</code>. Either expected.jsonl changed or the validator's interpretation of the recording did. Open the Spec expectations panel for per-phase detail.`;
+        driftNote.innerHTML = `<b>Drift detected:</b> at promote time the archive showed <code>${escapeHtml(frozenRate)}</code>; today's spec rates the same archive as <code>${escapeHtml(freshRate)}</code>.`;
       }
-    } else if (freshRate) {
-      driftNote.style.background = "#fafaf2";
-      driftNote.style.color = "#555";
-      driftNote.innerHTML = `<b>Fresh evaluation:</b> ${escapeHtml(freshRate)} (no frozen rate in this archive's manifest — pre-Phase-3 record).`;
+      manifestBox.appendChild(driftNote);
     }
-    manifestBox.appendChild(driftNote);
-    reRenderForArchive(archData);
-  });
-
-  function reRenderForLatest(d) {
-    swapPanel("expected-host", renderExpected(d));
-    swapPanel("ground-truth-host", renderGroundTruth(d));
-    swapPanel("transitions-host", renderTransitions(d));
-  }
-  function reRenderForArchive(d) {
-    swapPanel("expected-host", renderExpected(d));
-    swapPanel("ground-truth-host", renderGroundTruth(d));
-    swapPanel("transitions-host", renderTransitions(d));
-  }
-  function swapPanel(hostClass, newPanel) {
-    newPanel.classList.add(hostClass);
-    const existing = document.querySelector("." + hostClass);
-    if (existing) existing.replaceWith(newPanel);
+    expHost.replaceChildren(renderExpected(archData));
+    renderRecordingPanels(archData, /*isLatest=*/false);
   }
 
-  return p;
+  function renderRecordingPanels(d, isLatest) {
+    below.innerHTML = "";
+    if (isLatest) {
+      below.appendChild(renderPlayback(s, d));
+    } else {
+      // Archive: live playback not supported (Phase 4 work).
+      const note = panel("Playback");
+      const txt = document.createElement("p");
+      txt.style.cssText = "font-size: 12px; color: #888; margin: 0;";
+      txt.innerHTML = `Live playback is only available for the latest recording. To replay this archive, restore it as latest:<br>` +
+        `<code style="font-size: 11px;">mv replaydata/agents/${s.agent}/${s.subtree}/${s.id}/recordings/&lt;name&gt;/{events,transcript,ground_truth}.jsonl replaydata/agents/${s.agent}/${s.subtree}/${s.id}/</code><br>` +
+        `then refresh.`;
+      note.appendChild(txt);
+      below.appendChild(note);
+    }
+    below.appendChild(renderMeta(d));
+    below.appendChild(renderGroundTruth(d));
+    below.appendChild(renderTransitions(d));
+    if (Array.isArray(d.tools) && d.tools.length > 0) {
+      below.appendChild(renderToolCalls(d));
+    }
+    if (isLatest) {
+      // Validate + Signals only have data for the latest. Archives
+      // don't carry them through promote-recording.sh today.
+      below.appendChild(renderValidate(d));
+      if (Array.isArray(d.signals) && d.signals.length > 0) {
+        below.appendChild(renderSignalsPreview(d));
+      }
+    }
+  }
+
+  select.addEventListener("change", selectionChanged);
+  // Initial render reflects the default selection (Latest).
+  selectionChanged();
+
+  return wrap;
 }
 
 // renderToolCalls shows the tool_use blocks the server extracted

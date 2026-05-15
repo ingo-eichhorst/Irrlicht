@@ -699,6 +699,7 @@ type ArchivedRecordingDetail struct {
 	Transitions []json.RawMessage        `json:"transitions"`
 	GroundTruth *GroundTruthBlob         `json:"ground_truth,omitempty"`
 	Expected    *validate.ExpectedReport `json:"expected,omitempty"` // current spec vs this archive's events
+	Tools       []ToolCall               `json:"tools,omitempty"`    // tool_use blocks extracted from archive's transcript.jsonl
 }
 
 // handleRecordingsList walks the scenario's recordings/ subdir and
@@ -774,6 +775,7 @@ func (s *Server) handleArchivedRecording(w http.ResponseWriter, scenarioDir, nam
 	); err == nil && rep != nil {
 		d.Expected = rep
 	}
+	d.Tools = extractToolCalls(filepath.Join(archiveDir, "transcript.jsonl"))
 	writeJSON(w, d)
 }
 
