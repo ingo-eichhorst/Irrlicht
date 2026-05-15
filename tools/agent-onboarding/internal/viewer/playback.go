@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,11 @@ import (
 	"irrlicht/core/ports/outbound"
 	"irrlicht/tools/agent-onboarding/internal/replay"
 )
+
+// archiveNameRE constrains the optional `recording` field on /api/replay/start
+// so a caller can't escape the scenario directory via "..". Matches the
+// shape promote-recording.sh produces: <timestamp>_irrlichd-<version>.
+var archiveNameRE = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
 // Playback represents one active replay session. Only one Playback may
 // be active per Manager at a time — starting a new one stops the
@@ -40,6 +46,17 @@ type Playback struct {
 
 	// DashboardURL is what the frontend opens in an iframe.
 	DashboardURL string
+
+	// EventsDir is the directory the events.jsonl / transcript.jsonl
+	// pair was loaded from. Top-level recording → scenarioDir;
+	// archived recording → scenarioDir/recordings/<name>. handleStart
+	// reuses it for the turns lookup so transcript turns line up with
+	// the same events the state machine is replaying.
+	EventsDir string
+
+	// Recording is the archive name when this playback is replaying
+	// an archived recording, or "" for the top-level (latest).
+	Recording string
 
 	// Paused tracks the UI-perceived state; the state machine handles
 	// the actual pause via its command channel.
@@ -213,7 +230,9 @@ func (m *PlaybackManager) Current() *Playback {
 }
 
 // Start a viewer-internal playback. Stops any existing playback first.
-func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, speed float64) (*Playback, error) {
+// recording: "" → top-level events.jsonl; non-empty → archived recording
+// under <scenarioDir>/recordings/<recording>/.
+func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, speed float64, recording string) (*Playback, error) {
 	if !slugRE.MatchString(agent) || !slugRE.MatchString(scenario) {
 		return nil, fmt.Errorf("invalid agent or scenario id")
 	}
@@ -221,7 +240,17 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		return nil, fmt.Errorf("subtree must be 'scenarios' or 'regression'")
 	}
 	scenarioDir := filepath.Join(m.repoRoot, "replaydata", "agents", agent, subtree, scenario)
-	events, err := replay.LoadEventsOrSynthesize(scenarioDir)
+	eventsDir := scenarioDir
+	if recording != "" {
+		if !archiveNameRE.MatchString(recording) {
+			return nil, fmt.Errorf("invalid recording archive name")
+		}
+		eventsDir = filepath.Join(scenarioDir, "recordings", recording)
+		if _, err := os.Stat(filepath.Join(eventsDir, "events.jsonl")); err != nil {
+			return nil, fmt.Errorf("archive %q has no events.jsonl", recording)
+		}
+	}
+	events, err := replay.LoadEventsOrSynthesize(eventsDir)
 	if err != nil {
 		return nil, fmt.Errorf("load events: %w", err)
 	}
@@ -251,7 +280,9 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		broadcaster: m.broadcaster,
 		machine:     machine,
 		cancel:      cancel,
-		DashboardURL:   "/dashboard",
+		DashboardURL: "/dashboard",
+		EventsDir:    eventsDir,
+		Recording:    recording,
 	}
 
 	m.mu.Lock()
@@ -394,6 +425,9 @@ type startReq struct {
 	Scenario string  `json:"scenario"`
 	Mode     string  `json:"mode"`
 	Speed    float64 `json:"speed"`
+	// Recording is the archive name under <scenarioDir>/recordings/.
+	// Empty (or absent) means replay the top-level events.jsonl.
+	Recording string `json:"recording,omitempty"`
 }
 
 type startResp struct {
@@ -426,13 +460,16 @@ func (m *PlaybackManager) handleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported mode: "+req.Mode, http.StatusBadRequest)
 		return
 	}
-	pb, err := m.StartViewerInternal(req.Agent, req.Subtree, req.Scenario, req.Speed)
+	pb, err := m.StartViewerInternal(req.Agent, req.Subtree, req.Scenario, req.Speed, req.Recording)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	scenarioDir := filepath.Join(m.repoRoot, "replaydata", "agents", req.Agent, req.Subtree, req.Scenario)
-	turns := replay.LoadTurnMarkers(scenarioDir, pb.machine.Anchor())
+	// Load turns from the same directory the events came from so the
+	// transcript-derived turn lane aligns with the replay timeline. For
+	// archives, that's <scenarioDir>/recordings/<name>; for latest, the
+	// scenario dir itself.
+	turns := replay.LoadTurnMarkers(pb.EventsDir, pb.machine.Anchor())
 	writeJSON(w, startResp{
 		PlaybackID: pb.ID, DashboardURL: pb.DashboardURL, Mode: pb.Mode,
 		TotalMs: pb.machine.TotalDurationMs(),

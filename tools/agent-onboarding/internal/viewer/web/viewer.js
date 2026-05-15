@@ -799,37 +799,63 @@ function renderMeta(data) {
 // measured offsets): this panel asserts the daemon's behavior against
 // the spec, so a regression shows up as a red ✗ pill rather than a
 // silent rebase of the truth.
-function renderExpected(data) {
+// renderExpected has two modes:
+//   "validate" (default) — full UI with pass/fail summary, result + delta
+//                          columns, and a failures detail block.
+//   "spec"               — definitions only. Used when no recording is
+//                          selected so the panel reads as "here is the
+//                          spec" rather than "0/N passed against nothing".
+function renderExpected(data, mode) {
+  const specOnly = mode === "spec";
   const p = panel("Spec expectations");
   if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
     p.appendChild(text("No expected.jsonl for this scenario. Author one per the translate skill's Step 3.5 (.specs-grounded benchmark, distinct from ground_truth.jsonl)."));
     return p;
   }
   const rep = data.expected;
-  const summaryColor = rep.pass ? "#d6f0d4" : "#f8c8c8";
-  const summaryFg = rep.pass ? "#1f5a1d" : "#8a0000";
   const summary = document.createElement("div");
   summary.style.cssText = "margin-bottom: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;";
-  summary.innerHTML = `
-    <span style="background: ${summaryColor}; color: ${summaryFg}; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600;">
-      ${escapeHtml(rep.summary || "")}
-    </span>
-    <span style="font-size: 11px; color: #888;">
-      source: <code>${escapeHtml(rep.meta && rep.meta.source || "")}</code>
-    </span>
-  `;
+  if (specOnly) {
+    summary.innerHTML = `
+      <span style="background: #eaeae0; color: #555; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600;">
+        spec only — pick a recording to validate
+      </span>
+      <span style="font-size: 11px; color: #888;">
+        source: <code>${escapeHtml(rep.meta && rep.meta.source || "")}</code>
+      </span>
+    `;
+  } else {
+    const summaryColor = rep.pass ? "#d6f0d4" : "#f8c8c8";
+    const summaryFg = rep.pass ? "#1f5a1d" : "#8a0000";
+    summary.innerHTML = `
+      <span style="background: ${summaryColor}; color: ${summaryFg}; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600;">
+        ${escapeHtml(rep.summary || "")}
+      </span>
+      <span style="font-size: 11px; color: #888;">
+        source: <code>${escapeHtml(rep.meta && rep.meta.source || "")}</code>
+      </span>
+    `;
+  }
   p.appendChild(summary);
 
   const tbl = document.createElement("table");
-  tbl.innerHTML = `<tr>
-    <th>phase</th>
-    <th>target</th>
-    <th>anchor</th>
-    <th>window</th>
-    <th>result</th>
-    <th>delta</th>
-    <th>spec text</th>
-  </tr>`;
+  tbl.innerHTML = specOnly
+    ? `<tr>
+        <th>phase</th>
+        <th>target</th>
+        <th>anchor</th>
+        <th>window</th>
+        <th>spec text</th>
+      </tr>`
+    : `<tr>
+        <th>phase</th>
+        <th>target</th>
+        <th>anchor</th>
+        <th>window</th>
+        <th>result</th>
+        <th>delta</th>
+        <th>spec text</th>
+      </tr>`;
   // Definitions and phases are same-length, same-order arrays from
   // the validator. Zip by index so the row shows full context.
   const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
@@ -844,23 +870,34 @@ function renderExpected(data) {
     if (def.max_delay_ms) win += `≤ ${def.max_delay_ms} ms`;
     if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
     if (!win) win = "—";
-    const resultPill = ph.pass
-      ? `<span class="badge ready">✓ pass</span>`
-      : `<span class="badge fail">✗ fail</span>`;
-    const delta = ph.matched_ts ? `+${ph.delta_ms} ms` : "—";
     const specText = def.text || "";
     const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td><code>${escapeHtml(ph.phase)}</code></td>
-      <td style="font-size: 11px;">${target}</td>
-      <td style="font-size: 11px;">${anchor}</td>
-      <td style="font-size: 11px; color: #555;">${win}</td>
-      <td>${resultPill}</td>
-      <td>${escapeHtml(delta)}</td>
-      <td title="${escapeHtml(specText)}" style="font-size: 11px; color: #555;">${escapeHtml(truncate(specText, 90))}</td>`;
+    if (specOnly) {
+      tr.innerHTML = `
+        <td><code>${escapeHtml(ph.phase)}</code></td>
+        <td style="font-size: 11px;">${target}</td>
+        <td style="font-size: 11px;">${anchor}</td>
+        <td style="font-size: 11px; color: #555;">${win}</td>
+        <td title="${escapeHtml(specText)}" style="font-size: 11px; color: #555;">${escapeHtml(truncate(specText, 90))}</td>`;
+    } else {
+      const resultPill = ph.pass
+        ? `<span class="badge ready">✓ pass</span>`
+        : `<span class="badge fail">✗ fail</span>`;
+      const delta = ph.matched_ts ? `+${ph.delta_ms} ms` : "—";
+      tr.innerHTML = `
+        <td><code>${escapeHtml(ph.phase)}</code></td>
+        <td style="font-size: 11px;">${target}</td>
+        <td style="font-size: 11px;">${anchor}</td>
+        <td style="font-size: 11px; color: #555;">${win}</td>
+        <td>${resultPill}</td>
+        <td>${escapeHtml(delta)}</td>
+        <td title="${escapeHtml(specText)}" style="font-size: 11px; color: #555;">${escapeHtml(truncate(specText, 90))}</td>`;
+    }
     tbl.appendChild(tr);
   }
   p.appendChild(tbl);
+
+  if (specOnly) return p;
 
   // Failure detail block — surface the reason strings prominently so
   // the operator can scan failures without hovering each row.
@@ -896,11 +933,13 @@ function truncate(s, n) {
 //     rendered only when a recording is selected
 //
 // State machine for the selector:
-//   "(none)"  → only Spec expectations renders (against latest's events).
+//   "(none)"  → only Spec expectations renders, in spec-only mode (no
+//               pass/fail badges — there's nothing to validate against).
 //   ""        → "Latest": full feature set including live Playback.
-//   "<name>"  → archive: panels reflect that archive; Playback hidden
-//               (retargeting playback to archive events is Phase 4
-//               work still out of scope).
+//   "<name>"  → archive: panels reflect that archive; Playback retargets
+//               to the archive's events via /api/replay/start's recording
+//               field. Validate + Signals panels stay hidden because
+//               promote-recording.sh doesn't archive those today.
 function renderRecordingHistory(s, latestData, archives) {
   const wrap = document.createElement("div");
 
@@ -965,10 +1004,10 @@ function renderRecordingHistory(s, latestData, archives) {
     below.innerHTML = "";
 
     if (value === "__none__") {
-      // Spec-only view. Refresh expectations against latest's
-      // events (because the current spec is what matters — the
-      // latest events are just the recording we have).
-      expHost.replaceChildren(renderExpected(latestData));
+      // Spec-only view: render the panel WITHOUT pass/fail badges, the
+      // result/delta columns, or the summary chip. The point is "here's
+      // the spec" — there's no recording to validate against.
+      expHost.replaceChildren(renderExpected(latestData, "spec"));
       manifestBox.innerHTML = `<i>No recording selected — only Spec expectations rendered. Pick "Latest" or an archive to see captured behavior.</i>`;
       return;
     }
@@ -977,7 +1016,7 @@ function renderRecordingHistory(s, latestData, archives) {
       // Latest — full feature set.
       expHost.replaceChildren(renderExpected(latestData));
       manifestBox.innerHTML = `<i>Showing the current top-level recording (<code>events.jsonl</code>, <code>transcript.jsonl</code>, <code>ground_truth.jsonl</code>).</i>`;
-      renderRecordingPanels(latestData, /*isLatest=*/true);
+      renderRecordingPanels(latestData, /*archiveName=*/"");
       return;
     }
 
@@ -1022,33 +1061,25 @@ function renderRecordingHistory(s, latestData, archives) {
       manifestBox.appendChild(driftNote);
     }
     expHost.replaceChildren(renderExpected(archData));
-    renderRecordingPanels(archData, /*isLatest=*/false);
+    renderRecordingPanels(archData, /*archiveName=*/value);
   }
 
-  function renderRecordingPanels(d, isLatest) {
+  function renderRecordingPanels(d, archiveName) {
     below.innerHTML = "";
-    if (isLatest) {
-      below.appendChild(renderPlayback(s, d));
-    } else {
-      // Archive: live playback not supported (Phase 4 work).
-      const note = panel("Playback");
-      const txt = document.createElement("p");
-      txt.style.cssText = "font-size: 12px; color: #888; margin: 0;";
-      txt.innerHTML = `Live playback is only available for the latest recording. To replay this archive, restore it as latest:<br>` +
-        `<code style="font-size: 11px;">mv replaydata/agents/${s.agent}/${s.subtree}/${s.id}/recordings/&lt;name&gt;/{events,transcript,ground_truth}.jsonl replaydata/agents/${s.agent}/${s.subtree}/${s.id}/</code><br>` +
-        `then refresh.`;
-      note.appendChild(txt);
-      below.appendChild(note);
-    }
+    // Playback retargets to the archive when archiveName is set —
+    // /api/replay/start accepts a `recording` field that resolves to
+    // <scenarioDir>/recordings/<name>.
+    below.appendChild(renderPlayback(s, d, archiveName));
     below.appendChild(renderMeta(d));
     below.appendChild(renderGroundTruth(d));
     below.appendChild(renderTransitions(d));
     if (Array.isArray(d.tools) && d.tools.length > 0) {
       below.appendChild(renderToolCalls(d));
     }
-    if (isLatest) {
-      // Validate + Signals only have data for the latest. Archives
-      // don't carry them through promote-recording.sh today.
+    // Validate + Signals only carry data for the latest recording today
+    // (promote-recording.sh doesn't archive them). Keep them gated so
+    // archive selections don't render empty panels.
+    if (!archiveName) {
       below.appendChild(renderValidate(d));
       if (Array.isArray(d.signals) && d.signals.length > 0) {
         below.appendChild(renderSignalsPreview(d));
@@ -1294,8 +1325,17 @@ function renderValidate(data) {
 // renderPlayback wires the play/pause/scrubber UI and the dashboard
 // iframe. Takes the scenario picker entry (NOT the full detail payload)
 // because that's what we need to POST /api/replay/start.
-function renderPlayback(s, detailData) {
+function renderPlayback(s, detailData, archiveName) {
   const p = panel("Playback");
+
+  // When replaying an archive, surface which one above the controls so
+  // the operator doesn't confuse it with the live "Latest" timeline.
+  if (archiveName) {
+    const chip = document.createElement("div");
+    chip.style.cssText = "margin-bottom: 8px; font-size: 11px;";
+    chip.innerHTML = `<span style="background: #fff7d6; color: #8a4500; padding: 2px 10px; border-radius: 10px; font-weight: 600;">Playing archive: <code>${escapeHtml(archiveName)}</code></span>`;
+    p.appendChild(chip);
+  }
 
   // Play / Pause / Stop / Prev / Next / Speed.
   const ctl = document.createElement("div");
@@ -1824,7 +1864,13 @@ function renderPlayback(s, detailData) {
     const resp = await fetch("/api/replay/start", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({agent: s.agent, subtree: s.subtree, scenario: s.id, speed: currentSpeed}),
+      body: JSON.stringify({
+        agent: s.agent,
+        subtree: s.subtree,
+        scenario: s.id,
+        speed: currentSpeed,
+        recording: archiveName || "",
+      }),
     });
     if (!resp.ok) {
       alert(`start failed: ${resp.status} ${await resp.text()}`);
