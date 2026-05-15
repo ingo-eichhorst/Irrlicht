@@ -1,21 +1,25 @@
 {
-  "last_updated": "2026-04-24",
+  "last_updated": "2026-05-15",
   "agents": [
     {
       "name": "Claw Code",
       "github_repo": "ultraworkers/claw-code",
       "category": "agent",
       "website": "https://github.com/ultraworkers/claw-code",
-      "description": "Rust CLI agent harness that wraps Claude via the Anthropic API; star count inflated by viral self-promotion in the README.",
-      "stars": 188050,
+      "description": "Rust CLI agent harness that wraps Claude via the Anthropic API; star count inflated by viral self-promotion in the README (\"fastest repo to 100K stars\").",
+      "stars": 191505,
       "language": "Rust",
-      "license": null,
+      "license": "MIT",
       "interface": "CLI",
       "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 191505
+        },
         {
           "date": "2026-04-24",
           "stars": 188050
@@ -31,16 +35,20 @@
       "github_repo": "anomalyco/opencode",
       "category": "agent",
       "website": "https://opencode.ai",
-      "description": "Open-source coding agent (TypeScript CLI).",
-      "stars": 148747,
+      "description": "The open source coding agent.",
+      "stars": 160573,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "CLI",
       "pricing": "Free (open source)",
-      "irrlicht_support": "planned",
+      "irrlicht_support": "live",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 160573
+        },
         {
           "date": "2026-04-24",
           "stars": 148747
@@ -56,8 +64,8 @@
       "github_repo": "anthropics/claude-code",
       "category": "agent",
       "website": "https://www.anthropic.com/claude-code",
-      "description": "Anthropic's terminal-based coding agent.",
-      "stars": 117553,
+      "description": "Claude Code is an agentic coding tool that lives in your terminal, understands your codebase, and helps you code faster by executing routine tasks, explaining complex code, and handling git workflows - all through natural language commands.",
+      "stars": 123761,
       "language": "Shell",
       "license": null,
       "interface": "CLI",
@@ -66,6 +74,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 123761
+        },
         {
           "date": "2026-04-24",
           "stars": 117553
@@ -81,8 +93,8 @@
       "github_repo": "google-gemini/gemini-cli",
       "category": "agent",
       "website": "https://github.com/google-gemini/gemini-cli",
-      "description": "Google's open-source terminal coding agent for Gemini models.",
-      "stars": 102304,
+      "description": "An open-source AI agent that brings the power of Gemini directly into your terminal.",
+      "stars": 104022,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -91,6 +103,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 104022
+        },
         {
           "date": "2026-04-24",
           "stars": 102304
@@ -106,8 +122,8 @@
       "github_repo": "openai/codex",
       "category": "agent",
       "website": "https://github.com/openai/codex",
-      "description": "OpenAI's lightweight terminal coding agent.",
-      "stars": 77568,
+      "description": "Lightweight coding agent that runs in your terminal",
+      "stars": 82811,
       "language": "Rust",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -116,6 +132,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 82811
+        },
         {
           "date": "2026-04-24",
           "stars": 77568
@@ -131,16 +151,20 @@
       "github_repo": "OpenHands/OpenHands",
       "category": "agent",
       "website": "https://github.com/OpenHands/OpenHands",
-      "description": "AI-driven development platform for autonomous software agents.",
-      "stars": 71985,
+      "description": "🙌 OpenHands: AI-Driven Development",
+      "stars": 73613,
       "language": "Python",
-      "license": "MIT",
+      "license": "NOASSERTION",
       "interface": "CLI / Web",
       "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 73613
+        },
         {
           "date": "2026-04-24",
           "stars": 71985
@@ -156,8 +180,8 @@
       "github_repo": "cline/cline",
       "category": "agent",
       "website": "https://cline.bot",
-      "description": "Autonomous coding agent embedded in VS Code.",
-      "stars": 60949,
+      "description": "Autonomous coding agent as an SDK, IDE extension, or CLI assistant.",
+      "stars": 61809,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "IDE extension (VS Code)",
@@ -166,6 +190,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 61809
+        },
         {
           "date": "2026-04-24",
           "stars": 60949
@@ -177,62 +205,41 @@
       ]
     },
     {
-      "name": "Aider",
-      "github_repo": "Aider-AI/aider",
+      "name": "Warp",
+      "github_repo": "warpdotdev/warp",
       "category": "agent",
-      "website": "https://aider.chat",
-      "description": "AI pair-programming tool in your terminal.",
-      "stars": 43874,
-      "language": "Python",
-      "license": "Apache-2.0",
-      "interface": "CLI",
-      "pricing": "Free (open source)",
-      "irrlicht_support": "planned",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-04-24",
-          "stars": 43874
-        },
-        {
-          "date": "2026-04-12",
-          "stars": 43202
-        }
-      ]
-    },
-    {
-      "name": "Goose",
-      "github_repo": "aaif-goose/goose",
-      "category": "agent",
-      "website": "https://block.github.io/goose/",
-      "description": "Extensible open-source agent that can install, execute, edit, and test with any LLM (originated at Block).",
-      "stars": 43139,
+      "website": "https://www.warp.dev",
+      "description": "Warp is an agentic development environment, born out of the terminal.",
+      "stars": 58530,
       "language": "Rust",
-      "license": "Apache-2.0",
-      "interface": "CLI / Desktop app",
-      "pricing": "Free (open source)",
-      "irrlicht_support": "planned",
+      "license": "AGPL-3.0",
+      "interface": "Desktop app (Terminal)",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
         {
+          "date": "2026-05-15",
+          "stars": 58530
+        },
+        {
           "date": "2026-04-24",
-          "stars": 43139
+          "stars": 26501
         },
         {
           "date": "2026-04-12",
-          "stars": 41312
+          "stars": 26372
         }
       ]
     },
     {
       "name": "Pi",
-      "github_repo": "badlogic/pi-mono",
+      "github_repo": "earendil-works/pi",
       "category": "agent",
       "website": "https://github.com/badlogic/pi-mono",
-      "description": "Mario Zechner's AI agent toolkit: coding agent CLI, unified LLM API, TUI/web libraries, Slack bot, vLLM pods.",
-      "stars": 39373,
+      "description": "Mario Zechner's AI agent toolkit (CLI coding agent, unified LLM API, TUI/web libraries, Slack bot, vLLM pods); repo and `@earendil-works/*` packages moved to `earendil-works/pi` in v0.74.",
+      "stars": 49664,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "CLI",
@@ -241,6 +248,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 49664
+        },
         {
           "date": "2026-04-24",
           "stars": 39373
@@ -252,12 +263,70 @@
       ]
     },
     {
+      "name": "Goose",
+      "github_repo": "aaif-goose/goose",
+      "category": "agent",
+      "website": "https://block.github.io/goose/",
+      "description": "Extensible open-source agent (install/execute/edit/test with any LLM); originated at Block before transfer to the `aaif-goose` org.",
+      "stars": 45230,
+      "language": "Rust",
+      "license": "Apache-2.0",
+      "interface": "CLI / Desktop app",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 45230
+        },
+        {
+          "date": "2026-04-24",
+          "stars": 43139
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 41312
+        }
+      ]
+    },
+    {
+      "name": "Aider",
+      "github_repo": "Aider-AI/aider",
+      "category": "agent",
+      "website": "https://aider.chat",
+      "description": "aider is AI pair programming in your terminal",
+      "stars": 44842,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "live",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 44842
+        },
+        {
+          "date": "2026-04-24",
+          "stars": 43874
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 43202
+        }
+      ]
+    },
+    {
       "name": "Continue",
       "github_repo": "continuedev/continue",
       "category": "agent",
       "website": "https://continue.dev",
-      "description": "Source-controlled AI coding assistant and CI checks; VS Code / JetBrains / CLI.",
-      "stars": 32770,
+      "description": "⏩ Source-controlled AI checks, enforceable in CI. Powered by the open-source Continue CLI",
+      "stars": 33196,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "IDE extension / CLI",
@@ -266,6 +335,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 33196
+        },
         {
           "date": "2026-04-24",
           "stars": 32770
@@ -282,7 +355,7 @@
       "category": "agent",
       "website": "https://cursor.com",
       "description": "Proprietary AI-first code editor (the GitHub repo hosts issues only; editor source is closed).",
-      "stars": 32693,
+      "stars": 32875,
       "language": null,
       "license": null,
       "interface": "Desktop app (IDE)",
@@ -291,6 +364,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 32875
+        },
         {
           "date": "2026-04-24",
           "stars": 32693
@@ -307,7 +384,7 @@
       "category": "agent",
       "website": "https://voideditor.com",
       "description": "Open-source AI code editor (VS Code fork).",
-      "stars": 28644,
+      "stars": 28752,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "Desktop app (IDE)",
@@ -316,6 +393,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 28752
+        },
         {
           "date": "2026-04-24",
           "stars": 28644
@@ -327,37 +408,12 @@
       ]
     },
     {
-      "name": "Warp",
-      "github_repo": "warpdotdev/Warp",
-      "category": "agent",
-      "website": "https://www.warp.dev",
-      "description": "Agentic development environment built on a modern terminal.",
-      "stars": 26501,
-      "language": null,
-      "license": null,
-      "interface": "Desktop app (Terminal)",
-      "pricing": "Freemium",
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-04-24",
-          "stars": 26501
-        },
-        {
-          "date": "2026-04-12",
-          "stars": 26372
-        }
-      ]
-    },
-    {
       "name": "Qwen Code",
       "github_repo": "QwenLM/qwen-code",
       "category": "agent",
       "website": "https://qwen.ai/qwencode",
-      "description": "Alibaba's open-source terminal coding agent tuned for the Qwen3-Coder model family.",
-      "stars": 23813,
+      "description": "An open-source AI agent that lives in your terminal.",
+      "stars": 24401,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -366,6 +422,10 @@
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 24401
+        },
         {
           "date": "2026-04-24",
           "stars": 23813
@@ -381,16 +441,20 @@
       "github_repo": "charmbracelet/crush",
       "category": "agent",
       "website": "https://charm.land/crush",
-      "description": "Charmbracelet's multi-model terminal coding agent written in Go.",
-      "stars": 23418,
+      "description": "Glamourous agentic coding for all 💘",
+      "stars": 24298,
       "language": "Go",
-      "license": "MIT",
+      "license": "NOASSERTION",
       "interface": "CLI",
       "pricing": "Free (open source)",
       "irrlicht_support": "planned",
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 24298
+        },
         {
           "date": "2026-04-24",
           "stars": 23418
@@ -406,8 +470,8 @@
       "github_repo": "RooCodeInc/Roo-Code",
       "category": "agent",
       "website": "https://roocode.com",
-      "description": "VS Code coding agent with multi-mode team-of-agents support.",
-      "stars": 23345,
+      "description": "Roo Code gives you a whole dev team of AI agents in your code editor.",
+      "stars": 24073,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "IDE extension (VS Code)",
@@ -416,6 +480,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 24073
+        },
         {
           "date": "2026-04-24",
           "stars": 23345
@@ -427,37 +495,12 @@
       ]
     },
     {
-      "name": "SWE-agent",
-      "github_repo": "SWE-agent/SWE-agent",
-      "category": "agent",
-      "website": "https://swe-agent.com",
-      "description": "Princeton NLP's autonomous agent for resolving GitHub issues (NeurIPS 2024).",
-      "stars": 19050,
-      "language": "Python",
-      "license": "MIT",
-      "interface": "CLI",
-      "pricing": "Free (open source)",
-      "irrlicht_support": "planned",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-04-24",
-          "stars": 19050
-        },
-        {
-          "date": "2026-04-12",
-          "stars": 18968
-        }
-      ]
-    },
-    {
       "name": "Kilo Code",
       "github_repo": "Kilo-Org/kilocode",
       "category": "agent",
       "website": "https://kilo.ai",
-      "description": "All-in-one agentic coding platform for VS Code, JetBrains, and CLI.",
-      "stars": 18505,
+      "description": "Kilo is the all-in-one agentic engineering platform. Build, ship, and iterate faster with the most popular open source coding agent.",
+      "stars": 19304,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "IDE extension / CLI",
@@ -466,6 +509,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 19304
+        },
         {
           "date": "2026-04-24",
           "stars": 18505
@@ -477,12 +524,41 @@
       ]
     },
     {
+      "name": "SWE-agent",
+      "github_repo": "SWE-agent/SWE-agent",
+      "category": "agent",
+      "website": "https://swe-agent.com",
+      "description": "SWE-agent takes a GitHub issue and tries to automatically fix it, using your LM of choice. It can also be employed for offensive cybersecurity or competitive coding challenges. [NeurIPS 2024]",
+      "stars": 19225,
+      "language": "Python",
+      "license": "MIT",
+      "interface": "CLI",
+      "pricing": "Free (open source)",
+      "irrlicht_support": "planned",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 19225
+        },
+        {
+          "date": "2026-04-24",
+          "stars": 19050
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 18968
+        }
+      ]
+    },
+    {
       "name": "Plandex",
       "github_repo": "plandex-ai/plandex",
       "category": "agent",
       "website": "https://plandex.ai",
-      "description": "Open-source terminal agent for large, multi-step coding tasks spanning many files.",
-      "stars": 15289,
+      "description": "Open source AI coding agent. Designed for large projects and real world tasks.",
+      "stars": 15365,
       "language": "Go",
       "license": "MIT",
       "interface": "CLI",
@@ -491,6 +567,10 @@
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 15365
+        },
         {
           "date": "2026-04-24",
           "stars": 15289
@@ -506,8 +586,8 @@
       "github_repo": "langchain-ai/open-swe",
       "category": "agent",
       "website": "https://github.com/langchain-ai/open-swe",
-      "description": "LangChain's open-source asynchronous cloud coding agent.",
-      "stars": 9642,
+      "description": "An Open-Source Asynchronous Coding Agent",
+      "stars": 9802,
       "language": "Python",
       "license": "MIT",
       "interface": "Web",
@@ -516,6 +596,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 9802
+        },
         {
           "date": "2026-04-24",
           "stars": 9642
@@ -531,16 +615,20 @@
       "github_repo": "sweepai/sweep",
       "category": "agent",
       "website": "https://sweep.dev",
-      "description": "AI coding assistant for JetBrains (pivoted from earlier GitHub-issue automation).",
-      "stars": 7705,
+      "description": "Sweep: AI coding assistant for JetBrains",
+      "stars": 7713,
       "language": "Jupyter Notebook",
-      "license": null,
+      "license": "NOASSERTION",
       "interface": "IDE extension (JetBrains)",
       "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 7713
+        },
         {
           "date": "2026-04-24",
           "stars": 7705
@@ -556,8 +644,8 @@
       "github_repo": "tailcallhq/forgecode",
       "category": "agent",
       "website": "https://forgecode.dev",
-      "description": "Rust-based open-source terminal AI pair programmer supporting 300+ models.",
-      "stars": 6925,
+      "description": "AI enabled pair programmer for Claude, GPT, O Series, Grok, Deepseek, Gemini and 300+ models",
+      "stars": 7295,
       "language": "Rust",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -566,6 +654,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 7295
+        },
         {
           "date": "2026-04-24",
           "stars": 6925
@@ -581,8 +673,8 @@
       "github_repo": "ai-christianson/RA.Aid",
       "category": "agent",
       "website": "https://www.ra-aid.ai",
-      "description": "LangGraph-based autonomous coding agent with research \u2192 plan \u2192 implement loop.",
-      "stars": 2223,
+      "description": "Develop software autonomously.",
+      "stars": 2224,
       "language": "Python",
       "license": "Apache-2.0",
       "interface": "CLI",
@@ -591,6 +683,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 2224
+        },
         {
           "date": "2026-04-24",
           "stars": 2223
@@ -606,8 +702,8 @@
       "github_repo": "Factory-AI/factory",
       "category": "agent",
       "website": "https://www.factory.ai",
-      "description": "Agent-native software development platform with Droid agents.",
-      "stars": 794,
+      "description": "Factory - Agent-Native Software Development",
+      "stars": 876,
       "language": null,
       "license": null,
       "interface": "Web / CLI",
@@ -616,6 +712,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 876
+        },
         {
           "date": "2026-04-24",
           "stars": 794
@@ -631,8 +731,8 @@
       "github_repo": "trypear/pearai-app",
       "category": "agent",
       "website": "https://trypear.ai",
-      "description": "Open-source AI code editor (VS Code fork with Continue submodule).",
-      "stars": 676,
+      "description": "PearAI: Open Source AI Code Editor (Fork of VSCode). The PearAI Submodule (https://github.com/trypear/pearai-submodule) is a fork of Continue.",
+      "stars": 689,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "Desktop app (IDE)",
@@ -641,6 +741,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 689
+        },
         {
           "date": "2026-04-24",
           "stars": 676
@@ -656,7 +760,7 @@
       "github_repo": "codegen-sh/codegen",
       "category": "agent",
       "website": "https://codegen.com",
-      "description": "Python wrapper for the Codegen API \u2014 run code agents at scale against a hosted service.",
+      "description": "Python wrapper for the Codegen API - run code agents at scale",
       "stars": 521,
       "language": "Python",
       "license": "Apache-2.0",
@@ -666,6 +770,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 521
+        },
         {
           "date": "2026-04-24",
           "stars": 521
@@ -735,15 +843,15 @@
       "stars_history": []
     },
     {
-      "name": "Codebuff",
+      "name": "CodeGPT",
       "github_repo": null,
       "category": "agent",
-      "website": "https://codebuff.com",
-      "description": "AI coding agent for the terminal.",
+      "website": "https://www.codegpt.co",
+      "description": "Full-stack AI agent platform with a codebase knowledge graph.",
       "stars": null,
       "language": null,
       "license": null,
-      "interface": "CLI",
+      "interface": "IDE extension / Web",
       "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
@@ -754,15 +862,15 @@
       "stars_history": []
     },
     {
-      "name": "CodeGPT",
+      "name": "Codebuff",
       "github_repo": null,
       "category": "agent",
-      "website": "https://www.codegpt.co",
-      "description": "Full-stack AI agent platform with a codebase knowledge graph.",
+      "website": "https://codebuff.com",
+      "description": "AI coding agent for the terminal.",
       "stars": null,
       "language": null,
       "license": null,
-      "interface": "IDE extension / Web",
+      "interface": "CLI",
       "pricing": "Freemium",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
@@ -976,8 +1084,8 @@
       "github_repo": "paperclipai/paperclip",
       "category": "orchestrator",
       "website": "https://paperclip.ing",
-      "description": "Orchestration platform for \"zero-human companies\" \u2014 agents assigned to CEO/manager/worker roles with budgets and approvals.",
-      "stars": 58383,
+      "description": "The open-source app everyone uses to manage agents at work",
+      "stars": 65560,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "Web",
@@ -986,6 +1094,10 @@
       "first_seen": "2026-04-10",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 65560
+        },
         {
           "date": "2026-04-24",
           "stars": 58383
@@ -997,37 +1109,12 @@
       ]
     },
     {
-      "name": "Agno",
-      "github_repo": "agno-agi/agno",
-      "category": "orchestrator",
-      "website": "https://www.agno.com",
-      "description": "Python agent runtime for teams and workflows (formerly Phidata).",
-      "stars": 39648,
-      "language": "Python",
-      "license": "Apache-2.0",
-      "interface": "SDK / Web",
-      "pricing": "Freemium",
-      "irrlicht_support": "none",
-      "first_seen": "2026-04-05",
-      "alternative_metrics": null,
-      "stars_history": [
-        {
-          "date": "2026-04-24",
-          "stars": 39648
-        },
-        {
-          "date": "2026-04-12",
-          "stars": 39367
-        }
-      ]
-    },
-    {
       "name": "Ruflo",
       "github_repo": "ruvnet/ruflo",
       "category": "orchestrator",
       "website": "https://github.com/ruvnet/ruflo",
-      "description": "Agent orchestration platform for Claude: multi-agent swarms, RAG integration, Claude Code/Codex integration.",
-      "stars": 33079,
+      "description": "Agent orchestration platform for Claude: multi-agent swarms, RAG integration, Claude Code / Codex integration.",
+      "stars": 51261,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "CLI / SDK",
@@ -1036,6 +1123,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 51261
+        },
         {
           "date": "2026-04-24",
           "stars": 33079
@@ -1047,12 +1138,41 @@
       ]
     },
     {
+      "name": "Agno",
+      "github_repo": "agno-agi/agno",
+      "category": "orchestrator",
+      "website": "https://www.agno.com",
+      "description": "Build, run, and manage agent platforms.",
+      "stars": 40134,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "interface": "SDK / Web",
+      "pricing": "Freemium",
+      "irrlicht_support": "none",
+      "first_seen": "2026-04-05",
+      "alternative_metrics": null,
+      "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 40134
+        },
+        {
+          "date": "2026-04-24",
+          "stars": 39648
+        },
+        {
+          "date": "2026-04-12",
+          "stars": 39367
+        }
+      ]
+    },
+    {
       "name": "ChatDev",
       "github_repo": "OpenBMB/ChatDev",
       "category": "orchestrator",
       "website": "https://github.com/OpenBMB/ChatDev",
-      "description": "Virtual software company powered by multi-agent LLM collaboration (ChatDev 2.0).",
-      "stars": 32847,
+      "description": "ChatDev 2.0: Dev All through LLM-powered Multi-Agent Collaboration",
+      "stars": 33093,
       "language": "Python",
       "license": "Apache-2.0",
       "interface": "CLI / Web",
@@ -1061,6 +1181,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 33093
+        },
         {
           "date": "2026-04-24",
           "stars": 32847
@@ -1077,7 +1201,7 @@
       "category": "orchestrator",
       "website": "https://github.com/stitionai/devika",
       "description": "Open-source agentic software engineer (originally an open alternative to Devin).",
-      "stars": 19502,
+      "stars": 19507,
       "language": "Python",
       "license": "MIT",
       "interface": "Web",
@@ -1086,6 +1210,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 19507
+        },
         {
           "date": "2026-04-24",
           "stars": 19502
@@ -1101,8 +1229,8 @@
       "github_repo": "gastownhall/gastown",
       "category": "orchestrator",
       "website": "https://github.com/gastownhall/gastown",
-      "description": "Multi-agent workspace manager: Mayor (coordinator) routes work through Rigs and Polecats with a Beads work-state ledger.",
-      "stars": 14580,
+      "description": "Gas Town - multi-agent workspace manager",
+      "stars": 15195,
       "language": "Go",
       "license": "MIT",
       "interface": "CLI",
@@ -1111,6 +1239,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 15195
+        },
         {
           "date": "2026-04-24",
           "stars": 14580
@@ -1126,8 +1258,8 @@
       "github_repo": "smtg-ai/claude-squad",
       "category": "orchestrator",
       "website": "https://github.com/smtg-ai/claude-squad",
-      "description": "Manage multiple AI terminal agents (Claude Code, Codex, OpenCode, Amp) in tmux.",
-      "stars": 7145,
+      "description": "Manage multiple AI terminal agents like Claude Code, Codex, OpenCode, and Amp.",
+      "stars": 7475,
       "language": "Go",
       "license": "AGPL-3.0",
       "interface": "CLI (tmux)",
@@ -1136,6 +1268,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 7475
+        },
         {
           "date": "2026-04-24",
           "stars": 7145
@@ -1151,8 +1287,8 @@
       "github_repo": "ComposioHQ/agent-orchestrator",
       "category": "orchestrator",
       "website": "https://composio.dev",
-      "description": "Agent-agnostic orchestrator for parallel coding agents with autonomous CI auto-fix.",
-      "stars": 6474,
+      "description": "Agentic orchestrator for parallel coding agents — plans tasks, spawns agents, and autonomously handles CI fixes, merge conflicts, and code reviews.",
+      "stars": 7047,
       "language": "TypeScript",
       "license": "MIT",
       "interface": "CLI / Web",
@@ -1161,6 +1297,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 7047
+        },
         {
           "date": "2026-04-24",
           "stars": 6474
@@ -1177,7 +1317,7 @@
       "category": "orchestrator",
       "website": "https://github.com/dlorenc/multiclaude",
       "description": "Parallel Claude Code instances in tmux with a Brownian-ratchet CI model.",
-      "stars": 539,
+      "stars": 548,
       "language": "Go",
       "license": null,
       "interface": "CLI (tmux)",
@@ -1186,6 +1326,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 548
+        },
         {
           "date": "2026-04-24",
           "stars": 539
@@ -1201,8 +1345,8 @@
       "github_repo": "stoneforge-ai/stoneforge",
       "category": "orchestrator",
       "website": "https://stoneforge.ai",
-      "description": "Web dashboard orchestrating AI coding agent teams with worktree isolation.",
-      "stars": 130,
+      "description": "A web dashboard and runtime for orchestrating AI coding agents",
+      "stars": 143,
       "language": "TypeScript",
       "license": "Apache-2.0",
       "interface": "Web",
@@ -1211,6 +1355,10 @@
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 143
+        },
         {
           "date": "2026-04-24",
           "stars": 130
@@ -1227,15 +1375,19 @@
       "category": "orchestrator",
       "website": "https://forge.nxtg.ai",
       "description": "Rust-based multi-AI task orchestrator with file locking and drift detection.",
-      "stars": 109,
+      "stars": 116,
       "language": "Rust",
-      "license": null,
+      "license": "NOASSERTION",
       "interface": "CLI",
       "pricing": "Free (open source)",
       "irrlicht_support": "none",
       "first_seen": "2026-04-05",
       "alternative_metrics": null,
       "stars_history": [
+        {
+          "date": "2026-05-15",
+          "stars": 116
+        },
         {
           "date": "2026-04-24",
           "stars": 109
