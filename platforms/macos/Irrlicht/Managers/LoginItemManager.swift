@@ -35,21 +35,23 @@ enum LoginItemManager {
         }
     }
 
-    /// Bound to the Preferences toggle. Writes the user's intent to disk
-    /// (the `@AppStorage` binding already does this) and pushes through to
-    /// `SMAppService`. Logs failures — typically unsigned debug builds —
-    /// without surfacing them in the UI.
+    /// Bound to the Preferences toggle. The `SMAppService` call talks to
+    /// launchd over XPC, so run it off the main actor — keeps the switch
+    /// animation smooth on slower Macs. Errors (typically unsigned debug
+    /// builds) are logged, never surfaced in the UI.
     static func setEnabled(_ enabled: Bool) {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-                logger.info("Registered as login item")
-            } else {
-                try SMAppService.mainApp.unregister()
-                logger.info("Unregistered as login item")
+        Task.detached(priority: .userInitiated) {
+            do {
+                if enabled {
+                    try SMAppService.mainApp.register()
+                    logger.info("Registered as login item")
+                } else {
+                    try SMAppService.mainApp.unregister()
+                    logger.info("Unregistered as login item")
+                }
+            } catch {
+                logger.error("setEnabled(\(enabled)) failed: \(error.localizedDescription, privacy: .public)")
             }
-        } catch {
-            logger.error("setEnabled(\(enabled)) failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
