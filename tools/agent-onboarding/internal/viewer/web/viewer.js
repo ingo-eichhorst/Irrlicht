@@ -34,14 +34,13 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
   const sidebar = document.getElementById("scenarios");
   sidebar.innerHTML = "";
 
-  // Overview button — always present, renders the catalog × recordings
-  // matrix in the main pane. Reads from /api/catalog (which serves
-  // scenarios.json verbatim) so the maintainer's edits to that file
-  // show up on next refresh without a viewer rebuild.
+  // Overview button — always present. Click sets the hash; the router
+  // hashchange handler does the actual view swap.
   const overviewBtn = document.createElement("button");
   overviewBtn.className = "scn overview-btn";
+  overviewBtn.dataset.route = "overview";
   overviewBtn.textContent = "📊 Overview";
-  overviewBtn.addEventListener("click", () => loadOverview(overviewBtn));
+  overviewBtn.addEventListener("click", () => navigate("#/"));
   sidebar.appendChild(overviewBtn);
 
   if (!scenarios || scenarios.length === 0) {
@@ -49,8 +48,9 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
     note.style.cssText = "padding: 8px; font-size: 12px; color: #888;";
     note.textContent = "No recordings found under replaydata/agents/.";
     sidebar.appendChild(note);
-    // Still allow overview-only navigation against the catalog.
-    loadOverview(overviewBtn);
+    // Wire router even without recordings — overview view still works.
+    window.addEventListener("hashchange", route);
+    route();
     return;
   }
   // Group by subtree (scenarios vs regression) first, then by agent.
@@ -75,19 +75,68 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
       for (const s of agents[agent]) {
         // <button> rather than <a> so the element is reliably
         // click-triggerable from any input source (mouse, keyboard,
-        // accessibility tools, Chrome MCP).
+        // accessibility tools, Chrome MCP). data-rec-key lets the
+        // router find this button when restoring active state from
+        // a deep link.
         const el = document.createElement("button");
         el.className = "scn" + (s.has_ground_truth ? " has-gt" : "");
-        el.textContent = s.id;  // subtree is implied by the section header
-        el.addEventListener("click", () => loadScenario(s, el));
+        el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
+        el.textContent = s.id;
+        el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
         sidebar.appendChild(el);
       }
     }
   }
-  // Land on Overview by default — the matrix tells the user at a glance
-  // what's covered and what's missing before they pick a recording.
-  loadOverview(overviewBtn);
+  // Wire the router and dispatch the initial route. Deep links land
+  // directly on the requested view; bare `/` falls through to overview.
+  window.addEventListener("hashchange", route);
+  route();
 })();
+
+// navigate updates location.hash and lets the hashchange listener do
+// the dispatch. Centralizing through this single helper makes sure
+// every click adds an entry to browser history so back/forward work.
+// Setting `location.hash` to the same value is a no-op (no event,
+// no history entry), which is what we want for re-clicks.
+function navigate(hash) {
+  if (location.hash === hash) {
+    // Already there — force a re-render in case state went stale.
+    route();
+    return;
+  }
+  location.hash = hash;
+}
+
+// route parses location.hash and dispatches to the matching view.
+// Hash shapes:
+//   ""              → overview
+//   "#/"            → overview
+//   "#/scenario/<id>"                       → scenario coverage detail
+//   "#/recording/<agent>/<subtree>/<id>"    → recording playback
+// Unknown hashes fall back to overview.
+function route() {
+  const hash = location.hash || "#/";
+  let m;
+  if ((m = hash.match(/^#\/scenario\/([^/]+)\/?$/))) {
+    loadCoverageDetail(decodeURIComponent(m[1]));
+    return;
+  }
+  if ((m = hash.match(/^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)\/?$/))) {
+    const agent = decodeURIComponent(m[1]);
+    const subtree = decodeURIComponent(m[2]);
+    const id = decodeURIComponent(m[3]);
+    const rec = scenariosList.find(r => r.agent === agent && r.subtree === subtree && r.id === id);
+    if (!rec) {
+      console.warn("route: no recording for", hash, "— falling back to overview");
+      navigate("#/");
+      return;
+    }
+    loadScenario(rec);
+    return;
+  }
+  // Default: overview. Strip any unknown hash content from the title.
+  loadOverview();
+}
 
 // loadOverview swaps the main pane to the scenario coverage matrix.
 // Two catalog shapes are supported:
@@ -104,9 +153,11 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
 // In both modes, hovering a cell explains it, and where a recording
 // exists for the (agent, scenario) pair the cell is clickable and
 // jumps to that recording.
-function loadOverview(btnEl) {
+function loadOverview() {
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
-  if (btnEl) btnEl.classList.add("active");
+  const overviewBtn = document.querySelector(".scn.overview-btn");
+  if (overviewBtn) overviewBtn.classList.add("active");
+  document.title = "Irrlicht — Scenarios";
   document.getElementById("title").textContent = "Scenario coverage";
   const sourceLabel = catalogSource === "coverage"
     ? ".specs/agent-scenarios-coverage.json (source of truth)"
@@ -198,7 +249,7 @@ function renderCoverageMatrix(detail) {
       : "";
     nameLink.innerHTML = `${codeChip}<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span><br>` +
       `<span style="font-weight: normal; color: #666; font-size: 11px; margin-left: ${sc.code ? '34px' : '0'};">${sc.feature || ""}</span>`;
-    nameLink.addEventListener("click", () => loadCoverageDetail(sc.id));
+    nameLink.addEventListener("click", () => navigate(`#/scenario/${sc.id}`));
     nameCell.appendChild(nameLink);
     row.appendChild(nameCell);
     for (const agent of agents) {
@@ -233,11 +284,7 @@ function renderCoverageMatrix(detail) {
       badge.title = lines.join("\n");
       if (rec) {
         badge.addEventListener("click", () => {
-          const sidebar = document.getElementById("scenarios");
-          for (const el of sidebar.querySelectorAll(".scn")) {
-            if (el.textContent === sc.id) { el.click(); el.scrollIntoView({block: "nearest"}); return; }
-          }
-          loadScenario(rec, null);
+          navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
         });
       }
       cell.appendChild(badge);
@@ -293,24 +340,31 @@ function renderCoverageMatrix(detail) {
 //     step-script or prompt, settings, and which committed recordings
 //     exist for each agent.
 async function loadCoverageDetail(scenarioId) {
-  if (!catalog || !Array.isArray(catalog.scenarios)) return;
+  if (!catalog || !Array.isArray(catalog.scenarios)) {
+    navigate("#/");
+    return;
+  }
   const sc = catalog.scenarios.find(s => s.id === scenarioId);
-  if (!sc) return;
+  if (!sc) {
+    console.warn("loadCoverageDetail: unknown scenario id", scenarioId);
+    navigate("#/");
+    return;
+  }
 
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
+  const codePrefix = sc.code ? `${sc.code} ` : "";
+  document.title = `Irrlicht — ${codePrefix}${sc.feature || sc.id}`;
   document.getElementById("title").textContent = sc.feature || sc.id;
   document.getElementById("breadcrumb").textContent = `${sc.section || ""} → ${sc.id}`;
   const detail = document.getElementById("detail");
   detail.innerHTML = "";
 
-  // Back-to-matrix link
+  // Back-to-matrix link — goes through navigate() so it adds a
+  // history entry (forward then takes you back to the detail).
   const back = document.createElement("button");
   back.textContent = "← Back to overview";
   back.style.cssText = "background: transparent; border: 0; color: #1f56a8; padding: 0 0 10px; cursor: pointer; font-size: 12px;";
-  back.addEventListener("click", () => {
-    const overviewBtn = document.querySelector(".overview-btn");
-    loadOverview(overviewBtn);
-  });
+  back.addEventListener("click", () => navigate("#/"));
   detail.appendChild(back);
 
   // Header — what the scenario is + identifiers
@@ -503,14 +557,11 @@ function buildAgentPlanPanel(sc, agent, recipe) {
   }
 
   panel.innerHTML = html;
-  // Wire button after innerHTML (can't pass closure through innerHTML)
+  // Wire button after innerHTML (can't pass closure through innerHTML).
+  // Route through navigate() so the URL updates and back/forward work.
   panel.querySelectorAll(".open-rec").forEach(btn => {
     btn.addEventListener("click", () => {
-      const sidebar = document.getElementById("scenarios");
-      for (const el of sidebar.querySelectorAll(".scn")) {
-        if (el.textContent === btn.dataset.id) { el.click(); el.scrollIntoView({block: "nearest"}); return; }
-      }
-      if (rec) loadScenario(rec, null);
+      if (rec) navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
     });
   });
   return panel;
@@ -622,11 +673,7 @@ function renderScenariosMatrix(detail) {
           btn.title = `Open ${adapter}/${sc.name}`;
           btn.style.cssText = "background: transparent; border: 0; color: #2a8d4f; font-size: 16px; cursor: pointer; padding: 0;";
           btn.addEventListener("click", () => {
-            const sidebar = document.getElementById("scenarios");
-            for (const el of sidebar.querySelectorAll(".scn")) {
-              if (el.textContent === sc.name) { el.click(); el.scrollIntoView({block: "nearest"}); return; }
-            }
-            loadScenario(rec, null);
+            navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
           });
           cell.appendChild(btn);
         } else {
@@ -644,9 +691,18 @@ function renderScenariosMatrix(detail) {
   detail.appendChild(panel);
 }
 
-async function loadScenario(s, linkEl) {
+async function loadScenario(s) {
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
-  linkEl.classList.add("active");
+  // Find the sidebar button by data-rec-key (set in init() when the
+  // button was created). Deep links come through route() without a
+  // click event, so the active state has to be restored here.
+  const key = `${s.agent}/${s.subtree}/${s.id}`;
+  const sidebarBtn = document.querySelector(`.scn[data-rec-key="${CSS.escape(key)}"]`);
+  if (sidebarBtn) {
+    sidebarBtn.classList.add("active");
+    sidebarBtn.scrollIntoView({block: "nearest"});
+  }
+  document.title = `Irrlicht — ${s.agent}/${s.subtree}/${s.id}`;
   document.getElementById("title").textContent = s.id;
   document.getElementById("breadcrumb").textContent = `${s.agent} / ${s.subtree} / ${s.id}`;
   const detail = document.getElementById("detail");
