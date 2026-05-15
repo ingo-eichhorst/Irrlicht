@@ -6,6 +6,10 @@ description: >
   recipe (preconditions, exact driver steps, irrlicht-side verify
   assertions) and append it to .claude/skills/ir:onboard-agent/scenarios.json.
   Invoked as `/ir:onboard-agent translate <agent> <scenario-id>`.
+  Designed for careful, gated execution — each step has a verification
+  checkpoint, and the skill is expected to take a long time (often
+  30–60 minutes per cell) in exchange for recipes that re-record
+  deterministically for years.
 ---
 
 # Mode D: per-cell translation
@@ -18,6 +22,57 @@ get mostly the same output every time.
 The recipe goes into `.claude/skills/ir:onboard-agent/scenarios.json` —
 the same file `run-cell.sh` reads when you later record the cell. The
 viewer's scenario detail page renders the new fields automatically.
+
+## Working approach
+
+**This skill is allowed to take a long time. Correctness matters more
+than speed.** Each recipe gets re-recorded for years, and every
+deviation between runs is a regression report waiting to happen. A
+recipe that takes 30 minutes to translate carefully and then runs
+deterministically beats a 5-minute recipe that flakes one in three
+re-records. Budget accordingly.
+
+Three rules govern every step below:
+
+1. **Clean inputs.** The spec block, the coverage verdict, and the
+   adapter's transport knowledge are the *only* sources of truth.
+   Don't guess from the agent's general reputation or from
+   third-party tutorials; if a primary source doesn't speak to a
+   behavior, mark it `unknown` and stop. Re-run Mode C
+   (`/ir:onboard-agent survey <agent>`) to lift the verdict before
+   continuing — fabricating a recipe against an unknown verdict
+   produces a recording that proves the wrong thing.
+
+2. **Verification gates between steps.** Each step below ends with
+   a `► Verify before moving on:` checklist. Don't proceed to the
+   next step until every item is satisfied. The cost of stopping
+   to check is low; the cost of finding a wrong assumption embedded
+   in the final recipe is high.
+
+3. **Very clear descriptions.** The recipe's `description` and the
+   per-agent `notes` are read by future operators (and future you)
+   far more often than they're written. A new reader should be able
+   to answer four questions just from the text:
+   - *What scenario am I capturing?* — the spec text in plain English
+     (1–2 sentences, NO references to "the scenario above" or other
+     undefined antecedents).
+   - *Why this exact recipe shape?* — every non-obvious choice
+     (lazy-transcript nudge, fresh-cwd-per-restart, trailing sleep,
+     etc.) gets a sentence of "why" so the next translator doesn't
+     remove it thinking it's vestigial.
+   - *How is it going to differ between runs?* — anything model-
+     dependent (token counts, exact assistant wording, timing
+     within a few hundred ms) is called out so a re-record diff
+     against the structural baseline doesn't read as a regression.
+   - *Where would I look if it broke?* — adapter-specific gotchas
+     listed in `preconditions` or `notes` so the operator isn't
+     guessing.
+
+If a step's verification can't be satisfied with the inputs at hand,
+**stop and ask the maintainer** rather than guess. A missing piece
+of evidence is a real signal — translate that into either a
+`prerequisites_hint` on the survey or a `partial` verdict, then
+re-translate after the maintainer fills the gap.
 
 ## Invocation
 
@@ -93,6 +148,17 @@ the variants demand fundamentally different setups (different
 prerequisites, different agent CLIs) that can't share one
 recording.
 
+► **Verify before moving on:**
+- [ ] Captured every word of the Scenario: paragraph(s) and every
+  Expected: bullet — paraphrasing loses precision.
+- [ ] Counted the number of variants. If >1, decide chain-in-one vs
+  split-into-N now (chain is the default).
+- [ ] Identified each Expected bullet as either user-observable
+  (state badge, count, link, lifecycle, metric) or internal (event
+  kind, classifier rule, internal flag). Internal-only bullets
+  should not exist — if you see one, it's a spec bug; flag it to
+  the maintainer before proceeding.
+
 ### Step 2 — Read the verdict
 
 ```
@@ -109,6 +175,16 @@ recording.
 - `agent_supports == "unknown"` → flip to Mode C
   (`/ir:onboard-agent survey <agent>`) first to lift the verdict;
   re-run translate after the maintainer merges the survey.
+
+► **Verify before moving on:**
+- [ ] The verdict cell exists for `<agent>` in
+  `.specs/agent-scenarios-coverage.json` — no fabricating a column.
+- [ ] If `agent_supports == "partial"`, the coverage `notes` field
+  is non-empty AND you understand the caveat well enough to mirror
+  it into `preconditions`. If the notes are vague (e.g. "needs
+  more investigation"), stop and surface the gap to the maintainer.
+- [ ] If `agent_supports != "yes"`, you have a documented reason
+  to proceed (or not). Don't guess.
 
 ### Step 3 — Read the adapter's transport knowledge
 
@@ -183,6 +259,20 @@ finalizing the script:
 
 If you discover a new quirk while translating a cell, add it here so
 the next translator doesn't have to re-discover it.
+
+► **Verify before moving on:**
+- [ ] Read the adapter's `config.go` and confirmed the transcript
+  filename + process name + PID-discovery wiring. Recipes can't
+  assume; they must match what irrlicht looks for.
+- [ ] Read the interactive driver and confirmed which step types it
+  implements. Any step the recipe needs but the driver doesn't
+  support → extend the driver first, then return here.
+- [ ] Cross-checked any matching quirk in the "Adapter quirks"
+  list. Lazy transcripts, no-PID-binding agents, idle-flush
+  turn-end — every one of these changes the recipe shape.
+- [ ] If this is the agent's first scenario, also confirmed any
+  install-instructions.md gates (auth, local servers, model
+  availability) — they become `preconditions` entries.
 
 #### Multi-variant scenarios (chained sessions in one recording)
 
@@ -294,6 +384,18 @@ When the scenario implies a **negative** invariant ("state never
 entered working"), add an explicit "no … appears in the recording"
 verify entry so the maintainer remembers to check the absence.
 
+► **Verify before moving on:**
+- [ ] Every Expected bullet from Step 1 has at least one `verify`
+  string. No bullet is dropped silently.
+- [ ] Every `verify` string is anchored to `events.jsonl` / state
+  / `transcript.jsonl` content — not to internal flags, rule
+  numbers, or reason strings.
+- [ ] Negative invariants ("state never entered X") have explicit
+  "no … appears" verify entries.
+- [ ] No `verify` string asserts a behavior the recipe's script
+  can't actually exercise. (E.g. don't assert "subagent count = 3"
+  when the script sends no Agent tool calls.)
+
 ### Step 5 — Write the recipe
 
 Insert the JSON entry into `scenarios.json -> scenarios[]`. Append
@@ -304,6 +406,25 @@ confirm the JSON is valid.
 If the agent's row already exists (e.g. you're translating a second
 cell for the same scenario), add to `by_adapter` instead of creating a
 duplicate entry.
+
+► **Verify before moving on:**
+- [ ] `jq '.' .claude/skills/ir:onboard-agent/scenarios.json > /dev/null`
+  succeeds (no JSON syntax errors).
+- [ ] The `description` answers all four questions from the
+  "Very clear descriptions" rule above (what / why / how-it-differs
+  / where-to-look-if-broken). Read it cold as if you've never seen
+  the scenario before; if any answer is unclear, rewrite the
+  description before recording.
+- [ ] `preconditions` enumerate every external dependency the
+  operator needs in place before pressing record. A new operator
+  reading the recipe should know whether the cell is runnable
+  for them right now.
+- [ ] `setup` enumerates everything `run-cell.sh` / the driver
+  handles automatically, so the operator understands which parts
+  are their job (preconditions) vs the pipeline's (setup).
+- [ ] The script's steps are in the order the driver will execute
+  them; no implicit assumption that the operator will reorder
+  anything.
 
 ### Step 6 — Record and write the ground-truth file
 
@@ -369,6 +490,31 @@ agree on the same set of assertions.
 The viewer's "Ground truth" panel on the scenario playback page
 renders this file directly — if it's missing, the panel says "No
 ground_truth.jsonl" and the validator skips the scenario.
+
+► **Verify before declaring done:**
+- [ ] Recording was committed via `--attach` mode against the user's
+  real daemon (not isolated mode), and the events.jsonl matches every
+  bullet in the recipe's `verify` list. Mismatches are fixable: tighten
+  the recipe (more sleep, different step ordering) and re-record until
+  it's stable across two consecutive runs.
+- [ ] `ground_truth.jsonl` labels align with the actual offsets you
+  measured — generated via the Python helper above, not hand-picked.
+- [ ] `tools/replay-fixtures.sh` runs green against the new fixture.
+- [ ] `go test ./tools/agent-onboarding/... -race -count=1` runs
+  green (catches schema mismatches and viewer-side breaks).
+- [ ] Open the viewer playback page for the new recording. Visual
+  spot-checks:
+  - State band reflects what the verify list asserts.
+  - Turn lane shows the right number of user/assistant ticks.
+  - Ground truth panel renders all labels with the right offsets.
+  - "Emitted state transitions" panel lists each session ending in
+    `→ ∅` (or whatever the recipe documented).
+- [ ] Re-record once more from scratch (`run-cell.sh --attach …`).
+  Promote into a sibling dir under `.build/refresh/` and diff
+  structural fields (state-transition order, session count,
+  process_exited count) against the committed fixture. **They must
+  match.** Drift here means the recipe has variance that will bite
+  someone in six months.
 
 ## Determinism budget
 
