@@ -83,13 +83,20 @@ type ExpectedResult struct {
 	Notes     []string  `json:"notes,omitempty"`    // invariant-check trace
 }
 
-// ExpectedReport is the full validation result — meta + per-phase
-// verdicts. Pass is true iff every phase passed.
+// ExpectedReport is the full validation result — meta + the original
+// phase definitions + per-phase verdicts. Definitions and Phases are
+// the same length and indexed identically, so callers can pair them
+// up by position. Including the definitions lets viewer UIs render
+// target/anchor/window context next to the result without an extra
+// fetch. RecordingStart is events[0].Ts — viewer UIs use it to
+// convert matched_ts into an offset for timeline positioning.
 type ExpectedReport struct {
-	Meta    ExpectedMeta     `json:"meta"`
-	Pass    bool             `json:"pass"`
-	Phases  []ExpectedResult `json:"phases"`
-	Summary string           `json:"summary"`
+	Meta           ExpectedMeta     `json:"meta"`
+	Pass           bool             `json:"pass"`
+	RecordingStart time.Time        `json:"recording_start"`
+	Definitions    []ExpectedPhase  `json:"definitions"`
+	Phases         []ExpectedResult `json:"phases"`
+	Summary        string           `json:"summary"`
 }
 
 // recordedEvent is the subset of fields we care about from
@@ -140,10 +147,12 @@ func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
 	}
 
 	return &ExpectedReport{
-		Meta:    meta,
-		Pass:    allPass,
-		Phases:  results,
-		Summary: summarize(results),
+		Meta:           meta,
+		Pass:           allPass,
+		RecordingStart: events[0].Ts,
+		Definitions:    phases,
+		Phases:         results,
+		Summary:        summarize(results),
 	}, nil
 }
 

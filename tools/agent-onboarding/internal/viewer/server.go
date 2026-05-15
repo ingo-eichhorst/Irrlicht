@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"irrlicht/tools/agent-onboarding/internal/groundtruth"
+	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
 // slugRE constrains user-supplied URL components (agent, scenario id) so
@@ -503,15 +504,16 @@ func (s *Server) handleScenariosList(w http.ResponseWriter, r *http.Request) {
 
 // ScenarioDetail is the payload for /api/scenarios/{agent}/{subtree}/{id}.
 type ScenarioDetail struct {
-	Agent       string                  `json:"agent"`
-	Subtree     string                  `json:"subtree"`
-	ID          string                  `json:"id"`
-	Meta        json.RawMessage         `json:"meta,omitempty"`         // recording-meta.json or null
-	GroundTruth *GroundTruthBlob        `json:"ground_truth,omitempty"` // ground_truth.jsonl parsed
-	Signals     []json.RawMessage       `json:"signals"`                // all signals.jsonl rows
-	Transitions []json.RawMessage       `json:"transitions"`            // state_transition rows from events.jsonl
-	Frames      []FrameRow              `json:"frames,omitempty"`       // frames.jsonl parsed
-	Validate    json.RawMessage         `json:"validate,omitempty"`     // validate result JSON if present
+	Agent       string                    `json:"agent"`
+	Subtree     string                    `json:"subtree"`
+	ID          string                    `json:"id"`
+	Meta        json.RawMessage           `json:"meta,omitempty"`         // recording-meta.json or null
+	GroundTruth *GroundTruthBlob          `json:"ground_truth,omitempty"` // ground_truth.jsonl parsed
+	Expected    *validate.ExpectedReport  `json:"expected,omitempty"`     // expected.jsonl validated against events.jsonl (if file present)
+	Signals     []json.RawMessage         `json:"signals"`                // all signals.jsonl rows
+	Transitions []json.RawMessage         `json:"transitions"`            // state_transition rows from events.jsonl
+	Frames      []FrameRow                `json:"frames,omitempty"`       // frames.jsonl parsed
+	Validate    json.RawMessage           `json:"validate,omitempty"`     // validate result JSON if present
 }
 
 // GroundTruthBlob is the JSON-friendly shape of ground_truth.jsonl.
@@ -579,6 +581,12 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if b, err := os.ReadFile(filepath.Join(scenarioDir, fmt.Sprintf("%s-%s-validate.json", agent, id))); err == nil {
 		d.Validate = b
+	}
+	// Spec-grounded expected.jsonl validation. Errors are swallowed so a
+	// malformed expected.jsonl doesn't 500 the whole detail response —
+	// the frontend treats a missing report as "not configured".
+	if rep, err := validate.ValidateExpected(scenarioDir); err == nil && rep != nil {
+		d.Expected = rep
 	}
 	writeJSON(w, d)
 }

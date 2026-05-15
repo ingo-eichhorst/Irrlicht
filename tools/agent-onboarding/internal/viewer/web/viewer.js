@@ -710,8 +710,9 @@ async function loadScenario(s) {
 
   const data = await fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}`).then(r => r.json());
   detail.innerHTML = "";
-  detail.appendChild(renderPlayback(s));
+  detail.appendChild(renderPlayback(s, data));
   detail.appendChild(renderMeta(data));
+  detail.appendChild(renderExpected(data));
   detail.appendChild(renderGroundTruth(data));
   detail.appendChild(renderTransitions(data));
   detail.appendChild(renderValidate(data));
@@ -788,6 +789,97 @@ function renderMeta(data) {
   pre.textContent = JSON.stringify(meta, null, 2);
   p.appendChild(pre);
   return p;
+}
+
+// renderExpected paints the spec-grounded expected.jsonl validation
+// report. Distinct from renderGroundTruth (which shows per-recording
+// measured offsets): this panel asserts the daemon's behavior against
+// the spec, so a regression shows up as a red ✗ pill rather than a
+// silent rebase of the truth.
+function renderExpected(data) {
+  const p = panel("Spec expectations");
+  if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
+    p.appendChild(text("No expected.jsonl for this scenario. Author one per the translate skill's Step 3.5 (.specs-grounded benchmark, distinct from ground_truth.jsonl)."));
+    return p;
+  }
+  const rep = data.expected;
+  const summaryColor = rep.pass ? "#d6f0d4" : "#f8c8c8";
+  const summaryFg = rep.pass ? "#1f5a1d" : "#8a0000";
+  const summary = document.createElement("div");
+  summary.style.cssText = "margin-bottom: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;";
+  summary.innerHTML = `
+    <span style="background: ${summaryColor}; color: ${summaryFg}; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600;">
+      ${escapeHtml(rep.summary || "")}
+    </span>
+    <span style="font-size: 11px; color: #888;">
+      source: <code>${escapeHtml(rep.meta && rep.meta.source || "")}</code>
+    </span>
+  `;
+  p.appendChild(summary);
+
+  const tbl = document.createElement("table");
+  tbl.innerHTML = `<tr>
+    <th>phase</th>
+    <th>target</th>
+    <th>anchor</th>
+    <th>window</th>
+    <th>result</th>
+    <th>delta</th>
+    <th>spec text</th>
+  </tr>`;
+  // Definitions and phases are same-length, same-order arrays from
+  // the validator. Zip by index so the row shows full context.
+  const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
+  for (let i = 0; i < rep.phases.length; i++) {
+    const ph = rep.phases[i];
+    const def = defs[i] || {};
+    const target = def.expected_state
+      ? `state=<span class="badge ${def.expected_state}">${def.expected_state}</span>`
+      : (def.kind ? `kind=<code>${escapeHtml(def.kind)}</code>` : "—");
+    const anchor = def.relative_to ? `<code>${escapeHtml(def.relative_to)}</code>` : "<code>start</code>";
+    let win = "";
+    if (def.max_delay_ms) win += `≤ ${def.max_delay_ms} ms`;
+    if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
+    if (!win) win = "—";
+    const resultPill = ph.pass
+      ? `<span class="badge ready">✓ pass</span>`
+      : `<span class="badge fail">✗ fail</span>`;
+    const delta = ph.matched_ts ? `+${ph.delta_ms} ms` : "—";
+    const specText = def.text || "";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><code>${escapeHtml(ph.phase)}</code></td>
+      <td style="font-size: 11px;">${target}</td>
+      <td style="font-size: 11px;">${anchor}</td>
+      <td style="font-size: 11px; color: #555;">${win}</td>
+      <td>${resultPill}</td>
+      <td>${escapeHtml(delta)}</td>
+      <td title="${escapeHtml(specText)}" style="font-size: 11px; color: #555;">${escapeHtml(truncate(specText, 90))}</td>`;
+    tbl.appendChild(tr);
+  }
+  p.appendChild(tbl);
+
+  // Failure detail block — surface the reason strings prominently so
+  // the operator can scan failures without hovering each row.
+  const failed = rep.phases.filter(ph => !ph.pass);
+  if (failed.length > 0) {
+    const failBox = document.createElement("div");
+    failBox.style.cssText = "margin-top: 10px; padding: 8px 10px; background: #fff7f7; border-left: 3px solid #8a0000; font-size: 12px; color: #444;";
+    let html = "<b>Failures:</b><ul style=\"margin: 4px 0 0; padding-left: 20px;\">";
+    for (const ph of failed) {
+      html += `<li><code>${escapeHtml(ph.phase)}</code>: ${escapeHtml(ph.reason || "(no reason recorded)")}</li>`;
+    }
+    html += "</ul>";
+    failBox.innerHTML = html;
+    p.appendChild(failBox);
+  }
+  return p;
+}
+
+function truncate(s, n) {
+  if (!s) return "";
+  if (s.length <= n) return s;
+  return s.slice(0, n - 1) + "…";
 }
 
 function renderGroundTruth(data) {
@@ -956,7 +1048,7 @@ function renderValidate(data) {
 // renderPlayback wires the play/pause/scrubber UI and the dashboard
 // iframe. Takes the scenario picker entry (NOT the full detail payload)
 // because that's what we need to POST /api/replay/start.
-function renderPlayback(s) {
+function renderPlayback(s, detailData) {
   const p = panel("Playback");
 
   // Play / Pause / Stop / Prev / Next / Speed.
@@ -1020,6 +1112,14 @@ function renderPlayback(s) {
   // to the top half, assistant ticks to the bottom half — both can
   // co-exist at the same x without overlap. Lane is taller now (22px)
   // and ticks are wider (5px) so they're easier to land the cursor on.
+  // Expected lane — markers at each spec-grounded phase's
+  // matched-or-target timestamp. Sits above the turn lane so the
+  // operator reads top-to-bottom: expected (spec) → turns
+  // (transcript) → state (irrlicht) → events (irrlicht).
+  const expectedLane = document.createElement("div");
+  expectedLane.style.cssText = "position: relative; height: 16px; margin-bottom: 2px;";
+  scrubWrap.appendChild(expectedLane);
+
   const turnLane = document.createElement("div");
   turnLane.style.cssText = "position: relative; height: 22px; margin-bottom: 2px;";
   scrubWrap.appendChild(turnLane);
@@ -1363,6 +1463,101 @@ function renderPlayback(s) {
     renderStateBand();
     renderEventDots();
     renderTurns();
+    renderExpectedLane();
+  }
+
+  // renderExpectedLane paints one marker per spec-grounded phase from
+  // the validator report. Positions come from each phase's
+  // matched_ts (passed) or anchor_ts + max_delay_ms (failed). Color
+  // encodes pass/fail; shape encodes state-vs-lifecycle. Hover via
+  // the shared tooltip overlay shows phase name, spec text, actual
+  // vs target, and the validator's pass/fail reason.
+  function renderExpectedLane() {
+    expectedLane.innerHTML = "";
+    if (!totalMs) return;
+    const rep = detailData && detailData.expected;
+    if (!rep || !Array.isArray(rep.phases) || rep.phases.length === 0) {
+      // No expected.jsonl — render a thin grey hint instead of leaving the lane mysteriously empty.
+      const note = document.createElement("div");
+      note.style.cssText = "position: absolute; left: 0; top: 0; font-size: 10px; color: #aaa; padding: 2px 4px;";
+      note.textContent = "expected: not configured";
+      expectedLane.appendChild(note);
+      return;
+    }
+    // The validator anchors matched_ts to events[0].Ts (the
+    // recording's first event) and exposes it as
+    // rep.recording_start. Use that to convert each phase's
+    // absolute matched_ts into an offset_ms compatible with the
+    // EventMarker positions on the scrubber.
+    const startMs = rep.recording_start ? Date.parse(rep.recording_start) : NaN;
+    const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
+    for (let i = 0; i < rep.phases.length; i++) {
+      const ph = rep.phases[i];
+      const def = defs[i] || {};
+      const matchedMs = ph.matched_ts ? Date.parse(ph.matched_ts) : NaN;
+      const offsetMs = Number.isFinite(matchedMs) && Number.isFinite(startMs)
+        ? matchedMs - startMs
+        : null;
+      // Failed phases without a match still need positioning — they
+      // anchor at the validator's "should-have-been-here" point,
+      // which is anchor_ts + max_delay_ms. Without anchor info on
+      // the wire (we don't pass anchor_ts in the result yet), we
+      // park them at the lane's start with a "?" marker.
+      const pos = offsetMs !== null ? Math.max(0, Math.min(100, (offsetMs / totalMs) * 100)) : null;
+      const pass = ph.pass;
+      const marker = document.createElement("div");
+      const isState = !!def.expected_state;
+      const baseColor = isState
+        ? (def.expected_state === "working" ? "#8b5cf6"
+           : def.expected_state === "waiting" ? "#f59e0b"
+           : "#4ade80") // ready
+        : "#3b82f6"; // lifecycle kind (blue)
+      const rimColor = pass ? "#22c55e" : "#dc2626";
+      if (pos === null) {
+        // Failed AND unmatched — pin to left edge with a "?" so the
+        // operator notices something is wrong but isn't misled into
+        // thinking it's at offset 0.
+        marker.style.cssText =
+          `position: absolute; left: 2px; top: 1px; ` +
+          `width: 12px; height: 12px; ` +
+          `background: ${rimColor}; color: white; ` +
+          `border-radius: 50%; ` +
+          `font-size: 9px; font-weight: 700; text-align: center; line-height: 12px; ` +
+          `cursor: help;`;
+        marker.textContent = "?";
+      } else if (isState) {
+        marker.style.cssText =
+          `position: absolute; left: ${pos}%; top: 2px; ` +
+          `width: 10px; height: 10px; transform: translateX(-5px); ` +
+          `background: ${baseColor}; ` +
+          `border: 2px solid ${rimColor}; ` +
+          `border-radius: 50%; ` +
+          `cursor: help;`;
+      } else {
+        // Lifecycle marker — rectangular tag with the kind's first 2 chars.
+        const label = (def.kind || "").slice(0, 3).toUpperCase();
+        marker.style.cssText =
+          `position: absolute; left: ${pos}%; top: 1px; ` +
+          `padding: 0 3px; height: 12px; line-height: 12px; ` +
+          `transform: translateX(-50%); ` +
+          `background: ${baseColor}; color: white; ` +
+          `border: 1.5px solid ${rimColor}; ` +
+          `border-radius: 3px; ` +
+          `font-size: 9px; font-weight: 700; ` +
+          `cursor: help;`;
+        marker.textContent = label;
+      }
+      const lines = [`${ph.phase} — ${pass ? "PASS" : "FAIL"}`];
+      if (def.text) lines.push(def.text);
+      if (offsetMs !== null) {
+        let delta = `+${Math.round(offsetMs)} ms from recording start`;
+        if (def.max_delay_ms) delta += ` (target ≤ ${def.max_delay_ms} ms from anchor)`;
+        lines.push(delta);
+      }
+      if (ph.reason) lines.push(`reason: ${ph.reason}`);
+      marker.setAttribute("data-tip", lines.join("\n"));
+      expectedLane.appendChild(marker);
+    }
   }
 
   // Dashboard iframe (hidden until playback starts).
