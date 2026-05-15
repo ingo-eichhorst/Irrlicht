@@ -40,33 +40,96 @@ struct AXTitleMatchActivator: HostActivator {
             return
         }
         let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        guard let app = runningApps.first else { return }
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        guard !runningApps.isEmpty else { return }
 
-        var windowsRef: CFTypeRef?
-        let status = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef)
-        guard status == .success, let windows = windowsRef as? [AXUIElement] else { return }
-
-        let titles = windows.map { windowTitle($0) }
+        // kAXWindowsAttribute omits windows that are fullscreen on
+        // another Space for Electron hosts (VS Code, Cursor, Windsurf), so
+        // we enumerate via the app's Window menu instead — it lists every
+        // open window across Spaces, and AX-pressing an item is what the
+        // user would do manually, so macOS handles the Space switch and
+        // raise atomically.
+        var candidates: [(menuItem: AXUIElement, title: String)] = []
+        for app in runningApps {
+            let axApp = AXUIElementCreateApplication(app.processIdentifier)
+            candidates.append(contentsOf: windowMenuItems(axApp: axApp))
+        }
+        let titles = candidates.map { $0.title }
         guard let idx = bestMatchIndex(titles: titles, cwd: cwd) else {
-            logger.info("no window title matched cwd \(cwd, privacy: .public); candidates=\(titles, privacy: .public)")
+            logger.info("no window menu item matched cwd \(cwd, privacy: .public); candidates=\(titles, privacy: .public)")
             return
         }
-        let target = windows[idx]
-        // Set main first so the subsequent activate() knows which Space to switch to.
-        AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementPerformAction(target, kAXRaiseAction as CFString)
-        // Re-activate the app after designating the target window as main. This
-        // triggers a macOS Space switch when the target is a fullscreen window on
-        // another Space — kAXRaiseAction alone does not cross Space boundaries.
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .first?.activate(options: [])
+        let target = candidates[idx]
+        logger.info("AX dispatch: cwd=\(cwd, privacy: .public) picked=[\(idx)] \(titles[idx], privacy: .public) of candidates=\(titles, privacy: .public)")
+        AXUIElementPerformAction(target.menuItem, kAXPressAction as CFString)
     }
 
-    private static func windowTitle(_ window: AXUIElement) -> String {
-        var titleRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef)
-        return (titleRef as? String) ?? ""
+    /// Returns (menuItem, title) pairs for every entry in the app's Window
+    /// menu. The Window menu is identified by its localized title; if
+    /// the app's locale isn't in our list we fail gracefully (returns
+    /// `[]`) rather than guessing at a positional fallback that might
+    /// land on a non-Window menu and press a destructive item.
+    ///
+    /// Non-window entries in the menu (Minimize, Zoom, …) are not
+    /// filtered explicitly — `bestMatchIndex` scores them 0 against any
+    /// real cwd, so they never win regardless of locale.
+    private static let windowMenuTitles: Set<String> = [
+        "Window",       // en
+        "Fenster",      // de
+        "Fenêtre",      // fr
+        "Ventana",      // es
+        "Finestra",     // it
+        "Janela",       // pt (BR & PT)
+        "Venster",      // nl
+        "Fönster",      // sv
+        "Vindue",       // da
+        "Vindu",        // no/nb
+        "Ikkuna",       // fi
+        "Okno",         // pl/cs
+        "Окно",         // ru
+        "Pencere",      // tr
+        "ウィンドウ",      // ja
+        "窗口",          // zh-Hans
+        "視窗",          // zh-Hant
+        "창",           // ko
+    ]
+
+    private static func windowMenuItems(axApp: AXUIElement) -> [(menuItem: AXUIElement, title: String)] {
+        var menuBarRef: CFTypeRef?
+        // CFGetTypeID crashes on NULL and Swift CF bridging doesn't allow
+        // `as? AXUIElement`, so we unwrap then runtime-check the type.
+        guard AXUIElementCopyAttributeValue(axApp, kAXMenuBarAttribute as CFString, &menuBarRef) == .success,
+              let menuBarRef,
+              CFGetTypeID(menuBarRef) == AXUIElementGetTypeID()
+        else { return [] }
+        let menuBar = menuBarRef as! AXUIElement
+
+        guard let windowMenu = axChildren(menuBar).first(where: { menu in
+            axTitle(menu).map(windowMenuTitles.contains) ?? false
+        }) else { return [] }
+
+        // A top-level menu has a single AXMenu popup child; its children
+        // are the menu items.
+        guard let popup = axChildren(windowMenu).first else { return [] }
+
+        return axChildren(popup).compactMap { item in
+            guard let title = axTitle(item), !title.isEmpty else { return nil }
+            return (item, title)
+        }
+    }
+
+    private static func axChildren(_ element: AXUIElement) -> [AXUIElement] {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &ref) == .success,
+              let children = ref as? [AXUIElement]
+        else { return [] }
+        return children
+    }
+
+    private static func axTitle(_ element: AXUIElement) -> String? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &ref) == .success
+        else { return nil }
+        return ref as? String
     }
 
     // MARK: - Title match (pure, testable)
