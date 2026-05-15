@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Binding var isPresented: Bool
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+    @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = true
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = true
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = true
@@ -35,6 +36,16 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            VStack(alignment: .leading, spacing: 8) {
+                LeadingToggle(isOn: $launchAtLogin, label: "Open at Login")
+
+                Text("Start Irrlicht automatically when you log in to your Mac.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .onChange(of: launchAtLogin) { newValue in LoginItemManager.setEnabled(newValue) }
 
             Divider()
 

@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Wire gasTownProvider before daemon starts (hydration needs it).
         sessionManager.gasTownProvider = gasTownProvider
         daemonManager.start()
+        LoginItemManager.applyDefaultIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
