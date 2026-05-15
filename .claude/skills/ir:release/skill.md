@@ -162,6 +162,48 @@ NEWEST_SRC=$(find /Users/ingo/projects/irrlicht/platforms/macos/Irrlicht -name '
 [ "$SWIFT_BIN" -nt "$NEWEST_SRC" ] || { echo "STALE Swift binary"; exit 1; }
 ```
 
+**Audit the linked frameworks (load-bearing — this is what caught
+v0.4.3 too late).** Ad-hoc-signed builds must not statically link any
+framework whose APIs trigger a TCC preflight at process startup. The
+shipped v0.4.3 binary linked `Intents.framework` via `import Intents`
+in `FocusMonitor.swift`; TCC preflighted `kTCCServiceListenEvent` before
+any of our code ran and SIGABRT'd every install (#358).
+
+Each forbidden framework must either be (a) gated at the source level
+via a Developer-ID runtime detector + `NSClassFromString` dispatch (see
+`FocusMonitor.swift` post-#358 for the pattern), or (b) deferred until
+Developer ID lands (#233 / #357). The audit below fails the release
+on any unauthorized link:
+
+```bash
+# Each entry is "framework-name | reason | fix-pointer".
+# Add more here as we discover them. When DevID is in (#233) the
+# entitlement-bearing entries can be removed from this list.
+FORBIDDEN_FRAMEWORKS=(
+  "Intents.framework|preflights kTCCServiceListenEvent at startup; needs com.apple.developer.focus-status (DevID-gated)|FocusMonitor.swift uses NSClassFromString dispatch since #358 — keep that pattern"
+)
+
+violations=0
+for entry in "${FORBIDDEN_FRAMEWORKS[@]}"; do
+  fw="${entry%%|*}"
+  reason="$(echo "$entry" | cut -d'|' -f2)"
+  fix="$(echo "$entry" | cut -d'|' -f3)"
+  if otool -L "$SWIFT_BIN" 2>/dev/null | grep -q "$fw"; then
+    echo "FAIL: $fw is statically linked into the Swift binary."
+    echo "      reason: $reason"
+    echo "      fix:    $fix"
+    violations=$((violations + 1))
+  fi
+done
+if [ $violations -gt 0 ]; then
+  echo ""
+  echo "Aborting release. Resolve the framework link at the source level"
+  echo "(not by hand-patching the bundle) and rebuild."
+  exit 1
+fi
+echo "OK no forbidden frameworks linked"
+```
+
 ### App bundle
 
 **Path discipline — do not assemble under `/tmp/`.** TCC's
@@ -199,14 +241,35 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    the full template below verbatim, substituting only `$NEW_VERSION` and
    the build number.
 
-   **Coupling rule (load-bearing — don't drop keys):** every privacy-gated
-   entitlement in `Irrlicht.entitlements` must have a matching
-   `NS*UsageDescription` key here, or TCC will SIGABRT the app at launch
-   with a `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__` trace (see #352
-   crash from v0.4.3). Current pairs:
-   - `com.apple.security.app-sandbox` + `com.apple.security.network.client`/`server` — no usage description needed.
-   - **`com.apple.developer.focus-status` ↔ `NSFocusStatusUsageDescription`** — required because `FocusMonitor` (added pre-v0.4.2 for #338) calls `INFocusStatusCenter.default.requestAuthorization` during `applicationDidFinishLaunching`.
-   - Implicit `com.apple.security.automation.apple-events` (from the AppleScript activator) ↔ `NSAppleEventsUsageDescription`.
+   **Coupling rule (counterintuitive — read this before changing the
+   template):** the relationship between `Irrlicht.entitlements`, the
+   Info.plist `NS*UsageDescription` keys, and the linked frameworks is
+   *inverted* for ad-hoc-signed builds.
+
+   - **Apple-restricted entitlements** (e.g. `com.apple.developer.focus-status`)
+     cannot be claimed by an ad-hoc-signed binary — AMFI rejects the
+     bundle at launch with `launchd POSIX 153` / "Launchd job spawn
+     failed" (v0.4.3 crash, fixed in #356).
+   - **`NS*UsageDescription` keys for those entitlements** can still
+     trigger a TCC SIGABRT if the matching framework is *statically
+     linked* — TCC preflights `kTCCServiceListenEvent` (and similar)
+     at process startup whenever it sees the framework, regardless of
+     whether any API is actually called. **`NSFocusStatusUsageDescription`
+     in particular crashes ad-hoc-signed builds that link
+     `Intents.framework`** (v0.4.3 crash, fixed in #358).
+   - **The fix is structural, not declarative.** Source code must not
+     statically link those frameworks on ad-hoc builds. `FocusMonitor.swift`
+     uses a Developer-ID-signature runtime gate + `NSClassFromString`
+     dispatch for exactly this reason (#357 tracks the eventual
+     restoration of the static path once Developer ID lands).
+
+   For the Info.plist template below, the practical consequences are:
+
+   | Key | Include for ad-hoc? | Include once DevID lands (#233 / #357)? |
+   |---|---|---|
+   | `NSAppleEventsUsageDescription` | Yes | Yes |
+   | `NSFocusStatusUsageDescription` | **No** — even though `FocusMonitor.swift` exists in source, the runtime gate keeps Intents.framework unloaded. Adding the key with no framework reference is harmless; adding it once the framework is linked is a SIGABRT. | Yes (alongside the entitlement re-claim). |
+   | Anything new | Audit the source. If the relevant Swift code uses `import <Framework>` directly, the binary will link the framework, and TCC may preflight at startup. Either gate the source (FocusMonitor pattern) or skip the usage description until DevID. |
 
    ```xml
    <?xml version="1.0" encoding="UTF-8"?>
@@ -239,8 +302,6 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
        <true/>
        <key>NSAppleEventsUsageDescription</key>
        <string>Irrlicht needs to send Apple Events to focus terminal and IDE windows when you click a session in the menu bar.</string>
-       <key>NSFocusStatusUsageDescription</key>
-       <string>Irrlicht uses macOS Focus status to silence notification sounds and spoken alerts while you're in Do Not Disturb, Sleep, or any other Focus mode.</string>
        <key>NSHumanReadableCopyright</key>
        <string>Copyright © 2026 Ingo Eichhorst. MIT License.</string>
        <key>NSPrincipalClass</key>
@@ -255,14 +316,14 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements`) is one such
    entitlement. Applying the entitlements file at sign time bakes that claim
    into the binary, which `amfid` then refuses to launch — surfacing as
-   `launchd POSIX 153` / `Launchd job spawn failed` on first launch. This
-   shipped a broken v0.4.3 that the curl installer couldn't open on any end
-   user's machine; the assets were re-cut without entitlements applied.
+   `launchd POSIX 153` / `Launchd job spawn failed` on first launch (#356).
    The `Irrlicht.entitlements` file is preserved in the repo for the future
    Developer-ID-signed + notarized path (separate work, tracked under #233);
-   until that lands, it must not be applied. `INFocusStatusCenter` works at
-   runtime on macOS without the entitlement — only `NSFocusStatusUsageDescription`
-   in `Info.plist` (already written in step 5 above) is required for TCC.
+   until that lands, it must not be applied. When DevID arrives, restore the
+   `--entitlements` flag *and* re-add `NSFocusStatusUsageDescription` to the
+   Info.plist template above *and* restore the static `import Intents` /
+   direct API usage in `FocusMonitor.swift` (#357 tracks the full restoration
+   checklist — there are three coupled touchpoints that all flip together).
    ```bash
    codesign --force --deep --sign - "$APP_STAGING/Contents/MacOS/irrlichd"
    codesign --force --deep --sign - "$APP_STAGING"
@@ -273,17 +334,30 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
      || echo "OK no entitlements (AMFI won't reject)"
    ```
 7. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
-   the process is still alive and has spawned `irrlichd`. Missing resources
-   or codesign issues crash the app silently on launch otherwise. The
-   crash-report tail at the end exists because TCC's silent SIGABRT is the
-   most common smoke-test failure and is only diagnosable via
-   `~/Library/Logs/DiagnosticReports/` (#352).
+   the process is still alive and has spawned `irrlichd`.
+
+   **Do not ship through a smoke-test failure.** v0.4.3 shipped broken
+   because the smoke test failed locally and the failure was dismissed
+   as "/tmp/ TCC weirdness, end users will be fine." End users were not
+   fine; every install hit `launchd POSIX 153`. If the smoke test fails
+   and you can't explain why, the release is broken. **Period.** The
+   diagnostic toolkit below is for finding the root cause, not for
+   building a case to ship anyway.
+
+   Reset any poisoned TCC state for the bundle before the test — Sequoia
+   caches "this bundle id == no permission" decisions across runs, and
+   stale entries from earlier failed builds make a perfectly-shipping
+   bundle appear to crash. Resetting is safe (TCC will re-prompt on
+   first use post-install).
+
    ```bash
+   tccutil reset All io.irrlicht.app 2>/dev/null || true
+
    SMOKE_START=$(date +%s)
    "$APP_STAGING/Contents/MacOS/Irrlicht" > /tmp/app.log 2>&1 & APP_PID=$!
    sleep 2
    if ! pgrep -f "$APP_STAGING/Contents/MacOS/Irrlicht" >/dev/null; then
-     echo "FAIL: app exited within 2s"
+     echo "FAIL: app exited within 2s — RELEASE IS BROKEN, DO NOT SHIP"
      tail -20 /tmp/app.log
      # Tail the most recent crash report for the TCC `details` field — the
      # only place a privacy-violation reason actually shows up.
@@ -291,12 +365,34 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
      if [ -n "$LATEST_CRASH" ] && [ "$(stat -f %m "$LATEST_CRASH")" -ge "$SMOKE_START" ]; then
        echo "=== TCC details from $LATEST_CRASH ==="
        grep -o '"details":\[[^]]*\]' "$LATEST_CRASH" | head -1
+       # The faulting-thread frames pinpoint the offending framework
+       # (look for SLSMainConnection / NSWorkspaceNotificationCenter /
+       # INFocusStatusCenter / similar) — that's the lead for the
+       # source-level fix.
      fi
      exit 1
    fi
    pgrep -f "$APP_STAGING/Contents/MacOS/irrlichd" >/dev/null || { echo "FAIL: daemon not spawned"; }
    pkill -f "$APP_STAGING" 2>/dev/null; sleep 0.3
    ```
+
+   **If the smoke test fails, debugging checklist** (in order — each
+   has caught a real shipping bug):
+   1. Diff `otool -L "$SWIFT_BIN"` against the prior release's binary
+      (`otool -L /Applications/Irrlicht.app/Contents/MacOS/Irrlicht`).
+      A new framework dependency is the most common cause of TCC-class
+      crashes — every new framework potentially adds a startup preflight.
+   2. Read the latest crash report's triggering thread frames. The
+      symbol just before `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__` is
+      the API or framework the preflight checked.
+   3. Compare `codesign -d --entitlements -` output against the prior
+      release. New entitlement entries on an ad-hoc binary are killed
+      by AMFI with POSIX 153 (v0.4.3 mode, fixed in #356; the entitlement
+      audit in step 6 should have caught it).
+   4. If steps 1–3 all clear, copy the bundle to `/Applications/` (kill
+      the prior install first) and retry. A real shipping defect will
+      crash from both paths; an environment-only failure will only crash
+      from one. Even then: investigate, don't ship through.
 
 ### Branded DMG
 1. Create a writable DMG with `hdiutil create -size 50m -fs HFS+ -volname "Irrlicht-Install"`.
@@ -505,7 +601,7 @@ fi
 If the tap repo doesn't exist yet (first release), the publish step exits 0
 without `--push`; the verification will report a mismatch you can ignore.
 
-## Step 9: Verify
+## Step 9: Verify — including a real end-to-end install canary
 
 1. Confirm release URL is returned.
 2. Run `gh release view v$NEW_VERSION` to verify **all five assets** are attached:
@@ -514,16 +610,79 @@ without `--push`; the verification will report a mismatch you can ignore.
    - `Irrlicht-$NEW_VERSION-mac-installer.pkg`
    - `Irrlicht-$NEW_VERSION.zip` *(required by the curl installer)*
    - `checksums.sha256`
-3. Smoke-test the curl installer against the new release — it's version-agnostic (discovers the latest via the GitHub API), but the `.zip` asset is the piece that's tied to this release:
+3. **Download an asset and confirm it matches the shipped checksum.**
+   The pre-upload checksum file can drift from the actual uploaded bytes
+   (interrupted uploads, `--clobber` race, byte-counter bugs in `gh`):
    ```bash
-   # Download the installer and dry-run the asset fetch
-   curl -fsSL https://irrlicht.io/install.sh -o /tmp/install-check.sh
-   diff /tmp/install-check.sh site/install.sh || echo "WARNING: irrlicht.io/install.sh lags behind main — wait for GitHub Pages to rebuild"
-   # Verify the zip and checksums are downloadable
-   curl -fsI "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/Irrlicht-${NEW_VERSION}.zip" | head -1
-   curl -fsI "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/checksums.sha256" | head -1
+   rm -rf /tmp/verify && mkdir /tmp/verify && cd /tmp/verify
+   curl -fsSL -o Irrlicht-${NEW_VERSION}.zip \
+     "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/Irrlicht-${NEW_VERSION}.zip"
+   curl -fsSL "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/checksums.sha256" -o shipped.sha256
+   ACTUAL=$(shasum -a 256 "Irrlicht-${NEW_VERSION}.zip" | awk '{print $1}')
+   EXPECTED=$(awk -v f="Irrlicht-${NEW_VERSION}.zip" '$2==f{print $1}' shipped.sha256)
+   [ "$ACTUAL" = "$EXPECTED" ] || { echo "FAIL: shipped zip sha mismatches checksums.sha256"; exit 1; }
+   echo "OK shipped zip sha matches checksums.sha256"
+   cd /Users/ingo/projects/irrlicht
    ```
-4. Print summary: version, number of commits included, asset sizes.
+4. **End-to-end install canary — load-bearing, do not skip.** The pre-
+   packaging smoke test (Step 6 step 7) checks the assembly-path bundle.
+   This step checks what every end user actually runs. v0.4.3 passed
+   in-process smoke tests but failed every end-user install because
+   the failure was misdiagnosed as environment-specific. The canary
+   below would have caught it before the release page was visible.
+
+   ```bash
+   # Backup current install (probably from the just-finished release if
+   # you're on the build machine).
+   pkill -f '/Applications/Irrlicht.app' 2>/dev/null; sleep 0.5
+   mv /Applications/Irrlicht.app /tmp/Irrlicht-canary-backup.app 2>/dev/null
+
+   # Run the live curl installer against the just-published release.
+   # The installer discovers the latest version via the GitHub API.
+   curl -fsSL https://irrlicht.io/install.sh | sh
+   CANARY_RC=$?
+   if [ "$CANARY_RC" -ne 0 ]; then
+     echo "FAIL: curl installer exited $CANARY_RC — release is broken"
+     # Restore: mv /tmp/Irrlicht-canary-backup.app /Applications/Irrlicht.app
+     exit 1
+   fi
+
+   # The installer reports "Launching... ✓" even on apps that AMFI/TCC
+   # immediately kill. pgrep is the only ground truth.
+   sleep 3
+   if ! pgrep -fl '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' >/dev/null; then
+     echo "FAIL: app not running 3s after curl install — release is broken"
+     LATEST_CRASH=$(ls -t ~/Library/Logs/DiagnosticReports/Irrlicht*.ips 2>/dev/null | head -1)
+     if [ -n "$LATEST_CRASH" ]; then
+       echo "=== latest crash details ==="
+       grep -o '"details":\[[^]]*\]' "$LATEST_CRASH" | head -1
+     fi
+     exit 1
+   fi
+
+   # Confirm the version matches what we just shipped (catches stale
+   # GitHub-API cache where /releases/latest hasn't updated yet — wait
+   # and re-run if so, don't pretend the release succeeded).
+   INSTALLED=$(defaults read /Applications/Irrlicht.app/Contents/Info CFBundleShortVersionString)
+   [ "$INSTALLED" = "$NEW_VERSION" ] || { echo "FAIL: canary installed v$INSTALLED, expected v$NEW_VERSION"; exit 1; }
+
+   # Confirm no entitlements baked in (matches the build-time guard in
+   # Step 6 step 6, but on the actual shipping artifact this time —
+   # paranoia is cheap).
+   codesign -d --entitlements - /Applications/Irrlicht.app 2>&1 | grep -q '\[Key\]' \
+     && { echo "FAIL: shipping binary has entitlements baked in"; exit 1; }
+
+   echo "OK canary install: v$INSTALLED, no entitlements, running"
+   ```
+5. **Installer-script staleness check.** `irrlicht.io/install.sh` is
+   served by GitHub Pages and lags `main` by a few minutes after a merge:
+   ```bash
+   curl -fsSL https://irrlicht.io/install.sh -o /tmp/install-check.sh
+   diff /tmp/install-check.sh site/install.sh \
+     && echo "OK irrlicht.io/install.sh in sync with main" \
+     || echo "NOTE: irrlicht.io/install.sh hasn't caught up to main yet — wait for Pages rebuild"
+   ```
+6. Print summary: version, number of commits included, asset sizes.
 
 ## Step 10: Install script maintenance
 
