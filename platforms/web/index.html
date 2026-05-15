@@ -1580,6 +1580,9 @@
       delete historyByGranularity[1][sessionId];
       delete historyByGranularity[10][sessionId];
       delete historyByGranularity[60][sessionId];
+      // Plug the slow leak — without this, the notify-dedupe map keeps
+      // entries for deleted sessions indefinitely.
+      lastNotifiedPressure.delete(sessionId);
       if (!entry) return;
       sessionIndex.delete(sessionId);
       if (entry.parent) {
@@ -2204,13 +2207,20 @@
       return el;
     }
 
+    // Statuses are a closed enum on the daemon side (claudecode parser).
+    // We still whitelist them on the client so a future malformed status
+    // can't inject CSS-class noise via the .task-dot template.
+    const TASK_STATUSES = new Set(['pending', 'in_progress', 'completed']);
+    function safeTaskStatus(s) {
+      return TASK_STATUSES.has(s) ? s : 'pending';
+    }
     function updateTaskListRow(el, agent) {
       const tasks = (agent.metrics && agent.metrics.tasks) || [];
       if (tasks.length === 0) { el.style.display = 'none'; return; }
       el.style.display = '';
       const done = tasks.filter(t => t.status === 'completed').length;
       // Signature avoids reflowing the dot strip when nothing has changed.
-      const states = tasks.map(t => (t.status || 'pending')[0]).join('');
+      const states = tasks.map(t => safeTaskStatus(t.status)[0]).join('');
       const sig = done + '/' + tasks.length + ':' + states;
       if (el.dataset.sig === sig) return;
       el.dataset.sig = sig;
@@ -2218,7 +2228,7 @@
       const taskLabel = (t) => (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
       const dotHtml = tasks.map(t => {
         const tip = (taskLabel(t) || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-        return '<span class="task-dot task-' + (t.status || 'pending') + '" title="' + tip + '"></span>';
+        return '<span class="task-dot task-' + safeTaskStatus(t.status) + '" title="' + tip + '"></span>';
       }).join('');
       dotsEl.innerHTML = dotHtml;
       el.querySelector('.row-tasks-counter').textContent = done + ' / ' + tasks.length;
