@@ -83,6 +83,8 @@
 
       <h2>v0.4.3 <small>(2026-05-15)</small></h2>
 
+      <blockquote><strong>Note:</strong> Assets re-cut later the same day. The original v0.4.3 binary statically linked <code>Intents.framework</code> via <code>FocusMonitor.swift</code>'s direct <code>INFocusStatusCenter</code> calls, which made macOS TCC preflight <code>kTCCServiceListenEvent</code> at process startup and AMFI/TCC SIGABRT the ad-hoc-signed binary with <code>launchd POSIX 153</code> on every end-user install. The re-cut moves <code>FocusMonitor</code> to dynamic dispatch (<code>NSClassFromString</code> + <code>SecCodeCopySigningInformation</code> gate) so Intents.framework is never loaded on ad-hoc builds. DND-aware notification silencing is paused until Developer-ID signing lands (#233); restoration tracked in #357. Release-skill regression fix that prevents recurrence: #356.</blockquote>
+
       <h3>Added</h3>
 
       <ul>
