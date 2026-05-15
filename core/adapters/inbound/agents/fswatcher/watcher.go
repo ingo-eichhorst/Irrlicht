@@ -43,17 +43,25 @@ func (w *Watcher) Identity() agent.Identity {
 	return w.identity
 }
 
-// New creates a Watcher for the given directory relative to $HOME.
+// New creates a Watcher for the given directory. If dir is absolute, it is
+// used as-is; otherwise it is resolved relative to $HOME. Absolute paths let
+// adapters honor upstream env-var overrides (e.g. PI_CODING_AGENT_SESSION_DIR,
+// CLAUDE_CONFIG_DIR, CODEX_HOME) without coupling fswatcher to any specific
+// agent's environment conventions.
+//
 // adapter is the name set on all emitted TranscriptEvents (e.g. "claude-code").
 // maxAge controls the maximum file age — transcript files not modified within
 // this window are silently ignored. A zero value disables the filter.
-func New(relDir, adapter string, maxAge time.Duration) *Watcher {
+func New(dir, adapter string, maxAge time.Duration) *Watcher {
+	if filepath.IsAbs(dir) {
+		return &Watcher{root: filepath.Clean(dir), adapter: adapter, maxAge: maxAge}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return &Watcher{adapter: adapter, maxAge: maxAge}
 	}
 	return &Watcher{
-		root:    filepath.Join(home, relDir),
+		root:    filepath.Join(home, dir),
 		adapter: adapter,
 		maxAge:  maxAge,
 	}
