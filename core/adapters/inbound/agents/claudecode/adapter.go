@@ -28,11 +28,8 @@ const defaultProjectsDir = ".claude/projects"
 const configDirEnvVar = "CLAUDE_CONFIG_DIR"
 
 // transcriptsDir returns the directory the Claude Code adapter should watch.
-// When CLAUDE_CONFIG_DIR is set to an absolute path, transcripts live under
-// $CLAUDE_CONFIG_DIR/projects; non-absolute values (relative paths,
-// unexpanded ~) are logged and ignored to surface misconfiguration. The env
-// var is read once at Agent() construction; a daemon restart is required
-// after changing it.
+// Non-absolute env values are rejected so a misconfigured path surfaces in
+// logs instead of silently watching the wrong place.
 func transcriptsDir() string {
 	if v := os.Getenv(configDirEnvVar); v != "" {
 		cleaned := filepath.Clean(v)

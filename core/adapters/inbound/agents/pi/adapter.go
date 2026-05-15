@@ -20,17 +20,14 @@ const ProcessName = "pi"
 // --<cwd-with-dashes>--/<timestamp>_<uuid>.jsonl.
 const defaultRootDir = ".pi/agent/sessions"
 
-// sessionDirEnvVar is the upstream Pi env var (introduced in Pi v0.71.0,
-// 2026-04-30) that relocates the session-transcript root. When set, it must
-// be the absolute path of the session directory itself (not a parent).
+// sessionDirEnvVar is the upstream Pi env var that relocates the session-
+// transcript root. When set, it must be the absolute path of the session
+// directory itself (not a parent).
 const sessionDirEnvVar = "PI_CODING_AGENT_SESSION_DIR"
 
-// sessionsDir returns the directory the Pi adapter should watch. It honors
-// PI_CODING_AGENT_SESSION_DIR when set to an absolute path; non-absolute
-// values (relative paths, unexpanded ~) are logged and ignored to surface
-// the misconfiguration instead of silently watching the wrong place. The
-// env var is read once at Agent() construction time, so a daemon restart
-// is required after changing it.
+// sessionsDir returns the directory the Pi adapter should watch. Non-
+// absolute env values are rejected so a misconfigured path surfaces in
+// logs instead of silently watching the wrong place.
 func sessionsDir() string {
 	if v := os.Getenv(sessionDirEnvVar); v != "" {
 		cleaned := filepath.Clean(v)
