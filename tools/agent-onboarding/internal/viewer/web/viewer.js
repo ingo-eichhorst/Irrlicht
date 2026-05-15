@@ -708,13 +708,26 @@ async function loadScenario(s) {
   const detail = document.getElementById("detail");
   detail.innerHTML = `<p>Loading…</p>`;
 
-  const data = await fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}`).then(r => r.json());
+  const [data, archives] = await Promise.all([
+    fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}`).then(r => r.json()),
+    fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
+  ]);
   detail.innerHTML = "";
   detail.appendChild(renderPlayback(s, data));
   detail.appendChild(renderMeta(data));
   detail.appendChild(renderExpected(data));
-  detail.appendChild(renderGroundTruth(data));
-  detail.appendChild(renderTransitions(data));
+  // Recording history picker — only render when there are archived
+  // recordings (recordings/ dir is empty for first-time-recorded
+  // scenarios; rendering an empty dropdown would just be noise).
+  if (Array.isArray(archives) && archives.length > 0) {
+    detail.appendChild(renderRecordingHistory(s, data, archives));
+  }
+  const gt = renderGroundTruth(data);
+  gt.classList.add("ground-truth-host");
+  detail.appendChild(gt);
+  const tr = renderTransitions(data);
+  tr.classList.add("transitions-host");
+  detail.appendChild(tr);
   detail.appendChild(renderValidate(data));
   // Signals preview only makes sense for recordings made by Phase 1's
   // multi-sensor recorder. All committed pre-recorder recordings have
@@ -880,6 +893,96 @@ function truncate(s, n) {
   if (!s) return "";
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + "…";
+}
+
+// renderRecordingHistory paints a picker for the scenario's archived
+// recordings (under replaydata/.../recordings/). Default selection is
+// "Latest" — the top-level events.jsonl that drives every other
+// panel. Picking an archived recording re-fetches its
+// events/transcript/ground_truth and updates the transitions +
+// ground-truth panels in place. The state band on the playback view
+// keeps showing latest for now — retargeting playback to an archive
+// is a bigger lift.
+function renderRecordingHistory(s, latestData, archives) {
+  const p = panel("Recording history");
+  const intro = document.createElement("div");
+  intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
+  intro.innerHTML = `<b>${archives.length}</b> previous recording${archives.length === 1 ? "" : "s"} archived. ` +
+    `Select an archive to view its captured behavior; expected.jsonl is the constant benchmark across all of them.`;
+  p.appendChild(intro);
+
+  const select = document.createElement("select");
+  select.style.cssText = "padding: 4px 8px; font: inherit; font-size: 12px; border: 1px solid #c0bdb1; border-radius: 3px;";
+  const latestOpt = document.createElement("option");
+  latestOpt.value = "";
+  latestOpt.textContent = "Latest (current events.jsonl)";
+  select.appendChild(latestOpt);
+  for (const a of archives) {
+    const opt = document.createElement("option");
+    opt.value = a.name;
+    const verLabel = a.daemon_version ? ` · daemon ${a.daemon_version}` : "";
+    const passLabel = a.expected_pass_rate ? ` · ${a.expected_pass_rate}` : "";
+    opt.textContent = `${a.promoted_at || a.name}${verLabel}${passLabel}`;
+    select.appendChild(opt);
+  }
+  p.appendChild(select);
+
+  const manifestBox = document.createElement("div");
+  manifestBox.style.cssText = "margin-top: 10px; font-size: 11px; color: #666;";
+  p.appendChild(manifestBox);
+
+  select.addEventListener("change", async () => {
+    const name = select.value;
+    // Remove any panels we previously injected so a re-selection
+    // doesn't stack them.
+    document.querySelectorAll(".archive-injected").forEach(el => el.remove());
+
+    if (!name) {
+      // Latest — restore the original panels.
+      manifestBox.innerHTML = "<i>Latest — no archive metadata.</i>";
+      reRenderForLatest(latestData);
+      return;
+    }
+    const arch = archives.find(a => a.name === name);
+    if (arch) {
+      manifestBox.innerHTML = `
+        <b>promoted_at:</b> ${escapeHtml(arch.promoted_at || "")}<br>
+        <b>daemon_version:</b> ${escapeHtml(arch.daemon_version || "")}<br>
+        <b>agent_cli_version:</b> ${escapeHtml(arch.agent_cli_version || "")}<br>
+        <b>recipe_hash:</b> <code>${escapeHtml((arch.recipe_hash || "").slice(0, 16))}…</code><br>
+        <b>expected_pass_rate (at promote):</b> ${escapeHtml(arch.expected_pass_rate || "—")}<br>
+        <b>recording_started_at:</b> ${escapeHtml(arch.recording_started_at || "")}
+      `;
+    }
+    const archDetail = await fetch(
+      `/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings/${encodeURIComponent(name)}`
+    ).then(r => r.json());
+    // archDetail has the archive's transitions + ground_truth. Build
+    // a synthetic detail-like object so the existing render functions
+    // work unchanged.
+    const archData = {
+      ...latestData,
+      transitions: archDetail.transitions || [],
+      ground_truth: archDetail.ground_truth || null,
+    };
+    reRenderForArchive(archData);
+  });
+
+  function reRenderForLatest(d) {
+    swapPanel("ground-truth-host", renderGroundTruth(d));
+    swapPanel("transitions-host", renderTransitions(d));
+  }
+  function reRenderForArchive(d) {
+    swapPanel("ground-truth-host", renderGroundTruth(d));
+    swapPanel("transitions-host", renderTransitions(d));
+  }
+  function swapPanel(hostClass, newPanel) {
+    newPanel.classList.add(hostClass);
+    const existing = document.querySelector("." + hostClass);
+    if (existing) existing.replaceWith(newPanel);
+  }
+
+  return p;
 }
 
 function renderGroundTruth(data) {

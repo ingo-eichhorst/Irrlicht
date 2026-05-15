@@ -536,15 +536,27 @@ Run the recording once to validate the recipe end-to-end:
 ```
 
 If it succeeds and the recording's structural events match the
-recipe's `verify` list, promote it:
+recipe's `verify` list, promote it via the helper script:
 
 ```bash
 STAGE=.build/refresh/<agent>/<scenario-id>-<timestamp>
-TARGET=replaydata/agents/<agent>/scenarios/<scenario-id>
-mkdir -p $TARGET
-cp $STAGE/replaydata/agents/<agent>/scenarios/<scenario-id>/events.jsonl $TARGET/
-cp $STAGE/replaydata/agents/<agent>/scenarios/<scenario-id>/transcript.jsonl $TARGET/
+./tools/promote-recording.sh "$STAGE" <agent> <scenario-id>
 ```
+
+The helper:
+
+1. Archives the previous top-level recording into
+   `replaydata/agents/<agent>/scenarios/<scenario-id>/recordings/<ts>_<daemon-ver>/`
+   along with a `manifest.json` (daemon version, agent CLI version,
+   recipe hash, frozen expected pass rate, recording start ts). This
+   builds the history the viewer's recording-history dropdown reads.
+2. Copies the staged recording into the top-level slot.
+3. Re-runs the expected-validator against the new recording. **Exits
+   non-zero if validation fails** — leaving the new files in place
+   but flagging the drift so the maintainer reviews before the
+   archive becomes the de-facto latest. To roll back, move the
+   most-recent archive's files back to the top level:
+   `mv recordings/<latest>/{events,transcript,ground_truth}.jsonl ./`.
 
 Then write `$TARGET/ground_truth.jsonl` with labels anchored to the
 actual offsets you measured. The schema (one meta line + N label

@@ -555,6 +555,19 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 		s.serveFrame(w, scenarioDir, parts[4])
 		return
 	}
+	// Recording history endpoints:
+	//   /api/scenarios/{a}/{s}/{id}/recordings              → list archived recordings
+	//   /api/scenarios/{a}/{s}/{id}/recordings/{name}       → archived recording detail (events + transcript + manifest)
+	if len(parts) >= 4 && parts[3] == "recordings" {
+		if len(parts) == 4 {
+			s.handleRecordingsList(w, scenarioDir)
+			return
+		}
+		if len(parts) == 5 {
+			s.handleArchivedRecording(w, scenarioDir, parts[4])
+			return
+		}
+	}
 
 	d := ScenarioDetail{Agent: agent, Subtree: subtree, ID: id}
 	if b, err := os.ReadFile(filepath.Join(scenarioDir, "recording-meta.json")); err == nil {
@@ -587,6 +600,95 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	// the frontend treats a missing report as "not configured".
 	if rep, err := validate.ValidateExpected(scenarioDir); err == nil && rep != nil {
 		d.Expected = rep
+	}
+	writeJSON(w, d)
+}
+
+// RecordingArchive is one row of the recordings-list response —
+// names a historical recording's directory plus its manifest fields.
+type RecordingArchive struct {
+	Name               string `json:"name"`               // dir name under recordings/
+	PromotedAt         string `json:"promoted_at,omitempty"`
+	DaemonVersion      string `json:"daemon_version,omitempty"`
+	AgentCLIVersion    string `json:"agent_cli_version,omitempty"`
+	RecipeHash         string `json:"recipe_hash,omitempty"`
+	ExpectedPassRate   string `json:"expected_pass_rate,omitempty"`
+	RecordingStartedAt string `json:"recording_started_at,omitempty"`
+}
+
+// ArchivedRecordingDetail is the payload for fetching one archived
+// recording — events + transcript + the manifest. Ground truth is
+// included if it was archived alongside.
+type ArchivedRecordingDetail struct {
+	Name        string             `json:"name"`
+	Manifest    RecordingArchive   `json:"manifest"`
+	Transitions []json.RawMessage  `json:"transitions"`
+	GroundTruth *GroundTruthBlob   `json:"ground_truth,omitempty"`
+}
+
+// handleRecordingsList walks the scenario's recordings/ subdir and
+// returns a sorted (newest-first) list of archived recordings with
+// their manifest contents. Empty array when the dir doesn't exist
+// or has no entries.
+func (s *Server) handleRecordingsList(w http.ResponseWriter, scenarioDir string) {
+	recordingsDir := filepath.Join(scenarioDir, "recordings")
+	entries, err := os.ReadDir(recordingsDir)
+	if err != nil {
+		writeJSON(w, []RecordingArchive{}) // no recordings/ yet
+		return
+	}
+	out := make([]RecordingArchive, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		archive := RecordingArchive{Name: e.Name()}
+		if b, err := os.ReadFile(filepath.Join(recordingsDir, e.Name(), "manifest.json")); err == nil {
+			_ = json.Unmarshal(b, &archive)
+			archive.Name = e.Name() // defensive: manifest may not echo name
+		}
+		out = append(out, archive)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		// Newest-first by promoted_at (or name as a fallback for
+		// archives that predate the manifest field).
+		ai, bi := out[i].PromotedAt, out[j].PromotedAt
+		if ai != "" || bi != "" {
+			return ai > bi
+		}
+		return out[i].Name > out[j].Name
+	})
+	writeJSON(w, out)
+}
+
+// handleArchivedRecording returns the events / transcript / ground
+// truth for one archived recording. Mirrors the shape of the main
+// scenario detail response but pulls from recordings/<name>/.
+func (s *Server) handleArchivedRecording(w http.ResponseWriter, scenarioDir, name string) {
+	// Defense in depth — the slug regex on the URL parser only
+	// constrained agent + id, not the archive name. Disallow path
+	// traversal here.
+	if strings.Contains(name, "..") || strings.ContainsRune(name, filepath.Separator) {
+		http.Error(w, "invalid archive name", http.StatusBadRequest)
+		return
+	}
+	archiveDir := filepath.Join(scenarioDir, "recordings", name)
+	if _, err := os.Stat(archiveDir); err != nil {
+		http.Error(w, "archive not found", http.StatusNotFound)
+		return
+	}
+	d := ArchivedRecordingDetail{Name: name}
+	if b, err := os.ReadFile(filepath.Join(archiveDir, "manifest.json")); err == nil {
+		_ = json.Unmarshal(b, &d.Manifest)
+		d.Manifest.Name = name
+	}
+	d.Transitions = readTransitionsRaw(filepath.Join(archiveDir, "events.jsonl"))
+	if f, err := os.Open(filepath.Join(archiveDir, "ground_truth.jsonl")); err == nil {
+		gtMeta, labels, err := groundtruth.Read(f)
+		if err == nil {
+			d.GroundTruth = &GroundTruthBlob{Meta: gtMeta, Labels: labels}
+		}
+		f.Close()
 	}
 	writeJSON(w, d)
 }
