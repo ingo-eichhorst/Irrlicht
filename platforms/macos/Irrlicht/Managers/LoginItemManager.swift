@@ -11,15 +11,14 @@ enum LoginItemManager {
     private static let launchAtLoginKey = "launchAtLogin"
     private static let didApplyDefaultKey = "didApplyDefaultLoginItem"
 
-    static var isEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
-
     /// Called once during `applicationDidFinishLaunching`. On first ever
     /// launch (when the gate flag is still false), opt the user in by
     /// registering the app as a login item. The gate flips to true whether
     /// or not registration succeeds, so a transient signing error doesn't
-    /// turn into an every-launch retry.
+    /// turn into an every-launch retry — note this also means a dev who
+    /// runs an unsigned build first never gets auto-opted-in by a later
+    /// signed install under the same bundle ID; not a concern for end
+    /// users, who only see the signed release.
     static func applyDefaultIfNeeded() {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: didApplyDefaultKey) else { return }

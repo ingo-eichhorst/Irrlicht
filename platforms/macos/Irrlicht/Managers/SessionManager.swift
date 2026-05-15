@@ -108,19 +108,21 @@ class SessionManager: ObservableObject {
         self.instancesPath = supportPath.appendingPathComponent("instances")
         self.orderFilePath = supportPath.appendingPathComponent("session-order.json")
 
-        // Out-of-the-box notification defaults: all three events enabled, each
-        // with a distinguishable sound (Ready=Funk, Waiting=Ping, Context=Sosumi).
+        // Out-of-the-box defaults. Notifications: all three events enabled,
+        // each with a distinguishable sound (Ready=Funk, Waiting=Ping,
+        // Context=Sosumi). Login item: opt the user in on first launch, with
+        // the gate flag tracking that we've applied the default once.
         // register(defaults:) only seeds unset keys, so it never overrides a
         // user who has explicitly picked something else.
-        var notificationDefaults: [String: Any] = [
+        var defaultsSeed: [String: Any] = [
             "launchAtLogin": true,
             "didApplyDefaultLoginItem": false,
         ]
         for event in NotificationEvent.allCases {
-            notificationDefaults[event.enabledKey] = true
-            notificationDefaults[event.soundKey] = event.defaultSound.rawValue
+            defaultsSeed[event.enabledKey] = true
+            defaultsSeed[event.soundKey] = event.defaultSound.rawValue
         }
-        UserDefaults.standard.register(defaults: notificationDefaults)
+        UserDefaults.standard.register(defaults: defaultsSeed)
 
         Task {
             loadSessionOrder()
