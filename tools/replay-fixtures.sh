@@ -192,5 +192,29 @@ if [[ "$found_any" -eq 0 ]]; then
   exit 1
 fi
 
+# Expected-validator: walk every scenario that has expected.jsonl and
+# check the recording satisfies the spec-grounded benchmark. Distinct
+# from the per-recording ground_truth.jsonl above (different schema,
+# different semantics). The Go-level test already does this; the shell
+# call here writes per-scenario report files for CI inspection.
+expected_failures=0
+while IFS= read -r expected_path; do
+  scenario_dir="$(dirname "$expected_path")"
+  agent="$(basename "$(dirname "$(dirname "$scenario_dir")")")"
+  scenario="$(basename "$scenario_dir")"
+  report_json="$REPORTS_DIR/${agent}-${scenario}.expected.json"
+  if go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1; then
+    echo "expected: ${agent}/${scenario} PASS" >&2
+  else
+    echo "expected: ${agent}/${scenario} FAIL — see $report_json" >&2
+    expected_failures=$((expected_failures + 1))
+  fi
+done < <(find "$FIXTURES_ROOT" -name 'expected.jsonl' -not -path '*/_reports/*' | sort)
+
 echo >&2
 echo "done. reports in $REPORTS_DIR/" >&2
+
+if [[ "$expected_failures" -gt 0 ]]; then
+  echo "$expected_failures expected-validation failure(s) — the recording drifted from spec, or the spec changed without re-translating" >&2
+  exit 1
+fi

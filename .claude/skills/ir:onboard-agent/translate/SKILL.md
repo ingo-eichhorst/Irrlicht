@@ -67,6 +67,11 @@ Three rules govern every step below:
    - *Where would I look if it broke?* — adapter-specific gotchas
      listed in `preconditions` or `notes` so the operator isn't
      guessing.
+   - *Why is `expected.jsonl` needed separately from `ground_truth.jsonl`?*
+     — because re-recording against a regressed daemon would otherwise
+     silently rebase the truth. `expected.jsonl` is the spec-grounded
+     benchmark, updated only when the spec changes; `ground_truth.jsonl`
+     is the per-recording measured offsets, regenerated each re-record.
 
 If a step's verification can't be satisfied with the inputs at hand,
 **stop and ask the maintainer** rather than guess. A missing piece
@@ -365,6 +370,102 @@ Verify-list patterns for multi-variant recipes:
   grey gaps in the state band" — verified by opening the
   playback page in the viewer.
 
+### Step 3.5 — Author `expected.jsonl` FIRST
+
+**Before writing the recipe, write `expected.jsonl`.** This is the
+spec-grounded benchmark every future re-recording will be checked
+against. The file lives at
+`replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl` and is
+distinct from `ground_truth.jsonl`:
+
+| File              | Authored by | When        | Anchored to            | Updated when                          |
+|---                |---           |---           |---                      |---                                     |
+| `expected.jsonl`  | Translator   | Before record | Spec phases + tolerances | The spec itself changes wording        |
+| `ground_truth.jsonl` | Translator | After record  | Measured offsets         | Re-record produces new actual offsets  |
+
+Schema (one meta line + N phase lines):
+
+```jsonl
+{"schema_version":1,"scenario_id":"<id>","source":".specs/agent-scenarios.md → Feature: <name>","notes":"..."}
+{"phase":"session_birth","expected_state":"ready","relative_to":"start","max_delay_ms":1000,"text":"Session appears in ready within 1s"}
+{"phase":"pid_bind","kind":"pid_discovered","relative_to":"start","max_delay_ms":1000,"text":"PID bound within 1s"}
+{"phase":"first_turn_start","expected_state":"working","relative_to":"session_birth","text":"User prompt → working"}
+{"phase":"idle_window","expected_state":"ready","relative_to":"first_turn_start","duration_at_least_ms":15000,"invariants":["no transcript_removed for primary session","no state_transition to working"],"text":"..."}
+```
+
+Field semantics:
+
+- `phase` — spec-grounded label (kebab or snake case). Same names work
+  across agents. For multi-variant recordings prefix with `v1_`, `v2_`,
+  etc. so phases are unambiguous.
+- `expected_state` — one of `ready` / `working` / `waiting`. Asserts a
+  state-band transition.
+- `kind` — daemon event kind (e.g. `pid_discovered`, `process_exited`).
+  Asserts a lifecycle event rather than a state. Phases have EXACTLY
+  ONE of `expected_state` or `kind`.
+- `relative_to` — anchor phase name. `"start"` means recording start.
+  All other values must reference a phase declared EARLIER in the file.
+  When chaining variants, use the previous variant's `*_exit` phase as
+  the anchor.
+- `max_delay_ms` — phase event must arrive within this delay of the
+  anchor. Omit for "any time after anchor".
+- `duration_at_least_ms` — for idle/dwell phases. Asserts the
+  `expected_state` persists at least this long without flipping away.
+- `invariants` — plain-English negative assertions over the phase's
+  time window. Two DSL forms supported:
+  - `"no <kind> for <session-noun>"` — e.g. `"no transcript_removed for primary session"`
+  - `"no state_transition to <state>"` — e.g. `"no state_transition to working"`
+  Unknown forms are silently skipped (graceful degradation).
+- `trigger` — optional documentation hint (`user_prompt`, `tool_call`,
+  `interrupt`, `process_exit`). No validator semantics this iteration.
+- `text` — the spec's wording for the assertion. Operator-facing.
+
+**CRITICAL — what NEVER appears in `expected.jsonl`:**
+
+- Absolute `ts_offset_ms` values. The whole point of expected.jsonl is
+  that the same file validates every re-record regardless of when it
+  ran. Offsets are `ground_truth.jsonl`'s job (per-recording).
+- Numbers copied from a recording. If you find yourself measuring
+  events and writing the offsets down, you're authoring
+  `ground_truth.jsonl`, not `expected.jsonl`.
+
+**Common phase-chaining pitfall:** when matching the post-turn
+`ready`, anchor it to a `working` phase (not to the session's first
+`ready`) so the validator doesn't match the UUID-handoff ready
+instead. The committed `session-end` recipe is the worked example —
+each variant has `_session_birth` → `_turn_start` → `_turn_done` →
+`_exit` in that order.
+
+When you finish writing the file, run the validator dry against the
+existing recording (if one exists):
+
+```bash
+go run ./tools/agent-onboarding/cmd/expected-validate \
+  replaydata/agents/<agent>/scenarios/<scenario>
+```
+
+If a recording doesn't exist yet, the validator returns "no
+expected.jsonl present" — that's fine; you'll re-run after Step 6.
+
+► **Verify before moving on:**
+- [ ] `expected.jsonl` covers every spec Expected: bullet — count
+  bullets in the spec, count phases in the file (or invariants for
+  negative assertions), make them match.
+- [ ] No phase has both `expected_state` AND `kind`. No phase has
+  neither. Mutually exclusive by validator rules.
+- [ ] No `relative_to` references a phase declared later in the file.
+  No "forward" anchors.
+- [ ] No absolute offsets. Run `grep ts_offset_ms expected.jsonl`;
+  it must return nothing.
+- [ ] `text` fields read like the spec's wording, not like the
+  recipe's mechanism. (E.g. say "Session appears in ready within
+  1s", not "transcript_new event arrives within 1000 ms".)
+- [ ] If an existing recording is present, the dry-run validator
+  passes against it. If it fails, either the recording was made
+  against a regressed daemon (file an issue and don't "fix"
+  expected.jsonl), or the recipe doesn't actually exercise the
+  spec's scenario (fix the recipe in Step 5).
+
 ### Step 4 — Translate Expected bullets into verify strings
 
 Each spec `Expected:` bullet maps to one or more `verify` strings.
@@ -426,7 +527,7 @@ duplicate entry.
   them; no implicit assumption that the operator will reorder
   anything.
 
-### Step 6 — Record and write the ground-truth file
+### Step 6 — Record, validate against the spec, and write ground_truth
 
 Run the recording once to validate the recipe end-to-end:
 
@@ -497,9 +598,17 @@ ground_truth.jsonl" and the validator skips the scenario.
   bullet in the recipe's `verify` list. Mismatches are fixable: tighten
   the recipe (more sleep, different step ordering) and re-record until
   it's stable across two consecutive runs.
+- [ ] **The spec-grounded expected validator passes against the new
+  recording**: `go run ./tools/agent-onboarding/cmd/expected-validate
+  replaydata/agents/<agent>/scenarios/<scenario>` exits 0. This is
+  the load-bearing assertion — a fail here means either the recipe
+  doesn't exercise the spec (fix recipe + re-record) OR the daemon
+  drifted from the spec (file an issue and STOP — do NOT update
+  expected.jsonl to match a regression).
 - [ ] `ground_truth.jsonl` labels align with the actual offsets you
   measured — generated via the Python helper above, not hand-picked.
-- [ ] `tools/replay-fixtures.sh` runs green against the new fixture.
+- [ ] `tools/replay-fixtures.sh` runs green against the new fixture
+  (replays the recording AND runs expected-validate; both must pass).
 - [ ] `go test ./tools/agent-onboarding/... -race -count=1` runs
   green (catches schema mismatches and viewer-side breaks).
 - [ ] Open the viewer playback page for the new recording. Visual
@@ -514,7 +623,8 @@ ground_truth.jsonl" and the validator skips the scenario.
   structural fields (state-transition order, session count,
   process_exited count) against the committed fixture. **They must
   match.** Drift here means the recipe has variance that will bite
-  someone in six months.
+  someone in six months. Both recordings should pass the same
+  unchanged `expected.jsonl`.
 
 ## Determinism budget
 
@@ -585,6 +695,22 @@ the driver controls completion timing instead of inferring it from
   transition before the recording's tail expires. Write the verify
   as "accept either shape" — the live dashboard handles recovery
   correctly even when the recording window misses it.
+- **Don't write offsets into `expected.jsonl`.** It uses phase-relative
+  anchors + tolerance windows. Absolute `ts_offset_ms` is
+  `ground_truth.jsonl`'s job — that file is per-recording,
+  `expected.jsonl` is per-scenario. If you find yourself measuring
+  events and writing the offsets, you're authoring the wrong file.
+- **Don't update `expected.jsonl` when a re-record fails validation.**
+  The fail signal is "daemon vs spec drift". Update `expected.jsonl`
+  ONLY when the spec at `.specs/agent-scenarios.md` actually changes
+  wording. If the daemon drifted, file an issue and fix the daemon —
+  don't paper over the regression by widening the tolerance.
+- **Don't anchor a `_turn_done` phase directly to `_session_birth`.**
+  The validator's matcher picks the FIRST matching `ready` after the
+  anchor — for a session that goes ready (handoff) → working (turn) →
+  ready (done), the first match is the handoff, not the turn end. Insert
+  a `_turn_start` phase (matching `working`) between them so
+  `_turn_done` anchors to it and naturally matches the post-turn ready.
 
 ## When to re-run
 
