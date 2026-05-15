@@ -587,10 +587,7 @@
        layout at SessionListView.swift:588-604 (waiting-colored text in a
        padded, dim, rounded box, clamped to 3 lines). */
     .row-question-row {
-      padding: 2px 10px 4px 24px;
-    }
-    .row-question-row.child { padding-left: 44px; }
-    .row-question-text {
+      margin: 0 10px 4px 24px;
       display: -webkit-box;
       -webkit-line-clamp: 3;
       -webkit-box-orient: vertical;
@@ -604,6 +601,7 @@
       border-radius: 4px;
       cursor: default;
     }
+    .row-question-row.child { margin-left: 44px; }
 
     /* Task progress dots — rendered as a separate row beneath the parent
        session row (see .row-tasks-row), mirroring TaskListView in the macOS
@@ -1311,8 +1309,9 @@
 
     // --- Timeline / history state (WebSocket-streamed, see history_snapshot/tick/upgrade) ---
     let timelineHistory = new Map(); // session_id -> {label, states: string[]} for the active granularity
-    let currentGranularity = parseInt(localStorage.getItem('irrlicht_granularity') || '1', 10);
-    if (![1, 10, 60].includes(currentGranularity)) currentGranularity = 1;
+    // Derived from the display-mode cycle (`currentMode().granularity`); see
+    // applyDisplayMode → applyGranularity below.
+    let currentGranularity = 1;
     let currentBucketCount = 60;
     // historyByGranularity[g][sessionID] is a 60-element oldest→newest array of state names
     // (or "" for no-data buckets). Mirrored from the daemon's bit-packed wire format.
@@ -1802,9 +1801,12 @@
       const costText = (typeof windowed === 'number' && windowed > 0)
         ? formatCost(windowed) + tf.suffix
         : '';
-      el.querySelector('.group-cost').textContent = costText;
+      const costEl = el.querySelector('.group-cost');
+      if (costEl.textContent !== costText) costEl.textContent = costText;
       const totalAgents = group.agents.length + group.agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
-      el.querySelector('.group-count').textContent = totalAgents + (totalAgents === 1 ? ' session' : ' sessions');
+      const countText = totalAgents + (totalAgents === 1 ? ' session' : ' sessions');
+      const countEl = el.querySelector('.group-count');
+      if (countEl.textContent !== countText) countEl.textContent = countText;
 
       const isCollapsed = collapsedGroups.has(group.name);
       const chevron = el.querySelector('.group-chevron');
@@ -1979,17 +1981,15 @@
       elapsedEl.dataset.elapsedStored = metrics.elapsed_seconds || '';
       elapsedEl.dataset.active = isActive ? '1' : '0';
 
-      // Created — only visible in debug mode (gated by body class). Stamp
-      // the absolute first_seen so the 1s tick can refresh the chip
-      // without re-rendering the whole row.
+      // Created chip — only stamp the first_seen on the element; the 1s
+      // tickElapsed loop owns the textContent. first_seen is immutable per
+      // session so this is a constant after row creation.
       const createdEl = el.querySelector('.row-created');
       if (createdEl) {
-        createdEl.dataset.firstSeen = agent.first_seen || '';
-        const fs = parseFloat(agent.first_seen);
-        if (fs) {
-          createdEl.textContent = 'created ' + fmtDuration(Math.max(0, Math.floor(Date.now() / 1000 - fs))) + ' ago';
-        } else {
-          createdEl.textContent = '';
+        const fs = String(agent.first_seen || '');
+        if (createdEl.dataset.firstSeen !== fs) {
+          createdEl.dataset.firstSeen = fs;
+          if (!fs) createdEl.textContent = '';
         }
       }
 
@@ -2006,19 +2006,17 @@
       const roleBadge = el.querySelector('.row-role-badge');
       const role = agent.role || '';
       const numEl = el.querySelector('.row-num');
+      const wantIcon = (!role && agent.icon) ? agent.icon : '';
       if (role) {
         roleBadge.style.display = '';
         roleBadge.textContent = (agent.icon ? agent.icon + ' ' : '') + role;
         roleBadge.title = agent.description || role;
-        numEl.dataset.iconOverride = '';
-      } else if (agent.icon) {
-        roleBadge.style.display = 'none';
-        // Stash the glyph so render() can swap it in instead of the number.
-        numEl.dataset.iconOverride = agent.icon;
-        numEl.title = agent.description || '';
       } else {
         roleBadge.style.display = 'none';
-        numEl.dataset.iconOverride = '';
+        if (wantIcon) numEl.title = agent.description || '';
+      }
+      if ((numEl.dataset.iconOverride || '') !== wantIcon) {
+        numEl.dataset.iconOverride = wantIcon;
       }
 
       // Active tool label — shown only when agent is working and inside a tool call.
@@ -2034,9 +2032,9 @@
         toolEl.style.display = 'none';
       }
 
-      // Per-row history bar
-      const histCanvas = el.querySelector('.row-history');
-      paintRowHistory(histCanvas, agent.session_id);
+      // Per-row history canvas is repainted by repaintHistory() on the
+      // history-event WS path — no need to repaint here on every session
+      // update (data didn't change).
     }
 
     // --- Render ---
@@ -2160,14 +2158,20 @@
     // when it has sub-agents (children[]). Open circles = pending,
     // filled = settled. Mirrors the inline indicator visible in
     // assets/overlay-reference.png under row 2.
-    function createSubMatrixRow(agent, isChild) {
+    // Shared factory for trailing-row variants rendered beneath the parent
+    // session row (tasks, submatrix, question).
+    function makeRow(className, innerHTML, agent, update, isChild) {
       const el = document.createElement('div');
-      el.className = 'sub-matrix-row' + (isChild ? ' child' : '');
-      el.innerHTML =
-        '<span class="sub-matrix-counter"></span>' +
-        '<div class="sub-matrix-dots"></div>';
-      updateSubMatrixRow(el, agent);
+      el.className = className + (isChild ? ' child' : '');
+      if (innerHTML) el.innerHTML = innerHTML;
+      update(el, agent);
       return el;
+    }
+
+    function createSubMatrixRow(agent, isChild) {
+      return makeRow('sub-matrix-row',
+        '<span class="sub-matrix-counter"></span><div class="sub-matrix-dots"></div>',
+        agent, updateSubMatrixRow, isChild);
     }
 
     function updateSubMatrixRow(el, agent) {
@@ -2199,12 +2203,9 @@
     // session has in-progress TaskCreate/TaskUpdate tasks. Mirrors
     // TaskListView at SessionListView.swift:746-769.
     function createTaskListRow(agent, isChild) {
-      const el = document.createElement('div');
-      el.className = 'row-tasks-row' + (isChild ? ' child' : '');
-      el.innerHTML = '<div class="row-tasks-dots"></div>' +
-                     '<span class="row-tasks-counter"></span>';
-      updateTaskListRow(el, agent);
-      return el;
+      return makeRow('row-tasks-row',
+        '<div class="row-tasks-dots"></div><span class="row-tasks-counter"></span>',
+        agent, updateTaskListRow, isChild);
     }
 
     // Statuses are a closed enum on the daemon side (claudecode parser).
@@ -2226,10 +2227,9 @@
       el.dataset.sig = sig;
       const dotsEl = el.querySelector('.row-tasks-dots');
       const taskLabel = (t) => (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
-      const dotHtml = tasks.map(t => {
-        const tip = (taskLabel(t) || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-        return '<span class="task-dot task-' + safeTaskStatus(t.status) + '" title="' + tip + '"></span>';
-      }).join('');
+      const dotHtml = tasks.map(t =>
+        '<span class="task-dot task-' + safeTaskStatus(t.status) + '" title="' + esc(taskLabel(t)) + '"></span>'
+      ).join('');
       dotsEl.innerHTML = dotHtml;
       el.querySelector('.row-tasks-counter').textContent = done + ' / ' + tasks.length;
     }
@@ -2239,21 +2239,16 @@
     // SessionListView.swift:588-604 (waiting-colored text in a padded,
     // dim, rounded box rendered beneath the parent row).
     function createQuestionRow(agent, isChild) {
-      const el = document.createElement('div');
-      el.className = 'row-question-row' + (isChild ? ' child' : '');
-      el.innerHTML = '<span class="row-question-text"></span>';
-      updateQuestionRow(el, agent);
-      return el;
+      return makeRow('row-question-row', '', agent, updateQuestionRow, isChild);
     }
     function updateQuestionRow(el, agent) {
       const text = (agent.metrics && agent.metrics.last_assistant_text) || '';
       if (!text || agent.state !== 'waiting') { el.style.display = 'none'; return; }
       el.style.display = '';
-      const textEl = el.querySelector('.row-question-text');
-      if (textEl.dataset.full !== text) {
-        textEl.dataset.full = text;
-        textEl.textContent = text;
-        textEl.title = text;
+      if (el.dataset.full !== text) {
+        el.dataset.full = text;
+        el.textContent = text;
+        el.title = text;
       }
     }
 
@@ -2265,6 +2260,13 @@
       const host = document.getElementById('app-state-icons');
       if (!host) return;
       const list = topLevel || [];
+      const sig = list.length === 0
+        ? 'empty'
+        : list.length <= 3
+          ? 'icons:' + list.map(s => s.state || 'ready').join(',')
+          : 'count:' + list.length;
+      if (host.dataset.sig === sig) return;
+      host.dataset.sig = sig;
       if (list.length === 0) {
         host.innerHTML = '<span class="app-state-count" style="color:var(--muted)">○</span>';
         return;
@@ -2291,7 +2293,7 @@
       }
       // Debug-mode "created" chip — only iterate when the toggle is on so
       // we don't waste DOM reads when the chip is hidden.
-      if (document.body.classList.contains('debug-mode')) {
+      if (settings.debugMode) {
         for (const el of document.querySelectorAll('.row-created')) {
           const fs = parseFloat(el.dataset.firstSeen);
           if (fs) el.textContent = 'created ' + fmtDuration(Math.max(0, Math.floor(now - fs))) + ' ago';
@@ -2317,10 +2319,13 @@
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.offsetWidth || 120;
       const h = canvas.offsetHeight || 16;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
+      const pxW = w * dpr, pxH = h * dpr;
+      if (canvas.width !== pxW || canvas.height !== pxH) {
+        canvas.width = pxW;
+        canvas.height = pxH;
+      }
       const ctx = canvas.getContext('2d');
-      ctx.scale(dpr, dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       if (!rec || !rec.states.length) return;
       // Right-anchor: newest bucket lands at the right edge, oldest fills
@@ -2347,24 +2352,24 @@
     }
 
     // --- Initial load ---
-    // Fetch adapter branding first so the first render of session rows can
-    // already show adapter icons. Daemons predating issue #260 won't expose
-    // this endpoint — failure is non-fatal; rows render with no adapter
-    // icon (the row's other identifying columns — project, branch, ID —
-    // already disambiguate).
-    fetch('/api/v1/agents').then(r => r.json()).catch(() => null).then(entries => {
-      if (!Array.isArray(entries)) return;
-      for (const e of entries) {
-        if (e && e.name) agentRegistry[e.name] = e;
+    // Wait for both agents (icon branding) and sessions (the actual data)
+    // before the first render, so rows land with icons already populated.
+    // Older daemons predating issue #260 won't have /api/v1/agents — the
+    // null fallback leaves agentRegistry empty and rows render without
+    // icons (project, branch, ID still disambiguate).
+    Promise.all([
+      fetch('/api/v1/agents').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/v1/sessions').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([entries, resp]) => {
+      if (Array.isArray(entries)) {
+        for (const e of entries) {
+          if (e && e.name) agentRegistry[e.name] = e;
+        }
       }
-      // If the sessions fetch landed first, rows are already on screen with
-      // empty adapter icons. Re-render so they pick up the registry.
-      if (dashboardGroups.length) render();
-    });
-    fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
-      if (!resp) return;
-      dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
-      rebuildIndex();
+      if (resp) {
+        dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
+        rebuildIndex();
+      }
       render();
       repaintHistory();
     });
@@ -2379,18 +2384,22 @@
         const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
         const byName = new Map();
         for (const g of fresh) if (g && g.name) byName.set(g.name, g);
+        let changed = false;
         for (const g of dashboardGroups) {
           const f = byName.get(g.name);
-          if (f && f.costs) g.costs = f.costs;
+          if (!f || !f.costs) continue;
+          if (JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
+            g.costs = f.costs;
+            changed = true;
+          }
         }
-        render();
+        if (changed) render();
       });
     }, 30000);
 
     // --- WebSocket ---
     let ws = null;
     let reconnectDelay = 1000;
-    let hasEverConnected = false;
 
     // Status labels mirror the overlay's statusIndicator at SessionListView.swift:387:
     // connected → "watching", reconnecting → "reconnecting", else state name.
@@ -2422,13 +2431,14 @@
     }
 
     function connect() {
-      setWsStatus(hasEverConnected ? 'reconnecting' : 'connecting');
+      // ws is non-null on every subsequent reconnect attempt; use that to
+      // distinguish the initial "connecting" from a "reconnecting" cycle.
+      setWsStatus(ws ? 'reconnecting' : 'connecting');
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(proto + '://' + location.host + '/api/v1/sessions/stream');
 
       ws.onopen = function() {
         setWsStatus('connected');
-        hasEverConnected = true;
         reconnectDelay = 1000;
       };
 
@@ -2479,12 +2489,10 @@
 
     connect();
 
-    // Granularity now lives only as a derived value from the display-mode
-    // cycle (Context / 1 Min / 10 Min / 60 Min). No standalone buttons; the
-    // helper just updates the active dict and repaints the per-row history.
+    // Granularity is derived from the display-mode cycle — no need to
+    // persist it separately; restoring irrlicht_displayMode re-derives it.
     function applyGranularity(g) {
       currentGranularity = g;
-      localStorage.setItem('irrlicht_granularity', g);
       rebuildTimelineHistory();
       repaintHistory();
     }
