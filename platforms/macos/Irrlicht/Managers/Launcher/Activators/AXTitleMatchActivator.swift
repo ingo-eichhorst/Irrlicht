@@ -42,16 +42,12 @@ struct AXTitleMatchActivator: HostActivator {
         let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
         guard !runningApps.isEmpty else { return }
 
-        // Enumerate window candidates via the app's **Window menu** rather
-        // than kAXWindowsAttribute. The latter omits windows that are
-        // fullscreen on another Space for many Electron apps (VS Code,
-        // Cursor, Windsurf), so the only candidate we ever see is whatever
-        // happens to be on the current Space — making click-to-focus a
-        // silent no-op when the target lives on a different fullscreen
-        // Space (issue #344). The Window menu always lists every open
-        // window of the app, and AX-pressing a menu item is the same as
-        // the user picking it from the menu bar: macOS handles the Space
-        // switch and raise atomically.
+        // kAXWindowsAttribute omits windows that are fullscreen on
+        // another Space for Electron hosts (VS Code, Cursor, Windsurf), so
+        // we enumerate via the app's Window menu instead — it lists every
+        // open window across Spaces, and AX-pressing an item is what the
+        // user would do manually, so macOS handles the Space switch and
+        // raise atomically.
         var candidates: [(menuItem: AXUIElement, title: String)] = []
         for app in runningApps {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
@@ -99,44 +95,26 @@ struct AXTitleMatchActivator: HostActivator {
 
     private static func windowMenuItems(axApp: AXUIElement) -> [(menuItem: AXUIElement, title: String)] {
         var menuBarRef: CFTypeRef?
-        // Unwrap to a non-optional before CFGetTypeID — Swift's CF bridging
-        // does not allow `as? AXUIElement` (always-succeed); the runtime
-        // check has to go through CFGetTypeID, and that crashes on NULL.
+        // CFGetTypeID crashes on NULL and Swift CF bridging doesn't allow
+        // `as? AXUIElement`, so we unwrap then runtime-check the type.
         guard AXUIElementCopyAttributeValue(axApp, kAXMenuBarAttribute as CFString, &menuBarRef) == .success,
               let menuBarRef,
               CFGetTypeID(menuBarRef) == AXUIElementGetTypeID()
         else { return [] }
         let menuBar = menuBarRef as! AXUIElement
 
-        let menus = axChildren(menuBar)
+        guard let windowMenu = axChildren(menuBar).first(where: { menu in
+            axTitle(menu).map(windowMenuTitles.contains) ?? false
+        }) else { return [] }
 
-        // Find the Window menu by localized title. No positional fallback —
-        // pressing the first item of an unknown menu in a non-Cocoa-standard
-        // app could trigger a destructive action.
-        var windowMenu: AXUIElement?
-        for menu in menus {
-            var t: CFTypeRef?
-            if AXUIElementCopyAttributeValue(menu, kAXTitleAttribute as CFString, &t) == .success,
-               let title = t as? String, windowMenuTitles.contains(title) {
-                windowMenu = menu
-                break
-            }
-        }
-        guard let windowMenu else { return [] }
-
-        // Each top-level menu has a single AXMenu child (the popup); its
-        // children are the menu items.
+        // A top-level menu has a single AXMenu popup child; its children
+        // are the menu items.
         guard let popup = axChildren(windowMenu).first else { return [] }
 
-        var out: [(menuItem: AXUIElement, title: String)] = []
-        for item in axChildren(popup) {
-            var t: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(item, kAXTitleAttribute as CFString, &t) == .success,
-                  let title = t as? String, !title.isEmpty
-            else { continue }
-            out.append((item, title))
+        return axChildren(popup).compactMap { item in
+            guard let title = axTitle(item), !title.isEmpty else { return nil }
+            return (item, title)
         }
-        return out
     }
 
     private static func axChildren(_ element: AXUIElement) -> [AXUIElement] {
@@ -147,10 +125,11 @@ struct AXTitleMatchActivator: HostActivator {
         return children
     }
 
-    private static func windowTitle(_ window: AXUIElement) -> String {
-        var titleRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef)
-        return (titleRef as? String) ?? ""
+    private static func axTitle(_ element: AXUIElement) -> String? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &ref) == .success
+        else { return nil }
+        return ref as? String
     }
 
     // MARK: - Title match (pure, testable)
