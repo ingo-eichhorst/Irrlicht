@@ -40,7 +40,6 @@
 
     <div class="sidebar-section">
       <h4>Getting Started</h4>
-      <a href="story.html" class="active">The Story</a>
       <a href="index.html">Overview</a>
       <a href="installation.html">Installation</a>
       <a href="quickstart.html">Quick Start</a>
@@ -48,6 +47,7 @@
 
     <div class="sidebar-section">
       <h4>Core Concepts</h4>
+      <a href="story.html" class="active">The Story</a>
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
@@ -100,14 +100,21 @@
       <!-- ─── A name from the Brocken ─── -->
       <h2>A name from the Brocken</h2>
 
-      <p>The mountain is the Brocken, in the Harz. As a child I could see it from my bedroom window. Once a year, on Walpurgisnacht, Goethe's witches gather there &mdash; and on the way up, in <em>Faust</em>, a small ambient light appears to guide the travellers through the dark:</p>
+      <p>The mountain is the Brocken, the highest peak of the Harz &mdash; the ancient mountain range in central Germany. As a child I could see it from my bedroom window. The folklore of the Harz is full of small ghostly lights: phantom flames drifting over the moors and bogs near the Brocken, luring wanderers off the safe path and into the marsh. Harzer miners reported the same lights deep in the tunnels near Clausthal-Zellerfeld &mdash; sometimes a warning, sometimes a promise of ore ahead.</p>
+
+      <p>The most famous of them appears in Goethe's <em>Faust</em>. On Walpurgisnacht, an <em>Irrlicht</em> guides Faust and Mephistopheles up the Brocken, lighting their way through the <em>Traum- und Zaubersph&auml;re</em> &mdash; the realm of dream and sorcery. A treacherous companion on a treacherous path:</p>
 
       <blockquote class="epigraph">
         Ein Irrlicht mein' ich wohl zu sehn.
         <cite>&mdash; Goethe, Faust I, Walpurgisnacht</cite>
       </blockquote>
 
-      <p>An <em>Irrlicht</em> &mdash; a will-o'-the-wisp. In the folklore it misleads. In Goethe it guides. Mine guides me through a day of agents.</p>
+      <p>This Irrlicht flips the myth. Instead of a deceptive light that leads you astray, it is the <strong>tamed will-o'-the-wisp</strong> &mdash; small, honest lights that appear exactly where your attention should go.</p>
+
+      <div class="callout callout-info">
+        <strong>The core promise</strong>
+        No ghosts. Files &rarr; State &rarr; Light. The light system is deterministic &mdash; given the same transcript, every run produces the same state.
+      </div>
 
       <div class="section-ornament">&middot; &middot; &middot;</div>
 
@@ -141,10 +148,13 @@
 
       <!-- ─── Bottom nav ─── -->
       <nav class="docs-nav-bottom">
-        <div></div>
-        <a href="index.html" style="text-align:right">
+        <a href="quickstart.html">
+          <span class="label">Previous</span>
+          Quick Start
+        </a>
+        <a href="light-system.html" style="text-align:right">
           <span class="label">Next</span>
-          Overview &rarr;
+          The Light System
         </a>
       </nav>
 
