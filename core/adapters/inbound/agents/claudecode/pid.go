@@ -25,6 +25,9 @@ const staleMetaSlack = 2 * time.Second
 var sessionsDir = defaultSessionsDir()
 
 func defaultSessionsDir() string {
+	if v := os.Getenv(configDirEnvVar); v != "" {
+		return filepath.Join(v, "sessions")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
