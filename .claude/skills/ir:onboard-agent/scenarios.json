@@ -288,6 +288,34 @@
     },
 
     {
+      "name": "checkpoint-rewind",
+      "description": "Stub entry — claudecode has no native checkpoint feature, so this scenario is not recordable for that adapter. Other adapters (Cline shadow-git, Plandex plan branches, Replit checkpoint, Cursor rewind) may translate this scenario when their adapter packages land.",
+      "coverage_id": "checkpoint-rewind",
+      "requires": ["headless_mode"],
+      "verify": {},
+      "by_adapter": {
+        "claudecode": {
+          "applicable": false,
+          "notes": "agent_supports=no per coverage matrix — claudecode has no native checkpoint rewind. Translator stops here; no recipe."
+        }
+      }
+    },
+
+    {
+      "name": "cloud-background-agent",
+      "description": "Stub entry — claudecode is a local CLI with no first-party cloud variant, so this scenario is not recordable for that adapter. Forward-looking for Cursor Cloud / Codex Cloud / Copilot Cloud / Devin adapters when they exist.",
+      "coverage_id": "cloud-background-agent",
+      "requires": ["headless_mode"],
+      "verify": {},
+      "by_adapter": {
+        "claudecode": {
+          "applicable": false,
+          "notes": "agent_supports=no per coverage matrix — claudecode is local-only. Translator stops here; no recipe."
+        }
+      }
+    },
+
+    {
       "name": "session-reset",
       "description": "Claude session runs a no-op turn, then the user invokes /clear. The old session row should disappear from the dashboard and a new session_id should appear in ready. Adapter-specific note: claudecode's /clear creates a new transcript file under the same project slug; the driver's reset_session step auto-detects the new UUID and re-points subsequent turns at it. Coverage notes a known partial caveat (#169 stale PID metadata) — if the daemon retains the old session_id past /clear, this recipe surfaces that as a fail on the old_session_ended phase.",
       "coverage_id": "session-reset",
