@@ -9,6 +9,18 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-05-15
+
+### Added
+- **macOS: autostart Irrlicht.app at login, on by default** (#343) — On first launch the app registers itself as a login item via `SMAppService.mainApp` so the menu-bar overlay is up before you open your first terminal. A new toggle in Preferences flips the setting, and the choice is persisted to `UserDefaults`; a one-time gate (`didApplyDefaultLoginItem`) ensures the default never re-enables itself after you turn it off. The XPC call to launchd runs on a detached `userInitiated` task so the toggle animation stays smooth on slower Macs. The unsigned-then-signed-build dev edge case is called out inline in `applyDefaultIfNeeded` so future maintainers know why the gate exists.
+
+### Fixed
+- **macOS: focus VS Code windows on other Spaces** (#344, #348) — When VS Code (or Cursor / Windsurf) was fullscreen on a different macOS Space, clicking a session row in the overlay was a silent no-op. AX's `kAXWindowsAttribute` omits cross-Space fullscreen windows for Electron hosts, so the title-matching activator never saw the target window. The fix enumerates the app's Window menu instead — that list is always complete — and AX-presses the title-matching item so macOS performs the Space switch and window raise atomically. Window-menu titles are recognized across the major macOS-supported locales (en/de/fr/es/it/pt/nl/sv/da/no/fi/pl/cs/ru/tr/ja/zh-Hans/zh-Hant/ko) so the path works for non-English users too. Hardening from /simplify review: drop the second-to-last-menu positional fallback (could trigger a destructive action in non-Cocoa-standard apps), unwrap `menuBarRef` before `CFGetTypeID`, and collapse the imperative lookup into `first(where:) + compactMap`.
+- **daemon: session disappears when a second Claude is opened in the same VS Code window** (#345, #347) — Opening a second Claude Code session inside the same VS Code window briefly leaves the new process in the parent CWD before it `cd`s into its worktree. The scanner minted a `proc-<NEW>` pre-session for that CWD; the claudecode adapter's CWD-based PID discovery — with no transcript yet, so the metadata-based filter is bypassed — then returned the *neighbor* process's PID, and `HandlePIDAssigned`'s same-PID cleanup deleted the legitimate neighbor's session row. The row reappeared later via the activity-driven recovery path, which presented as a confusing flicker. Fix: pre-session IDs already encode the PID by construction (`fmt.Sprintf("proc-%d", pid)` in `processlifecycle/scanner.go`), so the daemon now short-circuits adapter-level discovery for them and calls `HandlePIDAssigned` directly with the parsed PID. The short-circuit sits above the `ProcessWatcher == nil` / `discoverFn == nil` guards so it's robust against future adapters that have a process matcher but no `PIDForSession`. Real sessions (UUID IDs with a transcript path) continue through the adapter unchanged. E2E regression test uses `sync/atomic.Int32` for the discovery-call counter so a future regression races visibly under `-race`.
+
+### Docs
+- **Landscape page refresh against live GitHub data** (#346) — `site/landscape/index.html` and `site/landscape/compare/index.html` regenerated from a fresh `gh api` sweep of 38 tracked agents (May 15, 2026 snapshot). Aider and OpenCode flip from `planned` to `live` in the landscape table to match their existing adapters under `core/adapters/inbound/agents/`. Two repo renames propagated: Pi `badlogic/pi-mono` → `earendil-works/pi` (the v0.74 move) and Warp `warpdotdev/Warp` → `warpdotdev/warp`. Two plausibility-rule trips noted with explicit reasoning: Warp jumped 26.5k→58.5k stars after open-sourcing its codebase (description and language metadata flipped from null to "Warp is an agentic development environment, born out of the terminal." / Rust / AGPL-3.0); Ruflo grew 33.1k→51.3k on viral promotion. The `ir:agent-releases` skill's `tracked-releases.md` adds 22 new versions across Claude Code (v2.1.120–v2.1.142), Codex (v0.125–v0.130 stables), Pi (v0.71–v0.74), and Gas Town (v1.0.1, v1.1.0), with five upstream items flagged for verification against the live adapters (all five verified post-release; findings recorded on #312 and a new ticket filed at #349 for Pi's `PI_CODING_AGENT_SESSION_DIR` env-var support).
+
 ## [0.4.2] — 2026-05-15
 
 ### Changed
@@ -684,7 +696,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.3
 [0.4.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.0
