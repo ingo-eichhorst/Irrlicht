@@ -288,6 +288,47 @@
     },
 
     {
+      "name": "session-end",
+      "description": "Agent completes one no-op turn and exits cleanly. The recording captures the lifecycle tail: process_exited fires when claude shuts down, then transcript_removed marks the row disappearing from the dashboard. Adapter-specific note: claudecode's transcript is lazy (see session-start) so the recipe sends a 1-token nudge to materialize the UUID transcript; without it, only the proc-<PID> pre-session lifecycle is observable.",
+      "coverage_id": "session-end",
+      "requires": ["headless_mode"],
+      "verify": {
+        "transitions_topology": ["ready", "working", "ready"],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+          ],
+          "script": [
+            {"type": "send", "text": "Reply with exactly the word: ok"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 6}
+          ],
+          "verify": [
+            "events.jsonl contains a state_transition to ready for the UUID session after the turn completes (final live state must be ready before the process is allowed to exit)",
+            "events.jsonl contains a process_exited event for the UUID session within 3 s of the driver's tmux kill-session step",
+            "events.jsonl contains a transcript_removed event for the UUID session shortly after process_exited (irrlicht's claudecode adapter removes the session once both transcript and PID are gone)",
+            "no state_transition to working or waiting appears after process_exited — the dead session does not re-enter an active state",
+            "final session state is ready (the recording-frozen state, observable just before process exit)",
+            "transcript.jsonl contains exactly 1 user line and 1 assistant line"
+          ],
+          "settings": {},
+          "timeout_seconds": 90
+        }
+      }
+    },
+
+    {
       "name": "session-start",
       "description": "Agent is launched in a fresh cwd, writes its first transcript line, sits idle. The recording proves irrlicht binds the session to ready + a PID within ~1s of agent launch. Adapter-specific note: claudecode does not create the per-session transcript file until the first user input lands — the recipe sends a 1-token nudge ('hi') so the transcript materializes and the UUID-keyed session row appears. The pre-session row (proc-<PID>) is observable from launch independent of the nudge.",
       "coverage_id": "session-start",
