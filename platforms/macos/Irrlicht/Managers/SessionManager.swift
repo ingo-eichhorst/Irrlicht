@@ -112,7 +112,10 @@ class SessionManager: ObservableObject {
         // with a distinguishable sound (Ready=Funk, Waiting=Ping, Context=Sosumi).
         // register(defaults:) only seeds unset keys, so it never overrides a
         // user who has explicitly picked something else.
-        var notificationDefaults: [String: Any] = [:]
+        var notificationDefaults: [String: Any] = [
+            "launchAtLogin": true,
+            "didApplyDefaultLoginItem": false,
+        ]
         for event in NotificationEvent.allCases {
             notificationDefaults[event.enabledKey] = true
             notificationDefaults[event.soundKey] = event.defaultSound.rawValue
