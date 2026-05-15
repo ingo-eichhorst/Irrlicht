@@ -83,6 +83,10 @@
 
       <!-- ─── Welcome ─── -->
       <h2>Welcome</h2>
+      <img src="../assets/mascot/mascot-trio-contributing-review.webp"
+           alt=""
+           class="mascot mascot-float-right"
+           loading="lazy" />
 
       <p>Irrlicht is open source under the MIT license. Contributions of all kinds are welcome: bug reports, feature requests, documentation improvements, code contributions, and community support.</p>
 
@@ -139,7 +143,8 @@
         </li>
         <li>
           <strong>Run the test suite</strong>
-          <pre><code>./validate.sh</code></pre>
+          <pre><code>go test ./core/... -race -count=1
+./tools/replay-fixtures.sh</code></pre>
           <p>All tests must pass before you start making changes. If they don't, you've found a bug -- please report it.</p>
         </li>
       </ol>
@@ -150,8 +155,9 @@
 
       <pre><code>Irrlicht/
   core/             # Go daemon -- session detection, state machine, IPC
-  platforms/macos/  # Swift macOS app -- menu bar UI, popover, notifications
-  validate.sh       # Single entry point for all validation</code></pre>
+  platforms/        # Swift macOS app + web dashboard
+  site/             # Landing page + docs (GitHub Pages)
+  tools/            # Build, release, and replay-fixture scripts</code></pre>
 
       <p>For a full breakdown of how the pieces fit together, see <a href="architecture.html">System Design</a>.</p>
 
@@ -183,31 +189,25 @@
 
       <h3>Testing</h3>
 
-      <p>The single entry point for all validation is:</p>
+      <p>Before marking a change done, run all three layers and confirm they pass:</p>
 
-      <pre><code>./validate.sh</code></pre>
+      <pre><code># Unit + e2e tests (race detector on, no cache)
+go test ./core/... -race -count=1
 
-      <p>This runs the full pipeline in order:</p>
-
-      <ol>
-        <li>Go build</li>
-        <li>Swift build</li>
-        <li>Go tests</li>
-        <li>Swift tests</li>
-        <li>Integration tests</li>
-      </ol>
+# Replay-fixture suite (drives real agent transcripts through adapters)
+./tools/replay-fixtures.sh</code></pre>
 
       <div class="callout callout-warning">
         <strong>Important</strong>
-        A change is only done when <code>validate.sh</code> exits 0. No exceptions.
+        A change is only done when both commands exit 0. No exceptions.
       </div>
 
       <p>To run tests for individual components during development:</p>
 
-      <pre><code># Go tests only
-cd core && go test -v ./...
+      <pre><code># Single Go package
+go test ./core/adapters/inbound/agents/claudecode/... -race -v
 
-# Swift tests only
+# Swift tests
 cd platforms/macos && swift test</code></pre>
 
       <h3>Commit Messages</h3>
@@ -230,8 +230,9 @@ test: add table-driven tests for state machine</code></pre>
 
       <ol class="steps">
         <li>
-          <strong>Ensure validation passes</strong>
-          <pre><code>./validate.sh</code></pre>
+          <strong>Ensure all tests pass</strong>
+          <pre><code>go test ./core/... -race -count=1
+./tools/replay-fixtures.sh</code></pre>
         </li>
         <li>
           <strong>Push your branch</strong>
@@ -320,7 +321,7 @@ test: add table-driven tests for state machine</code></pre>
         <li><code>replaydata/agents/&lt;name&gt;/capabilities.json</code> populated against <code>replaydata/agents/features.json</code></li>
         <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed under <code>replaydata/agents/&lt;name&gt;/scenarios/</code></li>
         <li><code>tools/replay-fixtures.sh</code> green</li>
-        <li><code>./validate.sh</code> green</li>
+        <li><code>go test ./core/... -race -count=1</code> green</li>
         <li>README compatibility grid updated to <code>alpha</code></li>
       </ul>
 
@@ -369,16 +370,16 @@ test: add table-driven tests for state machine</code></pre>
       <p>Irrlicht is designed to be agent-verifiable. If you're an AI coding agent contributing to this project:</p>
 
       <ul>
-        <li>Run <code>./validate.sh</code> after every change</li>
-        <li>A task is only complete when exit code is 0</li>
+        <li>Run <code>go test ./core/... -race -count=1</code> <em>and</em> <code>./tools/replay-fixtures.sh</code> after every change</li>
+        <li>A task is only complete when both exit 0</li>
         <li>Never mark a task done based only on compilation</li>
-        <li>If validation fails, inspect the failing test and fix the root cause</li>
+        <li>If a test fails, inspect it and fix the root cause</li>
         <li>Do not skip or comment out failing assertions</li>
       </ul>
 
       <div class="callout callout-warning">
         <strong>Non-negotiable</strong>
-        <code>./validate.sh</code> is the single source of truth. If it fails, the work is not done -- regardless of whether the code compiles or individual tests pass in isolation.
+        Both the Go test suite and the replay-fixture suite must exit 0. If either fails, the work is not done -- regardless of whether the code compiles or individual tests pass in isolation.
       </div>
 
       <!-- ─── Code Review ─── -->

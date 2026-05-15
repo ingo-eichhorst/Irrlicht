@@ -96,6 +96,10 @@
 
       <!-- The Three States -->
       <h2>The Three States</h2>
+      <img src="../assets/mascot/mascot-trio-state-cycle.webp"
+           alt=""
+           class="mascot mascot-float-right"
+           loading="lazy" />
 
       <p>Irrlicht's state model is <strong>MECE</strong> &mdash; mutually exclusive, collectively exhaustive. Every session is in exactly one state at any given moment. There is no fourth state, no "unknown", no "cancelled". Three states, three colors, three meanings.</p>
 
@@ -198,25 +202,25 @@
         <tbody>
           <tr>
             <td><code>safe</code></td>
-            <td>0 &ndash; 70%</td>
+            <td>0 &ndash; 60%</td>
             <td style="color: var(--ready);">green</td>
             <td>Plenty of room. No action needed.</td>
           </tr>
           <tr>
             <td><code>caution</code></td>
-            <td>70 &ndash; 85%</td>
+            <td>60 &ndash; 80%</td>
             <td style="color: #EAB308;">yellow</td>
             <td>Context is filling up. Be aware.</td>
           </tr>
           <tr>
             <td><code>warning</code></td>
-            <td>85% &ndash; 155K tokens</td>
+            <td>80 &ndash; 90%</td>
             <td style="color: #EF4444;">red</td>
             <td>Running low. Consider wrapping up or starting a new session.</td>
           </tr>
           <tr>
             <td><code>critical</code></td>
-            <td>155K+ tokens</td>
+            <td>90%+</td>
             <td style="color: #DC2626;">crimson</td>
             <td>Auto-compaction imminent. Finish the current task.</td>
           </tr>

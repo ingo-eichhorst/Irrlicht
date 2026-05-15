@@ -392,9 +392,45 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
   margin-bottom: 0.2rem;
 }
 
+/* ─── Mascots ─────────────────────────────────────────── */
+.mascot {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.mascot-float-right {
+  float: right;
+  width: 200px;
+  margin: 0.25rem 0 1rem 1.75rem;
+  shape-outside: margin-box;
+}
+
+.mascot-float-left {
+  float: left;
+  width: 200px;
+  margin: 0.25rem 1.75rem 1rem 0;
+  shape-outside: margin-box;
+}
+
+.mascot-hero {
+  width: 320px;
+  max-width: 70%;
+  margin: 0.5rem auto 2.5rem;
+}
+
 /* ─── Mobile ─── */
 @media (max-width: 800px) {
   .sidebar { display: none; }
   .docs-main { margin-left: 0; }
   .docs-content { padding: 2rem 1.5rem 4rem; }
+}
+
+@media (max-width: 720px) {
+  .mascot-float-right,
+  .mascot-float-left {
+    float: none;
+    width: 200px;
+    margin: 1.5rem auto;
+  }
 }
