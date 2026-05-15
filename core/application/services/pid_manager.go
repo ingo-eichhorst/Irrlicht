@@ -432,17 +432,36 @@ func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
 // claimed PIDs when no unclaimed candidate exists (the /clear scenario where
 // the same process starts a new transcript). Returns true if a PID was found.
 func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter string) bool {
+	state, _ := pm.repo.Load(sessionID)
+	if state != nil && state.PID > 0 {
+		return true
+	}
+
+	// Pre-sessions encode their PID in the session ID by construction
+	// (processlifecycle/scanner.go mints `proc-<pid>`). Skip adapter-level
+	// CWD discovery — it can misattribute the PID to a sibling process
+	// sharing the same CWD during the new agent's brief pre-`cd` window
+	// (issue #345). This bypass intentionally runs before the pw / discoverFn
+	// guards below: it only needs to parse the ID and call HandlePIDAssigned,
+	// which is safe regardless of whether the adapter has a PIDForSession
+	// registered or whether the daemon has a live ProcessWatcher.
+	if strings.HasPrefix(sessionID, "proc-") {
+		var pid int
+		if _, err := fmt.Sscanf(sessionID, "proc-%d", &pid); err == nil && pid > 0 {
+			pm.log.LogInfo("session-detector", sessionID,
+				fmt.Sprintf("encoded pid %d for %s pre-session", pid, adapter))
+			pm.HandlePIDAssigned(pid, sessionID)
+			return true
+		}
+		return false
+	}
+
 	if pm.pw == nil {
 		return false
 	}
 	discoverFn := pm.pidDiscovers[adapter]
 	if discoverFn == nil {
 		return false
-	}
-	// Check if session already has a PID.
-	state, _ := pm.repo.Load(sessionID)
-	if state != nil && state.PID > 0 {
-		return true
 	}
 
 	// Prefer unclaimed PIDs (multiple instances in same dir), but allow
