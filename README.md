@@ -73,7 +73,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | Platform              | Stage   | Access                    |
 | --------------------- | ------- | ------------------------- |
 | macOS (menu bar app)  | beta    | [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases/latest) |
-| Web dashboard         | alpha   | `http://127.0.0.1:7837`   |
+| Web dashboard         | beta    | `http://127.0.0.1:7837`   |
 | CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) |
 | Linux                 | planned | —                         |
 | Windows               | planned | —                         |
