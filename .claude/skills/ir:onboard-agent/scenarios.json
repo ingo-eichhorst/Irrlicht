@@ -288,6 +288,49 @@
     },
 
     {
+      "name": "session-reset",
+      "description": "Claude session runs a no-op turn, then the user invokes /clear. The old session row should disappear from the dashboard and a new session_id should appear in ready. Adapter-specific note: claudecode's /clear creates a new transcript file under the same project slug; the driver's reset_session step auto-detects the new UUID and re-points subsequent turns at it. Coverage notes a known partial caveat (#169 stale PID metadata) — if the daemon retains the old session_id past /clear, this recipe surfaces that as a fail on the old_session_ended phase.",
+      "coverage_id": "session-reset",
+      "requires": ["headless_mode"],
+      "verify": {
+        "transitions_topology": ["ready", "working", "ready", "ready", "working", "ready"],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd recording (--attach against --record daemon or isolated mode)"
+          ],
+          "setup": [
+            "Driver generates a fresh UUID for the first session; the reset_session step discovers the second UUID by scanning the project slug dir after /clear lands."
+          ],
+          "script": [
+            {"type": "send", "text": "Reply with exactly the word: ok"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 2},
+            {"type": "reset_session"},
+            {"type": "send", "text": "Reply with exactly the word: fresh"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 4}
+          ],
+          "verify": [
+            "events.jsonl shows the FIRST UUID session entering ready, then a working/ready cycle for turn 1",
+            "after /clear, events.jsonl emits transcript_removed (and/or process_exited) for the first UUID — the 'old session disappears' assertion from the spec",
+            "events.jsonl contains a DIFFERENT UUID session appearing in ready after /clear (new session_id, fresh row)",
+            "the second turn's working/ready cycle is on the NEW UUID, not the old one",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 2 user lines and 2 assistant lines (the two transcripts are concatenated by the multi-session curate path)"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+
+    {
       "name": "session-resume",
       "description": "Claude session is launched, runs one no-op turn, exits cleanly, then re-launches with the SAME --session-id and same cwd. The daemon should observe the same UUID re-appearing (not a new session row) and the second turn driving ready→working on that same session. Adapter-specific note: claudecode's resume mechanism is implicit — passing the same --session-id <UUID> at relaunch and using the same cwd causes claude to append to the existing transcript at ~/.claude/projects/<slug>/<UUID>.jsonl. The driver's new `resume` step does exactly that.",
       "coverage_id": "session-resume",

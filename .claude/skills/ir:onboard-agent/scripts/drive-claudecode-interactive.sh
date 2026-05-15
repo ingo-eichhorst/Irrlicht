@@ -300,6 +300,60 @@ step_exit_clean() {
   echo "[driver] exit_clean: sent Ctrl-D to $CURRENT_TMUX" >&2
 }
 
+step_reset_session() {
+  # /clear in claudecode abandons the current conversation and
+  # starts a fresh one — claude writes future turns to a NEW
+  # transcript file (new UUID) under the same project slug. The
+  # driver needs to discover that new file so wait_turn / send work
+  # against the resumed-as-new session. Approach: record the
+  # current transcript, send /clear, then scan the slug dir for any
+  # new .jsonl that's not the previous one.
+  local old_transcript="$TRANSCRIPT"
+  local old_uuid="$CURRENT_UUID"
+  tmux send-keys -t "$CURRENT_TMUX" "/clear"
+  sleep 0.3
+  tmux send-keys -t "$CURRENT_TMUX" Enter
+  echo "[driver] reset_session: sent /clear (old uuid=$old_uuid)" >&2
+  # Record the old UUID's metadata before the swap so the epilogue
+  # writes session.uuids with both lifetimes.
+  SESSION_UUIDS+=("$old_uuid")
+  SESSION_TRANSCRIPTS+=("$old_transcript")
+  sleep 2
+
+  # Find the new transcript: same slug dir, different UUID,
+  # non-empty.
+  local slug_dir
+  if [[ -n "$old_transcript" ]]; then
+    slug_dir="$(dirname "$old_transcript")"
+  else
+    slug_dir=""
+  fi
+  local new_transcript=""
+  if [[ -n "$slug_dir" && -d "$slug_dir" ]]; then
+    for _ in $(seq 1 30); do
+      for candidate in "$slug_dir"/*.jsonl; do
+        [[ -f "$candidate" ]] || continue
+        [[ "$candidate" == "$old_transcript" ]] && continue
+        if [[ -s "$candidate" ]]; then
+          new_transcript="$candidate"
+          break 2
+        fi
+      done
+      sleep 0.5
+    done
+  fi
+  if [[ -n "$new_transcript" ]]; then
+    CURRENT_UUID="$(basename "$new_transcript" .jsonl)"
+    TRANSCRIPT="$new_transcript"
+    EXPECTED_TURNS=0
+    echo "[driver] reset_session: new uuid=$CURRENT_UUID at $new_transcript" >&2
+  else
+    echo "[driver] reset_session: WARNING — no new transcript detected after /clear; subsequent turns may target the OLD UUID" >&2
+    # Don't bail — the recording is still useful for "/clear didn't
+    # spawn a new transcript" diagnosis.
+  fi
+}
+
 # Iterate steps. EXIT_REASON updates persist via the parent shell
 # (process substitution feeds the loop).
 STEP_OK=true
@@ -332,6 +386,9 @@ while read -r step; do
       ;;
     exit_clean)
       step_exit_clean
+      ;;
+    reset_session)
+      step_reset_session
       ;;
     *)
       echo "[driver] unknown step type: $type" >&2
