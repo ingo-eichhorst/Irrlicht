@@ -87,6 +87,20 @@ func attachGroupCosts(groups []*session.AgentGroup, tracker outbound.CostTracker
 	}
 }
 
+// handleGetVersion serves the daemon's build version. Frontends use it to
+// render `Irrlicht v$VERSION` in their app header without baking the value
+// into their own bundle.
+func handleGetVersion(version string) http.HandlerFunc {
+	type versionResp struct {
+		Version string `json:"version"`
+	}
+	body, _ := json.Marshal(versionResp{Version: version})
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}
+}
+
 // handleGetAgents serves the registered adapter branding so frontends can look
 // up an adapter's display name and icon by `name` instead of hardcoding their
 // own switches. The slice mirrors the order configured in main.go's agents;
