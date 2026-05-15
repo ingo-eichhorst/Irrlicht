@@ -30,10 +30,16 @@ viewer's scenario detail page renders the new fields automatically.
 - `<scenario-id>` — the kebab id used in `.specs/agent-scenarios-coverage.json`
   (e.g. `session-start`, `user-esc-interrupt`, `auto-executed-tool-call`).
 
-Worked example committed: `claudecode × session-start` —
-`.claude/skills/ir:onboard-agent/scenarios.json` → `scenarios[]` entry
-where `coverage_id == "session-start"`. Read it to see the schema
-applied end-to-end.
+Worked examples committed (both under `scenarios.json -> scenarios[]`):
+
+- `claudecode × session-start` (`coverage_id == "session-start"`) —
+  the basic single-session shape: 1 prompt + wait_turn + trailing
+  sleep, lazy-transcript nudge documented.
+- `claudecode × session-end` (`coverage_id == "session-end"`) — the
+  multi-variant chain: 3 lifetimes back-to-back, one per spec variant,
+  using `restart` / `sigkill` / `exit_clean` step types. Read this
+  one when translating any scenario whose spec has more than one
+  `Scenario:` / `Expected:` block under the same Feature heading.
 
 ## What this mode produces
 
@@ -78,9 +84,14 @@ Find the `### Feature:` heading whose kebab slug matches
 `<scenario-id>`. Capture every `Scenario:` paragraph and every
 `Expected:` bullet under it.
 
-A heading can have multiple Scenario/Expected sub-blocks (e.g.
-`session-end` has three variants). Translate the **primary** block
-(usually the first) and reference the others in `notes`.
+A heading can have **multiple** Scenario/Expected sub-blocks (e.g.
+`session-end` has three: clean exit, SIGKILL mid-idle, crash
+mid-turn). **Default: capture all of them in one recording** by
+chaining sessions in the script — see "Multi-variant scenarios"
+below. Only fall back to translating just the primary block when
+the variants demand fundamentally different setups (different
+prerequisites, different agent CLIs) that can't share one
+recording.
 
 ### Step 2 — Read the verdict
 
@@ -107,9 +118,21 @@ For the chosen agent, read in order:
    `TranscriptFilename`, `Capabilities`, and any `DiscoverPID`
    wiring. Defines what irrlicht sees.
 2. `.claude/skills/ir:onboard-agent/scripts/drive-<agent>-interactive.sh`
-   — the supported step grammar (`send` / `wait_turn` / `sleep` /
-   `interrupt` / `slash`) and CLI flags the driver passes. Your
-   `script` must stay inside this grammar.
+   — the supported step grammar and CLI flags the driver passes.
+   Your `script` must stay inside this grammar. Currently supported
+   step types (claudecode is the reference; other drivers implement
+   a subset):
+
+   | type           | semantics                                                      | drivers           |
+   |---             |---                                                              |---                 |
+   | `send`         | type text + Enter; bumps expected-turn count                    | all interactive    |
+   | `slash`        | same as `send`, used for `/cmd`-style slash commands            | all interactive    |
+   | `wait_turn`    | block until the agent finishes the current LLM round            | all interactive    |
+   | `sleep`        | pause N seconds (field: `seconds`)                              | all interactive    |
+   | `interrupt`    | send Escape (claudecode/codex/pi) or Ctrl-C (aider) mid-turn    | all interactive    |
+   | `restart`      | kill current tmux, mint new UUID + fresh cwd, re-init session   | claudecode         |
+   | `sigkill`      | `kill -9` the current agent process (forced termination)        | claudecode         |
+   | `exit_clean`   | Ctrl-D to the TUI for a graceful shutdown                       | claudecode         |
 3. `.claude/skills/ir:onboard-agent/install-instructions.md` — any
    per-agent gates (LM Studio for aider, API auth for codex/claudecode,
    etc.). These become `preconditions` entries.
@@ -160,6 +183,97 @@ finalizing the script:
 
 If you discover a new quirk while translating a cell, add it here so
 the next translator doesn't have to re-discover it.
+
+#### Multi-variant scenarios (chained sessions in one recording)
+
+When the spec has multiple `Scenario:` / `Expected:` sub-blocks under
+one Feature heading (e.g. `session-end` has clean exit + SIGKILL +
+crash), the default is to capture all variants in **one recording**
+by chaining sessions via `restart`. The viewer's state band renders
+each variant as a distinct colored arc with grey gaps where no
+session is alive between them — that visual difference is the whole
+point of recording them together.
+
+Recipe shape — three claudecode variants in one recording (the
+committed `session-end` recipe):
+
+```jsonc
+"script": [
+  // Variant 1: clean exit
+  {"type": "send", "text": "Reply with exactly the word: ok"},
+  {"type": "wait_turn"},
+  {"type": "sleep", "seconds": 2},
+  {"type": "exit_clean"},     // Ctrl-D for a graceful shutdown
+  {"type": "sleep", "seconds": 5},
+
+  // Variant 2: SIGKILL mid-idle
+  {"type": "restart"},        // new UUID + fresh cwd + new tmux
+  {"type": "send", "text": "Reply with exactly the word: ok"},
+  {"type": "wait_turn"},
+  {"type": "sleep", "seconds": 3},
+  {"type": "sigkill"},        // kill -9 claude
+  {"type": "sleep", "seconds": 5},
+
+  // Variant 3: SIGKILL mid-turn
+  {"type": "restart"},
+  {"type": "send", "text": "Write a 200 word essay …"},
+  {"type": "sleep", "seconds": 2},
+  {"type": "sigkill"},        // kill while still in working
+  {"type": "sleep", "seconds": 8}
+]
+```
+
+Hard-won lessons from the worked example:
+
+- **Fresh cwd per `restart` is non-negotiable.** Claudecode caches
+  "trust this folder" per directory. Re-using the same cwd skips
+  the trust dialog and the driver's wait-for-trust loop hangs
+  forever. The driver auto-creates `cwd-2`, `cwd-3`, etc. — your
+  recipe doesn't have to do anything, but knowing this means you
+  won't be tempted to "optimize" by sharing cwds across variants.
+- **Sleep before SIGKILL on idle.** A 3 s sleep after `wait_turn`
+  lets the classifier settle `working → ready` before the kill,
+  so the recording's last live state is `ready` (matches variant 2
+  Expected "Session disappears within 1s; state never entered
+  working post-exit").
+- **Variant-3 race is real.** Killing mid-turn means the daemon
+  may not have time to emit a `working → ready` sweep-recovery
+  transition before the 8 s tail expires. Document this in the
+  recipe's `verify` ("accept either shape") rather than asserting
+  the recovery — the live dashboard's sweep handles it correctly
+  even when the recording window misses it.
+- **State band needs `process_exited` as an end signal.** SIGKILL'd
+  UUID sessions never get a `transcript_removed`; only
+  `process_exited` marks them dead. The state band's `aliveUntil`
+  map recognizes all three (`process_exited`, `transcript_removed`,
+  `presession_removed`) and picks the earliest — without this, the
+  band rendered the whole multi-variant run as one continuous arc.
+
+Multi-session wiring (provided by the existing pipeline — no recipe
+boilerplate needed):
+
+- The driver tracks `SESSION_UUIDS[]` / `SESSION_TRANSCRIPTS[]`
+  across restarts and writes them to `staging/session.uuids` /
+  `staging/transcript.paths`.
+- `run-cell.sh` detects the multi-session case and exports
+  `IRRLICHT_EXTRA_SESSION_IDS` + `IRRLICHT_EXTRA_TRANSCRIPTS` to
+  the curator.
+- `curate-lifecycle-fixture.sh` unions the secondary UUIDs into
+  the event filter and concatenates the transcripts in
+  driver-recorded order.
+
+Verify-list patterns for multi-variant recipes:
+
+- Assert the **session count**: "events.jsonl contains exactly N
+  distinct UUID session_ids".
+- Assert one `process_exited` event **per UUID**.
+- Per-variant: assert the live state immediately before
+  `process_exited` matches the spec's variant-specific Expected
+  ("State is ready at exit" for clean / SIGKILL-idle; accept
+  either ready or working for SIGKILL-mid-turn).
+- Assert the **timeline visual**: "N colored arcs separated by
+  grey gaps in the state band" — verified by opening the
+  playback page in the viewer.
 
 ### Step 4 — Translate Expected bullets into verify strings
 
@@ -221,6 +335,33 @@ lines, each with `ts_offset_ms` / `marker` / `expected_state` /
 ...
 ```
 
+For multi-variant recordings, prefix each label's marker with
+`v1_` / `v2_` / `v3_` so the variant is unambiguous when reading
+the file. Compute offsets with a small Python helper rather than
+by hand — anchor offsets reflect milliseconds since the FIRST event
+in the recording, and multi-variant recordings span 60–90 s of
+wall time:
+
+```bash
+python3 - <<'PY'
+import json
+from datetime import datetime
+first = None
+with open("$TARGET/events.jsonl") as f:
+    for line in f:
+        e = json.loads(line)
+        ts = e.get("ts")
+        if not ts: continue
+        t = datetime.fromisoformat(ts)
+        if first is None: first = t
+        off = int((t - first).total_seconds() * 1000)
+        kind = e.get("kind")
+        if kind in ("state_transition", "process_exited"):
+            print(f'  +{off:6d} ms  {kind} {e.get("new_state") or ""}  '
+                  f'sid={e.get("session_id", "")[:14]}')
+PY
+```
+
 The recipe's plain-English `verify` items are the operator-facing
 docs; this JSONL is what the validator runs against. Both should
 agree on the same set of assertions.
@@ -280,6 +421,24 @@ the driver controls completion timing instead of inferring it from
   `ground_truth.jsonl` is what the validator runs against. After
   promoting a fresh recording, write a matching `ground_truth.jsonl`
   with offsets anchored to the new fixture.
+- **Don't translate only the primary variant when the spec has
+  multiple `Scenario:` blocks.** Default to chaining all variants
+  in one recording (see "Multi-variant scenarios"). Splitting them
+  forfeits the timeline-visual story (state band arcs separated by
+  grey gaps) and produces N partial recordings instead of one
+  complete one. Only split when the variants require fundamentally
+  different setup that can't share a recording.
+- **Don't reuse a cwd across `restart` steps.** Claudecode caches
+  trust per-directory; reusing the cwd skips the trust dialog and
+  the wait-for-trust loop hangs. The driver mints `cwd-2`, `cwd-3`
+  automatically; don't second-guess it.
+- **Don't assert the variant-3 sweep-to-ready transition in
+  `verify`.** When a session is SIGKILL'd mid-turn (variant 3 of
+  session-end and similar crash-mid-action scenarios), the daemon's
+  sweep may not have time to emit a `working → ready` recovery
+  transition before the recording's tail expires. Write the verify
+  as "accept either shape" — the live dashboard handles recovery
+  correctly even when the recording window misses it.
 
 ## When to re-run
 
