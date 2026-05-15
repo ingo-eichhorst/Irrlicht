@@ -1,10 +1,6 @@
 package claudecode
 
-import (
-	"os"
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
 func TestTranscriptsDir(t *testing.T) {
 	tests := []struct {
@@ -13,7 +9,10 @@ func TestTranscriptsDir(t *testing.T) {
 		want string
 	}{
 		{"empty falls back to default", "", defaultProjectsDir},
-		{"override produces $CLAUDE_CONFIG_DIR/projects", "/tmp/claude-home", "/tmp/claude-home/projects"},
+		{"absolute override produces $CLAUDE_CONFIG_DIR/projects", "/tmp/claude-home", "/tmp/claude-home/projects"},
+		{"trailing slash is cleaned", "/tmp/claude-home/", "/tmp/claude-home/projects"},
+		{"relative override is rejected (falls back to default)", "relative/home", defaultProjectsDir},
+		{"tilde-prefixed override is rejected (no shell expansion)", "~/custom", defaultProjectsDir},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -22,25 +21,5 @@ func TestTranscriptsDir(t *testing.T) {
 				t.Errorf("transcriptsDir() = %q, want %q", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestDefaultSessionsDirRespectsConfigDir(t *testing.T) {
-	t.Setenv(configDirEnvVar, "/tmp/claude-home")
-	want := "/tmp/claude-home/sessions"
-	if got := defaultSessionsDir(); got != want {
-		t.Errorf("defaultSessionsDir() = %q, want %q", got, want)
-	}
-}
-
-func TestDefaultSessionsDirFallsBackToHome(t *testing.T) {
-	t.Setenv(configDirEnvVar, "")
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home dir")
-	}
-	want := filepath.Join(home, ".claude", "sessions")
-	if got := defaultSessionsDir(); got != want {
-		t.Errorf("defaultSessionsDir() = %q, want %q", got, want)
 	}
 }

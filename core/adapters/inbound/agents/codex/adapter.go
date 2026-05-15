@@ -3,6 +3,7 @@
 package codex
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -25,11 +26,18 @@ const defaultRootDir = ".codex/sessions"
 const codexHomeEnvVar = "CODEX_HOME"
 
 // sessionsDir returns the directory the Codex adapter should watch. When
-// CODEX_HOME is set, sessions live under $CODEX_HOME/sessions; otherwise
-// the default $HOME-relative path is returned.
+// CODEX_HOME is set to an absolute path, sessions live under
+// $CODEX_HOME/sessions; non-absolute values (relative paths, unexpanded ~)
+// are logged and ignored to surface misconfiguration. The env var is read
+// once at Agent() construction; a daemon restart is required after changing
+// it.
 func sessionsDir() string {
 	if v := os.Getenv(codexHomeEnvVar); v != "" {
-		return filepath.Join(v, "sessions")
+		cleaned := filepath.Clean(v)
+		if filepath.IsAbs(cleaned) {
+			return filepath.Join(cleaned, "sessions")
+		}
+		log.Printf("codex: ignoring %s=%q — must be an absolute path (no shell expansion)", codexHomeEnvVar, v)
 	}
 	return defaultRootDir
 }

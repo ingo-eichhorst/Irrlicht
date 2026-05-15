@@ -54,7 +54,7 @@ func (w *Watcher) Identity() agent.Identity {
 // this window are silently ignored. A zero value disables the filter.
 func New(dir, adapter string, maxAge time.Duration) *Watcher {
 	if filepath.IsAbs(dir) {
-		return &Watcher{root: dir, adapter: adapter, maxAge: maxAge}
+		return &Watcher{root: filepath.Clean(dir), adapter: adapter, maxAge: maxAge}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
