@@ -40,27 +40,98 @@ struct AXTitleMatchActivator: HostActivator {
             return
         }
         let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        guard let app = runningApps.first else { return }
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        guard !runningApps.isEmpty else { return }
 
-        var windowsRef: CFTypeRef?
-        let status = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef)
-        guard status == .success, let windows = windowsRef as? [AXUIElement] else { return }
-
-        let titles = windows.map { windowTitle($0) }
+        // Enumerate window candidates via the app's **Window menu** rather
+        // than kAXWindowsAttribute. The latter omits windows that are
+        // fullscreen on another Space for many Electron apps (VS Code,
+        // Cursor, Windsurf), so the only candidate we ever see is whatever
+        // happens to be on the current Space — making click-to-focus a
+        // silent no-op when the target lives on a different fullscreen
+        // Space (issue #344). The Window menu always lists every open
+        // window of the app, and AX-pressing a menu item is the same as
+        // the user picking it from the menu bar: macOS handles the Space
+        // switch and raise atomically.
+        var candidates: [(menuItem: AXUIElement, title: String)] = []
+        for app in runningApps {
+            let axApp = AXUIElementCreateApplication(app.processIdentifier)
+            candidates.append(contentsOf: windowMenuItems(axApp: axApp))
+        }
+        let titles = candidates.map { $0.title }
         guard let idx = bestMatchIndex(titles: titles, cwd: cwd) else {
-            logger.info("no window title matched cwd \(cwd, privacy: .public); candidates=\(titles, privacy: .public)")
+            logger.info("no window menu item matched cwd \(cwd, privacy: .public); candidates=\(titles, privacy: .public)")
             return
         }
-        let target = windows[idx]
-        // Set main first so the subsequent activate() knows which Space to switch to.
-        AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementPerformAction(target, kAXRaiseAction as CFString)
-        // Re-activate the app after designating the target window as main. This
-        // triggers a macOS Space switch when the target is a fullscreen window on
-        // another Space — kAXRaiseAction alone does not cross Space boundaries.
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .first?.activate(options: [])
+        let target = candidates[idx]
+        logger.info("AX dispatch: cwd=\(cwd, privacy: .public) picked=[\(idx)] \(titles[idx], privacy: .public) of candidates=\(titles, privacy: .public)")
+        AXUIElementPerformAction(target.menuItem, kAXPressAction as CFString)
+    }
+
+    /// Returns (menuItem, title) pairs for every entry in the app's Window
+    /// menu. The Window menu is identified by title — locale-resilient
+    /// enough for English-default users; we additionally accept a few
+    /// common localizations. Items with empty titles or that match common
+    /// command names (Minimize, Zoom, Close, Bring All to Front) are
+    /// filtered so they never compete with real window entries.
+    private static let windowMenuTitles: Set<String> = [
+        "Window", "Fenster", "Fenêtre", "Ventana", "ウィンドウ", "窗口", "창",
+    ]
+    private static let windowMenuCommandTitles: Set<String> = [
+        "Minimize", "Zoom", "Close", "Bring All to Front",
+        "Minimieren", "Zoomen", "Schließen", "Alle nach vorne bringen",
+    ]
+
+    private static func windowMenuItems(axApp: AXUIElement) -> [(menuItem: AXUIElement, title: String)] {
+        var menuBarRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXMenuBarAttribute as CFString, &menuBarRef) == .success,
+              CFGetTypeID(menuBarRef) == AXUIElementGetTypeID()
+        else { return [] }
+        let menuBar = menuBarRef as! AXUIElement
+
+        var menusRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(menuBar, kAXChildrenAttribute as CFString, &menusRef) == .success,
+              let menus = menusRef as? [AXUIElement]
+        else { return [] }
+
+        // Find the Window menu by title (locale-tolerant). Fallback: the
+        // second-to-last top-level menu (Cocoa convention: …Window, Help).
+        var windowMenu: AXUIElement?
+        for menu in menus {
+            var t: CFTypeRef?
+            if AXUIElementCopyAttributeValue(menu, kAXTitleAttribute as CFString, &t) == .success,
+               let title = t as? String, windowMenuTitles.contains(title) {
+                windowMenu = menu
+                break
+            }
+        }
+        if windowMenu == nil, menus.count >= 2 {
+            windowMenu = menus[menus.count - 2]
+        }
+        guard let windowMenu else { return [] }
+
+        // The menu's children contain a single AXMenu (the popup); its
+        // children are the menu items.
+        var popupChildrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(windowMenu, kAXChildrenAttribute as CFString, &popupChildrenRef) == .success,
+              let popupChildren = popupChildrenRef as? [AXUIElement],
+              let popup = popupChildren.first
+        else { return [] }
+
+        var itemsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(popup, kAXChildrenAttribute as CFString, &itemsRef) == .success,
+              let items = itemsRef as? [AXUIElement]
+        else { return [] }
+
+        var out: [(menuItem: AXUIElement, title: String)] = []
+        for item in items {
+            var t: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(item, kAXTitleAttribute as CFString, &t) == .success,
+                  let title = t as? String, !title.isEmpty,
+                  !windowMenuCommandTitles.contains(title)
+            else { continue }
+            out.append((item, title))
+        }
+        return out
     }
 
     private static func windowTitle(_ window: AXUIElement) -> String {
