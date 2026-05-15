@@ -715,7 +715,9 @@ async function loadScenario(s) {
   detail.innerHTML = "";
   detail.appendChild(renderPlayback(s, data));
   detail.appendChild(renderMeta(data));
-  detail.appendChild(renderExpected(data));
+  const exp = renderExpected(data);
+  exp.classList.add("expected-host");
+  detail.appendChild(exp);
   // Recording history picker — only render when there are archived
   // recordings (recordings/ dir is empty for first-time-recorded
   // scenarios; rendering an empty dropdown would just be noise).
@@ -957,22 +959,51 @@ function renderRecordingHistory(s, latestData, archives) {
     const archDetail = await fetch(
       `/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings/${encodeURIComponent(name)}`
     ).then(r => r.json());
-    // archDetail has the archive's transitions + ground_truth. Build
-    // a synthetic detail-like object so the existing render functions
-    // work unchanged.
+    // archDetail has the archive's transitions + ground_truth +
+    // a fresh validation against the CURRENT top-level expected.jsonl.
+    // Build a synthetic detail-like object so the existing render
+    // functions work unchanged.
     const archData = {
       ...latestData,
       transitions: archDetail.transitions || [],
       ground_truth: archDetail.ground_truth || null,
+      expected: archDetail.expected || null,
     };
+    // Drift annotation: compare the archive's frozen pass rate
+    // (manifest, captured at promote time) against the FRESH eval
+    // (current spec applied to the archived events). Same string ↔
+    // no spec drift; mismatch ↔ either the spec moved or the daemon
+    // moved between promote-time and now.
+    const frozenRate = (arch && arch.expected_pass_rate) || "";
+    const freshRate = (archDetail.expected && archDetail.expected.summary) || "";
+    const driftNote = document.createElement("div");
+    driftNote.style.cssText = "margin-top: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;";
+    if (frozenRate && freshRate) {
+      if (frozenRate === freshRate) {
+        driftNote.style.background = "#fafaf2";
+        driftNote.style.color = "#555";
+        driftNote.innerHTML = `<b>No drift:</b> archive's frozen pass rate (${escapeHtml(frozenRate)}) matches a fresh evaluation against today's spec. The spec hasn't moved relative to what was true at promote time.`;
+      } else {
+        driftNote.style.background = "#fff7d6";
+        driftNote.style.color = "#8a4500";
+        driftNote.innerHTML = `<b>Drift detected:</b> at promote time the archive showed <code>${escapeHtml(frozenRate)}</code> against expected.jsonl; today's spec rates the same archive as <code>${escapeHtml(freshRate)}</code>. Either expected.jsonl changed or the validator's interpretation of the recording did. Open the Spec expectations panel for per-phase detail.`;
+      }
+    } else if (freshRate) {
+      driftNote.style.background = "#fafaf2";
+      driftNote.style.color = "#555";
+      driftNote.innerHTML = `<b>Fresh evaluation:</b> ${escapeHtml(freshRate)} (no frozen rate in this archive's manifest — pre-Phase-3 record).`;
+    }
+    manifestBox.appendChild(driftNote);
     reRenderForArchive(archData);
   });
 
   function reRenderForLatest(d) {
+    swapPanel("expected-host", renderExpected(d));
     swapPanel("ground-truth-host", renderGroundTruth(d));
     swapPanel("transitions-host", renderTransitions(d));
   }
   function reRenderForArchive(d) {
+    swapPanel("expected-host", renderExpected(d));
     swapPanel("ground-truth-host", renderGroundTruth(d));
     swapPanel("transitions-host", renderTransitions(d));
   }

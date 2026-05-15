@@ -617,13 +617,18 @@ type RecordingArchive struct {
 }
 
 // ArchivedRecordingDetail is the payload for fetching one archived
-// recording — events + transcript + the manifest. Ground truth is
-// included if it was archived alongside.
+// recording — events + transcript + the manifest + a fresh
+// validation against the CURRENT top-level expected.jsonl. The
+// re-validation is the drift signal: an archive that passed at
+// promote-time (per manifest.expected_pass_rate) but fails the
+// fresh evaluation means either the spec changed or the daemon
+// drifted between then and now.
 type ArchivedRecordingDetail struct {
-	Name        string             `json:"name"`
-	Manifest    RecordingArchive   `json:"manifest"`
-	Transitions []json.RawMessage  `json:"transitions"`
-	GroundTruth *GroundTruthBlob   `json:"ground_truth,omitempty"`
+	Name        string                   `json:"name"`
+	Manifest    RecordingArchive         `json:"manifest"`
+	Transitions []json.RawMessage        `json:"transitions"`
+	GroundTruth *GroundTruthBlob         `json:"ground_truth,omitempty"`
+	Expected    *validate.ExpectedReport `json:"expected,omitempty"` // current spec vs this archive's events
 }
 
 // handleRecordingsList walks the scenario's recordings/ subdir and
@@ -689,6 +694,15 @@ func (s *Server) handleArchivedRecording(w http.ResponseWriter, scenarioDir, nam
 			d.GroundTruth = &GroundTruthBlob{Meta: gtMeta, Labels: labels}
 		}
 		f.Close()
+	}
+	// Re-evaluate the archive against the CURRENT top-level
+	// expected.jsonl. Drift signal: archive may have passed at
+	// promote-time but fail today because the spec moved.
+	if rep, err := validate.ValidateExpectedAgainst(
+		filepath.Join(scenarioDir, "expected.jsonl"),
+		filepath.Join(archiveDir, "events.jsonl"),
+	); err == nil && rep != nil {
+		d.Expected = rep
 	}
 	writeJSON(w, d)
 }

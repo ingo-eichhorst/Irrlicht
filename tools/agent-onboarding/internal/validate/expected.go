@@ -114,15 +114,28 @@ type recordedEvent struct {
 // expectations. Returns nil + nil if scenarioDir has no expected.jsonl
 // (no expectations declared yet → nothing to validate, not a fail).
 func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
-	expPath := filepath.Join(scenarioDir, "expected.jsonl")
-	if _, err := os.Stat(expPath); err != nil {
+	return ValidateExpectedAgainst(
+		filepath.Join(scenarioDir, "expected.jsonl"),
+		filepath.Join(scenarioDir, "events.jsonl"),
+	)
+}
+
+// ValidateExpectedAgainst runs the validator with explicitly named
+// expected.jsonl and events.jsonl paths. Lets the viewer evaluate
+// an archived recording (in recordings/<name>/events.jsonl) against
+// the CURRENT spec (top-level expected.jsonl) — that's the "did the
+// daemon drift?" signal: an archive that PASSED at promote-time but
+// FAILS the current spec means either the spec moved or the daemon
+// went backward (the maintainer disambiguates).
+func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, error) {
+	if _, err := os.Stat(expectedPath); err != nil {
 		return nil, nil // not configured for this scenario
 	}
-	meta, phases, err := loadExpected(expPath)
+	meta, phases, err := loadExpected(expectedPath)
 	if err != nil {
 		return nil, fmt.Errorf("load expected.jsonl: %w", err)
 	}
-	events, err := loadEvents(filepath.Join(scenarioDir, "events.jsonl"))
+	events, err := loadEvents(eventsPath)
 	if err != nil {
 		return nil, fmt.Errorf("load events.jsonl: %w", err)
 	}
