@@ -392,9 +392,106 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
   margin-bottom: 0.2rem;
 }
 
+/* ─── Mascots ─────────────────────────────────────────── */
+.mascot {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.mascot-float-right {
+  float: right;
+  width: 200px;
+  margin: 0.25rem 0 1rem 1.75rem;
+  shape-outside: margin-box;
+}
+
+.mascot-float-left {
+  float: left;
+  width: 200px;
+  margin: 0.25rem 1.75rem 1rem 0;
+  shape-outside: margin-box;
+}
+
+.mascot-hero {
+  width: 320px;
+  max-width: 70%;
+  margin: 0.5rem auto 2.5rem;
+}
+
+/* ─── Story-page vintage utilities ─────────────────────── */
+.story-figure {
+  margin: 2rem auto 2.5rem;
+  text-align: center;
+}
+
+.story-figure img {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  border-radius: 10px;
+}
+
+.story-figure figcaption {
+  margin-top: 0.85rem;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+}
+
+.dropcap::first-letter {
+  font-family: 'Cormorant Garamond', serif;
+  font-weight: 600;
+  font-size: 3.4rem;
+  line-height: 0.9;
+  float: left;
+  margin: 0.18rem 0.6rem 0 0;
+  color: var(--text);
+}
+
+.section-ornament {
+  text-align: center;
+  margin: 2.5rem 0;
+  color: var(--text-dim);
+  letter-spacing: 1em;
+  font-size: 0.85rem;
+}
+
+.epigraph {
+  border-left: 2px solid var(--border);
+  margin: 1.75rem 0;
+  padding: 0.25rem 1.25rem;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 1.05rem;
+  color: var(--text-dim);
+}
+
+.epigraph cite {
+  display: block;
+  margin-top: 0.4rem;
+  font-style: normal;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 /* ─── Mobile ─── */
 @media (max-width: 800px) {
   .sidebar { display: none; }
   .docs-main { margin-left: 0; }
   .docs-content { padding: 2rem 1.5rem 4rem; }
+}
+
+@media (max-width: 720px) {
+  .mascot-float-right,
+  .mascot-float-left {
+    float: none;
+    width: 200px;
+    margin: 1.5rem auto;
+  }
 }

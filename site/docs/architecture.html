@@ -47,6 +47,7 @@
 
     <div class="sidebar-section">
       <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
@@ -82,13 +83,17 @@
 
       <!-- ── Overview ── -->
       <h2>Overview</h2>
+      <img src="../assets/mascot/mascot-trio-architecture-model.webp"
+           alt=""
+           class="mascot mascot-float-right"
+           loading="lazy" />
 
       <p>Irrlicht follows hexagonal (ports-and-adapters) architecture. Every external dependency is behind an interface. Every component is testable in isolation.</p>
 
       <div class="diagram">
 &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
 &#x2502;     HTTP/WebSocket Interface            &#x2502;
-&#x2502;  GET /api/v1/sessions, /stream, /state  &#x2502;
+&#x2502;  GET /api/v1/sessions(/stream), /state  &#x2502;
 &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;
                      &#x2502;
 &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;

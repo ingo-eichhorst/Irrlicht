@@ -48,6 +48,7 @@
 
     <div class="sidebar-section">
       <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
@@ -82,6 +83,10 @@
       <p class="page-subtitle">Inbound and outbound adapters that connect Irrlicht to the outside world.</p>
 
       <h2>Inbound Adapters (Event Sources)</h2>
+      <img src="../assets/mascot/mascot-trio-steam-computers.webp"
+           alt=""
+           class="mascot mascot-float-right"
+           loading="lazy" />
 
       <p>Inbound adapters drive events into the application. Each watches a specific agent's transcript files or process activity and emits session lifecycle events that the core state machine consumes.</p>
 
@@ -90,7 +95,7 @@
       <ul>
         <li><strong>Package:</strong> <code>core/adapters/inbound/agents/claudecode/</code></li>
         <li><strong>Watches:</strong> <code>~/.claude/projects/**/*.jsonl</code></li>
-        <li>Uses the shared fswatcher with a flat directory structure</li>
+        <li>Uses the shared fswatcher with recursive directory watching (two-level tree: <code>root/&lt;project&gt;/&lt;id&gt;.jsonl</code>)</li>
         <li><strong>Adapter name in session state:</strong> <code>"claude-code"</code></li>
       </ul>
 
@@ -144,8 +149,8 @@
       <h3>Process Scanner</h3>
 
       <ul>
-        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/processscanner/</code></li>
-        <li>Polls <code>pgrep -x claude</code> every 1 second</li>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/processlifecycle/</code></li>
+        <li>Polls once per second per adapter via <code>pgrep -x &lt;name&gt;</code> (exact-name match) or <code>pgrep -f &lt;regex&gt;</code> (command-line match, used by aider); interval backs off when the PID set is stable</li>
         <li>Creates pre-sessions (<code>proc-&lt;pid&gt;</code>) before transcripts exist</li>
         <li>CWD discovery via <code>lsof</code></li>
         <li>Suppresses ghost pre-sessions when a real transcript exists</li>

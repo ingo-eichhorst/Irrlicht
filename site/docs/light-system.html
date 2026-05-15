@@ -31,7 +31,7 @@
 <div class="docs-layout">
 
   <!-- Sidebar -->
-  <aside class="sidebar">
+  <nav class="sidebar">
     <a href="../index.html" class="sidebar-logo">
       <span class="dot"></span>
       <span>Irrlicht</span>
@@ -47,6 +47,7 @@
 
     <div class="sidebar-section">
       <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
       <a href="light-system.html" class="active">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
@@ -71,31 +72,21 @@
       <a href="code-of-conduct.html">Code of Conduct</a>
       <a href="changelog.html">Changelog</a>
     </div>
-  </aside>
+  </nav>
 
   <!-- Main -->
   <main class="docs-main">
     <div class="docs-content">
 
       <h1>The Light System</h1>
-      <p class="page-subtitle">Three states. No ambiguity. Each session is a single light whose color tells the truth.</p>
-
-      <!-- Philosophy -->
-      <h2>Philosophy</h2>
-
-      <p>The name <em>Irrlicht</em> comes from the folklore of the Harz, the ancient mountain range in central Germany. An Irrlicht is a will-o'-the-wisp &mdash; a ghostly light that drifts over the moors and bogs near the Brocken, luring wanderers off the safe path and into the marsh. Harzer miners reported phantom lights in the tunnels near Clausthal-Zellerfeld &mdash; sometimes a warning, sometimes a promise of ore ahead.</p>
-
-      <p>The most famous Irrlicht appears in Goethe's <em>Faust</em>. On Walpurgis Night, an Irrlicht guides Faust and Mephistopheles up the Brocken, lighting their way through the <em>Traum- und Zaubersph&auml;re</em> &mdash; the realm of dream and sorcery. A treacherous companion on a treacherous path.</p>
-
-      <p>This Irrlicht flips the myth. Instead of a deceptive light that leads you astray, it is the <strong>tamed will-o'-the-wisp</strong> &mdash; small, honest lights that appear exactly where your attention should go. You run four Claude sessions across three projects. Without Irrlicht, you tab between terminals, guess which agent is stuck, and interrupt work that was humming along fine. With Irrlicht, a glance at the menu bar tells you everything: which sessions are thinking, which need you, and which are done.</p>
-
-      <div class="callout callout-info">
-        <strong>The core promise</strong>
-        No ghosts. Files &rarr; State &rarr; Light. The light system is deterministic &mdash; given the same transcript, every run produces the same state.
-      </div>
+      <p class="page-subtitle">Three states. No ambiguity. Each session is a single light whose color tells the truth. For the folklore behind the name, see <a href="story.html">The Story</a>.</p>
 
       <!-- The Three States -->
       <h2>The Three States</h2>
+      <img src="../assets/mascot/mascot-trio-state-cycle.webp"
+           alt=""
+           class="mascot mascot-float-right"
+           loading="lazy" />
 
       <p>Irrlicht's state model is <strong>MECE</strong> &mdash; mutually exclusive, collectively exhaustive. Every session is in exactly one state at any given moment. There is no fourth state, no "unknown", no "cancelled". Three states, three colors, three meanings.</p>
 
@@ -198,25 +189,25 @@
         <tbody>
           <tr>
             <td><code>safe</code></td>
-            <td>0 &ndash; 70%</td>
+            <td>0 &ndash; 60%</td>
             <td style="color: var(--ready);">green</td>
             <td>Plenty of room. No action needed.</td>
           </tr>
           <tr>
             <td><code>caution</code></td>
-            <td>70 &ndash; 85%</td>
+            <td>60 &ndash; 80%</td>
             <td style="color: #EAB308;">yellow</td>
             <td>Context is filling up. Be aware.</td>
           </tr>
           <tr>
             <td><code>warning</code></td>
-            <td>85% &ndash; 155K tokens</td>
+            <td>80 &ndash; 90%</td>
             <td style="color: #EF4444;">red</td>
             <td>Running low. Consider wrapping up or starting a new session.</td>
           </tr>
           <tr>
             <td><code>critical</code></td>
-            <td>155K+ tokens</td>
+            <td>90%+</td>
             <td style="color: #DC2626;">crimson</td>
             <td>Auto-compaction imminent. Finish the current task.</td>
           </tr>
@@ -282,9 +273,9 @@
 
       <!-- Bottom nav -->
       <div class="docs-nav-bottom">
-        <a href="quickstart.html">
+        <a href="story.html">
           <span class="label">Previous</span>
-          Quick Start
+          The Story
         </a>
         <a href="state-machine.html">
           <span class="label">Next</span>
