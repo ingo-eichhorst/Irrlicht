@@ -163,47 +163,133 @@ NEWEST_SRC=$(find /Users/ingo/projects/irrlicht/platforms/macos/Irrlicht -name '
 ```
 
 ### App bundle
-1. Create `/tmp/Irrlicht.app/Contents/{MacOS,Resources}`.
-2. Copy Swift binary → `Contents/MacOS/Irrlicht` (from path above).
-3. Copy universal daemon → `Contents/MacOS/irrlichd`.
-4. Copy `AppIcon.icns` → `Contents/Resources/AppIcon.icns`.
-5. **Copy the SwiftPM resource bundle** `Irrlicht_Irrlicht.bundle` →
-   `Contents/Resources/Irrlicht_Irrlicht.bundle`. The Swift code uses
+
+**Path discipline — do not assemble under `/tmp/`.** TCC's
+responsibility-tracking treats `/tmp/`-rooted bundles as untrustworthy
+for privacy-gated APIs (Focus status, in particular); the smoke test
+will crash silently with no useful diagnostic — see #352, surfaced
+during the v0.4.3 release. Assemble under `.build/release/` instead,
+which lives under `$HOME` and is gitignored:
+
+```bash
+APP_STAGING=/Users/ingo/projects/irrlicht/.build/release/Irrlicht.app
+rm -rf "$APP_STAGING"
+mkdir -p "$APP_STAGING/Contents/MacOS" "$APP_STAGING/Contents/Resources"
+```
+
+All `$APP_STAGING` references below refer to this path. The final DMG,
+PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
+
+1. Copy Swift binary → `$APP_STAGING/Contents/MacOS/Irrlicht` (from path above).
+2. Copy universal daemon → `$APP_STAGING/Contents/MacOS/irrlichd`.
+3. Copy `AppIcon.icns` → `$APP_STAGING/Contents/Resources/AppIcon.icns`.
+4. **Copy the SwiftPM resource bundle** `Irrlicht_Irrlicht.bundle` →
+   `$APP_STAGING/Contents/Resources/Irrlicht_Irrlicht.bundle`. The Swift code uses
    `Bundle.module.url(...)` which aborts during its own initialization if
    the bundle isn't present — the `?? Bundle.main...` fallback never runs.
    Missing this bundle shipped a broken v0.3.4 that crashed at launch
    (`EXC_BREAKPOINT` in `resource_bundle_accessor.swift`).
    ```bash
    cp -R /Users/ingo/projects/irrlicht/platforms/macos/.build/apple/Products/Release/Irrlicht_Irrlicht.bundle \
-         /tmp/Irrlicht.app/Contents/Resources/Irrlicht_Irrlicht.bundle
+         "$APP_STAGING/Contents/Resources/Irrlicht_Irrlicht.bundle"
    ```
-6. Write a **resolved** `Info.plist` to `Contents/Info.plist` (no Xcode variables — use actual values: `CFBundleExecutable=Irrlicht`, `CFBundleIdentifier=io.irrlicht.app`, `CFBundlePackageType=APPL`, version from `$NEW_VERSION`).
-7. Ad-hoc code sign. App entitlements come from
+5. **Write a resolved `Info.plist`** to `$APP_STAGING/Contents/Info.plist`.
+   This is a hand-written file, *not* a copy of `platforms/macos/Irrlicht/Resources/Info.plist`
+   (which contains unresolved Xcode variables like `$(PRODUCT_NAME)`). Use
+   the full template below verbatim, substituting only `$NEW_VERSION` and
+   the build number.
+
+   **Coupling rule (load-bearing — don't drop keys):** every privacy-gated
+   entitlement in `Irrlicht.entitlements` must have a matching
+   `NS*UsageDescription` key here, or TCC will SIGABRT the app at launch
+   with a `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__` trace (see #352
+   crash from v0.4.3). Current pairs:
+   - `com.apple.security.app-sandbox` + `com.apple.security.network.client`/`server` — no usage description needed.
+   - **`com.apple.developer.focus-status` ↔ `NSFocusStatusUsageDescription`** — required because `FocusMonitor` (added pre-v0.4.2 for #338) calls `INFocusStatusCenter.default.requestAuthorization` during `applicationDidFinishLaunching`.
+   - Implicit `com.apple.security.automation.apple-events` (from the AppleScript activator) ↔ `NSAppleEventsUsageDescription`.
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>CFBundleDevelopmentRegion</key>
+       <string>en</string>
+       <key>CFBundleExecutable</key>
+       <string>Irrlicht</string>
+       <key>CFBundleIconFile</key>
+       <string>AppIcon</string>
+       <key>CFBundleIdentifier</key>
+       <string>io.irrlicht.app</string>
+       <key>CFBundleInfoDictionaryVersion</key>
+       <string>6.0</string>
+       <key>CFBundleName</key>
+       <string>Irrlicht</string>
+       <key>CFBundlePackageType</key>
+       <string>APPL</string>
+       <key>CFBundleShortVersionString</key>
+       <string>$NEW_VERSION</string>
+       <key>CFBundleVersion</key>
+       <string>$BUILD_NUMBER</string>
+       <key>LSApplicationCategoryType</key>
+       <string>public.app-category.developer-tools</string>
+       <key>LSMinimumSystemVersion</key>
+       <string>13.0</string>
+       <key>LSUIElement</key>
+       <true/>
+       <key>NSAppleEventsUsageDescription</key>
+       <string>Irrlicht needs to send Apple Events to focus terminal and IDE windows when you click a session in the menu bar.</string>
+       <key>NSFocusStatusUsageDescription</key>
+       <string>Irrlicht uses macOS Focus status to silence notification sounds and spoken alerts while you're in Do Not Disturb, Sleep, or any other Focus mode.</string>
+       <key>NSHumanReadableCopyright</key>
+       <string>Copyright © 2026 Ingo Eichhorst. MIT License.</string>
+       <key>NSPrincipalClass</key>
+       <string>NSApplication</string>
+   </dict>
+   </plist>
+   ```
+
+6. Ad-hoc code sign. App entitlements come from
    `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements` (currently
    `get-task-allow` + `com.apple.developer.focus-status`). `--entitlements` is
    required at sign time; Apple-gated entitlements carry no privileges in the
    produced bundle without it.
    ```bash
    ENTITLEMENTS="/Users/ingo/projects/irrlicht/platforms/macos/Irrlicht/Resources/Irrlicht.entitlements"
-   codesign --force --deep --sign - /tmp/Irrlicht.app/Contents/MacOS/irrlichd
-   codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" /tmp/Irrlicht.app
-   codesign --verify --deep --strict /tmp/Irrlicht.app
+   codesign --force --deep --sign - "$APP_STAGING/Contents/MacOS/irrlichd"
+   codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP_STAGING"
+   codesign --verify --deep --strict "$APP_STAGING"
    ```
-8. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
+7. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
    the process is still alive and has spawned `irrlichd`. Missing resources
-   or codesign issues crash the app silently on launch otherwise.
+   or codesign issues crash the app silently on launch otherwise. The
+   crash-report tail at the end exists because TCC's silent SIGABRT is the
+   most common smoke-test failure and is only diagnosable via
+   `~/Library/Logs/DiagnosticReports/` (#352).
    ```bash
-   /tmp/Irrlicht.app/Contents/MacOS/Irrlicht > /tmp/app.log 2>&1 & APP_PID=$!
+   SMOKE_START=$(date +%s)
+   "$APP_STAGING/Contents/MacOS/Irrlicht" > /tmp/app.log 2>&1 & APP_PID=$!
    sleep 2
-   kill -0 $APP_PID 2>/dev/null || { echo "FAIL: app crashed"; tail -20 /tmp/app.log; exit 1; }
-   pgrep -f '/tmp/Irrlicht.app/Contents/MacOS/irrlichd' >/dev/null || { echo "FAIL: daemon not spawned"; }
-   pkill -f '/tmp/Irrlicht.app' 2>/dev/null; sleep 0.3
+   if ! pgrep -f "$APP_STAGING/Contents/MacOS/Irrlicht" >/dev/null; then
+     echo "FAIL: app exited within 2s"
+     tail -20 /tmp/app.log
+     # Tail the most recent crash report for the TCC `details` field — the
+     # only place a privacy-violation reason actually shows up.
+     LATEST_CRASH=$(ls -t ~/Library/Logs/DiagnosticReports/Irrlicht*.ips 2>/dev/null | head -1)
+     if [ -n "$LATEST_CRASH" ] && [ "$(stat -f %m "$LATEST_CRASH")" -ge "$SMOKE_START" ]; then
+       echo "=== TCC details from $LATEST_CRASH ==="
+       grep -o '"details":\[[^]]*\]' "$LATEST_CRASH" | head -1
+     fi
+     exit 1
+   fi
+   pgrep -f "$APP_STAGING/Contents/MacOS/irrlichd" >/dev/null || { echo "FAIL: daemon not spawned"; }
+   pkill -f "$APP_STAGING" 2>/dev/null; sleep 0.3
    ```
 
 ### Branded DMG
 1. Create a writable DMG with `hdiutil create -size 50m -fs HFS+ -volname "Irrlicht-Install"`.
 2. Mount it read-write.
-3. Copy `Irrlicht.app`, create `Applications` symlink, create `.background/` dir with `background.tiff`.
+3. Copy `Irrlicht.app` (from `$APP_STAGING`), create `Applications` symlink, create `.background/` dir with `background.tiff`.
 4. The background image is at `site/assets/dmg-background.tiff`. If missing, generate it programmatically (dark theme, purple glow, dot grid, arrow, "Irrlicht" title, "Drag to Applications" subtitle, version footer).
 5. Apply Finder layout via AppleScript:
    - Icon view, icon size 80, no toolbar/statusbar
@@ -215,7 +301,7 @@ NEWEST_SRC=$(find /Users/ingo/projects/irrlicht/platforms/macos/Irrlicht -name '
 
 ### PKG installer
 ```bash
-pkgbuild --root /tmp/Irrlicht.app --identifier io.irrlicht.app --version $NEW_VERSION \
+pkgbuild --root "$APP_STAGING" --identifier io.irrlicht.app --version $NEW_VERSION \
   --install-location /Applications/Irrlicht.app /tmp/Irrlicht-$NEW_VERSION-mac-installer.pkg
 ```
 
@@ -224,7 +310,7 @@ Used by `https://irrlicht.io/install.sh`. Must be created with `ditto` so
 macOS metadata (including the ad-hoc code signature) is preserved.
 
 ```bash
-ditto -c -k --sequesterRsrc --keepParent /tmp/Irrlicht.app /tmp/Irrlicht-$NEW_VERSION.zip
+ditto -c -k --sequesterRsrc --keepParent "$APP_STAGING" /tmp/Irrlicht-$NEW_VERSION.zip
 ```
 
 ### Checksums
