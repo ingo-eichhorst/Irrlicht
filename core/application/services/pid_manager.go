@@ -432,7 +432,6 @@ func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
 // claimed PIDs when no unclaimed candidate exists (the /clear scenario where
 // the same process starts a new transcript). Returns true if a PID was found.
 func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter string) bool {
-	// Check if session already has a PID.
 	state, _ := pm.repo.Load(sessionID)
 	if state != nil && state.PID > 0 {
 		return true
