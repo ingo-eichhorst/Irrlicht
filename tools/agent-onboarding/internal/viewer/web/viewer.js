@@ -218,8 +218,13 @@ function renderCoverageMatrix(detail) {
       const rec = recIndex.get(`${agent}/${sc.id}`);
       const badge = document.createElement(rec ? "button" : "span");
       badge.textContent = label;
+      // font: inherit on the button branch — without it, the user-agent
+      // stylesheet swaps the page font for a platform-specific UI font
+      // whose glyph metrics shrink "●●" relative to the span branch.
+      // line-height:1 keeps the pill height consistent across the two.
       badge.style.cssText = `display: inline-block; padding: 2px 8px; border-radius: 10px; ` +
-        `font-size: 11px; font-weight: 600; background: ${bg}; color: ${fg}; ` +
+        `font: inherit; font-size: 13px; font-weight: 600; line-height: 1; ` +
+        `background: ${bg}; color: ${fg}; ` +
         `border: 0; cursor: ${rec ? "pointer" : "default"};`;
       // Build a multi-line tooltip
       const lines = [`${agent}: agent_supports=${sup}, irrlicht_observes=${obs}`];
