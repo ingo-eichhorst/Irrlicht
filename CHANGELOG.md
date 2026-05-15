@@ -11,6 +11,8 @@ attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/rel
 
 ## [0.4.3] — 2026-05-15
 
+> **Note:** Assets re-cut later the same day. The original v0.4.3 binary statically linked `Intents.framework` (via `FocusMonitor.swift`'s direct `INFocusStatusCenter` calls), which made macOS TCC preflight `kTCCServiceListenEvent` at process startup and AMFI/TCC SIGABRT the ad-hoc-signed binary with `launchd POSIX 153` on every end-user install. The re-cut moves `FocusMonitor` to dynamic dispatch (`NSClassFromString` + `SecCodeCopySigningInformation` gate) so Intents.framework is never loaded on ad-hoc builds. DND-aware notification silencing is paused until Developer-ID signing lands (#233); restoration tracked in #357. Release-skill regression fix that prevents recurrence: #356.
+
 ### Added
 - **macOS: autostart Irrlicht.app at login, on by default** (#343) — On first launch the app registers itself as a login item via `SMAppService.mainApp` so the menu-bar overlay is up before you open your first terminal. A new toggle in Preferences flips the setting, and the choice is persisted to `UserDefaults`; a one-time gate (`didApplyDefaultLoginItem`) ensures the default never re-enables itself after you turn it off. The XPC call to launchd runs on a detached `userInitiated` task so the toggle animation stays smooth on slower Macs. The unsigned-then-signed-build dev edge case is called out inline in `applyDefaultIfNeeded` so future maintainers know why the gate exists.
 
