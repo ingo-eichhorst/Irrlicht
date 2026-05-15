@@ -554,7 +554,7 @@
 
     {
       "name": "subagent-spawn",
-      "description": "Parent emits multiple Agent tool calls; daemon links each child via parent_linked. Verifies subagent transcripts land under <parent>/subagents/ and the curator bundles them into <fixture>.subagents/. Mirrors the shape of the committed 13-full-lifecycle-continue-* fixture but reproducible.",
+      "description": "Parent emits multiple Agent tool calls; daemon links each child via parent_linked. Verifies subagent transcripts land under <parent>/subagents/ and the curator bundles them into <fixture>.subagents/. This recipe doubles as the Task tool usage scenario (task #90): the Agent tool IS claudecode's Task tool, and the viewer's Tool Calls panel surfaces every invocation. For opencode the equivalent is gated on issue #277.",
       "coverage_id": "foreground-subagent",
       "requires": ["headless_mode", "subagents"],
       "verify": {
@@ -566,7 +566,24 @@
       },
       "by_adapter": {
         "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd recording — --attach against a --record daemon",
+            "claude session can spawn at least 3 subagents (default model has Agent tool exposed)"
+          ],
+          "setup": [
+            "Fresh cwd (claude's trust dialog appears once and the driver auto-accepts)"
+          ],
           "prompt": "Launch 3 Explore subagents in parallel via the Agent tool, in a single response. Subagent 1: count .go files in core/. Subagent 2: list test files in core/e2e/. Subagent 3: find imports of the 'sync' package across core/. After all three report back, reply 'done'.",
+          "verify": [
+            "events.jsonl contains at least 3 parent_linked events all pointing at the same parent UUID — one per subagent the Task tool spawned",
+            "transcript.jsonl contains tool_use blocks with name=Agent — the Task tool invocations (viewer's Tool Calls panel renders these)",
+            "every parent_linked'd subagent gets its own UUID-keyed transcript file under ~/.claude/projects/<slug>/<parent>/subagents/",
+            "the curator bundles the subagent transcripts into <fixture>.subagents/ so the fixture is portable",
+            "parent stays in working until the last subagent reports back, then ready",
+            "final session state is ready"
+          ],
           "settings": {},
           "timeout_seconds": 240
         }

@@ -718,6 +718,9 @@ async function loadScenario(s) {
   const exp = renderExpected(data);
   exp.classList.add("expected-host");
   detail.appendChild(exp);
+  if (Array.isArray(data.tools) && data.tools.length > 0) {
+    detail.appendChild(renderToolCalls(data));
+  }
   // Recording history picker — only render when there are archived
   // recordings (recordings/ dir is empty for first-time-recorded
   // scenarios; rendering an empty dropdown would just be noise).
@@ -1013,6 +1016,71 @@ function renderRecordingHistory(s, latestData, archives) {
     if (existing) existing.replaceWith(newPanel);
   }
 
+  return p;
+}
+
+// renderToolCalls shows the tool_use blocks the server extracted
+// from transcript.jsonl. Today this is the only signal irrlicht has
+// for "agent invoked a tool" — events.jsonl has no first-class
+// tool_use Kind, so the viewer derives this client-side from the
+// transcript content. Each row is `+ms · session · ToolName · id`.
+// Special-cases the "Agent" tool name (claudecode's Task tool) with
+// a distinct icon since spawning subagents is the headline case.
+function renderToolCalls(data) {
+  const p = panel("Tool calls");
+  const intro = document.createElement("div");
+  intro.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
+  intro.innerHTML = `<b>${data.tools.length}</b> tool call${data.tools.length === 1 ? "" : "s"} ` +
+    `extracted from <code>transcript.jsonl</code>. ` +
+    `Note: irrlicht's <code>events.jsonl</code> has no first-class <code>tool_use</code> Kind today; ` +
+    `this view is derived client-side from the transcript content. Promotion to a lifecycle Kind is future work.`;
+  p.appendChild(intro);
+
+  // Recording start anchors the +ms offsets so the table reads in
+  // the same time base as the timeline lanes.
+  let startMs = null;
+  if (data.tools.length > 0 && data.tools[0].ts) {
+    startMs = Date.parse(data.tools[0].ts);
+  }
+  // Group by tool name for the summary chips.
+  const byName = {};
+  for (const t of data.tools) {
+    byName[t.name] = (byName[t.name] || 0) + 1;
+  }
+  const chips = document.createElement("div");
+  chips.style.cssText = "display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;";
+  for (const name of Object.keys(byName).sort()) {
+    const chip = document.createElement("span");
+    const isAgent = name === "Agent";
+    chip.style.cssText = `padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; ` +
+      (isAgent
+        ? "background: #e0eaff; color: #1f3d8a;"
+        : "background: #eaeae0; color: #555;");
+    chip.textContent = `${name} · ${byName[name]}`;
+    if (isAgent) chip.title = "Task tool — spawns subagents. See coverage_id=foreground-subagent (3.1).";
+    chips.appendChild(chip);
+  }
+  p.appendChild(chips);
+
+  const tbl = document.createElement("table");
+  tbl.innerHTML = `<tr><th>+ms</th><th>session</th><th>tool</th><th>id</th></tr>`;
+  for (const t of data.tools) {
+    const offset = (startMs && t.ts) ? (Date.parse(t.ts) - startMs) : null;
+    const offsetCell = offset !== null ? `+${offset} ms` : "—";
+    const sidShort = (t.session_id || "").slice(0, 14);
+    const isAgent = t.name === "Agent";
+    const toolCell = isAgent
+      ? `<span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-weight: 600; font-size: 11px;">${escapeHtml(t.name)}</span>`
+      : `<code>${escapeHtml(t.name)}</code>`;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(offsetCell)}</td>
+      <td><code style="font-size: 11px; color: #666;">${escapeHtml(sidShort)}</code></td>
+      <td>${toolCell}</td>
+      <td><code style="font-size: 11px; color: #888;">${escapeHtml((t.id || "").slice(0, 16))}</code></td>`;
+    tbl.appendChild(tr);
+  }
+  p.appendChild(tbl);
   return p;
 }
 

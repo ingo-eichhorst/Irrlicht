@@ -514,6 +514,21 @@ type ScenarioDetail struct {
 	Transitions []json.RawMessage         `json:"transitions"`            // state_transition rows from events.jsonl
 	Frames      []FrameRow                `json:"frames,omitempty"`       // frames.jsonl parsed
 	Validate    json.RawMessage           `json:"validate,omitempty"`     // validate result JSON if present
+	Tools       []ToolCall                `json:"tools,omitempty"`        // tool_use blocks extracted from transcript.jsonl
+}
+
+// ToolCall is one Anthropic-style tool_use block lifted from the
+// transcript. Today this is the only signal irrlicht has for
+// "agent invoked a tool" — the daemon's events.jsonl carries
+// transcript_activity / parent_linked / hook_received but NOT a
+// first-class tool_use Kind. Promoting tool_use to a lifecycle Kind
+// is future work (issue TBD); until then the viewer derives it
+// client-side from the transcript content.
+type ToolCall struct {
+	Ts        string `json:"ts"`                   // RFC3339 (from the message line's timestamp)
+	SessionID string `json:"session_id,omitempty"` // sessionId on the message line
+	Name      string `json:"name"`                 // tool name (e.g. "Bash", "Agent", "Read")
+	ID        string `json:"id,omitempty"`         // tool_use id (toolu_…)
 }
 
 // GroundTruthBlob is the JSON-friendly shape of ground_truth.jsonl.
@@ -601,7 +616,62 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	if rep, err := validate.ValidateExpected(scenarioDir); err == nil && rep != nil {
 		d.Expected = rep
 	}
+	d.Tools = extractToolCalls(filepath.Join(scenarioDir, "transcript.jsonl"))
 	writeJSON(w, d)
+}
+
+// extractToolCalls walks transcript.jsonl looking for Anthropic-style
+// tool_use blocks inside message.content[]. Returns a flat list in
+// chronological (transcript) order. Empty when the transcript has no
+// tool calls or the file isn't a JSONL transcript (e.g. aider's .md).
+//
+// Schema notes:
+//
+//	{"timestamp":"…","sessionId":"…","message":{"content":[
+//	  {"type":"tool_use","id":"toolu_…","name":"Bash","input":{…}}
+//	]}}
+//
+// For multi-session recordings (session-end, session-reset chains)
+// every UUID's content is concatenated in the file, so this single
+// walk picks up tool calls across all of them.
+func extractToolCalls(transcriptPath string) []ToolCall {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var out []ToolCall
+	for scanner.Scan() {
+		var raw map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
+			continue
+		}
+		msg, _ := raw["message"].(map[string]any)
+		if msg == nil {
+			continue
+		}
+		content, _ := msg["content"].([]any)
+		if len(content) == 0 {
+			continue
+		}
+		ts, _ := raw["timestamp"].(string)
+		sid, _ := raw["sessionId"].(string)
+		for _, blkRaw := range content {
+			blk, ok := blkRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, _ := blk["type"].(string); t != "tool_use" {
+				continue
+			}
+			name, _ := blk["name"].(string)
+			id, _ := blk["id"].(string)
+			out = append(out, ToolCall{Ts: ts, SessionID: sid, Name: name, ID: id})
+		}
+	}
+	return out
 }
 
 // RecordingArchive is one row of the recordings-list response —
