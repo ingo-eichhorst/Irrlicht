@@ -20,6 +20,7 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
+    "estimated_cost_usd": 0.0600875,
     "cum_input_tokens": 23729,
     "cum_output_tokens": 51,
     "model_name": "gpt-5.4"

@@ -70,18 +70,27 @@ func (t *TranscriptTailer) accumulateTokens(parsed *ParsedEvent) {
 // applyContribution handles the new Phase-2+ path where the adapter already
 // deduped and handed us a finalized per-turn contribution. Provider-reported
 // USD cost wins; otherwise we accumulate tokens into the per-model breakdown.
+//
+// When the contribution carries no Model (codex token_count events split the
+// model name onto a separate turn_context event), fall back to the session's
+// current ModelName from applyModelMetadata so the delta still lands under
+// a priced bucket instead of cumByModel[""].
 func (t *TranscriptTailer) applyContribution(c *PerTurnContribution) {
 	if c.ProviderCostUSD != nil {
 		t.cumProviderCostUSD += *c.ProviderCostUSD
 		return
 	}
-	if c.Model == "" && c.Usage.Input == 0 && c.Usage.Output == 0 {
+	model := c.Model
+	if model == "" {
+		model = t.metrics.ModelName
+	}
+	if model == "" && c.Usage.Input == 0 && c.Usage.Output == 0 {
 		return
 	}
-	bd := t.cumByModel[c.Model]
+	bd := t.cumByModel[model]
 	if bd == nil {
 		bd = &UsageBreakdown{}
-		t.cumByModel[c.Model] = bd
+		t.cumByModel[model] = bd
 	}
 	bd.Input += c.Usage.Input
 	bd.Output += c.Usage.Output

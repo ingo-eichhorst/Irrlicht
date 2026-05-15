@@ -240,6 +240,11 @@ type LedgerState struct {
 	CumProviderCostUSD float64                    `json:"cum_provider_cost_usd,omitempty"`
 	ParserState        *ParserLedger              `json:"parser_state,omitempty"`
 	Tasks              []Task                     `json:"tasks,omitempty"`
+	// ModelName is the last observed model for the session. Persisted so that
+	// applyContribution's fallback (used when a contribution event carries no
+	// model — codex token_count) still routes to the right pricing bucket
+	// after a daemon restart, before the next model-bearing event arrives.
+	ModelName string `json:"model_name,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---
