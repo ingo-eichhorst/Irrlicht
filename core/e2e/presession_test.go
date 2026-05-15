@@ -347,3 +347,99 @@ func TestPreSession_RemovedOnProcessExit(t *testing.T) {
 		}
 	}
 }
+
+// TestPreSession_DoesNotEvictNeighborSessionWithSharedCWD is the regression
+// test for issue #345. When a second claude process starts in VS Code while
+// another is already running, the scanner can catch it during the brief
+// pre-`cd` window where its CWD still reads as the parent (the repo root).
+// Pre-fix, PIDManager called the adapter's CWD-based discovery for the new
+// `proc-<NEW>` pre-session, which could return the *neighbor's* PID — then
+// HandlePIDAssigned's same-PID cleanup evicted the legitimate neighbor.
+//
+// The fix short-circuits TryDiscoverPID for `proc-<pid>` sessions: the PID
+// is encoded in the ID, so adapter-level discovery is skipped entirely.
+// This test fails pre-fix because the registered discoverFn returns the
+// neighbor's PID.
+func TestPreSession_DoesNotEvictNeighborSessionWithSharedCWD(t *testing.T) {
+	cmd, _ := startFakeClaudeProcess(t)
+
+	// Pre-seed a neighbor session whose PID is alive (use os.Getpid() — the
+	// test binary itself — so PID liveness checks pass) and is NOT the fake
+	// process's PID.
+	neighborPID := os.Getpid()
+	if neighborPID == cmd.Process.Pid {
+		t.Fatalf("test PID unexpectedly matches fake process PID")
+	}
+
+	repo := newMemRepo()
+	repo.Save(&session.SessionState{
+		SessionID:      "neighbor-aaaa-bbbb-cccc-dddd",
+		State:          session.StateReady,
+		Adapter:        "test",
+		PID:            neighborPID,
+		TranscriptPath: filepath.Join(realTempDir(t), "neighbor.jsonl"),
+		UpdatedAt:      time.Now().Unix(),
+	})
+
+	// Adversarial discoverFn: returns the neighbor's PID, simulating the bug
+	// where CWD-based discovery misattributes the new proc-<pid> pre-session
+	// to a sibling process in the same CWD. With the fix, this function MUST
+	// NOT be called for proc-<pid> sessions.
+	var discoverCalls int32
+	discovers := map[string]agent.PIDDiscoverFunc{
+		"test": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+			discoverCalls++
+			return neighborPID, nil
+		},
+	}
+
+	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(testIdentity)
+	scanner.WithSessionChecker(realSessionCheckerFor(repo))
+
+	detector := services.NewSessionDetector(
+		[]inbound.Watcher{scanner},
+		&nopProcessWatcher{}, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
+		"test", 0, discovers, nil, nil,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go scanner.Watch(ctx)
+	go detector.Run(ctx)
+
+	preID := fmt.Sprintf("proc-%d", cmd.Process.Pid)
+	if !waitForSession(repo, preID, 5*time.Second) {
+		t.Fatalf("timeout: pre-session %s never appeared", preID)
+	}
+
+	// Wait past the first DiscoverPIDWithRetry tick (immediate + 500ms +
+	// 1s) so any erroneous discoverFn invocation has a chance to fire.
+	time.Sleep(2 * time.Second)
+
+	if discoverCalls != 0 {
+		t.Errorf("adapter discoverFn was called %d times for proc-<pid> session — issue #345 regression", discoverCalls)
+	}
+
+	pre, _ := repo.Load(preID)
+	if pre == nil {
+		t.Fatalf("pre-session %s was deleted", preID)
+	}
+	if pre.PID != cmd.Process.Pid {
+		t.Errorf("pre-session PID = %d, want %d (encoded from session ID)", pre.PID, cmd.Process.Pid)
+	}
+
+	if s, _ := repo.Load("neighbor-aaaa-bbbb-cccc-dddd"); s == nil {
+		t.Fatal("neighbor session was evicted by same-PID cleanup — issue #345 regression")
+	}
+}
+
+// nopProcessWatcher is a no-op outbound.ProcessWatcher for tests that need
+// to clear PIDManager's `pw == nil` guard in TryDiscoverPID without spinning
+// up the real kqueue watcher.
+type nopProcessWatcher struct{}
+
+func (nopProcessWatcher) Watch(int, string) error      { return nil }
+func (nopProcessWatcher) Unwatch(int)                  {}
+func (nopProcessWatcher) Run(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+func (nopProcessWatcher) Close() error                  { return nil }

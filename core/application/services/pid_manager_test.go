@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 )
 
@@ -548,5 +549,77 @@ func TestBackfillLauncher_NonKittyUnaffected(t *testing.T) {
 	}
 	if repo.states["s"].Launcher.KittyPID != 0 {
 		t.Errorf("KittyPID leaked into non-kitty launcher: %d", repo.states["s"].Launcher.KittyPID)
+	}
+}
+
+// TestTryDiscoverPID_ProcSession_BypassesDiscoverFn is the regression guard for
+// issue #345. Pre-sessions (proc-<pid>) encode their PID in the session ID, so
+// TryDiscoverPID must not invoke the adapter's CWD-based discoverFn for them —
+// doing so misattributes the PID to a sibling agent process in the same CWD
+// and triggers the same-PID cleanup that evicts the legitimate neighbor.
+func TestTryDiscoverPID_ProcSession_BypassesDiscoverFn(t *testing.T) {
+	repo := newMockRepo()
+
+	// Neighbor session that shares the encoded PID space: it has a *different*
+	// PID, so the same-PID cleanup must NOT touch it after we assign 12345.
+	repo.states["neighbor-uuid"] = &session.SessionState{
+		SessionID:      "neighbor-uuid",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            99999,
+		TranscriptPath: filepath.Join(t.TempDir(), "neighbor.jsonl"),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	// Pre-session as the scanner emits it: PID=0, ID encodes the PID.
+	repo.states["proc-12345"] = &session.SessionState{
+		SessionID: "proc-12345",
+		Adapter:   "claude-code",
+		State:     session.StateReady,
+		PID:       0,
+		CWD:       "/tmp/shared-cwd",
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	// Stub discoverFn that fails the test if it is ever called.
+	discoverCalls := 0
+	discovers := map[string]agent.PIDDiscoverFunc{
+		"claude-code": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+			discoverCalls++
+			// Return a wrong PID to make sure the test fails loudly if the
+			// short-circuit regresses — this is exactly the bug scenario:
+			// CWD-based discovery returning the neighbor's PID.
+			return 99999, nil
+		},
+	}
+
+	pm := services.NewPIDManager(
+		newMockProcessWatcher(),
+		repo,
+		&mockLogger{},
+		nil,
+		10*time.Minute,
+		discovers,
+		nil,
+		nil,
+		func(string) {},
+	)
+
+	if !pm.TryDiscoverPID("proc-12345", "/tmp/shared-cwd", "", "claude-code") {
+		t.Fatal("TryDiscoverPID returned false for proc-12345")
+	}
+
+	if discoverCalls != 0 {
+		t.Errorf("adapter discoverFn was called %d times for a proc-<pid> session; want 0", discoverCalls)
+	}
+
+	if got := repo.states["proc-12345"]; got == nil {
+		t.Fatal("proc-12345 was deleted")
+	} else if got.PID != 12345 {
+		t.Errorf("proc-12345 PID = %d, want 12345", got.PID)
+	}
+
+	if repo.states["neighbor-uuid"] == nil {
+		t.Fatal("neighbor-uuid was evicted by same-PID cleanup — issue #345 regression")
 	}
 }

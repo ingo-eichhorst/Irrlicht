@@ -445,6 +445,22 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 		return true
 	}
 
+	// Pre-sessions encode their PID in the session ID by construction
+	// (processlifecycle/scanner.go mints `proc-<pid>`). Skip adapter-level
+	// CWD discovery — it can misattribute the PID to a sibling process
+	// sharing the same CWD during the new agent's brief pre-`cd` window
+	// (issue #345).
+	if strings.HasPrefix(sessionID, "proc-") {
+		var pid int
+		if _, err := fmt.Sscanf(sessionID, "proc-%d", &pid); err == nil && pid > 0 {
+			pm.log.LogInfo("session-detector", sessionID,
+				fmt.Sprintf("encoded pid %d for %s pre-session", pid, adapter))
+			pm.HandlePIDAssigned(pid, sessionID)
+			return true
+		}
+		return false
+	}
+
 	// Prefer unclaimed PIDs (multiple instances in same dir), but allow
 	// claimed PIDs when all candidates are claimed (/clear scenario).
 	claimed := pm.claimedPIDs(sessionID)
