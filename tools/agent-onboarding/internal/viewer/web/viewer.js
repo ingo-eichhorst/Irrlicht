@@ -193,8 +193,11 @@ function renderCoverageMatrix(detail) {
     nameCell.style.cssText = "cursor: pointer;";
     const nameLink = document.createElement("button");
     nameLink.style.cssText = "background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit;";
-    nameLink.innerHTML = `<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span><br>` +
-      `<span style="font-weight: normal; color: #666; font-size: 11px;">${sc.feature || ""}</span>`;
+    const codeChip = sc.code
+      ? `<span style="display: inline-block; min-width: 28px; padding: 1px 5px; margin-right: 6px; background: #e8e6da; color: #555; border-radius: 3px; font-size: 10px; font-weight: 600; font-family: monospace; vertical-align: 1px;">${escapeHtml(sc.code)}</span>`
+      : "";
+    nameLink.innerHTML = `${codeChip}<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span><br>` +
+      `<span style="font-weight: normal; color: #666; font-size: 11px; margin-left: ${sc.code ? '34px' : '0'};">${sc.feature || ""}</span>`;
     nameLink.addEventListener("click", () => loadCoverageDetail(sc.id));
     nameCell.appendChild(nameLink);
     row.appendChild(nameCell);
@@ -308,8 +311,11 @@ async function loadCoverageDetail(scenarioId) {
   // Header — what the scenario is + identifiers
   const header = document.createElement("div");
   header.className = "panel";
+  const codeBadge = sc.code
+    ? `<span style="display: inline-block; padding: 2px 8px; margin-right: 8px; background: #e8e6da; color: #555; border-radius: 3px; font-size: 12px; font-weight: 600; font-family: monospace; vertical-align: 4px;">${escapeHtml(sc.code)}</span>`
+    : "";
   header.innerHTML = `
-    <h3 style="margin-top:0;">${sc.feature || sc.id}</h3>
+    <h3 style="margin-top:0;">${codeBadge}${sc.feature || sc.id}</h3>
     <div style="font-size: 11px; color: #888; margin-bottom: 6px;">
       <code>${sc.id}</code> · ${sc.section || ""}
     </div>

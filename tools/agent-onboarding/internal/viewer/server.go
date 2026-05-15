@@ -106,6 +106,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	// 1. Prefer the richer coverage file when it's reachable.
 	if covPath := s.resolveCoveragePath(); covPath != "" {
 		if b, err := os.ReadFile(covPath); err == nil {
+			b = annotateCatalogCodes(b)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set("X-Catalog-Source", "coverage")
 			w.Write(b)
@@ -124,6 +125,50 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Catalog-Source", "scenarios")
 	w.Write(b)
+}
+
+// annotateCatalogCodes walks the catalog JSON, assigns each scenario
+// a "<section>.<index-within-section>" code (e.g. "1.3" for the third
+// scenario in section 1), and returns the re-marshaled JSON. Section
+// numbering follows first-appearance order in the file. Scenario
+// index resets to 1 at each new section.
+//
+// Failure is graceful — if the JSON doesn't parse or doesn't have the
+// expected shape, return the input bytes unchanged so the frontend
+// still gets a usable catalog (just without codes).
+func annotateCatalogCodes(b []byte) []byte {
+	var top map[string]any
+	if err := json.Unmarshal(b, &top); err != nil {
+		return b
+	}
+	rawScenarios, ok := top["scenarios"].([]any)
+	if !ok {
+		return b
+	}
+	sectionIdx := map[string]int{}
+	sectionOrder := 0
+	withinSection := map[string]int{}
+	for _, raw := range rawScenarios {
+		sc, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		section, _ := sc["section"].(string)
+		if section == "" {
+			section = "(other)"
+		}
+		if _, seen := sectionIdx[section]; !seen {
+			sectionOrder++
+			sectionIdx[section] = sectionOrder
+		}
+		withinSection[section]++
+		sc["code"] = fmt.Sprintf("%d.%d", sectionIdx[section], withinSection[section])
+	}
+	out, err := json.Marshal(top)
+	if err != nil {
+		return b
+	}
+	return out
 }
 
 // handleScenarioSpec parses .specs/agent-scenarios.md on demand and
