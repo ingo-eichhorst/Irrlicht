@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -385,10 +386,10 @@ func TestPreSession_DoesNotEvictNeighborSessionWithSharedCWD(t *testing.T) {
 	// where CWD-based discovery misattributes the new proc-<pid> pre-session
 	// to a sibling process in the same CWD. With the fix, this function MUST
 	// NOT be called for proc-<pid> sessions.
-	var discoverCalls int32
+	var discoverCalls atomic.Int32
 	discovers := map[string]agent.PIDDiscoverFunc{
 		"test": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
-			discoverCalls++
+			discoverCalls.Add(1)
 			return neighborPID, nil
 		},
 	}
@@ -398,7 +399,7 @@ func TestPreSession_DoesNotEvictNeighborSessionWithSharedCWD(t *testing.T) {
 
 	detector := services.NewSessionDetector(
 		[]inbound.Watcher{scanner},
-		&nopProcessWatcher{}, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
+		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
 		"test", 0, discovers, nil, nil,
 	)
 
@@ -417,8 +418,8 @@ func TestPreSession_DoesNotEvictNeighborSessionWithSharedCWD(t *testing.T) {
 	// 1s) so any erroneous discoverFn invocation has a chance to fire.
 	time.Sleep(2 * time.Second)
 
-	if discoverCalls != 0 {
-		t.Errorf("adapter discoverFn was called %d times for proc-<pid> session — issue #345 regression", discoverCalls)
+	if n := discoverCalls.Load(); n != 0 {
+		t.Errorf("adapter discoverFn was called %d times for proc-<pid> session — issue #345 regression", n)
 	}
 
 	pre, _ := repo.Load(preID)
@@ -433,13 +434,3 @@ func TestPreSession_DoesNotEvictNeighborSessionWithSharedCWD(t *testing.T) {
 		t.Fatal("neighbor session was evicted by same-PID cleanup — issue #345 regression")
 	}
 }
-
-// nopProcessWatcher is a no-op outbound.ProcessWatcher for tests that need
-// to clear PIDManager's `pw == nil` guard in TryDiscoverPID without spinning
-// up the real kqueue watcher.
-type nopProcessWatcher struct{}
-
-func (nopProcessWatcher) Watch(int, string) error      { return nil }
-func (nopProcessWatcher) Unwatch(int)                  {}
-func (nopProcessWatcher) Run(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
-func (nopProcessWatcher) Close() error                  { return nil }
