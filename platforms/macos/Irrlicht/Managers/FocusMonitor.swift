@@ -1,5 +1,5 @@
 import Foundation
-import Intents
+import Security
 
 /// Provides the current macOS Focus / Do Not Disturb state so notification
 /// emitters can suppress sound (and TTS) alongside the system-suppressed
@@ -11,31 +11,26 @@ protocol FocusStateProviding: AnyObject, Sendable {
 
 /// Reads Focus state via `INFocusStatusCenter` (Intents framework, macOS 12+).
 ///
-/// **Authorization model.** Requires the `com.apple.developer.focus-status`
-/// entitlement (set in `Irrlicht.entitlements`) plus `NSFocusStatusUsageDescription`
-/// in Info.plist. On first launch with `.notDetermined`, we call
-/// `requestAuthorization`. In a properly Developer-ID-signed build that surfaces
-/// a system prompt; the user grants → `focusStatus.isFocused` returns the live
-/// Focus state.
+/// **Why the dynamic-dispatch dance.** Statically referencing `INFocusStatusCenter`
+/// (i.e. `import Intents` + direct API calls) makes the linker pull in
+/// `Intents.framework`. macOS then preflights TCC for `kTCCServiceListenEvent`
+/// at process startup — *before any of our code runs*. On an ad-hoc-signed
+/// binary that preflight aborts the process with
+/// `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__`, reporting that
+/// `NSFocusStatusUsageDescription` is missing (regardless of whether the key
+/// is actually in `Info.plist`). This is what killed v0.4.3 on every end
+/// user's first launch.
 ///
-/// **Dev signing caveat (observed on macOS Sequoia 15.7.4).** Self-signed and
-/// ad-hoc builds claiming `com.apple.developer.focus-status` won't launch at
-/// all (launchd refuses the entitlement). Self-signed builds *without* the
-/// entitlement still load the Intents framework: `requestAuthorization` reports
-/// `.authorized` (raw 3) with no prompt — but `focusStatus.isFocused` then
-/// *always returns `Optional(false)`* regardless of the actual system Focus
-/// state. The `auth=.authorized` reading is a misleading no-op; Apple gates the
-/// real read on Developer-ID-signed binaries. Practical consequence: live Focus
-/// suppression is only verifiable in the released DMG, not via `/ir:test-mac`.
-/// The `?? false` fallback in `isFocusActive` therefore covers both the truly-
-/// unauthorized case and the silently-faked-authorized case.
+/// The fix: never reference Intents APIs statically. We resolve `INFocusStatusCenter`
+/// through `NSClassFromString` *and only if the binary is Developer-ID-signed*,
+/// gated by `isDeveloperIDSigned` below. On ad-hoc builds the Intents framework
+/// is never loaded, so the TCC preflight never fires.
 ///
-/// **Why not the older approach.** Revision 1 of this monitor read
-/// `~/Library/Preferences/com.apple.ncprefs.plist` for `userPref.enabled` and
-/// `data[].storeAssertionRecords`. Field testing on macOS Sequoia 15.7.4
-/// showed *neither* schema is present — current Focus state has migrated to
-/// `~/Library/DoNotDisturb/DB/Assertions.json`, which is TCC-protected and
-/// requires Full Disk Access. INFocusStatusCenter is the only supported API.
+/// **When Developer ID lands** (tracked under #233), restoring the real Focus
+/// read is automatic: the runtime gate flips to `true`, `loadIntents()` succeeds,
+/// and `isFocusActive` returns the live state. No new release is required to
+/// turn the feature on once a DevID-signed build hits users' machines. The
+/// follow-up issue tracking the full restoration is #357.
 final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
     /// True when running as a real .app (production or dev bundle); false in
     /// xctest. The xctest host has no `.app` suffix on its bundle path, so we
@@ -44,36 +39,88 @@ final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
     /// was constructed back-to-back across tests.
     private static let isAppContext: Bool = Bundle.main.bundlePath.hasSuffix(".app")
 
+    /// Cached at init so every `isFocusActive` read is a plain ObjC dispatch
+    /// without re-resolving the class. `nil` on ad-hoc builds (intentional —
+    /// we never load Intents), or if NSClassFromString fails.
+    private let intentsCenter: NSObject?
+
     init() {
         guard Self.isAppContext else {
             print("🌙 FocusMonitor: non-app context, isFocusActive will return false")
+            self.intentsCenter = nil
             return
         }
-
-        let status = INFocusStatusCenter.default.authorizationStatus
-        print("🌙 FocusMonitor init: auth=\(status.rawValue) focused=\(INFocusStatusCenter.default.focusStatus.isFocused ?? false)")
-
-        switch status {
-        case .notDetermined:
-            INFocusStatusCenter.default.requestAuthorization { granted in
-                print("🌙 FocusMonitor authorization → \(granted.rawValue)")
-            }
-        case .denied, .restricted:
-            print("ℹ️ Focus permission unavailable — sound/TTS won't be suppressed under Focus. " +
-                  "Grant in System Settings → Privacy & Security → Focus → Irrlicht.")
-        case .authorized:
-            break
-        @unknown default:
-            break
+        guard Self.isDeveloperIDSigned else {
+            print("🌙 FocusMonitor: ad-hoc signed — Focus suppression disabled until Developer-ID lands (#357).")
+            self.intentsCenter = nil
+            return
+        }
+        self.intentsCenter = Self.resolveFocusStatusCenter()
+        if intentsCenter == nil {
+            print("🌙 FocusMonitor: INFocusStatusCenter class not resolvable; suppression disabled.")
         }
     }
 
     /// Synchronous live read. `INFocusStatusCenter.default.focusStatus` is
     /// process-safe and cheap; no caching needed for the rate at which we
-    /// emit notifications. Returns `false` in non-app contexts (xctest) so
-    /// tests don't inadvertently exercise the Intents framework.
+    /// emit notifications. Returns `false` whenever the dynamic resolve
+    /// didn't succeed (xctest, ad-hoc build, or unexpected runtime state).
     var isFocusActive: Bool {
-        guard Self.isAppContext else { return false }
-        return INFocusStatusCenter.default.focusStatus.isFocused ?? false
+        guard let center = intentsCenter else { return false }
+        // Equivalent of `center.focusStatus.isFocused ?? false`, dispatched via ObjC.
+        // We deliberately use `value(forKey:)` so this whole file compiles without
+        // `import Intents`. If Apple ever renames the property the worst case is
+        // a `nil` return (== isFocusActive: false), not a crash.
+        guard let focusStatus = center.value(forKey: "focusStatus") as? NSObject else { return false }
+        guard let isFocused = focusStatus.value(forKey: "isFocused") as? Bool else { return false }
+        return isFocused
+    }
+
+    // MARK: - DevID gate + dynamic Intents resolution
+
+    /// True iff the running binary has a Developer-ID Application code-signing
+    /// identity. Ad-hoc (Signature=adhoc, TeamIdentifier="not set") returns
+    /// false. Cached because the SecCode lookup is cheap-but-not-free and the
+    /// answer doesn't change for the life of the process.
+    private static let isDeveloperIDSigned: Bool = checkDeveloperIDSignature()
+
+    private static func checkDeveloperIDSignature() -> Bool {
+        var staticCode: SecStaticCode?
+        let mainBundleURL = Bundle.main.bundleURL as CFURL
+        let status = SecStaticCodeCreateWithPath(mainBundleURL, [], &staticCode)
+        guard status == errSecSuccess, let code = staticCode else { return false }
+
+        var info: CFDictionary?
+        let infoStatus = SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
+        guard infoStatus == errSecSuccess, let infoDict = info as? [String: Any] else { return false }
+
+        // TeamIdentifier is set for Developer-ID-signed binaries. Ad-hoc binaries
+        // either lack the key or store "not set" / empty. Apple's own signing
+        // (system frameworks) also has a team identifier, but we're inspecting
+        // *our* bundle so that's not relevant here.
+        guard let team = infoDict["teamid"] as? String, !team.isEmpty, team != "not set" else {
+            return false
+        }
+        // Confirm via the certificate-chain leaf CN. Developer-ID Application
+        // certificates have CN beginning with "Developer ID Application:".
+        if let certs = infoDict["certificates"] as? [SecCertificate], let leaf = certs.first {
+            var commonName: CFString?
+            if SecCertificateCopyCommonName(leaf, &commonName) == errSecSuccess,
+               let cn = commonName as String?,
+               cn.hasPrefix("Developer ID Application:") {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Looks up `INFocusStatusCenter` at runtime and returns its `default`
+    /// instance, or `nil` if anything in the chain is unavailable. Only called
+    /// from the DevID-signed branch of `init`, so on ad-hoc builds Intents.framework
+    /// is never touched and the dynamic linker never loads it.
+    private static func resolveFocusStatusCenter() -> NSObject? {
+        guard let cls = NSClassFromString("INFocusStatusCenter") as? NSObject.Type else { return nil }
+        // `+default` is a class method returning the singleton. ObjC dispatch.
+        return cls.value(forKey: "default") as? NSObject
     }
 }
