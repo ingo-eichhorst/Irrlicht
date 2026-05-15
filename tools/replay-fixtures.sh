@@ -203,11 +203,24 @@ while IFS= read -r expected_path; do
   agent="$(basename "$(dirname "$(dirname "$scenario_dir")")")"
   scenario="$(basename "$scenario_dir")"
   report_json="$REPORTS_DIR/${agent}-${scenario}.expected.json"
+  # Read meta.known_failing from the expected.jsonl meta line so a
+  # daemon-side gap doesn't block the test suite. The Go test does
+  # the same; this script mirrors the policy.
+  known_failing="$(head -n1 "$expected_path" | jq -r '.known_failing // false' 2>/dev/null || echo false)"
   if go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1; then
-    echo "expected: ${agent}/${scenario} PASS" >&2
+    if [[ "$known_failing" == "true" ]]; then
+      echo "expected: ${agent}/${scenario} PASS (was known_failing — drop the flag from expected.jsonl)" >&2
+      expected_failures=$((expected_failures + 1))
+    else
+      echo "expected: ${agent}/${scenario} PASS" >&2
+    fi
   else
-    echo "expected: ${agent}/${scenario} FAIL — see $report_json" >&2
-    expected_failures=$((expected_failures + 1))
+    if [[ "$known_failing" == "true" ]]; then
+      echo "expected: ${agent}/${scenario} known_failing (validation FAIL is expected; see meta.notes)" >&2
+    else
+      echo "expected: ${agent}/${scenario} FAIL — see $report_json" >&2
+      expected_failures=$((expected_failures + 1))
+    fi
   fi
 done < <(find "$FIXTURES_ROOT" -name 'expected.jsonl' -not -path '*/_reports/*' | sort)
 

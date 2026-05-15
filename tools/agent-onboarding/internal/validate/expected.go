@@ -45,11 +45,21 @@ import (
 // metadata. The validator carries this through into the report so
 // downstream tooling can show source/notes alongside per-phase
 // verdicts.
+//
+// KnownFailing marks a scenario whose validation is currently
+// expected to fail because of a known daemon-side gap (cite the
+// issue number in Notes). The validator still RUNS and surfaces the
+// failure detail per phase; what changes is that the test wrapper
+// (expected_test.go) and the CI path (replay-fixtures.sh) DON'T
+// turn red. The phase-by-phase output stays visible so the
+// maintainer can see when the gap closes. Remove this flag once the
+// daemon issue is fixed and the recording re-records cleanly.
 type ExpectedMeta struct {
 	SchemaVersion int    `json:"schema_version"`
 	ScenarioID    string `json:"scenario_id"`
 	Source        string `json:"source"`
 	Notes         string `json:"notes,omitempty"`
+	KnownFailing  bool   `json:"known_failing,omitempty"`
 }
 
 // ExpectedPhase is one line of expected.jsonl after the meta line.

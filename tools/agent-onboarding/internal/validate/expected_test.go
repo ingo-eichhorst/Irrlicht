@@ -43,8 +43,20 @@ func TestValidateExpected_committedScenarios(t *testing.T) {
 						failed = append(failed, p.Phase+": "+p.Reason)
 					}
 				}
-				t.Errorf("validation failed (%s): %s\n  failed phases:\n    %s",
-					name, report.Summary, strings.Join(failed, "\n    "))
+				if report.Meta.KnownFailing {
+					t.Logf("EXPECTED FAILURE (%s): %s\n  failed phases:\n    %s\n  (meta.known_failing=true — daemon-side gap; see expected.jsonl notes)",
+						name, report.Summary, strings.Join(failed, "\n    "))
+				} else {
+					t.Errorf("validation failed (%s): %s\n  failed phases:\n    %s",
+						name, report.Summary, strings.Join(failed, "\n    "))
+				}
+			} else if report.Meta.KnownFailing {
+				// The "gap closed" signal: if a scenario is marked
+				// known-failing but actually passes now, the test
+				// fails LOUDLY so the maintainer notices and drops
+				// the flag.
+				t.Errorf("validation passed (%s) but meta.known_failing=true — the daemon-side gap appears to be CLOSED; remove the known_failing flag from expected.jsonl",
+					name)
 			}
 		})
 	}
