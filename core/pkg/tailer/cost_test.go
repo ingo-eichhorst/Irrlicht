@@ -563,6 +563,99 @@ func TestCost_LedgerState_RestartPreservesCumulative(t *testing.T) {
 	}
 }
 
+// TestCost_ApplyContribution_FallbackToMetricsModelName covers the codex
+// split-event case from issue #361: a turn_context event sets the model, then
+// a later token_count event emits a PerTurnContribution with Model="". The
+// fallback in applyContribution must route that contribution under the
+// session's known ModelName so it gets priced.
+func TestCost_ApplyContribution_FallbackToMetricsModelName(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		// Mimics codex turn_context: model only, no usage.
+		{
+			"type": "assistant", "timestamp": ts(0),
+			"message": map[string]interface{}{"model": "gpt-5.4"},
+		},
+		// Mimics codex token_count: usage only, no model. testParser emits
+		// Contribution{Model: ""} for this event.
+		{
+			"type": "assistant", "timestamp": ts(1),
+			"cumulative_usage": map[string]interface{}{
+				"input_tokens": float64(1000), "output_tokens": float64(200),
+			},
+		},
+	})
+
+	tl := newTestTailer(path)
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if m.ModelName != "gpt-5.4" {
+		t.Fatalf("ModelName = %q, want gpt-5.4", m.ModelName)
+	}
+	if m.CumInputTokens != 1000 {
+		t.Errorf("CumInputTokens = %d, want 1000", m.CumInputTokens)
+	}
+	if m.CumOutputTokens != 200 {
+		t.Errorf("CumOutputTokens = %d, want 200", m.CumOutputTokens)
+	}
+	// gpt-5.4 pricing in the fixture: $2/Mtok input, $8/Mtok output.
+	// 1000 * 2/1e6 + 200 * 8/1e6 = 0.002 + 0.0016 = 0.0036
+	if m.EstimatedCostUSD <= 0 {
+		t.Errorf("EstimatedCostUSD = %f, want > 0 (model fallback should price the contribution; see #361)", m.EstimatedCostUSD)
+	}
+}
+
+// TestCost_LedgerState_RestartPreservesModelName covers the restart half of
+// issue #361. After a daemon restart mid-session, the next event in the file
+// may be a token_count (usage only, no model) before the next turn_context.
+// The ledger must round-trip ModelName so the applyContribution fallback in
+// the rehydrated tailer still routes the contribution to a priced bucket.
+func TestCost_LedgerState_RestartPreservesModelName(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{
+			"type": "assistant", "timestamp": ts(0),
+			"message": map[string]interface{}{"model": "gpt-5.4"},
+		},
+	})
+
+	tl1 := newTestTailer(path)
+	_, err := tl1.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := tl1.GetLedgerState()
+	if ledger.ModelName != "gpt-5.4" {
+		t.Fatalf("ledger ModelName = %q, want gpt-5.4", ledger.ModelName)
+	}
+
+	// Append a token_count-style event after the restart boundary.
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "assistant", "timestamp": ts(1),
+		"cumulative_usage": map[string]interface{}{
+			"input_tokens": float64(500), "output_tokens": float64(100),
+		},
+	})
+
+	tl2 := newTestTailer(path)
+	tl2.SetLedgerState(ledger)
+	m2, err := tl2.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if m2.ModelName != "gpt-5.4" {
+		t.Errorf("after restart: ModelName = %q, want gpt-5.4 (must be restored from ledger)", m2.ModelName)
+	}
+	if m2.CumInputTokens != 500 {
+		t.Errorf("after restart: CumInputTokens = %d, want 500", m2.CumInputTokens)
+	}
+	if m2.EstimatedCostUSD <= 0 {
+		t.Errorf("after restart: EstimatedCostUSD = %f, want > 0 (ledger-restored model should price the contribution)", m2.EstimatedCostUSD)
+	}
+}
+
 // TestCost_LedgerState_NoDoubleCountOnRehydrate verifies that SetLedgerState
 // with a non-zero LastOffset causes the tailer to resume from that offset rather
 // than re-reading from byte 0, so already-accumulated turns are not re-priced.

@@ -25,6 +25,7 @@
     "flickers_by_reason": {
       "force ready→working on first activity": 2
     },
+    "estimated_cost_usd": 2.8542325,
     "cum_input_tokens": 1094023,
     "cum_output_tokens": 7945,
     "model_name": "gpt-5.4"

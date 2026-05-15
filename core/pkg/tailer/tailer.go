@@ -267,6 +267,7 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		SchemaVersion:      2,
 		LastOffset:         t.lastOffset,
 		CumProviderCostUSD: t.cumProviderCostUSD,
+		ModelName:          t.metrics.ModelName,
 	}
 	if len(t.cumByModel) > 0 {
 		// Direct assignment is safe: the caller JSON-marshals immediately
@@ -303,6 +304,9 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		}
 	}
 	t.cumProviderCostUSD = s.CumProviderCostUSD
+	if s.ModelName != "" {
+		t.metrics.ModelName = s.ModelName
+	}
 	if s.ParserState != nil {
 		if pp, ok := t.parser.(ParserStateProvider); ok {
 			pp.SetParserLedger(*s.ParserState)
