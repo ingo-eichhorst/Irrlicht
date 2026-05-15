@@ -1153,7 +1153,12 @@ function renderPlayback(s) {
 
     // 1. Build per-session timelines.
     //    aliveFrom[sid] = offset of first event for the session
-    //    aliveUntil[sid] = offset of transcript_removed/presession_removed (or +∞ if still alive)
+    //    aliveUntil[sid] = offset of the EARLIEST session-end signal
+    //                     (process_exited, transcript_removed, or
+    //                     presession_removed). For SIGKILL/crash
+    //                     scenarios, process_exited fires first and
+    //                     transcript_removed may not appear at all,
+    //                     so process_exited has to count.
     //    transitions[sid] = sorted [{offset, state}, ...]
     const aliveFrom = {};
     const aliveUntil = {};
@@ -1161,8 +1166,10 @@ function renderPlayback(s) {
     for (const e of events) {
       if (!e.session_id) continue;
       if (aliveFrom[e.session_id] === undefined) aliveFrom[e.session_id] = e.offset_ms;
-      if (e.kind === "transcript_removed" || e.kind === "presession_removed") {
-        aliveUntil[e.session_id] = e.offset_ms;
+      if (e.kind === "process_exited" || e.kind === "transcript_removed" || e.kind === "presession_removed") {
+        if (aliveUntil[e.session_id] === undefined || e.offset_ms < aliveUntil[e.session_id]) {
+          aliveUntil[e.session_id] = e.offset_ms;
+        }
       }
       if (e.kind === "state_transition" && e.new_state) {
         (transitionsBySid[e.session_id] = transitionsBySid[e.session_id] || [])

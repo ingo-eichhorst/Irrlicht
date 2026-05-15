@@ -289,7 +289,7 @@
 
     {
       "name": "session-end",
-      "description": "Agent completes one no-op turn and exits cleanly. The recording captures the lifecycle tail: process_exited fires when claude shuts down, then transcript_removed marks the row disappearing from the dashboard. Adapter-specific note: claudecode's transcript is lazy (see session-start) so the recipe sends a 1-token nudge to materialize the UUID transcript; without it, only the proc-<PID> pre-session lifecycle is observable.",
+      "description": "Three claude lifetimes recorded back-to-back, one per session-end variant from .specs/agent-scenarios.md: (1) clean exit after a no-op turn, (2) SIGKILL while idle in ready, (3) SIGKILL mid-turn while still working. The recording lets irrlicht surface three ready→working→ready arcs separated by grey gaps in the state band. Each variant tests a different teardown path and the user-observable assertion that the session disappears regardless of how it ended.",
       "coverage_id": "session-end",
       "requires": ["headless_mode"],
       "verify": {
@@ -303,27 +303,43 @@
           "preconditions": [
             "claude CLI on PATH and authenticated (subscription or API key)",
             "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
-            "no other claudecode session uses the same UUID"
+            "no other claudecode session uses any of the recipe's UUIDs"
           ],
           "setup": [
-            "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
-            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+            "Driver generates 3 lowercased UUIDs: the staging-supplied one for the first session, and two via `uuidgen | tr '[:upper:]' '[:lower:]'` for the restart steps",
+            "Driver creates 3 fresh cwds under <staging>/cwd, cwd-2, cwd-3 so claudecode shows the trust dialog for each (claude caches trust per directory)"
           ],
           "script": [
             {"type": "send", "text": "Reply with exactly the word: ok"},
             {"type": "wait_turn"},
-            {"type": "sleep", "seconds": 6}
+            {"type": "sleep", "seconds": 2},
+            {"type": "exit_clean"},
+            {"type": "sleep", "seconds": 5},
+
+            {"type": "restart"},
+            {"type": "send", "text": "Reply with exactly the word: ok"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
+            {"type": "sigkill"},
+            {"type": "sleep", "seconds": 5},
+
+            {"type": "restart"},
+            {"type": "send", "text": "Write a 200 word essay about the history of coffee."},
+            {"type": "sleep", "seconds": 2},
+            {"type": "sigkill"},
+            {"type": "sleep", "seconds": 8}
           ],
           "verify": [
-            "events.jsonl contains a state_transition to ready for the UUID session after the turn completes (final live state must be ready before the process is allowed to exit)",
-            "events.jsonl contains a process_exited event for the UUID session within 3 s of the driver's tmux kill-session step",
-            "events.jsonl contains a transcript_removed event for the UUID session shortly after process_exited (irrlicht's claudecode adapter removes the session once both transcript and PID are gone)",
-            "no state_transition to working or waiting appears after process_exited — the dead session does not re-enter an active state",
-            "final session state is ready (the recording-frozen state, observable just before process exit)",
-            "transcript.jsonl contains exactly 1 user line and 1 assistant line"
+            "events.jsonl contains exactly 3 distinct UUID session_ids (one per variant) plus their proc-<PID> pre-session rows",
+            "events.jsonl contains exactly 3 process_exited events, one per UUID",
+            "variant 1: the first UUID session has a state_transition to ready right after its turn completes, immediately preceding its process_exited",
+            "variant 2: the second UUID session ends in ready (idle) when sigkill fires; no state_transition to working appears after the process_exited",
+            "variant 3: the third UUID session is in working when sigkill fires; irrlichd's sweep-promotes-to-ready behavior may or may not produce a working→ready transition before transcript_removed, depending on the 8 s tail window — accept either shape",
+            "the state band in the viewer shows three colored arcs separated by grey gaps where no session is alive between variants",
+            "transcript.jsonl contains 3 user lines and 3 assistant lines, with the variant-3 assistant message bearing stop_reason=stop_sequence (interrupted)"
           ],
           "settings": {},
-          "timeout_seconds": 90
+          "timeout_seconds": 180
         }
       }
     },

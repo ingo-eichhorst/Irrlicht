@@ -242,6 +242,28 @@ fi
 TRANSCRIPT="$(cat "$STAGING/transcript.path" 2>/dev/null || true)"
 ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
 
+# Multi-session: drivers that chain `restart` steps (e.g. claudecode's
+# session-end scenario) write the full UUID + transcript lists to
+# session.uuids / transcript.paths. Curate picks them up via env so
+# the fixture's events.jsonl filter includes all sessions and the
+# transcript output concatenates them in order.
+if [[ -f "$STAGING/session.uuids" ]]; then
+  uuid_count=$(grep -c . "$STAGING/session.uuids" || echo 0)
+  if [[ "$uuid_count" -gt 1 ]]; then
+    EXTRA_IDS=""
+    while IFS= read -r u; do
+      [[ -z "$u" ]] && continue
+      [[ "$u" == "$ACTUAL_UUID" ]] && continue
+      EXTRA_IDS+="${EXTRA_IDS:+,}${u}"
+    done < "$STAGING/session.uuids"
+    export IRRLICHT_EXTRA_SESSION_IDS="$EXTRA_IDS"
+    # Concatenate all transcript paths (newline-separated) so curate
+    # can build a single transcript.jsonl in chronological order.
+    export IRRLICHT_EXTRA_TRANSCRIPTS="$(cat "$STAGING/transcript.paths")"
+    echo "multi-session: primary=$ACTUAL_UUID, extras=$EXTRA_IDS"
+  fi
+fi
+
 # --- Locate the recording file ------------------------------------------
 # Isolated mode: one .jsonl in $STAGING/recordings/.
 # Attached mode: pick the file(s) in the running daemon's recordings
