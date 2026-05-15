@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Story — Irrlicht Docs</title>
+<meta name="description" content="How Irrlicht came to be — an origin story from one agent and a broken movie night to an ambient control plane for a coding factory.">
+<link rel="canonical" href="https://irrlicht.io/docs/story.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="The Story — Irrlicht Docs">
+<meta property="og:description" content="How Irrlicht came to be — an origin story from one agent and a broken movie night to an ambient control plane for a coding factory.">
+<meta property="og:url" content="https://irrlicht.io/docs/story.html">
+<meta property="og:site_name" content="Irrlicht">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="The Story — Irrlicht Docs">
+<meta name="twitter:description" content="How Irrlicht came to be — an origin story from one agent and a broken movie night to an ambient control plane for a coding factory.">
+
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.counter.dev">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar">
+    <a href="../index.html" class="sidebar-logo">
+      <div class="dot"></div>
+      <span>Irrlicht</span>
+      <small>DOCS</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="story.html" class="active">The Story</a>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>The Story</h1>
+      <p class="page-subtitle">How Irrlicht came to be — and why ambient monitoring matters once you're running more than one agent at a time.</p>
+
+      <p class="dropcap">One agent on one screen. I kept swivelling between tabs to check whether it had finished, and every check broke the film I was trying to watch on the other monitor. I wanted something quieter than a notification &mdash; a small light I could glance at from the corner of my eye, without the agent demanding the whole room.</p>
+
+      <figure class="story-figure">
+        <img src="../assets/mascot/history-first-irrlicht.webp"
+             alt="A small green flame in a glass flask on an alchemist's workbench, surrounded by notebooks, gauges, and old screens"
+             loading="lazy" />
+        <figcaption>The first Irrlicht &mdash; a small flame in a flask, sketched in the lab.</figcaption>
+      </figure>
+
+      <!-- ─── First spark ─── -->
+      <h2>The first spark</h2>
+
+      <p>The first version was a dot in the menu bar. Working, waiting, ready &mdash; three colours, no chrome. Then a second agent came along. Then a third. The dots multiplied; the discipline held. Glance up, see the state, go back to whatever I was actually doing.</p>
+
+      <div class="section-ornament">&middot; &middot; &middot;</div>
+
+      <!-- ─── A name from the Brocken ─── -->
+      <h2>A name from the Brocken</h2>
+
+      <p>The mountain is the Brocken, in the Harz. As a child I could see it from my bedroom window. Once a year, on Walpurgisnacht, Goethe's witches gather there &mdash; and on the way up, in <em>Faust</em>, a small ambient light appears to guide the travellers through the dark:</p>
+
+      <blockquote class="epigraph">
+        Ein Irrlicht mein' ich wohl zu sehn.
+        <cite>&mdash; Goethe, Faust I, Walpurgisnacht</cite>
+      </blockquote>
+
+      <p>An <em>Irrlicht</em> &mdash; a will-o'-the-wisp. In the folklore it misleads. In Goethe it guides. Mine guides me through a day of agents.</p>
+
+      <div class="section-ornament">&middot; &middot; &middot;</div>
+
+      <!-- ─── From three lights to a city ─── -->
+      <h2>From three lights to a city</h2>
+
+      <p>It didn't stay simple. The menu bar ran out of room. Different vendors meant different rate limits and different transcript formats. Then orchestrators arrived &mdash; Gas Town with eighteen agents on a single run, a small coding factory humming away in the background. Eighteen agents without monitoring is not parallelism; it is chaos with extra steps.</p>
+
+      <p>Aggregation became the point. Group by orchestrator, by project, by parent session. Make the menu bar say something useful again, even when the worker count is in the dozens.</p>
+
+      <!-- ─── What was missing ─── -->
+      <h2>What was missing</h2>
+
+      <p>Along the way I kept tripping over the same four gaps in what the agent vendors give you:</p>
+
+      <ul>
+        <li><strong>Cost per project.</strong> Nobody tracks it. You can see the per-call price, sometimes, on the provider's dashboard &mdash; but not <em>which</em> of your repos burned through it. Irrlicht does, because it watches sessions where they actually live: on disk, with a CWD.</li>
+        <li><strong>Cross-model review.</strong> An agent reviewing another agent's work produces visibly better results when the reviewer runs on a different model. You cannot get that with one vendor's CLI alone. Irrlicht treats Claude Code, Codex, Pi, Aider, OpenCode and others as first-class peers.</li>
+        <li><strong>Context observation.</strong> Vendors hide context usage behind a slash command, or behind nothing at all. You should not have to type <code>/usage</code> &mdash; or guess &mdash; to find out you are about to auto-compact. Irrlicht reads it from the transcript and exposes it as a pressure level you can see.</li>
+        <li><strong>Attention.</strong> Agents can run for a long time on their own, but every so often they need a permission, a feedback, a nudge. The hard part is knowing <em>when</em>, without staring at the screen. That is what a light is for.</li>
+      </ul>
+
+      <div class="section-ornament">&middot; &middot; &middot;</div>
+
+      <!-- ─── The control plane ─── -->
+      <h2>The control plane</h2>
+
+      <p>Irrlicht today is the surface that holds all four. Lights for state, badges for subagent counts, costs grouped by project, context pressure that doesn't lie, and notifications only when an agent actually needs you. One ambient layer, sitting in the menu bar, doing the watching so you don't have to.</p>
+
+      <p>So you can be doing something else &mdash; reading, writing, watching the film &mdash; and still know.</p>
+
+      <!-- ─── Bottom nav ─── -->
+      <nav class="docs-nav-bottom">
+        <div></div>
+        <a href="index.html" style="text-align:right">
+          <span class="label">Next</span>
+          Overview &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+<script async src="https://cdn.counter.dev/script.js" data-id="2d845c2a-ed61-4410-8850-e6339766176f" data-utcoffset="1"></script>
+</body>
+</html>

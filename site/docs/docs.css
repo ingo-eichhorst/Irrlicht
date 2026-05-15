@@ -419,6 +419,67 @@ body { font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--te
   margin: 0.5rem auto 2.5rem;
 }
 
+/* ─── Story-page vintage utilities ─────────────────────── */
+.story-figure {
+  margin: 2rem auto 2.5rem;
+  text-align: center;
+}
+
+.story-figure img {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  border-radius: 10px;
+}
+
+.story-figure figcaption {
+  margin-top: 0.85rem;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+}
+
+.dropcap::first-letter {
+  font-family: 'Cormorant Garamond', serif;
+  font-weight: 600;
+  font-size: 3.4rem;
+  line-height: 0.9;
+  float: left;
+  margin: 0.18rem 0.6rem 0 0;
+  color: var(--text);
+}
+
+.section-ornament {
+  text-align: center;
+  margin: 2.5rem 0;
+  color: var(--text-dim);
+  letter-spacing: 1em;
+  font-size: 0.85rem;
+}
+
+.epigraph {
+  border-left: 2px solid var(--border);
+  margin: 1.75rem 0;
+  padding: 0.25rem 1.25rem;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 1.05rem;
+  color: var(--text-dim);
+}
+
+.epigraph cite {
+  display: block;
+  margin-top: 0.4rem;
+  font-style: normal;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 /* ─── Mobile ─── */
 @media (max-width: 800px) {
   .sidebar { display: none; }

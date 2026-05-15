@@ -1310,6 +1310,87 @@ section {
   flex-wrap: wrap;
 }
 
+/* ─── Origin story ─── */
+.origin-story {
+  padding: 2rem 0 6rem;
+  text-align: center;
+  position: relative;
+}
+
+.origin-story .origin-text {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+.origin-story .section-title {
+  margin-bottom: 1.5rem;
+}
+
+.origin-story .origin-lede,
+.origin-story .origin-closing {
+  font-size: 1rem;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.75;
+}
+
+.origin-story .origin-closing {
+  margin-top: 0;
+}
+
+.origin-banner {
+  width: 100%;
+  margin: 3rem 0 2.5rem;
+  position: relative;
+  line-height: 0;
+}
+
+.origin-banner img {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Fade top + bottom edges into the page background so the image melts in */
+  -webkit-mask-image: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(0,0,0,0.4) 8%,
+    black 22%,
+    black 78%,
+    rgba(0,0,0,0.4) 92%,
+    transparent 100%);
+  mask-image: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(0,0,0,0.4) 8%,
+    black 22%,
+    black 78%,
+    rgba(0,0,0,0.4) 92%,
+    transparent 100%);
+}
+
+.origin-link {
+  display: inline-block;
+  margin-top: 1.5rem;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(139,92,246,0.25);
+  padding-bottom: 0.25rem;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.origin-link:hover {
+  color: var(--text-bright);
+  border-color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .origin-story { padding: 1rem 0 4rem; }
+  .origin-banner { margin: 2rem 0 1.5rem; }
+}
+
 /* ─── Footer ─── */
 footer {
   padding: 3rem 2rem;
@@ -1774,6 +1855,26 @@ footer {
         <a href="docs/contributing.html" class="btn-secondary">Contributing Guide</a>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ─── Origin story ─── -->
+<section class="origin-story reveal">
+  <div class="origin-text">
+    <p class="section-label">Origin</p>
+    <h2 class="section-title">Why a small light</h2>
+    <p class="origin-lede">It started with one agent on one screen &mdash; and the constant tab-flipping that broke the film I was trying to watch on the other monitor. I wanted something quieter than a notification. A small ambient light I could glance at from the corner of my eye, named after the wisps that guide Faust through Goethe's Walpurgisnacht.</p>
+  </div>
+
+  <div class="origin-banner">
+    <img src="assets/mascot/origin-banner.webp"
+         alt="A vintage alchemist's workbench at night with green, orange, and purple Irrlicht mascots watching old terminals, notebooks, and gauges"
+         loading="lazy" />
+  </div>
+
+  <div class="origin-text">
+    <p class="origin-closing">One light became three, then a city. Different vendors, rate limits, orchestrators with eighteen agents on a single run &mdash; a small coding factory humming in the background. Irrlicht is the surface that holds it all: state, cost per project, context pressure that vendors hide, and notifications only when an agent actually needs you.</p>
+    <a href="docs/story.html" class="origin-link">Read the full story &rarr;</a>
   </div>
 </section>
 
