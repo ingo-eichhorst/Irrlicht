@@ -235,7 +235,19 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    cp -R /Users/ingo/projects/irrlicht/platforms/macos/.build/apple/Products/Release/Irrlicht_Irrlicht.bundle \
          "$APP_STAGING/Contents/Resources/Irrlicht_Irrlicht.bundle"
    ```
-5. **Write a resolved `Info.plist`** to `$APP_STAGING/Contents/Info.plist`.
+5. **Copy the dashboard UI** → `$APP_STAGING/Contents/Resources/web/index.html`.
+   The daemon resolves it at runtime via `<exe>/../Resources/web/`
+   (`resolveUIDir` in `core/cmd/irrlichd/main.go`). Without this copy,
+   `GET /` returns the 503 "Dashboard UI not found" fallback — every
+   v0.4.4 install shipped without this file and the dashboard at
+   `http://127.0.0.1:7837/` was unreachable until v0.4.5 re-spun the assets.
+   The smoke test at step 8 asserts the dashboard responds; do not skip it.
+   ```bash
+   mkdir -p "$APP_STAGING/Contents/Resources/web"
+   cp /Users/ingo/projects/irrlicht/platforms/web/index.html \
+      "$APP_STAGING/Contents/Resources/web/index.html"
+   ```
+6. **Write a resolved `Info.plist`** to `$APP_STAGING/Contents/Info.plist`.
    This is a hand-written file, *not* a copy of `platforms/macos/Irrlicht/Resources/Info.plist`
    (which contains unresolved Xcode variables like `$(PRODUCT_NAME)`). Use
    the full template below verbatim, substituting only `$NEW_VERSION` and
@@ -310,7 +322,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    </plist>
    ```
 
-6. Ad-hoc code sign. **Do not pass `--entitlements`.** AMFI (Apple Mobile
+7. Ad-hoc code sign. **Do not pass `--entitlements`.** AMFI (Apple Mobile
    File Integrity) rejects ad-hoc-signed binaries that claim Apple-restricted
    entitlements; `com.apple.developer.focus-status` (in
    `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements`) is one such
@@ -333,8 +345,9 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
      && { echo "FAIL: entitlements baked into ad-hoc binary"; exit 1; } \
      || echo "OK no entitlements (AMFI won't reject)"
    ```
-7. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
-   the process is still alive and has spawned `irrlichd`.
+8. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
+   the process is still alive, has spawned `irrlichd`, and that the daemon
+   serves the dashboard at `127.0.0.1:7837/`.
 
    **Do not ship through a smoke-test failure.** v0.4.3 shipped broken
    because the smoke test failed locally and the failure was dismissed
@@ -373,6 +386,27 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
      exit 1
    fi
    pgrep -f "$APP_STAGING/Contents/MacOS/irrlichd" >/dev/null || { echo "FAIL: daemon not spawned"; }
+
+   # Dashboard reachability — catches missing Resources/web/index.html
+   # (v0.4.4 shipping defect). The grep on `<title>` is a stable marker in
+   # platforms/web/index.html and distinguishes the real dashboard from
+   # the 503 plain-text "Dashboard UI not found" body.
+   DASH_OK=0
+   for i in 1 2 3 4 5; do
+     if curl -fsS http://127.0.0.1:7837/ 2>/dev/null | grep -q '<title>'; then
+       DASH_OK=1; break
+     fi
+     sleep 1
+   done
+   if [ "$DASH_OK" -ne 1 ]; then
+     echo "FAIL: dashboard not served at 127.0.0.1:7837 — Resources/web/index.html missing? RELEASE IS BROKEN, DO NOT SHIP"
+     curl -sS -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:7837/
+     curl -sS http://127.0.0.1:7837/ | head -3
+     pkill -f "$APP_STAGING" 2>/dev/null
+     exit 1
+   fi
+   echo "OK dashboard served at 127.0.0.1:7837/"
+
    pkill -f "$APP_STAGING" 2>/dev/null; sleep 0.3
    ```
 
@@ -388,7 +422,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    3. Compare `codesign -d --entitlements -` output against the prior
       release. New entitlement entries on an ad-hoc binary are killed
       by AMFI with POSIX 153 (v0.4.3 mode, fixed in #356; the entitlement
-      audit in step 6 should have caught it).
+      audit in step 7 should have caught it).
    4. If steps 1–3 all clear, copy the bundle to `/Applications/` (kill
       the prior install first) and retry. A real shipping defect will
       crash from both paths; an environment-only failure will only crash
