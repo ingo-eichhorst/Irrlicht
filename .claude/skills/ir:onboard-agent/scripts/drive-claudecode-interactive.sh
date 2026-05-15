@@ -70,6 +70,11 @@ SESSION_TRANSCRIPTS=()
 # into $TRANSCRIPT. Caller must set CURRENT_UUID / CURRENT_TMUX /
 # CURRENT_CWD before invoking. Resets EXPECTED_TURNS to 0 and clears
 # TRANSCRIPT so the new session starts from a known state.
+#
+# Resume mode: when RESUME_MODE=1, replaces --session-id with
+# --resume <UUID> so claude appends to the existing transcript at
+# ~/.claude/projects/<slug>/<UUID>.jsonl. Passing --session-id twice
+# with the same UUID would conflict — claude exits immediately.
 init_session() {
   EXPECTED_TURNS=0
   TRANSCRIPT=""
@@ -81,10 +86,16 @@ init_session() {
   # signals to the whole process group. Use tmux's argv-after-`--` form
   # so each flag stays its own word (no inner-string shell-quoting
   # fragility).
+  local -a claude_args=(--settings "$SETTINGS_PATH")
+  if [[ "${RESUME_MODE:-0}" == "1" ]]; then
+    claude_args+=(--resume "$CURRENT_UUID")
+  else
+    claude_args+=(--session-id "$CURRENT_UUID")
+  fi
   tmux new-session -d -s "$CURRENT_TMUX" -c "$CURRENT_CWD" -- \
-    claude --session-id "$CURRENT_UUID" --settings "$SETTINGS_PATH"
+    claude "${claude_args[@]}"
   tmux pipe-pane -t "$CURRENT_TMUX" -o "cat >> '$DRIVER_LOG.stdout'"
-  echo "[driver] tmux started: $CURRENT_TMUX (uuid=$CURRENT_UUID, cwd=$CURRENT_CWD)" >&2
+  echo "[driver] tmux started: $CURRENT_TMUX (uuid=$CURRENT_UUID, cwd=$CURRENT_CWD, mode=${RESUME_MODE:+resume})" >&2
 
   # Trust dialog on first encounter with a directory. Each restart
   # uses a fresh cwd so the dialog always appears (claude caches
@@ -243,12 +254,11 @@ step_restart() {
 
 step_resume() {
   # Resume the current session — same UUID + same cwd as the previous
-  # launch, so claude appends to the existing transcript file rather
-  # than creating a new one. The pre-session/PID lifetime is fresh
-  # (new tmux, new claude process), but the UUID-keyed session row in
-  # irrlicht's dashboard should be the same one. The init_session
-  # call's wait-for-trust loop will fall through naturally on the
-  # second visit (claude caches trust per cwd so no dialog appears).
+  # launch. init_session will use `claude --resume <UUID>` (not
+  # --session-id) so claude loads the existing transcript and the
+  # daemon observes the SAME UUID-keyed session row across the new
+  # PID lifetime. Passing --session-id twice would conflict — claude
+  # exits immediately on a duplicate.
   SESSION_UUIDS+=("$CURRENT_UUID")
   SESSION_TRANSCRIPTS+=("$TRANSCRIPT")
   tmux kill-session -t "$CURRENT_TMUX" 2>/dev/null || true
@@ -259,7 +269,7 @@ step_resume() {
   # CURRENT_CWD UNCHANGED — claude uses the cwd's slug to find the
   # existing transcript at ~/.claude/projects/<slug>/<UUID>.jsonl
   echo "[driver] resume: same uuid=$CURRENT_UUID, same cwd=$CURRENT_CWD, new tmux=$CURRENT_TMUX" >&2
-  init_session
+  RESUME_MODE=1 init_session
 }
 
 step_sigkill() {
