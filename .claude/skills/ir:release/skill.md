@@ -79,22 +79,66 @@ those frontends know the gap closed.
 
 ## Step 2: Gather Changes
 
-1. Run `git log --oneline $(git describe --tags --abbrev=0)..HEAD --no-merges` to list all commits since the last release.
-2. Categorize into: Features, Fixes, Architecture/Refactoring, Docs, Distribution.
-3. Draft release notes in the style of previous releases (see `gh release view` for format).
+1. Run `git log --oneline $(git describe --tags --abbrev=0)..HEAD --no-merges` to list every commit since the last release.
+2. List each commit as a one-liner. **Don't draft prose yet** — Step 2a uses the raw one-liner list to select Highlights.
 
-**Line-wrap rule (load-bearing — don't skip):** GitHub renders the release
-body with GFM "breaks": soft line breaks (single newlines) become `<br>`.
-A paragraph hand-wrapped at 80 columns therefore lands on the release page
-as a stack of short ragged lines (the v0.4.1 release shipped this bug).
-Write each paragraph and each bullet as **one long line, no hard wraps**,
-and rely on the reader's browser to wrap it. Only insert a newline when
-you actually want a paragraph break or a new list item. This rule applies
-to the release notes drafted here, the PR body in Step 7b, and the
-`--notes` body in Step 8 — they all use GFM-with-breaks rendering. It does
-**not** apply to `CHANGELOG.md`, which renders as standard CommonMark
-where soft breaks collapse to spaces; CHANGELOG entries can stay
-one-long-line too, but 80-col wrap there is harmless.
+### 2a. Select Highlights (load-bearing — do this before drafting prose)
+
+Past releases (v0.4.0 through v0.4.5) shipped as a flat single-bullet-per-change wall where a marquee user-visible feature and a paper-cut fix got identical weight. The new format opens with up to three **Highlights** carrying screenshots, then a flat **Also in this release** list, then a **Technical appendix** that preserves the dense per-change context. Full template: `.claude/skills/ir:release/release-notes-template.md`. Read it before continuing.
+
+Walk every commit in the list from Step 2.1 and tag each one as `H` (Highlight candidate), `A` (Also), or `T` (appendix-only). A change is a Highlight candidate only if all three gates pass:
+
+1. **User-visible?** A non-developer end user notices the difference in the app, dashboard, menu bar, or a notification. A parser-internal fix is not user-visible even if it changes behavior in edge cases.
+2. **Screenshot-able?** An image or GIF can show the change. If no screenshot is feasible, it can't be a Highlight — readers have nothing to anchor on.
+3. **Distinct from recent Highlights?** Not a refinement of something highlighted in the last 1–2 releases. Repeated stories read as noise.
+
+**Cap at three.** If more than three pass the gates, demote the weakest to Also. If zero pass (hotfix / patch / release-tooling-only release), skip the Highlights section entirely and ship Headline + Also + Appendix.
+
+### 2b. Produce or locate the screenshot for each Highlight
+
+For each `H` change, identify the asset path under `assets/releases/v$NEW_VERSION/<slug>.png` (kebab-case slug derived from the Highlight name). If the asset doesn't exist yet, capture / generate it now — **don't ship a Highlight without an image**. Before/after changes (brand refresh, icon overhaul, layout shift) ship as one side-by-side composite, not two stacked images. Also produce the WebP rendering for the site under `site/assets/releases/v$NEW_VERSION/<slug>.webp` (and keep `.png` as fallback).
+
+### 2c. Draft the release notes
+
+Following the template structure exactly:
+
+```
+## <one-sentence headline — what this release is about>
+
+## Highlights
+
+### <Feature name>
+![<alt text>](../../assets/releases/v$NEW_VERSION/<slug>.png)
+
+<2 lines plain-language: what changed for the user>
+
+**Why it matters:** <one sentence on the user benefit, not implementation cleverness>
+
+(#PR, #issue)
+
+### <…second and third…>
+
+## Also in this release
+
+**Added**
+- <one-liner> (#PR)
+
+**Fixed**
+- <one-liner> (#PR)
+
+**Changed / Docs / Distribution**
+- <one-liner> (#PR)
+
+## Technical appendix
+
+<the current dense per-change format, verbatim — one bullet per change with implementation paths, edge cases, fixture impact>
+```
+
+The Technical appendix is **kept**, not replaced — it's the third layer that lets contributors / replay-fixture maintainers / future-you debugging a regression find the context they need. The layering just stops putting it in the first thing readers see.
+
+On the GitHub release body, wrap the appendix in `<details><summary>Technical detail</summary>` so it collapses by default. In `CHANGELOG.md` and `site/docs/changelog.html` it renders inline (those audiences are more technical and aren't scrolling past it).
+
+**Line-wrap rule (load-bearing — don't skip):** GitHub renders the release body with GFM "breaks": soft line breaks (single newlines) become `<br>`. A paragraph hand-wrapped at 80 columns therefore lands on the release page as a stack of short ragged lines (the v0.4.1 release shipped this bug). Write each paragraph and each appendix bullet as **one long line, no hard wraps**, and rely on the reader's browser to wrap it. Only insert a newline when you want a paragraph break or a new list item. This applies to the release notes drafted here, the PR body in Step 7b, and the `--notes` body in Step 8. It does **not** apply to `CHANGELOG.md`, which renders as standard CommonMark where soft breaks collapse to spaces.
 
 ## Step 3: Update Version References
 
@@ -106,20 +150,136 @@ one-long-line too, but 80-col wrap there is harmless.
 
 ### 4a. CHANGELOG (mandatory)
 
-**`CHANGELOG.md` (repo root) — REQUIRED every release.** Add a new
-`## [$NEW_VERSION] — YYYY-MM-DD` section at the top (directly under
-`## [Unreleased]`), using the Keep a Changelog categories already in the
-file: **Added**, **Changed**, **Fixed**, **Docs**, **Distribution**, etc.
-Reuse the release notes drafted in Step 2 — don't paraphrase them into
-something different. Also add the new version to the reference-link
-section at the bottom of the file
-(`[X.Y.Z]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/vX.Y.Z`)
-and update the `[Unreleased]` compare link to point at `vX.Y.Z...HEAD`.
-This step is mandatory — never ship a release without updating
-`CHANGELOG.md`.
+**`CHANGELOG.md` (repo root) — REQUIRED every release.** Add a new `## [$NEW_VERSION] — YYYY-MM-DD` section at the top (directly under `## [Unreleased]`), using the three-layer template structure drafted in Step 2c: Headline → Highlights (with images) → Also (Keep-a-Changelog buckets: **Added** / **Changed** / **Fixed** / **Docs** / **Distribution** / **Security**) → Technical appendix. Reuse the release notes drafted in Step 2c — don't paraphrase them into something different.
 
-Then mirror the same categorized entries into `site/docs/changelog.html`,
-adding a new version block at the top (before the previous version entry).
+In `CHANGELOG.md` and `site/docs/changelog.html` the appendix renders inline (no `<details>` collapse — those audiences want the depth). The Highlights images use relative paths (`assets/releases/v$NEW_VERSION/<slug>.png` from the repo root for `CHANGELOG.md`; `../../assets/releases/v$NEW_VERSION/<slug>.webp` from the site root with PNG fallback for the HTML changelog — see Step 4a-img for the exact `<picture>` shape).
+
+Also add the new version to the reference-link section at the bottom of `CHANGELOG.md` (`[X.Y.Z]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/vX.Y.Z`) and update the `[Unreleased]` compare link to point at `vX.Y.Z...HEAD`. This step is mandatory — never ship a release without updating `CHANGELOG.md`.
+
+Mirror the same categorized entries into `site/docs/changelog.html`, adding a new version block at the top (before the previous version entry). The HTML version uses the same Highlights structure with `<picture><source srcset="…webp"><img src="…png">` for each Highlight image.
+
+### 4a-img. Highlight images checklist
+
+Before merging the release PR, verify for every Highlight in this release:
+
+- [ ] `assets/releases/v$NEW_VERSION/<slug>.png` exists (source / CHANGELOG.md path).
+- [ ] `site/assets/releases/v$NEW_VERSION/<slug>.webp` exists (site rendering).
+- [ ] `site/assets/releases/v$NEW_VERSION/<slug>.png` exists (site fallback).
+- [ ] The image is referenced from the GitHub release body, `CHANGELOG.md`, and `site/docs/changelog.html`.
+- [ ] If the Highlight name implies a before/after comparison, the image is a side-by-side composite (single file, not two separate images).
+
+A Highlight without all four assets is not a Highlight — demote to Also in this release before shipping.
+
+### 4a-roadmap. Update the roadmap page (when items shipped)
+
+`site/docs/roadmap.html` is a chronological timeline running newest-at-top: future releases above a `<div class="timeline-now">` boundary on a dashed spine, past releases below it on a solid spine. When a release ships, the in-flight row migrates from future to past, the today line bumps to the ship date, the next-bucket release promotes into the in-flight slot, and the new past-section row picks up an **ALSO SHIPPED** roll-call of every other issue/PR that landed. The roadmap is the public commitment surface; closing the loop when items ship is what makes it credible. Run the steps below as part of every release.
+
+#### Step A. Compute this release's full issue/PR ref set
+
+The roadmap's per-row `<div class="also-shipped">` line lists every issue and PR that landed in that release, beyond what the Highlights / italic notes already cite. Compute the full set:
+
+```bash
+PREV_TAG=$(git describe --tags --abbrev=0 HEAD~)   # tag immediately before this release commit
+THIS_TAG="v$NEW_VERSION"
+
+python3 <<'PY'
+import subprocess, re, os
+prev = os.environ.get('PREV_TAG') or subprocess.check_output(
+    ['git','describe','--tags','--abbrev=0','HEAD~'], text=True).strip()
+this = os.environ.get('THIS_TAG') or 'HEAD'
+log = subprocess.check_output(
+    ['git','log','--no-merges','--format=%s%n%b', f'{prev}..{this}'], text=True)
+pat = re.compile(r'(?:^|(?<=[\s,(]))#(\d+)\b')
+refs = set()
+for line in log.split('\n'):
+    for m in pat.finditer(line):
+        n_str, end = m.group(1), m.end()
+        # skip hex colors like #34C759
+        if end < len(line) and line[end].lower() in 'abcdef': continue
+        n = int(n_str)
+        if not (2 <= n <= 999): continue
+        ctx = line[max(0, m.start()-25):m.start()].lower()
+        # skip natural-language uses like "sweep #2", "phase #3"
+        if any(k in ctx for k in ['sweep ', 'phase-narration', 'rounds ', 'iteration ']): continue
+        refs.add(n)
+print(' '.join('#' + str(n) for n in sorted(refs)))
+PY
+```
+
+Subtract the refs you already cite in this release's row (Highlights bullets and italic notes from Step 2c). What remains is the **ALSO SHIPPED** list for the row.
+
+#### Step B. Insert the new release row
+
+The past section uses two row shapes — copy the closest existing row and adapt:
+
+**Minor / major release** (e.g. `v0.5.0`): big purple trunk node, theme line, 2–6 bulleted milestones, ALSO SHIPPED line.
+
+```html
+<div class="release minor">
+  <div class="release-head">
+    <span class="release-version">v$NEW_VERSION</span>
+    <span class="release-date">YYYY-MM-DD</span>
+    <span class="release-pill pill-shipped">shipped</span>
+  </div>
+  <div class="release-theme">&lt;one-line theme — same headline as your release notes&gt;</div>
+  <ul class="milestones">
+    <li>&lt;big milestone&gt; <span class="ref">&middot; <a href="…/issues/N" target="_blank" rel="noopener">#N</a></span> <span class="desc">&mdash; &lt;short description&gt;</span></li>
+  </ul>
+  <div class="also-shipped">
+    <a href="…/issues/N1" target="_blank" rel="noopener">#N1</a>
+    <a href="…/issues/N2" target="_blank" rel="noopener">#N2</a>
+    …
+  </div>
+</div>
+```
+
+**Patch release** (e.g. `v0.5.3`): small gray-dot branch node, three-tier content. Pick the tier that fits what shipped:
+
+- **Big bullets** (`<ul class="milestones">`) for theme-level user-visible changes (a marquee feature, a major adapter, a new surface).
+- **Italic note** (`<p class="release-note">`) for narrower-but-notable changes — a specific adapter's fix, a terminal-host-specific issue, an env-var refinement, a security tightening. Two or three things merged into one italic line is fine.
+- **Just version + date** for cleanup-only patches (release-tooling, internal refactors, doc fixes only). Be honest: an empty patch row honestly says "we shipped, nothing user-visible landed". Don't pad.
+
+```html
+<div class="release patch">
+  <div class="release-head">
+    <span class="release-version">v$NEW_VERSION</span>
+    <span class="release-date">YYYY-MM-DD</span>
+  </div>
+  <!-- pick what applies: -->
+  <ul class="milestones"> … </ul>           <!-- big bullets, optional -->
+  <p class="release-note"> … </p>            <!-- italic notes, optional -->
+  <div class="also-shipped"> … </div>        <!-- always include if there are refs -->
+</div>
+```
+
+Insert the new row **immediately below the `<div class="timeline-now">` boundary** so it's the top of the past section.
+
+#### Step C. Update the "today" boundary
+
+```html
+<div class="timeline-now"><span>YYYY-MM-DD &middot; today</span></div>
+```
+
+Set `YYYY-MM-DD` to the release ship date (today).
+
+#### Step D. Migrate the future section (minor / major releases only)
+
+If this release is a minor or major (e.g. `v0.5.0` shipping), the future section needs a pill rotation:
+
+1. **Delete the previously-in-flight row** from the future section — its content lives in the new past-section row from Step B.
+2. **Promote the previously-next row** to in-flight: change `pill-next` → `pill-in-flight`, update the date estimate based on the cadence (typically 3–5 weeks from today for the next minor; patches inside the cycle ship in 1–5 day bursts).
+3. **Promote the previously-later row** to next: change the first `pill-later` row's pill to `pill-next`, update its date estimate.
+4. **Optionally adjust the theme line** of the new in-flight row if scope has shifted (issues moved in or out since the row was first drafted). The themes are best-effort: revise them when the work tells you they should change.
+
+For **patch releases**, skip Step D — the future section stays unchanged. The patch row from Step B sits below the today line; the in-flight row above it stays in place.
+
+#### Step E. Verify
+
+- Open `site/docs/roadmap.html` in a browser at desktop and ~360px widths. Spine continuous in both. Future portion dashed, past portion solid.
+- The new release row sits immediately below the today line.
+- The `ALSO SHIPPED` count plus the cited Highlight refs equals the full set Step A produced.
+- Spot-check 5 of the new ALSO SHIPPED links — all 200 OK.
+- The previously-in-flight item (if minor) is no longer in the future section.
 
 ### 4b. Doc + README sweep (mandatory)
 
