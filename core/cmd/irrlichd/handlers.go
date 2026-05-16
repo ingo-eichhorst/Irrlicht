@@ -46,6 +46,13 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		// Cross-account rate-limit inheritance (issue #309): wrapper
+		// sessions (Pi, OpenCode) inherit the subscription quota
+		// snapshot from a first-party CLI authenticated to the same
+		// OAuth account. Mutates `sessions` in place — the dashboard
+		// builder then sees the inherited snapshots and the chip
+		// renders for the wrapper just like it does for the donor.
+		services.InheritRateLimits(sessions, "")
 		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
 		if tracker != nil {
 			attachGroupCosts(resp, tracker, cache)
