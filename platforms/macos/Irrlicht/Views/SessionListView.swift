@@ -351,9 +351,7 @@ struct SessionListView: View {
                     .foregroundColor(.primary)
             } else if sessionManager.sessions.count <= 3 {
                 ForEach(sessionManager.sessions.prefix(3)) { session in
-                    Image(systemName: session.state.glyph)
-                        .foregroundColor(session.state.color)
-                        .font(.system(size: 12))
+                    SessionStateIcon(state: session.state, size: 12)
                 }
             } else {
                 Text("\(sessionManager.sessions.count) sessions")
@@ -458,10 +456,7 @@ struct SessionRowView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 // State icon
-                Image(systemName: session.state.glyph)
-                    .font(.system(size: 10))
-                    .foregroundColor(session.state.color)
-                    .frame(width: 12)
+                SessionStateIcon(state: session.state, size: 12)
                     .tooltip(session.state.label)
                     .accessibilityIdentifier("session-state-icon-\(session.id)")
 
@@ -813,10 +808,7 @@ struct SubagentRowView: View {
             Spacer().frame(width: 24)
 
             // State indicator (small)
-            Image(systemName: session.state.glyph)
-                .font(.system(size: 9))
-                .foregroundColor(session.state.color)
-                .frame(width: 12)
+            SessionStateIcon(state: session.state, size: 12)
                 .tooltip(session.state.label)
 
             // Context utilization
