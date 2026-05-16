@@ -232,6 +232,22 @@ step_interrupt() {
   sleep 1
 }
 
+# step_keys sends a raw tmux key sequence (NOT literal text). Useful for
+# driving picker UIs like /rewind's checkpoint selector — Escape, Up,
+# Down, Enter, etc. Each space-separated token becomes one tmux key
+# event. Unlike step_send, no implicit Enter is appended.
+#
+# Recipe step shape:
+#   {"type": "keys", "keys": "Escape Escape"}
+#   {"type": "keys", "keys": "Up Up Enter"}
+step_keys() {
+  local keys="$1"
+  # shellcheck disable=SC2086 — intentional word-splitting of the key list
+  tmux send-keys -t "$CURRENT_TMUX" $keys
+  echo "[driver] keys: $keys" >&2
+  sleep 0.3
+}
+
 step_restart() {
   # End the current session's lifecycle. Record its metadata in the
   # cumulative arrays before tearing down so the epilogue can write
@@ -369,6 +385,9 @@ while read -r step; do
       ;;
     interrupt)
       step_interrupt
+      ;;
+    keys)
+      step_keys "$(jq -r '.keys' <<<"$step")"
       ;;
     sleep)
       secs=$(jq -r '.seconds // 1' <<<"$step")

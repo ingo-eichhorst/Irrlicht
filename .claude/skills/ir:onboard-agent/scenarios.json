@@ -289,14 +289,54 @@
 
     {
       "name": "checkpoint-rewind",
-      "description": "Stub entry — claudecode has no native checkpoint feature, so this scenario is not recordable for that adapter. Other adapters (Cline shadow-git, Plandex plan branches, Replit checkpoint, Cursor rewind) may translate this scenario when their adapter packages land.",
+      "description": "User rewinds to an earlier auto-checkpoint, restoring files and/or conversation; subsequent turns start cleanly from the rewound point. claudecode binds Esc+Esc as a rewind shortcut and /rewind as the picker. This recipe drives two normal turns, then triggers Esc+Esc to roll back, then runs a third turn — the goal is to capture what irrlicht observes when claudecode mutates its transcript backwards (the daemon's transcript_tailer is append-oriented and may treat a truncation as session-removed-then-reborn).",
       "coverage_id": "checkpoint-rewind",
       "requires": ["headless_mode"],
-      "verify": {},
+      "verify": {
+        "final_state": "ready",
+        "tool_calls_max": 0,
+        "transitions_topology": ["ready", "working", "ready", "working", "ready", "working", "ready"]
+      },
       "by_adapter": {
         "claudecode": {
-          "applicable": false,
-          "notes": "agent_supports=no per coverage matrix — claudecode has no native checkpoint rewind. Translator stops here; no recipe."
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "claude version with /rewind support (Esc+Esc shortcut) — confirmed in 2.1.x",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID",
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "script": [
+            {"type": "send", "text": "Reply with exactly the word: one"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
+            {"type": "send", "text": "Reply with exactly the word: two"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 3},
+            {"type": "keys", "keys": "Escape Escape"},
+            {"type": "sleep", "seconds": 5},
+            {"type": "keys", "keys": "Enter"},
+            {"type": "sleep", "seconds": 3},
+            {"type": "send", "text": "Reply with exactly the word: three"},
+            {"type": "wait_turn"},
+            {"type": "sleep", "seconds": 4}
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "verify": [
+            "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
+            "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+            "events.jsonl contains ≥ 2 state_transition working entries (one per pre-rewind turn)",
+            "events.jsonl contains ≥ 2 state_transition ready entries returning from those turns",
+            "After Esc+Esc, the transcript file is mutated (truncated or rewritten); inspect events.jsonl for transcript_removed / transcript_new on the SAME session_id vs. just transcript_activity",
+            "Post-rewind turn shows a clean ready → working → ready arc on the rewound session",
+            "Final session state is ready",
+            "transcript.jsonl shows turns 1/2 then a structural break (truncation or marker) then turn 3"
+          ]
         }
       }
     },
