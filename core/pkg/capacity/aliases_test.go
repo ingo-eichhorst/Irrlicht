@@ -1,6 +1,9 @@
 package capacity
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -67,10 +70,9 @@ func TestModelAliases_UnknownReturnsUnchanged(t *testing.T) {
 	}
 }
 
-// LOCAL_OVERRIDE entries exist because their codeburn-side canonical is not
-// in LiteLLM. Verify they point at canonicals that *are* (or could plausibly
-// be) — i.e. not at the original codeburn target. Re-evaluation prompt for
-// reviewers: if codeburn or LiteLLM moves, these may need updating.
+// LOCAL_OVERRIDE entries must not regress to their known-missing codeburn
+// canonical. (This pins the override decisions; it does not verify the new
+// target exists in LiteLLM — see TestModelAliases_LocalOverrideTargetsExistInLiteLLM.)
 func TestModelAliases_LocalOverrides(t *testing.T) {
 	// alias → canonical the override must NOT regress to.
 	regressionTargets := map[string]string{
@@ -88,6 +90,49 @@ func TestModelAliases_LocalOverrides(t *testing.T) {
 		}
 		if got == regressed {
 			t.Errorf("alias %q regressed to codeburn-canonical %q (not in LiteLLM); see LOCAL_OVERRIDE comment in aliases.go", alias, regressed)
+		}
+	}
+}
+
+// Soft assertion that LOCAL_OVERRIDE targets are present in LiteLLM's actual
+// pricing table. Reads the daemon's cached LiteLLM data when available;
+// skips when absent so CI runners without a cache don't see false failures.
+// The point is to catch drift at local-dev time before the maintainer pushes
+// an override that resolves to a still-zero capacity.
+func TestModelAliases_LocalOverrideTargetsExistInLiteLLM(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no homedir available")
+	}
+	cachePath := filepath.Join(home, ".local/share/irrlicht/model-capacity-cache.json")
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Skipf("no LiteLLM cache at %s — run the daemon once to populate it", cachePath)
+	}
+
+	var cached struct {
+		Config struct {
+			Models map[string]json.RawMessage `json:"models"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(data, &cached); err != nil {
+		t.Fatalf("malformed LiteLLM cache: %v", err)
+	}
+
+	// Collect every override target by walking modelAliases and re-resolving
+	// the entries that have known-missing codeburn canonicals. This avoids
+	// duplicating the list; if a new LOCAL_OVERRIDE is added, this test
+	// auto-covers it.
+	overrideTargets := map[string]bool{
+		modelAliases["claude-4-sonnet"]:     true,
+		modelAliases["claude-4-opus"]:       true,
+		modelAliases["copilot-openai-auto"]: true,
+		modelAliases["gpt-5.1-codex-high"]:  true,
+	}
+
+	for target := range overrideTargets {
+		if _, ok := cached.Config.Models[target]; !ok {
+			t.Errorf("LOCAL_OVERRIDE target %q is not in LiteLLM cache — drift detected, pick a different canonical or wait for upstream", target)
 		}
 	}
 }

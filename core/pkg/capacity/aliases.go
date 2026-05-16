@@ -40,7 +40,7 @@ var modelAliases = map[string]string{
 	"cursor-auto":            "claude-sonnet-4-5",
 	"cursor-agent-auto":      "claude-sonnet-4-5",
 	"copilot-auto":           "claude-sonnet-4-5",
-	"copilot-openai-auto":    "gpt-5", // LOCAL_OVERRIDE: codeburn → gpt-5.3-codex; not in LiteLLM. Falls back to base GPT-5 (Copilot's OpenAI default).
+	"copilot-openai-auto":    "gpt-5", // LOCAL_OVERRIDE: codeburn → gpt-5.3-codex (not in LiteLLM). Best-guess fallback; Copilot's actual OpenAI route is unverified and likely a different gen — pricing for this alias may be inaccurate (probably under-priced) until LiteLLM ships codex/route-specific entries.
 	"copilot-anthropic-auto": "claude-sonnet-4-5",
 	"ibm-bob-auto":           "claude-sonnet-4-5",
 	"kiro-auto":              "claude-sonnet-4-5",
@@ -91,7 +91,7 @@ var modelAliases = map[string]string{
 	// skill will pull it back if codeburn's normalization changes).
 	"gpt-5-fast":         "gpt-5",
 	"gpt-5.2-low":        "gpt-5",
-	"gpt-5.1-codex-high": "gpt-5.1", // LOCAL_OVERRIDE: codeburn → gpt-5.3-codex; not in LiteLLM. Use the version-aligned gpt-5.1 entry instead.
+	"gpt-5.1-codex-high": "gpt-5.1", // LOCAL_OVERRIDE: codeburn → gpt-5.3-codex (not in LiteLLM). Version-aligned with the input slug, but the codex / high-reasoning tier is unpriced — this under-prices by whatever premium Cursor's codex tier carries over base 5.1.
 
 	// Antigravity Gemini IDs resolve to preview-priced entries.
 	"gemini-3.1-pro":         "gemini-3.1-pro-preview",
