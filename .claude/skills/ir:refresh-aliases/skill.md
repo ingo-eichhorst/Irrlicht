@@ -57,6 +57,8 @@ Compute four sets:
 - **Removed** — keys in irrlicht but not upstream. Don't auto-delete; codeburn may have dropped something we still need. Flag with the entry contents.
 - **Unchanged** — no action.
 
+**Skip LOCAL_OVERRIDE entries when classifying Changed.** Lines in `aliases.go` ending with `// LOCAL_OVERRIDE: <reason>` intentionally deviate from codeburn because the codeburn-chosen canonical isn't in LiteLLM's pricing table. Treat the local value as authoritative; do not propose reverting to codeburn's value. *Do* still report the override entry under a separate **Overrides** section so the maintainer sees it once per sync, and if the codeburn-side value has itself changed (e.g., codeburn re-points the alias to a different canonical) — re-evaluate whether the override is still needed, since the new codeburn canonical may now exist in LiteLLM.
+
 ### 5. Validate canonical targets against LiteLLM
 
 For each Added/Changed entry, check that the canonical value is a key in the running daemon's LiteLLM-derived table. The daemon caches it at `~/.local/share/irrlicht/model-capacity-cache.json`:
@@ -84,6 +86,10 @@ Changed (N):
 
 Removed (N) — not auto-deleted:
   "<alias>" → "<canonical>"
+  ...
+
+Overrides (N) — still diverging from codeburn:
+  "<alias>" → "<local-canonical>" (codeburn: "<upstream-canonical>") — <reason>
   ...
 ```
 

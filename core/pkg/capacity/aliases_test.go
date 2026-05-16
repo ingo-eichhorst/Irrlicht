@@ -67,6 +67,31 @@ func TestModelAliases_UnknownReturnsUnchanged(t *testing.T) {
 	}
 }
 
+// LOCAL_OVERRIDE entries exist because their codeburn-side canonical is not
+// in LiteLLM. Verify they point at canonicals that *are* (or could plausibly
+// be) — i.e. not at the original codeburn target. Re-evaluation prompt for
+// reviewers: if codeburn or LiteLLM moves, these may need updating.
+func TestModelAliases_LocalOverrides(t *testing.T) {
+	// alias → canonical the override must NOT regress to.
+	regressionTargets := map[string]string{
+		"claude-4-sonnet":     "claude-sonnet-4",
+		"claude-4-sonnet-1m":  "claude-sonnet-4",
+		"claude-4-opus":       "claude-opus-4",
+		"copilot-openai-auto": "gpt-5.3-codex",
+		"gpt-5.1-codex-high":  "gpt-5.3-codex",
+	}
+	for alias, regressed := range regressionTargets {
+		got, ok := modelAliases[alias]
+		if !ok {
+			t.Errorf("override alias %q missing from modelAliases", alias)
+			continue
+		}
+		if got == regressed {
+			t.Errorf("alias %q regressed to codeburn-canonical %q (not in LiteLLM); see LOCAL_OVERRIDE comment in aliases.go", alias, regressed)
+		}
+	}
+}
+
 // Alias must resolve before the LiteLLM lookup, so an alias key that also
 // appears as a direct LiteLLM entry routes through the canonical — otherwise
 // a future LiteLLM addition could silently undo a deliberate codeburn mapping.
