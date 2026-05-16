@@ -28,36 +28,44 @@ struct SessionStateIcon: View {
     }
 }
 
-/// Breathing solid dot — mirrors the web `.row-state-icon svg circle.core`
-/// keyframes (`irrlicht-breathe`): opacity 0.55 ↔ 1.0 over 1.4 s, ease-in-out,
-/// autoreversing. No scaling — the dot is always at its full r=7/20 footprint
-/// (70 % of the cell) so it stays clearly visible even if the animation drops
-/// frames or stops entirely. v0.4.5's halo-based glyph degraded to the tiny
-/// inner dot on macOS frame-degradation and on reduced-motion; this design
-/// removes that failure mode by construction.
+/// Breathing solid dot — opacity-only breathe (0.55 ↔ 1.0 over 1.4 s,
+/// ease-in-out, autoreversing). The dot is sized to match the ready-state
+/// SF Symbol `checkmark.circle.fill` (full frame, no inset) so working and
+/// ready read as the same size in the row. No scaling animation — the dot
+/// stays at its full footprint even if the animation drops frames or stops,
+/// so the worst-case render is a large solid purple disc the same size as
+/// the ready check.
+///
+/// First render is at full opacity (1.0) — `dim` starts `false`, then the
+/// `withAnimation` block in `.onAppear` flips it to true with an explicit
+/// `repeatForever(autoreverses:)` curve. Using `withAnimation` here instead
+/// of the implicit `.animation(value:)` modifier is load-bearing: the
+/// implicit form is cancelled when a parent view re-renders (which the
+/// session row does frequently, on every WebSocket push), so the breathe
+/// silently freezes after the first row update. `withAnimation` scopes the
+/// curve to the state change itself and survives parent re-renders.
 private struct WorkingIcon: View {
     let size: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dim = false
 
     private static let period: Double = 1.4
-    private static let dotRatio: CGFloat = 7 / 20   // r=7 of viewBox 20
     private static let dimOpacity: Double = 0.55
 
     var body: some View {
-        let diameter = size * Self.dotRatio * 2
         Circle()
             .fill(IrrColors.working)
-            .frame(width: diameter, height: diameter)
-            .opacity(reduceMotion ? 1 : (dim ? Self.dimOpacity : 1))
-            .animation(
-                reduceMotion ? nil :
-                    .easeInOut(duration: Self.period / 2)
-                        .repeatForever(autoreverses: true),
-                value: dim
-            )
             .frame(width: size, height: size)
-            .onAppear { if !reduceMotion { dim = true } }
+            .opacity(reduceMotion ? 1 : (dim ? Self.dimOpacity : 1))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(
+                    .easeInOut(duration: Self.period / 2)
+                        .repeatForever(autoreverses: true)
+                ) {
+                    dim = true
+                }
+            }
     }
 }
 
