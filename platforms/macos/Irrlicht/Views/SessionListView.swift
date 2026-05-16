@@ -662,7 +662,7 @@ struct SessionListView: View {
             quotaBar(percent: w.usedPercent,
                      color: barColor(used: w.usedPercent, pace: quotaPacePercent(w)),
                      pacePercent: quotaPacePercent(w))
-                .frame(width: compact ? 40 : 70, height: 5)
+                .frame(width: compact ? 60 : 70, height: 5)
 
             Text("\(Int(w.usedPercent.rounded()))%")
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
