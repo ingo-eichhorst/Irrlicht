@@ -93,6 +93,13 @@ var modelAliases = map[string]string{
 	"gpt-5.2-low":        "gpt-5",
 	"gpt-5.1-codex-high": "gpt-5.1", // LOCAL_OVERRIDE: codeburn → gpt-5.3-codex (not in LiteLLM). Version-aligned with the input slug, but the codex / high-reasoning tier is unpriced — this under-prices by whatever premium Cursor's codex tier carries over base 5.1.
 
+	// Moonshot Kimi family — codeburn maps three coding-focused aliases to
+	// "kimi-k2-thinking", which LiteLLM ships only under the dotted
+	// `moonshot.kimi-k2-thinking` key.
+	"kimi-auto":       "moonshot.kimi-k2-thinking", // LOCAL_OVERRIDE: codeburn → kimi-k2-thinking (not in LiteLLM).
+	"kimi-code":       "moonshot.kimi-k2-thinking", // LOCAL_OVERRIDE: codeburn → kimi-k2-thinking (not in LiteLLM).
+	"kimi-for-coding": "moonshot.kimi-k2-thinking", // LOCAL_OVERRIDE: codeburn → kimi-k2-thinking (not in LiteLLM).
+
 	// Antigravity Gemini IDs resolve to preview-priced entries.
 	"gemini-3.1-pro":         "gemini-3.1-pro-preview",
 	"gemini-3-flash":         "gemini-3-flash-preview",
