@@ -100,8 +100,10 @@ func TestExtractWaitingCue(t *testing.T) {
 		// 24 of the 30 matrix rows from issue #381; the remaining 6 are
 		// `?`-bearing and stay the responsibility of ExtractQuestionSnippet
 		// (covered by TestExtractQuestionSnippet).
-		{"1 take a look + let me know", "Take a look at the icon and let me know if it's right.", true},
-		{"2 try + confirm", "Try the Settings menu again and confirm the Done button is visible.", true},
+		// Cases 1 and 2 quote the issue verbatim — these are the original
+		// reported regressions and are the most load-bearing assertions.
+		{"1 verbatim issue example", "PR #379 is marked draft. Take a look at the icon and let me know if it's right or needs tweaking before I commit and push phase 2.", true},
+		{"2 verbatim issue example", "Bumped settings frame from 560pt → 640pt to accommodate the new toggle section + About footer. Restart done — try the Settings menu again and confirm the Done button is visible.", true},
 		{"5 ready for your review", "Pushed PR #379 as draft. Ready for your review.", true},
 		{"6 awaiting + before I", "Awaiting your go-ahead before I merge.", true},
 		{"7 ping me", "Ping me when you've tested it.", true},

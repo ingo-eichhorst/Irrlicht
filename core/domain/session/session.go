@@ -281,7 +281,8 @@ var waitingCuePatterns = []*regexp.Regexp{
 	// D. Curated imperatives — multi-word and verb+determiner shapes keep
 	// the false-positive surface small ("test failures", "review of the
 	// diff", "drop in coverage" don't fire because the determiner gate
-	// fails).
+	// fails). Bare verb forms only; gerunds ("Trying with caution.",
+	// "Verifying locally.") aren't covered — rare in turn-enders.
 	regexp.MustCompile(`(?i)\btake a look\b`),
 	regexp.MustCompile(`(?i)\b(?:sanity|double)[- ]check\b`),
 	regexp.MustCompile(`(?i)\b(?:please|kindly)\s+\w+\b`),
@@ -304,8 +305,12 @@ func ExtractWaitingCue(text string) string {
 	if text == "" {
 		return ""
 	}
+	// Walk the tail newest-first so when both the last and second-to-last
+	// sentence match a cue, the more recent (and usually more natural for
+	// display) sentence is returned.
 	tail := lastNonEmptySentences(splitSentences(text), 2)
-	for _, s := range tail {
+	for i := len(tail) - 1; i >= 0; i-- {
+		s := tail[i]
 		stripped := strings.TrimLeft(strings.TrimRight(s, trailingMarkdownNoise), markdownWrapper)
 		if stripped == "" {
 			continue
