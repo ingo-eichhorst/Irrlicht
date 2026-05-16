@@ -12,6 +12,47 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-05-17
+
+### Public roadmap page lands, with screenshots and concept tiles for every release row
+
+### Highlights
+
+#### Public roadmap at `/docs/roadmap.html`
+
+![Roadmap page top — Horizon and v1.0 entries on a dashed future spine](assets/releases/v0.4.6/roadmap-page.png)
+
+A chronological newest-at-top timeline shows every shipped release with big milestones, italic notes for narrower changes, and a compact `ALSO SHIPPED` roll-call of every other issue/PR. Future versions (v0.5 → v1.0 plus horizon) are bold guesses against the [Platform Rollout](https://github.com/ingo-eichhorst/Irrlicht/wiki/Platform-Rollout) wiki, with concept tiles for the in-flight relay-v0 work, the planned VS Code panel, iOS / iPadOS, Android + Apple watch, and the v1.0 second-desktop + hosted relay launch.
+
+**Why it matters:** where the project is going is now discoverable without spelunking GitHub issues. Linked from every docs sidebar, the landing footer, and the `CHANGELOG.md` preamble. Future releases will migrate items from above the today line down across it as they ship. (#395)
+
+### Added
+- **Moonshot Kimi family in the alias map** — `kimi-auto`, `kimi-code`, `kimi-for-coding` resolve to `moonshot.kimi-k2-thinking` in LiteLLM (codeburn sync). Sessions on Kimi-routed frontends now price at non-zero.
+
+### Changed
+- **Brand: gradient flame refresh propagates across the remaining surfaces** (#394) — picks up the docs sidebar dot, design-system preview tiles, and the few last places where the old wisp survived the v0.4.5 rollout.
+- **Working-state icon: heartbeat halo → breathing solid dot** (#393) — the SMIL halo animation was distracting; the solid dot with a gentle opacity breathe reads cleaner at 14px in the menu bar.
+- **Web dashboard: subagent dot-matrix row dropped to match the macOS overlay** (#397) — the 89/96-style dot strip was a web-only detail that no longer matched the unified row anatomy shipped in v0.4.5.
+
+### Fixed
+- **Claude Code task list: prune entries absent from `task_reminder` snapshots** (#396) — the in-memory task list is reconciled against the authoritative snapshot so dropped tasks no longer linger as `in_progress` indefinitely.
+
+### Docs / Tooling
+- **Release-flow friction removed from `CLAUDE.md`** (#392).
+- **`/ir:release` release-notes template + Step 4a-roadmap mechanics** — three-layer release notes (Headline → ≤3 Highlights with screenshots → Also → Technical appendix) at `.claude/skills/ir:release/release-notes-template.md`. Step 4a-roadmap codifies the roadmap-update protocol (Python recipe for ALSO SHIPPED, row-shape templates, today-line bump, pill rotation for minor releases).
+
+### Technical appendix
+
+- **Public roadmap page (#395)** — `site/docs/roadmap.html` is a single file with all CSS scoped inline (no `docs.css` edits). Pure-CSS git-branch via pseudo-elements: vertical spine via `.timeline-section::before`, minor-release nodes centered on the spine via `.release.minor::before`, patch nodes offset right via `.release.patch::before` (horizontal stub) + `.release.patch::after` (small dot at end of stub). Depth = 2 on the regex that finds release-block bounds, since both `<div class="release">` and `<div class="release-head">` open before the version label. ALSO SHIPPED list extracted via `git log <prev-tag>..<this-tag>` then noise-filtered for hex colors (`#34C759`) and natural-language `#N` uses (`sweep #2`, `Phase-narration #2`). Refs already cited in highlights / italic notes are pruned from each row's ALSO SHIPPED line to avoid duplication. Linked from every `docs/*.html` sidebar (new "Project" section between Architecture and Community), the landing-page footer, and the `CHANGELOG.md` preamble.
+- **Roadmap concept tiles** — six future-section composites generated via Python + PIL + rsvg-convert, using the new gradient flame brand on a dark-themed dark panel matching the docs.css palette. Tiles live under `assets/roadmap/v<ver>/` (source) and `site/assets/roadmap/v<ver>/` (WebP + PNG). Past-section figures use the existing `assets/releases/v<ver>/` namespace. CSS `.release-figure` renders future tiles at 0.78 opacity and past at 0.92 — concept reads as concept, screenshot reads as shipped UI.
+- **Release-notes template + Step 4a-roadmap expansion** — three-layer template at `.claude/skills/ir:release/release-notes-template.md` with worked example from v0.4.5. Step 2 / Step 4a in the skill updated to consume it; Step 4a-img enforces the highlight-image asset checklist (source PNG, site PNG, site WebP); Step 4a-roadmap codifies a 5-substep protocol (A. extract refs via git log, B. insert release row in past section, C. bump today line, D. pill rotation for minors, E. verify desktop + mobile + link spot-check).
+- **Brand refresh continuation (#394)** — propagates the v0.4.5 single-path gradient flame to surfaces the original PR missed: docs sidebar `.dot` swapped for an inline gradient flame SVG, design-system preview tiles updated, AppIcon iconset regenerated via the reproducible `tools/build-app-icon.sh` builder so the .icns is byte-identical on re-runs.
+- **Working-state breathing dot (#393)** — `svgIcons.working` in `platforms/web/index.html` swaps the SMIL heartbeat halo for a solid `<circle class="core" fill="#8B5CF6">` with a CSS keyframe `opacity` breathe (no animation under `prefers-reduced-motion`). macOS `SessionStateIcon` updated to match — `BreathingDot` SwiftUI view with `repeatForever` opacity transition, honoring `accessibilityReduceMotion`. Snapshot fixtures refreshed.
+- **Web: subagent dot-matrix row removed (#397)** — the 89/96 progress-dot strip below the session row no longer renders. The strip was a web-only artifact that conflicted with the unified row anatomy in v0.4.5. macOS overlay never had it; this brings web in line. Removed `.subagent-dot-matrix` CSS + the corresponding row builder.
+- **Claude Code task-list pruning (#396)** — the tailer treats `task_reminder` attachments as authoritative: after the existing `TaskDelta` loop, any local `in_progress` whose ID is missing from the snapshot is demoted to `completed`, and present-but-divergent-status entries take the snapshot value. Mirrors the v0.3.12 phantom-`in_progress` fix (#289) but for the absent-task case.
+- **CLAUDE.md friction (#392)** — drops the reminder paragraph that conflicted with the `/ir:release` skill's own step ordering.
+- **Model aliases — codeburn sync** — adds `kimi-auto`, `kimi-code`, `kimi-for-coding` to `core/pkg/capacity/aliases.go`, all `LOCAL_OVERRIDE` to `moonshot.kimi-k2-thinking` since LiteLLM only ships the dotted-prefix key. Five changed entries in the codeburn diff (`claude-4-opus`, `claude-4-sonnet`, `claude-4-sonnet-1m`, `copilot-openai-auto`, `gpt-5.1-codex-high`) are intentional `LOCAL_OVERRIDE`s — not updated.
+
 ## [0.4.5] — 2026-05-16
 
 ### Added
@@ -732,7 +773,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.6
 [0.4.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.5
 [0.4.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.4
 [0.4.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.3
