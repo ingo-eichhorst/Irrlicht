@@ -256,6 +256,7 @@ function renderCoverageMatrix(detail) {
       const cov = sc.coverage && sc.coverage[agent];
       const cell = document.createElement("td");
       cell.style.textAlign = "center";
+      cell.style.padding = "4px";
       if (!cov) {
         cell.textContent = "—";
         cell.style.color = "#ccc";
@@ -263,45 +264,9 @@ function renderCoverageMatrix(detail) {
         row.appendChild(cell);
         continue;
       }
-      const sup = cov.agent_supports || "unknown";
-      const obs = cov.irrlicht_observes || "unknown";
-      const {label, bg, fg} = coverageBadge(sup, obs);
       const rec = recIndex.get(`${agent}/${sc.id}`);
-      const badge = document.createElement(rec ? "button" : "span");
-      badge.textContent = label;
-      // font: inherit on the button branch — without it, the user-agent
-      // stylesheet swaps the page font for a platform-specific UI font
-      // whose glyph metrics shrink "●●" relative to the span branch.
-      // line-height:1 keeps the pill height consistent across the two.
-      badge.style.cssText = `display: inline-block; padding: 2px 8px; border-radius: 10px; ` +
-        `font: inherit; font-size: 13px; font-weight: 600; line-height: 1; ` +
-        `background: ${bg}; color: ${fg}; ` +
-        `border: 0; cursor: ${rec ? "pointer" : "default"};`;
-      // Build a multi-line tooltip
-      const lines = [`${agent}: agent_supports=${sup}, irrlicht_observes=${obs}`];
-      if (cov.notes) lines.push(cov.notes);
-      const meas = cov.measurement;
-      if (meas && meas.status && meas.status !== "no_recording" && meas.status !== "no_expected") {
-        lines.push(`measurement: ${meas.status}${meas.summary ? " (" + meas.summary + ")" : ""}`);
-      }
-      lines.push(rec ? `↻ click to open recording` : `(no recording committed)`);
-      badge.title = lines.join("\n");
-      if (rec) {
-        badge.addEventListener("click", () => {
-          navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
-        });
-      }
-      cell.appendChild(badge);
-      // Measurement indicator: a small second chip showing what the
-      // expected.jsonl validator says about the recorded fixture. Sits
-      // next to the verdict badge so an operator can spot when matrix
-      // verdict (coverage breadth) and execution state diverge — e.g.
-      // matrix says "partial" but the recipe we DID record passes 11/11.
-      const measChip = renderMeasurementChip(meas, sup, obs);
-      if (measChip) {
-        measChip.style.marginLeft = "4px";
-        cell.appendChild(measChip);
-      }
+      const strip = renderPipelineStrip(agent, sc.id, cov, rec);
+      cell.appendChild(strip);
       row.appendChild(cell);
     }
     tbody.appendChild(row);
@@ -310,58 +275,76 @@ function renderCoverageMatrix(detail) {
   panel.appendChild(table);
   detail.appendChild(panel);
 
-  // Summary chips
-  const sum = document.createElement("div");
-  sum.style.cssText = "margin-top: 8px; display: flex; gap: 14px; font-size: 11px; color: #555;";
-  let recorded = 0, observableNow = 0, supported = 0, total = 0;
-  let measPass = 0, measFail = 0, measKF = 0, measMismatch = 0;
+  // Pipeline status — count cells by where they are in the workflow.
+  const stages = {blocked: 0, awaitingRecipe: 0, awaitingSpec: 0, awaitingRecording: 0, recorded: 0, divergent: 0};
+  let total = 0, withEntry = 0;
   for (const sc of catalog.scenarios) {
     for (const agent of agents) {
       total++;
       const cov = sc.coverage && sc.coverage[agent];
       if (!cov) continue;
-      if (cov.agent_supports === "yes") supported++;
-      if (cov.agent_supports === "yes" && cov.irrlicht_observes === "yes") observableNow++;
-      if (recIndex.has(`${agent}/${sc.id}`)) recorded++;
-      const m = cov.measurement;
-      if (m && m.status === "pass") measPass++;
-      if (m && m.status === "fail") measFail++;
-      if (m && m.status === "known_failing") measKF++;
-      if (m && m.status === "known_failing_now_passing") measMismatch++;
-      // Verdict↔measurement mismatch
+      withEntry++;
       const sup = cov.agent_supports, obs = cov.irrlicht_observes;
-      if (m && obs === "partial" && m.status === "pass") measMismatch++;
-      if (m && sup === "yes" && obs === "yes" && (m.status === "fail" || m.status === "known_failing")) measMismatch++;
+      const pipe = cov.pipeline || {};
+      const meas = cov.measurement || {};
+      if (sup === "no") { stages.blocked++; continue; }
+      const recipeOK = pipe.recipe && pipe.recipe.authored;
+      const specOK = pipe.spec && pipe.spec.authored;
+      const recCount = ((pipe.recordings && pipe.recordings.latest) ? 1 : 0) + ((pipe.recordings && pipe.recordings.archive_count) || 0);
+      if (!recipeOK) { stages.awaitingRecipe++; continue; }
+      if (!specOK) { stages.awaitingSpec++; continue; }
+      if (recCount === 0) { stages.awaitingRecording++; continue; }
+      stages.recorded++;
+      // Divergence flags
+      const verdictExpectsPass = (sup === "yes" && obs === "yes");
+      const verdictExpectsPartial = (obs === "partial");
+      if (meas.status === "fail") stages.divergent++;
+      else if (meas.status === "known_failing" && verdictExpectsPass) stages.divergent++;
+      else if (meas.status === "pass" && verdictExpectsPartial) stages.divergent++;
+      else if (meas.status === "known_failing_now_passing") stages.divergent++;
     }
   }
+  const sum = document.createElement("div");
+  sum.style.cssText = "margin-top: 10px; display: flex; gap: 12px; font-size: 11px; color: #555; flex-wrap: wrap; align-items: center;";
   sum.innerHTML = `
-    <span><b>${recorded}</b> recordings committed</span>
-    <span><b>${observableNow}</b> fully observable now</span>
-    <span><b>${supported}</b> agent-supported</span>
-    <span><b>${total}</b> total cells</span>
-    <span style="margin-left:14px;">|</span>
-    <span><b>${measPass}</b> measured ✓</span>
-    <span><b>${measKF}</b> known_failing ⚠</span>
-    <span><b>${measFail}</b> failing ✗</span>
-    ${measMismatch > 0 ? `<span style="color:#c0392b;font-weight:600;"><b>${measMismatch}</b> verdict↔measurement mismatch</span>` : ""}
+    <span style="font-weight:600;">Pipeline:</span>
+    <span><b>${stages.blocked}</b> blocked (sup=no)</span>
+    <span>→</span>
+    <span><b>${stages.awaitingRecipe}</b> awaiting recipe</span>
+    <span>→</span>
+    <span><b>${stages.awaitingSpec}</b> awaiting spec</span>
+    <span>→</span>
+    <span><b>${stages.awaitingRecording}</b> awaiting recording</span>
+    <span>→</span>
+    <span style="background:#d6f0d4;color:#1f5a1d;padding:1px 6px;border-radius:8px;"><b>${stages.recorded}</b> recorded</span>
+    ${stages.divergent > 0 ? `<span style="margin-left:14px;color:#c0392b;font-weight:600;background:#fff5f5;padding:1px 6px;border-radius:8px;">⚠ <b>${stages.divergent}</b> divergent</span>` : ""}
+    <span style="margin-left:14px;color:#888;">${withEntry}/${total} cells assessed</span>
   `;
   panel.appendChild(sum);
 
-  // Legend
+  // Explainer / legend — describes the 5-segment strip
   const legend = document.createElement("div");
-  legend.style.cssText = "margin-top: 8px; display: flex; gap: 12px; font-size: 11px; color: #555; flex-wrap: wrap;";
+  legend.style.cssText = "margin-top: 10px; padding: 8px 10px; background: #fafaf2; border: 1px solid #e8e6da; border-radius: 4px; font-size: 11px; color: #555;";
   legend.innerHTML = `
-    <span>Verdict:</span>
-    <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 6px;border-radius:8px;">●●</span> supports + observes</span>
-    <span><span style="background:#fde7c1;color:#8a4500;padding:1px 6px;border-radius:8px;">●◐</span> partial</span>
-    <span><span style="background:#f8c8c8;color:#8a0000;padding:1px 6px;border-radius:8px;">✗</span> no</span>
-    <span><span style="background:#e5e5e5;color:#555;padding:1px 6px;border-radius:8px;">?</span> unknown</span>
-    <span style="margin-left:14px;">Measurement:</span>
-    <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 6px;border-radius:8px;font-size:11px;">✓</span> recording passes spec</span>
-    <span><span style="background:#fff7d6;color:#8a4500;padding:1px 6px;border-radius:8px;font-size:11px;">⚠</span> known_failing</span>
-    <span><span style="background:#f8c8c8;color:#8a0000;padding:1px 6px;border-radius:8px;font-size:11px;">✗</span> fails spec</span>
-    <span><span style="background:#cfe7ff;color:#1c3f7a;padding:1px 6px;border-radius:8px;font-size:11px;">↑</span> known_failing now passing</span>
-    <span style="margin-left:14px;color:#c0392b;font-weight:600;">red border</span> = verdict ≠ measurement
+    <div style="font-weight:600;margin-bottom:4px;">How to read each cell — 5-segment pipeline</div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
+      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">●●</span>
+        <b>Assessment</b> — agent supports + irrlicht observes (matrix verdict)</span>
+      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">✎</span>
+        <b>Recipe</b> — driver script authored in scenarios.json</span>
+      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">§</span>
+        <b>Spec</b> — expected.jsonl phase assertions authored</span>
+      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">3</span>
+        <b>Recordings</b> — count (latest + archived)</span>
+      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">✓</span>
+        <b>Validation</b> — latest passes spec (✗ fails, ⚠ known_failing, ↑ now passes)</span>
+    </div>
+    <div style="margin-top:6px;color:#888;">
+      Empty segments = pipeline stops there. Red outline = matrix ≠ measurement (regression).
+      Amber outline = matrix marked partial but recording passes clean (stale verdict).
+      Blue outline = known_failing flag should be dropped.
+      Click a cell to open the recording (or scenario detail if none).
+    </div>
   `;
   panel.appendChild(legend);
 }
@@ -644,6 +627,151 @@ function coverageBadge(sup, obs) {
   if (sup === "unknown" || obs === "unknown") return {label: "?", bg: "#e5e5e5", fg: "#555"};
   if (sup === "partial" || obs === "partial") return {label: "●◐", bg: "#fde7c1", fg: "#8a4500"};
   return {label: "—", bg: "transparent", fg: "#ccc"};
+}
+
+// renderPipelineStrip paints a compact 5-segment indicator that
+// summarizes where a single (agent × scenario) cell sits in the
+// onboarding workflow:
+//
+//   [ Assessment ][ Recipe ][ Spec ][ N recordings ][ Validation ]
+//
+// Reads left-to-right as a progression. Filled segments = stage
+// complete; dim = stage not reached. A cell-level outline highlights
+// drift between the maintainer's verdict and the measured outcome
+// (matrix-stale or regression).
+//
+// Inputs:
+//   agent — adapter slug for tooltip labelling and the navigation target
+//   scenarioID — coverage_id for the scenario detail link
+//   cov   — one entry from coverage[<agent>] (assessment + pipeline + measurement)
+//   rec   — recording lookup entry from recIndex (or undefined)
+function renderPipelineStrip(agent, scenarioID, cov, rec) {
+  const sup = cov.agent_supports || "unknown";
+  const obs = cov.irrlicht_observes || "unknown";
+  const pipe = cov.pipeline || {};
+  const meas = cov.measurement || {};
+
+  // agent_supports=no freezes the whole pipeline — nothing downstream
+  // matters. Mark "blocked" via the assessment segment styling and
+  // collapse subsequent stages.
+  const blocked = (sup === "no");
+
+  const wrap = document.createElement(rec ? "button" : "div");
+  wrap.style.cssText = "display: inline-flex; gap: 2px; padding: 2px; " +
+    "background: transparent; border: 1px solid transparent; border-radius: 4px; " +
+    "font: inherit; align-items: center; cursor: " + (rec ? "pointer" : "default") + ";";
+
+  // Build 5 segments.
+  const cb = coverageBadge(sup, obs);
+  wrap.appendChild(_pipeSeg(cb.label, cb.bg, cb.fg));
+  if (blocked) {
+    // Three further "blocked" segments so the cell width stays
+    // consistent across rows.
+    wrap.appendChild(_pipeSeg("·", "transparent", "#bbb"));
+    wrap.appendChild(_pipeSeg("·", "transparent", "#bbb"));
+    wrap.appendChild(_pipeSeg("·", "transparent", "#bbb"));
+    wrap.appendChild(_pipeSeg("·", "transparent", "#bbb"));
+  } else {
+    const recipe = pipe.recipe || {};
+    const spec = pipe.spec || {};
+    const rcs = pipe.recordings || {};
+    // Recipe
+    wrap.appendChild(recipe.authored
+      ? _pipeSeg("✎", "#d6f0d4", "#1f5a1d")
+      : _pipeSeg("·", "transparent", "#bbb"));
+    // Spec
+    wrap.appendChild(spec.authored
+      ? _pipeSeg("§", "#d6f0d4", "#1f5a1d")
+      : _pipeSeg("·", "transparent", "#bbb"));
+    // Recordings count (latest counts as 1; archive_count is additional)
+    const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
+    wrap.appendChild(totalRecs > 0
+      ? _pipeSeg(String(totalRecs), "#d6f0d4", "#1f5a1d")
+      : _pipeSeg("·", "transparent", "#bbb"));
+    // Validation
+    const v = _validationGlyph(meas.status);
+    wrap.appendChild(v
+      ? _pipeSeg(v.label, v.bg, v.fg)
+      : _pipeSeg("·", "transparent", "#bbb"));
+  }
+
+  // Drift outlines
+  const verdictExpectsPass = (sup === "yes" && obs === "yes");
+  const verdictExpectsPartial = (obs === "partial");
+  if (meas.status === "fail" || (meas.status === "known_failing" && verdictExpectsPass)) {
+    wrap.style.border = "1px solid #c0392b";
+    wrap.style.background = "#fff5f5";
+  } else if (meas.status === "pass" && verdictExpectsPartial) {
+    wrap.style.border = "1px solid #d68a2a";
+    wrap.style.background = "#fffaf0";
+  } else if (meas.status === "known_failing_now_passing") {
+    wrap.style.border = "1px solid #1c3f7a";
+    wrap.style.background = "#f0f5ff";
+  }
+
+  // Tooltip with the per-stage detail
+  const lines = [`${agent} × ${scenarioID}`];
+  lines.push(`Assessment: supports=${sup}, observes=${obs}`);
+  if (cov.notes) lines.push(`  ${cov.notes}`);
+  if (!blocked) {
+    const recipe = pipe.recipe || {};
+    const spec = pipe.spec || {};
+    const rcs = pipe.recordings || {};
+    lines.push(`Recipe: ${recipe.authored ? `authored (${recipe.step_count} steps)` : "not authored yet"}`);
+    lines.push(`Spec:   ${spec.authored ? `authored (${spec.phase_count} phases)` : "not authored yet"}`);
+    const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
+    if (totalRecs > 0) {
+      const parts = [];
+      if (rcs.latest) parts.push("1 latest");
+      if (rcs.archive_count > 0) parts.push(`${rcs.archive_count} archived`);
+      lines.push(`Recordings: ${totalRecs} (${parts.join(" + ")})`);
+    } else {
+      lines.push(`Recordings: none yet`);
+    }
+    if (meas.status && meas.status !== "no_recording" && meas.status !== "no_expected") {
+      lines.push(`Validation: ${meas.status}${meas.summary ? " — " + meas.summary : ""}`);
+    }
+  } else {
+    lines.push(`(pipeline frozen — agent_supports=no)`);
+  }
+  if (wrap.style.border && wrap.style.border.includes("#c0392b")) {
+    lines.push(`⚠ regression: matrix says yes but recording fails`);
+  } else if (wrap.style.border && wrap.style.border.includes("#d68a2a")) {
+    lines.push(`⚠ matrix may be stale: marked partial but recording passes`);
+  } else if (wrap.style.border && wrap.style.border.includes("#1c3f7a")) {
+    lines.push(`↑ flag drop: marked known_failing but now passes`);
+  }
+  lines.push(rec ? `↻ click to open recording` : `(no recording yet — click to open scenario spec)`);
+  wrap.title = lines.join("\n");
+
+  if (rec) {
+    wrap.onclick = () => navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
+  } else {
+    wrap.onclick = () => navigate(`#/scenario/${scenarioID}`);
+    wrap.style.cursor = "pointer";
+  }
+
+  return wrap;
+}
+
+function _pipeSeg(label, bg, fg) {
+  const seg = document.createElement("span");
+  seg.textContent = label;
+  seg.style.cssText = `display: inline-block; min-width: 18px; padding: 1px 4px; ` +
+    `border-radius: 3px; font: inherit; font-size: 11px; font-weight: 600; ` +
+    `line-height: 1; text-align: center; background: ${bg}; color: ${fg};`;
+  return seg;
+}
+
+function _validationGlyph(status) {
+  switch (status) {
+    case "pass":                      return {label: "✓", bg: "#d6f0d4", fg: "#1f5a1d"};
+    case "known_failing":             return {label: "⚠", bg: "#fff7d6", fg: "#8a4500"};
+    case "known_failing_now_passing": return {label: "↑", bg: "#cfe7ff", fg: "#1c3f7a"};
+    case "fail":                      return {label: "✗", bg: "#f8c8c8", fg: "#8a0000"};
+    case "validator_error":           return {label: "!", bg: "#e5e5e5", fg: "#555"};
+    default:                          return null; // no_recording / no_expected
+  }
 }
 
 // renderMeasurementChip returns a small second pill that reflects what

@@ -111,6 +111,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		if b, err := os.ReadFile(covPath); err == nil {
 			b = annotateCatalogCodes(b)
 			b = annotateMeasurements(b, s.RepoRoot)
+			b = annotatePipelineState(b, s.RepoRoot)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set("X-Catalog-Source", "coverage")
 			w.Write(b)
@@ -264,6 +265,182 @@ func measureScenario(repoRoot, agent, scenarioID string) map[string]any {
 	default:
 		return map[string]any{"status": "fail", "summary": rep.Summary}
 	}
+}
+
+// annotatePipelineState decorates each coverage cell with a `pipeline`
+// object describing where the (agent × scenario) pair currently sits in
+// the multi-stage workflow:
+//
+//	pipeline: {
+//	  recipe:     { authored: bool, step_count: N },
+//	  spec:       { authored: bool, phase_count: N },
+//	  recordings: { latest: bool, archive_count: N },
+//	}
+//
+// `measurement` (added by annotateMeasurements) already carries the
+// fifth stage's outcome. The overview UI composes the 5-segment strip
+// per cell from these three blobs + the existing verdict + measurement.
+//
+// Reads scenarios.json ONCE per request and reuses the parsed map per
+// cell. Spec phase count is a cheap line-count scan; recording counts
+// are filesystem stats only.
+func annotatePipelineState(b []byte, repoRoot string) []byte {
+	var top map[string]any
+	if err := json.Unmarshal(b, &top); err != nil {
+		return b
+	}
+	rawScenarios, ok := top["scenarios"].([]any)
+	if !ok {
+		return b
+	}
+	recipes := loadRecipeMap(repoRoot)
+	for _, raw := range rawScenarios {
+		sc, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		sid, _ := sc["id"].(string)
+		if sid == "" {
+			continue
+		}
+		coverage, ok := sc["coverage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		// Resolve the scenario folder name once (coverage_id may diverge
+		// from the scenarios.json `name`, e.g. user-esc-interrupt vs
+		// interrupted-turn).
+		folder := resolveScenarioFolderFromMap(recipes, sid)
+		if folder == "" {
+			folder = sid
+		}
+		for agentSlug, cellRaw := range coverage {
+			cell, ok := cellRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, folder, recipes)
+		}
+	}
+	out, err := json.Marshal(top)
+	if err != nil {
+		return b
+	}
+	return out
+}
+
+// recipeEntry captures the slice of scenarios.json fields the pipeline
+// state code uses.
+type recipeEntry struct {
+	Name       string
+	CoverageID string
+	ByAdapter  map[string]struct {
+		Applicable *bool `json:"applicable"`
+		Script     []any `json:"script"`
+	}
+}
+
+// loadRecipeMap reads .claude/skills/ir:onboard-agent/scenarios.json
+// once per request and returns a coverageID-keyed lookup. Missing or
+// malformed file → empty map; callers tolerate "no recipe authored."
+func loadRecipeMap(repoRoot string) map[string]recipeEntry {
+	out := map[string]recipeEntry{}
+	path := filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	var doc struct {
+		Scenarios []struct {
+			Name       string `json:"name"`
+			CoverageID string `json:"coverage_id"`
+			ByAdapter  map[string]struct {
+				Applicable *bool `json:"applicable"`
+				Script     []any `json:"script"`
+			} `json:"by_adapter"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return out
+	}
+	for _, sc := range doc.Scenarios {
+		cid := sc.CoverageID
+		if cid == "" {
+			cid = sc.Name
+		}
+		out[cid] = recipeEntry{Name: sc.Name, CoverageID: cid, ByAdapter: sc.ByAdapter}
+	}
+	return out
+}
+
+// resolveScenarioFolderFromMap is the in-memory equivalent of
+// resolveScenarioFolder: avoids re-reading scenarios.json N×M times in
+// the catalog walker.
+func resolveScenarioFolderFromMap(m map[string]recipeEntry, coverageID string) string {
+	if e, ok := m[coverageID]; ok {
+		return e.Name
+	}
+	return ""
+}
+
+// pipelineForCell computes the recipe/spec/recordings status for one
+// (agent, scenario) cell.
+func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes map[string]recipeEntry) map[string]any {
+	out := map[string]any{}
+
+	// Recipe — present if scenarios.json has a per-adapter entry AND
+	// (applicable is nil OR true). applicable=false explicitly marks
+	// the cell N/A even when an entry exists.
+	rec := recipes[coverageID]
+	recipeAuthored := false
+	stepCount := 0
+	if rec.ByAdapter != nil {
+		if entry, ok := rec.ByAdapter[agent]; ok {
+			if entry.Applicable == nil || *entry.Applicable {
+				recipeAuthored = true
+				stepCount = len(entry.Script)
+			}
+		}
+	}
+	out["recipe"] = map[string]any{"authored": recipeAuthored, "step_count": stepCount}
+
+	// Spec — count newline-terminated lines in expected.jsonl, minus
+	// the meta line. Cheap byte scan; no JSON parse needed.
+	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
+	specAuthored := false
+	phaseCount := 0
+	if specBytes, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl")); err == nil {
+		specAuthored = true
+		lines := 0
+		for _, b := range specBytes {
+			if b == '\n' {
+				lines++
+			}
+		}
+		// First line is the meta object; remainder are phases.
+		if lines > 0 {
+			phaseCount = lines - 1
+		}
+	}
+	out["spec"] = map[string]any{"authored": specAuthored, "phase_count": phaseCount}
+
+	// Recordings — top-level events.jsonl present = 1 latest; count
+	// archive subdirs under recordings/.
+	latest := false
+	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err == nil {
+		latest = true
+	}
+	archiveCount := 0
+	if entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings")); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				archiveCount++
+			}
+		}
+	}
+	out["recordings"] = map[string]any{"latest": latest, "archive_count": archiveCount}
+
+	return out
 }
 
 // resolveScenarioFolder maps a coverage_id (the matrix's scenario id)
