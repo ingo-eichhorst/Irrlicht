@@ -187,6 +187,40 @@ struct RateLimitInfo: Codable, Hashable {
     }
 }
 
+/// Per-provider display preference, stored in @AppStorage under
+/// `providerMode_<key>`. Issue #309's maintainer comment asked for an
+/// explicit toggle so a user with multiple paths into the same provider
+/// (e.g. Anthropic Pro **and** Bedrock API key) can pick which view the
+/// chip should render. `auto` defers to snapshot detection — the
+/// default and the right choice for the typical single-path user.
+enum ProviderModePreference: String, CaseIterable, Identifiable {
+    case auto         // infer from snapshot.planType / snapshot.credits
+    case subscription // force the bars chip
+    case usage        // force the spend chip
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .auto: return "Auto"
+        case .subscription: return "Subscription"
+        case .usage: return "Usage"
+        }
+    }
+
+    /// AppStorage key for this provider. Stable across app launches.
+    static func storageKey(providerKey: String) -> String {
+        "providerMode_\(providerKey)"
+    }
+
+    /// Read the persisted preference for a provider. Falls back to
+    /// `.auto` for unknown keys or unparseable values.
+    static func current(for providerKey: String) -> ProviderModePreference {
+        let raw = UserDefaults.standard.string(forKey: storageKey(providerKey: providerKey)) ?? ""
+        return ProviderModePreference(rawValue: raw) ?? .auto
+    }
+}
+
 /// Hardcoded provider-level icons, picked by RateLimitInfo.providerKey for
 /// the quota chip. These are subscription-provider icons (Anthropic,
 /// OpenAI) — distinct from the agent CLI icons in AgentRegistry, since

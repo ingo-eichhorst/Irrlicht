@@ -79,6 +79,30 @@ func (t *TranscriptTailer) rateLimitChanged(snap *RateLimitSnapshot) bool {
 	return false
 }
 
+// rateLimitFullyStale reports whether any window in snap has a ResetsAt
+// strictly before now — the signal that at least one window has rolled
+// over since the last statusline tick and our cached percent reading no
+// longer matches the provider's current state. The whole snapshot is
+// dropped (rather than just the stale window) because `sampled_at` is
+// shared across windows, so a stale 5h means the whole snapshot pre-
+// dates whatever the provider currently reports.
+//
+// A nil receiver or empty Windows is not stale (nothing to invalidate).
+// Windows with ResetsAt == 0 are treated as "no expiry data, can't
+// judge" — also not stale.
+func rateLimitFullyStale(snap *RateLimitSnapshot, now time.Time) bool {
+	if snap == nil || len(snap.Windows) == 0 {
+		return false
+	}
+	nowUnix := now.Unix()
+	for _, w := range snap.Windows {
+		if w.ResetsAt > 0 && w.ResetsAt <= nowUnix {
+			return true
+		}
+	}
+	return false
+}
+
 // rateLimitRolledOver returns true when any window's ResetsAt has advanced
 // since the most recent history entry — the signal that the provider rolled
 // over to a fresh quota window and previous slope data is stale.
@@ -352,6 +376,17 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.LastWasToolDenial = t.lastWasToolDenial
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText
+	// Drop snapshots once any window has rolled over but no fresh
+	// statusline tick has arrived. Our cached percent reading then
+	// describes a window the provider has already reset, and the
+	// tooltip would render "resets in 0m" while the real reset
+	// happened minutes ago. Better to surface "no chip" until the
+	// next tick lands than to render stale data (issue #309 phase-5
+	// hotfix).
+	if rateLimitFullyStale(t.rateLimit, time.Now()) {
+		t.rateLimit = nil
+		t.rateLimitHistory = nil
+	}
 	t.metrics.RateLimit = t.rateLimit
 	if len(t.rateLimitHistory) > 0 {
 		t.metrics.RateLimitHistory = append([]RateLimitSnapshot(nil), t.rateLimitHistory...)

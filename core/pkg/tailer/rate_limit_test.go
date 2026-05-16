@@ -2,6 +2,7 @@ package tailer
 
 import (
 	"testing"
+	"time"
 )
 
 func newTailerForRateLimitTest(t *testing.T) *TranscriptTailer {
@@ -89,5 +90,36 @@ func TestIngestRateLimit_NilNoOp(t *testing.T) {
 	tt.IngestRateLimit(nil)
 	if tt.rateLimit != nil || len(tt.rateLimitHistory) != 0 {
 		t.Fatal("nil snapshot must be a no-op")
+	}
+}
+
+func TestRateLimitFullyStale(t *testing.T) {
+	now := time.Unix(2000, 0)
+	cases := []struct {
+		name string
+		snap *RateLimitSnapshot
+		want bool
+	}{
+		{"nil snapshot", nil, false},
+		{"no windows", &RateLimitSnapshot{}, false},
+		{"all future resets", &RateLimitSnapshot{Windows: []RateLimitWindow{
+			{ResetsAt: 3000}, {ResetsAt: 4000},
+		}}, false},
+		{"any past reset triggers stale", &RateLimitSnapshot{Windows: []RateLimitWindow{
+			{ResetsAt: 1000}, {ResetsAt: 4000},
+		}}, true},
+		{"all past", &RateLimitSnapshot{Windows: []RateLimitWindow{
+			{ResetsAt: 1000}, {ResetsAt: 1500},
+		}}, true},
+		{"zero ResetsAt ignored (treated as no data)", &RateLimitSnapshot{Windows: []RateLimitWindow{
+			{ResetsAt: 0}, {ResetsAt: 0},
+		}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rateLimitFullyStale(tc.snap, now); got != tc.want {
+				t.Errorf("rateLimitFullyStale = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

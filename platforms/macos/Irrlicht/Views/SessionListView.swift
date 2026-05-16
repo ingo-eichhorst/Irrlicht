@@ -357,7 +357,7 @@ struct SessionListView: View {
         if showQuotaForecast {
             let chips = quotaChipData
             if !chips.isEmpty {
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     ForEach(chips) { chip in
                         quotaChipView(chip, compact: chips.count > 1)
                     }
@@ -421,14 +421,25 @@ struct SessionListView: View {
         var byProvider: [String: Bucket] = [:]
         for session in sessionManager.sessions {
             guard let snap = session.metrics?.rateLimit else { continue }
-            let mode: QuotaMode = (snap.credits != nil && (snap.planType ?? "").isEmpty)
-                ? .usage
-                : .subscription
             // Without a providerKey the chip has no brand — fall back to
             // a per-adapter unknown bucket so wrapper sessions (Pi,
             // OpenCode) with subscription-shaped data still render their
             // own chip rather than being silently dropped.
             let key = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
+            // Per-provider mode preference (Settings → Providers): when
+            // set to `.subscription` or `.usage` it overrides snapshot
+            // detection, so a user with multiple paths into the same
+            // provider can pin the display to the view they care about.
+            let preference = ProviderModePreference.current(for: key)
+            let inferredMode: QuotaMode = (snap.credits != nil && (snap.planType ?? "").isEmpty)
+                ? .usage
+                : .subscription
+            let mode: QuotaMode
+            switch preference {
+            case .auto: mode = inferredMode
+            case .subscription: mode = .subscription
+            case .usage: mode = .usage
+            }
             let imminent = snap.imminentWindow
             let sessionCost = session.metrics?.estimatedCostUSD ?? 0
             if var existing = byProvider[key] {
@@ -483,10 +494,20 @@ struct SessionListView: View {
             // otherwise fall back to the adapter icon so the chip never
             // appears iconless. The quota bucket is provider-scoped, so
             // the provider mark is the more meaningful brand.
+            //
+            // `.resizable().frame(...)` is load-bearing: `NSImage(data:)`
+            // on an SVG decodes inconsistently depending on the path's
+            // complexity — the Anthropic single-path mark lands at the
+            // SVG's declared 14×14 size, but the OpenAI multi-path knot
+            // decoded at viewBox-native 24×24, dominating the chip and
+            // pushing the body out of view. Forcing the SwiftUI frame
+            // normalises both regardless of underlying decode quirks.
             if let icon = ProviderIconRegistry.image(forKey: d.snapshot.providerKey(adapter: d.session.adapter))
                 ?? d.session.adapterIcon {
                 Image(nsImage: icon)
+                    .resizable()
                     .renderingMode(.template)
+                    .frame(width: 14, height: 14)
                     .foregroundColor(.primary)
             }
             switch d.mode {
@@ -504,22 +525,32 @@ struct SessionListView: View {
     }
 
     /// Usage-mode chip body — cumulative spend across all sessions on
-    /// this provider, with a "spend" subtitle. Honest label rather than
-    /// the mockup's "$X / day · spend today": proper daily attribution
-    /// needs a daemon-side per-provider cost tracker (deferred). For
-    /// short-lived sessions (the common case) cumulative ≈ today.
+    /// this provider, with a "spend" subtitle. Always 2 lines so the
+    /// chip has the same height as the subscription variant (5h + 7d
+    /// rows) and the two render cleanly side-by-side in the header.
+    ///
+    /// Zero-state: when no spend has accumulated, render an em-dash and
+    /// "no spend yet" rather than "$0.00 / spend". The data path is
+    /// wired up, just nothing to report — important when a user has
+    /// forced-usage mode on a subscription-only session, where
+    /// `totalCostUSD` legitimately stays at zero.
+    ///
+    /// A `minWidth: 88` matches the subscription chip's row width
+    /// (label + 40pt bar + percent) so a usage chip with a short
+    /// headline doesn't collapse to an icon-only sliver next to a
+    /// bars chip.
     @ViewBuilder
     private func quotaUsageBody(_ d: QuotaWidgetData, compact: Bool) -> some View {
+        let hasSpend = d.totalCostUSD > 0
         VStack(alignment: .leading, spacing: 1) {
-            Text(formatUsageCost(d.totalCostUSD))
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            Text(hasSpend ? formatUsageCost(d.totalCostUSD) : "—")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundColor(.primary)
-            if !compact {
-                Text("spend")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
+            Text(hasSpend ? "spend" : "no spend yet")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.secondary)
         }
+        .frame(minWidth: 88, alignment: .leading)
     }
 
     /// Format the cost headline: tiny costs render `<$0.01`, normal
