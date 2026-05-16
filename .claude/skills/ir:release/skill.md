@@ -172,7 +172,114 @@ A Highlight without all four assets is not a Highlight — demote to Also in thi
 
 ### 4a-roadmap. Update the roadmap page (when items shipped)
 
-If this release closed any open issues that appeared on `site/docs/roadmap.html` under **Now** or **Next** (or, in the chronological-timeline version, anywhere in the **Future** section), move them down across the "today" line into the **Past** section under this release's row. Use the same three-tier hierarchy: big-bullet milestones for theme-level changes, italic `.release-note` for narrower notes, plain version+date for cleanup-only patches. The roadmap is the public commitment surface; closing the loop when items ship is what makes it credible.
+`site/docs/roadmap.html` is a chronological timeline running newest-at-top: future releases above a `<div class="timeline-now">` boundary on a dashed spine, past releases below it on a solid spine. When a release ships, the in-flight row migrates from future to past, the today line bumps to the ship date, the next-bucket release promotes into the in-flight slot, and the new past-section row picks up an **ALSO SHIPPED** roll-call of every other issue/PR that landed. The roadmap is the public commitment surface; closing the loop when items ship is what makes it credible. Run the steps below as part of every release.
+
+#### Step A. Compute this release's full issue/PR ref set
+
+The roadmap's per-row `<div class="also-shipped">` line lists every issue and PR that landed in that release, beyond what the Highlights / italic notes already cite. Compute the full set:
+
+```bash
+PREV_TAG=$(git describe --tags --abbrev=0 HEAD~)   # tag immediately before this release commit
+THIS_TAG="v$NEW_VERSION"
+
+python3 <<'PY'
+import subprocess, re, os
+prev = os.environ.get('PREV_TAG') or subprocess.check_output(
+    ['git','describe','--tags','--abbrev=0','HEAD~'], text=True).strip()
+this = os.environ.get('THIS_TAG') or 'HEAD'
+log = subprocess.check_output(
+    ['git','log','--no-merges','--format=%s%n%b', f'{prev}..{this}'], text=True)
+pat = re.compile(r'(?:^|(?<=[\s,(]))#(\d+)\b')
+refs = set()
+for line in log.split('\n'):
+    for m in pat.finditer(line):
+        n_str, end = m.group(1), m.end()
+        # skip hex colors like #34C759
+        if end < len(line) and line[end].lower() in 'abcdef': continue
+        n = int(n_str)
+        if not (2 <= n <= 999): continue
+        ctx = line[max(0, m.start()-25):m.start()].lower()
+        # skip natural-language uses like "sweep #2", "phase #3"
+        if any(k in ctx for k in ['sweep ', 'phase-narration', 'rounds ', 'iteration ']): continue
+        refs.add(n)
+print(' '.join('#' + str(n) for n in sorted(refs)))
+PY
+```
+
+Subtract the refs you already cite in this release's row (Highlights bullets and italic notes from Step 2c). What remains is the **ALSO SHIPPED** list for the row.
+
+#### Step B. Insert the new release row
+
+The past section uses two row shapes — copy the closest existing row and adapt:
+
+**Minor / major release** (e.g. `v0.5.0`): big purple trunk node, theme line, 2–6 bulleted milestones, ALSO SHIPPED line.
+
+```html
+<div class="release minor">
+  <div class="release-head">
+    <span class="release-version">v$NEW_VERSION</span>
+    <span class="release-date">YYYY-MM-DD</span>
+    <span class="release-pill pill-shipped">shipped</span>
+  </div>
+  <div class="release-theme">&lt;one-line theme — same headline as your release notes&gt;</div>
+  <ul class="milestones">
+    <li>&lt;big milestone&gt; <span class="ref">&middot; <a href="…/issues/N" target="_blank" rel="noopener">#N</a></span> <span class="desc">&mdash; &lt;short description&gt;</span></li>
+  </ul>
+  <div class="also-shipped">
+    <a href="…/issues/N1" target="_blank" rel="noopener">#N1</a>
+    <a href="…/issues/N2" target="_blank" rel="noopener">#N2</a>
+    …
+  </div>
+</div>
+```
+
+**Patch release** (e.g. `v0.5.3`): small gray-dot branch node, three-tier content. Pick the tier that fits what shipped:
+
+- **Big bullets** (`<ul class="milestones">`) for theme-level user-visible changes (a marquee feature, a major adapter, a new surface).
+- **Italic note** (`<p class="release-note">`) for narrower-but-notable changes — a specific adapter's fix, a terminal-host-specific issue, an env-var refinement, a security tightening. Two or three things merged into one italic line is fine.
+- **Just version + date** for cleanup-only patches (release-tooling, internal refactors, doc fixes only). Be honest: an empty patch row honestly says "we shipped, nothing user-visible landed". Don't pad.
+
+```html
+<div class="release patch">
+  <div class="release-head">
+    <span class="release-version">v$NEW_VERSION</span>
+    <span class="release-date">YYYY-MM-DD</span>
+  </div>
+  <!-- pick what applies: -->
+  <ul class="milestones"> … </ul>           <!-- big bullets, optional -->
+  <p class="release-note"> … </p>            <!-- italic notes, optional -->
+  <div class="also-shipped"> … </div>        <!-- always include if there are refs -->
+</div>
+```
+
+Insert the new row **immediately below the `<div class="timeline-now">` boundary** so it's the top of the past section.
+
+#### Step C. Update the "today" boundary
+
+```html
+<div class="timeline-now"><span>YYYY-MM-DD &middot; today</span></div>
+```
+
+Set `YYYY-MM-DD` to the release ship date (today).
+
+#### Step D. Migrate the future section (minor / major releases only)
+
+If this release is a minor or major (e.g. `v0.5.0` shipping), the future section needs a pill rotation:
+
+1. **Delete the previously-in-flight row** from the future section — its content lives in the new past-section row from Step B.
+2. **Promote the previously-next row** to in-flight: change `pill-next` → `pill-in-flight`, update the date estimate based on the cadence (typically 3–5 weeks from today for the next minor; patches inside the cycle ship in 1–5 day bursts).
+3. **Promote the previously-later row** to next: change the first `pill-later` row's pill to `pill-next`, update its date estimate.
+4. **Optionally adjust the theme line** of the new in-flight row if scope has shifted (issues moved in or out since the row was first drafted). The themes are best-effort: revise them when the work tells you they should change.
+
+For **patch releases**, skip Step D — the future section stays unchanged. The patch row from Step B sits below the today line; the in-flight row above it stays in place.
+
+#### Step E. Verify
+
+- Open `site/docs/roadmap.html` in a browser at desktop and ~360px widths. Spine continuous in both. Future portion dashed, past portion solid.
+- The new release row sits immediately below the today line.
+- The `ALSO SHIPPED` count plus the cited Highlight refs equals the full set Step A produced.
+- Spot-check 5 of the new ALSO SHIPPED links — all 200 OK.
+- The previously-in-flight item (if minor) is no longer in the future section.
 
 ### 4b. Doc + README sweep (mandatory)
 
