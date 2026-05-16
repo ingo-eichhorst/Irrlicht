@@ -34,19 +34,6 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 	d.log.LogInfo("session-detector", ev.SessionID,
 		fmt.Sprintf("new session detected in %s (adapter=%s)", ev.ProjectDir, id.Name))
 
-	// /clear detection: when a new transcript appears in a projectDir
-	// that already has a session in `ready` with recent activity, the
-	// old session was abandoned (claudecode rotates the UUID on
-	// /clear, keeping the same process and projectDir). Emit
-	// transcript_removed for the old session BEFORE registering the
-	// new one so events.jsonl shows clean rotation with no overlap
-	// (issue #169). PIDManager's same-PID cleanup still runs at
-	// pid_discovered time as a safety net for the timing window
-	// where the new session arrives before the old's last activity
-	// is observable; this path eliminates the 50ms visible overlap
-	// in the typical /clear flow.
-	d.rotateOnNewTranscript(id, ev)
-
 	// Track project directory for parent derivation.
 	d.mu.Lock()
 	d.projectSessions[ev.SessionID] = ev.ProjectDir
