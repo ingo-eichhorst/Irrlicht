@@ -3,7 +3,7 @@
 // 1×/2×/5×/10×/20×/25×/100×, adaptive fast-forward, state-change
 // reason panel showing rule_id + signal_ref + evidence.
 
-const SPEED_PRESETS = [1, 2, 5, 10, 20, 25, 100];
+const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 
 // Module-level handles populated during init() and reused by the
 // Overview button + scenario clicks to swap views in the main pane.
