@@ -135,6 +135,38 @@ type ParsedEvent struct {
 	ContentChars     int64  // character count for token estimation
 	CWD              string // working directory if found
 	PermissionMode   string // Claude Code only
+
+	// RateLimit, when non-nil, is a subscription-quota snapshot extracted from
+	// this event. Codex emits one per token_count event_msg; Claude Code feeds
+	// them in via the statusline hook (different path — parser only fills this
+	// for in-band transcript signals).
+	RateLimit *RateLimitSnapshot
+}
+
+// RateLimitSnapshot mirrors session.RateLimitSnapshot inside the tailer
+// package so parsers can emit snapshots without importing the domain. The
+// adapter glue (core/adapters/outbound/metrics) converts to the domain type
+// at the same boundary it converts Task and SubagentCompletion.
+type RateLimitSnapshot struct {
+	Windows     []RateLimitWindow
+	PlanType    string
+	Credits     *CreditsSnapshot
+	ReachedType string
+	SampledAt   int64
+}
+
+// RateLimitWindow mirrors session.RateLimitWindow.
+type RateLimitWindow struct {
+	UsedPercent   float64
+	WindowMinutes int
+	ResetsAt      int64
+}
+
+// CreditsSnapshot mirrors session.CreditsSnapshot.
+type CreditsSnapshot struct {
+	HasCredits bool
+	Unlimited  bool
+	Balance    float64
 }
 
 // TokenSnapshot holds a token breakdown from a single event.

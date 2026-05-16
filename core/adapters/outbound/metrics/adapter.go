@@ -3,6 +3,7 @@ package metrics
 import (
 	"os"
 	"sync"
+	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/domain/session"
@@ -161,6 +162,14 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		}
 	}
 	result.Tasks = tailerTasksToDomain(m.Tasks)
+	if m.RateLimit != nil {
+		result.RateLimit = tailerRateLimitToDomain(m.RateLimit)
+		history := tailerRateLimitHistoryToDomain(m.RateLimitHistory)
+		if eta := session.ForecastCap(history, time.Now()); eta != nil {
+			etaUnix := eta.Unix()
+			result.RateLimitForecastEta = &etaUnix
+		}
+	}
 	if result.ModelName == "" {
 		result.ModelName = "unknown"
 	}
@@ -174,6 +183,59 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		result.LastAssistantText = snippet
 	}
 	return result, nil
+}
+
+// IngestRateLimit pushes a rate-limit snapshot into the tailer for
+// transcriptPath. Used by the Claude Code statusline hook receiver. No-op
+// when no tailer exists for the path (snapshot arrived before the session
+// was detected) — the snapshot is simply dropped; the next statusline tick
+// will populate it once the tailer exists.
+func (a *Adapter) IngestRateLimit(transcriptPath string, snap *session.RateLimitSnapshot) {
+	if transcriptPath == "" || snap == nil {
+		return
+	}
+	a.mu.Lock()
+	lt, ok := a.tailers[transcriptPath]
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	tailerSnap := domainRateLimitToTailer(snap)
+	lt.mu.Lock()
+	lt.t.IngestRateLimit(tailerSnap)
+	lt.mu.Unlock()
+}
+
+// domainRateLimitToTailer is the inbound counterpart to tailerRateLimitToDomain
+// — used by IngestRateLimit when the HTTP layer hands us a domain-typed
+// snapshot that has to land inside the tailer's mirror type.
+func domainRateLimitToTailer(src *session.RateLimitSnapshot) *tailer.RateLimitSnapshot {
+	if src == nil {
+		return nil
+	}
+	dst := &tailer.RateLimitSnapshot{
+		PlanType:    src.PlanType,
+		ReachedType: src.ReachedType,
+		SampledAt:   src.SampledAt,
+	}
+	if len(src.Windows) > 0 {
+		dst.Windows = make([]tailer.RateLimitWindow, len(src.Windows))
+		for i, w := range src.Windows {
+			dst.Windows[i] = tailer.RateLimitWindow{
+				UsedPercent:   w.UsedPercent,
+				WindowMinutes: w.WindowMinutes,
+				ResetsAt:      w.ResetsAt,
+			}
+		}
+	}
+	if src.Credits != nil {
+		dst.Credits = &tailer.CreditsSnapshot{
+			HasCredits: src.Credits.HasCredits,
+			Unlimited:  src.Credits.Unlimited,
+			Balance:    src.Credits.Balance,
+		}
+	}
+	return dst
 }
 
 // PruneEntry releases per-session state when a session ends: drops the
@@ -195,6 +257,50 @@ func (a *Adapter) PruneEntry(transcriptPath string) {
 	if lp := ledgerPath(transcriptPath); lp != "" {
 		_ = os.Remove(lp)
 	}
+}
+
+// tailerRateLimitToDomain converts a tailer-side snapshot to its domain mirror.
+func tailerRateLimitToDomain(src *tailer.RateLimitSnapshot) *session.RateLimitSnapshot {
+	if src == nil {
+		return nil
+	}
+	dst := &session.RateLimitSnapshot{
+		PlanType:    src.PlanType,
+		ReachedType: src.ReachedType,
+		SampledAt:   src.SampledAt,
+	}
+	if len(src.Windows) > 0 {
+		dst.Windows = make([]session.RateLimitWindow, len(src.Windows))
+		for i, w := range src.Windows {
+			dst.Windows[i] = session.RateLimitWindow{
+				UsedPercent:   w.UsedPercent,
+				WindowMinutes: w.WindowMinutes,
+				ResetsAt:      w.ResetsAt,
+			}
+		}
+	}
+	if src.Credits != nil {
+		dst.Credits = &session.CreditsSnapshot{
+			HasCredits: src.Credits.HasCredits,
+			Unlimited:  src.Credits.Unlimited,
+			Balance:    src.Credits.Balance,
+		}
+	}
+	return dst
+}
+
+// tailerRateLimitHistoryToDomain copies the rolling history into the
+// domain-typed slice the forecast helper consumes.
+func tailerRateLimitHistoryToDomain(src []tailer.RateLimitSnapshot) []session.RateLimitSnapshot {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]session.RateLimitSnapshot, len(src))
+	for i := range src {
+		converted := tailerRateLimitToDomain(&src[i])
+		dst[i] = *converted
+	}
+	return dst
 }
 
 // tailerTasksToDomain converts a tailer task slice to the domain mirror type.

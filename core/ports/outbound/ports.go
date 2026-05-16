@@ -94,6 +94,13 @@ type MetricsCollector interface {
 	// cache and the on-disk ledger file — when a session ends. Idempotent
 	// on a missing or already-removed entry.
 	PruneEntry(transcriptPath string)
+	// IngestRateLimit attaches a subscription-quota snapshot to the session
+	// associated with transcriptPath, when a tailer already exists for it.
+	// Used by the Claude Code statusline hook, which delivers rate-limit
+	// data out-of-band from the transcript stream. No-op when the tailer
+	// hasn't been created yet — the next ComputeMetrics will create one
+	// and the next statusline tick will populate it.
+	IngestRateLimit(transcriptPath string, snap *session.RateLimitSnapshot)
 }
 
 // PushBroadcaster fans out session state changes to subscribers (e.g. WebSocket clients).

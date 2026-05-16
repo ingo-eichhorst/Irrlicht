@@ -124,6 +124,8 @@ func (m *mockMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetr
 
 func (m *mockMetrics) PruneEntry(path string) { m.pruned = append(m.pruned, path) }
 
+func (m *mockMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {}
+
 // funcMetrics is a metrics collector whose ComputeMetrics behaviour can be
 // configured per test. Used to simulate a tailer that returns refreshed
 // metrics for already-persisted sessions during seedFromDisk.
@@ -139,6 +141,8 @@ func (m *funcMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetr
 }
 
 func (m *funcMetrics) PruneEntry(path string) {}
+
+func (m *funcMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {}
 
 // --- AgentWatcher mock -------------------------------------------------------
 

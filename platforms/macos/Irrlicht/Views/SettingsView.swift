@@ -6,7 +6,10 @@ struct SettingsView: View {
     @Binding var isPresented: Bool
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+    @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
+    @AppStorage("providerMode_anthropic") private var providerModeAnthropic: String = ProviderModePreference.auto.rawValue
+    @AppStorage("providerMode_openai") private var providerModeOpenAI: String = ProviderModePreference.auto.rawValue
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = true
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = true
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = true
@@ -35,6 +38,24 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                LeadingToggle(isOn: $showQuotaForecast, label: "Show Quota Forecast")
+
+                Text("Replace the app version in the header with a live burn-rate forecast against your Pro/Max or ChatGPT subscription cap. Only appears when a subscription session is active.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if showQuotaForecast {
+                    providerModeRow(label: "Anthropic", selection: $providerModeAnthropic)
+                    providerModeRow(label: "OpenAI", selection: $providerModeOpenAI)
+                    Text("Auto picks the chip variant from the snapshot; override when you have multiple paths into one provider.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -112,16 +133,41 @@ struct SettingsView: View {
 
             Spacer()
 
+            Divider()
+
             HStack {
+                Text("Irrlicht v\(appVersion)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 Spacer()
                 Button("Done") { isPresented = false }
                     .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
-        .frame(width: 360, height: 520)
+        .frame(width: 360, height: 740)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
+    }
+
+    /// One row of the Providers section: provider name + segmented
+    /// picker. Bound to the raw AppStorage string so SwiftUI re-renders
+    /// downstream views (SessionListView's chip) as soon as the user
+    /// flips it.
+    @ViewBuilder
+    private func providerModeRow(label: String, selection: Binding<String>) -> some View {
+        HStack {
+            Text(label)
+                .font(.callout)
+                .frame(width: 80, alignment: .leading)
+            Picker("", selection: selection) {
+                ForEach(ProviderModePreference.allCases) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
     }
 
     private func checkNotificationAuth() {

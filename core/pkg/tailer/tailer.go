@@ -144,6 +144,20 @@ type SessionMetrics struct {
 	// TaskCreate / TaskUpdate tool_use events in the Claude Code transcript.
 	// Nil for sessions that have not called TaskCreate.
 	Tasks []Task `json:"tasks,omitempty"`
+
+	// RateLimit is the most recent rate-limit snapshot observed for this
+	// session. Populated by parsers that surface subscription quota (codex
+	// from token_count events) and by the Claude Code statusline hook
+	// receiver (which calls IngestRateLimit directly). Nil when no
+	// snapshot has been seen.
+	RateLimit *RateLimitSnapshot `json:"rate_limit,omitempty"`
+
+	// RateLimitHistory is a small rolling buffer of changed snapshots used
+	// to compute a burn-rate forecast. Sample-on-change: duplicates of the
+	// most recent used_percent values are dropped before append, so the
+	// slope calculation isn't diluted by zero-delta statusline ticks
+	// (issue #309). Capped at rateLimitHistoryCap entries.
+	RateLimitHistory []RateLimitSnapshot `json:"-"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -238,7 +252,20 @@ type TranscriptTailer struct {
 	// synthesize turn_done when the file has been quiet long enough. Zero
 	// means no line has been seen yet.
 	lastLineSeenAt time.Time
+
+	// rateLimit is the most recent snapshot observed; rateLimitHistory holds
+	// the rolling sample-on-change buffer (capped at rateLimitHistoryCap).
+	// In-memory only — after a daemon restart, the next few token_count or
+	// statusline events repopulate the history before forecasting resumes.
+	rateLimit        *RateLimitSnapshot
+	rateLimitHistory []RateLimitSnapshot
 }
+
+// rateLimitHistoryCap caps the rolling history at a small number of changed
+// samples. Larger windows blur the slope across burn-rate regime changes; a
+// 5-sample window is responsive to recent activity without being thrown off
+// by a single jumpy reading.
+const rateLimitHistoryCap = 5
 
 // NewTranscriptTailer creates a new tailer for the given transcript path.
 // The parser handles format-specific line parsing; adapter is used for model
