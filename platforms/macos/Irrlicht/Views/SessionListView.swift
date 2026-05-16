@@ -683,7 +683,12 @@ struct SessionListView: View {
         switch d.mode {
         case .subscription:
             for w in d.snapshot.windows {
-                let pct = String(format: "%.1f%%", w.usedPercent)
+                // Provider data is integer-precision (any decimals are
+                // floating-point noise from a JSON marshal/unmarshal
+                // round-trip on the daemon side, e.g. 7.000000000000001
+                // for a value the provider reported as 7). Render as
+                // whole percent so the tooltip matches the chip body.
+                let pct = "\(Int(w.usedPercent.rounded()))%"
                 let label = quotaWindowLabel(w.windowMinutes)
                 let resets = formatTimeUntil(w.resetsAt)
                 lines.append("\(label): \(pct) · resets in \(resets)")
