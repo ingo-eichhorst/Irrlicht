@@ -965,21 +965,40 @@ function renderRecordingHistory(s, latestData, archives) {
   noneOpt.value = "__none__";
   noneOpt.textContent = "— No recording (spec only) —";
   select.appendChild(noneOpt);
+
+  // Label format shared by latest + archives: recording_started_at,
+  // daemon version, fresh pass rate. Using recording_started_at (not
+  // promoted_at) so the timestamps in the dropdown describe WHEN the
+  // recording was captured, which is what the operator actually wants
+  // to compare across runs. The latest's metadata comes from
+  // latestData.expected (no separate manifest at top-level).
+  function fmtLabel(startedAt, daemonVer, passRate) {
+    const ts = startedAt || "(no timestamp)";
+    const ver = daemonVer ? ` · daemon ${daemonVer}` : "";
+    const pass = passRate ? ` · ${passRate}` : "";
+    return `${ts}${ver}${pass}`;
+  }
+
+  // The top-level recording (events.jsonl at the scenario root) sits at
+  // the top of the dropdown — it IS the latest, no separate "Latest"
+  // entry needed. value stays "" so the server-side path is unchanged.
   const latestOpt = document.createElement("option");
   latestOpt.value = "";
-  latestOpt.textContent = "Latest (current events.jsonl)";
+  const latestStart = latestData.expected && latestData.expected.recording_start;
+  const latestPass = latestData.expected && latestData.expected.summary;
+  latestOpt.textContent = fmtLabel(latestStart, "dev", latestPass);
   select.appendChild(latestOpt);
+
   for (const a of (archives || [])) {
     const opt = document.createElement("option");
     opt.value = a.name;
-    const verLabel = a.daemon_version ? ` · daemon ${a.daemon_version}` : "";
-    const passLabel = a.expected_pass_rate ? ` · ${a.expected_pass_rate}` : "";
-    opt.textContent = `${a.promoted_at || a.name}${verLabel}${passLabel}`;
+    opt.textContent = fmtLabel(a.recording_started_at || a.name, a.daemon_version, a.expected_pass_rate);
     select.appendChild(opt);
   }
-  // Default = Latest. URL deep-links (#/recording/...) imply
-  // "show me this recording" so Latest is the natural starting
-  // point; users explicitly switch to (none) for spec-only view.
+  // Default = the newest recording (top-level events.jsonl). URL deep-
+  // links (#/recording/...) imply "show me this recording", which means
+  // the latest by default; users explicitly switch to (none) for spec-
+  // only view.
   select.value = "";
   selPanel.appendChild(select);
 
@@ -1013,7 +1032,7 @@ function renderRecordingHistory(s, latestData, archives) {
       // result/delta columns, or the summary chip. The point is "here's
       // the spec" — there's no recording to validate against.
       expHost.replaceChildren(renderExpected(latestData, "spec"));
-      manifestBox.innerHTML = `<i>No recording selected — only Spec expectations rendered. Pick "Latest" or an archive to see captured behavior.</i>`;
+      manifestBox.innerHTML = `<i>No recording selected — only Spec expectations rendered. Pick a recording to see captured behavior.</i>`;
       return;
     }
 
