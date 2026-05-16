@@ -3,12 +3,13 @@ import SwiftUI
 /// Per-row session-state glyph, unified with the web dashboard
 /// (`platforms/web/index.html` `svgIcons`):
 ///
-/// - working: solid inner dot + animated halo ring (expands and fades).
+/// - working: large solid dot (r = 7/20 of frame), opacity-only breathe
+///            between 0.55 and 1.0 over 1.4 s.
 /// - waiting: two-bar pause.
 /// - ready:   SF Symbol `checkmark.circle.fill` (unchanged from before).
 ///
-/// The halo animation is suppressed when the user has enabled Reduce Motion;
-/// only the steady inner dot remains.
+/// The opacity animation is suppressed when the user has enabled Reduce
+/// Motion; the dot remains at full opacity, fully visible.
 struct SessionStateIcon: View {
     let state: SessionState.State
     let size: CGFloat
@@ -27,44 +28,44 @@ struct SessionStateIcon: View {
     }
 }
 
-/// Heartbeat halo — mirrors the SMIL `<animate>` in the web SVG:
-/// halo scales r 3→9 (i.e. 1.0×→3.0× starting size), opacity 0.85→0,
-/// stroke 1.5→0.4 over 1.6s, repeating forever.
+/// Breathing solid dot — opacity-only breathe (0.55 ↔ 1.0 over 1.4 s,
+/// ease-in-out, autoreversing). The dot is sized to match the ready-state
+/// SF Symbol `checkmark.circle.fill` (full frame, no inset) so working and
+/// ready read as the same size in the row. No scaling animation — the dot
+/// stays at its full footprint even if the animation drops frames or stops,
+/// so the worst-case render is a large solid purple disc the same size as
+/// the ready check.
+///
+/// First render is at full opacity (1.0) — `dim` starts `false`, then the
+/// `withAnimation` block in `.onAppear` flips it to true with an explicit
+/// `repeatForever(autoreverses:)` curve. Using `withAnimation` here instead
+/// of the implicit `.animation(value:)` modifier is load-bearing: the
+/// implicit form is cancelled when a parent view re-renders (which the
+/// session row does frequently, on every WebSocket push), so the breathe
+/// silently freezes after the first row update. `withAnimation` scopes the
+/// curve to the state change itself and survives parent re-renders.
 private struct WorkingIcon: View {
     let size: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animating = false
+    @State private var dim = false
 
-    private static let period: Double = 1.6
-    private static let coreRatio: CGFloat = 2.6 / 20   // SVG dot radius / viewBox
-    private static let haloStartRatio: CGFloat = 3 / 20
-    private static let haloEndScale: CGFloat = 9 / 3   // r=3 → r=9
+    private static let period: Double = 1.4
+    private static let dimOpacity: Double = 0.55
 
     var body: some View {
-        ZStack {
-            // Steady inner dot
-            Circle()
-                .fill(IrrColors.working)
-                .frame(width: size * Self.coreRatio * 2,
-                       height: size * Self.coreRatio * 2)
-
-            if !reduceMotion {
-                let haloDiameter = size * Self.haloStartRatio * 2
-                Circle()
-                    .stroke(IrrColors.working,
-                            lineWidth: animating ? 0.4 : 1.5)
-                    .frame(width: haloDiameter, height: haloDiameter)
-                    .scaleEffect(animating ? Self.haloEndScale : 1.0)
-                    .opacity(animating ? 0 : 0.85)
-                    .animation(
-                        .linear(duration: Self.period)
-                            .repeatForever(autoreverses: false),
-                        value: animating
-                    )
+        Circle()
+            .fill(IrrColors.working)
+            .frame(width: size, height: size)
+            .opacity(reduceMotion ? 1 : (dim ? Self.dimOpacity : 1))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(
+                    .easeInOut(duration: Self.period / 2)
+                        .repeatForever(autoreverses: true)
+                ) {
+                    dim = true
+                }
             }
-        }
-        .frame(width: size, height: size)
-        .onAppear { animating = true }
     }
 }
 
