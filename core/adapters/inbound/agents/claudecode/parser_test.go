@@ -1581,11 +1581,8 @@ func TestTailer_TaskReminder_PrunesAbsentTasks(t *testing.T) {
 	if m.Tasks[1].ID != "5" || m.Tasks[1].Status != tailer.TaskStatusPending {
 		t.Errorf("task[1] = %+v, want id=5 pending", m.Tasks[1])
 	}
-	for _, task := range m.Tasks {
-		if task.ID == "3" {
-			t.Errorf("phantom in_progress task 3 must not survive snapshot; tasks=%+v", m.Tasks)
-		}
-	}
+	// The len=2 + ID-4 + ID-5 assertions above prove the stale in_progress
+	// task 3 was pruned (the #282 phantom case).
 }
 
 // TestTailer_TaskReminder_EmptySnapshotPrunesAll covers the "nothing active"

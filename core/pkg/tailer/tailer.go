@@ -644,10 +644,7 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 // so monotonic IDs continue to match Claude's sequential numbering across
 // pruned batches. See issues #282 and #389.
 func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
-	if parsed == nil || parsed.TaskSnapshot == nil {
-		return
-	}
-	if len(t.tasks) == 0 {
+	if parsed == nil || parsed.TaskSnapshot == nil || len(t.tasks) == 0 {
 		return
 	}
 	snapByID := make(map[string]TaskSnapshotEntry, len(*parsed.TaskSnapshot))
