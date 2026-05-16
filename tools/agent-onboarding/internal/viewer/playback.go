@@ -24,8 +24,10 @@ import (
 
 // archiveNameRE constrains the optional `recording` field on /api/replay/start
 // so a caller can't escape the scenario directory via "..". Matches the
-// shape promote-recording.sh produces: <timestamp>_irrlichd-<version>.
-var archiveNameRE = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
+// shape promote-recording.sh produces: <timestamp>_irrlichd-<version>,
+// where the version is a semver+sha string like "0.3.13+4662be4.dirty" —
+// `+` and `.` are both legal characters in archive names.
+var archiveNameRE = regexp.MustCompile(`^[A-Za-z0-9._:+-]+$`)
 
 // Playback represents one active replay session. Only one Playback may
 // be active per Manager at a time — starting a new one stops the
