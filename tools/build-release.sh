@@ -7,8 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
-# Read version from version.json (single source of truth)
-VERSION=$(python3 -c "import json; print(json.load(open('version.json'))['version'])")
+# Read version from version.json (single source of truth). build-release.sh
+# always uses the BARE base version — release artifacts must not carry git
+# sha or .dirty markers in the binary's --version output, since the tagged
+# commit is the source of truth for releases. Dev builds use the full
+# computed string via tools/version.sh / tools/build-dev.sh.
+VERSION=$("$SCRIPT_DIR/version.sh" --base)
 BUILD_DIR=".build"
 DAEMON_NAME="irrlichd"
 APP_NAME="Irrlicht"
