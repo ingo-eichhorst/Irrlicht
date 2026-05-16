@@ -122,14 +122,19 @@ struct SettingsView: View {
 
             Spacer()
 
+            Divider()
+
             HStack {
+                Text("Irrlicht v\(appVersion)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 Spacer()
                 Button("Done") { isPresented = false }
                     .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
-        .frame(width: 360, height: 520)
+        .frame(width: 360, height: 640)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
     }

@@ -299,13 +299,18 @@ struct SessionListView: View {
 
     private var sessionHeaderView: some View {
         HStack {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 headerTitleView
 
-                Text("—")
-                    .foregroundColor(.secondary)
+                // Em-dash + glyphs are visually redundant once the quota
+                // chip is filling the slot — the chip already implies
+                // session activity. Hide them while the chip is present.
+                if quotaWidgetData == nil || !showQuotaForecast {
+                    Text("—")
+                        .foregroundColor(.secondary)
 
-                sessionIconsView
+                    sessionIconsView
+                }
             }
 
             Spacer()
@@ -342,32 +347,34 @@ struct SessionListView: View {
         }
     }
     
-    /// Header text shown to the left of the session glyphs. Defaults to the
-    /// app version; when any visible session carries a rate-limit snapshot
-    /// (and the user hasn't hidden the quota forecast in settings), we swap
-    /// in the burn-rate widget instead. Subscription users see live quota;
-    /// API-key / Bedrock / Vertex users keep the version string. Aggregation
-    /// rule: pick the snapshot with the highest UsedPercent across sessions.
-    /// The bucket is account-scoped so all subscription sessions on a single
-    /// account should agree, but `max` is robust to per-session staleness.
+    /// Header slot shown to the left of the session glyphs. When any
+    /// visible session carries a rate-limit snapshot (and the user hasn't
+    /// hidden the quota chip in Settings), we render a provider chip with
+    /// stacked 5h/7d progress bars — matching the design mockup in
+    /// issue #309. Otherwise the slot is empty; the app version is
+    /// reachable from Settings rather than the header.
+    ///
+    /// Aggregation: pick the snapshot with the highest UsedPercent across
+    /// all visible sessions. The subscription bucket is account-scoped, so
+    /// every session on a single account reports the same numbers; `max`
+    /// is just robust to per-session staleness during the first few
+    /// post-restart ticks.
     @ViewBuilder
     private var headerTitleView: some View {
         if showQuotaForecast, let widget = quotaWidgetData {
-            quotaWidgetView(widget)
+            quotaChipView(widget)
         } else {
-            Text("Irrlicht v\(appVersion)")
-                .font(.headline)
-                .foregroundColor(.primary)
+            EmptyView()
         }
     }
 
-    /// Snapshot + forecast pair selected for the header — the imminent
-    /// window plus the matching session's projected ETA. Nil when no
+    /// Snapshot picked for the header chip plus the adapter that produced
+    /// it (so the chip can render the correct provider icon). Nil when no
     /// session has a usable snapshot.
     private struct QuotaWidgetData {
         let snapshot: RateLimitInfo
+        let session: SessionState
         let imminent: RateLimitWindowInfo
-        let forecastEta: Date?
     }
 
     private var quotaWidgetData: QuotaWidgetData? {
@@ -375,11 +382,7 @@ struct SessionListView: View {
         for session in sessionManager.sessions {
             guard let snap = session.metrics?.rateLimit else { continue }
             guard let imm = snap.imminentWindow else { continue }
-            let candidate = QuotaWidgetData(
-                snapshot: snap,
-                imminent: imm,
-                forecastEta: session.metrics?.rateLimitForecastEta
-            )
+            let candidate = QuotaWidgetData(snapshot: snap, session: session, imminent: imm)
             if let current = best {
                 if imm.usedPercent > current.imminent.usedPercent {
                     best = candidate
@@ -391,25 +394,72 @@ struct SessionListView: View {
         return best
     }
 
+    /// The chip-style header widget: provider icon on the left, two
+    /// horizontal progress bars stacked on the right (5h primary + 7d
+    /// secondary). Each bar carries its window label, percent, and reset
+    /// time inline. Matches mockup 1 in issue #309.
     @ViewBuilder
-    private func quotaWidgetView(_ d: QuotaWidgetData) -> some View {
-        let primary = quotaPrimaryLabel(d)
-        Text(primary)
-            .font(.headline)
-            .foregroundColor(quotaWidgetColor(d))
-            .tooltip(quotaTooltip(d))
+    private func quotaChipView(_ d: QuotaWidgetData) -> some View {
+        HStack(spacing: 6) {
+            // Provider icon (Anthropic / OpenAI) when we can infer one;
+            // otherwise fall back to the adapter icon so the chip never
+            // appears iconless. The quota bucket is provider-scoped, so
+            // the provider mark is the more meaningful brand.
+            if let icon = ProviderIconRegistry.image(forKey: d.snapshot.providerKey(adapter: d.session.adapter))
+                ?? d.session.adapterIcon {
+                Image(nsImage: icon)
+                    .renderingMode(.template)
+                    .foregroundColor(.primary)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
+                    quotaWindowRow(window)
+                }
+            }
+        }
+        .tooltip(quotaTooltip(d))
     }
 
-    private func quotaPrimaryLabel(_ d: QuotaWidgetData) -> String {
-        let pct = Int(d.imminent.usedPercent.rounded())
-        let windowLabel = quotaWindowLabel(d.imminent.windowMinutes)
-        if let eta = d.forecastEta {
-            return "\(windowLabel): \(pct)% · cap at \(formatClockTime(eta))"
+    /// One row inside the chip: window label · filled bar · percent · reset
+    /// time. Bar fill color comes from the pressure ramp.
+    @ViewBuilder
+    private func quotaWindowRow(_ w: RateLimitWindowInfo) -> some View {
+        HStack(spacing: 6) {
+            Text(quotaWindowLabel(w.windowMinutes))
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 14, alignment: .leading)
+
+            quotaBar(percent: w.usedPercent, color: barColor(w.usedPercent))
+                .frame(width: 70, height: 5)
+
+            Text("\(Int(w.usedPercent.rounded()))%")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(.primary)
+                .frame(width: 28, alignment: .trailing)
+
+            Text("resets \(formatResetTime(w.resetsAt))")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
-        // No forecast yet (insufficient history, flat burn, or "won't hit cap").
-        // Still surface the current % so users see ambient quota even before
-        // we have a slope.
-        return "\(windowLabel): \(pct)%"
+    }
+
+    /// A simple rounded-rect progress bar. ZStack so the fill and the
+    /// track render with the same corner radius without clipping
+    /// artifacts at small sizes.
+    @ViewBuilder
+    private func quotaBar(percent: Double, color: Color) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2.5)
+                    .fill(Color.secondary.opacity(0.2))
+                RoundedRectangle(cornerRadius: 2.5)
+                    .fill(color)
+                    .frame(width: geo.size.width * min(1.0, max(0.0, percent / 100.0)))
+            }
+        }
     }
 
     private func quotaTooltip(_ d: QuotaWidgetData) -> String {
@@ -423,7 +473,9 @@ struct SessionListView: View {
             let resets = formatTimeUntil(w.resetsAt)
             lines.append("\(label): \(pct) · resets in \(resets)")
         }
-        if d.forecastEta == nil, d.snapshot.windows.contains(where: { $0.usedPercent > 0 }) {
+        if let eta = d.session.metrics?.rateLimitForecastEta {
+            lines.append("Projected cap: \(formatClockTime(eta))")
+        } else if d.snapshot.windows.contains(where: { $0.usedPercent > 0 }) {
             lines.append("Forecast: won't hit cap this window")
         }
         if let reached = d.snapshot.reachedType, !reached.isEmpty {
@@ -444,13 +496,12 @@ struct SessionListView: View {
         }
     }
 
-    private func quotaWidgetColor(_ d: QuotaWidgetData) -> Color {
-        if d.snapshot.reachedType?.isEmpty == false { return IrrColors.pressureCritical }
-        switch d.imminent.usedPercent {
+    private func barColor(_ pct: Double) -> Color {
+        switch pct {
         case 90...: return IrrColors.pressureCritical
         case 80..<90: return IrrColors.pressureHigh
         case 60..<80: return IrrColors.pressureMedium
-        default: return .primary
+        default: return IrrColors.pressureLow
         }
     }
 
@@ -458,6 +509,22 @@ struct SessionListView: View {
         let f = DateFormatter()
         f.dateStyle = .none
         f.timeStyle = .short
+        return f.string(from: date)
+    }
+
+    /// Compact reset label for the chip row. Same-day resets render as
+    /// "HH:MM"; resets later in the week render as "EEE HH:MM" (e.g.
+    /// "Fri 9:00"). Mirrors mockup 1's "resets 11:14" / "resets Fri 9:00".
+    private func formatResetTime(_ date: Date) -> String {
+        let cal = Calendar.current
+        let now = Date()
+        let f = DateFormatter()
+        if cal.isDate(date, inSameDayAs: now) {
+            f.dateStyle = .none
+            f.timeStyle = .short
+        } else {
+            f.dateFormat = "EEE H:mm"
+        }
         return f.string(from: date)
     }
 

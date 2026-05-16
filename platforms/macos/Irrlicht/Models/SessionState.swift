@@ -163,6 +163,72 @@ struct RateLimitInfo: Codable, Hashable {
         default: return pt.capitalized
         }
     }
+
+    /// Provider identity inferred from planType (when populated) or the
+    /// adapter that produced this snapshot. The bucket is account-scoped
+    /// at the subscription provider, not the CLI — multiple agents (Claude
+    /// Code + Pi(anthropic) + OpenCode(anthropic-oauth)) share a single
+    /// Anthropic subscription, so the chip should brand by provider.
+    ///
+    /// Returns "anthropic" / "openai" for known providers, or nil when
+    /// the snapshot doesn't tell us enough (rare: usually planType or the
+    /// adapter is enough). Callers fall back to the adapter icon when nil.
+    func providerKey(adapter: String?) -> String? {
+        switch planType {
+        case "max", "pro": return "anthropic"
+        case "plus": return "openai"
+        default: break
+        }
+        switch adapter {
+        case "claude-code": return "anthropic"
+        case "codex": return "openai"
+        default: return nil
+        }
+    }
+}
+
+/// Hardcoded provider-level icons, picked by RateLimitInfo.providerKey for
+/// the quota chip. These are subscription-provider icons (Anthropic,
+/// OpenAI) — distinct from the agent CLI icons in AgentRegistry, since
+/// many CLIs can share one subscription.
+///
+/// Lives Swift-side rather than in the Go AgentRegistry because providers
+/// don't have agent adapters in irrlicht; they are an orthogonal axis.
+enum ProviderIconRegistry {
+    /// Anthropic logomark — three angled strokes forming a stylized "A",
+    /// matched to the mockup in issue #309. White-on-transparent so it
+    /// inherits the foreground color when rendered as a template.
+    static let anthropicSVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+      <path d="M14.83 4.5h-3.49l5.83 15h3.5l-5.84-15zM6.49 4.5l-5.83 15h3.57l1.19-3.13h6.09l1.2 3.13h3.57l-5.83-15H6.49zm-.05 8.98l1.99-5.2 1.99 5.2H6.44z" fill="currentColor"/>
+    </svg>
+    """
+
+    /// OpenAI mark — a simplified knot/whirl glyph.
+    static let openaiSVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+      <path d="M22.28 9.821a5.985 5.985 0 0 0-.515-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.142-.08 4.774-2.758a.795.795 0 0 0 .392-.681v-6.737l2.018 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.488 4.493zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.778 2.758a.795.795 0 0 0 .787 0l5.832-3.367v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.077.077 0 0 1-.062 0l-4.83-2.79A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.077.077 0 0 1 .062 0l4.83 2.79a4.5 4.5 0 0 1-.676 8.05v-5.678a.79.79 0 0 0-.398-.66zm2.01-3.023l-.142-.085-4.774-2.782a.776.776 0 0 0-.787 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.504 4.504 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.392.681v6.737zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" fill="currentColor"/>
+    </svg>
+    """
+
+    /// Render the SVG for the given key into an NSImage sized to fit the
+    /// chip icon slot. Returns nil for unknown keys; callers fall back to
+    /// the adapter icon.
+    @MainActor
+    static func image(forKey key: String?) -> NSImage? {
+        guard let key = key else { return nil }
+        let svg: String
+        switch key {
+        case "anthropic": svg = anthropicSVG
+        case "openai": svg = openaiSVG
+        default: return nil
+        }
+        guard let data = svg.data(using: .utf8),
+              let img = NSImage(data: data) else { return nil }
+        img.isTemplate = true
+        img.size = NSSize(width: 14, height: 14)
+        return img
+    }
 }
 
 // Performance metrics from transcript analysis
