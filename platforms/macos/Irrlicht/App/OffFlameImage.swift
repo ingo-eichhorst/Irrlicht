@@ -7,7 +7,6 @@ enum OffFlameImage {
 
     private struct Config {
         let bodyStops: String
-        let coreStops: String
         let slash: String
         let accessibilityDescription: String?
 
@@ -15,10 +14,6 @@ enum OffFlameImage {
             bodyStops: """
             <stop offset="0%" stop-color="#f3f4f6" stop-opacity="0.95"/>
             <stop offset="100%" stop-color="#9ca3af" stop-opacity="0.95"/>
-            """,
-            coreStops: """
-            <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
-            <stop offset="100%" stop-color="#e5e7eb" stop-opacity="0.7"/>
             """,
             slash: "",
             accessibilityDescription: "Irrlicht — no active sessions"
@@ -29,15 +24,12 @@ enum OffFlameImage {
             <stop offset="0%" stop-color="#6b7280" stop-opacity="0.6"/>
             <stop offset="100%" stop-color="#3f4551" stop-opacity="0.9"/>
             """,
-            coreStops: """
-            <stop offset="0%" stop-color="#9ca3af" stop-opacity="0.55"/>
-            <stop offset="100%" stop-color="#6b7280" stop-opacity="0.3"/>
-            """,
             // Dark stroke under a lighter foreground stroke so the slash reads
-            // against both the flame and the panel background.
+            // against both the flame and the panel background. Coordinates and
+            // stroke widths scaled to the 1254-unit viewBox of the new mark.
             slash: """
-            <line x1="5" y1="4" x2="27" y2="29" stroke="#0a0f1a" stroke-width="3.5" stroke-linecap="round" opacity="0.9"/>
-            <line x1="5" y1="4" x2="27" y2="29" stroke="#9ca3af" stroke-width="1.6" stroke-linecap="round"/>
+            <line x1="196" y1="156" x2="1058" y2="1136" stroke="#0a0f1a" stroke-width="137" stroke-linecap="round" opacity="0.9"/>
+            <line x1="196" y1="156" x2="1058" y2="1136" stroke="#9ca3af" stroke-width="63" stroke-linecap="round"/>
             """,
             // Surrounding Text already announces the empty state.
             accessibilityDescription: nil
@@ -47,17 +39,13 @@ enum OffFlameImage {
     private static func build(pointSize: CGFloat, config: Config) -> NSImage {
         let size = Int(pointSize.rounded())
         let svg = """
-        <svg xmlns="http://www.w3.org/2000/svg" width="\(size)" height="\(size)" viewBox="0 0 32 32">
+        <svg xmlns="http://www.w3.org/2000/svg" width="\(size)" height="\(size)" viewBox="0 0 1254 1254">
         <defs>
         <linearGradient id="wisp-off-body" x1="50%" y1="0%" x2="50%" y2="100%">
         \(config.bodyStops)
         </linearGradient>
-        <linearGradient id="wisp-off-core" x1="50%" y1="20%" x2="50%" y2="100%">
-        \(config.coreStops)
-        </linearGradient>
         </defs>
-        <path d="M 16.5 3 C 14.5 6, 12 8.5, 10.5 12 C 9 15.5, 9 19, 9.8 22 C 10.5 25, 12.5 27.5, 15 28.5 C 15.5 28.7, 16 28.8, 16.5 28.7 C 17.5 28.5, 19 28, 20.5 27 C 22.5 25.5, 23 22.5, 23 19.5 C 23 16, 22 13, 20.5 10.5 C 19 8, 17.5 5.5, 16.5 3 Z" fill="url(#wisp-off-body)"/>
-        <path d="M 16 10 C 14.5 12, 13.5 14.5, 13.5 17.5 C 13.5 20.5, 14.5 23, 16 23.5 C 17.5 23, 18.5 20.5, 18.5 17.5 C 18.5 14.5, 17.5 12, 16 10 Z" fill="url(#wisp-off-core)"/>
+        <path d="M584 157C609 199 615 250 609 308C604 362 581 412 526 464C474 513 424 562 392 625C356 695 349 790 372 869C410 1001 516 1065 635 1065C790 1065 888 956 888 785C888 718 858 654 800 615C791 609 787 612 788 624C789 644 795 661 794 683C792 743 755 784 697 784C654 784 625 751 624 699C623 661 644 621 670 581C706 526 734 484 734 416C734 321 680 246 598 167C593 162 588 158 584 157Z" fill="url(#wisp-off-body)"/>
         \(config.slash)
         </svg>
         """
