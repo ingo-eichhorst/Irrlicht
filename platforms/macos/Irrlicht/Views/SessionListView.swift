@@ -887,16 +887,11 @@ struct SessionListView: View {
     }
     
     private var statusIndicator: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 6, height: 6)
-                .shadow(color: statusColor.opacity(0.5), radius: 3)
-            Text(statusLabel)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .tooltip(sessionManager.connectionState.tooltip)
+        Circle()
+            .fill(statusColor)
+            .frame(width: 6, height: 6)
+            .shadow(color: statusColor.opacity(0.5), radius: 3)
+            .tooltip(sessionManager.connectionState.tooltip)
     }
 
     private var statusColor: Color {
@@ -904,15 +899,6 @@ struct SessionListView: View {
         case .connected: return IrrColors.wsConnected
         case .connecting, .reconnecting: return IrrColors.wsConnecting
         case .disconnected: return IrrColors.wsDisconnected
-        }
-    }
-
-    private var statusLabel: String {
-        switch sessionManager.connectionState {
-        case .connected: return "watching"
-        case .connecting: return "connecting"
-        case .reconnecting: return "reconnecting"
-        case .disconnected: return "disconnected"
         }
     }
     
