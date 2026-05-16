@@ -514,7 +514,12 @@ struct SessionListView: View {
         if var existing = buckets[key] {
             // Subscription wins over usage when both paths are seen
             // (rare — one OAuth account on both subscription and API
-            // key): the bars are the richer signal.
+            // key): the bars are the richer signal. Trade-off: this
+            // can replace a fresh usage entry with a stale subscription
+            // one, losing recency in service of richer rendering. The
+            // mixed-mode case is uncommon enough that we accept it
+            // rather than introduce a "prefer fresh except when…"
+            // tiebreaker.
             if existing.mode == .usage && mode == .subscription {
                 existing.mode = .subscription
                 existing.snapshot = snap
@@ -653,6 +658,10 @@ struct SessionListView: View {
     /// the bar shrinks so two or three chips fit in the 380pt header.
     @ViewBuilder
     private func quotaWindowRow(_ w: RateLimitWindowInfo, compact: Bool) -> some View {
+        // Compute once per row — SwiftUI re-invokes view bodies on every
+        // SessionManager publish, and calling quotaPacePercent twice
+        // would also let two Date() captures disagree by microseconds.
+        let pace = quotaPacePercent(w)
         HStack(spacing: 6) {
             Text(quotaWindowLabel(w.windowMinutes))
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -660,8 +669,8 @@ struct SessionListView: View {
                 .frame(width: 14, alignment: .leading)
 
             quotaBar(percent: w.usedPercent,
-                     color: barColor(used: w.usedPercent, pace: quotaPacePercent(w)),
-                     pacePercent: quotaPacePercent(w))
+                     color: Self.barColor(used: w.usedPercent, pace: pace),
+                     pacePercent: pace)
                 .frame(width: compact ? 60 : 70, height: 5)
 
             Text("\(Int(w.usedPercent.rounded()))%")
@@ -685,10 +694,16 @@ struct SessionListView: View {
     /// the user *should be* right now, independent of when the
     /// snapshot was last refreshed.
     ///
-    /// Returns nil when the window can't be paced: zero-duration,
-    /// missing `resetsAt`, or a `resetsAt` that's already in the past
-    /// (which the daemon's stale-check should have dropped, but
-    /// belt-and-braces here too).
+    /// Returns nil when the window can't be paced: zero-duration or
+    /// missing `resetsAt`. A `resetsAt` already in the past produces a
+    /// clamped 100% (marker pinned to the right edge) which combined
+    /// with the chip's stale-opacity tint reads naturally as "this
+    /// snapshot pre-dates the current window."
+    ///
+    /// Codex's v1 minute-window quirk (`299` instead of `300`,
+    /// `10079` instead of `10080`) is left as-is here — the
+    /// ≤60-second drift in the implied window-start time is well
+    /// below the resolution the marker conveys visually.
     private func quotaPacePercent(_ w: RateLimitWindowInfo) -> Double? {
         guard w.windowMinutes > 0 else { return nil }
         guard w.resetsAt.timeIntervalSince1970 > 0 else { return nil }
@@ -741,18 +756,27 @@ struct SessionListView: View {
                 // round-trip on the daemon side, e.g. 7.000000000000001
                 // for a value the provider reported as 7). Render as
                 // whole percent so the tooltip matches the chip body.
-                let pct = "\(Int(w.usedPercent.rounded()))%"
+                //
+                // Line template:
+                //   <window>: <used>% used · <pace verdict> · resets in <when>
+                //
+                // The earlier shape included an explicit "pace 42%
+                // (behind by 26pt)" suffix that grew long enough to
+                // wrap mid-parenthesis at the macOS tooltip width.
+                // The pace percent is redundant — the delta is the
+                // load-bearing signal — so we drop it and put the
+                // verdict inline, no parentheses.
+                let used = Int(w.usedPercent.rounded())
                 let label = quotaWindowLabel(w.windowMinutes)
                 let resets = formatTimeUntil(w.resetsAt)
-                var line = "\(label): \(pct) · resets in \(resets)"
+                var line = "\(label): \(used)% used · resets in \(resets)"
                 if let pace = quotaPacePercent(w) {
-                    let paceInt = Int(pace.rounded())
-                    let delta = Int(w.usedPercent.rounded()) - paceInt
+                    let delta = used - Int(pace.rounded())
                     let verdict: String
-                    if delta > 0 { verdict = "ahead by \(delta)pt" }
-                    else if delta < 0 { verdict = "behind by \(-delta)pt" }
+                    if delta > 0 { verdict = "\(delta)pt over pace" }
+                    else if delta < 0 { verdict = "\(-delta)pt under pace" }
                     else { verdict = "on pace" }
-                    line += " · pace \(paceInt)% (\(verdict))"
+                    line = "\(label): \(used)% used · \(verdict) · resets in \(resets)"
                 }
                 lines.append(line)
             }
@@ -815,7 +839,10 @@ struct SessionListView: View {
     /// When `pace` is nil (no expiry data on the window) we fall back
     /// to a purely absolute ramp so the chip still has a sensible
     /// color in that edge case.
-    private func barColor(used: Double, pace: Double?) -> Color {
+    ///
+    /// `static` + non-private so XCTests can table-drive the threshold
+    /// boundaries without instantiating the view.
+    static func barColor(used: Double, pace: Double?) -> Color {
         if used >= 85 { return .orange }
         guard let pace = pace else {
             switch used {
@@ -892,6 +919,10 @@ struct SessionListView: View {
             .frame(width: 6, height: 6)
             .shadow(color: statusColor.opacity(0.5), radius: 3)
             .tooltip(sessionManager.connectionState.tooltip)
+            // The dot is the only visible affordance now; VoiceOver
+            // needs an explicit label since "Circle" alone tells the
+            // user nothing about connection state.
+            .accessibilityLabel("Connection: \(sessionManager.connectionState.tooltip)")
     }
 
     private var statusColor: Color {

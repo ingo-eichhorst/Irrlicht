@@ -46,7 +46,13 @@ var authFileCache struct {
 }
 
 type authCacheEntry struct {
-	mtime time.Time
+	// missing is true when the file isn't present (negative cache);
+	// mtime and the parsed-doc fields below are then meaningless.
+	// Negative caching keeps `/api/v1/sessions` from re-stat'ing
+	// non-existent paths on every hit for users who don't have all
+	// three wrapper CLIs installed (the common case).
+	missing bool
+	mtime   time.Time
 	// One of the parsed-doc fields below is populated, depending on
 	// which reader filled the entry. Distinguishing by path keeps the
 	// readers type-safe without a generic any-typed payload.
@@ -66,7 +72,10 @@ type openCodeAuthEntry struct {
 
 // readAuthCache returns the parsed entry for path, populating the
 // cache via parse if the file is new or has been modified since the
-// last read. Returns (zero, false) on any read/parse error.
+// last read. Returns (zero, false) when the file is missing or parses
+// fail. Negative results (missing file) are cached so subsequent
+// calls don't restat — a user without all three wrappers installed
+// hits this path on every `/api/v1/sessions`.
 func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (authCacheEntry, bool) {
 	authFileCache.mu.Lock()
 	defer authFileCache.mu.Unlock()
@@ -75,11 +84,13 @@ func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (auth
 	}
 	stat, err := os.Stat(path)
 	if err != nil {
-		// Drop any stale entry — the file was removed.
-		delete(authFileCache.entries, path)
+		// Negative cache: remember the absence. If the file appears
+		// later, the next Stat will succeed and the cached `missing`
+		// entry gets overwritten below.
+		authFileCache.entries[path] = authCacheEntry{missing: true}
 		return authCacheEntry{}, false
 	}
-	if entry, ok := authFileCache.entries[path]; ok && entry.mtime.Equal(stat.ModTime()) {
+	if entry, ok := authFileCache.entries[path]; ok && !entry.missing && entry.mtime.Equal(stat.ModTime()) {
 		return entry, true
 	}
 	data, err := os.ReadFile(path)
@@ -96,10 +107,28 @@ func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (auth
 }
 
 // AccountKey identifies a subscription bucket: the provider name plus
-// an account anchor (empty for the Anthropic singleton case).
+// an account anchor. An empty `AccountID` is a sentinel meaning
+// "singleton donor for this provider, no account-level disambiguation"
+// — currently only Anthropic uses this because Claude Code stores its
+// OAuth tokens in the macOS keychain rather than in a plaintext file
+// we can read.
+//
+// Footgun warning: a future provider whose anchor isn't reachable in
+// plaintext would, if added with `AccountID == ""`, silently start
+// inheriting from / donating to every other empty-AccountID provider
+// of the same name. Always either populate `AccountID` from the
+// account anchor, or document the singleton intent explicitly (and
+// gate it via IsSingleton below). See issue #309.
 type AccountKey struct {
 	Provider  string // "anthropic" | "openai"
-	AccountID string // empty when the provider's anchor isn't reachable in plaintext
+	AccountID string // empty only for the documented singleton case (currently Anthropic)
+}
+
+// IsSingleton reports whether this key is the no-account-anchor
+// sentinel — used by the donor map to match any wrapper recipient of
+// the same provider regardless of the wrapper's own account hint.
+func (k AccountKey) IsSingleton() bool {
+	return k.AccountID == ""
 }
 
 // InheritRateLimits walks the given sessions, builds a donor map of
