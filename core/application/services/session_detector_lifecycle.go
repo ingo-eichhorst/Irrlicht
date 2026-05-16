@@ -95,7 +95,10 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 // is adapter-specific. Other adapters either don't have /clear or
 // don't rotate transcript files.
 func (d *SessionDetector) rotateOnNewTranscript(id agent.Identity, ev agent.Event) {
-	if id.Name != "claudecode" {
+	// Adapter identity inside the daemon uses the hyphenated
+	// canonical name; the agent-onboarding tooling uses the slug form.
+	// Match both for forward-compat.
+	if id.Name != "claude-code" && id.Name != "claudecode" {
 		return
 	}
 	states, err := d.repo.ListAll()
