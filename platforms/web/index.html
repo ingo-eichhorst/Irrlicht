@@ -183,8 +183,6 @@
       display: block;
     }
 
-    .app-state-icon svg.working { animation: spin 2.5s linear infinite; }
-
     .app-state-count {
       font-family: var(--font-mono);
       font-size: 11px;
@@ -424,8 +422,6 @@
       display: block;
     }
 
-    .row-state-icon svg.working { animation: spin 2.5s linear infinite; }
-
     .row-adapter-icon {
       width: 12px;
       height: 12px;
@@ -441,9 +437,14 @@
       display: block;
     }
 
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
+    /* Reduced-motion: hide the animated halo so only the steady inner dot
+       remains. SMIL doesn't honor prefers-reduced-motion natively, so we
+       hide the halo element via CSS. */
+    @media (prefers-reduced-motion: reduce) {
+      .row-state-icon svg circle.halo,
+      .app-state-icon svg circle.halo {
+        display: none;
+      }
     }
 
     .row-num {
@@ -1428,7 +1429,7 @@
 
     // --- SVG Icons (compact 12px) ---
     const svgIcons = {
-      working: '<svg class="working" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8B5CF6" stroke-width="1.5" stroke-dasharray="4 3"/></svg>',
+      working: '<svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.6" fill="#8B5CF6"/><circle class="halo" cx="10" cy="10" r="3" fill="none" stroke="#8B5CF6" stroke-width="1.5"><animate attributeName="r" values="3;9" dur="1.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.85;0" dur="1.6s" repeatCount="indefinite"/><animate attributeName="stroke-width" values="1.5;0.4" dur="1.6s" repeatCount="indefinite"/></circle></svg>',
       waiting: '<svg viewBox="0 0 16 16" fill="none"><rect x="4" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/><rect x="9.5" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/></svg>',
       ready: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#34C759" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="#34C759" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
       cancelled: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8E8E93" stroke-width="1.5"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/></svg>',
