@@ -397,19 +397,33 @@ struct SessionListView: View {
     /// subscription chip (snapshot has `planType`) or a usage chip
     /// (snapshot has `credits` populated — Codex API-key path).
     ///
-    /// For subscription chips, the bucket is account-scoped so all
-    /// same-account sessions report identical numbers — `max` over
-    /// `usedPercent` is robust to per-session staleness. For usage
-    /// chips, `totalCostUSD` sums cumulative `estimatedCostUSD` across
-    /// every matching session — close enough to "what the user has
-    /// spent on this provider lately" for the typical session-lifetime;
-    /// proper daily rollup needs a daemon-side per-provider cost
-    /// tracker (deferred).
+    /// Within a subscription bucket the representative snapshot is the
+    /// **freshest** sample (largest `sampledAt`). The earlier rule —
+    /// "highest `usedPercent`" — locked the chip onto stale ready
+    /// sessions: a finished Anthropic session whose 5h window had
+    /// rolled over at 16% used would beat every fresh active session
+    /// reading 2% post-rollover, leaving the chip stuck on the bad
+    /// data forever. The bucket is account-scoped so all live sessions
+    /// on a single account report identical numbers anyway; freshness
+    /// only matters when one session has gone stale.
+    ///
+    /// Snapshots whose any window has already passed `resetsAt` are
+    /// filtered out before bucketing — they describe a provider state
+    /// the agent has long since exited (issue #309 phase-5 hotfix).
+    /// Defense in depth: the daemon also nulls stale snapshots in its
+    /// own metrics path, but persisted ready sessions retain their
+    /// last-known data on disk and bypass that check.
+    ///
+    /// For usage chips, `totalCostUSD` sums cumulative
+    /// `estimatedCostUSD` across every matching session — close enough
+    /// to "what the user has spent on this provider lately" for the
+    /// typical session-lifetime; proper daily rollup needs a
+    /// daemon-side per-provider cost tracker (deferred).
     ///
     /// Sort order is **stable by provider key** (anthropic < openai <
-    /// unknown:…). A `usedPercent` sort made chips swap positions every
-    /// few seconds as percents updated — alphabetical also matches
-    /// mockup 2's Anthropic-leftmost layout.
+    /// unknown:…). A `usedPercent` sort made chips swap positions
+    /// every few seconds as percents updated — alphabetical also
+    /// matches mockup 2's Anthropic-leftmost layout.
     private var quotaChipData: [QuotaWidgetData] {
         struct Bucket {
             var snapshot: RateLimitInfo
@@ -418,9 +432,16 @@ struct SessionListView: View {
             var totalCostUSD: Double
             var mode: QuotaMode
         }
+        let now = Date()
         var byProvider: [String: Bucket] = [:]
         for session in sessionManager.sessions {
             guard let snap = session.metrics?.rateLimit else { continue }
+            // Drop snapshots with any window past its reset. Same rule
+            // as the daemon-side stale check; applied here so stale
+            // persisted-but-ready sessions don't pollute the bucket.
+            if snap.windows.contains(where: { $0.resetsAt <= now }) {
+                continue
+            }
             // Without a providerKey the chip has no brand — fall back to
             // a per-adapter unknown bucket so wrapper sessions (Pi,
             // OpenCode) with subscription-shaped data still render their
@@ -451,12 +472,11 @@ struct SessionListView: View {
                     existing.snapshot = snap
                     existing.session = session
                     existing.imminent = imminent
-                }
-                if let imm = imminent,
-                   let existingImm = existing.imminent,
-                   imm.usedPercent > existingImm.usedPercent {
-                    existing.imminent = imm
+                } else if snap.sampledAt > existing.snapshot.sampledAt {
+                    // Freshest snapshot wins within the bucket.
                     existing.snapshot = snap
+                    existing.session = session
+                    existing.imminent = imminent
                 }
                 existing.totalCostUSD += sessionCost
                 byProvider[key] = existing
