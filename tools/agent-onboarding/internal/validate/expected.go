@@ -88,7 +88,13 @@ type ExpectedResult struct {
 	Phase     string    `json:"phase"`
 	Pass      bool      `json:"pass"`
 	MatchedTs time.Time `json:"matched_ts,omitempty"`
-	DeltaMs   int64     `json:"delta_ms,omitempty"` // matched_ts - anchor_ts
+	// DeltaMs is matched_ts - anchor_ts. Serialized even when 0 because
+	// 0 is a meaningful value: it means the phase matched exactly at the
+	// anchor event (common when one phase's match is also the next
+	// phase's anchor, e.g. idle_window matching ready at first_turn_end).
+	// With omitempty here the frontend reads `undefined` and renders
+	// "+undefined ms" in the delta column.
+	DeltaMs int64 `json:"delta_ms"`
 	Reason    string    `json:"reason,omitempty"`   // pass/fail explanation
 	Notes     []string  `json:"notes,omitempty"`    // invariant-check trace
 }

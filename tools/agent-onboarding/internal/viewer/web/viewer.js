@@ -883,7 +883,12 @@ function renderExpected(data, mode) {
       const resultPill = ph.pass
         ? `<span class="badge ready">✓ pass</span>`
         : `<span class="badge fail">✗ fail</span>`;
-      const delta = ph.matched_ts ? `+${ph.delta_ms} ms` : "—";
+      // delta_ms may be 0 (phase matched exactly at its anchor) — treat
+      // anything numeric as renderable, only fall back to "—" when the
+      // phase never matched at all.
+      const delta = ph.matched_ts
+        ? `+${Number.isFinite(ph.delta_ms) ? ph.delta_ms : 0} ms`
+        : "—";
       tr.innerHTML = `
         <td><code>${escapeHtml(ph.phase)}</code></td>
         <td style="font-size: 11px;">${target}</td>
