@@ -28,7 +28,7 @@
     "flickers_by_reason": {
       "agent finished turn → ready": 2,
       "force ready→working on first activity": 1,
-      "turn ended with question → waiting": 1
+      "turn ended with question or cue → waiting": 1
     },
     "estimated_cost_usd": 0.5229155,
     "cum_input_tokens": 60,
@@ -73,7 +73,7 @@
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "waiting",
-      "reason": "turn ended with question → waiting",
+      "reason": "turn ended with question or cue → waiting",
       "last_event_type": "assistant",
       "has_open_tool": false,
       "is_agent_done": true,

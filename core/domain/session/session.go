@@ -256,13 +256,19 @@ func ExtractQuestionSnippet(text string) string {
 // C action gates, D curated imperatives (multi-word to minimise FPs),
 // E trailing soft asks. All compile case-insensitive and run only against
 // the trailing 1–2 sentences of LastAssistantText (see ExtractWaitingCue).
+//
+// The set favours recall: first-person intent statements that share an
+// imperative shape ("Let me verify it's right.", "I'll check the logs.",
+// "before I merged") may also match. That tradeoff is intentional per
+// #381 — under-detecting a real waiting state defeats the dashboard's
+// purpose, while a transient false-positive resolves on the next event.
 var waitingCuePatterns = []*regexp.Regexp{
 	// A. Direct ask (second-person verb)
 	regexp.MustCompile(`(?i)\b(?:let me know|lmk|tell me|ping me|email me|reach out|holler|shout|hit me up)\b`),
 	regexp.MustCompile(`(?i)\b(?:could|can|would|will) you\b`),
 	// B. Approval / review framings
-	regexp.MustCompile(`(?i)\b(?:awaiting|waiting for|need|needs|require[ds]?) your\b`),
 	regexp.MustCompile(`(?i)\bawaiting\b`),
+	regexp.MustCompile(`(?i)\b(?:waiting for|need|needs|require[ds]?) your\b`),
 	regexp.MustCompile(`(?i)\bready for (?:your|review|feedback|approval|sign[- ]?off)\b`),
 	regexp.MustCompile(`(?i)\bgive me (?:the )?(?:go[- ]?ahead|green light|nod|ok|signal|word)\b`),
 	regexp.MustCompile(`(?i)\byour (?:call|choice|move|turn|pick|shout)\b`),

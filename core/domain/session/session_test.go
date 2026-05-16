@@ -97,7 +97,9 @@ func TestExtractWaitingCue(t *testing.T) {
 		text string
 		want bool // true = a cue is detected
 	}{
-		// 30 positive cases from the issue coverage matrix.
+		// 24 of the 30 matrix rows from issue #381; the remaining 6 are
+		// `?`-bearing and stay the responsibility of ExtractQuestionSnippet
+		// (covered by TestExtractQuestionSnippet).
 		{"1 take a look + let me know", "Take a look at the icon and let me know if it's right.", true},
 		{"2 try + confirm", "Try the Settings menu again and confirm the Done button is visible.", true},
 		{"5 ready for your review", "Pushed PR #379 as draft. Ready for your review.", true},

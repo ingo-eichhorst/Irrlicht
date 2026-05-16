@@ -64,7 +64,7 @@
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "waiting",
-      "reason": "turn ended with question → waiting",
+      "reason": "turn ended with question or cue → waiting",
       "last_event_type": "assistant",
       "has_open_tool": false,
       "is_agent_done": true,
