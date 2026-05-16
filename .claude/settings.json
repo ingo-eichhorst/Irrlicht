@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh release view:*)",
+      "Bash(gh release create:*)",
+      "Bash(gh release edit:*)",
+      "Bash(gh release upload:*)",
+      "Bash(gh release list:*)",
+      "Bash(gh release download:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr merge:* --squash)",
+      "Bash(gh pr merge:* --squash --delete-branch)",
+      "Bash(gh issue view:*)",
+      "Bash(gh api:*)",
+      "Bash(git tag)",
+      "Bash(git tag v*)",
+      "Bash(git tag -d v*)",
+      "Bash(git tag -l*)",
+      "Bash(git push origin v*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git show-ref:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git describe:*)",
+      "Bash(curl -fsSL https://raw.githubusercontent.com/getagentseal/codeburn/*)",
+      "Bash(curl -fsSL https://github.com/ingo-eichhorst/Irrlicht/*)",
+      "Bash(curl -fsSL https://raw.githubusercontent.com/ingo-eichhorst/*)",
+      "Bash(curl -fsSL https://irrlicht.io/*)",
+      "Bash(hdiutil:*)",
+      "Bash(codesign:*)",
+      "Bash(pkgbuild:*)",
+      "Bash(ditto:*)",
+      "Bash(lipo:*)",
+      "Bash(otool:*)",
+      "Bash(tccutil reset *)",
+      "Bash(file:*)",
+      "Bash(defaults read:*)",
+      "Bash(osascript:*)",
+      "Bash(tools/homebrew-tap/update-cask.sh:*)"
+    ],
+    "deny": [
+      "Bash(git push * --force*)",
+      "Bash(git push * -f *)"
+    ],
+    "ask": []
+  }
+}
