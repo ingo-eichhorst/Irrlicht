@@ -194,6 +194,46 @@ func TestChainStatuslineCommand_WrapUsesBashEnvelope(t *testing.T) {
 // On the next daemon start, we must unwrap their command and re-chain it in
 // the bash-envelope form — not overwrite it with the standalone install,
 // which would drop their original statusline script.
+// TestChainStatuslineCommand_RoundTripsSingleQuotedCommand pins the
+// escape contract. The wrap embeds the user command inside
+// `bash -c '…'`, so any single quote in the user command has to be
+// escaped (POSIX `'\''` idiom) for the wrapped form to parse, AND
+// reversed when we unchain it back. Easy to break either side.
+func TestChainStatuslineCommand_RoundTripsSingleQuotedCommand(t *testing.T) {
+	originals := []string{
+		`echo 'hello'`,
+		`bash -c 'set -e; echo ok'`,
+		`/usr/local/bin/x --flag 'a b' --other "ok"`,
+		`echo "no single quotes here"`,
+		`printf '%s\n' '<hi>'`,
+	}
+	for _, original := range originals {
+		t.Run(original, func(t *testing.T) {
+			wrapped := chainStatuslineCommand(original)
+			if !strings.HasPrefix(wrapped, `bash -c 'tee >(`) {
+				t.Fatalf("expected v2 wrap, got %q", wrapped)
+			}
+			unwrapped := unchainStatuslineCommand(wrapped)
+			if unwrapped != original {
+				t.Errorf("round-trip mismatch:\n  in:  %q\n  out: %q\n  via: %q",
+					original, unwrapped, wrapped)
+			}
+		})
+	}
+}
+
+// TestUnchainStatuslineCommand_ToleratesExtraWhitespace covers the
+// regex-based boundary detection in the unchain path. A hand-edited
+// wrap with extra spaces around the pipe should still round-trip
+// through unchain → chain.
+func TestUnchainStatuslineCommand_ToleratesExtraWhitespace(t *testing.T) {
+	hand := `bash -c 'tee >(/usr/local/bin/x)   |  curl -fsS --max-time 1 -X POST --data-binary @- ` +
+		`http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true'`
+	if got := unchainStatuslineCommand(hand); got != `/usr/local/bin/x` {
+		t.Errorf("expected user command despite extra whitespace, got %q", got)
+	}
+}
+
 func TestChainStatuslineCommand_MigratesV1WrapToV2(t *testing.T) {
 	userCmd := "bash ~/.claude/interplay-statusline.sh"
 	v1 := "tee >(" + userCmd + ") | curl -fsS --max-time 1 -X POST --data-binary @- " +

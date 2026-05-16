@@ -79,18 +79,18 @@ func (t *TranscriptTailer) rateLimitChanged(snap *RateLimitSnapshot) bool {
 	return false
 }
 
-// rateLimitFullyStale reports whether any window in snap has a ResetsAt
-// strictly before now — the signal that at least one window has rolled
-// over since the last statusline tick and our cached percent reading no
-// longer matches the provider's current state. The whole snapshot is
-// dropped (rather than just the stale window) because `sampled_at` is
-// shared across windows, so a stale 5h means the whole snapshot pre-
-// dates whatever the provider currently reports.
+// rateLimitHasStaleWindow reports whether snap contains at least one
+// window whose ResetsAt is at or before now — the signal that the
+// provider has rolled that window over since the last statusline tick
+// and our cached percent reading no longer matches reality. The whole
+// snapshot is treated as stale (rather than just the offending window)
+// because `sampled_at` is shared across windows: a stale 5h means the
+// whole snapshot pre-dates whatever the provider currently reports.
 //
 // A nil receiver or empty Windows is not stale (nothing to invalidate).
 // Windows with ResetsAt == 0 are treated as "no expiry data, can't
 // judge" — also not stale.
-func rateLimitFullyStale(snap *RateLimitSnapshot, now time.Time) bool {
+func rateLimitHasStaleWindow(snap *RateLimitSnapshot, now time.Time) bool {
 	if snap == nil || len(snap.Windows) == 0 {
 		return false
 	}
@@ -383,7 +383,7 @@ func (t *TranscriptTailer) computeMetrics() {
 	// happened minutes ago. Better to surface "no chip" until the
 	// next tick lands than to render stale data (issue #309 phase-5
 	// hotfix).
-	if rateLimitFullyStale(t.rateLimit, time.Now()) {
+	if rateLimitHasStaleWindow(t.rateLimit, time.Now()) {
 		t.rateLimit = nil
 		t.rateLimitHistory = nil
 	}

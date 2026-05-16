@@ -1,6 +1,8 @@
 package tailer
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -93,7 +95,38 @@ func TestIngestRateLimit_NilNoOp(t *testing.T) {
 	}
 }
 
-func TestRateLimitFullyStale(t *testing.T) {
+// TestComputeMetrics_NullsStaleSnapshot wires the stale-check through
+// the real TailAndProcess path: ingest a snapshot with a past
+// resets_at, run a pass against an empty transcript, and assert the
+// surfaced metrics.RateLimit is nil. Catches regressions where the
+// stale logic is renamed/moved but the call-site isn't updated.
+func TestComputeMetrics_NullsStaleSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tt := NewTranscriptTailer(path, nil, "test")
+	staleResets := time.Now().Add(-1 * time.Hour).Unix()
+	tt.IngestRateLimit(&RateLimitSnapshot{
+		SampledAt: time.Now().Add(-2 * time.Hour).Unix(),
+		Windows: []RateLimitWindow{
+			{UsedPercent: 47, WindowMinutes: 300, ResetsAt: staleResets},
+		},
+	})
+	m, err := tt.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if m.RateLimit != nil {
+		t.Errorf("expected stale snapshot to be nulled, got %+v", m.RateLimit)
+	}
+	if len(m.RateLimitHistory) != 0 {
+		t.Errorf("expected history to be cleared, got %d entries", len(m.RateLimitHistory))
+	}
+}
+
+func TestRateLimitHasStaleWindow(t *testing.T) {
 	now := time.Unix(2000, 0)
 	cases := []struct {
 		name string
@@ -117,8 +150,8 @@ func TestRateLimitFullyStale(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := rateLimitFullyStale(tc.snap, now); got != tc.want {
-				t.Errorf("rateLimitFullyStale = %v, want %v", got, tc.want)
+			if got := rateLimitHasStaleWindow(tc.snap, now); got != tc.want {
+				t.Errorf("rateLimitHasStaleWindow = %v, want %v", got, tc.want)
 			}
 		})
 	}

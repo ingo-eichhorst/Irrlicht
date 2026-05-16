@@ -217,6 +217,80 @@ func TestInheritRateLimits_NoDonorIsNoOp(t *testing.T) {
 	}
 }
 
+// writeCodexAuth stages a synthetic ~/.codex/auth.json under home.
+// Raw bytes (`raw`) trump structured body when both are set, so we
+// can exercise malformed-JSON cases.
+func writeCodexAuth(t *testing.T, home string, body any, raw string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".codex", "auth.json")
+	var data []byte
+	if raw != "" {
+		data = []byte(raw)
+	} else {
+		var err error
+		data, err = json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadCodexAccountID_ErrorPaths(t *testing.T) {
+	cases := []struct {
+		name string
+		body any
+		raw  string
+		want string
+	}{
+		{
+			name: "valid chatgpt mode",
+			body: map[string]any{"auth_mode": "chatgpt", "tokens": map[string]any{"account_id": "acct-x"}},
+			want: "acct-x",
+		},
+		{
+			name: "api-key mode returns empty",
+			body: map[string]any{"auth_mode": "apikey", "tokens": map[string]any{"account_id": "ignored"}},
+			want: "",
+		},
+		{
+			name: "missing auth_mode returns empty",
+			body: map[string]any{"tokens": map[string]any{"account_id": "ignored"}},
+			want: "",
+		},
+		{
+			name: "missing tokens field returns empty",
+			body: map[string]any{"auth_mode": "chatgpt"},
+			want: "",
+		},
+		{
+			name: "malformed JSON returns empty",
+			raw:  "{not json",
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeCodexAuth(t, home, tc.body, tc.raw)
+			if got := readCodexAccountID(home); got != tc.want {
+				t.Errorf("readCodexAccountID = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadCodexAccountID_MissingFileReturnsEmpty(t *testing.T) {
+	if got := readCodexAccountID(t.TempDir()); got != "" {
+		t.Errorf("expected empty for missing file, got %q", got)
+	}
+}
+
 func TestInheritRateLimits_CodexAPIKeyDoesNotDonate(t *testing.T) {
 	// Codex on API-key auth (auth_mode != "chatgpt") shouldn't be
 	// treated as a subscription donor — its rate_limit reflects the

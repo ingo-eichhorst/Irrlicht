@@ -6,8 +6,15 @@
 package claudecode
 
 import (
+	"regexp"
 	"strings"
 )
+
+// unchainBoundary matches the boundary between the user's tee-fed
+// command and our trailing curl pipeline. Whitespace-tolerant so a
+// hand-edited wrap with extra spaces still round-trips through
+// unchainStatuslineCommand.
+var unchainBoundary = regexp.MustCompile(`\)\s*\|\s*curl\s`)
 
 // statuslineSentinel is the substring that identifies an irrlicht-managed
 // statusline command. Used for idempotency checks and chained-command
@@ -182,11 +189,16 @@ func unchainStatuslineCommand(current string) string {
 			continue
 		}
 		rest := current[len(prefix):]
-		end := strings.Index(rest, `) | curl `)
-		if end < 0 {
+		// Whitespace-tolerant match for `) | curl ` so a hand-edited
+		// wrap (e.g. with extra spaces around the pipe) still unwinds
+		// cleanly. The first match wins — user commands containing a
+		// literal ") | curl " inside their own command would still
+		// round-trip wrong, but that's a pathological case.
+		loc := unchainBoundary.FindStringIndex(rest)
+		if loc == nil {
 			continue
 		}
-		inner := rest[:end]
+		inner := rest[:loc[0]]
 		// Reverse the single-quote escaping for v2 wraps; v1 wraps were
 		// never escaped, but the replace is a safe no-op when no escapes
 		// are present.

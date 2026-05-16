@@ -141,7 +141,12 @@ func ForecastCap(history []RateLimitSnapshot, now time.Time) *time.Time {
 		return &t
 	}
 	secondsToCap := remaining / ratePerSecond
-	eta := time.Unix(latest.SampledAt, 0).Add(time.Duration(secondsToCap) * time.Second)
+	// Convert the float seconds-until-cap to a Duration without first
+	// truncating the float: `Duration(secondsToCap) * Second` would
+	// cast 12.7 → 12 before multiplying, losing sub-second precision.
+	// Multiplying then casting preserves it (rounded by Duration's
+	// integer nanosecond representation).
+	eta := time.Unix(latest.SampledAt, 0).Add(time.Duration(secondsToCap * float64(time.Second)))
 	if imminent.ResetsAt > 0 && eta.After(time.Unix(imminent.ResetsAt, 0)) {
 		// Won't hit cap before the window rolls over.
 		return nil

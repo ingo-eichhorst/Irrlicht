@@ -439,116 +439,109 @@ struct SessionListView: View {
         let totalCostUSD: Double
     }
 
-    /// All chips to render, one per subscription/usage provider. Groups
-    /// sessions by provider, then per group decides whether to render a
-    /// subscription chip (snapshot has `planType`) or a usage chip
-    /// (snapshot has `credits` populated — Codex API-key path).
+    /// All chips to render, one per subscription/usage provider. See
+    /// `bucketForChips` for the bucketing rules.
+    private var quotaChipData: [QuotaWidgetData] {
+        var byProvider: [String: ChipBucket] = [:]
+        for session in sessionManager.sessions {
+            mergeIntoBuckets(session: session, into: &byProvider)
+        }
+        return byProvider
+            .map { id, b in b.toWidgetData(id: id) }
+            .sorted { $0.id < $1.id }
+    }
+
+    /// Mutable accumulator for one provider bucket while folding
+    /// sessions into chips.
+    private struct ChipBucket {
+        var snapshot: RateLimitInfo
+        var session: SessionState
+        var imminent: RateLimitWindowInfo?
+        var totalCostUSD: Double
+        var mode: QuotaMode
+
+        func toWidgetData(id: String) -> QuotaWidgetData {
+            QuotaWidgetData(
+                id: id,
+                mode: mode,
+                snapshot: snapshot,
+                session: session,
+                imminent: imminent,
+                totalCostUSD: totalCostUSD
+            )
+        }
+    }
+
+    /// Fold one session's snapshot into the provider buckets.
     ///
-    /// Within a subscription bucket the representative snapshot is the
-    /// **freshest** sample (largest `sampledAt`). The earlier rule —
-    /// "highest `usedPercent`" — locked the chip onto stale ready
-    /// sessions: a finished Anthropic session whose 5h window had
-    /// rolled over at 16% used would beat every fresh active session
-    /// reading 2% post-rollover, leaving the chip stuck on the bad
-    /// data forever. The bucket is account-scoped so all live sessions
-    /// on a single account report identical numbers anyway; freshness
-    /// only matters when one session has gone stale.
+    /// Skips sessions without a snapshot and snapshots with any window
+    /// past `resetsAt` — same rule as the daemon-side stale check, but
+    /// applied here too because persisted ready sessions retain their
+    /// last-known data on disk and bypass the daemon recompute.
     ///
-    /// Snapshots whose any window has already passed `resetsAt` are
-    /// filtered out before bucketing — they describe a provider state
-    /// the agent has long since exited (issue #309 phase-5 hotfix).
-    /// Defense in depth: the daemon also nulls stale snapshots in its
-    /// own metrics path, but persisted ready sessions retain their
-    /// last-known data on disk and bypass that check.
+    /// Within a bucket the representative snapshot is the **freshest**
+    /// sample (largest `sampledAt`). An earlier rule — "highest
+    /// `usedPercent`" — locked the chip onto stale ready sessions: a
+    /// finished Anthropic session whose 5h window had rolled over at
+    /// 16% would beat every fresh active session reading 2% post-
+    /// rollover, leaving the chip stuck on the bad data forever. The
+    /// bucket is account-scoped so all live sessions on a single
+    /// account report identical numbers anyway; freshness only matters
+    /// when one session has gone stale.
     ///
     /// For usage chips, `totalCostUSD` sums cumulative
     /// `estimatedCostUSD` across every matching session — close enough
     /// to "what the user has spent on this provider lately" for the
-    /// typical session-lifetime; proper daily rollup needs a
-    /// daemon-side per-provider cost tracker (deferred).
-    ///
-    /// Sort order is **stable by provider key** (anthropic < openai <
-    /// unknown:…). A `usedPercent` sort made chips swap positions
-    /// every few seconds as percents updated — alphabetical also
-    /// matches mockup 2's Anthropic-leftmost layout.
-    private var quotaChipData: [QuotaWidgetData] {
-        struct Bucket {
-            var snapshot: RateLimitInfo
-            var session: SessionState
-            var imminent: RateLimitWindowInfo?
-            var totalCostUSD: Double
-            var mode: QuotaMode
-        }
-        let now = Date()
-        var byProvider: [String: Bucket] = [:]
-        for session in sessionManager.sessions {
-            guard let snap = session.metrics?.rateLimit else { continue }
-            // Drop snapshots with any window past its reset. Same rule
-            // as the daemon-side stale check; applied here so stale
-            // persisted-but-ready sessions don't pollute the bucket.
-            if snap.windows.contains(where: { $0.resetsAt <= now }) {
-                continue
+    /// typical session-lifetime. Proper daily rollup needs a
+    /// daemon-side per-provider cost tracker (issue #385).
+    private func mergeIntoBuckets(session: SessionState, into buckets: inout [String: ChipBucket]) {
+        guard let snap = session.metrics?.rateLimit else { return }
+        if snap.windows.contains(where: { $0.resetsAt <= Date() }) { return }
+        let key = snap.providerKey(adapter: session.adapter)
+            ?? "unknown:\(session.adapter ?? "")"
+        let mode = resolveChipMode(snap: snap, providerKey: key)
+        let imminent = snap.imminentWindow
+        let sessionCost = session.metrics?.estimatedCostUSD ?? 0
+        if var existing = buckets[key] {
+            // Subscription wins over usage when both paths are seen
+            // (rare — one OAuth account on both subscription and API
+            // key): the bars are the richer signal.
+            if existing.mode == .usage && mode == .subscription {
+                existing.mode = .subscription
+                existing.snapshot = snap
+                existing.session = session
+                existing.imminent = imminent
+            } else if snap.sampledAt > existing.snapshot.sampledAt {
+                existing.snapshot = snap
+                existing.session = session
+                existing.imminent = imminent
             }
-            // Without a providerKey the chip has no brand — fall back to
-            // a per-adapter unknown bucket so wrapper sessions (Pi,
-            // OpenCode) with subscription-shaped data still render their
-            // own chip rather than being silently dropped.
-            let key = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
-            // Per-provider mode preference (Settings → Providers): when
-            // set to `.subscription` or `.usage` it overrides snapshot
-            // detection, so a user with multiple paths into the same
-            // provider can pin the display to the view they care about.
-            let preference = ProviderModePreference.current(for: key)
-            let inferredMode: QuotaMode = (snap.credits != nil && (snap.planType ?? "").isEmpty)
+            existing.totalCostUSD += sessionCost
+            buckets[key] = existing
+        } else {
+            buckets[key] = ChipBucket(
+                snapshot: snap,
+                session: session,
+                imminent: imminent,
+                totalCostUSD: sessionCost,
+                mode: mode
+            )
+        }
+    }
+
+    /// Resolve which chip variant to render for a snapshot, honouring
+    /// the user's per-provider preference (Settings → Providers) and
+    /// falling back to auto-detection from snapshot shape.
+    private func resolveChipMode(snap: RateLimitInfo, providerKey: String) -> QuotaMode {
+        let preference = ProviderModePreference.current(for: providerKey)
+        switch preference {
+        case .subscription: return .subscription
+        case .usage: return .usage
+        case .auto:
+            return (snap.credits != nil && (snap.planType ?? "").isEmpty)
                 ? .usage
                 : .subscription
-            let mode: QuotaMode
-            switch preference {
-            case .auto: mode = inferredMode
-            case .subscription: mode = .subscription
-            case .usage: mode = .usage
-            }
-            let imminent = snap.imminentWindow
-            let sessionCost = session.metrics?.estimatedCostUSD ?? 0
-            if var existing = byProvider[key] {
-                // Subscription wins over usage when both paths are seen
-                // (rare — one OAuth account on both subscription and API
-                // key) since the bars are the richer signal.
-                if existing.mode == .usage && mode == .subscription {
-                    existing.mode = .subscription
-                    existing.snapshot = snap
-                    existing.session = session
-                    existing.imminent = imminent
-                } else if snap.sampledAt > existing.snapshot.sampledAt {
-                    // Freshest snapshot wins within the bucket.
-                    existing.snapshot = snap
-                    existing.session = session
-                    existing.imminent = imminent
-                }
-                existing.totalCostUSD += sessionCost
-                byProvider[key] = existing
-            } else {
-                byProvider[key] = Bucket(
-                    snapshot: snap,
-                    session: session,
-                    imminent: imminent,
-                    totalCostUSD: sessionCost,
-                    mode: mode
-                )
-            }
         }
-        return byProvider
-            .map { key, b in
-                QuotaWidgetData(
-                    id: key,
-                    mode: b.mode,
-                    snapshot: b.snapshot,
-                    session: b.session,
-                    imminent: b.imminent,
-                    totalCostUSD: b.totalCostUSD
-                )
-            }
-            .sorted { $0.id < $1.id }
     }
 
     /// The chip-style header widget. Dispatches on mode:

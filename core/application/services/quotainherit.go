@@ -25,9 +25,75 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"irrlicht/core/domain/session"
 )
+
+// authFileCache memoizes parsed auth-file lookups by path so the
+// inheritance pass doesn't reread three small JSON files on every
+// `/api/v1/sessions` hit. Validated by mtime: a stale entry is dropped
+// when the file's modification time changes. Concurrent readers are
+// fine — the cache is keyed by path and writes are coordinated by mu.
+//
+// Entries are kept indefinitely; the working set is at most three
+// files (~/.codex, ~/.pi/agent, ~/.local/share/opencode), so there's
+// no eviction need.
+var authFileCache struct {
+	mu      sync.Mutex
+	entries map[string]authCacheEntry
+}
+
+type authCacheEntry struct {
+	mtime time.Time
+	// One of the parsed-doc fields below is populated, depending on
+	// which reader filled the entry. Distinguishing by path keeps the
+	// readers type-safe without a generic any-typed payload.
+	codexAccountID string
+	piDoc          map[string]piAuthEntry
+	openCodeDoc    map[string]openCodeAuthEntry
+}
+
+type piAuthEntry struct {
+	Type      string `json:"type"`
+	AccountID string `json:"accountId"`
+}
+
+type openCodeAuthEntry struct {
+	Type string `json:"type"`
+}
+
+// readAuthCache returns the parsed entry for path, populating the
+// cache via parse if the file is new or has been modified since the
+// last read. Returns (zero, false) on any read/parse error.
+func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (authCacheEntry, bool) {
+	authFileCache.mu.Lock()
+	defer authFileCache.mu.Unlock()
+	if authFileCache.entries == nil {
+		authFileCache.entries = map[string]authCacheEntry{}
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		// Drop any stale entry — the file was removed.
+		delete(authFileCache.entries, path)
+		return authCacheEntry{}, false
+	}
+	if entry, ok := authFileCache.entries[path]; ok && entry.mtime.Equal(stat.ModTime()) {
+		return entry, true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return authCacheEntry{}, false
+	}
+	entry, ok := parse(data)
+	if !ok {
+		return authCacheEntry{}, false
+	}
+	entry.mtime = stat.ModTime()
+	authFileCache.entries[path] = entry
+	return entry, true
+}
 
 // AccountKey identifies a subscription bucket: the provider name plus
 // an account anchor (empty for the Anthropic singleton case).
@@ -146,10 +212,14 @@ func recipientKey(s *session.SessionState, home string) (AccountKey, bool) {
 // failure — the caller treats absence as "no donor available", which
 // is the safe default.
 func readCodexAccountID(home string) string {
-	data, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-	if err != nil {
+	entry, ok := readAuthCache(filepath.Join(home, ".codex", "auth.json"), parseCodexAuth)
+	if !ok {
 		return ""
 	}
+	return entry.codexAccountID
+}
+
+func parseCodexAuth(data []byte) (authCacheEntry, bool) {
 	var doc struct {
 		AuthMode string `json:"auth_mode"`
 		Tokens   struct {
@@ -157,12 +227,14 @@ func readCodexAccountID(home string) string {
 		} `json:"tokens"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return ""
+		return authCacheEntry{}, false
 	}
 	if doc.AuthMode != "chatgpt" {
-		return ""
+		// Valid file, not a subscription user — cache the empty
+		// account_id to avoid re-parsing on every request.
+		return authCacheEntry{codexAccountID: ""}, true
 	}
-	return doc.Tokens.AccountID
+	return authCacheEntry{codexAccountID: doc.Tokens.AccountID}, true
 }
 
 // readPiInheritKey parses ~/.pi/agent/auth.json. Pi keys each provider
@@ -171,27 +243,27 @@ func readCodexAccountID(home string) string {
 // prefer OpenAI over Anthropic when both are configured; either choice
 // is defensible for a single-provider Pi user.
 func readPiInheritKey(home string) (AccountKey, bool) {
-	data, err := os.ReadFile(filepath.Join(home, ".pi", "agent", "auth.json"))
-	if err != nil {
+	entry, ok := readAuthCache(filepath.Join(home, ".pi", "agent", "auth.json"), parsePiAuth)
+	if !ok {
 		return AccountKey{}, false
 	}
-	var doc map[string]struct {
-		Type      string `json:"type"`
-		AccountID string `json:"accountId"`
+	if v, ok := entry.piDoc["openai-codex"]; ok && v.Type == "oauth" && v.AccountID != "" {
+		return AccountKey{Provider: "openai", AccountID: v.AccountID}, true
 	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return AccountKey{}, false
-	}
-	if entry, ok := doc["openai-codex"]; ok && entry.Type == "oauth" && entry.AccountID != "" {
-		return AccountKey{Provider: "openai", AccountID: entry.AccountID}, true
-	}
-	if entry, ok := doc["anthropic"]; ok && entry.Type == "oauth" {
+	if v, ok := entry.piDoc["anthropic"]; ok && v.Type == "oauth" {
 		// Anthropic singleton — AccountID intentionally empty so the
 		// key matches Claude Code's donor entry.
-		_ = entry
 		return AccountKey{Provider: "anthropic"}, true
 	}
 	return AccountKey{}, false
+}
+
+func parsePiAuth(data []byte) (authCacheEntry, bool) {
+	var doc map[string]piAuthEntry
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return authCacheEntry{}, false
+	}
+	return authCacheEntry{piDoc: doc}, true
 }
 
 // readOpenCodeInheritKey parses ~/.local/share/opencode/auth.json.
@@ -203,27 +275,28 @@ func readPiInheritKey(home string) (AccountKey, bool) {
 // the chatgpt account_id; out of scope for v1, so OpenCode→OpenAI
 // just doesn't inherit until that lands).
 func readOpenCodeInheritKey(home string) (AccountKey, bool) {
-	data, err := os.ReadFile(filepath.Join(home, ".local", "share", "opencode", "auth.json"))
-	if err != nil {
+	entry, ok := readAuthCache(filepath.Join(home, ".local", "share", "opencode", "auth.json"), parseOpenCodeAuth)
+	if !ok {
 		return AccountKey{}, false
 	}
-	var doc map[string]struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return AccountKey{}, false
-	}
-	if entry, ok := doc["openai-oauth"]; ok && entry.Type == "oauth" {
-		_ = entry
+	if v, ok := entry.openCodeDoc["openai-oauth"]; ok && v.Type == "oauth" {
 		// AccountID unavailable in the OpenCode auth file shape
 		// observed so far — would need to decode the JWT access token
 		// to recover it. Leave inheritance disabled for this branch
 		// until we have data to verify the JWT extraction against.
+		// See issue #384.
 		return AccountKey{}, false
 	}
-	if entry, ok := doc["anthropic-oauth"]; ok && entry.Type == "oauth" {
-		_ = entry
+	if v, ok := entry.openCodeDoc["anthropic-oauth"]; ok && v.Type == "oauth" {
 		return AccountKey{Provider: "anthropic"}, true
 	}
 	return AccountKey{}, false
+}
+
+func parseOpenCodeAuth(data []byte) (authCacheEntry, bool) {
+	var doc map[string]openCodeAuthEntry
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return authCacheEntry{}, false
+	}
+	return authCacheEntry{openCodeDoc: doc}, true
 }
