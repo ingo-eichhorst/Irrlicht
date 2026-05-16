@@ -15,18 +15,20 @@
     "last_event_time": "2026-04-09T21:36:56.235Z",
     "wall_clock_session_duration": 2838196000000,
     "state_durations": {
-      "ready": 998516000000,
-      "waiting": 635998000000,
+      "ready": 355870000000,
+      "waiting": 1278644000000,
       "working": 1203682000000
     },
-    "flicker_count": 19,
+    "flicker_count": 18,
     "flickers_by_category": {
-      "ready_between_working": 17,
-      "working_between_ready": 2
+      "ready_between_working": 14,
+      "waiting_between_working": 3,
+      "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 17,
-      "force ready→working on first activity": 2
+      "agent finished turn → ready": 14,
+      "force ready→working on first activity": 1,
+      "turn ended with question → waiting": 3
     },
     "estimated_cost_usd": 10.691253,
     "cum_input_tokens": 162,
@@ -346,7 +348,7 @@
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "…presession_test.go\n```\n\nLet me know when you want me to commit, and whether y…"
     },
     {
@@ -355,13 +357,13 @@
       "virtual_time": "2026-04-09T21:03:22.66Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "…presession_test.go\n```\n\nLet me know when you want me to commit, and whether y…"
     },
     {
@@ -369,9 +371,9 @@
       "event_index": 151,
       "virtual_time": "2026-04-09T21:11:29.365Z",
       "cause": "debounce_coalesce",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
@@ -640,13 +642,13 @@
       "virtual_time": "2026-04-09T21:31:20.652Z",
       "cause": "event",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "assistant",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "All tests pass. Let me also verify the new test fails without the fix (test-the-…"
     },
     {
@@ -654,9 +656,9 @@
       "event_index": 336,
       "virtual_time": "2026-04-09T21:31:23.103Z",
       "cause": "debounce_coalesce",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
@@ -697,13 +699,13 @@
       "virtual_time": "2026-04-09T21:32:17.544Z",
       "cause": "event",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "assistant",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "All green. Now let me rebuild the daemon and restart it so you can verify the fi…"
     },
     {
@@ -711,9 +713,9 @@
       "event_index": 355,
       "virtual_time": "2026-04-09T21:32:20.53Z",
       "cause": "event",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "assistant",
       "has_open_tool": true,
       "open_tool_names": [
@@ -721,7 +723,7 @@
       ],
       "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "All green. Now let me rebuild the daemon and restart it so you can verify the fi…"
     },
     {
@@ -750,7 +752,7 @@
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "…o)\n```\n\n5 sessions now, including `proc-21130` for the new claude process you…"
     },
     {
@@ -759,13 +761,13 @@
       "virtual_time": "2026-04-09T21:32:44.55Z",
       "cause": "event",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "assistant",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "…o)\n```\n\n5 sessions now, including `proc-21130` for the new claude process you…"
     },
     {
@@ -773,9 +775,9 @@
       "event_index": 365,
       "virtual_time": "2026-04-09T21:32:48.342Z",
       "cause": "debounce_coalesce",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
@@ -808,7 +810,7 @@
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "… New claude processes in projects with active neighbour sessions now get thei…"
     },
     {
@@ -817,13 +819,13 @@
       "virtual_time": "2026-04-09T21:33:13.26Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "… New claude processes in projects with active neighbour sessions now get thei…"
     },
     {
@@ -831,9 +833,9 @@
       "event_index": 372,
       "virtual_time": "2026-04-09T21:35:39.972Z",
       "cause": "event",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,

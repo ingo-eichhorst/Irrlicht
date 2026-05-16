@@ -189,10 +189,17 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 	}
 
 	// The sidecar still has 10 recorded transitions (pre-#329 daemon).
-	// Several of those are same-timestamp ready→working→ready pairs from
-	// the skip-only-pass flicker the fix eliminates — both in lifetime 1
-	// and in lifetime 2 — so the post-fix replay produces 6 ordered
-	// matches against the recorded sequence.
+	// Two effects shape OrderedMatches:
+	//   * #329 fix dropped same-timestamp ready→working→ready flicker pairs
+	//     in both lifetimes.
+	//   * #381 fix widened IsWaitingForUserInput to catch imperative cues,
+	//     so the first foreground-wave wrap-up — "All waves complete (6
+	//     foreground subagents). Check the UI for the full picture." — now
+	//     classifies as working→waiting (cue: verb+determiner "Check the
+	//     UI") where the pre-fix daemon recorded working→ready. The
+	//     classifier-emitted waiting episode and its subsequent unwind
+	//     shift index alignment, so only the very first (ready→working)
+	//     transition still lines up by index against the recording.
 	check, err := runExtendedCheck(sidecar, report.Transitions)
 	if err != nil {
 		t.Fatalf("runExtendedCheck: %v", err)
@@ -200,8 +207,8 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 	if check.RecordedCount != 10 {
 		t.Errorf("recorded transitions: got %d, want 10", check.RecordedCount)
 	}
-	if check.OrderedMatches != 6 {
-		t.Errorf("ordered matches: got %d, want 6", check.OrderedMatches)
+	if check.OrderedMatches != 1 {
+		t.Errorf("ordered matches: got %d, want 1", check.OrderedMatches)
 	}
 }
 

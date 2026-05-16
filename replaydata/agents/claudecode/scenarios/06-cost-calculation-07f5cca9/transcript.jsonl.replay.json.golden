@@ -15,16 +15,16 @@
     "last_event_time": "2026-04-07T23:15:42.607Z",
     "wall_clock_session_duration": 11901617000000,
     "state_durations": {
-      "ready": 3231325000000,
-      "waiting": 1120676000000,
+      "ready": 2907257000000,
+      "waiting": 1444744000000,
       "working": 7549616000000
     },
-    "flicker_count": 2,
+    "flicker_count": 1,
     "flickers_by_category": {
-      "working_between_ready": 2
+      "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "force ready→working on first activity": 2
+      "force ready→working on first activity": 1
     },
     "estimated_cost_usd": 86.8277925,
     "cum_input_tokens": 3673,
@@ -68,13 +68,13 @@
       "virtual_time": "2026-04-07T20:12:50.382Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "…put* gap rather than a quiet transcript gap.\n\nBeads issue `irrlicht-5yw` and …"
     },
     {
@@ -82,9 +82,9 @@
       "event_index": 126,
       "virtual_time": "2026-04-07T20:14:38.006Z",
       "cause": "debounce_coalesce",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
@@ -97,13 +97,13 @@
       "virtual_time": "2026-04-07T20:16:07.224Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "…two-distinct-flicker-root-causes` records both findings\n\nRe-running `scripts/…"
     },
     {
@@ -111,9 +111,9 @@
       "event_index": 142,
       "virtual_time": "2026-04-07T20:16:30.826Z",
       "cause": "event",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
@@ -329,13 +329,13 @@
       "virtual_time": "2026-04-07T21:51:55.648Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "…ecommendation: **(c)** subsample the extreme fixture to ~200 events around th…"
     },
     {
@@ -343,9 +343,9 @@
       "event_index": 466,
       "virtual_time": "2026-04-07T21:55:08.49Z",
       "cause": "debounce_coalesce",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,

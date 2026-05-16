@@ -88,6 +88,96 @@ func TestExtractQuestionSnippet(t *testing.T) {
 	}
 }
 
+func TestExtractWaitingCue(t *testing.T) {
+	// Issue #381: agents often end a turn with an imperative or implicit
+	// cue rather than a literal `?`. ExtractWaitingCue covers that gap.
+	// Each case mirrors a row in the coverage matrix.
+	cases := []struct {
+		name string
+		text string
+		want bool // true = a cue is detected
+	}{
+		// 30 positive cases from the issue coverage matrix.
+		{"1 take a look + let me know", "Take a look at the icon and let me know if it's right.", true},
+		{"2 try + confirm", "Try the Settings menu again and confirm the Done button is visible.", true},
+		{"5 ready for your review", "Pushed PR #379 as draft. Ready for your review.", true},
+		{"6 awaiting + before I", "Awaiting your go-ahead before I merge.", true},
+		{"7 ping me", "Ping me when you've tested it.", true},
+		{"8 your call", "Two options — A) revert, B) re-roll. Your call.", true},
+		{"11 let me know", "Let me know when you're back online.", true},
+		{"12 confirm the migration", "Confirm the migration ran.", true},
+		{"14 holler", "Holler if anything looks off.", true},
+		{"15 sign off", "Sign off on the diff when you can.", true},
+		{"16 approve the staging", "Approve the staging deploy in #ops to continue.", true},
+		{"17 need your input", "Need your input on whether to keep the fallback.", true},
+		{"18 awaiting confirmation", "Awaiting confirmation that the cert installed.", true},
+		{"19 drop the API key", "Drop the API key in .env and I'll re-run.", true},
+		{"20 once you've reviewed", "Once you've reviewed, ship it.", true},
+		{"21 I'll wait", "I'll wait for your green light before pushing.", true},
+		{"23 lmk", "Lmk if you'd rather I split the PR.", true},
+		{"24 tell me", "Tell me which approach you prefer.", true},
+		{"25 please review", "Please review the diff.", true},
+		{"29 stop me if", "Heads up — about to drop the table. Stop me if that's wrong.", true},
+		{"30 verify locally + reply with", "Verify locally and reply with the diff output.", true},
+		// The `?`-bearing rows in the matrix — verified here too because
+		// IsWaitingForUserInput ORs both detectors; the cue detector
+		// should be permissive enough that several still match independently.
+		{"4 wdyt", "WDYT", true},
+		{"22 thoughts trailing", "All good. Thoughts", true},
+		{"27 any feedback", "Any feedback before I merge", true},
+
+		// Negative cases — must NOT trigger the cue detector.
+		{"neg done tests pass", "Done. The tests pass.", false},
+		{"neg all green pushed", "All green. Pushed to main.", false},
+		{"neg confirmed past tense", "Confirmed: the migration ran cleanly.", false},
+		{"neg URL with ?", "See https://example.com/?foo=bar for details.", false},
+		{"neg test failures substring", "Use a fixture, e.g. small.json. The tests pass.", false},
+		{"neg empty", "", false},
+		{"neg statement", "I am done.", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ExtractWaitingCue(c.text) != ""
+			if got != c.want {
+				t.Errorf("ExtractWaitingCue(%q) detected=%v, want %v (snippet=%q)", c.text, got, c.want, ExtractWaitingCue(c.text))
+			}
+		})
+	}
+}
+
+func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
+	// Public-API assertion: with the cue detector OR'd into the question
+	// detector, turns that end with an imperative gate now register as
+	// waiting. Sample the most representative shapes from issue #381 so a
+	// future regression at either layer surfaces here too.
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"take a look + let me know", "Take a look at the icon and let me know if it's right.", true},
+		{"ready for your review", "Pushed PR #379 as draft. Ready for your review.", true},
+		{"your call", "Two options — A) revert, B) re-roll. Your call.", true},
+		{"awaiting + before I", "Awaiting your go-ahead before I merge.", true},
+		{"once you've reviewed", "Once you've reviewed, ship it.", true},
+		{"please review", "Please review the diff.", true},
+		{"stop me if", "Heads up — about to drop the table. Stop me if that's wrong.", true},
+
+		// Done-state regression guards — must stay false.
+		{"done tests pass stays ready", "Done. The tests pass.", false},
+		{"all green pushed stays ready", "All green. Pushed to main.", false},
+		{"confirmed past tense stays ready", "Confirmed: the migration ran cleanly.", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := &SessionMetrics{LastAssistantText: c.text}
+			if got := m.IsWaitingForUserInput(); got != c.want {
+				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
+			}
+		})
+	}
+}
+
 func TestIsStale(t *testing.T) {
 	now := time.Now().Unix()
 

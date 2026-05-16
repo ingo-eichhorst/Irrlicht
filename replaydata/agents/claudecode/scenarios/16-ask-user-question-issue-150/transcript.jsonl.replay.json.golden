@@ -10,13 +10,13 @@
   "summary": {
     "total_events": 181,
     "consumed_events": 181,
-    "total_transitions": 87,
+    "total_transitions": 85,
     "first_event_time": "2026-04-12T18:52:20.503Z",
     "last_event_time": "2026-04-12T22:29:31.472Z",
     "wall_clock_session_duration": 13030969000000,
     "state_durations": {
-      "ready": 11797731000000,
-      "waiting": 1135157000000,
+      "ready": 10720608000000,
+      "waiting": 2212280000000,
       "working": 98081000000
     },
     "flicker_count": 12,
@@ -337,43 +337,13 @@
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "Hi! Just let me know what you need."
     },
     {
       "index": 20,
       "event_index": 67,
       "virtual_time": "2026-04-12T20:57:23.314Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Hi! Just let me know what you need."
-    },
-    {
-      "index": 21,
-      "event_index": 70,
-      "virtual_time": "2026-04-12T21:15:20.437Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": true,
-      "last_assistant_text_head": "Standing by — what would you like to test?"
-    },
-    {
-      "index": 22,
-      "event_index": 70,
-      "virtual_time": "2026-04-12T21:15:20.437Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "waiting",
@@ -383,10 +353,10 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "Standing by — what would you like to test?"
+      "last_assistant_text_head": "Hi! Just let me know what you need."
     },
     {
-      "index": 23,
+      "index": 21,
       "event_index": 71,
       "virtual_time": "2026-04-12T21:18:03.522Z",
       "cause": "event",
@@ -400,7 +370,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 24,
+      "index": 22,
       "event_index": 73,
       "virtual_time": "2026-04-12T21:18:06.757Z",
       "cause": "debounce_coalesce",
@@ -415,7 +385,7 @@
       "last_assistant_text_head": "…at would you like me to test?"
     },
     {
-      "index": 25,
+      "index": 23,
       "event_index": 75,
       "virtual_time": "2026-04-12T21:20:36.761Z",
       "cause": "debounce_coalesce",
@@ -429,7 +399,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 26,
+      "index": 24,
       "event_index": 77,
       "virtual_time": "2026-04-12T21:20:39.367Z",
       "cause": "debounce_coalesce",
@@ -444,7 +414,7 @@
       "last_assistant_text_head": "What are you looking to test?"
     },
     {
-      "index": 27,
+      "index": 25,
       "event_index": 78,
       "virtual_time": "2026-04-12T21:22:19.652Z",
       "cause": "event",
@@ -458,7 +428,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 28,
+      "index": 26,
       "event_index": 80,
       "virtual_time": "2026-04-12T21:22:21.968Z",
       "cause": "debounce_coalesce",
@@ -473,7 +443,7 @@
       "last_assistant_text_head": "👋 Looks like we're going back and forth — just say the word when you have s…"
     },
     {
-      "index": 29,
+      "index": 27,
       "event_index": 83,
       "virtual_time": "2026-04-12T21:24:30.385Z",
       "cause": "debounce_coalesce",
@@ -488,7 +458,7 @@
       "last_assistant_text_head": "Here whenever you're ready."
     },
     {
-      "index": 30,
+      "index": 28,
       "event_index": 83,
       "virtual_time": "2026-04-12T21:24:30.385Z",
       "cause": "debounce_coalesce",
@@ -503,7 +473,7 @@
       "last_assistant_text_head": "Here whenever you're ready."
     },
     {
-      "index": 31,
+      "index": 29,
       "event_index": 84,
       "virtual_time": "2026-04-12T21:25:24.805Z",
       "cause": "event",
@@ -517,7 +487,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 32,
+      "index": 30,
       "event_index": 88,
       "virtual_time": "2026-04-12T21:25:30.378Z",
       "cause": "debounce_coalesce",
@@ -532,7 +502,7 @@
       "last_assistant_text_head": "…E.md    site/\nassets/          core/            scripts/     testdata/\nCHANGE…"
     },
     {
-      "index": 33,
+      "index": 31,
       "event_index": 91,
       "virtual_time": "2026-04-12T21:29:09.484Z",
       "cause": "debounce_coalesce",
@@ -547,7 +517,7 @@
       "last_assistant_text_head": "Ready when you are — what should I test?"
     },
     {
-      "index": 34,
+      "index": 32,
       "event_index": 91,
       "virtual_time": "2026-04-12T21:29:09.484Z",
       "cause": "debounce_coalesce",
@@ -562,7 +532,7 @@
       "last_assistant_text_head": "Ready when you are — what should I test?"
     },
     {
-      "index": 35,
+      "index": 33,
       "event_index": 92,
       "virtual_time": "2026-04-12T21:30:20.034Z",
       "cause": "event",
@@ -576,7 +546,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 36,
+      "index": 34,
       "event_index": 93,
       "virtual_time": "2026-04-12T21:30:25.44Z",
       "cause": "event",
@@ -594,7 +564,7 @@
       "last_assistant_text_head": "What would you like to work on in the irrlicht project today?"
     },
     {
-      "index": 37,
+      "index": 35,
       "event_index": 96,
       "virtual_time": "2026-04-12T21:30:36.492Z",
       "cause": "debounce_coalesce",
@@ -608,7 +578,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 38,
+      "index": 36,
       "event_index": 97,
       "virtual_time": "2026-04-12T21:30:54.903Z",
       "cause": "event",
@@ -622,7 +592,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 39,
+      "index": 37,
       "event_index": 99,
       "virtual_time": "2026-04-12T21:30:57.202Z",
       "cause": "debounce_coalesce",
@@ -637,7 +607,7 @@
       "last_assistant_text_head": "What do you want me to do?"
     },
     {
-      "index": 40,
+      "index": 38,
       "event_index": 102,
       "virtual_time": "2026-04-12T21:31:13.017Z",
       "cause": "debounce_coalesce",
@@ -652,9 +622,39 @@
       "last_assistant_text_head": "Got it!"
     },
     {
-      "index": 41,
+      "index": 39,
       "event_index": 105,
       "virtual_time": "2026-04-12T21:31:20.296Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "👍"
+    },
+    {
+      "index": 40,
+      "event_index": 105,
+      "virtual_time": "2026-04-12T21:31:20.296Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "👍"
+    },
+    {
+      "index": 41,
+      "event_index": 109,
+      "virtual_time": "2026-04-12T21:31:48.829Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -668,8 +668,8 @@
     },
     {
       "index": 42,
-      "event_index": 105,
-      "virtual_time": "2026-04-12T21:31:20.296Z",
+      "event_index": 109,
+      "virtual_time": "2026-04-12T21:31:48.829Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -683,8 +683,8 @@
     },
     {
       "index": 43,
-      "event_index": 109,
-      "virtual_time": "2026-04-12T21:31:48.829Z",
+      "event_index": 112,
+      "virtual_time": "2026-04-12T21:31:54.995Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -698,8 +698,8 @@
     },
     {
       "index": 44,
-      "event_index": 109,
-      "virtual_time": "2026-04-12T21:31:48.829Z",
+      "event_index": 112,
+      "virtual_time": "2026-04-12T21:31:54.995Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -713,8 +713,8 @@
     },
     {
       "index": 45,
-      "event_index": 112,
-      "virtual_time": "2026-04-12T21:31:54.995Z",
+      "event_index": 115,
+      "virtual_time": "2026-04-12T21:32:28.146Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -728,8 +728,8 @@
     },
     {
       "index": 46,
-      "event_index": 112,
-      "virtual_time": "2026-04-12T21:31:54.995Z",
+      "event_index": 115,
+      "virtual_time": "2026-04-12T21:32:28.146Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -743,8 +743,8 @@
     },
     {
       "index": 47,
-      "event_index": 115,
-      "virtual_time": "2026-04-12T21:32:28.146Z",
+      "event_index": 118,
+      "virtual_time": "2026-04-12T21:35:00.368Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -758,8 +758,8 @@
     },
     {
       "index": 48,
-      "event_index": 115,
-      "virtual_time": "2026-04-12T21:32:28.146Z",
+      "event_index": 118,
+      "virtual_time": "2026-04-12T21:35:00.368Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -773,8 +773,8 @@
     },
     {
       "index": 49,
-      "event_index": 118,
-      "virtual_time": "2026-04-12T21:35:00.368Z",
+      "event_index": 121,
+      "virtual_time": "2026-04-12T21:36:12.889Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -788,8 +788,8 @@
     },
     {
       "index": 50,
-      "event_index": 118,
-      "virtual_time": "2026-04-12T21:35:00.368Z",
+      "event_index": 121,
+      "virtual_time": "2026-04-12T21:36:12.889Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -803,8 +803,8 @@
     },
     {
       "index": 51,
-      "event_index": 121,
-      "virtual_time": "2026-04-12T21:36:12.889Z",
+      "event_index": 124,
+      "virtual_time": "2026-04-12T21:38:45.92Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -818,8 +818,8 @@
     },
     {
       "index": 52,
-      "event_index": 121,
-      "virtual_time": "2026-04-12T21:36:12.889Z",
+      "event_index": 124,
+      "virtual_time": "2026-04-12T21:38:45.92Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -833,8 +833,8 @@
     },
     {
       "index": 53,
-      "event_index": 124,
-      "virtual_time": "2026-04-12T21:38:45.92Z",
+      "event_index": 127,
+      "virtual_time": "2026-04-12T21:40:04.658Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -848,8 +848,8 @@
     },
     {
       "index": 54,
-      "event_index": 124,
-      "virtual_time": "2026-04-12T21:38:45.92Z",
+      "event_index": 127,
+      "virtual_time": "2026-04-12T21:40:04.658Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -863,8 +863,8 @@
     },
     {
       "index": 55,
-      "event_index": 127,
-      "virtual_time": "2026-04-12T21:40:04.658Z",
+      "event_index": 130,
+      "virtual_time": "2026-04-12T21:42:16.19Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -878,8 +878,8 @@
     },
     {
       "index": 56,
-      "event_index": 127,
-      "virtual_time": "2026-04-12T21:40:04.658Z",
+      "event_index": 130,
+      "virtual_time": "2026-04-12T21:42:16.19Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -893,8 +893,8 @@
     },
     {
       "index": 57,
-      "event_index": 130,
-      "virtual_time": "2026-04-12T21:42:16.19Z",
+      "event_index": 133,
+      "virtual_time": "2026-04-12T21:43:08.073Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -908,8 +908,8 @@
     },
     {
       "index": 58,
-      "event_index": 130,
-      "virtual_time": "2026-04-12T21:42:16.19Z",
+      "event_index": 133,
+      "virtual_time": "2026-04-12T21:43:08.073Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -923,8 +923,8 @@
     },
     {
       "index": 59,
-      "event_index": 133,
-      "virtual_time": "2026-04-12T21:43:08.073Z",
+      "event_index": 136,
+      "virtual_time": "2026-04-12T21:44:01.077Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -938,8 +938,8 @@
     },
     {
       "index": 60,
-      "event_index": 133,
-      "virtual_time": "2026-04-12T21:43:08.073Z",
+      "event_index": 136,
+      "virtual_time": "2026-04-12T21:44:01.077Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -953,8 +953,8 @@
     },
     {
       "index": 61,
-      "event_index": 136,
-      "virtual_time": "2026-04-12T21:44:01.077Z",
+      "event_index": 140,
+      "virtual_time": "2026-04-12T21:46:21.007Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -968,8 +968,8 @@
     },
     {
       "index": 62,
-      "event_index": 136,
-      "virtual_time": "2026-04-12T21:44:01.077Z",
+      "event_index": 140,
+      "virtual_time": "2026-04-12T21:46:21.007Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -983,8 +983,8 @@
     },
     {
       "index": 63,
-      "event_index": 140,
-      "virtual_time": "2026-04-12T21:46:21.007Z",
+      "event_index": 143,
+      "virtual_time": "2026-04-12T21:46:27.531Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -998,8 +998,8 @@
     },
     {
       "index": 64,
-      "event_index": 140,
-      "virtual_time": "2026-04-12T21:46:21.007Z",
+      "event_index": 143,
+      "virtual_time": "2026-04-12T21:46:27.531Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -1013,36 +1013,6 @@
     },
     {
       "index": 65,
-      "event_index": 143,
-      "virtual_time": "2026-04-12T21:46:27.531Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "👍"
-    },
-    {
-      "index": 66,
-      "event_index": 143,
-      "virtual_time": "2026-04-12T21:46:27.531Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "👍"
-    },
-    {
-      "index": 67,
       "event_index": 144,
       "virtual_time": "2026-04-12T21:46:45.049Z",
       "cause": "event",
@@ -1056,7 +1026,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 68,
+      "index": 66,
       "event_index": 146,
       "virtual_time": "2026-04-12T21:46:49.95Z",
       "cause": "debounce_coalesce",
@@ -1071,7 +1041,7 @@
       "last_assistant_text_head": "What would you like to work on?"
     },
     {
-      "index": 69,
+      "index": 67,
       "event_index": 149,
       "virtual_time": "2026-04-12T21:50:09.147Z",
       "cause": "debounce_coalesce",
@@ -1086,9 +1056,39 @@
       "last_assistant_text_head": "Hi!"
     },
     {
-      "index": 70,
+      "index": 68,
       "event_index": 152,
       "virtual_time": "2026-04-12T21:51:24.997Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "👍"
+    },
+    {
+      "index": 69,
+      "event_index": 152,
+      "virtual_time": "2026-04-12T21:51:24.997Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "👍"
+    },
+    {
+      "index": 70,
+      "event_index": 155,
+      "virtual_time": "2026-04-12T21:51:50.001Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -1102,8 +1102,8 @@
     },
     {
       "index": 71,
-      "event_index": 152,
-      "virtual_time": "2026-04-12T21:51:24.997Z",
+      "event_index": 155,
+      "virtual_time": "2026-04-12T21:51:50.001Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -1117,8 +1117,8 @@
     },
     {
       "index": 72,
-      "event_index": 155,
-      "virtual_time": "2026-04-12T21:51:50.001Z",
+      "event_index": 159,
+      "virtual_time": "2026-04-12T22:13:52.093Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -1132,8 +1132,8 @@
     },
     {
       "index": 73,
-      "event_index": 155,
-      "virtual_time": "2026-04-12T21:51:50.001Z",
+      "event_index": 159,
+      "virtual_time": "2026-04-12T22:13:52.093Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -1147,8 +1147,8 @@
     },
     {
       "index": 74,
-      "event_index": 159,
-      "virtual_time": "2026-04-12T22:13:52.093Z",
+      "event_index": 162,
+      "virtual_time": "2026-04-12T22:15:46.868Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -1162,8 +1162,8 @@
     },
     {
       "index": 75,
-      "event_index": 159,
-      "virtual_time": "2026-04-12T22:13:52.093Z",
+      "event_index": 162,
+      "virtual_time": "2026-04-12T22:15:46.868Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -1177,8 +1177,8 @@
     },
     {
       "index": 76,
-      "event_index": 162,
-      "virtual_time": "2026-04-12T22:15:46.868Z",
+      "event_index": 165,
+      "virtual_time": "2026-04-12T22:18:57.736Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -1192,8 +1192,8 @@
     },
     {
       "index": 77,
-      "event_index": 162,
-      "virtual_time": "2026-04-12T22:15:46.868Z",
+      "event_index": 165,
+      "virtual_time": "2026-04-12T22:18:57.736Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -1207,8 +1207,8 @@
     },
     {
       "index": 78,
-      "event_index": 165,
-      "virtual_time": "2026-04-12T22:18:57.736Z",
+      "event_index": 168,
+      "virtual_time": "2026-04-12T22:20:52.203Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -1222,8 +1222,8 @@
     },
     {
       "index": 79,
-      "event_index": 165,
-      "virtual_time": "2026-04-12T22:18:57.736Z",
+      "event_index": 168,
+      "virtual_time": "2026-04-12T22:20:52.203Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -1237,36 +1237,6 @@
     },
     {
       "index": 80,
-      "event_index": 168,
-      "virtual_time": "2026-04-12T22:20:52.203Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "👍"
-    },
-    {
-      "index": 81,
-      "event_index": 168,
-      "virtual_time": "2026-04-12T22:20:52.203Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "👍"
-    },
-    {
-      "index": 82,
       "event_index": 170,
       "virtual_time": "2026-04-12T22:28:27.18Z",
       "cause": "debounce_coalesce",
@@ -1280,7 +1250,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 83,
+      "index": 81,
       "event_index": 171,
       "virtual_time": "2026-04-12T22:28:39.677Z",
       "cause": "event",
@@ -1298,7 +1268,7 @@
       "last_assistant_text_head": "What would you like to do next?"
     },
     {
-      "index": 84,
+      "index": 82,
       "event_index": 175,
       "virtual_time": "2026-04-12T22:29:27.056Z",
       "cause": "debounce_coalesce",
@@ -1312,7 +1282,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 85,
+      "index": 83,
       "event_index": 180,
       "virtual_time": "2026-04-12T22:29:31.472Z",
       "cause": "debounce_coalesce",
@@ -1326,7 +1296,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 86,
+      "index": 84,
       "event_index": 180,
       "virtual_time": "2026-04-12T22:29:31.472Z",
       "cause": "debounce_coalesce",
