@@ -386,8 +386,13 @@ struct SessionListView: View {
     /// each group as the representative reading (the bucket is
     /// account-scoped, so every same-account session reports identical
     /// numbers — `max` is just robust to per-session staleness).
-    /// Sorted by `imminent.usedPercent` descending so the provider
-    /// closest to its cap is leftmost.
+    ///
+    /// Sort order is **stable by provider key** (anthropic < openai <
+    /// unknown:…). An earlier version sorted by `usedPercent` descending
+    /// to surface the most-stressed provider first, but that made chips
+    /// swap positions every few seconds as percents updated — the
+    /// flicker drowned out the actual signal. A fixed alphabetical
+    /// order also matches the layout in mockup 2 (Anthropic leftmost).
     private var quotaChipData: [QuotaWidgetData] {
         var byProvider: [String: QuotaWidgetData] = [:]
         for session in sessionManager.sessions {
@@ -407,7 +412,7 @@ struct SessionListView: View {
                 byProvider[key] = candidate
             }
         }
-        return byProvider.values.sorted { $0.imminent.usedPercent > $1.imminent.usedPercent }
+        return byProvider.values.sorted { $0.id < $1.id }
     }
 
     /// The chip-style header widget: provider icon + stacked 5h/7d bars.
