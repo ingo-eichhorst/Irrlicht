@@ -11,15 +11,9 @@ package capacity
 // runtime, otherwise the alias still resolves to a zero-value capacity.
 //
 // Exact-match only: no prefix/fuzzy logic. Resolution happens inside
-// GetModelCapacity before the existing lookup.
-//
-// Canonicals currently missing from LiteLLM (alias still resolves to a
-// zero-value capacity until LiteLLM ships them; daemon logs the alias →
-// canonical mapping on miss so users can see the gap):
-//   - claude-sonnet-4  (claude-4-sonnet, claude-4-sonnet-1m)
-//   - claude-opus-4    (claude-4-opus)
-//   - gpt-5.3-codex    (copilot-openai-auto, gpt-5.1-codex-high)
-// The /ir:refresh-aliases skill flags new misses on each sync.
+// GetModelCapacity before the existing lookup. When the canonical isn't in
+// LiteLLM either, the daemon logs the alias → canonical mapping on miss so
+// the gap is observable.
 var modelAliases = map[string]string{
 	// OMP / SAP AI Core — double-dash provider prefix, dot-version, tier-last.
 	"anthropic--claude-4.6-opus":   "claude-opus-4-6",

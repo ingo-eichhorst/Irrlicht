@@ -5,10 +5,8 @@ import (
 	"testing"
 )
 
-// TestModelAliases_ResolveToCanonical asserts every alias entry resolves to
-// the same ModelCapacity as its canonical key. The manager is seeded with one
-// distinct ModelCapacity per canonical target, so a mis-routed alias would
-// surface as a mismatched ContextWindow or Pricing.
+// Each canonical gets a distinct ModelCapacity so a mis-routed alias surfaces
+// as a value mismatch rather than passing on equal zero values.
 func TestModelAliases_ResolveToCanonical(t *testing.T) {
 	canonicals := make(map[string]ModelCapacity)
 	i := int64(1)
@@ -43,9 +41,6 @@ func TestModelAliases_ResolveToCanonical(t *testing.T) {
 	}
 }
 
-// TestModelAliases_UnknownReturnsUnchanged asserts alias resolution is
-// exact-match only: an unknown string falls through to the canonical lookup
-// unchanged, no prefix or fuzzy matching.
 func TestModelAliases_UnknownReturnsUnchanged(t *testing.T) {
 	cm := NewForTest(map[string]ModelCapacity{
 		"claude-opus-4-6": {ContextWindow: 200000},
@@ -72,11 +67,9 @@ func TestModelAliases_UnknownReturnsUnchanged(t *testing.T) {
 	}
 }
 
-// TestModelAliases_ShadowDirectLookup asserts that when an alias key is
-// *also* present as a direct entry in the LiteLLM table, the alias mapping
-// wins. This pins the "alias resolves first" semantics: if a future LiteLLM
-// version ships "claude-opus-4.6" as a real key, our alias still routes it
-// to "claude-opus-4-6" (codeburn's canonical), avoiding silent drift.
+// Alias must resolve before the LiteLLM lookup, so an alias key that also
+// appears as a direct LiteLLM entry routes through the canonical — otherwise
+// a future LiteLLM addition could silently undo a deliberate codeburn mapping.
 func TestModelAliases_ShadowDirectLookup(t *testing.T) {
 	const alias = "claude-opus-4.6" // present in modelAliases → "claude-opus-4-6"
 	if _, ok := modelAliases[alias]; !ok {

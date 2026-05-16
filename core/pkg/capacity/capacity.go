@@ -141,7 +141,7 @@ func (cm *CapacityManager) logPricingMiss(modelName string) {
 	}
 	if !cm.loggedMisses[modelName] {
 		cm.loggedMisses[modelName] = true
-		if canonical, ok := modelAliases[modelName]; ok && canonical != modelName {
+		if canonical, ok := modelAliases[modelName]; ok {
 			log.Printf("irrlicht/capacity: no pricing for model %q (resolved via alias to canonical %q) — cost will be 0 until LiteLLM cache is refreshed", modelName, canonical)
 		} else {
 			log.Printf("irrlicht/capacity: no pricing for model %q — cost will be 0 until LiteLLM cache is refreshed", modelName)
