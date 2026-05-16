@@ -151,8 +151,8 @@ func TestChainStatuslineCommand_WrapsThirdPartyCommand(t *testing.T) {
 	if !strings.Contains(got, statuslineSentinel) {
 		t.Errorf("expected wrap to include our sentinel, got %q", got)
 	}
-	if !strings.HasPrefix(got, "tee >(") {
-		t.Errorf("expected wrap to start with `tee >(`, got %q", got)
+	if !strings.HasPrefix(got, `bash -c 'tee >(`) {
+		t.Errorf("expected wrap to start with `bash -c 'tee >(`, got %q", got)
 	}
 }
 
@@ -175,5 +175,34 @@ func TestUnchainStatuslineCommand_RoundTripsUserCommand(t *testing.T) {
 func TestUnchainStatuslineCommand_StandaloneReturnsEmpty(t *testing.T) {
 	if got := unchainStatuslineCommand(installedStatuslineCommand); got != "" {
 		t.Errorf("expected empty for standalone install, got %q", got)
+	}
+}
+
+func TestChainStatuslineCommand_WrapUsesBashEnvelope(t *testing.T) {
+	got := chainStatuslineCommand("/usr/local/bin/my-statusline")
+	if !strings.HasPrefix(got, `bash -c 'tee >(`) {
+		t.Errorf("expected bash -c envelope, got %q", got)
+	}
+	if !strings.HasSuffix(got, `|| true'`) {
+		t.Errorf("expected trailing `|| true'`, got %q", got)
+	}
+}
+
+// TestChainStatuslineCommand_MigratesV1WrapToV2 covers the existing-install
+// path: users who picked up the first (broken) statusline wrap end up with a
+// `tee >(…) | curl …` command in settings.json that fails under POSIX sh.
+// On the next daemon start, we must unwrap their command and re-chain it in
+// the bash-envelope form — not overwrite it with the standalone install,
+// which would drop their original statusline script.
+func TestChainStatuslineCommand_MigratesV1WrapToV2(t *testing.T) {
+	userCmd := "bash ~/.claude/interplay-statusline.sh"
+	v1 := "tee >(" + userCmd + ") | curl -fsS --max-time 1 -X POST --data-binary @- " +
+		"http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true"
+	got := chainStatuslineCommand(v1)
+	if !strings.HasPrefix(got, `bash -c 'tee >(`) {
+		t.Fatalf("expected v2 (bash -c) form after migration, got %q", got)
+	}
+	if !strings.Contains(got, userCmd) {
+		t.Errorf("expected user command to survive migration, got %q", got)
 	}
 }

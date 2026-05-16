@@ -124,44 +124,73 @@ func writeStatuslineCommand(settings map[string]interface{}, cmd string) {
 //   - "" (nothing configured) → install our standalone command.
 //   - already-our-canonical → return as-is (caller treats as no-op).
 //   - contains our sentinel but isn't canonical → return canonical (rewrite).
-//   - some other command → wrap with tee so both ours and theirs receive stdin.
+//   - some other command → wrap so both ours and theirs receive stdin.
 //
-// The wrap form is:
+// The wrap form uses `bash -c` explicitly because Claude Code invokes
+// statusLine.command via POSIX `sh` on Unix, and the process substitution
+// (`tee >(…)`) we rely on to duplicate stdin is bash-only. Without the
+// `bash -c` envelope, `sh` errors at parse time and the entire pipeline
+// (including our curl) never runs.
+//
+// Internal shape, inside `bash -c "…"`:
 //
 //	tee >(<user command>) | curl -fsS … >/dev/null 2>&1 || true
 //
-// `tee >(…)` duplicates stdin to the user's process; the second branch flows
-// through the pipeline to curl. Bash process substitution is bash-only, but
-// Claude Code already invokes statusLine.command via bash on macOS/Linux.
+// The user's command sees a copy of stdin via `tee`; the trailing curl
+// branch carries stdin onward to our endpoint. The `|| true` keeps the
+// overall command status zero so Claude Code doesn't surface a failure.
 func chainStatuslineCommand(current string) string {
 	if current == "" || current == installedStatuslineCommand {
 		return installedStatuslineCommand
 	}
+	// If current is already a managed wrap (old or new format), unchain to
+	// recover the user's original command, then re-chain in the canonical
+	// new format. This is the migration path from the v1 wrap (no `bash -c`
+	// envelope, which silently failed under POSIX sh) to the v2 wrap that
+	// works regardless of which shell Claude Code invokes us through.
+	if user := unchainStatuslineCommand(current); user != "" {
+		return wrapStatuslineCommand(user)
+	}
 	if strings.Contains(current, statuslineSentinel) {
-		// Already managed by us; force back to canonical form (and drop any
-		// stale wrap of a removed user command).
+		// Managed standalone — no user command to preserve. Force canonical.
 		return installedStatuslineCommand
 	}
-	// Wrap: user's command runs alongside ours via process substitution.
-	return "tee >(" + current + ") | curl -fsS --max-time 1 -X POST --data-binary @- " +
-		"http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true"
+	// Pure user command — wrap it.
+	return wrapStatuslineCommand(current)
+}
+
+// wrapStatuslineCommand builds the canonical chained form for the given
+// user command. Single-quotes inside the user's command are escaped so the
+// command can be embedded in `bash -c '…'` without breaking quoting.
+func wrapStatuslineCommand(user string) string {
+	escaped := strings.ReplaceAll(user, "'", `'\''`)
+	return `bash -c 'tee >(` + escaped + `) | curl -fsS --max-time 1 -X POST --data-binary @- ` +
+		`http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true'`
 }
 
 // unchainStatuslineCommand returns the user's original command when current
-// was a chained wrap, or "" when current is our standalone install. Used by
-// uninstall to restore the prior state.
+// was a chained wrap, or "" otherwise (standalone install, unknown shape).
+//
+// Recognises both wrap formats:
+//   - v1 (broken under sh): `tee >(<user>) | curl … sentinel … || true`
+//   - v2 (canonical):       `bash -c 'tee >(<user>) | curl … sentinel … || true'`
+//
+// The v1 form is still recognised for migration; new installs always emit v2.
 func unchainStatuslineCommand(current string) string {
-	const prefix = "tee >("
-	if !strings.HasPrefix(current, prefix) {
-		return ""
+	for _, prefix := range []string{`bash -c 'tee >(`, `tee >(`} {
+		if !strings.HasPrefix(current, prefix) {
+			continue
+		}
+		rest := current[len(prefix):]
+		end := strings.Index(rest, `) | curl `)
+		if end < 0 {
+			continue
+		}
+		inner := rest[:end]
+		// Reverse the single-quote escaping for v2 wraps; v1 wraps were
+		// never escaped, but the replace is a safe no-op when no escapes
+		// are present.
+		return strings.ReplaceAll(inner, `'\''`, "'")
 	}
-	rest := current[len(prefix):]
-	// Find the matching close paren of `tee >(...)`. The user's command
-	// shouldn't contain an unbalanced ")"; if it does, we conservatively
-	// give up on round-tripping and return empty.
-	end := strings.Index(rest, ") | curl ")
-	if end < 0 {
-		return ""
-	}
-	return rest[:end]
+	return ""
 }
