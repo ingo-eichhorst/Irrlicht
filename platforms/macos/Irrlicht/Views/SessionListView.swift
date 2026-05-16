@@ -840,20 +840,38 @@ struct SessionListView: View {
     /// to a purely absolute ramp so the chip still has a sensible
     /// color in that edge case.
     ///
+    /// Named thresholds for the bar-color ramp. Centralised so tuning
+    /// the boundaries doesn't require hunting through the function
+    /// body — and so the XCTest reads them by name when it asserts
+    /// the boundary behaviour.
+    enum QuotaBarThreshold {
+        /// Absolute used-percent at which the bar flips to orange
+        /// regardless of pace — the cap itself is imminent.
+        static let absoluteOrange: Double = 85
+        /// `used - pace` overshoot at which the bar flips to orange.
+        static let paceDeltaOrange: Double = 15
+        /// `used - pace` overshoot at which the bar flips to yellow.
+        static let paceDeltaYellow: Double = 5
+        /// Absolute used-percent thresholds used as a fallback when
+        /// the window has no `resetsAt` and we can't compute a pace.
+        static let fallbackOrange: Double = 70
+        static let fallbackYellow: Double = 50
+    }
+
     /// `static` + non-private so XCTests can table-drive the threshold
     /// boundaries without instantiating the view.
     static func barColor(used: Double, pace: Double?) -> Color {
-        if used >= 85 { return .orange }
+        if used >= QuotaBarThreshold.absoluteOrange { return .orange }
         guard let pace = pace else {
             switch used {
-            case 70...: return .orange
-            case 50...: return .yellow
+            case QuotaBarThreshold.fallbackOrange...: return .orange
+            case QuotaBarThreshold.fallbackYellow...: return .yellow
             default: return IrrColors.pressureLow
             }
         }
         let delta = used - pace
-        if delta >= 15 { return .orange }
-        if delta >= 5 { return .yellow }
+        if delta >= QuotaBarThreshold.paceDeltaOrange { return .orange }
+        if delta >= QuotaBarThreshold.paceDeltaYellow { return .yellow }
         return IrrColors.pressureLow
     }
 

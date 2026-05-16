@@ -106,6 +106,13 @@ func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (auth
 	return entry, true
 }
 
+// Canonical provider keys. Centralised so a typo at any inheritance
+// site fails the build instead of silently creating a phantom bucket.
+const (
+	ProviderAnthropic = "anthropic"
+	ProviderOpenAI    = "openai"
+)
+
 // AccountKey identifies a subscription bucket: the provider name plus
 // an account anchor. An empty `AccountID` is a sentinel meaning
 // "singleton donor for this provider, no account-level disambiguation"
@@ -120,7 +127,7 @@ func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (auth
 // account anchor, or document the singleton intent explicitly (and
 // gate it via IsSingleton below). See issue #309.
 type AccountKey struct {
-	Provider  string // "anthropic" | "openai"
+	Provider  string // one of the Provider* constants above
 	AccountID string // empty only for the documented singleton case (currently Anthropic)
 }
 
@@ -205,10 +212,10 @@ func donorKey(s *session.SessionState, home string) (AccountKey, bool) {
 		// Code (lives in keychain), so we deliberately leave AccountID
 		// empty. Wrappers' recipientKey returns the matching singleton
 		// shape, so the lookup still hits.
-		return AccountKey{Provider: "anthropic"}, true
+		return AccountKey{Provider: ProviderAnthropic}, true
 	case "codex":
 		if id := readCodexAccountID(home); id != "" {
-			return AccountKey{Provider: "openai", AccountID: id}, true
+			return AccountKey{Provider: ProviderOpenAI, AccountID: id}, true
 		}
 	}
 	return AccountKey{}, false
@@ -277,12 +284,12 @@ func readPiInheritKey(home string) (AccountKey, bool) {
 		return AccountKey{}, false
 	}
 	if v, ok := entry.piDoc["openai-codex"]; ok && v.Type == "oauth" && v.AccountID != "" {
-		return AccountKey{Provider: "openai", AccountID: v.AccountID}, true
+		return AccountKey{Provider: ProviderOpenAI, AccountID: v.AccountID}, true
 	}
 	if v, ok := entry.piDoc["anthropic"]; ok && v.Type == "oauth" {
 		// Anthropic singleton — AccountID intentionally empty so the
 		// key matches Claude Code's donor entry.
-		return AccountKey{Provider: "anthropic"}, true
+		return AccountKey{Provider: ProviderAnthropic}, true
 	}
 	return AccountKey{}, false
 }
@@ -317,7 +324,7 @@ func readOpenCodeInheritKey(home string) (AccountKey, bool) {
 		return AccountKey{}, false
 	}
 	if v, ok := entry.openCodeDoc["anthropic-oauth"]; ok && v.Type == "oauth" {
-		return AccountKey{Provider: "anthropic"}, true
+		return AccountKey{Provider: ProviderAnthropic}, true
 	}
 	return AccountKey{}, false
 }
