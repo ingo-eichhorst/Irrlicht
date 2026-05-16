@@ -626,20 +626,23 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 
 // reconcileTaskSnapshot applies a Claude Code task_reminder snapshot from
 // parsed (when present) to the running tasks slice. Reminders are
-// authoritative over local state in two ways:
+// authoritative over local state:
 //
-//  1. Phantom demotion: a local in_progress task whose ID is missing from
-//     the snapshot is set to completed (Claude has dropped it from active
-//     tracking) — this is the primary fix for the stale TaskUpdate bug.
+//  1. Prune: a local task whose ID is missing from the snapshot is removed.
+//     Claude Code's UI only shows the current batch — when it stops tracking
+//     a task, we drop it too. This both fixes the phantom in_progress bug
+//     from #282 (no entry means no stuck status) and prevents unbounded dot
+//     accumulation in long sessions (#389).
 //  2. Present divergence: for any ID present in the snapshot whose status
-//     differs from local state, the snapshot's status wins. Strictly more
-//     than a "phantom only" rule — Claude's view is authoritative whenever
-//     it speaks. Safe under transcript ordering because reminders appear
-//     on user turns, after the assistant tool_use that emitted any deltas
-//     for that turn.
+//     differs from local state, the snapshot's status wins. Claude's view
+//     is authoritative whenever it speaks. Safe under transcript ordering
+//     because reminders appear on user turns, after the assistant tool_use
+//     that emitted any deltas for that turn.
 //
 // Snapshots that mention IDs we never saw a TaskCreate for are ignored;
-// the reconcile only updates pre-existing tasks. See issue #282.
+// the reconcile only acts on pre-existing tasks. t.taskSeq is never reset,
+// so monotonic IDs continue to match Claude's sequential numbering across
+// pruned batches. See issues #282 and #389.
 func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 	if parsed == nil || parsed.TaskSnapshot == nil || len(t.tasks) == 0 {
 		return
@@ -648,12 +651,16 @@ func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 	for _, entry := range *parsed.TaskSnapshot {
 		snapByID[entry.ID] = entry
 	}
+	kept := make([]Task, 0, len(t.tasks))
 	for i := range t.tasks {
 		entry, present := snapByID[t.tasks[i].ID]
 		if !present {
-			if t.tasks[i].Status == TaskStatusInProgress {
-				log.Printf("irrlicht/tailer: reconciling phantom in_progress task id=%s subject=%q → completed (not in task_reminder snapshot) in %s", t.tasks[i].ID, t.tasks[i].Subject, t.path)
-				t.tasks[i].Status = TaskStatusCompleted
+			// Quiet on the common case (completed tasks pruned at batch
+			// turnover). Pending/in_progress prunes still log — they're
+			// the #282-style "Claude dropped a task it claimed to track"
+			// signal worth surfacing.
+			if t.tasks[i].Status != TaskStatusCompleted {
+				log.Printf("irrlicht/tailer: pruning %s task id=%s subject=%q (absent from task_reminder snapshot) in %s", t.tasks[i].Status, t.tasks[i].ID, t.tasks[i].Subject, t.path)
 			}
 			continue
 		}
@@ -661,7 +668,9 @@ func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 			log.Printf("irrlicht/tailer: reconciling task id=%s status %s → %s from task_reminder in %s", t.tasks[i].ID, t.tasks[i].Status, entry.Status, t.path)
 			t.tasks[i].Status = entry.Status
 		}
+		kept = append(kept, t.tasks[i])
 	}
+	t.tasks = kept
 }
 
 // processParsedEvent applies a single non-skipped ParsedEvent to the tailer's
