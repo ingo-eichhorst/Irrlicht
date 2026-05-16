@@ -7,11 +7,18 @@ description: "Sync irrlicht's model-name alias map against codeburn's upstream B
 
 Irrlicht's `core/pkg/capacity/aliases.go` is a hand-translated port of codeburn's `BUILTIN_ALIASES` map. New frontends (Cursor releases, OMP variants, Antigravity Gemini models, etc.) appear upstream first; this skill keeps our map in sync.
 
-## When to run
+## Modes
+
+This skill runs in two modes — the workflow below covers both; only the apply step (Step 7) differs.
+
+- **Standalone** (default — invoked as `/ir:refresh-aliases` or "refresh aliases"): produce a diff report, edit `aliases.go`, run tests, and open a PR. Maintainer reviews the PR before it lands on `main`.
+- **Release-inline** (invoked from `/ir:release` Step 1.5): produce the same diff, but edit `aliases.go` directly on the active release branch — no separate PR. The release commit ships the alias updates alongside the version bump. **Fail-soft**: if the fetch errors out (offline, upstream 5xx), continue the release with the existing map.
+
+## When to run (standalone)
 
 - Quarterly cadence (no schedule — maintainer triggers).
 - On demand whenever a session shows `EstimatedCostUSD: 0` for a model the maintainer recognizes as a real provider (likely a new alias upstream).
-- Before cutting a release if a new frontend has shipped publicly.
+- Before cutting a release, if /ir:release's Step 1.5 wasn't run for some reason.
 
 ## Workflow
 
@@ -84,12 +91,14 @@ If diff is empty: report "no changes" and exit.
 
 ### 7. Apply
 
-If the maintainer accepts:
+Edit `core/pkg/capacity/aliases.go` — add new entries in the appropriate grouping section, update changed canonicals. Preserve the existing per-group comments. Don't delete Removed entries unless explicitly approved.
 
-1. Edit `core/pkg/capacity/aliases.go` — add new entries in the appropriate grouping section, update changed canonicals. Preserve the existing per-group comments. Don't delete Removed entries unless explicitly approved.
-2. Run `go test ./core/pkg/capacity/... -race -count=1` — the table-driven test enumerates every entry; new aliases need a canonical seed already covered, otherwise the test catches it.
-3. Commit on a fresh branch: `chore(capacity): sync BUILTIN_ALIASES with codeburn`.
-4. Open a PR with the diff report as the body so the maintainer can audit.
+Run `go test ./core/pkg/capacity/... -race -count=1` — the table-driven test enumerates every entry; new aliases need a canonical seed already covered, otherwise the test catches it.
+
+Then, depending on mode:
+
+- **Standalone**: commit on a fresh branch (`chore(capacity): sync BUILTIN_ALIASES with codeburn`) and open a PR with the diff report as the body.
+- **Release-inline**: leave the change staged on the active release branch (the `/ir:release` Step 7a commit will pick it up). Mention added entries under "Fixed" in the release notes — `/ir:release` Step 1.5 has the suggested phrasing.
 
 ## Constraints
 
