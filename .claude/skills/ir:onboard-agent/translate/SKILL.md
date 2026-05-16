@@ -67,11 +67,11 @@ Three rules govern every step below:
    - *Where would I look if it broke?* — adapter-specific gotchas
      listed in `preconditions` or `notes` so the operator isn't
      guessing.
-   - *Why is `expected.jsonl` needed separately from `ground_truth.jsonl`?*
-     — because re-recording against a regressed daemon would otherwise
-     silently rebase the truth. `expected.jsonl` is the spec-grounded
-     benchmark, updated only when the spec changes; `ground_truth.jsonl`
-     is the per-recording measured offsets, regenerated each re-record.
+   - *Why is `expected.jsonl` the source of truth?* — it's the spec-
+     grounded benchmark, updated only when the spec itself changes.
+     Re-recording against a regressed daemon can't silently rebase it,
+     so regressions surface as validation failures rather than
+     disappearing into a refreshed truth file.
 
 If a step's verification can't be satisfied with the inputs at hand,
 **stop and ask the maintainer** rather than guess. A missing piece
@@ -375,13 +375,10 @@ Verify-list patterns for multi-variant recipes:
 **Before writing the recipe, write `expected.jsonl`.** This is the
 spec-grounded benchmark every future re-recording will be checked
 against. The file lives at
-`replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl` and is
-distinct from `ground_truth.jsonl`:
-
-| File              | Authored by | When        | Anchored to            | Updated when                          |
-|---                |---           |---           |---                      |---                                     |
-| `expected.jsonl`  | Translator   | Before record | Spec phases + tolerances | The spec itself changes wording        |
-| `ground_truth.jsonl` | Translator | After record  | Measured offsets         | Re-record produces new actual offsets  |
+`replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl`.
+It is the single source of behavioral truth — re-recording cannot
+silently rebase it, so regressions surface as validation failures
+rather than disappearing into a refreshed offset file.
 
 Schema (one meta line + N phase lines):
 
@@ -424,10 +421,12 @@ Field semantics:
 
 - Absolute `ts_offset_ms` values. The whole point of expected.jsonl is
   that the same file validates every re-record regardless of when it
-  ran. Offsets are `ground_truth.jsonl`'s job (per-recording).
-- Numbers copied from a recording. If you find yourself measuring
-  events and writing the offsets down, you're authoring
-  `ground_truth.jsonl`, not `expected.jsonl`.
+  ran. Express timing as `max_delay_ms` relative to a previously-
+  declared phase, not as an absolute offset.
+- Numbers copied from a specific recording. If you find yourself
+  measuring events and writing the offsets down verbatim, step back —
+  the spec describes a *bound* (within N ms of phase X), not the
+  particular offset this recording happened to produce.
 
 **Common phase-chaining pitfall:** when matching the post-turn
 `ready`, anchor it to a `working` phase (not to the session's first
@@ -527,7 +526,7 @@ duplicate entry.
   them; no implicit assumption that the operator will reorder
   anything.
 
-### Step 6 — Record, validate against the spec, and write ground_truth
+### Step 6 — Record and validate against the spec
 
 Run the recording once to validate the recipe end-to-end:
 
@@ -550,59 +549,17 @@ The helper:
    along with a `manifest.json` (daemon version, agent CLI version,
    recipe hash, frozen expected pass rate, recording start ts). This
    builds the history the viewer's recording-history dropdown reads.
-2. Copies the staged recording into the top-level slot.
+2. Copies the staged recording into the top-level slot and writes a
+   top-level `manifest.json` describing the new latest.
 3. Re-runs the expected-validator against the new recording. **Exits
    non-zero if validation fails** — leaving the new files in place
    but flagging the drift so the maintainer reviews before the
    archive becomes the de-facto latest. To roll back, move the
    most-recent archive's files back to the top level:
-   `mv recordings/<latest>/{events,transcript,ground_truth}.jsonl ./`.
+   `mv recordings/<latest>/{events,transcript}.jsonl ./`.
 
-Then write `$TARGET/ground_truth.jsonl` with labels anchored to the
-actual offsets you measured. The schema (one meta line + N label
-lines, each with `ts_offset_ms` / `marker` / `expected_state` /
-`tolerance_ms` / `evidence_kind` / `notes`):
-
-```jsonl
-{"schema_version":1,"agent":"<agent>","scenario":"<scenario-id>","recording_started_at":"<UTC>","notes":"..."}
-{"ts_offset_ms":60,"marker":"presession_ready","expected_state":"ready","tolerance_ms":1000,"evidence_kind":"transcript_event_kind","notes":"..."}
-...
-```
-
-For multi-variant recordings, prefix each label's marker with
-`v1_` / `v2_` / `v3_` so the variant is unambiguous when reading
-the file. Compute offsets with a small Python helper rather than
-by hand — anchor offsets reflect milliseconds since the FIRST event
-in the recording, and multi-variant recordings span 60–90 s of
-wall time:
-
-```bash
-python3 - <<'PY'
-import json
-from datetime import datetime
-first = None
-with open("$TARGET/events.jsonl") as f:
-    for line in f:
-        e = json.loads(line)
-        ts = e.get("ts")
-        if not ts: continue
-        t = datetime.fromisoformat(ts)
-        if first is None: first = t
-        off = int((t - first).total_seconds() * 1000)
-        kind = e.get("kind")
-        if kind in ("state_transition", "process_exited"):
-            print(f'  +{off:6d} ms  {kind} {e.get("new_state") or ""}  '
-                  f'sid={e.get("session_id", "")[:14]}')
-PY
-```
-
-The recipe's plain-English `verify` items are the operator-facing
-docs; this JSONL is what the validator runs against. Both should
+The recipe's plain-English `verify` items and `expected.jsonl` should
 agree on the same set of assertions.
-
-The viewer's "Ground truth" panel on the scenario playback page
-renders this file directly — if it's missing, the panel says "No
-ground_truth.jsonl" and the validator skips the scenario.
 
 ► **Verify before declaring done:**
 - [ ] Recording was committed via `--attach` mode against the user's
@@ -617,8 +574,6 @@ ground_truth.jsonl" and the validator skips the scenario.
   doesn't exercise the spec (fix recipe + re-record) OR the daemon
   drifted from the spec (file an issue and STOP — do NOT update
   expected.jsonl to match a regression).
-- [ ] `ground_truth.jsonl` labels align with the actual offsets you
-  measured — generated via the Python helper above, not hand-picked.
 - [ ] `tools/replay-fixtures.sh` runs green against the new fixture
   (replays the recording AND runs expected-validate; both must pass).
 - [ ] `go test ./tools/agent-onboarding/... -race -count=1` runs
@@ -627,7 +582,7 @@ ground_truth.jsonl" and the validator skips the scenario.
   spot-checks:
   - State band reflects what the verify list asserts.
   - Turn lane shows the right number of user/assistant ticks.
-  - Ground truth panel renders all labels with the right offsets.
+  - "Spec expectations" panel shows the right pass/fail per phase.
   - "Emitted state transitions" panel lists each session ending in
     `→ ∅` (or whatever the recipe documented).
 - [ ] Re-record once more from scratch (`run-cell.sh --attach …`).
@@ -680,15 +635,13 @@ the driver controls completion timing instead of inferring it from
 - **Don't translate a scenario whose verdict is `agent_supports:
   "no"`.** Mark `applicable: false` and move on — fabricating a
   recipe just produces a recording that proves the wrong thing.
-- **Don't write `verify` items in ground-truth form.** The recipe's
+- **Don't write `verify` items as machine assertions.** The recipe's
   `verify` field is plain-English for the operator to spot-check
   (e.g. "events.jsonl contains a transcript_new event within 1000 ms");
-  the structured machine-checkable form belongs in
-  `replaydata/agents/<agent>/scenarios/<id>/ground_truth.jsonl`. Both
-  exist — the recipe `verify` is the maintainer-facing docs; the
-  `ground_truth.jsonl` is what the validator runs against. After
-  promoting a fresh recording, write a matching `ground_truth.jsonl`
-  with offsets anchored to the new fixture.
+  the structured machine-checkable form belongs in `expected.jsonl`
+  as phase declarations. Both exist — the recipe `verify` is the
+  maintainer-facing docs; `expected.jsonl` is what the validator
+  runs against.
 - **Don't translate only the primary variant when the spec has
   multiple `Scenario:` blocks.** Default to chaining all variants
   in one recording (see "Multi-variant scenarios"). Splitting them
@@ -707,11 +660,12 @@ the driver controls completion timing instead of inferring it from
   transition before the recording's tail expires. Write the verify
   as "accept either shape" — the live dashboard handles recovery
   correctly even when the recording window misses it.
-- **Don't write offsets into `expected.jsonl`.** It uses phase-relative
-  anchors + tolerance windows. Absolute `ts_offset_ms` is
-  `ground_truth.jsonl`'s job — that file is per-recording,
-  `expected.jsonl` is per-scenario. If you find yourself measuring
-  events and writing the offsets, you're authoring the wrong file.
+- **Don't write absolute offsets into `expected.jsonl`.** It uses
+  phase-relative anchors + tolerance windows (`max_delay_ms` measured
+  from a previously-declared phase), never absolute `ts_offset_ms`
+  values copied from a recording. If you find yourself measuring
+  events and writing offsets verbatim, step back — the spec describes
+  a *bound*, not the particular offset this recording produced.
 - **Don't update `expected.jsonl` when a re-record fails validation.**
   The fail signal is "daemon vs spec drift". Update `expected.jsonl`
   ONLY when the spec at `.specs/agent-scenarios.md` actually changes

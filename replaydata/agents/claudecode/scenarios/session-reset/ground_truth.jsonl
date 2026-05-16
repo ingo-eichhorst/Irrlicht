@@ -1,9 +1,0 @@
-{"schema_version":1,"agent":"claudecode","scenario":"session-reset","recording_started_at":"2026-05-15T10:58:24.990Z","notes":"KNOWN PARTIAL — coverage notes #169: daemon does NOT emit transcript_removed for the OLD UUID after /clear, so the spec's 'Old session disappears' assertion currently fails expected.jsonl validation. The recording captures real daemon behavior — leaving the gap visible is the deliverable. The new UUID DOES appear cleanly in ready and runs its turn normally."}
-{"ts_offset_ms":37,"marker":"presession_ready","expected_state":"ready","tolerance_ms":1000,"evidence_kind":"transcript_event_kind"}
-{"ts_offset_ms":12509,"marker":"v1_session_handoff","expected_state":"ready","tolerance_ms":2000,"evidence_kind":"transcript_event_kind","notes":"first UUID takes over from pre-session"}
-{"ts_offset_ms":12651,"marker":"v1_turn_start","expected_state":"working","tolerance_ms":2000,"evidence_kind":"transcript_line"}
-{"ts_offset_ms":16307,"marker":"v1_turn_end","expected_state":"ready","tolerance_ms":2000,"evidence_kind":"transcript_field_value"}
-{"ts_offset_ms":17676,"marker":"v2_session_appeared","expected_state":"ready","tolerance_ms":3000,"evidence_kind":"transcript_event_kind","notes":"NEW UUID (fd023a54) appears in ready ~1.4 s after /clear was sent — the 'new session_id' half of the spec works"}
-{"ts_offset_ms":19881,"marker":"v2_turn_start","expected_state":"working","tolerance_ms":2000,"evidence_kind":"transcript_line"}
-{"ts_offset_ms":22905,"marker":"v2_turn_end","expected_state":"ready","tolerance_ms":2000,"evidence_kind":"transcript_field_value"}
-{"ts_offset_ms":28716,"marker":"v2_exit","expected_state":"ready","tolerance_ms":3000,"evidence_kind":"transcript_event_kind","notes":"process_exited for the new UUID at tmux teardown"}

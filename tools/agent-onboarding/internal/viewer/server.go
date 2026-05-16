@@ -1,12 +1,13 @@
-// Package viewer serves the Phase 7 replay viewer: a localhost web UI
-// for inspecting recordings (signals.jsonl + events.jsonl + frames/ +
-// optional ground_truth.jsonl + optional validate result).
+// Package viewer serves the replay viewer: a localhost web UI for
+// inspecting recordings (events.jsonl + transcript.jsonl + expected.jsonl
+// validation + archive history).
 //
 // API:
-//   GET  /                                          — embedded SPA
-//   GET  /api/scenarios                             — list of recordings
-//   GET  /api/scenarios/{agent}/{subtree}/{id}      — recording detail (signals + meta + gt + transitions)
-//   GET  /api/scenarios/{agent}/{subtree}/{id}/frame/{name} — single frame's text
+//   GET  /                                                  — embedded SPA
+//   GET  /api/scenarios                                     — list of recordings
+//   GET  /api/scenarios/{agent}/{subtree}/{id}              — recording detail
+//   GET  /api/scenarios/{agent}/{subtree}/{id}/recordings   — archived recordings
+//   GET  /api/scenarios/{agent}/{subtree}/{id}/recordings/{name} — one archive
 //
 // `subtree` is "scenarios" or "regression"; the recordings live at
 // replaydata/agents/<agent>/<subtree>/<id>/.
@@ -29,7 +30,6 @@ import (
 	"strings"
 	"time"
 
-	"irrlicht/tools/agent-onboarding/internal/groundtruth"
 	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
@@ -457,12 +457,9 @@ func (s *Server) resolveCoveragePath() string {
 
 // ScenarioListEntry is one row in /api/scenarios.
 type ScenarioListEntry struct {
-	Agent          string `json:"agent"`
-	Subtree        string `json:"subtree"` // "scenarios" | "regression"
-	ID             string `json:"id"`
-	HasGroundTruth bool   `json:"has_ground_truth"`
-	HasSignals     bool   `json:"has_signals"`
-	HasFrames      bool   `json:"has_frames"`
+	Agent   string `json:"agent"`
+	Subtree string `json:"subtree"` // "scenarios" | "regression"
+	ID      string `json:"id"`
 }
 
 func (s *Server) handleScenariosList(w http.ResponseWriter, r *http.Request) {
@@ -481,13 +478,8 @@ func (s *Server) handleScenariosList(w http.ResponseWriter, r *http.Request) {
 				if !sd.IsDir() {
 					continue
 				}
-				id := sd.Name()
-				scenarioDir := filepath.Join(subPath, id)
 				out = append(out, ScenarioListEntry{
-					Agent: agent, Subtree: subtree, ID: id,
-					HasGroundTruth: fileExists(filepath.Join(scenarioDir, "ground_truth.jsonl")),
-					HasSignals:     fileExists(filepath.Join(scenarioDir, "signals.jsonl")),
-					HasFrames:      fileExists(filepath.Join(scenarioDir, "frames.jsonl")),
+					Agent: agent, Subtree: subtree, ID: sd.Name(),
 				})
 			}
 		}
@@ -510,12 +502,8 @@ type ScenarioDetail struct {
 	Subtree        string                   `json:"subtree"`
 	ID             string                   `json:"id"`
 	Meta           json.RawMessage          `json:"meta,omitempty"`            // recording-meta.json or null
-	GroundTruth    *GroundTruthBlob         `json:"ground_truth,omitempty"`    // ground_truth.jsonl parsed
 	Expected       *validate.ExpectedReport `json:"expected,omitempty"`        // expected.jsonl validated against events.jsonl (if file present)
-	Signals        []json.RawMessage        `json:"signals"`                   // all signals.jsonl rows
 	Transitions    []json.RawMessage        `json:"transitions"`               // state_transition rows from events.jsonl
-	Frames         []FrameRow               `json:"frames,omitempty"`          // frames.jsonl parsed
-	Validate       json.RawMessage          `json:"validate,omitempty"`        // validate result JSON if present
 	Tools          []ToolCall               `json:"tools,omitempty"`           // tool_use blocks extracted from transcript.jsonl
 	LatestManifest *RecordingArchive        `json:"latest_manifest,omitempty"` // synthesized manifest for the live top-level recording, mirroring archive manifest fields so the viewer can render a uniform metadata panel
 }
@@ -532,19 +520,6 @@ type ToolCall struct {
 	SessionID string `json:"session_id,omitempty"` // sessionId on the message line
 	Name      string `json:"name"`                 // tool name (e.g. "Bash", "Agent", "Read")
 	ID        string `json:"id,omitempty"`         // tool_use id (toolu_…)
-}
-
-// GroundTruthBlob is the JSON-friendly shape of ground_truth.jsonl.
-type GroundTruthBlob struct {
-	Meta   groundtruth.Meta    `json:"meta"`
-	Labels []groundtruth.Label `json:"labels"`
-}
-
-// FrameRow mirrors one row of frames.jsonl plus the resolved relative URL.
-type FrameRow struct {
-	Ts     string `json:"ts"`
-	Path   string `json:"path"`
-	Format string `json:"format"`
 }
 
 func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
@@ -569,10 +544,6 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "scenario not found", http.StatusNotFound)
 		return
 	}
-	if len(parts) >= 5 && parts[3] == "frame" {
-		s.serveFrame(w, scenarioDir, parts[4])
-		return
-	}
 	// Recording history endpoints:
 	//   /api/scenarios/{a}/{s}/{id}/recordings              → list archived recordings
 	//   /api/scenarios/{a}/{s}/{id}/recordings/{name}       → archived recording detail (events + transcript + manifest)
@@ -591,27 +562,14 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	if b, err := os.ReadFile(filepath.Join(scenarioDir, "recording-meta.json")); err == nil {
 		d.Meta = b
 	}
-	if f, err := os.Open(filepath.Join(scenarioDir, "ground_truth.jsonl")); err == nil {
-		gtMeta, labels, err := groundtruth.Read(f)
-		f.Close()
-		if err == nil {
-			d.GroundTruth = &GroundTruthBlob{Meta: gtMeta, Labels: labels}
-		}
-	}
-	d.Signals = readJSONLRaw(filepath.Join(scenarioDir, "signals.jsonl"))
 	d.Transitions = readTransitionsRaw(filepath.Join(scenarioDir, "events.jsonl"))
-	d.Frames = readFrames(filepath.Join(scenarioDir, "frames.jsonl"))
-	// Synthesize meta from events.jsonl when the recording predates the
-	// recorder (no recording-meta.json on disk). 27/27 committed recordings
-	// fall into this bucket today — without synthesis, the Recording
-	// Metadata panel is always empty.
+	// Synthesize meta from events.jsonl when no recording-meta.json
+	// exists on disk — every committed recording falls into this bucket
+	// today; without synthesis the dropdown's metadata panel is empty.
 	if d.Meta == nil {
 		if synth := synthesizeMetaFromEvents(filepath.Join(scenarioDir, "events.jsonl")); synth != nil {
 			d.Meta = synth
 		}
-	}
-	if b, err := os.ReadFile(filepath.Join(scenarioDir, fmt.Sprintf("%s-%s-validate.json", agent, id))); err == nil {
-		d.Validate = b
 	}
 	// Spec-grounded expected.jsonl validation. Errors are swallowed so a
 	// malformed expected.jsonl doesn't 500 the whole detail response —
@@ -783,7 +741,6 @@ type ArchivedRecordingDetail struct {
 	Name        string                   `json:"name"`
 	Manifest    RecordingArchive         `json:"manifest"`
 	Transitions []json.RawMessage        `json:"transitions"`
-	GroundTruth *GroundTruthBlob         `json:"ground_truth,omitempty"`
 	Expected    *validate.ExpectedReport `json:"expected,omitempty"` // current spec vs this archive's events
 	Tools       []ToolCall               `json:"tools,omitempty"`    // tool_use blocks extracted from archive's transcript.jsonl
 }
@@ -845,13 +802,6 @@ func (s *Server) handleArchivedRecording(w http.ResponseWriter, scenarioDir, nam
 		d.Manifest.Name = name
 	}
 	d.Transitions = readTransitionsRaw(filepath.Join(archiveDir, "events.jsonl"))
-	if f, err := os.Open(filepath.Join(archiveDir, "ground_truth.jsonl")); err == nil {
-		gtMeta, labels, err := groundtruth.Read(f)
-		if err == nil {
-			d.GroundTruth = &GroundTruthBlob{Meta: gtMeta, Labels: labels}
-		}
-		f.Close()
-	}
 	// Re-evaluate the archive against the CURRENT top-level
 	// expected.jsonl. Drift signal: archive may have passed at
 	// promote-time but fail today because the spec moved.
@@ -863,43 +813,6 @@ func (s *Server) handleArchivedRecording(w http.ResponseWriter, scenarioDir, nam
 	}
 	d.Tools = extractToolCalls(filepath.Join(archiveDir, "transcript.jsonl"))
 	writeJSON(w, d)
-}
-
-func (s *Server) serveFrame(w http.ResponseWriter, scenarioDir, name string) {
-	// Defense in depth: prevent path traversal.
-	if strings.Contains(name, "..") || strings.ContainsRune(name, filepath.Separator) {
-		http.Error(w, "invalid frame name", http.StatusBadRequest)
-		return
-	}
-	p := filepath.Join(scenarioDir, "frames", name)
-	b, err := os.ReadFile(p)
-	if err != nil {
-		http.NotFound(w, nil)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = w.Write(b)
-}
-
-func readJSONLRaw(path string) []json.RawMessage {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	var out []json.RawMessage
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		b := scanner.Bytes()
-		if len(strings.TrimSpace(string(b))) == 0 {
-			continue
-		}
-		cp := make([]byte, len(b))
-		copy(cp, b)
-		out = append(out, cp)
-	}
-	return out
 }
 
 // synthesizeMetaFromEvents builds a recording-meta.json-compatible
@@ -1077,28 +990,6 @@ func readTransitionsRaw(path string) []json.RawMessage {
 			out = append(out, b)
 		}
 	}
-}
-
-func readFrames(path string) []FrameRow {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	var out []FrameRow
-	dec := json.NewDecoder(bufio.NewReader(f))
-	for {
-		var row FrameRow
-		if err := dec.Decode(&row); err != nil {
-			return out
-		}
-		out = append(out, row)
-	}
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

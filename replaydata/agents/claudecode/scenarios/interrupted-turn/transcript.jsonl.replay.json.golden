@@ -8,15 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 16,
-    "consumed_events": 16,
+    "total_events": 17,
+    "consumed_events": 17,
     "total_transitions": 5,
-    "first_event_time": "2026-05-01T11:12:33.04Z",
-    "last_event_time": "2026-05-01T11:12:43.036Z",
-    "wall_clock_session_duration": 9996000000,
+    "first_event_time": "2026-05-14T21:34:22.665Z",
+    "last_event_time": "2026-05-14T21:34:32.739Z",
+    "wall_clock_session_duration": 10074000000,
     "state_durations": {
-      "ready": 5924000000,
-      "working": 4072000000
+      "ready": 5992000000,
+      "working": 4082000000
     },
     "flicker_count": 2,
     "flickers_by_category": {
@@ -27,18 +27,18 @@
       "force ready→working on first activity": 1,
       "user ESC interrupt while working → ready": 1
     },
-    "estimated_cost_usd": 0.01523075,
-    "cum_input_tokens": 6,
-    "cum_output_tokens": 6,
-    "cum_cache_read_tokens": 28589,
-    "cum_cache_creation_tokens": 121,
+    "estimated_cost_usd": 0.157535,
+    "cum_input_tokens": 12,
+    "cum_output_tokens": 14,
+    "cum_cache_read_tokens": 47910,
+    "cum_cache_creation_tokens": 13317,
     "model_name": "claude-opus-4-7"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-01T11:12:33.04Z",
+      "virtual_time": "2026-05-14T21:34:22.665Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -52,7 +52,7 @@
     {
       "index": 1,
       "event_index": 6,
-      "virtual_time": "2026-05-01T11:12:33.04Z",
+      "virtual_time": "2026-05-14T21:34:22.665Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -65,8 +65,8 @@
     },
     {
       "index": 2,
-      "event_index": 9,
-      "virtual_time": "2026-05-01T11:12:37.112Z",
+      "event_index": 10,
+      "virtual_time": "2026-05-14T21:34:26.747Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -79,8 +79,8 @@
     },
     {
       "index": 3,
-      "event_index": 15,
-      "virtual_time": "2026-05-01T11:12:43.036Z",
+      "event_index": 16,
+      "virtual_time": "2026-05-14T21:34:32.739Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -94,8 +94,8 @@
     },
     {
       "index": 4,
-      "event_index": 15,
-      "virtual_time": "2026-05-01T11:12:43.036Z",
+      "event_index": 16,
+      "virtual_time": "2026-05-14T21:34:32.739Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",

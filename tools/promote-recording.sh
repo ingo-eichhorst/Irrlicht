@@ -14,12 +14,11 @@
 #   ├── expected.jsonl              # spec — preserved
 #   ├── events.jsonl                # NEW (from staging)
 #   ├── transcript.jsonl            # NEW (from staging)
-#   ├── ground_truth.jsonl          # NEW (from staging, optional)
+#   ├── manifest.json               # NEW (top-level recording metadata)
 #   └── recordings/
 #       └── 2026-05-15T09-40_irrlichd-2.1.142/
 #           ├── events.jsonl        # PREVIOUS latest, moved here
 #           ├── transcript.jsonl
-#           ├── ground_truth.jsonl  # if it existed
 #           └── manifest.json
 #
 # Manifest fields:
@@ -108,7 +107,7 @@ if [[ -f "$TARGET_DIR/events.jsonl" ]]; then
   echo "archiving previous recording to $ARCHIVE_DIR" >&2
 
   # Move the current trio into the archive.
-  for f in events.jsonl transcript.jsonl ground_truth.jsonl; do
+  for f in events.jsonl transcript.jsonl; do
     if [[ -f "$TARGET_DIR/$f" ]]; then
       mv "$TARGET_DIR/$f" "$ARCHIVE_DIR/$f"
     fi
@@ -153,7 +152,7 @@ fi
 
 # 2. Copy the staged recording into the top-level slot.
 mkdir -p "$TARGET_DIR"
-for f in events.jsonl transcript.jsonl ground_truth.jsonl; do
+for f in events.jsonl transcript.jsonl; do
   if [[ -f "$STAGED_DIR/$f" ]]; then
     cp "$STAGED_DIR/$f" "$TARGET_DIR/$f"
   fi

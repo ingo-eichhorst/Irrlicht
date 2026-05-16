@@ -58,23 +58,12 @@ fi
 ADAPTER="${positional[0]}"
 SCENARIO="${positional[1]}"
 
-# --recorder=on is recognized but currently a no-op flag.
-#
-# Phase 1 of #268 ships the recorder binary (`agent-onboard record`) as a
-# standalone observer that takes paths and a PID it can attach to. The
-# existing run-cell flow uses an isolated daemon + driver and does not
-# directly expose the agent CLI's PID or live transcript path back to this
-# script, so wiring the recorder in requires deeper integration that is
-# Phase 6's responsibility.
-#
-# When --recorder=on is passed today the flag is acknowledged so callers
-# can adopt the surface immediately; Phase 6's `pipeline/run-pipeline.sh`
-# will be the integration point that actually spawns `agent-onboard record`
-# alongside the driver and captures signals.jsonl + frames/ into staging.
+# --recorder=on is a deprecated no-op flag. Mode B's sensor recorder
+# (signals.jsonl + frames + ground_truth) has been retired in favor of
+# expected.jsonl as the single source of behavioral truth. Accept the
+# flag for compatibility with older callers but emit nothing.
 if [[ "$RECORDER" == "on" ]]; then
-  echo "note: --recorder=on accepted but the live recorder is wired up in Phase 6 (#268)." >&2
-  echo "      To capture signals.jsonl today, run \`agent-onboard record\` directly against" >&2
-  echo "      a live agent. See tools/agent-onboarding/cmd/recorder/main.go for flags." >&2
+  echo "note: --recorder=on is deprecated (Mode B retired); flag has no effect." >&2
 fi
 
 # Look up the cell from scenarios.json. Absent cell → refuse.

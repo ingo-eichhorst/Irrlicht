@@ -18,7 +18,7 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "model_name": "gpt-5.4"
+    "model_name": "gpt-5.5"
   },
   "transitions": [
     {

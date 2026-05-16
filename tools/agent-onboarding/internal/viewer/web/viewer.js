@@ -79,7 +79,7 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
         // router find this button when restoring active state from
         // a deep link.
         const el = document.createElement("button");
-        el.className = "scn" + (s.has_ground_truth ? " has-gt" : "");
+        el.className = "scn";
         el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
         el.textContent = s.id;
         el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
@@ -795,11 +795,7 @@ function renderMeta(data) {
 }
 
 // renderExpected paints the spec-grounded expected.jsonl validation
-// report. Distinct from renderGroundTruth (which shows per-recording
-// measured offsets): this panel asserts the daemon's behavior against
-// the spec, so a regression shows up as a red ✗ pill rather than a
-// silent rebase of the truth.
-// renderExpected has two modes:
+// report. Two modes:
 //   "validate" (default) — full UI with pass/fail summary, result + delta
 //                          columns, and a failures detail block.
 //   "spec"               — definitions only. Used when no recording is
@@ -809,7 +805,7 @@ function renderExpected(data, mode) {
   const specOnly = mode === "spec";
   const p = panel("Spec expectations");
   if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
-    p.appendChild(text("No expected.jsonl for this scenario. Author one per the translate skill's Step 3.5 (.specs-grounded benchmark, distinct from ground_truth.jsonl)."));
+    p.appendChild(text("No expected.jsonl for this scenario. Author one per the translate skill's Step 3.5."));
     return p;
   }
   const rep = data.expected;
@@ -1059,7 +1055,7 @@ function renderRecordingHistory(s, latestData, archives) {
           <b>recording_started_at:</b> ${escapeHtml(lm.recording_started_at || "")}
         `;
       } else {
-        manifestBox.innerHTML = `<i>Showing the current top-level recording (<code>events.jsonl</code>, <code>transcript.jsonl</code>, <code>ground_truth.jsonl</code>).</i>`;
+        manifestBox.innerHTML = `<i>Showing the current top-level recording (<code>events.jsonl</code>, <code>transcript.jsonl</code>).</i>`;
       }
       renderRecordingPanels(latestData, /*archiveName=*/"");
       return;
@@ -1083,7 +1079,6 @@ function renderRecordingHistory(s, latestData, archives) {
     const archData = {
       ...latestData,
       transitions: archDetail.transitions || [],
-      ground_truth: archDetail.ground_truth || null,
       expected: archDetail.expected || null,
       tools: archDetail.tools || [],
     };
@@ -1116,19 +1111,9 @@ function renderRecordingHistory(s, latestData, archives) {
     // <scenarioDir>/recordings/<name>.
     below.appendChild(renderPlayback(s, d, archiveName));
     below.appendChild(renderMeta(d));
-    below.appendChild(renderGroundTruth(d));
     below.appendChild(renderTransitions(d));
     if (Array.isArray(d.tools) && d.tools.length > 0) {
       below.appendChild(renderToolCalls(d));
-    }
-    // Validate + Signals only carry data for the latest recording today
-    // (promote-recording.sh doesn't archive them). Keep them gated so
-    // archive selections don't render empty panels.
-    if (!archiveName) {
-      below.appendChild(renderValidate(d));
-      if (Array.isArray(d.signals) && d.signals.length > 0) {
-        below.appendChild(renderSignalsPreview(d));
-      }
     }
   }
 
@@ -1198,29 +1183,6 @@ function renderToolCalls(data) {
       <td><code style="font-size: 11px; color: #666;">${escapeHtml(sidShort)}</code></td>
       <td>${toolCell}</td>
       <td><code style="font-size: 11px; color: #888;">${escapeHtml((t.id || "").slice(0, 16))}</code></td>`;
-    tbl.appendChild(tr);
-  }
-  p.appendChild(tbl);
-  return p;
-}
-
-function renderGroundTruth(data) {
-  const p = panel("Ground truth");
-  if (!data.ground_truth || !data.ground_truth.labels || data.ground_truth.labels.length === 0) {
-    p.appendChild(text("No ground_truth.jsonl — this scenario is regression-only (replay-fixtures.sh exercises it but the validator skips it)."));
-    return p;
-  }
-  const tbl = document.createElement("table");
-  tbl.innerHTML = `<tr><th>+ms</th><th>marker</th><th>expected</th><th>tol</th><th>evidence_kind</th><th>notes</th></tr>`;
-  for (const l of data.ground_truth.labels) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td><span class="gt-marker">${l.ts_offset_ms}</span></td>
-      <td><code>${escapeHtml(l.marker)}</code></td>
-      <td><span class="badge ${l.expected_state}">${l.expected_state}</span></td>
-      <td>${l.tolerance_ms || 1000}</td>
-      <td>${escapeHtml(l.evidence_kind || "")}</td>
-      <td>${escapeHtml(l.notes || "")}</td>`;
     tbl.appendChild(tr);
   }
   p.appendChild(tbl);
@@ -1334,37 +1296,6 @@ function badgeClass(state) {
   if (!state) return "none";
   if (state === "∅") return "ended";
   return String(state).replace(/[^a-zA-Z0-9_-]/g, "") || "none";
-}
-
-function renderValidate(data) {
-  if (!data.validate) return panelFiller();
-  const p = panel("Validator result");
-  try {
-    const v = typeof data.validate === "string" ? JSON.parse(data.validate) : data.validate;
-    const b = document.createElement("div");
-    b.innerHTML = `<span class="badge ${v.pass ? 'pass' : 'fail'}">${v.pass ? 'PASS' : 'FAIL'}</span> &nbsp; <code>${v.scenario}</code>`;
-    p.appendChild(b);
-    const tbl = document.createElement("table");
-    tbl.style.marginTop = "8px";
-    tbl.innerHTML = `<tr><th>marker</th><th>expected</th><th>observed</th><th>Δms</th><th>tol</th><th>pass</th><th>note</th></tr>`;
-    for (const l of v.labels || []) {
-      const tr = document.createElement("tr");
-      if (!l.pass) tr.className = "hl";
-      tr.innerHTML = `
-        <td>${escapeHtml(l.marker)}</td>
-        <td><span class="badge ${l.expected_state}">${l.expected_state}</span></td>
-        <td><span class="badge ${l.observed_state || 'none'}">${escapeHtml(l.observed_state || '∅')}</span></td>
-        <td>${l.delta_ms}</td>
-        <td>${l.tolerance_ms}</td>
-        <td><span class="badge ${l.pass ? 'pass' : 'fail'}">${l.pass ? '✓' : '✗'}</span></td>
-        <td>${escapeHtml(l.note || "")}</td>`;
-      tbl.appendChild(tr);
-    }
-    p.appendChild(tbl);
-  } catch (e) {
-    p.appendChild(text("(could not parse validate result)"));
-  }
-  return p;
 }
 
 // renderPlayback wires the play/pause/scrubber UI and the dashboard
@@ -2036,42 +1967,12 @@ function mkButton(label) {
   return b;
 }
 
-function renderSignalsPreview(data) {
-  const p = panel("Signals preview (first 50)");
-  if (!data.signals || data.signals.length === 0) {
-    p.appendChild(text("No signals.jsonl — this recording predates the multi-sensor recorder."));
-    return p;
-  }
-  const tbl = document.createElement("table");
-  tbl.innerHTML = `<tr><th>ts</th><th>sensor</th><th>kind</th><th>payload preview</th></tr>`;
-  for (let i = 0; i < Math.min(50, data.signals.length); i++) {
-    const sRaw = data.signals[i];
-    let s;
-    try { s = typeof sRaw === "string" ? JSON.parse(sRaw) : sRaw; } catch { continue; }
-    const tr = document.createElement("tr");
-    const payload = typeof s.payload === "string" ? s.payload : JSON.stringify(s.payload || {});
-    tr.innerHTML = `
-      <td>${escapeHtml((s.ts || "").substring(11, 23))}</td>
-      <td><code>${escapeHtml(s.sensor)}</code></td>
-      <td><code>${escapeHtml(s.kind)}</code></td>
-      <td><code>${escapeHtml(payload).substring(0, 120)}</code></td>`;
-    tbl.appendChild(tr);
-  }
-  p.appendChild(tbl);
-  return p;
-}
-
 function panel(title) {
   const p = document.createElement("div");
   p.className = "panel";
   const h = document.createElement("h3");
   h.textContent = title;
   p.appendChild(h);
-  return p;
-}
-function panelFiller() {
-  const p = document.createElement("div");
-  p.style.display = "none";
   return p;
 }
 function text(s) {

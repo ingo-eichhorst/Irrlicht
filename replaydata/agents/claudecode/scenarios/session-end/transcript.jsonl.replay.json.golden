@@ -3,41 +3,40 @@
   "source_transcript": "",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
-    "adapter": "pi",
+    "adapter": "claude-code",
     "debounce_window": 2000000000,
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 9,
-    "consumed_events": 9,
-    "total_transitions": 7,
-    "first_event_time": "2026-05-14T21:38:31.349Z",
-    "last_event_time": "2026-05-14T21:39:18.586Z",
-    "wall_clock_session_duration": 47237000000,
+    "total_events": 34,
+    "consumed_events": 34,
+    "total_transitions": 6,
+    "first_event_time": "2026-05-15T09:12:58.844Z",
+    "last_event_time": "2026-05-15T09:13:56.618Z",
+    "wall_clock_session_duration": 57774000000,
     "state_durations": {
-      "ready": 9235000000,
-      "working": 38002000000
+      "ready": 55345000000,
+      "working": 2429000000
     },
-    "flicker_count": 3,
+    "flicker_count": 1,
     "flickers_by_category": {
-      "ready_between_working": 2,
       "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 2,
       "force ready→working on first activity": 1
     },
-    "estimated_cost_usd": 0.038307,
-    "cum_input_tokens": 6199,
-    "cum_output_tokens": 56,
-    "cum_cache_read_tokens": 11264,
-    "model_name": "gpt-5.5"
+    "estimated_cost_usd": 0.283227,
+    "cum_input_tokens": 12,
+    "cum_output_tokens": 12,
+    "cum_cache_read_tokens": 34654,
+    "cum_cache_creation_tokens": 26554,
+    "model_name": "claude-opus-4-7"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-14T21:38:31.349Z",
+      "virtual_time": "2026-05-15T09:12:58.844Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -50,23 +49,24 @@
     },
     {
       "index": 1,
-      "event_index": 2,
-      "virtual_time": "2026-05-14T21:38:32.416Z",
+      "event_index": 13,
+      "virtual_time": "2026-05-15T09:13:00.72Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
-      "reason": "transcript activity (ready → working)",
-      "last_event_type": "",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
       "has_open_tool": false,
-      "is_agent_done": false,
+      "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
     },
     {
       "index": 2,
-      "event_index": 4,
-      "virtual_time": "2026-05-14T21:39:05.063Z",
-      "cause": "event",
+      "event_index": 13,
+      "virtual_time": "2026-05-15T09:13:00.72Z",
+      "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -75,57 +75,27 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "turn-one"
+      "last_assistant_text_head": "ok"
     },
     {
       "index": 3,
-      "event_index": 6,
-      "virtual_time": "2026-05-14T21:39:09.365Z",
+      "event_index": 18,
+      "virtual_time": "2026-05-15T09:13:27.223Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "turn-two"
-    },
-    {
-      "index": 4,
-      "event_index": 6,
-      "virtual_time": "2026-05-14T21:39:09.365Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "turn-two"
-    },
-    {
-      "index": 5,
-      "event_index": 7,
-      "virtual_time": "2026-05-14T21:39:13.231Z",
-      "cause": "event",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "user_message",
+      "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
     },
     {
-      "index": 6,
-      "event_index": 8,
-      "virtual_time": "2026-05-14T21:39:18.586Z",
-      "cause": "event",
+      "index": 4,
+      "event_index": 25,
+      "virtual_time": "2026-05-15T09:13:29.652Z",
+      "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -134,7 +104,21 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "turn-three"
+      "last_assistant_text_head": "ok"
+    },
+    {
+      "index": 5,
+      "event_index": 33,
+      "virtual_time": "2026-05-15T09:13:56.618Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
     }
   ]
 }

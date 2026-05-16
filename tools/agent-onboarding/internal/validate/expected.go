@@ -1,22 +1,10 @@
-// Spec-derived expectation validation. Distinct from validate.go
-// (ground_truth.jsonl) in both source and semantics:
+// Spec-derived expectation validation. expected.jsonl is per-scenario
+// — written BEFORE the recording, anchored to the spec's Expected:
+// bullets. Re-records do NOT rewrite it. Its purpose is to encode
+// "these are the spec-grounded assertions the daemon must satisfy."
 //
-//   - validate.go reads ground_truth.jsonl, which is per-recording —
-//     written AFTER the recording, anchored to the recording's actual
-//     timestamps. Re-records rewrite it. Its purpose is to encode
-//     "these are the measured offsets and what state each one
-//     corresponds to".
-//
-//   - expected.go reads expected.jsonl, which is per-scenario — written
-//     BEFORE the recording, anchored to the spec's Expected: bullets.
-//     Re-records do NOT rewrite it. Its purpose is to encode "these are
-//     the spec-grounded assertions the daemon must satisfy".
-//
-// The split matters for regression detection: a daemon change that
-// drifts from the spec must FAIL expected.jsonl validation. Without
-// the split, the next re-record would silently rebase ground_truth.jsonl
-// to match the new (regressed) behavior and the validator would happily
-// pass against the regression.
+// A daemon change that drifts from the spec must FAIL expected.jsonl
+// validation. The committed assertions are the regression contract.
 //
 // File shape (one meta line + N phase lines):
 //

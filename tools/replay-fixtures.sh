@@ -193,10 +193,9 @@ if [[ "$found_any" -eq 0 ]]; then
 fi
 
 # Expected-validator: walk every scenario that has expected.jsonl and
-# check the recording satisfies the spec-grounded benchmark. Distinct
-# from the per-recording ground_truth.jsonl above (different schema,
-# different semantics). The Go-level test already does this; the shell
-# call here writes per-scenario report files for CI inspection.
+# check the recording satisfies the spec-grounded benchmark. The
+# Go-level test already does this; the shell call here writes
+# per-scenario report files for CI inspection.
 expected_failures=0
 while IFS= read -r expected_path; do
   scenario_dir="$(dirname "$expected_path")"

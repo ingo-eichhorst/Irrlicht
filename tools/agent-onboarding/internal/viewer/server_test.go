@@ -11,13 +11,13 @@ import (
 
 // TestScenariosList_walksReplaydataTree spins up a temp replaydata tree
 // with one agent in `scenarios/` and one in `regression/`, and asserts
-// /api/scenarios returns both with the correct flags.
+// /api/scenarios returns both in sorted order.
 func TestScenariosList_walksReplaydataTree(t *testing.T) {
 	root := t.TempDir()
 	mkRecording(t, root, "claudecode", "scenarios", "baseline-hello",
-		map[string]string{"signals.jsonl": "", "ground_truth.jsonl": "{}"})
+		map[string]string{"events.jsonl": ""})
 	mkRecording(t, root, "aider", "regression", "llm-error",
-		map[string]string{"transcript.md": ""}) // no signals, no gt
+		map[string]string{"transcript.md": ""})
 	s := &Server{RepoRoot: root}
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/api/scenarios", nil))
@@ -35,20 +35,15 @@ func TestScenariosList_walksReplaydataTree(t *testing.T) {
 	if entries[0].Agent != "aider" || entries[0].Subtree != "regression" {
 		t.Errorf("entries[0]=%+v", entries[0])
 	}
-	if entries[1].Agent != "claudecode" || !entries[1].HasGroundTruth {
+	if entries[1].Agent != "claudecode" || entries[1].ID != "baseline-hello" {
 		t.Errorf("entries[1]=%+v", entries[1])
 	}
 }
 
-func TestScenarioDetail_returnsMetaAndGroundTruth(t *testing.T) {
+func TestScenarioDetail_returnsMetaAndTransitions(t *testing.T) {
 	root := t.TempDir()
-	gt := `{"schema_version":1,"agent":"x","scenario":"y","recording_started_at":"2026-05-14T12:00:00Z"}
-{"ts_offset_ms":0,"marker":"a","expected_state":"ready"}
-`
 	mkRecording(t, root, "x", "scenarios", "y", map[string]string{
 		"recording-meta.json": `{"agent":"x","scenario":"y"}`,
-		"ground_truth.jsonl":  gt,
-		"signals.jsonl":       `{"ts":"2026-05-14T12:00:00Z","sensor":"transcript","kind":"line","payload":{"line":"hi"}}` + "\n",
 		"events.jsonl":        `{"kind":"state_transition","ts":"2026-05-14T12:00:00Z","new_state":"ready"}` + "\n",
 	})
 	s := &Server{RepoRoot: root}
@@ -61,11 +56,8 @@ func TestScenarioDetail_returnsMetaAndGroundTruth(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &d); err != nil {
 		t.Fatal(err)
 	}
-	if d.GroundTruth == nil || len(d.GroundTruth.Labels) != 1 {
-		t.Errorf("ground truth missing or wrong: %+v", d.GroundTruth)
-	}
-	if len(d.Signals) != 1 || len(d.Transitions) != 1 {
-		t.Errorf("signals/transitions wrong: %d / %d", len(d.Signals), len(d.Transitions))
+	if len(d.Transitions) != 1 {
+		t.Errorf("expected 1 transition, got %d", len(d.Transitions))
 	}
 }
 

@@ -164,6 +164,6 @@ Empty output = the proposal matches the committed matrix; nothing to merge.
 
 - It does not modify `.specs/agent-scenarios-coverage.json`. That's the
   maintainer's job after review.
-- It does not record fixtures. That's Mode B (`/ir:onboard-agent pipeline`,
-  Phase 6) or Mode A (the existing 5-step manual flow).
+- It does not record fixtures. That's a separate flow
+  (`run-cell.sh` + `promote-recording.sh`).
 - It does not run the agent CLI. The survey is documentation-only.

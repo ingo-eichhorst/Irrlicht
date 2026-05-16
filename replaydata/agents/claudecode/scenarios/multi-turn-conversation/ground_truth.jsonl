@@ -1,4 +1,0 @@
-{"schema_version":1,"agent":"claudecode","scenario":"multi-turn-conversation","recording_started_at":"2026-05-01T11:11:31.621419Z","notes":"Labels anchored to the canonical events.jsonl committed with this recording. Recording predates the multi-sensor recorder; offsets are approximate. The validator's tolerance_ms absorbs the drift."}
-{"ts_offset_ms":0,"marker":"session_created","expected_state":"ready","tolerance_ms":1000,"evidence_kind":"transcript_event_kind","notes":"new session row appears in `ready`"}
-{"ts_offset_ms":15700,"marker":"turn_1_start","expected_state":"working","tolerance_ms":2000,"evidence_kind":"transcript_line","notes":"first user prompt → working"}
-{"ts_offset_ms":22500,"marker":"turn_1_end","expected_state":"ready","tolerance_ms":2000,"evidence_kind":"transcript_field_value","notes":"agent finished turn → ready (stop_reason=end_turn)"}

@@ -72,13 +72,6 @@ hermetic and don't need auth.
   Maintainer reviews + merges into `.specs/agent-scenarios-coverage.json`.
   See `survey/SKILL.md` for the dispatch recipe. No live agent CLI is
   invoked. Re-run on each agent version bump.
-- **`/ir:onboard-agent pipeline <agent> [<scenario>]`** — full automated
-  onboarding pipeline (Mode B). Orchestrates probe → record → label →
-  synth → gen → validate via `pipeline/run-pipeline.sh`. Produces a
-  generated Go adapter + interactive driver under
-  `.build/agent-onboarding/staged/<agent>/generated/`; maintainer
-  reviews and promotes. See `pipeline/SKILL.md` for the per-stage
-  contract and failure recovery.
 - **`/ir:onboard-agent translate <agent> <scenario-id>`** — per-cell
   translation mode (Mode D). Reads the prose spec in
   `.specs/agent-scenarios.md`, looks up the coverage verdict, and
