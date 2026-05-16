@@ -337,7 +337,16 @@ func (m *StateMachine) seekTo(offsetMs int64, anchor time.Time) {
 			m.applyLocked(m.events[i])
 		}
 	} else if newCursor < m.cursor {
-		// Seeking backward: rebuild from scratch up to newCursor.
+		// Seeking backward: tell the dashboard to drop every session we
+		// currently have BEFORE clearing the map and re-applying. Without
+		// these deletes, the dashboard's per-session DOM rows persist
+		// across the seek — the rebuilt session_created broadcasts add
+		// duplicates rather than replace the originals, and any name-
+		// affecting fields (CWD, TranscriptPath) re-derived during replay
+		// produce visibly different group labels.
+		for _, s := range m.sessions {
+			m.broadcast(outbound.PushTypeDeleted, s)
+		}
 		m.sessions = map[string]*session.SessionState{}
 		for i := 0; i < newCursor; i++ {
 			m.applyLocked(m.events[i])
