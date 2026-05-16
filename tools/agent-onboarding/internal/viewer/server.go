@@ -14,7 +14,9 @@ package viewer
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -504,17 +506,18 @@ func (s *Server) handleScenariosList(w http.ResponseWriter, r *http.Request) {
 
 // ScenarioDetail is the payload for /api/scenarios/{agent}/{subtree}/{id}.
 type ScenarioDetail struct {
-	Agent       string                    `json:"agent"`
-	Subtree     string                    `json:"subtree"`
-	ID          string                    `json:"id"`
-	Meta        json.RawMessage           `json:"meta,omitempty"`         // recording-meta.json or null
-	GroundTruth *GroundTruthBlob          `json:"ground_truth,omitempty"` // ground_truth.jsonl parsed
-	Expected    *validate.ExpectedReport  `json:"expected,omitempty"`     // expected.jsonl validated against events.jsonl (if file present)
-	Signals     []json.RawMessage         `json:"signals"`                // all signals.jsonl rows
-	Transitions []json.RawMessage         `json:"transitions"`            // state_transition rows from events.jsonl
-	Frames      []FrameRow                `json:"frames,omitempty"`       // frames.jsonl parsed
-	Validate    json.RawMessage           `json:"validate,omitempty"`     // validate result JSON if present
-	Tools       []ToolCall                `json:"tools,omitempty"`        // tool_use blocks extracted from transcript.jsonl
+	Agent          string                   `json:"agent"`
+	Subtree        string                   `json:"subtree"`
+	ID             string                   `json:"id"`
+	Meta           json.RawMessage          `json:"meta,omitempty"`            // recording-meta.json or null
+	GroundTruth    *GroundTruthBlob         `json:"ground_truth,omitempty"`    // ground_truth.jsonl parsed
+	Expected       *validate.ExpectedReport `json:"expected,omitempty"`        // expected.jsonl validated against events.jsonl (if file present)
+	Signals        []json.RawMessage        `json:"signals"`                   // all signals.jsonl rows
+	Transitions    []json.RawMessage        `json:"transitions"`               // state_transition rows from events.jsonl
+	Frames         []FrameRow               `json:"frames,omitempty"`          // frames.jsonl parsed
+	Validate       json.RawMessage          `json:"validate,omitempty"`        // validate result JSON if present
+	Tools          []ToolCall               `json:"tools,omitempty"`           // tool_use blocks extracted from transcript.jsonl
+	LatestManifest *RecordingArchive        `json:"latest_manifest,omitempty"` // synthesized manifest for the live top-level recording, mirroring archive manifest fields so the viewer can render a uniform metadata panel
 }
 
 // ToolCall is one Anthropic-style tool_use block lifted from the
@@ -617,7 +620,90 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 		d.Expected = rep
 	}
 	d.Tools = extractToolCalls(filepath.Join(scenarioDir, "transcript.jsonl"))
+	d.LatestManifest = buildLatestManifest(scenarioDir, agent, &d, s.RepoRoot)
 	writeJSON(w, d)
+}
+
+// buildLatestManifest produces a RecordingArchive-shaped manifest for
+// the live top-level recording so the viewer can render a uniform
+// metadata panel for both Latest and archives. Prefers a real
+// manifest.json at the scenario root (written by promote-recording.sh)
+// when present; otherwise synthesizes from the data we already have
+// loaded (meta.started_at, expected.summary, scenarios.json recipe
+// hash). Returns nil when there isn't even a top-level events.jsonl
+// to describe.
+func buildLatestManifest(scenarioDir, agent string, d *ScenarioDetail, repoRoot string) *RecordingArchive {
+	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err != nil {
+		return nil
+	}
+	m := &RecordingArchive{Name: "latest", DaemonVersion: "dev"}
+	if b, err := os.ReadFile(filepath.Join(scenarioDir, "manifest.json")); err == nil {
+		_ = json.Unmarshal(b, m)
+		// `name` is internal-only — force "latest" regardless of file content.
+		m.Name = "latest"
+		return m
+	}
+	// Fall back to synthesis from in-memory data.
+	if d.Expected != nil {
+		if !d.Expected.RecordingStart.IsZero() {
+			m.RecordingStartedAt = d.Expected.RecordingStart.Format(time.RFC3339Nano)
+		}
+		m.ExpectedPassRate = d.Expected.Summary
+	}
+	if m.RecordingStartedAt == "" && d.Meta != nil {
+		var meta struct {
+			StartedAt string `json:"started_at"`
+		}
+		if err := json.Unmarshal(d.Meta, &meta); err == nil {
+			m.RecordingStartedAt = meta.StartedAt
+		}
+	}
+	scenarioName := filepath.Base(scenarioDir)
+	m.RecipeHash = computeRecipeHash(repoRoot, agent, scenarioName)
+	return m
+}
+
+// computeRecipeHash mirrors promote-recording.sh's recipe_hash:
+// sha256 of the compact-JSON serialization of scenarios.json's
+// .scenarios[name].by_adapter[agent] block. Empty string on any
+// failure — the dropdown panel renders the rest of the fields fine
+// without it.
+func computeRecipeHash(repoRoot, agent, scenarioName string) string {
+	path := filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var doc struct {
+		Scenarios []struct {
+			Name      string                     `json:"name"`
+			ByAdapter map[string]json.RawMessage `json:"by_adapter"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return ""
+	}
+	for _, sc := range doc.Scenarios {
+		if sc.Name != scenarioName {
+			continue
+		}
+		raw, ok := sc.ByAdapter[agent]
+		if !ok {
+			return ""
+		}
+		// Re-marshal compact to match jq -c's spacing exactly.
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return ""
+		}
+		compact, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		sum := sha256.Sum256(compact)
+		return hex.EncodeToString(sum[:])
+	}
+	return ""
 }
 
 // extractToolCalls walks transcript.jsonl looking for Anthropic-style

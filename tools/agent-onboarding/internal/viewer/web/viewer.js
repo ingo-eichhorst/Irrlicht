@@ -1044,9 +1044,23 @@ function renderRecordingHistory(s, latestData, archives) {
     }
 
     if (value === "") {
-      // Latest — full feature set.
+      // Latest — full feature set. Render the same manifest panel as
+      // archives, populated server-side via ScenarioDetail.LatestManifest
+      // (synthesized when no scenarioDir/manifest.json exists yet).
       expHost.replaceChildren(renderExpected(latestData));
-      manifestBox.innerHTML = `<i>Showing the current top-level recording (<code>events.jsonl</code>, <code>transcript.jsonl</code>, <code>ground_truth.jsonl</code>).</i>`;
+      const lm = latestData.latest_manifest;
+      if (lm) {
+        manifestBox.innerHTML = `
+          <b>promoted_at:</b> ${escapeHtml(lm.promoted_at || "(live — not yet archived)")}<br>
+          <b>daemon_version:</b> ${escapeHtml(lm.daemon_version || "")}<br>
+          <b>agent_cli_version:</b> ${escapeHtml(lm.agent_cli_version || "")}<br>
+          <b>recipe_hash:</b> <code>${escapeHtml((lm.recipe_hash || "").slice(0, 16))}${lm.recipe_hash ? "…" : ""}</code><br>
+          <b>expected_pass_rate:</b> ${escapeHtml(lm.expected_pass_rate || "—")}<br>
+          <b>recording_started_at:</b> ${escapeHtml(lm.recording_started_at || "")}
+        `;
+      } else {
+        manifestBox.innerHTML = `<i>Showing the current top-level recording (<code>events.jsonl</code>, <code>transcript.jsonl</code>, <code>ground_truth.jsonl</code>).</i>`;
+      }
       renderRecordingPanels(latestData, /*archiveName=*/"");
       return;
     }
