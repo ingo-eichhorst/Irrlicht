@@ -23,6 +23,14 @@ The recipe goes into `.claude/skills/ir:onboard-agent/scenarios.json` —
 the same file `run-cell.sh` reads when you later record the cell. The
 viewer's scenario detail page renders the new fields automatically.
 
+> **Stages 2 + 3 of the cell lifecycle.** This skill covers recipe
+> authoring (Stage 2) AND spec authoring (Stage 3, Step 3.5 below) for
+> one cell. Stage 1 (assessment) is handled by [`../survey/SKILL.md`];
+> Stages 4–5 (recording + validation) are
+> [`run-cell.sh`](../scripts/run-cell.sh) + `promote-recording.sh` +
+> `expected-validate`. The end-to-end walkthrough across all five
+> stages is [`../cell-lifecycle.md`](../cell-lifecycle.md).
+
 ## Working approach
 
 **This skill is allowed to take a long time. Correctness matters more

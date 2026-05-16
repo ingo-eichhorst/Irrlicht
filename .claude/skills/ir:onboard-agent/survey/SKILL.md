@@ -15,6 +15,11 @@ for one agent, with citations, ready for the maintainer to merge into
 `.specs/agent-scenarios-coverage.json`. The survey itself does **not** modify
 the coverage matrix.
 
+> **Stage 1 of the cell lifecycle.** This is the assessment phase — see
+> [`../cell-lifecycle.md`](../cell-lifecycle.md) for how the verdict
+> produced here feeds Stage 2 (recipe authoring via `translate/`) and
+> beyond.
+
 ## Invocation
 
 ```

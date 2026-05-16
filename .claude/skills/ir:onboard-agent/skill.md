@@ -88,6 +88,36 @@ The adapter argument disambiguates which axis is being run: agent adapters
 (`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator
 adapters (`gastown`) match `orchestrator_scenarios[].by_orchestrator`.
 
+## Cell lifecycle — end-to-end workflow for ONE (agent × scenario)
+
+Every cell moves through a 5-stage pipeline. The viewer renders these
+stages as a strip per cell (`●● ✎ § N ✓`); the doc below is the
+canonical walkthrough.
+
+```
+1. Assessment  →  2. Recipe       →  3. Spec          →  4. Recording      →  5. Validation
+   matrix verdict   scenarios.json     expected.jsonl      events.jsonl +       pass/fail per
+                    by_adapter[a]      phase DSL           transcript.jsonl     phase
+        │                │                  │                    │                    │
+        ▼                ▼                  ▼                    ▼                    ▼
+   /survey skill    /translate         author              run-cell.sh           expected-
+   + matrix edit                       manually            + promote.sh          validate
+```
+
+See [`cell-lifecycle.md`](cell-lifecycle.md) for:
+
+- the canonical artifact + tool + success criterion per stage
+- the phase DSL field reference (`expected_state`, `same_session_as`,
+  `new_session`, etc.)
+- iteration loops (recording loop, daemon-fix loop, drift-detection)
+- a worked example (`claudecode/session-reset`)
+- explicit out-of-scope items
+
+When in doubt about a stage, jump to that section in
+`cell-lifecycle.md`. The subskills below (`survey/`, `translate/`)
+implement individual stages; the lifecycle doc is how they fit
+together.
+
 ## Step 1: Understand the task
 
 Parse the invocation into one of:
