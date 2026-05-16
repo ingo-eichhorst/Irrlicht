@@ -370,56 +370,112 @@ struct SessionListView: View {
         }
     }
 
-    /// One chip's worth of data: a representative snapshot for the
-    /// provider, the session that carries it (for icon lookup and forecast
-    /// access), and the most-imminent window for sort + headline display.
-    /// `id` is the providerKey so SwiftUI ForEach has a stable identity.
+    /// Render mode for a provider chip. Subscription chips show the
+    /// 5h/7d bars; usage chips show cumulative spend across all
+    /// sessions on that provider.
+    private enum QuotaMode {
+        case subscription
+        case usage
+    }
+
+    /// One chip's worth of data: render mode, a representative snapshot
+    /// for icon + tooltip lookup, the session that carries it, the
+    /// most-imminent window (subscription only), and the summed spend
+    /// (usage only). `id` is the providerKey so SwiftUI ForEach has a
+    /// stable identity.
     private struct QuotaWidgetData: Identifiable {
         let id: String
+        let mode: QuotaMode
         let snapshot: RateLimitInfo
         let session: SessionState
-        let imminent: RateLimitWindowInfo
+        let imminent: RateLimitWindowInfo?
+        let totalCostUSD: Double
     }
 
-    /// All chips to render, one per subscription provider. Groups
-    /// sessions by provider, picks the most-stressed snapshot within
-    /// each group as the representative reading (the bucket is
-    /// account-scoped, so every same-account session reports identical
-    /// numbers — `max` is just robust to per-session staleness).
+    /// All chips to render, one per subscription/usage provider. Groups
+    /// sessions by provider, then per group decides whether to render a
+    /// subscription chip (snapshot has `planType`) or a usage chip
+    /// (snapshot has `credits` populated — Codex API-key path).
+    ///
+    /// For subscription chips, the bucket is account-scoped so all
+    /// same-account sessions report identical numbers — `max` over
+    /// `usedPercent` is robust to per-session staleness. For usage
+    /// chips, `totalCostUSD` sums cumulative `estimatedCostUSD` across
+    /// every matching session — close enough to "what the user has
+    /// spent on this provider lately" for the typical session-lifetime;
+    /// proper daily rollup needs a daemon-side per-provider cost
+    /// tracker (deferred).
     ///
     /// Sort order is **stable by provider key** (anthropic < openai <
-    /// unknown:…). An earlier version sorted by `usedPercent` descending
-    /// to surface the most-stressed provider first, but that made chips
-    /// swap positions every few seconds as percents updated — the
-    /// flicker drowned out the actual signal. A fixed alphabetical
-    /// order also matches the layout in mockup 2 (Anthropic leftmost).
+    /// unknown:…). A `usedPercent` sort made chips swap positions every
+    /// few seconds as percents updated — alphabetical also matches
+    /// mockup 2's Anthropic-leftmost layout.
     private var quotaChipData: [QuotaWidgetData] {
-        var byProvider: [String: QuotaWidgetData] = [:]
+        struct Bucket {
+            var snapshot: RateLimitInfo
+            var session: SessionState
+            var imminent: RateLimitWindowInfo?
+            var totalCostUSD: Double
+            var mode: QuotaMode
+        }
+        var byProvider: [String: Bucket] = [:]
         for session in sessionManager.sessions {
             guard let snap = session.metrics?.rateLimit else { continue }
-            guard let imm = snap.imminentWindow else { continue }
-            // Without a providerKey the chip has no brand and shouldn't be
-            // aggregated — fall back to "unknown" so wrapper sessions
-            // (Pi, OpenCode) with subscription-shaped data still render
-            // their own chip rather than be silently dropped.
+            let mode: QuotaMode = (snap.credits != nil && (snap.planType ?? "").isEmpty)
+                ? .usage
+                : .subscription
+            // Without a providerKey the chip has no brand — fall back to
+            // a per-adapter unknown bucket so wrapper sessions (Pi,
+            // OpenCode) with subscription-shaped data still render their
+            // own chip rather than being silently dropped.
             let key = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
-            let candidate = QuotaWidgetData(id: key, snapshot: snap, session: session, imminent: imm)
-            if let existing = byProvider[key] {
-                if imm.usedPercent > existing.imminent.usedPercent {
-                    byProvider[key] = candidate
+            let imminent = snap.imminentWindow
+            let sessionCost = session.metrics?.estimatedCostUSD ?? 0
+            if var existing = byProvider[key] {
+                // Subscription wins over usage when both paths are seen
+                // (rare — one OAuth account on both subscription and API
+                // key) since the bars are the richer signal.
+                if existing.mode == .usage && mode == .subscription {
+                    existing.mode = .subscription
+                    existing.snapshot = snap
+                    existing.session = session
+                    existing.imminent = imminent
                 }
+                if let imm = imminent,
+                   let existingImm = existing.imminent,
+                   imm.usedPercent > existingImm.usedPercent {
+                    existing.imminent = imm
+                    existing.snapshot = snap
+                }
+                existing.totalCostUSD += sessionCost
+                byProvider[key] = existing
             } else {
-                byProvider[key] = candidate
+                byProvider[key] = Bucket(
+                    snapshot: snap,
+                    session: session,
+                    imminent: imminent,
+                    totalCostUSD: sessionCost,
+                    mode: mode
+                )
             }
         }
-        return byProvider.values.sorted { $0.id < $1.id }
+        return byProvider
+            .map { key, b in
+                QuotaWidgetData(
+                    id: key,
+                    mode: b.mode,
+                    snapshot: b.snapshot,
+                    session: b.session,
+                    imminent: b.imminent,
+                    totalCostUSD: b.totalCostUSD
+                )
+            }
+            .sorted { $0.id < $1.id }
     }
 
-    /// The chip-style header widget: provider icon + stacked 5h/7d bars.
-    /// Matches mockup 1 (single chip) and mockup 2 (multiple chips
-    /// side-by-side) in issue #309. The `compact` flag tightens spacing
-    /// and drops the inline reset time when several chips share the
-    /// header — full info is always available in the tooltip.
+    /// The chip-style header widget. Dispatches on mode:
+    ///   - subscription → provider icon + stacked 5h/7d bars (mockup 1/2)
+    ///   - usage        → provider icon + cumulative spend (mockup 2)
     @ViewBuilder
     private func quotaChipView(_ d: QuotaWidgetData, compact: Bool) -> some View {
         HStack(spacing: 6) {
@@ -433,13 +489,47 @@ struct SessionListView: View {
                     .renderingMode(.template)
                     .foregroundColor(.primary)
             }
-            VStack(alignment: .leading, spacing: 1) {
-                ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
-                    quotaWindowRow(window, compact: compact)
+            switch d.mode {
+            case .subscription:
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
+                        quotaWindowRow(window, compact: compact)
+                    }
                 }
+            case .usage:
+                quotaUsageBody(d, compact: compact)
             }
         }
         .tooltip(quotaTooltip(d))
+    }
+
+    /// Usage-mode chip body — cumulative spend across all sessions on
+    /// this provider, with a "spend" subtitle. Honest label rather than
+    /// the mockup's "$X / day · spend today": proper daily attribution
+    /// needs a daemon-side per-provider cost tracker (deferred). For
+    /// short-lived sessions (the common case) cumulative ≈ today.
+    @ViewBuilder
+    private func quotaUsageBody(_ d: QuotaWidgetData, compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(formatUsageCost(d.totalCostUSD))
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(.primary)
+            if !compact {
+                Text("spend")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    /// Format the cost headline: tiny costs render `<$0.01`, normal
+    /// costs render with two decimals, ≥ $100 drops to integer dollars
+    /// to keep the chip from growing.
+    private func formatUsageCost(_ cost: Double) -> String {
+        if cost <= 0 { return "$0.00" }
+        if cost < 0.01 { return "<$0.01" }
+        if cost >= 100 { return String(format: "$%.0f", cost) }
+        return String(format: "$%.2f", cost)
     }
 
     /// One row inside a chip. In compact mode (multiple chips visible)
@@ -492,16 +582,30 @@ struct SessionListView: View {
         if let plan = d.snapshot.planTypeLabel {
             lines.append(plan)
         }
-        for w in d.snapshot.windows {
-            let pct = String(format: "%.1f%%", w.usedPercent)
-            let label = quotaWindowLabel(w.windowMinutes)
-            let resets = formatTimeUntil(w.resetsAt)
-            lines.append("\(label): \(pct) · resets in \(resets)")
-        }
-        if let eta = d.session.metrics?.rateLimitForecastEta {
-            lines.append("Projected cap: \(formatClockTime(eta))")
-        } else if d.snapshot.windows.contains(where: { $0.usedPercent > 0 }) {
-            lines.append("Forecast: won't hit cap this window")
+        switch d.mode {
+        case .subscription:
+            for w in d.snapshot.windows {
+                let pct = String(format: "%.1f%%", w.usedPercent)
+                let label = quotaWindowLabel(w.windowMinutes)
+                let resets = formatTimeUntil(w.resetsAt)
+                lines.append("\(label): \(pct) · resets in \(resets)")
+            }
+            if let eta = d.session.metrics?.rateLimitForecastEta {
+                lines.append("Projected cap: \(formatClockTime(eta))")
+            } else if d.snapshot.windows.contains(where: { $0.usedPercent > 0 }) {
+                lines.append("Forecast: won't hit cap this window")
+            }
+        case .usage:
+            lines.append("\(formatUsageCost(d.totalCostUSD)) · cumulative spend across active sessions")
+            if let credits = d.snapshot.credits {
+                if credits.unlimited == true {
+                    lines.append("Credits: unlimited")
+                } else if let balance = credits.balance {
+                    lines.append(String(format: "Credits balance: $%.2f", balance))
+                } else if credits.hasCredits {
+                    lines.append("Credits: available")
+                }
+            }
         }
         if let reached = d.snapshot.reachedType, !reached.isEmpty {
             lines.append("⚠️ rate limit reached: \(reached)")
