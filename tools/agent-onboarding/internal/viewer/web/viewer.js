@@ -984,7 +984,14 @@ function renderRecordingHistory(s, latestData, archives) {
   // entry needed. value stays "" so the server-side path is unchanged.
   const latestOpt = document.createElement("option");
   latestOpt.value = "";
-  const latestStart = latestData.expected && latestData.expected.recording_start;
+  // Prefer expected.recording_start when an expected.jsonl exists; fall
+  // back to meta.started_at (synthesized from events.jsonl[0].ts by
+  // synthesizeMetaFromEvents) for scenarios without a spec file yet.
+  // Without this fallback the option reads "(no timestamp)" right after
+  // a fresh recording before expected.jsonl is authored.
+  const latestStart = (latestData.expected && latestData.expected.recording_start)
+    || (latestData.meta && latestData.meta.started_at)
+    || null;
   const latestPass = latestData.expected && latestData.expected.summary;
   latestOpt.textContent = fmtLabel(latestStart, "dev", latestPass);
   select.appendChild(latestOpt);
