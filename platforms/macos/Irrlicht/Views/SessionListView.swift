@@ -188,6 +188,7 @@ struct SessionListView: View {
     @State private var isSettingsButtonHovered = false
     @State private var showSettings = false
     @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
+    @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
 
     private var displayMode: DisplayMode { DisplayMode(rawValue: displayModeRaw) ?? .context }
 
@@ -299,9 +300,7 @@ struct SessionListView: View {
     private var sessionHeaderView: some View {
         HStack {
             HStack(spacing: 4) {
-                Text("Irrlicht v\(appVersion)")
-                    .font(.headline)
-                    .foregroundColor(.primary)
+                headerTitleView
 
                 Text("—")
                     .foregroundColor(.secondary)
@@ -343,6 +342,138 @@ struct SessionListView: View {
         }
     }
     
+    /// Header text shown to the left of the session glyphs. Defaults to the
+    /// app version; when any visible session carries a rate-limit snapshot
+    /// (and the user hasn't hidden the quota forecast in settings), we swap
+    /// in the burn-rate widget instead. Subscription users see live quota;
+    /// API-key / Bedrock / Vertex users keep the version string. Aggregation
+    /// rule: pick the snapshot with the highest UsedPercent across sessions.
+    /// The bucket is account-scoped so all subscription sessions on a single
+    /// account should agree, but `max` is robust to per-session staleness.
+    @ViewBuilder
+    private var headerTitleView: some View {
+        if showQuotaForecast, let widget = quotaWidgetData {
+            quotaWidgetView(widget)
+        } else {
+            Text("Irrlicht v\(appVersion)")
+                .font(.headline)
+                .foregroundColor(.primary)
+        }
+    }
+
+    /// Snapshot + forecast pair selected for the header — the imminent
+    /// window plus the matching session's projected ETA. Nil when no
+    /// session has a usable snapshot.
+    private struct QuotaWidgetData {
+        let snapshot: RateLimitInfo
+        let imminent: RateLimitWindowInfo
+        let forecastEta: Date?
+    }
+
+    private var quotaWidgetData: QuotaWidgetData? {
+        var best: QuotaWidgetData?
+        for session in sessionManager.sessions {
+            guard let snap = session.metrics?.rateLimit else { continue }
+            guard let imm = snap.imminentWindow else { continue }
+            let candidate = QuotaWidgetData(
+                snapshot: snap,
+                imminent: imm,
+                forecastEta: session.metrics?.rateLimitForecastEta
+            )
+            if let current = best {
+                if imm.usedPercent > current.imminent.usedPercent {
+                    best = candidate
+                }
+            } else {
+                best = candidate
+            }
+        }
+        return best
+    }
+
+    @ViewBuilder
+    private func quotaWidgetView(_ d: QuotaWidgetData) -> some View {
+        let primary = quotaPrimaryLabel(d)
+        Text(primary)
+            .font(.headline)
+            .foregroundColor(quotaWidgetColor(d))
+            .tooltip(quotaTooltip(d))
+    }
+
+    private func quotaPrimaryLabel(_ d: QuotaWidgetData) -> String {
+        let pct = Int(d.imminent.usedPercent.rounded())
+        let windowLabel = quotaWindowLabel(d.imminent.windowMinutes)
+        if let eta = d.forecastEta {
+            return "\(windowLabel): \(pct)% · cap at \(formatClockTime(eta))"
+        }
+        // No forecast yet (insufficient history, flat burn, or "won't hit cap").
+        // Still surface the current % so users see ambient quota even before
+        // we have a slope.
+        return "\(windowLabel): \(pct)%"
+    }
+
+    private func quotaTooltip(_ d: QuotaWidgetData) -> String {
+        var lines: [String] = []
+        if let plan = d.snapshot.planTypeLabel {
+            lines.append(plan)
+        }
+        for w in d.snapshot.windows {
+            let pct = String(format: "%.1f%%", w.usedPercent)
+            let label = quotaWindowLabel(w.windowMinutes)
+            let resets = formatTimeUntil(w.resetsAt)
+            lines.append("\(label): \(pct) · resets in \(resets)")
+        }
+        if d.forecastEta == nil, d.snapshot.windows.contains(where: { $0.usedPercent > 0 }) {
+            lines.append("Forecast: won't hit cap this window")
+        }
+        if let reached = d.snapshot.reachedType, !reached.isEmpty {
+            lines.append("⚠️ rate limit reached: \(reached)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func quotaWindowLabel(_ minutes: Int) -> String {
+        // Tolerate Codex v1's 299 / 10079 off-by-one quirk.
+        switch minutes {
+        case 299, 300: return "5h"
+        case 10079, 10080: return "7d"
+        default:
+            if minutes >= 1440 { return "\(minutes / 1440)d" }
+            if minutes >= 60 { return "\(minutes / 60)h" }
+            return "\(minutes)m"
+        }
+    }
+
+    private func quotaWidgetColor(_ d: QuotaWidgetData) -> Color {
+        if d.snapshot.reachedType?.isEmpty == false { return IrrColors.pressureCritical }
+        switch d.imminent.usedPercent {
+        case 90...: return IrrColors.pressureCritical
+        case 80..<90: return IrrColors.pressureHigh
+        case 60..<80: return IrrColors.pressureMedium
+        default: return .primary
+        }
+    }
+
+    private func formatClockTime(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f.string(from: date)
+    }
+
+    private func formatTimeUntil(_ date: Date) -> String {
+        let seconds = max(0, Int(date.timeIntervalSinceNow))
+        let h = seconds / 3600
+        let m = (seconds % 3600) / 60
+        if h >= 24 {
+            let d = h / 24
+            let rh = h % 24
+            return rh == 0 ? "\(d)d" : "\(d)d \(rh)h"
+        }
+        if h > 0 { return "\(h)h \(m)m" }
+        return "\(m)m"
+    }
+
     private var sessionIconsView: some View {
         HStack(spacing: 2) {
             if sessionManager.sessions.isEmpty {

@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Binding var isPresented: Bool
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
+    @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = true
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = true
@@ -32,6 +33,15 @@ struct SettingsView: View {
                 LeadingToggle(isOn: $showCostDisplay, label: "Show Estimated Cost")
 
                 Text("Display estimated USD cost per session and per project group. Cost estimates are approximate.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                LeadingToggle(isOn: $showQuotaForecast, label: "Show Quota Forecast")
+
+                Text("Replace the app version in the header with a live burn-rate forecast against your Pro/Max or ChatGPT subscription cap. Only appears when a subscription session is active.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

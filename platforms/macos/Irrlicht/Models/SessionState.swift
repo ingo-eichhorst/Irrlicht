@@ -59,6 +59,112 @@ struct SessionTask: Codable, Hashable {
     }
 }
 
+/// Subscription-quota window emitted by Anthropic / OpenAI subscription
+/// providers. Two windows typically arrive together (5h primary, 7d
+/// secondary). UsedPercent is the provider value as-is (may carry
+/// floating-point noise like 14.000000000000002 — round at render time,
+/// not at decode).
+struct RateLimitWindowInfo: Codable, Hashable {
+    let usedPercent: Double
+    let windowMinutes: Int
+    let resetsAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case usedPercent = "used_percent"
+        case windowMinutes = "window_minutes"
+        case resetsAt = "resets_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        usedPercent = try c.decode(Double.self, forKey: .usedPercent)
+        windowMinutes = try c.decode(Int.self, forKey: .windowMinutes)
+        let epoch = try c.decode(Double.self, forKey: .resetsAt)
+        resetsAt = Date(timeIntervalSince1970: epoch)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(usedPercent, forKey: .usedPercent)
+        try c.encode(windowMinutes, forKey: .windowMinutes)
+        try c.encode(resetsAt.timeIntervalSince1970, forKey: .resetsAt)
+    }
+}
+
+/// Prepaid credits balance, populated only when the user is on the API-key
+/// / usage path. Subscription users see `credits == nil`.
+struct CreditsInfo: Codable, Hashable {
+    let hasCredits: Bool
+    let unlimited: Bool?
+    let balance: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case hasCredits = "has_credits"
+        case unlimited, balance
+    }
+}
+
+/// One subscription-quota snapshot for a session. Mirrors
+/// session.RateLimitSnapshot in the Go daemon (issue #309). Carried under
+/// SessionMetrics.rateLimit; nil for sessions that don't surface a quota
+/// (API-key Claude Code, Bedrock, Vertex).
+struct RateLimitInfo: Codable, Hashable {
+    let windows: [RateLimitWindowInfo]
+    let planType: String?
+    let credits: CreditsInfo?
+    let reachedType: String?
+    let sampledAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case windows
+        case planType = "plan_type"
+        case credits
+        case reachedType = "reached_type"
+        case sampledAt = "sampled_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        windows = try c.decodeIfPresent([RateLimitWindowInfo].self, forKey: .windows) ?? []
+        planType = try c.decodeIfPresent(String.self, forKey: .planType)
+        credits = try c.decodeIfPresent(CreditsInfo.self, forKey: .credits)
+        reachedType = try c.decodeIfPresent(String.self, forKey: .reachedType)
+        let epoch = try c.decode(Double.self, forKey: .sampledAt)
+        sampledAt = Date(timeIntervalSince1970: epoch)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(windows, forKey: .windows)
+        try c.encodeIfPresent(planType, forKey: .planType)
+        try c.encodeIfPresent(credits, forKey: .credits)
+        try c.encodeIfPresent(reachedType, forKey: .reachedType)
+        try c.encode(sampledAt.timeIntervalSince1970, forKey: .sampledAt)
+    }
+
+    /// The window with the highest UsedPercent — the natural "next to hit
+    /// the cap" pick for the header display. Returns nil when no windows
+    /// carry a non-zero reading.
+    var imminentWindow: RateLimitWindowInfo? {
+        let nonZero = windows.filter { $0.usedPercent > 0 }
+        return nonZero.max { $0.usedPercent < $1.usedPercent }
+    }
+
+    /// Returns a friendly tier label for tooltip / display, e.g. "Claude
+    /// Max", "ChatGPT Plus", or nil when planType is empty/unset.
+    var planTypeLabel: String? {
+        guard let pt = planType, !pt.isEmpty else { return nil }
+        switch pt {
+        case "max": return "Claude Max"
+        case "pro": return "Claude Pro"
+        case "plus": return "ChatGPT Plus"
+        case "team": return "Team"
+        case "enterprise": return "Enterprise"
+        default: return pt.capitalized
+        }
+    }
+}
+
 // Performance metrics from transcript analysis
 struct SessionMetrics: Codable {
     let elapsedSeconds: Int64       // elapsed time when metrics were computed (for ready sessions)
@@ -71,6 +177,8 @@ struct SessionMetrics: Codable {
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
     let lastAssistantText: String?  // last assistant message text, truncated (~200 chars)
     let tasks: [SessionTask]?              // Claude Code task list (nil when TaskCreate never called)
+    let rateLimit: RateLimitInfo?          // subscription-quota snapshot (nil for API-key / Bedrock / Vertex)
+    let rateLimitForecastEta: Date?        // projected wall-clock time when the imminent window hits 100% (nil when unforecastable)
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -83,6 +191,75 @@ struct SessionMetrics: Codable {
         case estimatedCostUSD = "estimated_cost_usd"
         case lastAssistantText = "last_assistant_text"
         case tasks
+        case rateLimit = "rate_limit"
+        case rateLimitForecastEta = "rate_limit_forecast_eta"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        elapsedSeconds = try c.decodeIfPresent(Int64.self, forKey: .elapsedSeconds) ?? 0
+        totalTokens = try c.decodeIfPresent(Int64.self, forKey: .totalTokens) ?? 0
+        modelName = try c.decodeIfPresent(String.self, forKey: .modelName) ?? ""
+        contextWindow = try c.decodeIfPresent(Int64.self, forKey: .contextWindow)
+        contextUtilization = try c.decodeIfPresent(Double.self, forKey: .contextUtilization) ?? 0
+        pressureLevel = try c.decodeIfPresent(String.self, forKey: .pressureLevel) ?? "unknown"
+        contextWindowUnknown = try c.decodeIfPresent(Bool.self, forKey: .contextWindowUnknown)
+        estimatedCostUSD = try c.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
+        lastAssistantText = try c.decodeIfPresent(String.self, forKey: .lastAssistantText)
+        tasks = try c.decodeIfPresent([SessionTask].self, forKey: .tasks)
+        rateLimit = try c.decodeIfPresent(RateLimitInfo.self, forKey: .rateLimit)
+        if let epoch = try c.decodeIfPresent(Double.self, forKey: .rateLimitForecastEta) {
+            rateLimitForecastEta = Date(timeIntervalSince1970: epoch)
+        } else {
+            rateLimitForecastEta = nil
+        }
+    }
+
+    /// Explicit memberwise initializer for SwiftUI previews and tests that
+    /// build SessionMetrics in-process. New fields default to nil so existing
+    /// call sites compile without changes.
+    init(
+        elapsedSeconds: Int64,
+        totalTokens: Int64,
+        modelName: String,
+        contextWindow: Int64?,
+        contextUtilization: Double,
+        pressureLevel: String,
+        contextWindowUnknown: Bool?,
+        estimatedCostUSD: Double?,
+        lastAssistantText: String?,
+        tasks: [SessionTask]?,
+        rateLimit: RateLimitInfo? = nil,
+        rateLimitForecastEta: Date? = nil
+    ) {
+        self.elapsedSeconds = elapsedSeconds
+        self.totalTokens = totalTokens
+        self.modelName = modelName
+        self.contextWindow = contextWindow
+        self.contextUtilization = contextUtilization
+        self.pressureLevel = pressureLevel
+        self.contextWindowUnknown = contextWindowUnknown
+        self.estimatedCostUSD = estimatedCostUSD
+        self.lastAssistantText = lastAssistantText
+        self.tasks = tasks
+        self.rateLimit = rateLimit
+        self.rateLimitForecastEta = rateLimitForecastEta
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(elapsedSeconds, forKey: .elapsedSeconds)
+        try c.encode(totalTokens, forKey: .totalTokens)
+        try c.encode(modelName, forKey: .modelName)
+        try c.encodeIfPresent(contextWindow, forKey: .contextWindow)
+        try c.encode(contextUtilization, forKey: .contextUtilization)
+        try c.encode(pressureLevel, forKey: .pressureLevel)
+        try c.encodeIfPresent(contextWindowUnknown, forKey: .contextWindowUnknown)
+        try c.encodeIfPresent(estimatedCostUSD, forKey: .estimatedCostUSD)
+        try c.encodeIfPresent(lastAssistantText, forKey: .lastAssistantText)
+        try c.encodeIfPresent(tasks, forKey: .tasks)
+        try c.encodeIfPresent(rateLimit, forKey: .rateLimit)
+        try c.encodeIfPresent(rateLimitForecastEta.map { $0.timeIntervalSince1970 }, forKey: .rateLimitForecastEta)
     }
     
     // Computed properties for UI display

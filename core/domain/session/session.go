@@ -132,6 +132,20 @@ type SessionMetrics struct {
 	// Nil for sessions that have not used TaskCreate (including non-Claude-Code
 	// adapters).
 	Tasks []Task `json:"tasks,omitempty"`
+
+	// RateLimit is the most recent subscription quota snapshot observed for
+	// this session. Populated by the Codex parser (from token_count events)
+	// and by the Claude Code statusline hook. Nil when the underlying
+	// provider doesn't surface quota (API-key Claude Code, Bedrock, Vertex)
+	// or when no snapshot has arrived yet.
+	RateLimit *RateLimitSnapshot `json:"rate_limit,omitempty"`
+
+	// RateLimitForecastEta is the projected wall-clock time (Unix seconds)
+	// at which the most-imminent rate-limit window will hit 100%, computed
+	// from a rolling history of changed snapshots. Nil when forecasting is
+	// not possible — insufficient history, flat or decreasing burn rate,
+	// or the projected ETA exceeds the window's ResetsAt.
+	RateLimitForecastEta *int64 `json:"rate_limit_forecast_eta,omitempty"`
 }
 
 // SubagentCompletion is the domain mirror of tailer.SubagentCompletion. The
@@ -493,6 +507,8 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		CumCacheCreationTokens: newM.CumCacheCreationTokens,
 		Tasks:                  newM.Tasks,
 		NoSubstantiveActivity:  newM.NoSubstantiveActivity,
+		RateLimit:              newM.RateLimit,
+		RateLimitForecastEta:   newM.RateLimitForecastEta,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
@@ -541,6 +557,14 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	// nil Tasks = "no data yet"; non-nil empty slice = "no tasks" — overwrite only for the latter.
 	if merged.Tasks == nil && oldM.Tasks != nil {
 		merged.Tasks = oldM.Tasks
+	}
+	// Rate-limit snapshots arrive sporadically — preserve the previous one
+	// across passes that didn't observe a fresh sample.
+	if merged.RateLimit == nil && oldM.RateLimit != nil {
+		merged.RateLimit = oldM.RateLimit
+	}
+	if merged.RateLimitForecastEta == nil && oldM.RateLimitForecastEta != nil {
+		merged.RateLimitForecastEta = oldM.RateLimitForecastEta
 	}
 	return merged
 }
