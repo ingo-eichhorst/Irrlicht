@@ -1548,6 +1548,36 @@
         if (wn && !a.worker_name) a.worker_name = wn;
         if (wid && !a.worker_id) a.worker_id = wid;
         a.children = ch;
+        // Migrate the agent if its project_name now points at a different
+        // group than where it currently lives. Without this, sessions whose
+        // first WS push arrived before metadata enrichment landed (empty
+        // project_name → "unknown" bucket) stay stranded there forever even
+        // after later updates carry the correct name. Children inherit their
+        // parent's group, so only migrate top-level entries.
+        if (!entry.parent) {
+          var desired = a.project_name || 'unknown';
+          if (entry.group.name !== desired) {
+            var oldGroup = entry.group;
+            var ai = oldGroup.agents.findIndex(x => x.session_id === s.session_id);
+            if (ai >= 0) oldGroup.agents.splice(ai, 1);
+            var target = dashboardGroups.find(g => g.name === desired);
+            if (!target) {
+              target = {name: desired, agents: []};
+              dashboardGroups.push(target);
+            }
+            target.agents.push(a);
+            entry.group = target;
+            // Children's sessionIndex entries still point at the old group;
+            // refresh them so any future site that reads child.entry.group
+            // (e.g. a parent-deletion cleanup that drills into children)
+            // doesn't follow a reference to a group we just spliced out.
+            indexChildren(target, a);
+            if (oldGroup.agents.length === 0) {
+              var gi = dashboardGroups.indexOf(oldGroup);
+              if (gi >= 0) dashboardGroups.splice(gi, 1);
+            }
+          }
+        }
         maybeNotifyOnUpdate(prevSnap, a);
         return;
       }
