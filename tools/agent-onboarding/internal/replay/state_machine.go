@@ -268,10 +268,26 @@ func (m *StateMachine) Run(ctx context.Context) {
 		}
 		ev := m.events[cur]
 
-		// Compute the wait until this event's timestamp.
+		// Compute the wait until this event's timestamp. The baseline is
+		// the last applied event's timestamp — EXCEPT after a backward
+		// seek, where seekTo sets playheadMs to the seek target while
+		// cursor lands on the first event AT OR AFTER that target. In
+		// that window the playhead is ahead of events[cur-1], and using
+		// events[cur-1] as the baseline computes the recording's natural
+		// inter-event gap — which makes the wall-clock-driven playhead
+		// visually cross state-transition markers seconds before the
+		// corresponding events actually fire. Clamp to whichever is
+		// later so the wait reflects "from where the user is NOW until
+		// the next event" rather than the recording's frozen gap.
 		var scaled time.Duration
 		if cur > 0 {
 			prev := m.events[cur-1].Timestamp
+			m.mu.Lock()
+			playheadTs := m.events[0].Timestamp.Add(time.Duration(m.playheadMs) * time.Millisecond)
+			m.mu.Unlock()
+			if playheadTs.After(prev) {
+				prev = playheadTs
+			}
 			scaled = time.Duration(float64(ev.Timestamp.Sub(prev)) / m.Speed())
 		}
 
