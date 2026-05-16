@@ -349,17 +349,26 @@ struct SessionListView: View {
     
     /// Header slot shown to the left of the session glyphs. Renders one
     /// chip per subscription provider whose sessions have surfaced quota
-    /// data (Anthropic, OpenAI, …) — matching mockup 2 in issue #309.
-    /// Empty when no provider has a snapshot; the app version lives in
-    /// Settings rather than competing for this slot.
+    /// data (Anthropic, OpenAI, …) — matching mockups 2 and 3 in
+    /// issue #309. When more chips exist than the 380pt header can fit
+    /// comfortably, the first `maxVisibleChips` render normally and the
+    /// rest collapse into a single "+N more" chip whose tooltip lists
+    /// what's hidden (mockup 3). Empty when no provider has a snapshot;
+    /// the app version lives in Settings rather than competing for
+    /// this slot.
     @ViewBuilder
     private var headerTitleView: some View {
         if showQuotaForecast {
             let chips = quotaChipData
             if !chips.isEmpty {
+                let visible = Array(chips.prefix(Self.maxVisibleQuotaChips))
+                let hidden = Array(chips.dropFirst(Self.maxVisibleQuotaChips))
                 HStack(alignment: .top, spacing: 8) {
-                    ForEach(chips) { chip in
+                    ForEach(visible) { chip in
                         quotaChipView(chip, compact: chips.count > 1)
+                    }
+                    if !hidden.isEmpty {
+                        quotaOverflowChip(hidden: hidden)
                     }
                 }
             } else {
@@ -367,6 +376,44 @@ struct SessionListView: View {
             }
         } else {
             EmptyView()
+        }
+    }
+
+    /// Cap on chips rendered inline in the header before overflow kicks
+    /// in. Two compact chips at ~110pt each plus an 8pt gap is already
+    /// most of the 380pt panel width once the mode button and status
+    /// indicator are factored in; a third would overflow visibly.
+    private static let maxVisibleQuotaChips = 2
+
+    /// The "+N more" chip: a small grey pill showing the hidden chip
+    /// count, whose tooltip lists each hidden provider with its
+    /// headline metric. Matches mockup 3 in issue #309.
+    @ViewBuilder
+    private func quotaOverflowChip(hidden: [QuotaWidgetData]) -> some View {
+        Text("+\(hidden.count) more")
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.15))
+            .cornerRadius(IrrRadius.sm)
+            .tooltip(hidden.map { quotaOverflowSummary($0) }.joined(separator: "\n"))
+    }
+
+    /// One line in the overflow tooltip: "<plan or provider>: <headline>".
+    /// Subscription chips show the imminent window's percent; usage chips
+    /// show the cumulative spend headline.
+    private func quotaOverflowSummary(_ d: QuotaWidgetData) -> String {
+        let label = d.snapshot.planTypeLabel ?? d.id.capitalized
+        switch d.mode {
+        case .subscription:
+            if let imm = d.imminent {
+                return "\(label): \(Int(imm.usedPercent.rounded()))%"
+            }
+            return label
+        case .usage:
+            let cost = d.totalCostUSD > 0 ? formatUsageCost(d.totalCostUSD) : "—"
+            return "\(label): \(cost)"
         }
     }
 
