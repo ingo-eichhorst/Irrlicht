@@ -655,7 +655,13 @@ func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 	for i := range t.tasks {
 		entry, present := snapByID[t.tasks[i].ID]
 		if !present {
-			log.Printf("irrlicht/tailer: pruning task id=%s subject=%q status=%s (absent from task_reminder snapshot) in %s", t.tasks[i].ID, t.tasks[i].Subject, t.tasks[i].Status, t.path)
+			// Quiet on the common case (completed tasks pruned at batch
+			// turnover). Pending/in_progress prunes still log — they're
+			// the #282-style "Claude dropped a task it claimed to track"
+			// signal worth surfacing.
+			if t.tasks[i].Status != TaskStatusCompleted {
+				log.Printf("irrlicht/tailer: pruning %s task id=%s subject=%q (absent from task_reminder snapshot) in %s", t.tasks[i].Status, t.tasks[i].ID, t.tasks[i].Subject, t.path)
+			}
 			continue
 		}
 		if entry.Status != "" && entry.Status != t.tasks[i].Status {
