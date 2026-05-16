@@ -62,15 +62,22 @@ render() {
   local out="$2"
   case "$renderer" in
     rsvg)
-      rsvg-convert -w "$px" -h "$px" "$src" -o "$out"
+      rsvg-convert -w "$px" -h "$px" -o "$out" -- "$src"
       ;;
     qlmanage)
       # qlmanage renders into its own filename derived from the input; redirect
       # via a temp dir and rename.
       local tmp="$work/ql_$px"
       mkdir -p "$tmp"
-      qlmanage -t -s "$px" -o "$tmp" "$src" >/dev/null 2>&1
-      mv "$tmp"/*.png "$out"
+      qlmanage -t -s "$px" -o "$tmp" -- "$src" >/dev/null 2>&1
+      shopt -s nullglob
+      local produced=("$tmp"/*.png)
+      shopt -u nullglob
+      if [[ ${#produced[@]} -ne 1 ]]; then
+        echo "error: qlmanage produced ${#produced[@]} PNGs in $tmp (expected 1)" >&2
+        exit 1
+      fi
+      mv "${produced[0]}" "$out"
       ;;
   esac
 }
