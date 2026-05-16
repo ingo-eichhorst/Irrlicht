@@ -375,7 +375,13 @@ struct SessionListView: View {
                 EmptyView()
             }
         } else {
-            EmptyView()
+            // User opted out of the quota chip in Settings — show the
+            // app name so the header isn't a bare em-dash. Version is
+            // still tucked into the Settings footer per the maintainer's
+            // request from #309.
+            Text("Irrlicht")
+                .font(.headline)
+                .foregroundColor(.primary)
         }
     }
 
