@@ -95,11 +95,16 @@ fi
 
 # 5. Build irrlichd + replay from the current worktree so recordings
 #    reflect code under review, and so run-cell.sh can invoke replay
-#    directly without paying a `go run` recompile per cell.
+#    directly without paying a `go run` recompile per cell. The
+#    -ldflags injection mirrors tools/build-dev.sh so the resulting
+#    binary's --version output (and the daemon_version captured into
+#    manifest.json by promote-recording.sh) carries the git sha +
+#    .dirty flag instead of the bare "dev" string.
 BIN_DIR="$REPO_ROOT/.build/refresh/bin"
 mkdir -p "$BIN_DIR"
+VERSION_STR="$("$REPO_ROOT/tools/version.sh" 2>/dev/null || echo dev)"
 for bin in irrlichd replay; do
-  if ! (cd "$REPO_ROOT" && go build -o "$BIN_DIR/$bin" ./core/cmd/"$bin") >/dev/null 2>&1; then
+  if ! (cd "$REPO_ROOT" && go build -ldflags "-X main.Version=$VERSION_STR" -o "$BIN_DIR/$bin" ./core/cmd/"$bin") >/dev/null 2>&1; then
     fail "failed to build $bin from ./core/cmd/$bin"
   fi
 done
