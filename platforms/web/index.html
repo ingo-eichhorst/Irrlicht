@@ -8,6 +8,7 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
+      /* Dark palette — default. Light overrides live below. */
       --bg: #080c16;
       --bg-glow: #0d1424;
       --surface: #0f1628;
@@ -16,7 +17,14 @@
       --border-subtle: #141c32;
       --text: #d4daf0;
       --text-bright: #edf0fa;
-      --muted: #5a6480;
+      --muted: #8e96b3;
+      --header-bg: rgba(8, 12, 22, 0.85);
+      --ctx-bar-track: rgba(255, 255, 255, 0.06);
+      --sub-dot-open: rgba(139, 92, 246, 0.55);
+      --sub-dot-filled: #34C759;
+      --noise-opacity: 0.035;
+      --grid-color: rgba(100, 140, 255, 0.3);
+      --grid-opacity: 0.03;
       --working: #8B5CF6;
       --working-dim: rgba(139, 92, 246, 0.12);
       --working-glow: rgba(139, 92, 246, 0.25);
@@ -28,6 +36,8 @@
       --ready-glow: rgba(52, 199, 89, 0.2);
       --cancelled: #8E8E93;
       --cancelled-dim: rgba(142, 142, 147, 0.1);
+      /* Pressure-bar colors — mirror overlay's ContextBarColor / pressure_level mapping:
+         safe → low, caution → medium, warning → high, critical → critical. */
       --pressure-low: #34C759;
       --pressure-medium: #FF9500;
       --pressure-high: #FF3B30;
@@ -36,6 +46,48 @@
       --ws-disconnected: #FF3B30;
       --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Fira Mono", Menlo, Consolas, monospace;
       --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+
+    /* Light palette — applied automatically when OS prefers light, unless the
+       explicit override pins to dark. The same vars also apply when the user
+       toggles [data-theme="light"]. */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        --bg: #f4f5f7;
+        --bg-glow: #ffffff;
+        --surface: #ffffff;
+        --surface-hover: #ebeef4;
+        --border: #d2d4dc;
+        --border-subtle: #e4e6ed;
+        --text: #1d1d1f;
+        --text-bright: #000000;
+        --muted: #6e6e73;
+        --header-bg: rgba(255, 255, 255, 0.85);
+        --ctx-bar-track: rgba(0, 0, 0, 0.08);
+        --sub-dot-open: rgba(139, 92, 246, 0.45);
+        --sub-dot-filled: #34C759;
+        --noise-opacity: 0;
+        --grid-color: rgba(60, 100, 200, 0.18);
+        --grid-opacity: 0.04;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg: #f4f5f7;
+      --bg-glow: #ffffff;
+      --surface: #ffffff;
+      --surface-hover: #ebeef4;
+      --border: #d2d4dc;
+      --border-subtle: #e4e6ed;
+      --text: #1d1d1f;
+      --text-bright: #000000;
+      --muted: #6e6e73;
+      --header-bg: rgba(255, 255, 255, 0.85);
+      --ctx-bar-track: rgba(0, 0, 0, 0.08);
+      --sub-dot-open: rgba(139, 92, 246, 0.45);
+      --sub-dot-filled: #34C759;
+      --noise-opacity: 0;
+      --grid-color: rgba(60, 100, 200, 0.18);
+      --grid-opacity: 0.04;
     }
 
     body {
@@ -54,7 +106,7 @@
       content: '';
       position: fixed;
       inset: 0;
-      opacity: 0.035;
+      opacity: var(--noise-opacity);
       pointer-events: none;
       z-index: 0;
       background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -66,12 +118,12 @@
       content: '';
       position: fixed;
       inset: 0;
-      opacity: 0.03;
+      opacity: var(--grid-opacity);
       pointer-events: none;
       z-index: 0;
       background-image:
-        repeating-linear-gradient(0deg, transparent, transparent 59px, rgba(100, 140, 255, 0.3) 59px, rgba(100, 140, 255, 0.3) 60px),
-        repeating-linear-gradient(90deg, transparent, transparent 59px, rgba(100, 140, 255, 0.3) 59px, rgba(100, 140, 255, 0.3) 60px);
+        repeating-linear-gradient(0deg, transparent, transparent 59px, var(--grid-color) 59px, var(--grid-color) 60px),
+        repeating-linear-gradient(90deg, transparent, transparent 59px, var(--grid-color) 59px, var(--grid-color) 60px);
     }
 
     header {
@@ -83,84 +135,135 @@
       justify-content: space-between;
       padding: 12px 20px;
       border-bottom: 1px solid var(--border-subtle);
-      background: rgba(8, 12, 22, 0.85);
+      background: var(--header-bg);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
     }
 
-    .header-left { display: flex; align-items: baseline; gap: 16px; }
+    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
-    .logo {
-      font-family: var(--font-mono);
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.25em;
-      text-transform: uppercase;
-      color: var(--text-bright);
-    }
-
-    .logo span { color: var(--working); }
-
-    .summary {
+    /* App title — mirrors overlay's "Irrlicht v$VERSION" left of the state icons. */
+    .app-title {
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 6px;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-bright);
+      white-space: nowrap;
+    }
+
+    .app-title .app-name { letter-spacing: 0; }
+    .app-title .app-version { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .app-title .app-sep { color: var(--muted); padding: 0 2px; }
+
+    /* Aggregated state icons — up to 3 per-session glyphs colored by state,
+       or "N sessions" text when there are more. Mirrors `sessionIconsView` in
+       SessionListView.swift:346. */
+    .app-state-icons {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 14px;
+    }
+
+    .app-state-icon {
+      width: 14px;
+      height: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .app-state-icon svg {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+
+    .app-state-count {
       font-family: var(--font-mono);
       font-size: 11px;
-      letter-spacing: 0.04em;
-    }
-
-    .summary-item {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      color: var(--muted);
-    }
-
-    .summary-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-
-    .summary-count {
-      font-weight: 700;
-      font-variant-numeric: tabular-nums;
       color: var(--text);
     }
+
+    /* Single header cycling button — replaces the standalone view-mode-bar +
+       timeline granularity buttons. Mirrors overlay's mode-cycle-btn at
+       SessionListView.swift:314. */
+    .view-mode-cycle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.03em;
+      padding: 3px 8px;
+      cursor: pointer;
+      min-width: 56px;
+      text-align: center;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .view-mode-cycle:hover { border-color: var(--working); color: var(--text-bright); }
+    .view-mode-cycle.history { border-color: var(--working); color: var(--working); background: var(--working-dim); }
+
+    /* Theme toggle — explicit override that persists in localStorage; absent
+       value defers to the OS prefers-color-scheme media query. */
+    .theme-toggle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      width: 26px;
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .theme-toggle:hover { border-color: var(--working); color: var(--text-bright); }
 
     .ws-status {
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 6px;
       font-family: var(--font-mono);
       font-size: 10px;
       letter-spacing: 0.03em;
       color: var(--muted);
     }
 
-    .ws-ring {
-      width: 8px;
-      height: 8px;
+    /* Filled dot mirrors overlay's statusIndicator at SessionListView.swift:366.
+       Color/label combos: green/"watching" (connected),
+       orange/"reconnecting"/"connecting", red/"disconnected". */
+    .ws-dot {
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
-      border: 2px solid var(--ws-disconnected);
-      transition: border-color 0.4s, background 0.4s;
+      background: var(--ws-disconnected);
+      box-shadow: 0 0 4px rgba(255, 59, 48, 0.4);
+      transition: background 0.3s, box-shadow 0.3s;
     }
 
-    .ws-ring.connected {
-      border-color: var(--ws-connected);
-      background: rgba(52, 199, 89, 0.3);
+    .ws-dot.connected {
+      background: var(--ws-connected);
+      box-shadow: 0 0 4px rgba(52, 199, 89, 0.5);
     }
 
-    .ws-ring.connecting {
-      border-color: var(--waiting);
+    .ws-dot.connecting,
+    .ws-dot.reconnecting {
+      background: var(--waiting);
+      box-shadow: 0 0 4px rgba(255, 149, 0, 0.5);
       animation: ws-pulse 1.2s ease-in-out infinite;
     }
 
     @keyframes ws-pulse {
       0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
+      50% { opacity: 0.45; transform: scale(0.85); }
     }
 
     main {
@@ -204,77 +307,18 @@
     }
 
     /* --- Timeline heatmap --- */
-    #timeline-wrap {
-      display: none;
-      margin-bottom: 12px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
+    /* Per-row history bar — visible only in history modes; takes the same
+       slot the context bar occupies in Context mode. Floor mirrors macOS
+       HistoryBarView (SessionListView.swift:555) at 132×16, grown by the
+       same flex factors as .row-ctx-bar so the bar can absorb slack. */
+    .row-history {
+      flex: 2 1 100px;
+      min-width: 100px;
+      max-width: 320px;
+      height: 16px;
+      border-radius: 3px;
       overflow: hidden;
     }
-
-    #timeline-wrap canvas {
-      display: block;
-      width: 100%;
-    }
-
-    .timeline-controls {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      margin-bottom: 6px;
-    }
-
-    .timeline-gran-label {
-      font-size: 9px;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      margin-right: 2px;
-    }
-
-    .timeline-gran-btn {
-      background: none;
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      color: var(--muted);
-      font-size: 9px;
-      font-family: var(--font-mono);
-      padding: 1px 5px;
-      cursor: pointer;
-    }
-
-    .timeline-gran-btn:hover { border-color: var(--working); color: var(--text); }
-    .timeline-gran-btn.active { border-color: var(--working); color: var(--working); }
-
-    /* Per-row history bar (wide viewports only) */
-    .row-history {
-      width: 120px;
-      height: 6px;
-      flex-shrink: 0;
-      display: block;
-    }
-
-    /* View-mode toggle (narrow viewports) */
-    .view-mode-bar {
-      display: none;
-      gap: 4px;
-      margin-bottom: 8px;
-    }
-
-    .view-mode-btn {
-      background: none;
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      color: var(--muted);
-      font-size: 9px;
-      font-family: var(--font-mono);
-      padding: 2px 8px;
-      cursor: pointer;
-    }
-
-    .view-mode-btn:hover { border-color: var(--working); color: var(--text); }
-    .view-mode-btn.active { border-color: var(--working); color: var(--working); }
 
     /* --- Session list --- */
     .session-list {
@@ -306,17 +350,17 @@
 
     .group-name {
       font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 12px;
+      font-weight: 700;
       color: var(--text-bright);
-      letter-spacing: 0.03em;
+      letter-spacing: 0.02em;
     }
 
     .group-cost {
       font-family: var(--font-mono);
-      font-size: 9px;
+      font-size: 10px;
       color: var(--muted);
-      margin-left: 4px;
+      margin-left: 8px;
       cursor: pointer;
       user-select: none;
     }
@@ -327,29 +371,31 @@
 
     .group-count {
       font-family: var(--font-mono);
-      font-size: 9px;
+      font-size: 10px;
       color: var(--muted);
       margin-left: auto;
     }
 
-    .group-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-
-    /* Session row */
+    /* Session row — strict one-line layout. The branch column owns excess
+       width and ellipsises long names; all other columns are fixed so the
+       meta cluster (bar/tokens/cost/model/icon) never wraps onto a second
+       line. The macOS overlay row uses the same rule (one HStack, no
+       wrapping). */
     .session-row {
       display: flex;
       align-items: center;
-      flex-wrap: wrap;
-      gap: 6px;
+      flex-wrap: nowrap;
+      gap: 5px;
       padding: 3px 10px;
       font-family: var(--font-mono);
       font-size: 10px;
       color: var(--text);
       border-radius: 3px;
+      min-width: 0;
+      /* Pin to the height the history bar (16) takes so toggling Context↔
+         history modes doesn't shift the row. Mirrors macOS row pin at
+         SessionListView.swift:586 (`.frame(minHeight: 16)`). */
+      min-height: 22px;
       transition: background 0.12s;
       opacity: 0;
       animation: row-reveal 0.2s ease forwards;
@@ -376,8 +422,6 @@
       display: block;
     }
 
-    .row-state-icon svg.working { animation: spin 2.5s linear infinite; }
-
     .row-adapter-icon {
       width: 12px;
       height: 12px;
@@ -393,9 +437,25 @@
       display: block;
     }
 
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
+    /* Working state — opacity-only "breathe" on a large solid dot.
+       Footprint is r=7 of 20 viewBox (70 % of cell), so the dot stays
+       clearly visible even if the animation is dropped by the renderer
+       or disabled for reduced-motion. */
+    @keyframes irrlicht-breathe {
+      0%, 100% { opacity: 0.55; }
+      50%      { opacity: 1; }
+    }
+    .row-state-icon svg circle.core,
+    .app-state-icon svg circle.core {
+      animation: irrlicht-breathe 1.4s ease-in-out infinite;
+      transform-origin: 50% 50%;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .row-state-icon svg circle.core,
+      .app-state-icon svg circle.core {
+        animation: none;
+        opacity: 1;
+      }
     }
 
     .row-num {
@@ -407,42 +467,60 @@
       flex-shrink: 0;
     }
 
-    .row-sub-badge {
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      background: var(--working);
-      color: #fff;
-      font-size: 9px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      line-height: 1;
-    }
-
     .row-branch {
       color: var(--text);
       font-size: 10px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      max-width: 140px;
+      /* Floor mirrors macOS row (SessionListView.swift:501) at 64 px; on
+         wider viewports the branch grows to use the slack so long names
+         don't ellipsis-truncate when there's plenty of room. Capped so an
+         extreme-wide window doesn't dedicate half the row to the branch. */
+      flex: 1 1 64px;
+      min-width: 64px;
+      max-width: 220px;
+    }
+    .session-row.has-sub .row-branch { flex: 1 1 44px; min-width: 44px; }
+
+    /* Small subagent count badge — filled circle with running-count number,
+       sized to fit alongside the row's mono text. Mirrors macOS at
+       SessionListView.swift:481-490. */
+    .row-sub-badge {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 14px;
+      border-radius: 50%;
+      background: var(--working);
+      color: #fff;
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 14px;
+      text-align: center;
+      font-family: var(--font-sans);
     }
 
+    .row-spacer { flex: 1 1 auto; min-width: 4px; }
+
+    /* Context bar — floor mirrors macOS ContextBar at SessionListView.swift:420
+       (100×13). On wider viewports the bar grows to use the slack so the
+       fill is more readable, capped so it doesn't dominate the row. The
+       grow factor is higher than branch's so the bar absorbs more slack. */
     .row-ctx-bar {
-      width: 80px;
-      height: 6px;
-      background: rgba(255,255,255,0.06);
-      border-radius: 2px;
+      position: relative;
+      height: 13px;
+      flex: 2 1 100px;
+      min-width: 100px;
+      max-width: 320px;
+      background: var(--ctx-bar-track);
+      border-radius: 3px;
       overflow: hidden;
-      flex-shrink: 0;
     }
 
     .row-ctx-fill {
+      display: block;
       height: 100%;
-      border-radius: 2px;
+      border-radius: 3px;
       background: var(--pressure-low);
       transition: width 0.4s ease, background 0.3s;
     }
@@ -451,20 +529,45 @@
     .row-ctx-fill.high    { background: var(--pressure-high); }
     .row-ctx-fill.critical { background: var(--pressure-critical); }
 
-    .row-ctx-pct {
-      font-size: 9px;
-      flex-shrink: 0;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .row-cost {
+    /* Token count overlay sits on top of the bar and right-aligns. Color
+       picks the muted token for readability over both the unfilled track
+       and the filled portion (which is solid green). */
+    .row-ctx-label {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0 4px;
+      font-family: var(--font-mono);
       font-size: 9px;
       font-weight: 500;
+      font-variant-numeric: tabular-nums;
       color: var(--muted);
-      flex-shrink: 0;
+      pointer-events: none;
     }
 
-    .row-spacer { flex: 1; }
+    /* Standalone context % column — only shown when Settings.showCostDisplay
+       is OFF (so the cost column hides and we surface percentage instead). */
+    .row-ctx-pct {
+      font-size: 10px;
+      flex: 0 0 auto;
+      font-variant-numeric: tabular-nums;
+      min-width: 38px;
+      text-align: right;
+      color: var(--muted);
+    }
+    body:not(.no-cost) .row-ctx-pct { display: none; }
+
+    .row-cost {
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+      min-width: 48px;
+      text-align: right;
+    }
 
     .row-model {
       font-size: 10px;
@@ -491,24 +594,30 @@
       flex-shrink: 0;
     }
 
-    .row-question {
-      font-size: 9px;
-      color: var(--waiting);
-      opacity: 0.85;
+    /* Waiting-question row — assistant's last message rendered beneath
+       the parent when the session is awaiting user input. Mirrors macOS
+       layout at SessionListView.swift:588-604 (waiting-colored text in a
+       padded, dim, rounded box, clamped to 3 lines). */
+    .row-question-row {
+      margin: 0 10px 4px 24px;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 300px;
-      padding: 0 4px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      line-height: 1.4;
+      color: var(--waiting);
+      background: var(--waiting-dim);
+      padding: 4px 6px;
+      border-radius: 4px;
+      cursor: default;
     }
+    .row-question-row.child { margin-left: 44px; }
 
-    /* Task progress dots */
-    .row-tasks {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 3px;
-    }
+    /* Task progress dots — rendered as a separate row beneath the parent
+       session row (see .row-tasks-row), mirroring TaskListView in the macOS
+       overlay (SessionListView.swift:746-769). */
     .task-dot {
       width: 7px;
       height: 7px;
@@ -519,11 +628,95 @@
     .task-dot.task-pending    { background: transparent; border: 1.5px solid var(--working); }
     .task-dot.task-in_progress { background: transparent; border: 1.5px solid var(--working); }
     .task-dot.task-completed  { background: var(--ready); border: 1.5px solid var(--ready); }
-    .row-task-count {
-      font-size: 9px;
-      color: var(--muted);
-      margin-left: 2px;
+
+    .row-tasks-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 1px 10px 4px 24px;
       font-family: var(--font-mono);
+      font-size: 9px;
+    }
+    .row-tasks-row.child { padding-left: 44px; }
+    .row-tasks-dots {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 3px;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .row-tasks-counter {
+      color: var(--muted);
+      flex-shrink: 0;
+      min-width: 38px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Subagent dot-matrix indicator — rendered under a session row when it
+       has running sub-agents. Open circles = pending, filled = settled.
+       Mirrors overlay anatomy in assets/overlay-reference.png. */
+    .sub-matrix-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 1px 10px 4px 24px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+    }
+    .sub-matrix-row.child { padding-left: 44px; }
+    .sub-matrix-counter {
+      color: var(--muted);
+      flex-shrink: 0;
+      min-width: 38px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      padding-top: 2px;
+    }
+    .sub-matrix-dots {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, 10px);
+      gap: 3px;
+      flex: 1;
+    }
+    .sub-matrix-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      box-sizing: border-box;
+    }
+    .sub-matrix-dot.settled {
+      background: var(--sub-dot-filled);
+    }
+    .sub-matrix-dot.open {
+      background: transparent;
+      border: 1.5px solid var(--sub-dot-open);
+    }
+
+    /* Connection banner — surfaces when the WebSocket is reconnecting or
+       disconnected. Mirrors the inline error display in
+       SessionListView.swift:207-210. Hidden when connected (default). */
+    #connection-banner {
+      display: none;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 6px 10px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+    }
+    #connection-banner.reconnecting {
+      display: block;
+      background: var(--waiting-dim);
+      border-color: rgba(255, 149, 0, 0.4);
+      color: var(--waiting);
+    }
+    #connection-banner.disconnected {
+      display: block;
+      background: rgba(255, 59, 48, 0.1);
+      border-color: rgba(255, 59, 48, 0.4);
+      color: var(--pressure-high);
     }
 
     /* Pressure alert row */
@@ -656,15 +849,16 @@
       font-size: 10px; padding: 0 5px; height: 14px; border-radius: 3px;
       background: rgba(139, 92, 246, 0.12); color: var(--working);
       font-family: var(--font-mono); font-weight: 600;
-      display: flex; align-items: center; white-space: nowrap; flex-shrink: 0;
+      display: flex; align-items: center; white-space: nowrap;
+      flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      max-width: 100px;
     }
-    /* Active tool indicator on session rows */
+    /* Active tool indicator — hidden for now (the overlay doesn't surface it
+       in the default row either). Keep the rule + JS update path so we can
+       re-enable later, but force-hide via CSS. */
     .row-tool {
-      font-family: var(--font-mono); font-size: 9px; color: var(--muted);
-      flex-shrink: 0; white-space: nowrap; max-width: 80px;
-      overflow: hidden; text-overflow: ellipsis;
+      display: none !important;
     }
-    .row-tool.tool-user { color: var(--waiting); }
     /* Gas Town hierarchy */
     .gt-agents-row {
       display: flex; align-items: center; gap: 8px;
@@ -686,172 +880,246 @@
     }
     .gt-workers { display: flex; flex-wrap: wrap; gap: 4px; }
 
-    /* --- Tabs --- */
-    .tab-bar {
-      display: flex;
-      gap: 0;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 12px;
-    }
-
-    .tab-btn {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      padding: 8px 16px;
-      background: none;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: var(--muted);
-      cursor: pointer;
-      transition: color 0.15s, border-color 0.15s;
-    }
-
-    .tab-btn:hover { color: var(--text); }
-
-    .tab-btn.active {
-      color: var(--text-bright);
-      border-bottom-color: var(--working);
-    }
-
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
-
-    #raw-panel pre {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 14px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      line-height: 1.5;
-      color: var(--text);
-      overflow: auto;
-      max-height: calc(100vh - 140px);
-      white-space: pre-wrap;
-      word-break: break-all;
-      tab-size: 2;
-    }
-
-    #raw-panel .raw-toolbar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 8px;
-    }
-
-    #raw-panel .raw-toolbar button {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      letter-spacing: 0.03em;
-      padding: 4px 10px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      color: var(--text);
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-
-    #raw-panel .raw-toolbar button:hover { background: var(--surface-hover); }
-    #raw-panel .raw-toolbar button.active { border-color: var(--working); color: var(--working); }
-
-    #raw-panel .raw-toolbar .raw-label {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      color: var(--muted);
-      letter-spacing: 0.03em;
-    }
-
-    /* Responsive */
+    /* Responsive — context bar is the load-bearing signal and never hides.
+       Breakpoints sized to the actual minimum width of fixed columns plus
+       gaps + padding (~400 px for everything visible; trim from there). */
     @media (max-width: 768px) {
       header { padding: 10px 14px; }
       main { padding: 10px 14px; }
-      .row-branch { max-width: 80px; }
-      .row-ctx-bar { width: 50px; }
-      .row-model { max-width: 80px; }
-      /* History bar is hidden on narrow; toggle controls visibility via JS */
-      .row-history { display: none; }
-      .view-mode-bar { display: flex; }
+      .row-model { max-width: 70px; }
+      .app-title .app-sep { display: none; }
     }
 
-    @media (max-width: 480px) {
-      header { flex-direction: column; align-items: flex-start; gap: 8px; }
+    @media (max-width: 420px) {
+      header { flex-wrap: wrap; gap: 8px; }
       main { padding: 8px 10px; }
-      .row-ctx-bar { display: none; }
-      .row-ctx-pct { display: none; }
+      .row-cost { display: none; }
+      .app-state-icons { display: none; }
     }
 
-    /* History view mode: hide meta columns, show history bar */
+    @media (max-width: 360px) {
+      .row-model { display: none; }
+    }
+
+    @media (max-width: 320px) {
+      .row-adapter-icon { display: none; }
+    }
+
+    /* Display modes — driven by the single header cycling button. Context is
+       the default (show meta columns, hide history bar); 1s/10s/60s history
+       modes swap that. body.view-history is the umbrella class for any
+       history granularity. */
+    .row-history { display: none; }
     body.view-history .row-ctx-bar { display: none !important; }
     body.view-history .row-ctx-pct { display: none !important; }
     body.view-history .row-cost    { display: none !important; }
     body.view-history .row-model   { display: none !important; }
     body.view-history .row-history { display: block !important; }
+
+    /* Settings-driven visibility (mirrors macOS SettingsView toggles).
+       - showCostDisplay: when off, hide the cost column (default on).
+       - debugMode: when off, hide the trailing row-id, row-elapsed, and
+         row-created chips (timestamps + ID are dev-only info, just like
+         the macOS overlay). */
+    body.no-cost .row-cost { display: none !important; }
+    body:not(.debug-mode) .row-id      { display: none !important; }
+    body:not(.debug-mode) .row-elapsed { display: none !important; }
+    body:not(.debug-mode) .row-created { display: none !important; }
+    .row-created {
+      font-size: 9px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      flex: 0 0 auto;
+    }
+
+    /* Settings modal */
+    .settings-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .settings-modal-backdrop.open { display: flex; }
+    .settings-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px 18px 14px;
+      width: 100%;
+      max-width: 420px;
+      max-height: calc(100vh - 48px);
+      overflow: auto;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+    }
+    .settings-modal h2 {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .settings-modal h2:not(:first-child) { margin-top: 14px; }
+    .settings-modal label {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 6px 4px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .settings-modal label:hover { background: var(--surface-hover); }
+    .settings-modal label input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 30px;
+      height: 16px;
+      border-radius: 8px;
+      background: var(--border);
+      position: relative;
+      cursor: pointer;
+      flex-shrink: 0;
+      margin-top: 1px;
+      transition: background 0.15s;
+    }
+    .settings-modal label input[type="checkbox"]::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--text-bright);
+      transition: left 0.15s, background 0.15s;
+    }
+    .settings-modal label input[type="checkbox"]:checked {
+      background: var(--working);
+    }
+    .settings-modal label input[type="checkbox"]:checked::after {
+      left: 16px;
+      background: #ffffff;
+    }
+    .settings-modal .settings-label-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .settings-modal .settings-label-text .settings-title { color: var(--text-bright); font-weight: 500; }
+    .settings-modal .settings-label-text .settings-hint { color: var(--muted); font-size: 11px; }
+    .settings-modal .settings-modal-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .settings-modal .settings-modal-footer .settings-perm-note {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      flex: 1;
+    }
+    .settings-modal .settings-modal-close {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 4px 12px;
+      cursor: pointer;
+    }
+    .settings-modal .settings-modal-close:hover { border-color: var(--working); color: var(--text-bright); }
   </style>
 </head>
 <body>
   <header>
     <div class="header-left">
-      <div class="logo">irr<span>licht</span></div>
-      <div class="summary" id="summary" aria-label="Session summary">
-        <div class="summary-item">
-          <div class="summary-dot" style="background:var(--working)"></div>
-          <span class="summary-count" id="cnt-working">0</span>
-        </div>
-        <div class="summary-item">
-          <div class="summary-dot" style="background:var(--waiting)"></div>
-          <span class="summary-count" id="cnt-waiting">0</span>
-        </div>
-        <div class="summary-item">
-          <div class="summary-dot" style="background:var(--ready)"></div>
-          <span class="summary-count" id="cnt-ready">0</span>
-        </div>
+      <div class="app-title">
+        <span class="app-name">Irrlicht</span>
+        <span class="app-version" id="app-version"></span>
+        <span class="app-sep">—</span>
       </div>
+      <div class="app-state-icons" id="app-state-icons" aria-label="Active sessions"></div>
     </div>
-    <div class="ws-status" role="status" aria-live="polite">
-      <div class="ws-ring connecting" id="ws-ring"></div>
-      <span id="ws-label">connecting</span>
+    <div class="header-right">
+      <button class="view-mode-cycle" id="view-mode-cycle" type="button"
+              title="Cycle Context / 1 Min / 10 Min / 60 Min">Context</button>
+      <button class="theme-toggle" id="theme-toggle" type="button"
+              title="Toggle light/dark theme" aria-label="Toggle theme">☾</button>
+      <button class="theme-toggle" id="settings-toggle" type="button"
+              title="Settings" aria-label="Settings">⚙</button>
+      <div class="ws-status" role="status" aria-live="polite">
+        <div class="ws-dot connecting" id="ws-dot"></div>
+        <span id="ws-label">connecting</span>
+      </div>
     </div>
   </header>
 
+  <div class="settings-modal-backdrop" id="settings-backdrop" role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="settings-modal">
+      <h2>Display</h2>
+      <label>
+        <input type="checkbox" data-setting="showCostDisplay">
+        <span class="settings-label-text">
+          <span class="settings-title">Show cost</span>
+          <span class="settings-hint">Display the per-session running cost in each row.</span>
+        </span>
+      </label>
+      <label>
+        <input type="checkbox" data-setting="debugMode">
+        <span class="settings-label-text">
+          <span class="settings-title">Debug mode</span>
+          <span class="settings-hint">Show session IDs and elapsed time in each row.</span>
+        </span>
+      </label>
+
+      <h2>Notifications</h2>
+      <label>
+        <input type="checkbox" data-setting="notifyOnReady">
+        <span class="settings-label-text">
+          <span class="settings-title">Notify when a session becomes ready</span>
+          <span class="settings-hint">A finished turn is ready for your next prompt.</span>
+        </span>
+      </label>
+      <label>
+        <input type="checkbox" data-setting="notifyOnWaiting">
+        <span class="settings-label-text">
+          <span class="settings-title">Notify when a session is waiting on me</span>
+          <span class="settings-hint">The agent asked a question or paused for approval.</span>
+        </span>
+      </label>
+      <label>
+        <input type="checkbox" data-setting="notifyOnContextPressure">
+        <span class="settings-label-text">
+          <span class="settings-title">Notify on context pressure</span>
+          <span class="settings-hint">Heads-up when a session approaches its context limit.</span>
+        </span>
+      </label>
+
+      <div class="settings-modal-footer">
+        <span class="settings-perm-note" id="settings-perm-note"></span>
+        <button class="settings-modal-close" id="settings-close" type="button">Done</button>
+      </div>
+    </div>
+  </div>
+
   <main>
-    <div class="tab-bar">
-      <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-      <button class="tab-btn" data-tab="raw">Raw</button>
+    <div id="connection-banner" role="alert" aria-live="polite"></div>
+    <div id="gt-container" style="display:none" aria-label="Gas Town"></div>
+    <div id="empty-state">
+      <div class="empty-dot"></div>
+      <p>awaiting sessions</p>
     </div>
-
-    <div id="dashboard-panel" class="tab-panel active">
-      <div id="gt-container" style="display:none" aria-label="Gas Town"></div>
-      <div class="view-mode-bar">
-        <button class="view-mode-btn active" data-mode="meta">Context/Cost/Model</button>
-        <button class="view-mode-btn" data-mode="history">History</button>
-      </div>
-      <div id="timeline-wrap">
-        <div class="timeline-controls">
-          <span class="timeline-gran-label">Interval:</span>
-          <button class="timeline-gran-btn active" data-gran="1">1s</button>
-          <button class="timeline-gran-btn" data-gran="10">10s</button>
-          <button class="timeline-gran-btn" data-gran="60">60s</button>
-        </div>
-        <canvas id="timeline"></canvas>
-      </div>
-      <div id="empty-state">
-        <div class="empty-dot"></div>
-        <p>awaiting sessions</p>
-      </div>
-      <div class="session-list" id="session-list" aria-live="polite"></div>
-    </div>
-
-    <div id="raw-panel" class="tab-panel">
-      <div class="raw-toolbar">
-        <span class="raw-label">Endpoint:</span>
-        <button class="active" data-raw-src="sessions">/api/v1/sessions</button>
-        <button id="raw-refresh" title="Refresh">refresh</button>
-      </div>
-      <pre id="raw-output">Loading…</pre>
-    </div>
+    <div class="session-list" id="session-list" aria-live="polite"></div>
   </main>
 
   <script>
@@ -864,7 +1132,182 @@
     // registry is essentially static (changes require a daemon restart).
     let agentRegistry = {};
     let sessionIndex = new Map();
+    // Collapsed group names persist across reloads so a deliberate collapse
+    // survives a refresh. Restored from localStorage on load.
     let collapsedGroups = new Set();
+    try {
+      const raw = localStorage.getItem('irrlicht_collapsedGroups');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) collapsedGroups = new Set(parsed.filter(s => typeof s === 'string'));
+      }
+    } catch (e) {}
+    function persistCollapsedGroups() {
+      try { localStorage.setItem('irrlicht_collapsedGroups', JSON.stringify([...collapsedGroups])); } catch (e) {}
+    }
+
+    // --- Theme ---
+    // The explicit override (localStorage["irrlicht_theme"] = "light" | "dark")
+    // sets data-theme on <html>, which the CSS @media (prefers-color-scheme)
+    // rules respect. Absent override → follow OS preference.
+    const themeKey = 'irrlicht_theme';
+    function storedTheme() {
+      const t = localStorage.getItem(themeKey);
+      return (t === 'light' || t === 'dark') ? t : null;
+    }
+    function resolvedTheme() {
+      const t = storedTheme();
+      if (t) return t;
+      return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+    }
+    function applyStoredTheme() {
+      const t = storedTheme();
+      if (t) document.documentElement.setAttribute('data-theme', t);
+      else document.documentElement.removeAttribute('data-theme');
+      updateThemeToggleGlyph();
+    }
+    function updateThemeToggleGlyph() {
+      const btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      // ☀ when current theme is dark (clicking switches to light)
+      // ☾ when current theme is light (clicking switches to dark)
+      btn.textContent = resolvedTheme() === 'dark' ? '☀' : '☾';
+    }
+    function toggleTheme() {
+      const next = resolvedTheme() === 'dark' ? 'light' : 'dark';
+      localStorage.setItem(themeKey, next);
+      applyStoredTheme();
+      // Re-render so adapter icons pick up the new light/dark variant.
+      for (const el of document.querySelectorAll('.session-row')) {
+        el.dataset.adapterPopulated = '0';
+      }
+      render();
+    }
+    applyStoredTheme();
+    if (window.matchMedia) {
+      const mq = window.matchMedia('(prefers-color-scheme: light)');
+      const onChange = () => {
+        if (!storedTheme()) { updateThemeToggleGlyph(); render(); }
+      };
+      if (mq.addEventListener) mq.addEventListener('change', onChange);
+      else if (mq.addListener) mq.addListener(onChange);
+    }
+
+    // --- Display mode (Context / 1 Min / 10 Min / 60 Min) ---
+    // Single cycling toggle in the header replaces the standalone view-mode
+    // bar and the timeline-granularity buttons. Mirrors overlay's
+    // DisplayMode enum at SessionListView.swift:148.
+    const DISPLAY_MODES = [
+      { key: 'context', label: 'Context', isHistory: false, granularity: 1  },
+      { key: '1min',    label: '1 Min',   isHistory: true,  granularity: 1  },
+      { key: '10min',   label: '10 Min',  isHistory: true,  granularity: 10 },
+      { key: '60min',   label: '60 Min',  isHistory: true,  granularity: 60 },
+    ];
+    let currentDisplayMode = localStorage.getItem('irrlicht_displayMode') || 'context';
+    if (!DISPLAY_MODES.find(m => m.key === currentDisplayMode)) currentDisplayMode = 'context';
+    function currentMode() {
+      return DISPLAY_MODES.find(m => m.key === currentDisplayMode) || DISPLAY_MODES[0];
+    }
+    function applyDisplayMode() {
+      const m = currentMode();
+      const btn = document.getElementById('view-mode-cycle');
+      if (btn) {
+        btn.textContent = m.label;
+        btn.classList.toggle('history', m.isHistory);
+      }
+      document.body.classList.toggle('view-history', m.isHistory);
+      if (m.isHistory) applyGranularity(m.granularity);
+      // Repaint so the timeline panel and per-row history canvases match the
+      // new mode (canvases need offsetWidth>0 before painting; the panel
+      // hides outside history modes).
+      repaintHistory();
+    }
+    function cycleDisplayMode() {
+      const idx = DISPLAY_MODES.findIndex(m => m.key === currentDisplayMode);
+      currentDisplayMode = DISPLAY_MODES[(idx + 1) % DISPLAY_MODES.length].key;
+      localStorage.setItem('irrlicht_displayMode', currentDisplayMode);
+      applyDisplayMode();
+    }
+
+    // --- Settings ---
+    // Mirrors the macOS app's SettingsView (platforms/macos/Irrlicht/Views/
+    // SettingsView.swift). Defaults match @AppStorage defaults in Swift:
+    // showCostDisplay defaults on; debug + notify toggles default off.
+    // `launchAtLogin` and per-event sound pickers don't apply to the web view.
+    const SETTINGS_KEY = 'irrlicht_settings';
+    const SETTINGS_DEFAULTS = {
+      debugMode: false,
+      showCostDisplay: true,
+      notifyOnReady: false,
+      notifyOnWaiting: false,
+      notifyOnContextPressure: false,
+    };
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (!raw) return Object.assign({}, SETTINGS_DEFAULTS);
+        const parsed = JSON.parse(raw);
+        return Object.assign({}, SETTINGS_DEFAULTS, (parsed && typeof parsed === 'object') ? parsed : {});
+      } catch (e) {
+        return Object.assign({}, SETTINGS_DEFAULTS);
+      }
+    }
+    let settings = loadSettings();
+    function persistSettings() {
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+    }
+    function applySettings() {
+      document.body.classList.toggle('no-cost', !settings.showCostDisplay);
+      document.body.classList.toggle('debug-mode', !!settings.debugMode);
+    }
+    applySettings();
+
+    // --- Notifications ---
+    // tryNotify gates browser notifications behind: matching settings toggle,
+    // permission grant, and tab being hidden (so we don't ping while the user
+    // is actively looking at the dashboard). Mirrors what the macOS app would
+    // surface via UNUserNotificationCenter.
+    const lastNotifiedPressure = new Map();
+    function tryNotify(toggleKey, title, body) {
+      if (!settings[toggleKey]) return;
+      if (typeof Notification === 'undefined') return;
+      if (Notification.permission !== 'granted') return;
+      if (document.visibilityState === 'visible') return;
+      try { new Notification(title, { body: body || '', tag: 'irrlicht-' + toggleKey, silent: false }); } catch (e) {}
+    }
+    function rowLabel(s) {
+      // Best-effort "project · branch" label that matches what the row shows.
+      const proj = s && s.project_name ? s.project_name : '';
+      const branch = s && s.git_branch ? s.git_branch : '';
+      if (proj && branch) return proj + ' · ' + branch;
+      return proj || branch || (s && s.session_id ? s.session_id.slice(0, 8) : 'session');
+    }
+    function maybeNotifyOnUpdate(prev, next) {
+      if (!next) return;
+      const prevState    = prev ? prev.state : '';
+      const prevPressure = (prev && prev.metrics) ? prev.metrics.pressure_level : '';
+      const nextState    = next.state || '';
+      const nextPressure = (next.metrics && next.metrics.pressure_level) || '';
+      const sid          = next.session_id;
+      const label        = rowLabel(next);
+
+      if (nextState === 'ready' && prevState !== 'ready') {
+        tryNotify('notifyOnReady', 'Session ready', label);
+      } else if (nextState === 'waiting' && prevState !== 'waiting') {
+        tryNotify('notifyOnWaiting', 'Awaiting input', label);
+      }
+
+      const isHigh = nextPressure === 'warning' || nextPressure === 'critical';
+      const wasHigh = prevPressure === 'warning' || prevPressure === 'critical';
+      const lastFor = sid ? lastNotifiedPressure.get(sid) : null;
+      if (isHigh && (!wasHigh || lastFor !== nextPressure)) {
+        const title = nextPressure === 'critical' ? 'Context pressure: critical' : 'Context pressure: high';
+        tryNotify('notifyOnContextPressure', title, label + ' — switch to a fresh session soon');
+        if (sid) lastNotifiedPressure.set(sid, nextPressure);
+      } else if (!isHigh && sid && lastNotifiedPressure.has(sid)) {
+        lastNotifiedPressure.delete(sid);
+      }
+    }
 
     // --- Cost timeframes ---
     const COST_TIMEFRAMES = [
@@ -878,8 +1321,9 @@
 
     // --- Timeline / history state (WebSocket-streamed, see history_snapshot/tick/upgrade) ---
     let timelineHistory = new Map(); // session_id -> {label, states: string[]} for the active granularity
-    let currentGranularity = parseInt(localStorage.getItem('irrlicht_granularity') || '1', 10);
-    if (![1, 10, 60].includes(currentGranularity)) currentGranularity = 1;
+    // Derived from the display-mode cycle (`currentMode().granularity`); see
+    // applyDisplayMode → applyGranularity below.
+    let currentGranularity = 1;
     let currentBucketCount = 60;
     // historyByGranularity[g][sessionID] is a 60-element oldest→newest array of state names
     // (or "" for no-data buckets). Mirrored from the daemon's bit-packed wire format.
@@ -996,7 +1440,7 @@
 
     // --- SVG Icons (compact 12px) ---
     const svgIcons = {
-      working: '<svg class="working" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8B5CF6" stroke-width="1.5" stroke-dasharray="4 3"/></svg>',
+      working: '<svg viewBox="0 0 16 16" fill="none"><circle class="core" cx="8" cy="8" r="8" fill="#8B5CF6"/></svg>',
       waiting: '<svg viewBox="0 0 16 16" fill="none"><rect x="4" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/><rect x="9.5" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/></svg>',
       ready: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#34C759" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="#34C759" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
       cancelled: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8E8E93" stroke-width="1.5"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/></svg>',
@@ -1106,14 +1550,52 @@
       var entry = sessionIndex.get(s.session_id);
       if (entry) {
         var a = entry.agent;
+        // Capture previous state + pressure before merging so we can fire
+        // notifications on the transition (web parity for the menu-bar app's
+        // ready/waiting/pressure alerts).
+        var prevSnap = { state: a.state, metrics: a.metrics ? { pressure_level: a.metrics.pressure_level } : null };
         var role = a.role, wn = a.worker_name, wid = a.worker_id, ch = a.children;
         Object.assign(a, s);
         if (role && !a.role) a.role = role;
         if (wn && !a.worker_name) a.worker_name = wn;
         if (wid && !a.worker_id) a.worker_id = wid;
         a.children = ch;
+        // Migrate the agent if its project_name now points at a different
+        // group than where it currently lives. Without this, sessions whose
+        // first WS push arrived before metadata enrichment landed (empty
+        // project_name → "unknown" bucket) stay stranded there forever even
+        // after later updates carry the correct name. Children inherit their
+        // parent's group, so only migrate top-level entries.
+        if (!entry.parent) {
+          var desired = a.project_name || 'unknown';
+          if (entry.group.name !== desired) {
+            var oldGroup = entry.group;
+            var ai = oldGroup.agents.findIndex(x => x.session_id === s.session_id);
+            if (ai >= 0) oldGroup.agents.splice(ai, 1);
+            var target = dashboardGroups.find(g => g.name === desired);
+            if (!target) {
+              target = {name: desired, agents: []};
+              dashboardGroups.push(target);
+            }
+            target.agents.push(a);
+            entry.group = target;
+            // Children's sessionIndex entries still point at the old group;
+            // refresh them so any future site that reads child.entry.group
+            // (e.g. a parent-deletion cleanup that drills into children)
+            // doesn't follow a reference to a group we just spliced out.
+            indexChildren(target, a);
+            if (oldGroup.agents.length === 0) {
+              var gi = dashboardGroups.indexOf(oldGroup);
+              if (gi >= 0) dashboardGroups.splice(gi, 1);
+            }
+          }
+        }
+        maybeNotifyOnUpdate(prevSnap, a);
         return;
       }
+      // First sight of this session — treat any non-trivial state as a
+      // transition for notification purposes.
+      maybeNotifyOnUpdate(null, s);
       var groupName = s.project_name || 'unknown';
       var group = dashboardGroups.find(g => g.name === groupName);
       if (!group) {
@@ -1139,6 +1621,9 @@
       delete historyByGranularity[1][sessionId];
       delete historyByGranularity[10][sessionId];
       delete historyByGranularity[60][sessionId];
+      // Plug the slow leak — without this, the notify-dedupe map keeps
+      // entries for deleted sessions indefinitely.
+      lastNotifiedPressure.delete(sessionId);
       if (!entry) return;
       sessionIndex.delete(sessionId);
       if (entry.parent) {
@@ -1297,12 +1782,24 @@
       }
     }
 
+    // Writes the row-num slot: if updateSessionRow flagged an icon override
+    // (agent.icon set, agent.role empty), show the icon glyph instead of the
+    // numeric agent number. Matches macOS at SessionListView.swift:469-479.
+    function paintRowNum(el, num) {
+      const numEl = el.querySelector('.row-num');
+      if (!numEl) return;
+      const icon = numEl.dataset.iconOverride || '';
+      const desired = icon || String(num);
+      if (numEl.textContent !== desired) numEl.textContent = desired;
+    }
+
     // --- Create/Update functions for session rows ---
     function createGroupHeader(group) {
       const el = document.createElement('div');
       el.className = 'group-hdr';
+      // Anatomy mirrors overlay GroupView at SessionListView.swift:871:
+      // chevron + name + per-day cost on the left, session count on the right.
       el.innerHTML = '<span class="group-chevron">\u25BE</span>' +
-        '<span class="group-dot"></span>' +
         '<span class="group-name"></span>' +
         '<span class="group-cost" title="Click to cycle time frame"></span>' +
         '<span class="group-count"></span>';
@@ -1312,6 +1809,7 @@
         } else {
           collapsedGroups.add(group.name);
         }
+        persistCollapsedGroups();
         render();
       });
       const costEl = el.querySelector('.group-cost');
@@ -1331,7 +1829,12 @@
     }
 
     function updateGroupHeader(el, group) {
-      el.querySelector('.group-name').textContent = group.name;
+      // Gas Town groups get a ⛽ glyph prefix on the title — matches macOS
+      // group-title rendering at SessionListView.swift:945.
+      const isGastown = group.type === 'gastown';
+      const desiredName = (isGastown ? '⛽ ' : '') + (group.name || '');
+      const nameEl = el.querySelector('.group-name');
+      if (nameEl.textContent !== desiredName) nameEl.textContent = desiredName;
       const tf = COST_TIMEFRAMES.find(t => t.key === currentTimeframe) || COST_TIMEFRAMES[0];
       const windowed = group.costs ? group.costs[currentTimeframe] : undefined;
       // Hide the cost until the daemon has windowed data for this project —
@@ -1340,22 +1843,16 @@
       const costText = (typeof windowed === 'number' && windowed > 0)
         ? formatCost(windowed) + tf.suffix
         : '';
-      el.querySelector('.group-cost').textContent = costText;
+      const costEl = el.querySelector('.group-cost');
+      if (costEl.textContent !== costText) costEl.textContent = costText;
       const totalAgents = group.agents.length + group.agents.reduce((n, a) => n + (a.children ? a.children.length : 0), 0);
-      el.querySelector('.group-count').textContent = totalAgents + (totalAgents === 1 ? ' agent' : ' agents');
+      const countText = totalAgents + (totalAgents === 1 ? ' session' : ' sessions');
+      const countEl = el.querySelector('.group-count');
+      if (countEl.textContent !== countText) countEl.textContent = countText;
 
       const isCollapsed = collapsedGroups.has(group.name);
       const chevron = el.querySelector('.group-chevron');
       chevron.classList.toggle('collapsed', isCollapsed);
-
-      // Dot color based on max context utilization
-      const maxCtx = groupMaxPressure(group);
-      const dot = el.querySelector('.group-dot');
-      let dotColor = 'var(--ready)';
-      if (maxCtx > 90) dotColor = 'var(--pressure-high)';
-      else if (maxCtx > 75) dotColor = 'var(--pressure-medium)';
-      else if (maxCtx > 50) dotColor = 'var(--waiting)';
-      dot.style.background = dotColor;
 
       // Update the click handler's group reference
       el._group = group;
@@ -1365,24 +1862,28 @@
       const el = document.createElement('div');
       el.className = 'session-row' + (isChild ? ' child' : '');
       el.dataset.sessionId = agent.session_id;
-      // Build inner structure
+      // Slot order mirrors the overlay row anatomy
+      // (issue #354; assets/overlay-reference.png):
+      // 1 state · 2 project/branch · 3 context-bar · 4 tokens · 5 cost ·
+      // 6 model · 7 adapter icon. Extras (role badge, in-progress task dots,
+      // waiting question, active-tool label, elapsed/id, history canvas) are
+      // tucked between the primary slots with `display:none` until populated.
       el.innerHTML =
         '<span class="row-state-icon"></span>' +
-        '<span class="row-adapter-icon" style="display:none"></span>' +
-        '<span class="row-role-badge" style="display:none"></span>' +
         '<span class="row-num"></span>' +
         '<span class="row-sub-badge" style="display:none"></span>' +
+        '<span class="row-role-badge" style="display:none"></span>' +
         '<span class="row-branch"></span>' +
-        '<span class="row-question" style="display:none"></span>' +
-        '<div class="row-tasks" style="display:none"></div>' +
-        '<span class="row-ctx-bar"><span class="row-ctx-fill"></span></span>' +
+        '<span class="row-tool" style="display:none"></span>' +
+        '<span class="row-ctx-bar"><span class="row-ctx-fill"></span><span class="row-ctx-label"></span></span>' +
         '<span class="row-ctx-pct"></span>' +
         '<span class="row-cost"></span>' +
-        '<span class="row-tool" style="display:none"></span>' +
-        '<span class="row-spacer"></span>' +
         '<canvas class="row-history"></canvas>' +
+        '<span class="row-spacer"></span>' +
         '<span class="row-model"></span>' +
+        '<span class="row-adapter-icon" style="display:none"></span>' +
         '<span class="row-elapsed"></span>' +
+        '<span class="row-created"></span>' +
         '<span class="row-id"></span>';
       updateSessionRow(el, agent, isChild);
       return el;
@@ -1412,7 +1913,8 @@
       // disambiguate, so a missing icon doesn't impair the row's meaning.
       // The dataset cache only advances on a successful populate so a
       // late-arriving registry repopulates rows on the next update without
-      // needing a full re-render.
+      // needing a full re-render. The cache also keys on the current theme
+      // so toggling light/dark re-renders the icon with the matching variant.
       //
       // SVGs are rendered inside an <img> with a base64 data: URL rather
       // than via innerHTML. The browser's image-loading sandbox blocks
@@ -1423,10 +1925,18 @@
       // btoa(unescape(encodeURIComponent(svg))).)
       const adapterKey = agent.adapter || '';
       const cachedAdapter = el.dataset.adapter || '';
+      const cachedTheme = el.dataset.adapterTheme || '';
+      const theme = resolvedTheme();
       const branding = agentRegistry[adapterKey];
-      if (branding && (cachedAdapter !== adapterKey || el.dataset.adapterPopulated !== '1')) {
+      const themeChanged = cachedTheme !== theme;
+      if (branding && (cachedAdapter !== adapterKey || el.dataset.adapterPopulated !== '1' || themeChanged)) {
         const adapterEl = el.querySelector('.row-adapter-icon');
-        const svg = branding.icon_svg_light || '';
+        // icon_svg_light is meant for LIGHT theme (dark strokes on white);
+        // icon_svg_dark is meant for DARK theme (light strokes on dark).
+        // The Codex icon strokes near-black/near-white, so the wrong pick
+        // makes it disappear into the background (issue #354 round-4).
+        const svg = (theme === 'light' ? (branding.icon_svg_light || branding.icon_svg_dark)
+                                       : (branding.icon_svg_dark || branding.icon_svg_light)) || '';
         if (svg) {
           adapterEl.innerHTML = '<img alt="" src="data:image/svg+xml;base64,' + btoa(svg) + '">';
           adapterEl.title = branding.display_name || adapterKey;
@@ -1436,6 +1946,7 @@
           adapterEl.style.display = 'none';
         }
         el.dataset.adapter = adapterKey;
+        el.dataset.adapterTheme = theme;
         el.dataset.adapterPopulated = '1';
       } else if (!branding && cachedAdapter !== adapterKey) {
         const adapterEl = el.querySelector('.row-adapter-icon');
@@ -1448,49 +1959,32 @@
       // Agent number — set from outside via data attribute
       // (set by render loop)
 
-      // Subagent badge
-      const subCount = activeSubagentCount(agent);
-      const badge = el.querySelector('.row-sub-badge');
-      if (subCount > 0) {
-        badge.style.display = '';
-        badge.textContent = subCount;
-      } else {
-        badge.style.display = 'none';
-      }
-
       // Branch
       const branchEl = el.querySelector('.row-branch');
       if (branchEl.textContent !== branch) branchEl.textContent = branch || '\u2014';
 
       // Waiting question — show last assistant text when waiting
-      const questionEl = el.querySelector('.row-question');
-      const questionText = (state === 'waiting' && metrics.last_assistant_text) ?
-        (metrics.last_assistant_text.length > 100 ? metrics.last_assistant_text.slice(0, 100) + '\u2026' : metrics.last_assistant_text) : '';
-      if (questionText) {
-        questionEl.style.display = '';
-        if (questionEl.textContent !== questionText) {
-          questionEl.textContent = questionText;
-          questionEl.title = metrics.last_assistant_text;
-        }
-      } else {
-        questionEl.style.display = 'none';
-      }
+      // (waiting question now renders in its own row beneath the parent;
+      // see createQuestionRow / render() emit.)
 
-      // Task progress dots (Claude Code TaskCreate / TaskUpdate)
-      const tasksEl = el.querySelector('.row-tasks');
-      const tasks = metrics.tasks;
-      const allDone = tasks && tasks.length > 0 && tasks.every(t => t.status === 'completed');
-      if (tasks && tasks.length > 0 && !allDone) {
-        tasksEl.style.display = '';
-        const done = tasks.filter(t => t.status === 'completed').length;
-        const taskLabel = (t) => (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
-        const newHtml = tasks.map(t => {
-          const tip = taskLabel(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-          return '<span class="task-dot task-' + (t.status || 'pending') + '" title="' + tip + '"></span>';
-        }).join('') + '<span class="row-task-count">' + done + ' / ' + tasks.length + '</span>';
-        if (tasksEl.innerHTML !== newHtml) tasksEl.innerHTML = newHtml;
+      // Task progress dots render in a separate row beneath the parent
+      // (see createTaskListRow / render() emit). Mirrors TaskListView in
+      // SessionListView.swift:746–769.
+
+      // Subagent count badge — small filled circle next to the working
+      // icon when the parent has active sub-agents. Mirrors macOS at
+      // SessionListView.swift:481-490. Toggling .has-sub on the row
+      // shrinks the branch column so columns downstream still align with
+      // rows that don't have a badge.
+      const subBadge = el.querySelector('.row-sub-badge');
+      const activeSubs = activeSubagentCount(agent);
+      if (activeSubs > 0) {
+        subBadge.style.display = '';
+        if (subBadge.textContent !== String(activeSubs)) subBadge.textContent = String(activeSubs);
+        el.classList.add('has-sub');
       } else {
-        tasksEl.style.display = 'none';
+        subBadge.style.display = 'none';
+        el.classList.remove('has-sub');
       }
 
       // Context bar
@@ -1499,14 +1993,20 @@
       if (fill.style.width !== ctxWidth) fill.style.width = ctxWidth;
       fill.className = 'row-ctx-fill ' + pressureClass(pressure);
 
-      // Context %
-      const pctEl = el.querySelector('.row-ctx-pct');
+      // Token count — rendered as an overlay inside the context bar so
+      // the row stays compact (mirrors macOS ContextBar's `label` slot at
+      // SessionListView.swift:432-439). The standalone .row-ctx-pct lives
+      // on only when Settings hides the cost column (showCostDisplay off),
+      // in which case it shows the % utilization instead.
       const totalTok = metrics.total_tokens || 0;
-      const pctText = ctxPct > 0 ? ctxPct.toFixed(0) + '%'
-        : (pressure === 'unknown' && totalTok > 0) ? formatTokens(totalTok) + ' / ?' : '';
+      const labelEl = el.querySelector('.row-ctx-label');
+      const labelText = totalTok > 0 ? formatTokens(totalTok) : '';
+      if (labelEl.textContent !== labelText) labelEl.textContent = labelText;
+
+      const pctEl = el.querySelector('.row-ctx-pct');
+      const pctText = ctxPct > 0 ? ctxPct.toFixed(0) + '%' : '';
       if (pctEl.textContent !== pctText) pctEl.textContent = pctText;
-      pctEl.style.color = ctxPct > 0 ? pressureColor(pressure)
-        : (pressure === 'unknown' && totalTok > 0) ? '#8E8E93' : '';
+      pctEl.style.color = ctxPct > 0 ? pressureColor(pressure) : '';
 
       // Cost
       const costEl = el.querySelector('.row-cost');
@@ -1523,20 +2023,42 @@
       elapsedEl.dataset.elapsedStored = metrics.elapsed_seconds || '';
       elapsedEl.dataset.active = isActive ? '1' : '0';
 
+      // Created chip — only stamp the first_seen on the element; the 1s
+      // tickElapsed loop owns the textContent. first_seen is immutable per
+      // session so this is a constant after row creation.
+      const createdEl = el.querySelector('.row-created');
+      if (createdEl) {
+        const fs = String(agent.first_seen || '');
+        if (createdEl.dataset.firstSeen !== fs) {
+          createdEl.dataset.firstSeen = fs;
+          if (!fs) createdEl.textContent = '';
+        }
+      }
+
       // Short ID
       const idEl = el.querySelector('.row-id');
       const sid = shortID(agent.session_id);
       if (idEl.textContent !== sid) idEl.textContent = sid;
 
-      // Role badge — icon and description come from the API (agent.icon, agent.description).
+      // Role badge — icon + role name when both are present. When only an
+      // icon is set (no role string), the icon replaces the agent number in
+      // .row-num — matches macOS at SessionListView.swift:469-479. The
+      // render loop puts the numeric agentNum into .row-num after this fn
+      // returns, so we set a flag the loop reads back.
       const roleBadge = el.querySelector('.row-role-badge');
       const role = agent.role || '';
+      const numEl = el.querySelector('.row-num');
+      const wantIcon = (!role && agent.icon) ? agent.icon : '';
       if (role) {
         roleBadge.style.display = '';
         roleBadge.textContent = (agent.icon ? agent.icon + ' ' : '') + role;
         roleBadge.title = agent.description || role;
       } else {
         roleBadge.style.display = 'none';
+        if (wantIcon) numEl.title = agent.description || '';
+      }
+      if ((numEl.dataset.iconOverride || '') !== wantIcon) {
+        numEl.dataset.iconOverride = wantIcon;
       }
 
       // Active tool label — shown only when agent is working and inside a tool call.
@@ -1552,9 +2074,9 @@
         toolEl.style.display = 'none';
       }
 
-      // Per-row history bar
-      const histCanvas = el.querySelector('.row-history');
-      paintRowHistory(histCanvas, agent.session_id);
+      // Per-row history canvas is repainted by repaintHistory() on the
+      // history-event WS path — no need to repaint here on every session
+      // update (data didn't change).
     }
 
     // --- Render ---
@@ -1564,27 +2086,11 @@
       const list = document.getElementById('session-list');
       const empty = document.getElementById('empty-state');
 
-      // Sort
-      const stateOrder = ['working', 'waiting', 'ready'];
-      function agentSort(a, b) {
-        const ai = stateOrder.indexOf(a.state);
-        const bi = stateOrder.indexOf(b.state);
-        if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-        return (b.updated_at || 0) - (a.updated_at || 0);
-      }
-      function groupPriority(g) {
-        let best = 99;
-        for (const a of g.agents) {
-          const i = stateOrder.indexOf(a.state);
-          if (i >= 0 && i < best) best = i;
-        }
-        return best;
-      }
-      dashboardGroups.sort((a, b) => {
-        const pa = groupPriority(a), pb = groupPriority(b);
-        if (pa !== pb) return pa - pb;
-        return a.name.localeCompare(b.name);
-      });
+      // Ordering: trust the daemon. /api/v1/sessions ships groups + agents
+      // in a stable order; WS deltas only append. Sorting by state on every
+      // render makes rows jump as sessions transition (working→ready), which
+      // the macOS overlay doesn't do (SessionListView.swift:994 iterates
+      // group.agents straight). Match that.
 
       if (dashboardGroups.length === 0) {
         empty.style.display = 'flex';
@@ -1602,7 +2108,6 @@
             items.push({type: 'group', key: 'g:' + g.name, group: g});
           }
           if (!collapsedGroups.has(g.name)) {
-            g.agents.sort(agentSort);
             for (const a of g.agents) {
               agentNum++;
               items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false});
@@ -1612,8 +2117,24 @@
               if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
                 items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
               }
-              for (const sub of (a.children || [])) {
-                items.push({type: 'agent', key: 'a:' + sub.session_id, agent: sub, num: '', isChild: true});
+              // Waiting question — separate row beneath the parent (matches
+              // SessionListView.swift:588-604). Renders only while the
+              // session is in 'waiting' AND has a last_assistant_text.
+              if (a.state === 'waiting' && a.metrics && a.metrics.last_assistant_text) {
+                items.push({type: 'question', key: 'q:' + a.session_id, agent: a, isChild: false});
+              }
+              // Task progress dots — separate row beneath the parent so they
+              // don't push the meta columns off the session row. Matches the
+              // overlay's TaskListView placement (SessionListView.swift:629-632).
+              const tasks = (a.metrics && a.metrics.tasks) || [];
+              const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
+              if (tasksOpen) {
+                items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
+              }
+              // Sub-agents render as a dot matrix under the parent (replaces
+              // per-child rows). Issue #354.
+              if (a.children && a.children.length > 0) {
+                items.push({type: 'submatrix', key: 'sm:' + a.session_id, agent: a, isChild: false});
               }
             }
           }
@@ -1625,30 +2146,42 @@
           item => {
             if (item.type === 'group') return createGroupHeader(item.group);
             if (item.type === 'alert') return createAlertRow(item.pressure);
+            if (item.type === 'submatrix') return createSubMatrixRow(item.agent, item.isChild);
+            if (item.type === 'tasks') return createTaskListRow(item.agent, item.isChild);
+            if (item.type === 'question') return createQuestionRow(item.agent, item.isChild);
             const el = createSessionRow(item.agent, item.isChild);
-            el.querySelector('.row-num').textContent = item.num;
+            paintRowNum(el, item.num);
             return el;
           },
           (el, item) => {
             if (item.type === 'group') { updateGroupHeader(el, item.group); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
+            if (item.type === 'submatrix') { updateSubMatrixRow(el, item.agent); return; }
+            if (item.type === 'tasks') { updateTaskListRow(el, item.agent); return; }
+            if (item.type === 'question') { updateQuestionRow(el, item.agent); return; }
             updateSessionRow(el, item.agent, item.isChild);
-            el.querySelector('.row-num').textContent = item.num;
+            paintRowNum(el, item.num);
             el.className = 'session-row' + (item.isChild ? ' child' : '');
           }
         );
       }
 
-      // Summary counts
+      // Summary: header state icons. Iterate top-level sessions in render
+      // order (groups sorted, agents sorted) so the icon order matches the
+      // visible row order.
       const all = [];
+      const topLevel = [];
       function collectAll(agents) {
         for (const a of agents) {
           all.push(a);
           if (a.children) collectAll(a.children);
         }
       }
-      for (const g of dashboardGroups) collectAll(g.agents);
-      updateSummary(all);
+      for (const g of dashboardGroups) {
+        for (const a of g.agents) topLevel.push(a);
+        collectAll(g.agents);
+      }
+      updateSummary(all, topLevel);
     }
 
     function createAlertRow(pressure) {
@@ -1663,16 +2196,132 @@
       el.innerHTML = '<span class="' + cls + '">\u26A0 Switch to a fresh session soon</span>';
     }
 
-    function updateSummary(list) {
-      let w = 0, wa = 0, r = 0;
-      for (const s of list) {
-        if (s.state === 'working') w++;
-        else if (s.state === 'waiting') wa++;
-        else if (s.state === 'ready') r++;
+    // Subagent dot-matrix indicator. Rendered under a parent session row
+    // when it has sub-agents (children[]). Open circles = pending,
+    // filled = settled. Mirrors the inline indicator visible in
+    // assets/overlay-reference.png under row 2.
+    // Shared factory for trailing-row variants rendered beneath the parent
+    // session row (tasks, submatrix, question).
+    function makeRow(className, innerHTML, agent, update, isChild) {
+      const el = document.createElement('div');
+      el.className = className + (isChild ? ' child' : '');
+      if (innerHTML) el.innerHTML = innerHTML;
+      update(el, agent);
+      return el;
+    }
+
+    function createSubMatrixRow(agent, isChild) {
+      return makeRow('sub-matrix-row',
+        '<span class="sub-matrix-counter"></span><div class="sub-matrix-dots"></div>',
+        agent, updateSubMatrixRow, isChild);
+    }
+
+    function updateSubMatrixRow(el, agent) {
+      const children = agent.children || [];
+      const total = children.length;
+      if (total === 0) { el.style.display = 'none'; return; }
+      el.style.display = '';
+      const settled = children.filter(c => c.state === 'ready').length;
+      // Cache the (settled,total) pair so we don't burn an innerHTML write on
+      // every render tick when nothing has changed.
+      const sig = settled + '/' + total;
+      if (el.dataset.sig !== sig) {
+        el.dataset.sig = sig;
+        el.querySelector('.sub-matrix-counter').textContent = settled + ' / ' + total;
+        const dots = el.querySelector('.sub-matrix-dots');
+        // Bound to a sane cap to avoid pathological DOM growth on a runaway
+        // agent \u2014 the screenshot reference goes up to 96, so 1000 is a
+        // generous ceiling that still renders inside one CSS grid.
+        const cap = Math.min(total, 1000);
+        const filled = Math.min(settled, cap);
+        let html = '';
+        for (let i = 0; i < filled; i++) html += '<span class="sub-matrix-dot settled"></span>';
+        for (let i = filled; i < cap; i++) html += '<span class="sub-matrix-dot open"></span>';
+        dots.innerHTML = html;
       }
-      document.getElementById('cnt-working').textContent = w;
-      document.getElementById('cnt-waiting').textContent = wa;
-      document.getElementById('cnt-ready').textContent = r;
+    }
+
+    // Task progress strip \u2014 rendered under a parent session row when the
+    // session has in-progress TaskCreate/TaskUpdate tasks. Mirrors
+    // TaskListView at SessionListView.swift:746-769.
+    function createTaskListRow(agent, isChild) {
+      return makeRow('row-tasks-row',
+        '<div class="row-tasks-dots"></div><span class="row-tasks-counter"></span>',
+        agent, updateTaskListRow, isChild);
+    }
+
+    // Statuses are a closed enum on the daemon side (claudecode parser).
+    // We still whitelist them on the client so a future malformed status
+    // can't inject CSS-class noise via the .task-dot template.
+    const TASK_STATUSES = new Set(['pending', 'in_progress', 'completed']);
+    function safeTaskStatus(s) {
+      return TASK_STATUSES.has(s) ? s : 'pending';
+    }
+    function updateTaskListRow(el, agent) {
+      const tasks = (agent.metrics && agent.metrics.tasks) || [];
+      if (tasks.length === 0) { el.style.display = 'none'; return; }
+      el.style.display = '';
+      const done = tasks.filter(t => t.status === 'completed').length;
+      // Signature avoids reflowing the dot strip when nothing has changed.
+      const states = tasks.map(t => safeTaskStatus(t.status)[0]).join('');
+      const sig = done + '/' + tasks.length + ':' + states;
+      if (el.dataset.sig === sig) return;
+      el.dataset.sig = sig;
+      const dotsEl = el.querySelector('.row-tasks-dots');
+      const taskLabel = (t) => (t.status === 'in_progress' && t.active_form) ? t.active_form : t.subject;
+      const dotHtml = tasks.map(t =>
+        '<span class="task-dot task-' + safeTaskStatus(t.status) + '" title="' + esc(taskLabel(t)) + '"></span>'
+      ).join('');
+      dotsEl.innerHTML = dotHtml;
+      el.querySelector('.row-tasks-counter').textContent = done + ' / ' + tasks.length;
+    }
+
+    // Waiting question row — shows the assistant's last message when the
+    // session is waiting on the user. Mirrors macOS at
+    // SessionListView.swift:588-604 (waiting-colored text in a padded,
+    // dim, rounded box rendered beneath the parent row).
+    function createQuestionRow(agent, isChild) {
+      return makeRow('row-question-row', '', agent, updateQuestionRow, isChild);
+    }
+    function updateQuestionRow(el, agent) {
+      const text = (agent.metrics && agent.metrics.last_assistant_text) || '';
+      if (!text || agent.state !== 'waiting') { el.style.display = 'none'; return; }
+      el.style.display = '';
+      if (el.dataset.full !== text) {
+        el.dataset.full = text;
+        el.textContent = text;
+        el.title = text;
+      }
+    }
+
+    // Aggregated state icons in the header — mirrors overlay's sessionIconsView
+    // at SessionListView.swift:346. Show ≤3 per-session glyphs colored by
+    // state when there are 1–3 sessions, else collapse to "N sessions" text.
+    // "Sessions" here means top-level sessions only (children excluded).
+    function updateSummary(_allFlat, topLevel) {
+      const host = document.getElementById('app-state-icons');
+      if (!host) return;
+      const list = topLevel || [];
+      const sig = list.length === 0
+        ? 'empty'
+        : list.length <= 3
+          ? 'icons:' + list.map(s => s.state || 'ready').join(',')
+          : 'count:' + list.length;
+      if (host.dataset.sig === sig) return;
+      host.dataset.sig = sig;
+      if (list.length === 0) {
+        host.innerHTML = '<span class="app-state-count" style="color:var(--muted)">○</span>';
+        return;
+      }
+      if (list.length <= 3) {
+        let html = '';
+        for (const s of list) {
+          html += '<span class="app-state-icon" title="' + esc(s.state || 'ready') + '">' + stateIcon(s.state || 'ready') + '</span>';
+        }
+        host.innerHTML = html;
+        return;
+      }
+      host.innerHTML = '<span class="app-state-count">' + list.length + ' sessions</span>';
     }
 
     // --- Elapsed time tick (1s) ---
@@ -1684,46 +2333,59 @@
           if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
         }
       }
+      // Debug-mode "created" chip — only iterate when the toggle is on so
+      // we don't waste DOM reads when the chip is hidden.
+      if (settings.debugMode) {
+        for (const el of document.querySelectorAll('.row-created')) {
+          const fs = parseFloat(el.dataset.firstSeen);
+          if (fs) el.textContent = 'created ' + fmtDuration(Math.max(0, Math.floor(now - fs))) + ' ago';
+        }
+      }
     }
     setInterval(tickElapsed, 1000);
 
-    // --- Timeline heatmap ---
-    const TIMELINE_COL_W = 4;
-    const TIMELINE_ROW_H = 6;
-    const TIMELINE_GAP = 1;
-    const TIMELINE_LABEL_W = 100;
-    const stateColors = {
+    // --- Per-row history bar ---
+    // The overlay shows history only as per-row mini-bars (no global heatmap).
+    // We mirror that here; the daemon's bucket priorities drive the per-row
+    // paint via paintRowHistory(). State→color is local so we don't depend on
+    // CSS vars at canvas-paint time.
+    const HISTORY_BAR_COLORS = {
       working: '#8B5CF6',
       waiting: '#FF9500',
-      ready: '#34C759',
+      ready:   '#34C759',
     };
 
-    // paintRowHistory draws the per-row history mini-bar for a single session.
     function paintRowHistory(canvas, sessionID) {
       if (!canvas) return;
       const rec = timelineHistory.get(sessionID);
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.offsetWidth || 120;
-      const h = canvas.offsetHeight || 6;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
+      const h = canvas.offsetHeight || 16;
+      const pxW = w * dpr, pxH = h * dpr;
+      if (canvas.width !== pxW || canvas.height !== pxH) {
+        canvas.width = pxW;
+        canvas.height = pxH;
+      }
       const ctx = canvas.getContext('2d');
-      ctx.scale(dpr, dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       if (!rec || !rec.states.length) return;
+      // Right-anchor: newest bucket lands at the right edge, oldest fills
+      // backwards leftward. Empty leading buckets (no data yet) are
+      // represented by an unpainted left section. Mirrors macOS
+      // HistoryBarView (SessionListView.swift:555).
       const states = rec.states;
       const colW = w / currentBucketCount;
+      const startCol = currentBucketCount - states.length;
       for (let i = 0; i < states.length; i++) {
-        ctx.fillStyle = stateColors[states[i]] || '#1a2340';
-        ctx.fillRect(i * colW, 0, Math.max(colW, 0.5), h);
+        const color = HISTORY_BAR_COLORS[states[i]];
+        if (!color) continue;
+        ctx.fillStyle = color;
+        ctx.fillRect((startCol + i) * colW, 0, Math.max(colW, 0.5), h);
       }
     }
 
-    // repaintHistory repaints all history-bearing surfaces from `timelineHistory`.
-    // Called after rebuildTimelineHistory() on snapshot/tick/upgrade or when the
-    // user toggles granularity. No network I/O — history rides the WebSocket.
     function repaintHistory() {
-      renderTimeline();
       for (const el of document.querySelectorAll('.session-row')) {
         const canvas = el.querySelector('.row-history');
         const sid = el.dataset.sessionId;
@@ -1731,92 +2393,49 @@
       }
     }
 
-    function renderTimeline() {
-      const wrap = document.getElementById('timeline-wrap');
-      const canvas = document.getElementById('timeline');
-
-      if (timelineHistory.size === 0) {
-        wrap.style.display = 'none';
-        return;
-      }
-      wrap.style.display = 'block';
-
-      const dpr = window.devicePixelRatio || 1;
-      const rows = Array.from(timelineHistory.values());
-      const maxTicks = rows.reduce((m, r) => Math.max(m, r.states.length), 0);
-      const canvasW = TIMELINE_LABEL_W + maxTicks * TIMELINE_COL_W;
-      const canvasH = rows.length * (TIMELINE_ROW_H + TIMELINE_GAP);
-
-      canvas.width = canvasW * dpr;
-      canvas.height = canvasH * dpr;
-      canvas.style.width = canvasW + 'px';
-      canvas.style.height = canvasH + 'px';
-
-      const ctx = canvas.getContext('2d');
-      ctx.scale(dpr, dpr);
-      ctx.clearRect(0, 0, canvasW, canvasH);
-
-      // Sort rows: working first, then waiting, then ready (by most recent state)
-      rows.sort((a, b) => {
-        const aState = a.states[a.states.length - 1] || 'ready';
-        const bState = b.states[b.states.length - 1] || 'ready';
-        const order = ['working', 'waiting', 'ready'];
-        return order.indexOf(aState) - order.indexOf(bState);
-      });
-
-      for (let r = 0; r < rows.length; r++) {
-        const rec = rows[r];
-        const y = r * (TIMELINE_ROW_H + TIMELINE_GAP);
-
-        // Label
-        ctx.fillStyle = '#5a6480';
-        ctx.font = '9px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(rec.label, 2, y + TIMELINE_ROW_H / 2);
-
-        // State columns — right-aligned so newest is at right
-        const startCol = maxTicks - rec.states.length;
-        for (let t = 0; t < rec.states.length; t++) {
-          const state = rec.states[t];
-          if (!state) continue;
-          const x = TIMELINE_LABEL_W + (startCol + t) * TIMELINE_COL_W;
-          ctx.fillStyle = stateColors[state] || '#1a2340';
-          ctx.fillRect(x, y, TIMELINE_COL_W - 1, TIMELINE_ROW_H);
+    // --- Initial load ---
+    // Wait for both agents (icon branding) and sessions (the actual data)
+    // before the first render, so rows land with icons already populated.
+    // Older daemons predating issue #260 won't have /api/v1/agents — the
+    // null fallback leaves agentRegistry empty and rows render without
+    // icons (project, branch, ID still disambiguate).
+    Promise.all([
+      fetch('/api/v1/agents').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/v1/sessions').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([entries, resp]) => {
+      if (Array.isArray(entries)) {
+        for (const e of entries) {
+          if (e && e.name) agentRegistry[e.name] = e;
         }
       }
-    }
-
-    // --- Initial load ---
-    // Fetch adapter branding first so the first render of session rows can
-    // already show adapter icons. Daemons predating issue #260 won't expose
-    // this endpoint — failure is non-fatal; rows render with no adapter
-    // icon (the row's other identifying columns — project, branch, ID —
-    // already disambiguate).
-    fetch('/api/v1/agents').then(r => r.json()).catch(() => null).then(entries => {
-      if (!Array.isArray(entries)) return;
-      for (const e of entries) {
-        if (e && e.name) agentRegistry[e.name] = e;
+      if (resp) {
+        dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
+        rebuildIndex();
       }
-      // If the sessions fetch landed first, rows are already on screen with
-      // empty adapter icons. Re-render so they pick up the registry.
-      if (dashboardGroups.length) render();
-    });
-    fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
-      if (!resp) return;
-      dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
-      rebuildIndex();
       render();
       repaintHistory();
     });
     // Periodic re-hydration so trailing-window costs (carried on each group
     // under `costs`) don't go stale between WebSocket deltas, which only
-    // carry individual session updates.
+    // carry individual session updates. We only copy the `costs` field —
+    // replacing the whole array would shuffle WS-added sessions back into
+    // the daemon's UUID order, which is the position-jump the user flagged.
     setInterval(() => {
       fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
         if (!resp) return;
-        dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || dashboardGroups);
-        rebuildIndex();
-        render();
+        const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
+        const byName = new Map();
+        for (const g of fresh) if (g && g.name) byName.set(g.name, g);
+        let changed = false;
+        for (const g of dashboardGroups) {
+          const f = byName.get(g.name);
+          if (!f || !f.costs) continue;
+          if (JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
+            g.costs = f.costs;
+            changed = true;
+          }
+        }
+        if (changed) render();
       });
     }, 30000);
 
@@ -1824,15 +2443,39 @@
     let ws = null;
     let reconnectDelay = 1000;
 
+    // Status labels mirror the overlay's statusIndicator at SessionListView.swift:387:
+    // connected → "watching", reconnecting → "reconnecting", else state name.
     function setWsStatus(status) {
-      const ring = document.getElementById('ws-ring');
+      const dot = document.getElementById('ws-dot');
       const label = document.getElementById('ws-label');
-      ring.className = 'ws-ring ' + status;
-      label.textContent = status;
+      dot.className = 'ws-dot ' + status;
+      let text;
+      if (status === 'connected') text = 'watching';
+      else if (status === 'reconnecting') text = 'reconnecting';
+      else if (status === 'connecting') text = 'connecting';
+      else text = 'disconnected';
+      label.textContent = text;
+      // Surface a full-width banner over the session list when the daemon
+      // connection is impaired — the header dot alone is easy to miss.
+      const banner = document.getElementById('connection-banner');
+      if (banner) {
+        if (status === 'reconnecting') {
+          banner.className = 'reconnecting';
+          banner.textContent = 'Reconnecting to daemon…';
+        } else if (status === 'disconnected') {
+          banner.className = 'disconnected';
+          banner.textContent = 'Disconnected — the irrlicht daemon is unreachable. Check that it is running.';
+        } else {
+          banner.className = '';
+          banner.textContent = '';
+        }
+      }
     }
 
     function connect() {
-      setWsStatus('connecting');
+      // ws is non-null on every subsequent reconnect attempt; use that to
+      // distinguish the initial "connecting" from a "reconnecting" cycle.
+      setWsStatus(ws ? 'reconnecting' : 'connecting');
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(proto + '://' + location.host + '/api/v1/sessions/stream');
 
@@ -1888,74 +2531,105 @@
 
     connect();
 
-    // --- Tabs ---
-    let activeTab = 'dashboard';
-    let rawSource = 'sessions';
-
-    for (const btn of document.querySelectorAll('.tab-btn')) {
-      btn.addEventListener('click', function() {
-        activeTab = this.dataset.tab;
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === this));
-        document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === activeTab + '-panel'));
-        if (activeTab === 'raw') fetchRaw();
-      });
-    }
-
-    // --- Raw panel ---
-    const rawEndpoints = {
-      sessions: '/api/v1/sessions',
-    };
-
-    for (const btn of document.querySelectorAll('[data-raw-src]')) {
-      btn.addEventListener('click', function() {
-        rawSource = this.dataset.rawSrc;
-        document.querySelectorAll('[data-raw-src]').forEach(b => b.classList.toggle('active', b === this));
-        fetchRaw();
-      });
-    }
-
-    document.getElementById('raw-refresh').addEventListener('click', fetchRaw);
-
-    // --- Granularity toggle ---
+    // Granularity is derived from the display-mode cycle — no need to
+    // persist it separately; restoring irrlicht_displayMode re-derives it.
     function applyGranularity(g) {
       currentGranularity = g;
-      localStorage.setItem('irrlicht_granularity', g);
-      document.querySelectorAll('.timeline-gran-btn').forEach(b => {
-        b.classList.toggle('active', parseInt(b.dataset.gran, 10) === g);
-      });
       rebuildTimelineHistory();
       repaintHistory();
     }
 
-    for (const btn of document.querySelectorAll('.timeline-gran-btn')) {
-      btn.addEventListener('click', function() {
-        applyGranularity(parseInt(this.dataset.gran, 10));
+    // --- Header controls: theme toggle + display-mode cycle + settings ---
+    document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+    document.getElementById('view-mode-cycle').addEventListener('click', cycleDisplayMode);
+    // Initial paint of the header button state (also sets body.view-history
+    // and aligns currentGranularity if restored from localStorage).
+    applyDisplayMode();
+
+    // --- Settings modal ---
+    function syncSettingsForm() {
+      for (const el of document.querySelectorAll('[data-setting]')) {
+        const key = el.dataset.setting;
+        if (key in settings) el.checked = !!settings[key];
+      }
+      refreshPermNote();
+    }
+    function refreshPermNote() {
+      const note = document.getElementById('settings-perm-note');
+      if (!note) return;
+      const anyNotify = settings.notifyOnReady || settings.notifyOnWaiting || settings.notifyOnContextPressure;
+      note.innerHTML = '';
+      if (typeof Notification === 'undefined') {
+        if (anyNotify) note.textContent = 'Browser notifications unsupported.';
+        return;
+      }
+      if (Notification.permission === 'denied' && anyNotify) {
+        // Two-line hint mirrors the macOS blocked-auth banner at
+        // SettingsView.swift:88-106. We can't link to System Settings from
+        // a webpage, so we describe the in-browser path instead.
+        const line1 = document.createElement('div');
+        line1.textContent = 'Notifications blocked for this site.';
+        const line2 = document.createElement('div');
+        line2.style.opacity = '0.8';
+        line2.textContent = 'Click the site-info icon in the address bar, then enable Notifications.';
+        note.appendChild(line1);
+        note.appendChild(line2);
+        return;
+      }
+      if (anyNotify && Notification.permission !== 'granted') {
+        note.textContent = 'Browser will prompt for permission on next event.';
+      }
+    }
+    function openSettings() {
+      syncSettingsForm();
+      document.getElementById('settings-backdrop').classList.add('open');
+    }
+    function closeSettings() {
+      document.getElementById('settings-backdrop').classList.remove('open');
+    }
+    document.getElementById('settings-toggle').addEventListener('click', openSettings);
+    document.getElementById('settings-close').addEventListener('click', closeSettings);
+    document.getElementById('settings-backdrop').addEventListener('click', (e) => {
+      if (e.target.id === 'settings-backdrop') closeSettings();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('settings-backdrop').classList.contains('open')) {
+        closeSettings();
+      }
+    });
+    // Wire each checkbox so toggling persists immediately and applies its
+    // body-class effect (or, for notification toggles, kicks off the
+    // permission prompt the first time).
+    for (const el of document.querySelectorAll('[data-setting]')) {
+      el.addEventListener('change', async function() {
+        const key = this.dataset.setting;
+        const turningOn = this.checked;
+        if (turningOn && key.startsWith('notifyOn') && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+          try {
+            const result = await Notification.requestPermission();
+            if (result !== 'granted') {
+              this.checked = false;
+              refreshPermNote();
+              return;
+            }
+          } catch (err) {
+            this.checked = false;
+            refreshPermNote();
+            return;
+          }
+        }
+        settings[key] = this.checked;
+        persistSettings();
+        applySettings();
+        refreshPermNote();
       });
     }
 
-    // Restore saved granularity on load
-    applyGranularity(currentGranularity);
-
-    // --- View-mode toggle (narrow viewports) ---
-    for (const btn of document.querySelectorAll('.view-mode-btn')) {
-      btn.addEventListener('click', function() {
-        const mode = this.dataset.mode;
-        document.querySelectorAll('.view-mode-btn').forEach(b => b.classList.toggle('active', b === this));
-        document.body.classList.toggle('view-history', mode === 'history');
-        // Repaint row bars immediately so there's no flash of empty canvases
-        // when switching to history mode (offsetWidth is now non-zero).
-        if (mode === 'history') repaintHistory();
-      });
-    }
-
-    function fetchRaw() {
-      const out = document.getElementById('raw-output');
-      out.textContent = 'Loading…';
-      fetch(rawEndpoints[rawSource])
-        .then(r => r.json())
-        .then(data => { out.textContent = JSON.stringify(data, null, 2); })
-        .catch(err => { out.textContent = 'Error: ' + err.message; });
-    }
+    // --- Daemon version (Irrlicht v$VERSION in the header) ---
+    fetch('/api/v1/version').then(r => r.ok ? r.json() : null).catch(() => null).then(v => {
+      const el = document.getElementById('app-version');
+      if (el && v && v.version) el.textContent = 'v' + v.version;
+    });
   </script>
 </body>
 </html>

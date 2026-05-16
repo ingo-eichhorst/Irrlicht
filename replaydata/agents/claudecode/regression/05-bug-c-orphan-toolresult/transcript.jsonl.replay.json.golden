@@ -15,7 +15,8 @@
     "last_event_time": "2026-03-16T15:52:47.067Z",
     "wall_clock_session_duration": 13518118000000,
     "state_durations": {
-      "working": 13518118000000
+      "ready": 820838000000,
+      "working": 12697280000000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -44,13 +45,13 @@
     },
     {
       "index": 1,
-      "event_index": 0,
-      "virtual_time": "2026-03-16T12:07:28.949Z",
-      "cause": "event",
+      "event_index": 2,
+      "virtual_time": "2026-03-16T12:21:09.787Z",
+      "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
-      "reason": "transcript activity (ready → working)",
-      "last_event_type": "",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,

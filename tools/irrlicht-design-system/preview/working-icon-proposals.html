@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>working-icon proposals — Irrlicht design system</title>
+<link rel="stylesheet" href="_base.css">
+<style>
+  html, body { overflow: auto; min-height: 100vh; }
+  body {
+    padding: 32px;
+    font-family: 'Outfit', -apple-system, sans-serif;
+  }
+
+  :root {
+    --working: #8B5CF6;
+    --working-dim: rgba(139, 92, 246, 0.18);
+    --working-deep: rgba(139, 92, 246, 0.45);
+    --waiting: #FF9500;
+    --ready:   #34C759;
+    --text-bright: #f5f6f9;
+    --text-dim: #7a8195;
+    --panel-bg: #0c1320;
+    --panel-border: rgba(255,255,255,0.06);
+  }
+
+  h1 {
+    font-weight: 300;
+    font-size: 24px;
+    color: var(--text-bright);
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+  }
+  .lead {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 28px;
+    line-height: 1.5;
+    max-width: 720px;
+  }
+  .lead strong { color: var(--text-bright); font-weight: 500; }
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  .toolbar button {
+    background: var(--panel-bg);
+    color: var(--text-dim);
+    border: 1px solid var(--panel-border);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: 0.15s;
+  }
+  .toolbar button:hover { color: var(--text-bright); border-color: var(--working); }
+  .toolbar button.active {
+    color: var(--working);
+    background: var(--working-dim);
+    border-color: var(--working);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 18px;
+  }
+
+  .card {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 18px 18px 16px;
+    min-height: auto;
+    display: block;
+  }
+  .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 14px;
+  }
+  .card-title {
+    color: var(--text-bright);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .card-id {
+    color: var(--text-dim);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+  }
+
+  /* Size strip */
+  .size-strip {
+    display: flex;
+    align-items: end;
+    justify-content: space-around;
+    gap: 12px;
+    padding: 16px 8px 8px;
+    background: #050a14;
+    border-radius: 6px;
+    border: 1px solid var(--panel-border);
+  }
+  .size-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .size-cell .label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* Standardized sizing for each icon variant */
+  .ico-12 { width: 12px; height: 12px; display: inline-block; }
+  .ico-14 { width: 14px; height: 14px; display: inline-block; }
+  .ico-24 { width: 24px; height: 24px; display: inline-block; }
+  .ico-48 { width: 48px; height: 48px; display: inline-block; }
+
+  .pros-cons {
+    margin-top: 12px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    line-height: 1.55;
+  }
+  .pros-cons .label {
+    color: var(--text-bright);
+    font-weight: 500;
+    margin-right: 6px;
+  }
+  .pros-cons .pro::before  { content: '✓ '; color: var(--ready); }
+  .pros-cons .con::before  { content: '✗ '; color: var(--waiting); }
+
+  /* In-context row example */
+  .row-context {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: #050a14;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .row-context .branch { color: var(--text-bright); }
+  .row-context .bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .row-context .bar > span {
+    display: block;
+    height: 100%;
+    width: 64%;
+    background: var(--working);
+  }
+
+  /* Reduced-motion simulator: when body has .force-reduced-motion,
+     suppress all animations to show the static fallback. */
+  body.force-reduced-motion *,
+  body.force-reduced-motion *::before,
+  body.force-reduced-motion *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  body.force-reduced-motion svg * {
+    animation: none !important;
+  }
+  /* SMIL <animate> elements need begin="indefinite" to truly freeze;
+     we toggle them via JS below for a more accurate fallback view. */
+
+  /* ===================================================================
+     Proposal A — Rotating arc spinner
+     A 270° arc rotates at 1.2s. Always visible because the arc has
+     substantial stroke width; rotation is bulletproof CSS transform.
+     =================================================================== */
+  @keyframes spin-360 { to { transform: rotate(360deg); } }
+  .ico-spinner svg { animation: spin-360 1.1s linear infinite; transform-origin: 50% 50%; }
+  body.force-reduced-motion .ico-spinner svg { animation: none; }
+
+  /* ===================================================================
+     Proposal B — Equalizer bars
+     4 vertical bars with cycling heights. Static fallback is just
+     4 visible bars at minimum height.
+     =================================================================== */
+  @keyframes eq-1 { 0%,100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
+  @keyframes eq-2 { 0%,100% { transform: scaleY(0.6);  } 50% { transform: scaleY(0.85); } }
+  @keyframes eq-3 { 0%,100% { transform: scaleY(0.85); } 50% { transform: scaleY(0.5);  } }
+  @keyframes eq-4 { 0%,100% { transform: scaleY(0.45); } 50% { transform: scaleY(0.95); } }
+
+  .ico-eq { display: inline-flex; align-items: end; justify-content: center; gap: 1.5px; padding: 0; }
+  .ico-eq .bar {
+    background: var(--working);
+    border-radius: 1px;
+    transform-origin: 50% 100%;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .ico-eq .bar:nth-child(1) { animation: eq-1 0.9s ease-in-out infinite; }
+  .ico-eq .bar:nth-child(2) { animation: eq-2 1.1s ease-in-out infinite; animation-delay: -0.3s; }
+  .ico-eq .bar:nth-child(3) { animation: eq-3 1.0s ease-in-out infinite; animation-delay: -0.6s; }
+  .ico-eq .bar:nth-child(4) { animation: eq-4 1.2s ease-in-out infinite; animation-delay: -0.45s; }
+  body.force-reduced-motion .ico-eq .bar { animation: none; transform: scaleY(0.65); }
+
+  /* ===================================================================
+     Proposal C — Three sequential dots
+     Three static dots; brightness pulses left → right. Falls back to
+     three solid dots all at full opacity.
+     =================================================================== */
+  @keyframes dot-pulse {
+    0%, 100% { opacity: 0.35; }
+    50%      { opacity: 1; }
+  }
+  .ico-dots { display: inline-flex; align-items: center; justify-content: center; gap: 2px; }
+  .ico-dots .dot {
+    background: var(--working);
+    border-radius: 50%;
+    aspect-ratio: 1;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 30%;
+    animation: dot-pulse 1.2s ease-in-out infinite;
+  }
+  .ico-dots .dot:nth-child(2) { animation-delay: 0.2s; }
+  .ico-dots .dot:nth-child(3) { animation-delay: 0.4s; }
+  body.force-reduced-motion .ico-dots .dot { animation: none; opacity: 1; }
+
+  /* ===================================================================
+     Proposal D — Solid breathing circle (opacity-only)
+     One large solid dot. Pulses 0.55 → 1.0 opacity. No scaling, so
+     it never shrinks. Static fallback = solid filled circle.
+     =================================================================== */
+  @keyframes breathe {
+    0%, 100% { opacity: 0.55; }
+    50%      { opacity: 1; }
+  }
+  .ico-breathe svg circle.core { animation: breathe 1.4s ease-in-out infinite; transform-origin: 50% 50%; }
+  body.force-reduced-motion .ico-breathe svg circle.core { animation: none; opacity: 1; }
+
+  /* ===================================================================
+     Proposal E — Mini gradient flame (on-brand)
+     A tiny version of the brand flame with a subtle flicker (opacity
+     oscillation between 0.8 and 1.0, plus a tiny scale wobble). On-brand
+     and immediately recognizable as "active/burning."
+     =================================================================== */
+  @keyframes flicker {
+    0%, 100% { opacity: 0.85; transform: scale(0.96); }
+    50%      { opacity: 1;    transform: scale(1.04); }
+  }
+  .ico-flame svg { animation: flicker 1.3s ease-in-out infinite; transform-origin: 50% 60%; }
+  body.force-reduced-motion .ico-flame svg { animation: none; opacity: 1; transform: none; }
+
+  /* ===================================================================
+     Footer + select buttons
+     =================================================================== */
+  .select-row {
+    margin-top: 14px;
+    display: flex;
+    gap: 6px;
+  }
+  .select-row button {
+    background: transparent;
+    color: var(--working);
+    border: 1px solid var(--working);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    flex: 1;
+    transition: 0.15s;
+  }
+  .select-row button:hover {
+    background: var(--working);
+    color: white;
+  }
+</style>
+</head>
+<body>
+
+<h1>Working-state icon — 5 alternatives</h1>
+<p class="lead">
+  v0.4.5 shipped a <strong>heartbeat halo</strong> for the working state. The animation breaks on
+  macOS (frame degradation) and sometimes on the web, leaving only the tiny inner 2.6 px dot
+  visible — too small to read at a glance. Each alternative below stays clearly visible
+  <strong>with animation, without animation, and at the smallest 12 px row size</strong>.
+  Compare in the size strip and the in-row context, then toggle reduced-motion to confirm
+  the static fallback is also readable.
+</p>
+
+<div class="toolbar">
+  <button id="motion-toggle">Simulate prefers-reduced-motion</button>
+  <button id="zoom-toggle">Zoom 4×</button>
+</div>
+
+<div class="grid">
+
+  <!-- ========== Proposal A — Rotating arc ========== -->
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">A · Rotating arc spinner</div>
+      <div class="card-id">arc</div>
+    </div>
+    <div class="size-strip">
+      <div class="size-cell"><span class="ico-spinner ico-12">
+        <svg viewBox="0 0 20 20" fill="none">
+          <path d="M 10 2 A 8 8 0 1 1 2.34 12.5" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </span><span class="label">12</span></div>
+      <div class="size-cell"><span class="ico-spinner ico-14">
+        <svg viewBox="0 0 20 20" fill="none">
+          <path d="M 10 2 A 8 8 0 1 1 2.34 12.5" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </span><span class="label">14</span></div>
+      <div class="size-cell"><span class="ico-spinner ico-24">
+        <svg viewBox="0 0 20 20" fill="none">
+          <path d="M 10 2 A 8 8 0 1 1 2.34 12.5" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </span><span class="label">24</span></div>
+      <div class="size-cell"><span class="ico-spinner ico-48">
+        <svg viewBox="0 0 20 20" fill="none">
+          <path d="M 10 2 A 8 8 0 1 1 2.34 12.5" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </span><span class="label">48</span></div>
+    </div>
+    <div class="row-context">
+      <span class="ico-spinner ico-12">
+        <svg viewBox="0 0 20 20" fill="none">
+          <path d="M 10 2 A 8 8 0 1 1 2.34 12.5" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="branch">feat/quota-forecast</span>
+      <span class="bar"><span></span></span>
+      <span>4m</span>
+    </div>
+    <div class="pros-cons">
+      <div class="pro"><span class="label">Pro:</span> CSS <code>transform: rotate</code> is the most reliable animation primitive everywhere — works identically in WebKit, Blink, SwiftUI <code>.rotationEffect</code>. Substantial stroke width (3 of 20 viewBox) means it stays legible even at 12 px.</div>
+      <div class="con"><span class="label">Con:</span> Universally recognized as "loading" — may read more like a network spinner than a working agent. Static fallback is a frozen partial arc (still visible, but ambiguous).</div>
+    </div>
+    <div class="select-row"><button onclick="pick('A')">Pick A</button></div>
+  </div>
+
+  <!-- ========== Proposal B — Equalizer bars ========== -->
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">B · Equalizer bars</div>
+      <div class="card-id">eq</div>
+    </div>
+    <div class="size-strip">
+      <div class="size-cell"><span class="ico-eq ico-12"><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i></span><span class="label">12</span></div>
+      <div class="size-cell"><span class="ico-eq ico-14"><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i></span><span class="label">14</span></div>
+      <div class="size-cell"><span class="ico-eq ico-24"><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i></span><span class="label">24</span></div>
+      <div class="size-cell"><span class="ico-eq ico-48"><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i></span><span class="label">48</span></div>
+    </div>
+    <div class="row-context">
+      <span class="ico-eq ico-12"><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i></span>
+      <span class="branch">feat/quota-forecast</span>
+      <span class="bar"><span></span></span>
+      <span>4m</span>
+    </div>
+    <div class="pros-cons">
+      <div class="pro"><span class="label">Pro:</span> Reads as "active output / processing." Each bar always visible at minimum 35 % height, so a frozen state still reads as 4 standing bars. CSS <code>scaleY</code> + animation-delay only — trivial to mirror in SwiftUI.</div>
+      <div class="con"><span class="label">Con:</span> At 12 px width, 4 bars means each bar is ~2 px wide — gap is tight. Could drop to 3 bars at the smallest size if needed.</div>
+    </div>
+    <div class="select-row"><button onclick="pick('B')">Pick B</button></div>
+  </div>
+
+  <!-- ========== Proposal C — Three sequential dots ========== -->
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">C · Three sequential dots</div>
+      <div class="card-id">dots</div>
+    </div>
+    <div class="size-strip">
+      <div class="size-cell"><span class="ico-dots ico-12"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span><span class="label">12</span></div>
+      <div class="size-cell"><span class="ico-dots ico-14"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span><span class="label">14</span></div>
+      <div class="size-cell"><span class="ico-dots ico-24"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span><span class="label">24</span></div>
+      <div class="size-cell"><span class="ico-dots ico-48"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span><span class="label">48</span></div>
+    </div>
+    <div class="row-context">
+      <span class="ico-dots ico-12"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span>
+      <span class="branch">feat/quota-forecast</span>
+      <span class="bar"><span></span></span>
+      <span>4m</span>
+    </div>
+    <div class="pros-cons">
+      <div class="pro"><span class="label">Pro:</span> Reads as "thinking…" — the same vocabulary chat UIs use for "agent typing." All three dots always visible (opacity floor 0.35), so the static fallback is three solid purple dots at full opacity — completely legible.</div>
+      <div class="con"><span class="label">Con:</span> Three dots is wider than tall — needs a 3:1 aspect at small sizes (the cell still renders at 12×12 here, dots are circular within it). Reads less as a glyph and more as a row of indicators.</div>
+    </div>
+    <div class="select-row"><button onclick="pick('C')">Pick C</button></div>
+  </div>
+
+  <!-- ========== Proposal D — Breathing solid dot ========== -->
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">D · Breathing solid dot</div>
+      <div class="card-id">breathe</div>
+    </div>
+    <div class="size-strip">
+      <div class="size-cell"><span class="ico-breathe ico-12">
+        <svg viewBox="0 0 20 20"><circle class="core" cx="10" cy="10" r="7" fill="#8B5CF6"/></svg>
+      </span><span class="label">12</span></div>
+      <div class="size-cell"><span class="ico-breathe ico-14">
+        <svg viewBox="0 0 20 20"><circle class="core" cx="10" cy="10" r="7" fill="#8B5CF6"/></svg>
+      </span><span class="label">14</span></div>
+      <div class="size-cell"><span class="ico-breathe ico-24">
+        <svg viewBox="0 0 20 20"><circle class="core" cx="10" cy="10" r="7" fill="#8B5CF6"/></svg>
+      </span><span class="label">24</span></div>
+      <div class="size-cell"><span class="ico-breathe ico-48">
+        <svg viewBox="0 0 20 20"><circle class="core" cx="10" cy="10" r="7" fill="#8B5CF6"/></svg>
+      </span><span class="label">48</span></div>
+    </div>
+    <div class="row-context">
+      <span class="ico-breathe ico-12">
+        <svg viewBox="0 0 20 20"><circle class="core" cx="10" cy="10" r="7" fill="#8B5CF6"/></svg>
+      </span>
+      <span class="branch">feat/quota-forecast</span>
+      <span class="bar"><span></span></span>
+      <span>4m</span>
+    </div>
+    <div class="pros-cons">
+      <div class="pro"><span class="label">Pro:</span> Largest possible footprint (r=7 of 20 viewBox = 70 % of cell). Opacity-only animation never shrinks the shape — even with animation completely broken or disabled, you see a big solid purple disc. Closest match to the v0.4.5 "circle" vocabulary so existing-user recognition is preserved.</div>
+      <div class="con"><span class="label">Con:</span> The least "in motion" of the five. Easy to miss the breathe at small sizes — reads almost as a static state when ambient.</div>
+    </div>
+    <div class="select-row"><button onclick="pick('D')">Pick D</button></div>
+  </div>
+
+  <!-- ========== Proposal E — Mini gradient flame (on-brand) ========== -->
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">E · Mini gradient flame</div>
+      <div class="card-id">flame</div>
+    </div>
+    <div class="size-strip">
+      <div class="size-cell"><span class="ico-flame ico-12">
+        <svg viewBox="0 0 24 24" fill="none">
+          <defs>
+            <linearGradient id="g-12" x1="12" y1="2" x2="12" y2="22" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#C4B5FD"/>
+              <stop offset="0.5" stop-color="#8B5CF6"/>
+              <stop offset="1" stop-color="#6D28D9"/>
+            </linearGradient>
+          </defs>
+          <path d="M12 2 C 14 6, 17 8, 17 13 C 17 17, 14.5 21, 12 21 C 9.5 21, 7 17, 7 13 C 7 8, 10 6, 12 2 Z" fill="url(#g-12)"/>
+        </svg>
+      </span><span class="label">12</span></div>
+      <div class="size-cell"><span class="ico-flame ico-14">
+        <svg viewBox="0 0 24 24" fill="none">
+          <defs>
+            <linearGradient id="g-14" x1="12" y1="2" x2="12" y2="22" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#C4B5FD"/>
+              <stop offset="0.5" stop-color="#8B5CF6"/>
+              <stop offset="1" stop-color="#6D28D9"/>
+            </linearGradient>
+          </defs>
+          <path d="M12 2 C 14 6, 17 8, 17 13 C 17 17, 14.5 21, 12 21 C 9.5 21, 7 17, 7 13 C 7 8, 10 6, 12 2 Z" fill="url(#g-14)"/>
+        </svg>
+      </span><span class="label">14</span></div>
+      <div class="size-cell"><span class="ico-flame ico-24">
+        <svg viewBox="0 0 24 24" fill="none">
+          <defs>
+            <linearGradient id="g-24" x1="12" y1="2" x2="12" y2="22" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#C4B5FD"/>
+              <stop offset="0.5" stop-color="#8B5CF6"/>
+              <stop offset="1" stop-color="#6D28D9"/>
+            </linearGradient>
+          </defs>
+          <path d="M12 2 C 14 6, 17 8, 17 13 C 17 17, 14.5 21, 12 21 C 9.5 21, 7 17, 7 13 C 7 8, 10 6, 12 2 Z" fill="url(#g-24)"/>
+        </svg>
+      </span><span class="label">24</span></div>
+      <div class="size-cell"><span class="ico-flame ico-48">
+        <svg viewBox="0 0 24 24" fill="none">
+          <defs>
+            <linearGradient id="g-48" x1="12" y1="2" x2="12" y2="22" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#C4B5FD"/>
+              <stop offset="0.5" stop-color="#8B5CF6"/>
+              <stop offset="1" stop-color="#6D28D9"/>
+            </linearGradient>
+          </defs>
+          <path d="M12 2 C 14 6, 17 8, 17 13 C 17 17, 14.5 21, 12 21 C 9.5 21, 7 17, 7 13 C 7 8, 10 6, 12 2 Z" fill="url(#g-48)"/>
+        </svg>
+      </span><span class="label">48</span></div>
+    </div>
+    <div class="row-context">
+      <span class="ico-flame ico-12">
+        <svg viewBox="0 0 24 24" fill="none">
+          <defs>
+            <linearGradient id="g-row" x1="12" y1="2" x2="12" y2="22" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#C4B5FD"/>
+              <stop offset="0.5" stop-color="#8B5CF6"/>
+              <stop offset="1" stop-color="#6D28D9"/>
+            </linearGradient>
+          </defs>
+          <path d="M12 2 C 14 6, 17 8, 17 13 C 17 17, 14.5 21, 12 21 C 9.5 21, 7 17, 7 13 C 7 8, 10 6, 12 2 Z" fill="url(#g-row)"/>
+        </svg>
+      </span>
+      <span class="branch">feat/quota-forecast</span>
+      <span class="bar"><span></span></span>
+      <span>4m</span>
+    </div>
+    <div class="pros-cons">
+      <div class="pro"><span class="label">Pro:</span> On-brand — uses the v0.4.5 gradient-flame mark in miniature. Subtle flicker (opacity + 8 % scale) reads as "burning / active" without violent motion. Static fallback is the brand mark itself — strong identity anchor.</div>
+      <div class="con"><span class="label">Con:</span> The brand flame also appears in the menu-bar idle icon and the nav-bar — using it again as a per-row state risks visual repetition / loss of distinct meaning. At 12 px the gradient stops compress into a flat mid-tone purple, which mutes the identity payoff.</div>
+    </div>
+    <div class="select-row"><button onclick="pick('E')">Pick E</button></div>
+  </div>
+
+</div>
+
+<script>
+  // Reduced-motion toggle — also freezes SMIL <animate> by setting begin="indefinite"
+  // (none in the current proposals, but kept for forward-compat).
+  const motionBtn = document.getElementById('motion-toggle');
+  motionBtn.addEventListener('click', () => {
+    document.body.classList.toggle('force-reduced-motion');
+    motionBtn.classList.toggle('active');
+    motionBtn.textContent = document.body.classList.contains('force-reduced-motion')
+      ? 'Reduced motion ON — showing static fallback'
+      : 'Simulate prefers-reduced-motion';
+  });
+
+  const zoomBtn = document.getElementById('zoom-toggle');
+  zoomBtn.addEventListener('click', () => {
+    document.body.classList.toggle('zoomed');
+    zoomBtn.classList.toggle('active');
+    if (document.body.classList.contains('zoomed')) {
+      document.body.style.zoom = '4';
+      zoomBtn.textContent = 'Zoom 4× ON';
+    } else {
+      document.body.style.zoom = '1';
+      zoomBtn.textContent = 'Zoom 4×';
+    }
+  });
+
+  function pick(id) {
+    const names = {
+      A: 'Rotating arc spinner',
+      B: 'Equalizer bars',
+      C: 'Three sequential dots',
+      D: 'Breathing solid dot',
+      E: 'Mini gradient flame'
+    };
+    alert(`Selected: ${id} — ${names[id]}\n\nTell Claude: "Implement working-icon proposal ${id} (${names[id]}) for web + macOS."`);
+  }
+</script>
+
+</body>
+</html>

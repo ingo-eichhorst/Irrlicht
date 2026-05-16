@@ -90,7 +90,7 @@ final class MenuBarController: NSObject {
         // corners and `hasShadow = true` follows the rounded silhouette.
         hostingController.view.wantsLayer = true
         if let layer = hostingController.view.layer {
-            layer.cornerRadius = 10
+            layer.cornerRadius = IrrRadius.lg
             layer.cornerCurve = .continuous
             layer.masksToBounds = true
         }

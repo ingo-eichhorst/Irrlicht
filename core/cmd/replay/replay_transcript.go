@@ -173,6 +173,9 @@ func (r *transcriptReplayer) runBatches(batches [][]rawEvent) error {
 // mirroring SessionDetector.processActivity's force-r→w + ClassifyState
 // pattern. Any emitted transition is appended to the report.
 func (r *transcriptReplayer) classifyBatch(eventIdx int, virtTime time.Time, cause transitionCause, domainMetrics *session.SessionMetrics) {
+	if domainMetrics.NoSubstantiveActivity {
+		return
+	}
 	if r.state == session.StateReady && domainMetrics.LastEventType != "" {
 		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
 			r.state, session.StateWorking, "force ready→working on first activity", domainMetrics))

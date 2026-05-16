@@ -15,17 +15,20 @@
     "last_event_time": "2026-04-11T19:11:47.643Z",
     "wall_clock_session_duration": 1130897000000,
     "state_durations": {
-      "ready": 1082116000000,
+      "ready": 1075565000000,
+      "waiting": 6551000000,
       "working": 48781000000
     },
     "flicker_count": 4,
     "flickers_by_category": {
-      "ready_between_working": 3,
+      "ready_between_working": 2,
+      "waiting_between_working": 1,
       "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 3,
-      "force ready→working on first activity": 1
+      "agent finished turn → ready": 2,
+      "force ready→working on first activity": 1,
+      "turn ended with question or cue → waiting": 1
     },
     "estimated_cost_usd": 0.5229155,
     "cum_input_tokens": 60,
@@ -69,13 +72,13 @@
       "virtual_time": "2026-04-11T18:53:22.468Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "waiting",
+      "reason": "turn ended with question or cue → waiting",
       "last_event_type": "assistant",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
+      "waiting_for_user_input": true,
       "last_assistant_text_head": "All waves complete (6 foreground subagents). Check the UI for the full picture."
     },
     {
@@ -83,9 +86,9 @@
       "event_index": 27,
       "virtual_time": "2026-04-11T18:53:29.019Z",
       "cause": "debounce_coalesce",
-      "prev_state": "ready",
+      "prev_state": "waiting",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
+      "reason": "transcript activity (waiting → working)",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,

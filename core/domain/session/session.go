@@ -1,6 +1,7 @@
 package session
 
 import (
+	"regexp"
 	"strings"
 	"time"
 )
@@ -109,6 +110,18 @@ type SessionMetrics struct {
 	// episode (issue #150). Transient — per-pass, not persisted.
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
 
+	// NoSubstantiveActivity reflects the last tailer pass: true when the
+	// pass consumed new transcript content but produced no state-relevant
+	// change (every line was Skip=true with no SubagentCompletions and no
+	// TaskSnapshot). The detector uses this to short-circuit the
+	// classification pipeline for post-turn writes like Claude Code's
+	// `system/away_summary` recap — without it, the force-bounce in
+	// processActivity sees the stale LastEventType and flips a ready
+	// session back to working (issue #329). Per-pass: MergeMetrics copies
+	// it from newM with no fallback, and json:"-" keeps it out of
+	// serialized state.
+	NoSubstantiveActivity bool `json:"-"`
+
 	// SubagentCompletions surfaces parent-side "subagent done" signals
 	// from the most recent transcript scan (origin.kind="task-notification"
 	// lines parsed by the Claude Code adapter). Per-pass and transient —
@@ -120,6 +133,20 @@ type SessionMetrics struct {
 	// Nil for sessions that have not used TaskCreate (including non-Claude-Code
 	// adapters).
 	Tasks []Task `json:"tasks,omitempty"`
+
+	// RateLimit is the most recent subscription quota snapshot observed for
+	// this session. Populated by the Codex parser (from token_count events)
+	// and by the Claude Code statusline hook. Nil when the underlying
+	// provider doesn't surface quota (API-key Claude Code, Bedrock, Vertex)
+	// or when no snapshot has arrived yet.
+	RateLimit *RateLimitSnapshot `json:"rate_limit,omitempty"`
+
+	// RateLimitForecastEta is the projected wall-clock time (Unix seconds)
+	// at which the most-imminent rate-limit window will hit 100%, computed
+	// from a rolling history of changed snapshots. Nil when forecasting is
+	// not possible — insufficient history, flat or decreasing burn rate,
+	// or the projected ETA exceeds the window's ResetsAt.
+	RateLimitForecastEta *int64 `json:"rate_limit_forecast_eta,omitempty"`
 }
 
 // SubagentCompletion is the domain mirror of tailer.SubagentCompletion. The
@@ -178,17 +205,22 @@ const trailingMarkdownNoise = "*_~`\"')] \t\n\r"
 const markdownWrapper = "*_~`\"')]"
 
 // IsWaitingForUserInput returns true when the agent finished its turn and the
-// last assistant message contains a question — indicating the agent is
-// waiting for user input even though no user-blocking tool is open.
+// last assistant message either ends in a literal question or carries an
+// imperative cue (e.g. "let me know if it's right before I commit",
+// "verify locally and reply with …") — both indicate the agent is gated on
+// the user even though no user-blocking tool is open.
 //
-// Detects questions anywhere in the text, not just at the trailing position,
-// so phrases like "What would you like? In the meantime I'll move on." are
-// recognized as waiting prompts.
+// Two detectors are OR'd: ExtractQuestionSnippet (literal `?`, fired
+// anywhere in the text) and ExtractWaitingCue (cue regexes against the
+// trailing 1–2 sentences). See issue #381 for the cue coverage matrix.
 func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	if m == nil {
 		return false
 	}
-	return ExtractQuestionSnippet(m.LastAssistantText) != ""
+	if ExtractQuestionSnippet(m.LastAssistantText) != "" {
+		return true
+	}
+	return ExtractWaitingCue(m.LastAssistantText) != ""
 }
 
 // ExtractQuestionSnippet returns the first non-rhetorical question sentence
@@ -230,6 +262,97 @@ func ExtractQuestionSnippet(text string) string {
 		return trimmed
 	}
 	return ""
+}
+
+// waitingCuePatterns matches imperative or implicit waiting cues — non-
+// question requests that should still register as a waiting turn. Bucketed
+// from the coverage matrix in issue #381: A direct ask, B approval framing,
+// C action gates, D curated imperatives (multi-word to minimise FPs),
+// E trailing soft asks.
+//
+// The set favours recall: first-person intent statements that share an
+// imperative shape ("Let me verify it's right.", "I'll check the logs.",
+// "before I merged") may also match. That tradeoff is intentional per
+// #381 — under-detecting a real waiting state defeats the dashboard's
+// purpose, while a transient false-positive resolves on the next event.
+var waitingCuePatterns = []*regexp.Regexp{
+	// A. Direct ask (second-person verb)
+	regexp.MustCompile(`(?i)\b(?:let me know|lmk|tell me|ping me|email me|reach out|holler|shout|hit me up)\b`),
+	regexp.MustCompile(`(?i)\b(?:could|can|would|will) you\b`),
+	// B. Approval / review framings
+	regexp.MustCompile(`(?i)\bawaiting\b`),
+	regexp.MustCompile(`(?i)\b(?:waiting for|need|needs|require[ds]?) your\b`),
+	regexp.MustCompile(`(?i)\bready for (?:your|review|feedback|approval|sign[- ]?off)\b`),
+	regexp.MustCompile(`(?i)\bgive me (?:the )?(?:go[- ]?ahead|green light|nod|ok|signal|word)\b`),
+	regexp.MustCompile(`(?i)\byour (?:call|choice|move|turn|pick|shout)\b`),
+	regexp.MustCompile(`(?i)\b(?:sign[- ]?off|green[- ]?light|go[- ]?ahead)\b`),
+	// C. Action gates
+	regexp.MustCompile(`(?i)\bbefore (?:I|we)\s+\w+\b`),
+	regexp.MustCompile(`(?i)\bonce you(?:'ve| have)?\b`),
+	regexp.MustCompile(`(?i)\bI'?ll wait\b`),
+	regexp.MustCompile(`(?i)\bstop me if\b`),
+	// D. Curated imperatives — multi-word and verb+determiner shapes keep
+	// the false-positive surface small ("test failures", "review of the
+	// diff", "drop in coverage" don't fire because the determiner gate
+	// fails). Bare verb forms only; gerunds ("Trying with caution.",
+	// "Verifying locally.") aren't covered — rare in turn-enders.
+	regexp.MustCompile(`(?i)\btake a look\b`),
+	regexp.MustCompile(`(?i)\b(?:sanity|double)[- ]check\b`),
+	regexp.MustCompile(`(?i)\b(?:please|kindly)\s+\w+\b`),
+	regexp.MustCompile(`(?i)\b(?:try|confirm|verify|check|review|approve|test|drop|paste|share|reply)\s+(?:the|that|this|it|whether|if)\b`),
+	regexp.MustCompile(`(?i)^(?:try|confirm|verify|check|review|approve|test|drop|paste|share|reply)\s+(?:\w+ly|with)\b`),
+	// E. Trailing soft asks
+	regexp.MustCompile(`(?i)\bwdyt\b`),
+	regexp.MustCompile(`(?i)\bthoughts\b[.?!]?\s*$`),
+	regexp.MustCompile(`(?i)\b(?:any|any other) (?:feedback|thoughts|concerns|questions)\b`),
+	regexp.MustCompile(`(?i)\bis (?:that|this) (?:right|correct|ok|okay|fine|good|what you wanted)\b`),
+}
+
+// ExtractWaitingCue returns the trailing sentence that carries an imperative
+// or implicit waiting cue, or "" when none is present. Unlike
+// ExtractQuestionSnippet it does not require a literal '?'; it matches the
+// last 1–2 non-empty sentences against waitingCuePatterns. Restricting the
+// scan to the tail prevents earlier paragraph content (status notes, code
+// snippets) from triggering a spurious waiting verdict.
+func ExtractWaitingCue(text string) string {
+	if text == "" {
+		return ""
+	}
+	// Walk the tail newest-first so when both the last and second-to-last
+	// sentence match a cue, the more recent (and usually more natural for
+	// display) sentence is returned.
+	tail := lastNonEmptySentences(splitSentences(text), 2)
+	for i := len(tail) - 1; i >= 0; i-- {
+		s := tail[i]
+		stripped := strings.TrimLeft(strings.TrimRight(s, trailingMarkdownNoise), markdownWrapper)
+		if stripped == "" {
+			continue
+		}
+		for _, re := range waitingCuePatterns {
+			if re.MatchString(stripped) {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// lastNonEmptySentences returns up to n trailing sentences from the input,
+// trimmed of surrounding whitespace and with empty entries skipped, in their
+// original order.
+func lastNonEmptySentences(sentences []string, n int) []string {
+	out := make([]string, 0, n)
+	for i := len(sentences) - 1; i >= 0 && len(out) < n; i-- {
+		t := strings.TrimSpace(sentences[i])
+		if t == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
 }
 
 // answerPrefixes flag a sentence as starting with an explanatory answer to a
@@ -371,6 +494,7 @@ type Launcher struct {
 	TTY            string `json:"tty,omitempty"`              // controlling TTY of the agent process, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this
 	KittyListenOn  string `json:"kitty_listen_on,omitempty"`  // $KITTY_LISTEN_ON — kitty remote-control socket path
 	KittyWindowID  string `json:"kitty_window_id,omitempty"`  // $KITTY_WINDOW_ID — kitty window identifier
+	KittyPID       int    `json:"kitty_pid,omitempty"`        // $KITTY_PID — kitty.app process id (lets the activator target this specific instance when multiple kitties run)
 }
 
 // IsEmpty reports whether the launcher carries no identifying information
@@ -380,7 +504,7 @@ func (l *Launcher) IsEmpty() bool {
 	return l == nil || (l.TermProgram == "" && l.ITermSessionID == "" &&
 		l.TermSessionID == "" && l.TmuxPane == "" &&
 		l.TmuxSocket == "" && l.VSCodePID == 0 && l.TTY == "" &&
-		l.KittyListenOn == "" && l.KittyWindowID == "")
+		l.KittyListenOn == "" && l.KittyWindowID == "" && l.KittyPID == 0)
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.
@@ -479,6 +603,9 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		CumCacheReadTokens:     newM.CumCacheReadTokens,
 		CumCacheCreationTokens: newM.CumCacheCreationTokens,
 		Tasks:                  newM.Tasks,
+		NoSubstantiveActivity:  newM.NoSubstantiveActivity,
+		RateLimit:              newM.RateLimit,
+		RateLimitForecastEta:   newM.RateLimitForecastEta,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow
@@ -527,6 +654,14 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 	// nil Tasks = "no data yet"; non-nil empty slice = "no tasks" — overwrite only for the latter.
 	if merged.Tasks == nil && oldM.Tasks != nil {
 		merged.Tasks = oldM.Tasks
+	}
+	// Rate-limit snapshots arrive sporadically — preserve the previous one
+	// across passes that didn't observe a fresh sample.
+	if merged.RateLimit == nil && oldM.RateLimit != nil {
+		merged.RateLimit = oldM.RateLimit
+	}
+	if merged.RateLimitForecastEta == nil && oldM.RateLimitForecastEta != nil {
+		merged.RateLimitForecastEta = oldM.RateLimitForecastEta
 	}
 	return merged
 }

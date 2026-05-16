@@ -40,6 +40,28 @@ func TestNewWithRoot(t *testing.T) {
 	}
 }
 
+// New treats an absolute dir as-is so adapters can pass an env-var override
+// (e.g. PI_CODING_AGENT_SESSION_DIR=/tmp/pi-sessions) without it being
+// silently rejoined under $HOME.
+func TestNew_AbsoluteDir_UsedAsIs(t *testing.T) {
+	w := New("/tmp/pi-sessions", testAdapter, 0)
+	if w.Root() != "/tmp/pi-sessions" {
+		t.Errorf("Root() = %q, want /tmp/pi-sessions", w.Root())
+	}
+}
+
+func TestNew_RelativeDir_JoinedWithHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	w := New(".pi/agent/sessions", testAdapter, 0)
+	want := filepath.Join(home, ".pi/agent/sessions")
+	if w.Root() != want {
+		t.Errorf("Root() = %q, want %q", w.Root(), want)
+	}
+}
+
 func TestExtractSessionID(t *testing.T) {
 	tests := []struct {
 		path string

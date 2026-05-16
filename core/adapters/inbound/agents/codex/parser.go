@@ -2,6 +2,7 @@ package codex
 
 import (
 	"strings"
+	"time"
 
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/pkg/transcript"
@@ -90,6 +91,18 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// Model/token extraction from payload-wrapped events.
 	var cumBreakdown *tailer.UsageBreakdown
 	ev.ModelName, ev.ContextWindow, ev.Tokens, cumBreakdown = extractCodexMetadata(raw)
+
+	// Rate-limit extraction from token_count events. Lives on
+	// event_msg.payload.rate_limits and is emitted on every API turn (clean
+	// cadence — no zero-delta noise like Claude Code's statusline). Other
+	// event types either don't carry the block or carry stale duplicates.
+	if eventType == "event_msg" {
+		if payload, ok := raw["payload"].(map[string]interface{}); ok {
+			if pt, _ := payload["type"].(string); pt == "token_count" {
+				ev.RateLimit = extractCodexRateLimits(payload, ev.Timestamp)
+			}
+		}
+	}
 
 	// Emit a Contribution when cumulative usage advances (monotonic delta).
 	if cumBreakdown != nil {
@@ -317,6 +330,86 @@ func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
 	if l.CumCursor != nil {
 		p.cursor = *l.CumCursor
 	}
+}
+
+// extractCodexRateLimits parses payload.rate_limits from a Codex token_count
+// event into a tailer.RateLimitSnapshot. Returns nil when no rate_limits
+// block is present (older transcripts, or pre-first-response events).
+//
+// Handles three observed schema versions:
+//
+//   - v1 (Oct 2025): primary/secondary with window_minutes + resets_in_seconds
+//     (relative). 82 samples carry off-by-one minutes (299, 10079); we keep
+//     them verbatim — the matching logic downstream tolerates ±1.
+//   - v2 (Nov–Dec 2025): adds plan_type + credits, uses resets_at (absolute).
+//   - v3 (Jan 2026+): adds limit_id, limit_name, rate_limit_reached_type.
+//
+// sampledAt is the event's wall-clock time; used as the snapshot timestamp
+// and as the anchor when converting v1's relative resets_in_seconds to
+// absolute epoch seconds.
+func extractCodexRateLimits(payload map[string]interface{}, sampledAt time.Time) *tailer.RateLimitSnapshot {
+	rl, ok := payload["rate_limits"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	snap := &tailer.RateLimitSnapshot{SampledAt: sampledAt.Unix()}
+
+	if v, ok := rl["plan_type"].(string); ok {
+		snap.PlanType = v
+	}
+	if v, ok := rl["rate_limit_reached_type"].(string); ok {
+		snap.ReachedType = v
+	}
+	if c, ok := rl["credits"].(map[string]interface{}); ok {
+		creds := &tailer.CreditsSnapshot{}
+		if v, ok := c["has_credits"].(bool); ok {
+			creds.HasCredits = v
+		}
+		if v, ok := c["unlimited"].(bool); ok {
+			creds.Unlimited = v
+		}
+		if v, ok := c["balance"].(float64); ok {
+			creds.Balance = v
+		}
+		snap.Credits = creds
+	}
+
+	// Windows: read primary/secondary in that order so the slice is stable.
+	if w := extractCodexRateLimitWindow(rl["primary"], sampledAt); w != nil {
+		snap.Windows = append(snap.Windows, *w)
+	}
+	if w := extractCodexRateLimitWindow(rl["secondary"], sampledAt); w != nil {
+		snap.Windows = append(snap.Windows, *w)
+	}
+	if len(snap.Windows) == 0 && snap.PlanType == "" && snap.Credits == nil {
+		// Nothing useful to surface — block was empty.
+		return nil
+	}
+	return snap
+}
+
+// extractCodexRateLimitWindow parses one window (primary or secondary) from
+// the rate_limits block. Returns nil when the value is missing or not a map.
+func extractCodexRateLimitWindow(raw interface{}, sampledAt time.Time) *tailer.RateLimitWindow {
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	w := &tailer.RateLimitWindow{}
+	if v, ok := m["used_percent"].(float64); ok {
+		w.UsedPercent = v
+	}
+	if v, ok := m["window_minutes"].(float64); ok {
+		w.WindowMinutes = int(v)
+	}
+	if v, ok := m["resets_at"].(float64); ok && v > 0 {
+		w.ResetsAt = int64(v)
+	} else if v, ok := m["resets_in_seconds"].(float64); ok && v > 0 {
+		// v1 schema: relative seconds. Anchor to the event timestamp so
+		// downstream consumers see a consistent absolute epoch.
+		w.ResetsAt = sampledAt.Add(time.Duration(v) * time.Second).Unix()
+	}
+	return w
 }
 
 // extractOpenAIUsageBreakdown parses an OpenAI-style usage map into a UsageBreakdown,

@@ -47,6 +47,7 @@
 
     <div class="sidebar-section">
       <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
@@ -82,13 +83,17 @@
 
       <!-- ── Overview ── -->
       <h2>Overview</h2>
+      <img src="../assets/mascot/mascot-trio-architecture-model.webp"
+           alt=""
+           class="mascot mascot-float-right"
+           loading="lazy" />
 
       <p>Irrlicht follows hexagonal (ports-and-adapters) architecture. Every external dependency is behind an interface. Every component is testable in isolation.</p>
 
       <div class="diagram">
 &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
 &#x2502;     HTTP/WebSocket Interface            &#x2502;
-&#x2502;  GET /api/v1/sessions, /stream, /state  &#x2502;
+&#x2502;  GET /api/v1/sessions(/stream), /state  &#x2502;
 &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;
                      &#x2502;
 &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
@@ -125,7 +130,7 @@
 &#x2502;   &#x251C;&#x2500;&#x2500; orchestrator/      # Orchestrator state
 &#x2502;   &#x2514;&#x2500;&#x2500; config/            # Configuration
 &#x251C;&#x2500;&#x2500; ports/
-&#x2502;   &#x251C;&#x2500;&#x2500; inbound/           # AgentWatcher, OrchestratorWatcher
+&#x2502;   &#x251C;&#x2500;&#x2500; inbound/           # Watcher, OrchestratorWatcher
 &#x2502;   &#x2514;&#x2500;&#x2500; outbound/          # Repository, Logger, ProcessWatcher, etc.
 &#x251C;&#x2500;&#x2500; adapters/
 &#x2502;   &#x251C;&#x2500;&#x2500; inbound/           # Event sources
@@ -138,11 +143,18 @@
 
       <h3>Inbound Ports</h3>
 
-      <pre><code>type AgentWatcher interface {
+      <pre><code>type Watcher interface {
+    Identity() agent.Identity
     Watch(ctx context.Context) error
     Subscribe() &lt;-chan agent.Event
     Unsubscribe(ch &lt;-chan agent.Event)
 }</code></pre>
+
+      <p>Each watcher carries the identity of the adapter that produced it
+      (<code>Identity().Name</code> &mdash; e.g. <code>"claude-code"</code>).
+      The <code>SessionDetector</code>'s merge pipeline captures
+      <code>Identity()</code> once per watcher and wraps every event with it,
+      so adapter identity is a property of the watcher, not the event payload.</p>
 
       <h3>Outbound Ports</h3>
 
@@ -169,7 +181,7 @@
         <li><strong>GitResolver</strong> &mdash; resolves project names via git commands</li>
         <li><strong>MetricsCollector</strong> &mdash; transcript tailer for session metrics</li>
         <li><strong>ProcessWatcher</strong> &mdash; kqueue adapter for process exit detection</li>
-        <li><strong>AgentWatchers</strong> &mdash; shared fswatcher fans out events from all registered adapters (Claude Code, Codex, Pi, Aider, OpenCode), plus Process Lifecycle for pre-sessions</li>
+        <li><strong>Watchers</strong> &mdash; <code>cmd/irrlichd/wiring.go</code> dispatches on each <code>agent.Agent</code>'s <code>Source</code> variant: <code>FilesUnderRoot</code> adapters (Claude Code, Codex, Pi) get a shared fswatcher plus a process scanner; <code>FilesUnderCWD</code> (Aider) and <code>ProcessOwnedStore</code> (OpenCode) adapters get a process scanner only. Every watcher exposes <code>Identity()</code> so per-event adapter naming flows through the merge pipeline rather than being stamped at emit time.</li>
         <li><strong>SessionDetector</strong> &mdash; thin coordinator that delegates to:
           <ul>
             <li><strong>StateClassifier</strong> &mdash; pure functions for working/waiting/ready transitions</li>
@@ -239,7 +251,6 @@
         <li><strong>Idempotent operations</strong> &mdash; safe to restart at any time</li>
         <li><strong>Non-destructive</strong> &mdash; never corrupts existing configs or data</li>
         <li><strong>Atomic writes</strong> &mdash; temp file + rename pattern prevents partial writes</li>
-        <li><strong>Kill switch</strong> &mdash; set <code>IRRLICHT_DISABLED=1</code> to disable entirely</li>
       </ul>
 
       <!-- ── Bottom nav ── -->

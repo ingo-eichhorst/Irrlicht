@@ -15,9 +15,9 @@
     "last_event_time": "2026-04-11T09:52:51.612Z",
     "wall_clock_session_duration": 43941000000,
     "state_durations": {
-      "ready": 7613000000,
+      "ready": 9718000000,
       "waiting": 16389000000,
-      "working": 19939000000
+      "working": 17834000000
     },
     "flicker_count": 3,
     "flickers_by_category": {
@@ -27,7 +27,7 @@
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 1,
-      "transcript activity (ready → working)": 1,
+      "force ready→working on first activity": 1,
       "transcript activity (waiting → working)": 1
     },
     "estimated_cost_usd": 0.4214535,
@@ -54,13 +54,13 @@
     },
     {
       "index": 1,
-      "event_index": 2,
-      "virtual_time": "2026-04-11T09:52:07.671Z",
+      "event_index": 6,
+      "virtual_time": "2026-04-11T09:52:09.776Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
-      "reason": "transcript activity (ready → working)",
-      "last_event_type": "",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
@@ -134,7 +134,7 @@
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "waiting",
-      "reason": "turn ended with question → waiting",
+      "reason": "turn ended with question or cue → waiting",
       "last_event_type": "assistant",
       "has_open_tool": false,
       "is_agent_done": true,

@@ -132,6 +132,19 @@ func TestClassifyState(t *testing.T) {
 			},
 			wantState: session.StateWaiting,
 		},
+		// Rule 2a (issue #381): turn ended with an imperative cue (no `?`)
+		// still routes to waiting via ExtractWaitingCue.
+		{
+			name:    "working → waiting (turn_done + imperative cue)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "turn_done",
+				HasOpenToolCall:   false,
+				LastAssistantText: "Take a look at the icon and let me know if it's right before I commit.",
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
 
 		// Rule 2b: IsAgentDone without question → ready.
 		{

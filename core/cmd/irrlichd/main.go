@@ -107,6 +107,15 @@ func main() {
 		logger.LogInfo("startup", "", "installed Claude Code hooks for permission tracking")
 	}
 
+	// Auto-install Claude Code statusLine.command for rate-limit ingestion
+	// (issue #309). Chains any user-configured statusline so we don't clobber
+	// it.
+	if modified, err := claudecode.EnsureStatuslineInstalled(); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to install statusline: %v", err))
+	} else if modified {
+		logger.LogInfo("startup", "", "installed Claude Code statusline hook for rate-limit ingestion")
+	}
+
 	// Configuration.
 	cfg := config.Default()
 	if v := os.Getenv("IRRLICHT_MAX_SESSION_AGE"); v != "" {
@@ -218,6 +227,7 @@ func main() {
 	hub := wshub.NewHub(push, historySnapshotProvider(historyTracker))
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
 	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(allAgents))
+	mux.HandleFunc("GET /api/v1/version", handleGetVersion(Version))
 
 	// pprof debug endpoints for runtime profiling (localhost only).
 	mux.HandleFunc("GET /debug/pprof/", localhostOnly(pprof.Index))
@@ -380,6 +390,12 @@ func main() {
 	// The detector satisfies claudecode.HookTarget via HandlePermissionHook.
 	mux.HandleFunc("POST /api/v1/hooks/claudecode",
 		claudecode.NewHookHandler(detector, logger))
+
+	// Statusline receiver: Claude Code's per-tick statusline JSON, carrying
+	// rate_limits for Pro/Max subscribers (issue #309). Routes to the
+	// metrics adapter so the snapshot lands in the right session's tailer.
+	mux.HandleFunc("POST /api/v1/hooks/claudecode/statusline",
+		claudecode.NewStatuslineHandler(metricsCollector, logger))
 
 	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
 	// IRRLICHT_RECORDINGS_DIR overrides the default directory so test

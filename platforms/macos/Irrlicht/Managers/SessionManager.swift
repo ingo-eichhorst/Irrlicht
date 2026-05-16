@@ -52,6 +52,9 @@ class SessionManager: ObservableObject {
     private var projectCostsTimer: Timer?
     private let projectCostsRefreshInterval: TimeInterval = 30.0
 
+    /// Daemon-owned directory. `irrlichd` creates it and writes session JSON
+    /// files; the app only mutates individual files for explicit user actions
+    /// (`resetSessionState`, `deleteSession`). Reads go through the WebSocket.
     private let instancesPath: URL
     private let orderFilePath: URL
     private var sessionOrder: [String] = []
@@ -63,14 +66,6 @@ class SessionManager: ObservableObject {
     // Tracks which pressure thresholds (80, 95) have already fired a notification
     // for each session ID. Prevents re-firing on every state update.
     private var notifiedThresholds: [String: Set<Int>] = [:]
-
-    // MARK: - File polling (legacy, active when IRRLICHT_USE_FILES=1)
-
-    private var fileSystemWatcher: DispatchSourceFileSystemObject?
-    private var debounceTimer: Timer?
-    private var periodicUpdateTimer: Timer?
-    private let debounceInterval: TimeInterval = 0.2 // 200ms debounce
-    private let updateInterval: TimeInterval = 1.0 // 1 second periodic updates
 
     // MARK: - WebSocket state
 
@@ -96,13 +91,14 @@ class SessionManager: ObservableObject {
     /// stays alive.
     private var notificationForwarder: NotificationClickForwarder?
 
-    // MARK: - Mode selection
+    /// Source of truth for "is macOS Focus / DND active right now". Consulted
+    /// when emitting notifications so we suppress sound + TTS alongside the
+    /// system-suppressed banner. Injectable for tests.
+    private let focusMonitor: FocusStateProviding
 
-    private var useFilePolling: Bool {
-        ProcessInfo.processInfo.environment["IRRLICHT_USE_FILES"] == "1"
-    }
+    init(focusMonitor: FocusStateProviding = FocusMonitor()) {
+        self.focusMonitor = focusMonitor
 
-    init() {
         let homeURL = FileManager.default.homeDirectoryForCurrentUser
         let supportPath = homeURL
             .appendingPathComponent("Library")
@@ -112,16 +108,27 @@ class SessionManager: ObservableObject {
         self.instancesPath = supportPath.appendingPathComponent("instances")
         self.orderFilePath = supportPath.appendingPathComponent("session-order.json")
 
+        // Out-of-the-box defaults. Notifications: all three events enabled,
+        // each with a distinguishable sound (Ready=Funk, Waiting=Ping,
+        // Context=Sosumi). Login item: opt the user in on first launch, with
+        // the gate flag tracking that we've applied the default once.
+        // register(defaults:) only seeds unset keys, so it never overrides a
+        // user who has explicitly picked something else.
+        var defaultsSeed: [String: Any] = [
+            "launchAtLogin": true,
+            "didApplyDefaultLoginItem": false,
+        ]
+        for event in NotificationEvent.allCases {
+            defaultsSeed[event.enabledKey] = true
+            defaultsSeed[event.soundKey] = event.defaultSound.rawValue
+        }
+        UserDefaults.standard.register(defaults: defaultsSeed)
+
         Task {
             loadSessionOrder()
             loadProjectGroupOrder()
             requestNotificationPermission()
-            if self.useFilePolling {
-                self.startWatching()
-                self.loadExistingSessions()
-            } else {
-                self.startWebSocket()
-            }
+            self.startWebSocket()
             self.startProjectCostsPolling()
         }
     }
@@ -131,12 +138,6 @@ class SessionManager: ObservableObject {
         connectTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
-        fileSystemWatcher?.cancel()
-        fileSystemWatcher = nil
-        debounceTimer?.invalidate()
-        debounceTimer = nil
-        periodicUpdateTimer?.invalidate()
-        periodicUpdateTimer = nil
         projectCostsTimer?.invalidate()
         projectCostsTimer = nil
     }
@@ -671,151 +672,6 @@ class SessionManager: ObservableObject {
         writeDebugState()
     }
 
-    // MARK: - File System Watching (legacy)
-
-    func startWatching() {
-        guard connectionState == .disconnected else { return }
-
-        // Create directory if it doesn't exist
-        createInstancesDirectoryIfNeeded()
-
-        // Set up file system watcher
-        let fileDescriptor = open(instancesPath.path, O_EVTONLY)
-        guard fileDescriptor >= 0 else {
-            lastError = "Failed to open instances directory for watching"
-            return
-        }
-
-        fileSystemWatcher = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
-            eventMask: [.write, .delete, .rename],
-            queue: DispatchQueue.main
-        )
-
-        fileSystemWatcher?.setEventHandler { [weak self] in
-            self?.debouncedReload()
-        }
-
-        fileSystemWatcher?.setCancelHandler {
-            close(fileDescriptor)
-        }
-
-        fileSystemWatcher?.resume()
-
-        // Start periodic update timer
-        periodicUpdateTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.loadExistingSessions()
-            }
-        }
-
-        connectionState = .connected
-    }
-
-    func stopWatching() {
-        fileSystemWatcher?.cancel()
-        fileSystemWatcher = nil
-        debounceTimer?.invalidate()
-        debounceTimer = nil
-        periodicUpdateTimer?.invalidate()
-        periodicUpdateTimer = nil
-        connectionState = .disconnected
-    }
-
-    private func debouncedReload() {
-        debounceTimer?.invalidate()
-        debounceTimer = Timer.scheduledTimer(withTimeInterval: debounceInterval, repeats: false) { [weak self] _ in
-            Task {
-                await self?.loadExistingSessions()
-            }
-        }
-    }
-
-    // MARK: - Session Loading (file polling mode)
-
-    func loadExistingSessions() {
-        print("📂 Loading sessions from: \(instancesPath.path)")
-        do {
-            let fileURLs = try FileManager.default.contentsOfDirectory(
-                at: instancesPath,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ).filter { $0.pathExtension == "json" }
-
-            print("📄 Found \(fileURLs.count) session files")
-
-            var newSessions: [SessionState] = []
-
-            for fileURL in fileURLs {
-                do {
-                    let data = try Data(contentsOf: fileURL)
-                    let session = try JSONDecoder().decode(SessionState.self, from: data)
-
-                    newSessions.append(session)
-                } catch {
-                    print("Failed to decode session file \(fileURL.lastPathComponent): \(error)")
-                    // Continue processing other files
-                }
-            }
-
-            // Auto-cleanup orphaned sessions whose Claude Code process has exited.
-            // This catches the common case where Claude Code is force-quit or crashes
-            // without firing SessionEnd.
-            var orphanedIds: [String] = []
-            let staleTTL: TimeInterval = 3600 // 1 hour — for legacy sessions without PID
-            for session in newSessions {
-                let isOrphaned: Bool
-                if let pid = session.pid, pid > 0 {
-                    // PID-based check: probe with signal 0 (no signal sent, just liveness check)
-                    isOrphaned = kill(pid_t(pid), 0) != 0
-                } else {
-                    // Legacy session: no PID stored; only reap active states after TTL
-                    let isActive = session.state == .working || session.state == .waiting
-                    isOrphaned = isActive && session.updatedAt < Date().addingTimeInterval(-staleTTL)
-                }
-                if isOrphaned {
-                    let filePath = instancesPath.appendingPathComponent("\(session.id).json")
-                    try? FileManager.default.removeItem(at: filePath)
-                    orphanedIds.append(session.id)
-                    let pidDesc = session.pid.map { "pid=\($0)" } ?? "no-pid"
-                    print("🧹 Auto-deleted orphaned session \(session.shortId) (\(pidDesc))")
-                }
-            }
-            if !orphanedIds.isEmpty {
-                newSessions.removeAll { orphanedIds.contains($0.id) }
-            }
-
-            // Sort sessions according to saved order, with new sessions at the end
-            newSessions = sortSessionsByOrder(newSessions)
-
-            // Update session order to include any new sessions and remove deleted ones
-            updateSessionOrder(with: newSessions)
-
-            // Assign duplicate indexes for sessions with same project/branch
-            assignDuplicateIndexes(&newSessions)
-
-            sessions = newSessions
-            checkContextPressureAlerts(sessions: newSessions)
-            writeDebugState()
-
-        } catch {
-            lastError = "Failed to load sessions: \(error.localizedDescription)"
-            print("Session loading error: \(error)")
-        }
-    }
-
-    private func createInstancesDirectoryIfNeeded() {
-        do {
-            try FileManager.default.createDirectory(
-                at: instancesPath,
-                withIntermediateDirectories: true,
-                attributes: nil
-            )
-        } catch {
-            lastError = "Failed to create instances directory: \(error.localizedDescription)"
-        }
-    }
-
     // MARK: - Computed Properties for UI
 
     var glyphStrip: String {
@@ -868,9 +724,12 @@ class SessionManager: ObservableObject {
         // Register the click-forwarder delegate before the first notification
         // is scheduled, otherwise macOS drops notification taps silently.
         if notificationForwarder == nil {
-            let forwarder = NotificationClickForwarder { [weak self] sessionID in
-                self?.handleNotificationTap(sessionID: sessionID)
-            }
+            let forwarder = NotificationClickForwarder(
+                onTap: { [weak self] sessionID in
+                    self?.handleNotificationTap(sessionID: sessionID)
+                },
+                focusMonitor: focusMonitor
+            )
             notificationForwarder = forwarder
             center.delegate = forwarder
         }
@@ -952,12 +811,14 @@ class SessionManager: ObservableObject {
     }
 
     private func sendContextPressureNotification(session: SessionState, threshold: Int, utilization: Double) {
+        guard UserDefaults.standard.bool(forKey: NotificationEvent.contextPressure.enabledKey) else { return }
         let label = session.projectName ?? session.shortId
         sendNotification(
             identifier: "irrlicht-context-\(session.id)-\(threshold)",
             title: "Context pressure: \(threshold)% threshold reached",
             body: "\(label) is at \(String(format: "%.1f%%", utilization)) context. Consider switching to a fresh session.",
-            sessionID: session.id
+            sessionID: session.id,
+            event: .contextPressure
         )
     }
 
@@ -971,11 +832,14 @@ class SessionManager: ObservableObject {
         let notifyWaiting = UserDefaults.standard.bool(forKey: "notifyOnWaiting")
 
         let title: String
+        let event: NotificationEvent
         switch session.state {
         case .ready where notifyReady && previousState == .working:
             title = "Agent ready"
+            event = .ready
         case .waiting where notifyWaiting && previousState == .working:
             title = "Agent waiting for input"
+            event = .waiting
         default:
             return
         }
@@ -987,18 +851,24 @@ class SessionManager: ObservableObject {
             identifier: "irrlicht-state-\(session.id)",
             title: title,
             body: "\(label)\(branch)",
-            sessionID: session.id
+            sessionID: session.id,
+            event: event
         )
     }
 
-    private func sendNotification(identifier: String, title: String, body: String, sessionID: String) {
+    private func sendNotification(
+        identifier: String,
+        title: String,
+        body: String,
+        sessionID: String,
+        event: NotificationEvent
+    ) {
         guard canUseUserNotifications else { return }
+        let choice = Self.choice(for: event)
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
-        // Round-trip the session ID so the click-forwarder can look up
-        // the session and jump back to its launching terminal/IDE.
+        content.sound = Self.notificationSound(for: choice)
         content.userInfo = [NotificationUserInfoKey.sessionID: sessionID]
 
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
@@ -1007,6 +877,60 @@ class SessionManager: ObservableObject {
                 print("⚠️ Failed to send notification: \(error.localizedDescription)")
             }
         }
+
+        // willPresent is unreliable for LSUIElement menubar-only apps — macOS
+        // skips it when it considers the app not-in-foreground, and Irrlicht
+        // sits in that grey zone. Drive speech from here (on @MainActor) so
+        // it actually fires for real state transitions. The per-event toggle
+        // is the off switch; users who pick a Speak aloud variant have opted in.
+        // TTS bypasses UNNotificationContent entirely, so we must also gate on
+        // Focus here — otherwise the loudest sound option leaks through DND.
+        if let voice = Self.voiceForSpeak(choice: choice, focusActive: focusMonitor.isFocusActive) {
+            SoundPlayer.speak(title: title, body: body, voice: voice)
+        }
+    }
+
+    /// Pure decision helper: returns the voice to speak with when the chosen
+    /// SoundChoice is `.speak(_)` AND Focus is not active. Anything else → nil.
+    /// Extracted so the Focus-gating branch in `sendNotification` has direct
+    /// unit-test coverage without needing to stub `SoundPlayer`.
+    nonisolated static func voiceForSpeak(choice: SoundChoice, focusActive: Bool) -> SpokenVoice? {
+        if case .speak(let voice) = choice, !focusActive { return voice }
+        return nil
+    }
+
+    /// Pure: turn a SoundChoice into a UNNotificationSound. `.none` / `.speak`
+    /// → nil (no audible alert from the notification center). A `.custom`
+    /// choice whose installed file went missing falls back to Ping.
+    nonisolated static func notificationSound(for choice: SoundChoice) -> UNNotificationSound? {
+        switch choice {
+        case .none, .speak:
+            return nil
+        case .custom(let installedFilename, _):
+            let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+            let path = library?
+                .appendingPathComponent("Sounds")
+                .appendingPathComponent(installedFilename).path
+            if let path, FileManager.default.fileExists(atPath: path) {
+                return UNNotificationSound(named: UNNotificationSoundName(installedFilename))
+            }
+            return UNNotificationSound(named: UNNotificationSoundName("Ping.aiff"))
+        default:
+            guard let name = choice.notificationSoundName else { return .default }
+            return UNNotificationSound(named: UNNotificationSoundName(name))
+        }
+    }
+
+    /// Convenience for tests + callers that want the event → sound lookup in
+    /// a single hop. Production path uses `choice(for:)` + `notificationSound(for:)`
+    /// directly to avoid double-reading UserDefaults.
+    nonisolated static func resolveNotificationSound(for event: NotificationEvent) -> UNNotificationSound? {
+        notificationSound(for: choice(for: event))
+    }
+
+    nonisolated static func choice(for event: NotificationEvent) -> SoundChoice {
+        let raw = UserDefaults.standard.string(forKey: event.soundKey) ?? SoundChoice.default.rawValue
+        return SoundChoice(rawValue: raw) ?? .default
     }
 
     /// Invoked by `NotificationClickForwarder` on the main actor when the user
@@ -1365,9 +1289,11 @@ enum NotificationUserInfoKey {
 /// of making `SessionManager` itself inherit from NSObject.
 final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelegate {
     private let onTap: @MainActor (String) -> Void
+    private let focusMonitor: FocusStateProviding
 
-    init(onTap: @escaping @MainActor (String) -> Void) {
+    init(onTap: @escaping @MainActor (String) -> Void, focusMonitor: FocusStateProviding) {
         self.onTap = onTap
+        self.focusMonitor = focusMonitor
     }
 
     nonisolated func userNotificationCenter(
@@ -1386,11 +1312,21 @@ final class NotificationClickForwarder: NSObject, UNUserNotificationCenterDelega
 
     // Show banners for notifications delivered while the app is foregrounded
     // — without this, in-app notifications are silently suppressed on macOS.
+    // Under Focus / DND, suppress both banner and sound: the user has asked
+    // macOS for quiet, and forcing `.sound` here is what lets the sound leak
+    // through even when the OS is suppressing the banner.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        completionHandler(Self.presentationOptions(focusActive: focusMonitor.isFocusActive))
+    }
+
+    /// Pure decision helper for `willPresent`. Extracted so tests can verify
+    /// the Focus-gating branch without needing a real UNUserNotificationCenter
+    /// instance (which can't be constructed outside an app bundle).
+    nonisolated static func presentationOptions(focusActive: Bool) -> UNNotificationPresentationOptions {
+        focusActive ? [] : [.banner, .sound]
     }
 }

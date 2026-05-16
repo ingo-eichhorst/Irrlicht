@@ -48,6 +48,7 @@
 
     <div class="sidebar-section">
       <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
@@ -112,19 +113,103 @@
             <td>Override path to Gas Town <code>gt</code> CLI binary</td>
           </tr>
           <tr>
-            <td><code>IRRLICHT_USE_FILES</code></td>
-            <td>Boolean (1/0)</td>
-            <td>unset</td>
-            <td>Enable file polling mode in macOS app (legacy, not recommended)</td>
+            <td><code>IRRLICHT_UI_DIR</code></td>
+            <td>Path</td>
+            <td>auto-detect</td>
+            <td>Directory containing the dashboard's <code>index.html</code>; escape hatch when auto-detection fails (see <a href="#when-to-use">When to use these</a>)</td>
           </tr>
           <tr>
-            <td><code>IRRLICHT_DISABLED</code></td>
+            <td><code>IRRLICHT_BIND_ADDR</code></td>
+            <td>host:port</td>
+            <td><code>127.0.0.1:7837</code></td>
+            <td>Override the daemon's TCP bind &mdash; use <code>0.0.0.0:7837</code> to expose on the LAN</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_MDNS</code></td>
             <td>Boolean (1/0)</td>
             <td>unset</td>
-            <td>Disable the daemon entirely (kill switch)</td>
+            <td>Advertise <code>_irrlicht._tcp</code> via Bonjour so other devices on the LAN can discover the daemon</td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_DEBUG</code></td>
+            <td>Boolean (1/0)</td>
+            <td>unset</td>
+            <td>macOS app dumps session state to <code>~/.irrlicht/debug-state.json</code> on every update</td>
+          </tr>
+          <tr>
+            <td><code>PI_CODING_AGENT_SESSION_DIR</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.pi/coding-agent/sessions</code></td>
+            <td>Relocate the Pi adapter's transcript root. Read once at daemon startup; restart required after changing. Non-absolute values are rejected with a log warning</td>
+          </tr>
+          <tr>
+            <td><code>CLAUDE_CONFIG_DIR</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.claude</code></td>
+            <td>Relocate the Claude Code adapter's transcript root (the daemon appends <code>/projects</code>). PID-metadata directory at <code>~/.claude/sessions/</code> remains hardcoded</td>
+          </tr>
+          <tr>
+            <td><code>CODEX_HOME</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.codex</code></td>
+            <td>Relocate the Codex adapter's transcript root (the daemon appends <code>/sessions</code>)</td>
           </tr>
         </tbody>
       </table>
+
+      <!-- ── When to use these ── -->
+      <h2 id="when-to-use">When to use these</h2>
+
+      <p>The defaults work for solo, single-machine use. Reach for these overrides when one of the following describes you:</p>
+
+      <h3>I want to peek at sessions from my phone on the same WiFi</h3>
+
+      <p>If you run <code>irrlichd</code> yourself from a terminal, set both vars inline:</p>
+
+      <pre><code>IRRLICHT_BIND_ADDR=0.0.0.0:7837 IRRLICHT_MDNS=1 irrlichd</code></pre>
+
+      <p>If the macOS app auto-spawns the daemon for you (the default for DMG / Homebrew installs), shell env vars never reach it. Set them in the per-user launchd context first, then relaunch the app:</p>
+
+      <pre><code>launchctl setenv IRRLICHT_BIND_ADDR 0.0.0.0:7837
+launchctl setenv IRRLICHT_MDNS 1
+# quit Irrlicht.app from the menu bar, then reopen it</code></pre>
+
+      <p>Either way, then open <code>http://&lt;hostname&gt;.local:7837</code> in any browser on the same network. mDNS lets the phone find the host without you typing an IP.</p>
+
+      <p><strong>Security note:</strong> the daemon has no authentication today. Anyone on the network you bind to can read all your transcripts. Only do this on networks you trust (your home LAN, your tailnet) &mdash; never on a coffee-shop WiFi. See <a href="https://github.com/ingo-eichhorst/Irrlicht/blob/main/SECURITY.md">SECURITY.md</a> for the full posture.</p>
+
+      <p><strong>Future:</strong> these two knobs will be replaced by a single explicit <em>hub mode</em>. See the <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server">Relay Server design</a> for the planned consolidation.</p>
+
+      <h3>The dashboard returned "Dashboard UI not found"</h3>
+
+      <p>The daemon resolves the dashboard's location in this order (first hit wins):</p>
+
+      <ol>
+        <li><code>$IRRLICHT_UI_DIR</code> &mdash; escape hatch (what this recipe sets)</li>
+        <li><code>&lt;exe&gt;/../Resources/web/</code> &mdash; production <code>.app</code> bundle layout</li>
+        <li><code>~/.local/share/irrlicht/web/</code> &mdash; daemon-only curl install</li>
+        <li>Walking up from the executable for <code>platforms/web/index.html</code> &mdash; dev checkout</li>
+      </ol>
+
+      <p>If the three auto-detect paths (2&ndash;4) all miss &mdash; custom install layout, fork with a moved UI, broken symlink &mdash; set the env var so it takes precedence:</p>
+
+      <pre><code>IRRLICHT_UI_DIR=/path/to/dir/containing/index.html irrlichd</code></pre>
+
+      <h3>The macOS app is misbehaving and I want to see its session state</h3>
+
+      <p>Env vars set in your shell do <em>not</em> reach a GUI app launched via <code>open -a</code> &mdash; LaunchServices spawns the app without inheriting them. Use one of these instead:</p>
+
+      <pre><code># Most reliable: invoke the binary directly
+IRRLICHT_DEBUG=1 /Applications/Irrlicht.app/Contents/MacOS/Irrlicht
+
+# Or, on macOS 13+: forward via open's --env flag
+open -a Irrlicht --env IRRLICHT_DEBUG=1
+
+# Or, persist for the launchd session and relaunch normally
+launchctl setenv IRRLICHT_DEBUG 1
+# quit Irrlicht.app, then reopen it</code></pre>
+
+      <p>The current session list, connection state, and history buckets are written to <code>~/.irrlicht/debug-state.json</code> on every update. Useful when filing a bug report.</p>
 
       <!-- ── Filesystem Paths ── -->
       <h2>Filesystem Paths</h2>
@@ -169,7 +254,11 @@
       <h3>Notifications</h3>
 
       <ul>
-        <li>Context pressure notifications at 80% and 95%</li>
+        <li>Three events &mdash; <code>ready</code>, <code>waiting</code>, and context pressure (80% / 95%) &mdash; each has its own enable toggle and sound picker in Preferences</li>
+        <li>Built-in sounds: Ping, Chime, Funk, Whoosh, Sosumi; defaults Ready=Funk, Waiting=Ping, Context=Sosumi</li>
+        <li><strong>None</strong> &mdash; the banner still appears but plays no sound</li>
+        <li><strong>Speak aloud</strong> &mdash; routes the title and body through <code>AVSpeechSynthesizer</code> (pinned to en-US) with three voice variants: Default, Zoe-Premium (female), Jamie-Premium (male). If a premium voice isn't installed, the row deep-links to System Settings &rarr; Accessibility &rarr; Spoken Content</li>
+        <li><strong>Custom</strong> &mdash; imports <code>aiff/wav/mp3/m4a/caf</code> from disk into <code>~/Library/Sounds/</code>, transcoding <code>mp3</code>/<code>m4a</code> to LPCM-in-CAF so <code>UNNotificationSound</code> can play them</li>
         <li>Requires macOS notification permission (requested on launch)</li>
       </ul>
 
@@ -179,7 +268,7 @@
       <ul>
         <li><strong>Format:</strong> Structured JSON</li>
         <li><strong>Location:</strong> <code>~/Library/Application Support/Irrlicht/logs/</code></li>
-        <li><strong>Files:</strong> <code>irrlicht.log</code> (current), <code>irrlicht.log.1</code> through <code>.5</code> (rotated)</li>
+        <li><strong>Files:</strong> <code>events.log</code> (current), <code>events.log.1</code> through <code>.5</code> (rotated)</li>
         <li><strong>Max size:</strong> 10MB per file, 5 files retained</li>
         <li><strong>Log event types:</strong> <code>startup</code>, <code>shutdown</code>, <code>session-detector</code>, <code>process-watcher</code>, <code>process-exit</code></li>
       </ul>
@@ -199,6 +288,20 @@
       <p>The daemon (<code>irrlichd</code>) is embedded inside <code>Irrlicht.app</code> and managed automatically. When you launch the app, the daemon starts; when you quit, it stops. If the daemon crashes, the app restarts it with exponential backoff.</p>
 
       <p>If an external daemon is already running (e.g. from a development build), the app detects it and uses the existing instance instead of spawning a new one.</p>
+
+      <!-- ── Terminal hosts ── -->
+      <h2>Terminal hosts</h2>
+
+      <p>Clicking a session in the menu bar or web UI brings the originating terminal's window &mdash; and where possible the exact tab &mdash; to the front. Most terminals work out of the box. Kitty needs one extra config line for precise tab focus.</p>
+
+      <h3>Kitty</h3>
+
+      <p>Kitty&apos;s inter-process control is opt-in. Without it, Irrlicht can raise the kitty window but cannot switch to the tab that owns the clicked session &mdash; the last-focused tab stays visible. Enable remote control in <code>~/.config/kitty/kitty.conf</code>:</p>
+
+      <pre><code>allow_remote_control yes
+listen_on            unix:/tmp/kitty-{kitty_pid}</code></pre>
+
+      <p>Restart kitty after editing. New sessions started inside kitty will then have <code>KITTY_LISTEN_ON</code> set, and clicks land on the exact tab via <code>kitten @ focus-window</code>. (Note: macOS does not support Linux-style abstract sockets, so a filesystem path is required.)</p>
 
       <!-- ── Bottom nav ── -->
       <nav class="docs-nav-bottom">

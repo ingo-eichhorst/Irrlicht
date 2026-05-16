@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
+  <title id="title">Irrlicht purple gradient flame icon</title>
+  <desc id="desc">A simplified Irrlicht flame silhouette with a restrained purple brand gradient centered on #8B5CF6 and a subtle glow on a transparent background.</desc>
+
+  <defs>
+    <linearGradient id="flameGradient" x1="0.38" y1="0.08" x2="0.62" y2="0.95">
+      <stop offset="0%" stop-color="#E9DDFF"/>
+      <stop offset="24%" stop-color="#C9B2FF"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="76%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
+
+    <radialGradient id="innerGlowTop" cx="0.35" cy="0.18" r="0.85">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="25%" stop-color="#F5F0FF" stop-opacity="0.20"/>
+      <stop offset="54%" stop-color="#D9C8FF" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="innerGlowBottom" cx="0.53" cy="0.92" r="0.42">
+      <stop offset="0%" stop-color="#B691FF" stop-opacity="0.28"/>
+      <stop offset="45%" stop-color="#8B5CF6" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="baseGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.96"/>
+      <stop offset="42%" stop-color="#7C3AED" stop-opacity="0.60"/>
+      <stop offset="75%" stop-color="#6D28D9" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#5B21B6" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="outerGlow" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="14" result="blur1"/>
+      <feColorMatrix in="blur1" type="matrix"
+        values="1 0 0 0 0
+                0 1 0 0 0
+                0 0 1 0 0
+                0 0 0 0.55 0" result="glow1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="36" result="blur2"/>
+      <feColorMatrix in="blur2" type="matrix"
+        values="1 0 0 0 0
+                0 1 0 0 0
+                0 0 1 0 0
+                0 0 0 0.18 0" result="glow2"/>
+      <feMerge>
+        <feMergeNode in="glow2"/>
+        <feMergeNode in="glow1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <mask id="flameMask">
+      <path fill="white" d="M584 157C609 199 615 250 609 308C604 362 581 412 526 464C474 513 424 562 392 625C356 695 349 790 372 869C410 1001 516 1065 635 1065C790 1065 888 956 888 785C888 718 858 654 800 615C791 609 787 612 788 624C789 644 795 661 794 683C792 743 755 784 697 784C654 784 625 751 624 699C623 661 644 621 670 581C706 526 734 484 734 416C734 321 680 246 598 167C593 162 588 158 584 157Z"/>
+    </mask>
+  </defs>
+
+  <ellipse cx="627" cy="1060" rx="155" ry="52" fill="url(#baseGlow)" opacity="0.9"/>
+
+  <g filter="url(#outerGlow)">
+    <path fill="url(#flameGradient)" d="M584 157C609 199 615 250 609 308C604 362 581 412 526 464C474 513 424 562 392 625C356 695 349 790 372 869C410 1001 516 1065 635 1065C790 1065 888 956 888 785C888 718 858 654 800 615C791 609 787 612 788 624C789 644 795 661 794 683C792 743 755 784 697 784C654 784 625 751 624 699C623 661 644 621 670 581C706 526 734 484 734 416C734 321 680 246 598 167C593 162 588 158 584 157Z"/>
+    <g mask="url(#flameMask)">
+      <ellipse cx="565" cy="275" rx="180" ry="210" fill="url(#innerGlowTop)"/>
+      <ellipse cx="635" cy="920" rx="250" ry="220" fill="url(#innerGlowBottom)"/>
+    </g>
+  </g>
+</svg>

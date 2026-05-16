@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import os
 
 /// Branding for one inbound agent adapter, served by the daemon's
@@ -58,6 +59,212 @@ struct SessionTask: Codable, Hashable {
     }
 }
 
+/// Subscription-quota window emitted by Anthropic / OpenAI subscription
+/// providers. Two windows typically arrive together (5h primary, 7d
+/// secondary). UsedPercent is the provider value as-is (may carry
+/// floating-point noise like 14.000000000000002 — round at render time,
+/// not at decode).
+struct RateLimitWindowInfo: Codable, Hashable {
+    let usedPercent: Double
+    let windowMinutes: Int
+    let resetsAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case usedPercent = "used_percent"
+        case windowMinutes = "window_minutes"
+        case resetsAt = "resets_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        usedPercent = try c.decode(Double.self, forKey: .usedPercent)
+        windowMinutes = try c.decode(Int.self, forKey: .windowMinutes)
+        let epoch = try c.decode(Double.self, forKey: .resetsAt)
+        resetsAt = Date(timeIntervalSince1970: epoch)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(usedPercent, forKey: .usedPercent)
+        try c.encode(windowMinutes, forKey: .windowMinutes)
+        try c.encode(resetsAt.timeIntervalSince1970, forKey: .resetsAt)
+    }
+}
+
+/// Prepaid credits balance, populated only when the user is on the API-key
+/// / usage path. Subscription users see `credits == nil`.
+struct CreditsInfo: Codable, Hashable {
+    let hasCredits: Bool
+    let unlimited: Bool?
+    let balance: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case hasCredits = "has_credits"
+        case unlimited, balance
+    }
+}
+
+/// One subscription-quota snapshot for a session. Mirrors
+/// session.RateLimitSnapshot in the Go daemon (issue #309). Carried under
+/// SessionMetrics.rateLimit; nil for sessions that don't surface a quota
+/// (API-key Claude Code, Bedrock, Vertex).
+struct RateLimitInfo: Codable, Hashable {
+    let windows: [RateLimitWindowInfo]
+    let planType: String?
+    let credits: CreditsInfo?
+    let reachedType: String?
+    let sampledAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case windows
+        case planType = "plan_type"
+        case credits
+        case reachedType = "reached_type"
+        case sampledAt = "sampled_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        windows = try c.decodeIfPresent([RateLimitWindowInfo].self, forKey: .windows) ?? []
+        planType = try c.decodeIfPresent(String.self, forKey: .planType)
+        credits = try c.decodeIfPresent(CreditsInfo.self, forKey: .credits)
+        reachedType = try c.decodeIfPresent(String.self, forKey: .reachedType)
+        let epoch = try c.decode(Double.self, forKey: .sampledAt)
+        sampledAt = Date(timeIntervalSince1970: epoch)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(windows, forKey: .windows)
+        try c.encodeIfPresent(planType, forKey: .planType)
+        try c.encodeIfPresent(credits, forKey: .credits)
+        try c.encodeIfPresent(reachedType, forKey: .reachedType)
+        try c.encode(sampledAt.timeIntervalSince1970, forKey: .sampledAt)
+    }
+
+    /// The window with the highest UsedPercent — the natural "next to hit
+    /// the cap" pick for the header display. Returns nil when no windows
+    /// carry a non-zero reading.
+    var imminentWindow: RateLimitWindowInfo? {
+        let nonZero = windows.filter { $0.usedPercent > 0 }
+        return nonZero.max { $0.usedPercent < $1.usedPercent }
+    }
+
+    /// Returns a friendly tier label for tooltip / display, e.g. "Claude
+    /// Max", "ChatGPT Plus", or nil when planType is empty/unset.
+    var planTypeLabel: String? {
+        guard let pt = planType, !pt.isEmpty else { return nil }
+        switch pt {
+        case "max": return "Claude Max"
+        case "pro": return "Claude Pro"
+        case "plus": return "ChatGPT Plus"
+        case "team": return "Team"
+        case "enterprise": return "Enterprise"
+        default: return pt.capitalized
+        }
+    }
+
+    /// Provider identity inferred from planType (when populated) or the
+    /// adapter that produced this snapshot. The bucket is account-scoped
+    /// at the subscription provider, not the CLI — multiple agents (Claude
+    /// Code + Pi(anthropic) + OpenCode(anthropic-oauth)) share a single
+    /// Anthropic subscription, so the chip should brand by provider.
+    ///
+    /// Returns "anthropic" / "openai" for known providers, or nil when
+    /// the snapshot doesn't tell us enough (rare: usually planType or the
+    /// adapter is enough). Callers fall back to the adapter icon when nil.
+    func providerKey(adapter: String?) -> String? {
+        switch planType {
+        case "max", "pro": return "anthropic"
+        case "plus": return "openai"
+        default: break
+        }
+        switch adapter {
+        case "claude-code": return "anthropic"
+        case "codex": return "openai"
+        default: return nil
+        }
+    }
+}
+
+/// Per-provider display preference, stored in @AppStorage under
+/// `providerMode_<key>`. Issue #309's maintainer comment asked for an
+/// explicit toggle so a user with multiple paths into the same provider
+/// (e.g. Anthropic Pro **and** Bedrock API key) can pick which view the
+/// chip should render. `auto` defers to snapshot detection — the
+/// default and the right choice for the typical single-path user.
+enum ProviderModePreference: String, CaseIterable, Identifiable {
+    case auto         // infer from snapshot.planType / snapshot.credits
+    case subscription // force the bars chip
+    case usage        // force the spend chip
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .auto: return "Auto"
+        case .subscription: return "Subscription"
+        case .usage: return "Usage"
+        }
+    }
+
+    /// AppStorage key for this provider. Stable across app launches.
+    static func storageKey(providerKey: String) -> String {
+        "providerMode_\(providerKey)"
+    }
+
+    /// Read the persisted preference for a provider. Falls back to
+    /// `.auto` for unknown keys or unparseable values.
+    static func current(for providerKey: String) -> ProviderModePreference {
+        let raw = UserDefaults.standard.string(forKey: storageKey(providerKey: providerKey)) ?? ""
+        return ProviderModePreference(rawValue: raw) ?? .auto
+    }
+}
+
+/// Hardcoded provider-level icons, picked by RateLimitInfo.providerKey for
+/// the quota chip. These are subscription-provider icons (Anthropic,
+/// OpenAI) — distinct from the agent CLI icons in AgentRegistry, since
+/// many CLIs can share one subscription.
+///
+/// Lives Swift-side rather than in the Go AgentRegistry because providers
+/// don't have agent adapters in irrlicht; they are an orthogonal axis.
+enum ProviderIconRegistry {
+    /// Anthropic logomark — three angled strokes forming a stylized "A",
+    /// matched to the mockup in issue #309. White-on-transparent so it
+    /// inherits the foreground color when rendered as a template.
+    static let anthropicSVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+      <path d="M14.83 4.5h-3.49l5.83 15h3.5l-5.84-15zM6.49 4.5l-5.83 15h3.57l1.19-3.13h6.09l1.2 3.13h3.57l-5.83-15H6.49zm-.05 8.98l1.99-5.2 1.99 5.2H6.44z" fill="currentColor"/>
+    </svg>
+    """
+
+    /// OpenAI mark — a simplified knot/whirl glyph.
+    static let openaiSVG = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+      <path d="M22.28 9.821a5.985 5.985 0 0 0-.515-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.142-.08 4.774-2.758a.795.795 0 0 0 .392-.681v-6.737l2.018 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.488 4.493zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.778 2.758a.795.795 0 0 0 .787 0l5.832-3.367v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.077.077 0 0 1-.062 0l-4.83-2.79A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.077.077 0 0 1 .062 0l4.83 2.79a4.5 4.5 0 0 1-.676 8.05v-5.678a.79.79 0 0 0-.398-.66zm2.01-3.023l-.142-.085-4.774-2.782a.776.776 0 0 0-.787 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.504 4.504 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.392.681v6.737zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" fill="currentColor"/>
+    </svg>
+    """
+
+    /// Render the SVG for the given key into an NSImage sized to fit the
+    /// chip icon slot. Returns nil for unknown keys; callers fall back to
+    /// the adapter icon.
+    @MainActor
+    static func image(forKey key: String?) -> NSImage? {
+        guard let key = key else { return nil }
+        let svg: String
+        switch key {
+        case "anthropic": svg = anthropicSVG
+        case "openai": svg = openaiSVG
+        default: return nil
+        }
+        guard let data = svg.data(using: .utf8),
+              let img = NSImage(data: data) else { return nil }
+        img.isTemplate = true
+        img.size = NSSize(width: 14, height: 14)
+        return img
+    }
+}
+
 // Performance metrics from transcript analysis
 struct SessionMetrics: Codable {
     let elapsedSeconds: Int64       // elapsed time when metrics were computed (for ready sessions)
@@ -70,6 +277,8 @@ struct SessionMetrics: Codable {
     let estimatedCostUSD: Double?   // estimated session cost in USD (nil if not available)
     let lastAssistantText: String?  // last assistant message text, truncated (~200 chars)
     let tasks: [SessionTask]?              // Claude Code task list (nil when TaskCreate never called)
+    let rateLimit: RateLimitInfo?          // subscription-quota snapshot (nil for API-key / Bedrock / Vertex)
+    let rateLimitForecastEta: Date?        // projected wall-clock time when the imminent window hits 100% (nil when unforecastable)
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -82,6 +291,75 @@ struct SessionMetrics: Codable {
         case estimatedCostUSD = "estimated_cost_usd"
         case lastAssistantText = "last_assistant_text"
         case tasks
+        case rateLimit = "rate_limit"
+        case rateLimitForecastEta = "rate_limit_forecast_eta"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        elapsedSeconds = try c.decodeIfPresent(Int64.self, forKey: .elapsedSeconds) ?? 0
+        totalTokens = try c.decodeIfPresent(Int64.self, forKey: .totalTokens) ?? 0
+        modelName = try c.decodeIfPresent(String.self, forKey: .modelName) ?? ""
+        contextWindow = try c.decodeIfPresent(Int64.self, forKey: .contextWindow)
+        contextUtilization = try c.decodeIfPresent(Double.self, forKey: .contextUtilization) ?? 0
+        pressureLevel = try c.decodeIfPresent(String.self, forKey: .pressureLevel) ?? "unknown"
+        contextWindowUnknown = try c.decodeIfPresent(Bool.self, forKey: .contextWindowUnknown)
+        estimatedCostUSD = try c.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
+        lastAssistantText = try c.decodeIfPresent(String.self, forKey: .lastAssistantText)
+        tasks = try c.decodeIfPresent([SessionTask].self, forKey: .tasks)
+        rateLimit = try c.decodeIfPresent(RateLimitInfo.self, forKey: .rateLimit)
+        if let epoch = try c.decodeIfPresent(Double.self, forKey: .rateLimitForecastEta) {
+            rateLimitForecastEta = Date(timeIntervalSince1970: epoch)
+        } else {
+            rateLimitForecastEta = nil
+        }
+    }
+
+    /// Explicit memberwise initializer for SwiftUI previews and tests that
+    /// build SessionMetrics in-process. New fields default to nil so existing
+    /// call sites compile without changes.
+    init(
+        elapsedSeconds: Int64,
+        totalTokens: Int64,
+        modelName: String,
+        contextWindow: Int64?,
+        contextUtilization: Double,
+        pressureLevel: String,
+        contextWindowUnknown: Bool?,
+        estimatedCostUSD: Double?,
+        lastAssistantText: String?,
+        tasks: [SessionTask]?,
+        rateLimit: RateLimitInfo? = nil,
+        rateLimitForecastEta: Date? = nil
+    ) {
+        self.elapsedSeconds = elapsedSeconds
+        self.totalTokens = totalTokens
+        self.modelName = modelName
+        self.contextWindow = contextWindow
+        self.contextUtilization = contextUtilization
+        self.pressureLevel = pressureLevel
+        self.contextWindowUnknown = contextWindowUnknown
+        self.estimatedCostUSD = estimatedCostUSD
+        self.lastAssistantText = lastAssistantText
+        self.tasks = tasks
+        self.rateLimit = rateLimit
+        self.rateLimitForecastEta = rateLimitForecastEta
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(elapsedSeconds, forKey: .elapsedSeconds)
+        try c.encode(totalTokens, forKey: .totalTokens)
+        try c.encode(modelName, forKey: .modelName)
+        try c.encodeIfPresent(contextWindow, forKey: .contextWindow)
+        try c.encode(contextUtilization, forKey: .contextUtilization)
+        try c.encode(pressureLevel, forKey: .pressureLevel)
+        try c.encodeIfPresent(contextWindowUnknown, forKey: .contextWindowUnknown)
+        try c.encodeIfPresent(estimatedCostUSD, forKey: .estimatedCostUSD)
+        try c.encodeIfPresent(lastAssistantText, forKey: .lastAssistantText)
+        try c.encodeIfPresent(tasks, forKey: .tasks)
+        try c.encodeIfPresent(rateLimit, forKey: .rateLimit)
+        try c.encodeIfPresent(rateLimitForecastEta.map { $0.timeIntervalSince1970 }, forKey: .rateLimitForecastEta)
     }
     
     // Computed properties for UI display
@@ -151,20 +429,13 @@ struct SessionMetrics: Codable {
         }
     }
     
-    var contextPressureColor: String {
+    var contextPressureColor: Color {
         switch pressureLevel {
-        case "safe":
-            return "#34C759"   // system green
-        case "caution":
-            return "#FF9500"   // system orange
-        case "warning":
-            return "#FF3B30"   // system red
-        case "critical":
-            return "#D70015"   // darker red
-        case "unknown", "":
-            return "#8E8E93"   // system gray
-        default:
-            return "#8E8E93"   // system gray
+        case "safe":     return IrrColors.pressureLow
+        case "caution":  return IrrColors.pressureMedium
+        case "warning":  return IrrColors.pressureHigh
+        case "critical": return IrrColors.pressureCritical
+        default:         return IrrColors.cancelled
         }
     }
     
@@ -231,6 +502,7 @@ struct Launcher: Codable, Hashable {
     let tty: String?
     let kittyListenOn: String?
     let kittyWindowID: String?
+    let kittyPID: Int?
 
     enum CodingKeys: String, CodingKey {
         case termProgram    = "term_program"
@@ -241,6 +513,7 @@ struct Launcher: Codable, Hashable {
         case tty            = "tty"
         case kittyListenOn  = "kitty_listen_on"
         case kittyWindowID  = "kitty_window_id"
+        case kittyPID       = "kitty_pid"
     }
 }
 
@@ -417,17 +690,21 @@ struct SessionState: Identifiable, Codable {
             }
         }
 
-        var color: String {
+        var color: Color {
             switch self {
-            case .working: return "#8B5CF6"   // purple to match 🟣
-            case .waiting: return "#FF9500"   // system orange
-            case .ready: return "#34C759"  // system green
+            case .working: return IrrColors.working
+            case .waiting: return IrrColors.waiting
+            case .ready:   return IrrColors.ready
             }
         }
 
-        /// Hex color without leading `#`, for SVG markup.
+        /// Hex without leading `#`, for inline SVG `fill="#..."` markup.
         var hexColor: String {
-            String(color.dropFirst())
+            switch self {
+            case .working: return IrrSVG.working
+            case .waiting: return IrrSVG.waiting
+            case .ready:   return IrrSVG.ready
+            }
         }
 
         /// Highest-priority state in a collection (waiting > working > ready).

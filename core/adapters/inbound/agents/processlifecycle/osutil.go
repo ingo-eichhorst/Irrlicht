@@ -111,6 +111,7 @@ var launcherEnvKeys = map[string]struct{}{
 	"TERMINAL_EMULATOR": {}, // JetBrains JediTerm sets this to "JetBrains-JediTerm"
 	"KITTY_LISTEN_ON":   {}, // kitty remote-control socket path (e.g. "unix:/tmp/kitty-NNN/sock")
 	"KITTY_WINDOW_ID":   {}, // kitty window ID for precise window targeting
+	"KITTY_PID":         {}, // kitty.app PID; lets the macOS activator target this specific kitty instance
 }
 
 // ReadLauncherEnv returns the launcher identity captured from the process env
@@ -150,6 +151,11 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 			l.VSCodePID = n
 		}
 	}
+	if v := env["KITTY_PID"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			l.KittyPID = n
+		}
+	}
 	// Treat VSCODE_PID as an implicit TERM_PROGRAM hint when the env only
 	// exposes VS Code / Cursor / Windsurf indirectly (their integrated
 	// terminal sets VSCODE_PID but not always TERM_PROGRAM=vscode).
@@ -162,12 +168,57 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	if l.TermProgram == "" && env["TERMINAL_EMULATOR"] == "JetBrains-JediTerm" {
 		l.TermProgram = "jetbrains"
 	}
+	// The ancestry walk is cached because three guarded blocks below may
+	// all need it (kitty TermProgram override, hardened-runtime TermProgram
+	// fallback, kitty field back-fill). Walking the ppid chain once instead
+	// of up to three times keeps ReadLauncherEnv bounded — each readProcInfo
+	// is a `ps` shellout with a 2s ceiling.
+	var ancestryTerm string
+	var ancestryHostPID int
+	ancestryResolved := false
+	ancestry := func() (term string, hostPID int) {
+		if !ancestryResolved {
+			ancestryTerm, ancestryHostPID = resolveHostFromAncestry(pid)
+			ancestryResolved = true
+		}
+		return ancestryTerm, ancestryHostPID
+	}
+
+	// kitty intentionally does not set TERM_PROGRAM (upstream kitty issue
+	// #4793), so the env-captured value may be inherited from whatever
+	// process launched kitty.app (e.g. a VS Code integrated terminal). When
+	// KITTY_WINDOW_ID is present, kitty *is* the host of this session — but
+	// we still verify via process ancestry to rule out the reverse case
+	// (KITTY_WINDOW_ID leaked from a kitty shell that spawned VS Code).
+	if l.KittyWindowID != "" && l.TermProgram != "kitty" {
+		if term, _ := ancestry(); term == "kitty" {
+			l.TermProgram = "kitty"
+		}
+	}
 	// Hardened-runtime processes (e.g. Anthropic's signed `claude` binary)
 	// hide env from sysctl. Fall back to process-ancestry walking so the UI
 	// can at least bring the host app to the front. Darwin-only; other
 	// platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
-		l.TermProgram = resolveTermProgramFromAncestry(pid)
+		l.TermProgram, _ = ancestry()
+	}
+	// Back-fill kitty fields for sessions whose own env is unreadable
+	// (Apple-signed agents like `pi`, hardened-runtime binaries). If kitty
+	// is the host per ancestry walk but env yielded no kitty signals,
+	// derive them from kitty.app itself + its remote-control socket.
+	// Without this, clicking the session in the UI raises kitty but can't
+	// target the right tab — exactly the symptom reported for pi sessions
+	// in issue #326.
+	if l.TermProgram == "kitty" && l.KittyPID == 0 {
+		if term, kpid := ancestry(); term == "kitty" && kpid > 0 {
+			l.KittyPID = kpid
+			if l.KittyListenOn == "" {
+				l.KittyListenOn = kittyListenOnFor(kpid)
+			}
+			if l.KittyListenOn != "" && l.KittyWindowID == "" {
+				l.KittyWindowID = kittyWindowIDForPID(l.KittyListenOn, pid)
+			}
+		}
 	}
 	// Capture the controlling TTY so Terminal.app (and potentially others)
 	// can target the exact tab — Terminal.app's AppleScript dictionary

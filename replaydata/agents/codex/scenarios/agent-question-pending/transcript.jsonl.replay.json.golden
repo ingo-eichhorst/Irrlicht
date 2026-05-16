@@ -20,6 +20,7 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
+    "estimated_cost_usd": 0.0600875,
     "cum_input_tokens": 23729,
     "cum_output_tokens": 51,
     "model_name": "gpt-5.4"
@@ -61,7 +62,7 @@
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "waiting",
-      "reason": "turn ended with question → waiting",
+      "reason": "turn ended with question or cue → waiting",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,

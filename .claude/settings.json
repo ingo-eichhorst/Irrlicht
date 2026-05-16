@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh release view:*)",
+      "Bash(gh release create:*)",
+      "Bash(gh release edit:*)",
+      "Bash(gh release upload:*)",
+      "Bash(gh release list:*)",
+      "Bash(gh release download:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh api:*)",
+      "Bash(git tag:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git show-ref:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git describe:*)",
+      "Bash(curl -fsSL:*)",
+      "Bash(hdiutil:*)",
+      "Bash(codesign:*)",
+      "Bash(pkgbuild:*)",
+      "Bash(ditto:*)",
+      "Bash(lipo:*)",
+      "Bash(otool:*)",
+      "Bash(tccutil:*)",
+      "Bash(file:*)",
+      "Bash(defaults read:*)",
+      "Bash(osascript:*)",
+      "Bash(tools/homebrew-tap/update-cask.sh:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

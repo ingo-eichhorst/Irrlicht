@@ -172,6 +172,8 @@ func (m *stubMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, erro
 
 func (m *stubMetrics) PruneEntry(_ string) {}
 
+func (m *stubMetrics) IngestRateLimit(_ string, _ *session.RateLimitSnapshot) {}
+
 // testIdentity is the shared Identity value e2e tests stamp on every
 // watcher they hand to NewSessionDetector. NewSessionDetector's panic
 // guard requires a non-zero Identity; the actual Name doesn't matter to

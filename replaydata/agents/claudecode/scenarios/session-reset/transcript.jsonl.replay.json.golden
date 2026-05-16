@@ -10,7 +10,7 @@
   "summary": {
     "total_events": 23,
     "consumed_events": 23,
-    "total_transitions": 7,
+    "total_transitions": 5,
     "first_event_time": "2026-05-15T10:58:37.468Z",
     "last_event_time": "2026-05-15T10:58:47.784Z",
     "wall_clock_session_duration": 10316000000,
@@ -18,13 +18,13 @@
       "ready": 7298000000,
       "working": 3018000000
     },
-    "flicker_count": 3,
+    "flicker_count": 2,
     "flickers_by_category": {
-      "ready_between_working": 2,
+      "ready_between_working": 1,
       "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 2,
+      "agent finished turn → ready": 1,
       "force ready→working on first activity": 1
     },
     "estimated_cost_usd": 0.281882,
@@ -81,36 +81,6 @@
     },
     {
       "index": 3,
-      "event_index": 13,
-      "virtual_time": "2026-05-15T10:58:42.513Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "ok"
-    },
-    {
-      "index": 4,
-      "event_index": 13,
-      "virtual_time": "2026-05-15T10:58:42.513Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "ok"
-    },
-    {
-      "index": 5,
       "event_index": 18,
       "virtual_time": "2026-05-15T10:58:44.766Z",
       "cause": "debounce_coalesce",
@@ -124,7 +94,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 6,
+      "index": 4,
       "event_index": 22,
       "virtual_time": "2026-05-15T10:58:47.784Z",
       "cause": "debounce_coalesce",

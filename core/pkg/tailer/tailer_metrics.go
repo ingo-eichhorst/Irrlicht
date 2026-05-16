@@ -17,6 +17,85 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 	if parsed.PermissionMode != "" {
 		t.metrics.PermissionMode = parsed.PermissionMode
 	}
+	if parsed.RateLimit != nil {
+		t.ingestRateLimit(parsed.RateLimit)
+	}
+}
+
+// IngestRateLimit accepts an externally-sourced snapshot (the Claude Code
+// statusline hook receiver calls this with each POST payload). Identical to
+// the parser-driven path that runs inside applyMetadata; broken out so the
+// HTTP handler can update a session without driving the parser.
+func (t *TranscriptTailer) IngestRateLimit(snap *RateLimitSnapshot) {
+	if snap == nil {
+		return
+	}
+	t.ingestRateLimit(snap)
+}
+
+// ingestRateLimit updates the latest snapshot and appends to the rolling
+// history when the reading has actually changed. Sample-on-change is critical
+// for Claude Code's statusline path where the hook fires on every assistant
+// message regardless of whether the rate-limit counters moved — a naive
+// every-tick append would dilute the slope with zero-delta noise (issue #309).
+//
+// When a window's ResetsAt changes (the window rolled over and used_percent
+// snapped back to zero), the pre-rollover slope no longer applies to the new
+// window — the history is reset so the next forecast rebuilds from clean
+// post-rollover samples. A brief "no forecast yet" gap is preferable to a
+// nonsense projection that mixes two distinct windows.
+func (t *TranscriptTailer) ingestRateLimit(snap *RateLimitSnapshot) {
+	t.rateLimit = snap
+	if t.rateLimitRolledOver(snap) {
+		t.rateLimitHistory = nil
+	}
+	if t.rateLimitChanged(snap) {
+		t.rateLimitHistory = append(t.rateLimitHistory, *snap)
+		if len(t.rateLimitHistory) > rateLimitHistoryCap {
+			t.rateLimitHistory = t.rateLimitHistory[len(t.rateLimitHistory)-rateLimitHistoryCap:]
+		}
+	}
+}
+
+// rateLimitChanged returns true when snap differs materially from the most
+// recent history entry. Comparison is on (UsedPercent, WindowMinutes,
+// ResetsAt) for every window — anything else (plan_type, credits) doesn't
+// affect the forecast.
+func (t *TranscriptTailer) rateLimitChanged(snap *RateLimitSnapshot) bool {
+	if len(t.rateLimitHistory) == 0 {
+		return true
+	}
+	prev := t.rateLimitHistory[len(t.rateLimitHistory)-1]
+	if len(prev.Windows) != len(snap.Windows) {
+		return true
+	}
+	for i := range prev.Windows {
+		pw := prev.Windows[i]
+		nw := snap.Windows[i]
+		if pw.UsedPercent != nw.UsedPercent || pw.WindowMinutes != nw.WindowMinutes || pw.ResetsAt != nw.ResetsAt {
+			return true
+		}
+	}
+	return false
+}
+
+// rateLimitRolledOver returns true when any window's ResetsAt has advanced
+// since the most recent history entry — the signal that the provider rolled
+// over to a fresh quota window and previous slope data is stale.
+func (t *TranscriptTailer) rateLimitRolledOver(snap *RateLimitSnapshot) bool {
+	if len(t.rateLimitHistory) == 0 {
+		return false
+	}
+	prev := t.rateLimitHistory[len(t.rateLimitHistory)-1]
+	for i := range snap.Windows {
+		if i >= len(prev.Windows) {
+			break
+		}
+		if snap.Windows[i].ResetsAt > prev.Windows[i].ResetsAt {
+			return true
+		}
+	}
+	return false
 }
 
 // applyModelMetadata records the model name (with the [1m] extended-context
@@ -70,18 +149,27 @@ func (t *TranscriptTailer) accumulateTokens(parsed *ParsedEvent) {
 // applyContribution handles the new Phase-2+ path where the adapter already
 // deduped and handed us a finalized per-turn contribution. Provider-reported
 // USD cost wins; otherwise we accumulate tokens into the per-model breakdown.
+//
+// When the contribution carries no Model (codex token_count events split the
+// model name onto a separate turn_context event), fall back to the session's
+// current ModelName from applyModelMetadata so the delta still lands under
+// a priced bucket instead of cumByModel[""].
 func (t *TranscriptTailer) applyContribution(c *PerTurnContribution) {
 	if c.ProviderCostUSD != nil {
 		t.cumProviderCostUSD += *c.ProviderCostUSD
 		return
 	}
-	if c.Model == "" && c.Usage.Input == 0 && c.Usage.Output == 0 {
+	model := c.Model
+	if model == "" {
+		model = t.metrics.ModelName
+	}
+	if model == "" && c.Usage.Input == 0 && c.Usage.Output == 0 {
 		return
 	}
-	bd := t.cumByModel[c.Model]
+	bd := t.cumByModel[model]
 	if bd == nil {
 		bd = &UsageBreakdown{}
-		t.cumByModel[c.Model] = bd
+		t.cumByModel[model] = bd
 	}
 	bd.Input += c.Usage.Input
 	bd.Output += c.Usage.Output
@@ -213,6 +301,19 @@ func (t *TranscriptTailer) computeMetrics() {
 	// more output). Skipping this would return CumInputTokens=0 in that window.
 	t.computeCumulativeTokens()
 
+	// Rate-limit snapshot has the same "must run even on empty pass"
+	// property — Claude Code's statusline hook can populate t.rateLimit
+	// out of band (no transcript line drives it), and the surface
+	// metrics need to expose that even on the first poll before any
+	// transcript activity exists. Lives above the early-return guard
+	// so an idle session still surfaces its last-known snapshot.
+	t.metrics.RateLimit = t.rateLimit
+	if len(t.rateLimitHistory) > 0 {
+		t.metrics.RateLimitHistory = append([]RateLimitSnapshot(nil), t.rateLimitHistory...)
+	} else {
+		t.metrics.RateLimitHistory = nil
+	}
+
 	if len(t.metrics.MessageHistory) == 0 {
 		t.metrics.MessagesPerMinute = 0
 		t.metrics.ElapsedSeconds = 0
@@ -264,6 +365,9 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.LastWasToolDenial = t.lastWasToolDenial
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText
+	// (rate-limit fields are populated above the empty-MessageHistory
+	// early return so an idle session still surfaces its last-known
+	// snapshot — UI decorates staleness rather than dropping it.)
 	if len(t.tasks) > 0 {
 		t.metrics.Tasks = append([]Task(nil), t.tasks...)
 	} else {

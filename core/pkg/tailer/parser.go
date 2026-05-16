@@ -135,6 +135,38 @@ type ParsedEvent struct {
 	ContentChars     int64  // character count for token estimation
 	CWD              string // working directory if found
 	PermissionMode   string // Claude Code only
+
+	// RateLimit, when non-nil, is a subscription-quota snapshot extracted from
+	// this event. Codex emits one per token_count event_msg; Claude Code feeds
+	// them in via the statusline hook (different path — parser only fills this
+	// for in-band transcript signals).
+	RateLimit *RateLimitSnapshot
+}
+
+// RateLimitSnapshot mirrors session.RateLimitSnapshot inside the tailer
+// package so parsers can emit snapshots without importing the domain. The
+// adapter glue (core/adapters/outbound/metrics) converts to the domain type
+// at the same boundary it converts Task and SubagentCompletion.
+type RateLimitSnapshot struct {
+	Windows     []RateLimitWindow
+	PlanType    string
+	Credits     *CreditsSnapshot
+	ReachedType string
+	SampledAt   int64
+}
+
+// RateLimitWindow mirrors session.RateLimitWindow.
+type RateLimitWindow struct {
+	UsedPercent   float64
+	WindowMinutes int
+	ResetsAt      int64
+}
+
+// CreditsSnapshot mirrors session.CreditsSnapshot.
+type CreditsSnapshot struct {
+	HasCredits bool
+	Unlimited  bool
+	Balance    float64
 }
 
 // TokenSnapshot holds a token breakdown from a single event.
@@ -240,6 +272,11 @@ type LedgerState struct {
 	CumProviderCostUSD float64                    `json:"cum_provider_cost_usd,omitempty"`
 	ParserState        *ParserLedger              `json:"parser_state,omitempty"`
 	Tasks              []Task                     `json:"tasks,omitempty"`
+	// ModelName is the last observed model for the session. Persisted so that
+	// applyContribution's fallback (used when a contribution event carries no
+	// model — codex token_count) still routes to the right pricing bucket
+	// after a daemon restart, before the next model-bearing event arrives.
+	ModelName string `json:"model_name,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---

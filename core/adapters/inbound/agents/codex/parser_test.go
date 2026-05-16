@@ -920,3 +920,178 @@ func TestParser_EventMsgNonTaskCompleteSkipped(t *testing.T) {
 		}
 	}
 }
+
+// TestParser_RateLimits_V3Schema asserts the parser extracts a complete v3
+// rate_limits block (limit_id + plan_type + reached_type, no credits) from
+// a token_count event into the snapshot.
+func TestParser_RateLimits_V3Schema(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "event_msg",
+		"payload": map[string]interface{}{
+			"type":        "token_count",
+			"limit_id":    "codex",
+			"limit_name":  nil,
+			"rate_limits": map[string]interface{}{
+				"limit_id":   "codex",
+				"limit_name": nil,
+				"primary": map[string]interface{}{
+					"used_percent":   1.0,
+					"window_minutes": 300.0,
+					"resets_at":      1778625131.0,
+				},
+				"secondary": map[string]interface{}{
+					"used_percent":   0.0,
+					"window_minutes": 10080.0,
+					"resets_at":      1778949174.0,
+				},
+				"credits":                  nil,
+				"plan_type":                "plus",
+				"rate_limit_reached_type":  nil,
+			},
+		},
+	})
+	if ev == nil || !ev.Skip {
+		t.Fatal("expected token_count to be skipped (post-rate-limit extraction)")
+	}
+	if ev.RateLimit == nil {
+		t.Fatal("expected RateLimit snapshot on token_count event")
+	}
+	if ev.RateLimit.PlanType != "plus" {
+		t.Errorf("plan_type = %q, want plus", ev.RateLimit.PlanType)
+	}
+	if len(ev.RateLimit.Windows) != 2 {
+		t.Fatalf("expected 2 windows, got %d", len(ev.RateLimit.Windows))
+	}
+	primary := ev.RateLimit.Windows[0]
+	if primary.WindowMinutes != 300 || primary.UsedPercent != 1.0 || primary.ResetsAt != 1778625131 {
+		t.Errorf("primary = %+v", primary)
+	}
+	secondary := ev.RateLimit.Windows[1]
+	if secondary.WindowMinutes != 10080 || secondary.ResetsAt != 1778949174 {
+		t.Errorf("secondary = %+v", secondary)
+	}
+	if ev.RateLimit.Credits != nil {
+		t.Errorf("expected nil Credits on subscription path, got %+v", ev.RateLimit.Credits)
+	}
+}
+
+// TestParser_RateLimits_V2WithCredits exercises the API-key / usage-path
+// shape where plan_type is null and credits carries a balance.
+func TestParser_RateLimits_V2WithCredits(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "event_msg",
+		"payload": map[string]interface{}{
+			"type": "token_count",
+			"rate_limits": map[string]interface{}{
+				"primary": map[string]interface{}{
+					"used_percent":   12.5,
+					"window_minutes": 300.0,
+					"resets_at":      1778625131.0,
+				},
+				"secondary": map[string]interface{}{
+					"used_percent":   2.0,
+					"window_minutes": 10080.0,
+					"resets_at":      1778949174.0,
+				},
+				"credits": map[string]interface{}{
+					"has_credits": true,
+					"unlimited":   false,
+					"balance":     42.5,
+				},
+				"plan_type": nil,
+			},
+		},
+	})
+	if ev.RateLimit == nil {
+		t.Fatal("expected RateLimit snapshot")
+	}
+	if ev.RateLimit.PlanType != "" {
+		t.Errorf("expected empty plan_type, got %q", ev.RateLimit.PlanType)
+	}
+	if ev.RateLimit.Credits == nil {
+		t.Fatal("expected non-nil Credits on API-key path")
+	}
+	if !ev.RateLimit.Credits.HasCredits || ev.RateLimit.Credits.Balance != 42.5 {
+		t.Errorf("credits = %+v", ev.RateLimit.Credits)
+	}
+}
+
+// TestParser_RateLimits_V1RelativeResets converts v1's resets_in_seconds
+// (relative) to absolute epoch using the event timestamp, and preserves
+// the off-by-one (299, 10079) window-minute values verbatim.
+func TestParser_RateLimits_V1RelativeResets(t *testing.T) {
+	p := &Parser{}
+	tsStr := "2025-10-15T12:00:00Z"
+	parsed, _ := time.Parse(time.RFC3339, tsStr)
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "event_msg",
+		"timestamp": tsStr,
+		"payload": map[string]interface{}{
+			"type": "token_count",
+			"rate_limits": map[string]interface{}{
+				"primary": map[string]interface{}{
+					"used_percent":      5.0,
+					"window_minutes":    299.0,
+					"resets_in_seconds": 1800.0,
+				},
+				"secondary": map[string]interface{}{
+					"used_percent":      1.0,
+					"window_minutes":    10079.0,
+					"resets_in_seconds": 86400.0,
+				},
+			},
+		},
+	})
+	if ev.RateLimit == nil {
+		t.Fatal("expected RateLimit snapshot")
+	}
+	if ev.RateLimit.Windows[0].WindowMinutes != 299 {
+		t.Errorf("expected v1 quirk window_minutes=299 preserved, got %d", ev.RateLimit.Windows[0].WindowMinutes)
+	}
+	wantPrimaryResets := parsed.Add(1800 * time.Second).Unix()
+	if ev.RateLimit.Windows[0].ResetsAt != wantPrimaryResets {
+		t.Errorf("primary resets_at = %d, want %d (relative→absolute)", ev.RateLimit.Windows[0].ResetsAt, wantPrimaryResets)
+	}
+}
+
+// TestParser_RateLimits_AbsentReturnsNil keeps the snapshot nil when the
+// payload has no rate_limits block (older Codex transcripts, pre-first-API
+// response events). Must not produce a phantom empty snapshot.
+func TestParser_RateLimits_AbsentReturnsNil(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "event_msg",
+		"payload": map[string]interface{}{
+			"type": "token_count",
+			"info": map[string]interface{}{},
+		},
+	})
+	if ev.RateLimit != nil {
+		t.Errorf("expected nil RateLimit on payload without rate_limits, got %+v", ev.RateLimit)
+	}
+}
+
+// TestParser_RateLimits_OnlyOnTokenCount ensures we don't extract from
+// other event_msg payload types (task_started, exec_command_*, etc.) even
+// if a malformed transcript carries a rate_limits block on them.
+func TestParser_RateLimits_OnlyOnTokenCount(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "event_msg",
+		"payload": map[string]interface{}{
+			"type": "task_started",
+			"rate_limits": map[string]interface{}{
+				"primary": map[string]interface{}{
+					"used_percent":   99.0,
+					"window_minutes": 300.0,
+					"resets_at":      1778625131.0,
+				},
+			},
+		},
+	})
+	if ev.RateLimit != nil {
+		t.Errorf("expected nil RateLimit on non-token_count event_msg, got %+v", ev.RateLimit)
+	}
+}

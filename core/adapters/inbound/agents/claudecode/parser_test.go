@@ -1533,28 +1533,51 @@ func TestParser_TaskReminder_NonTaskReminderIgnored(t *testing.T) {
 	}
 }
 
-// TestTailer_TaskReminder_DemotesPhantomInProgress models the real-session
-// failure mode from issue #282: TaskUpdate marks task 1 in_progress, then a
-// later task_reminder snapshot that omits task 1 arrives; the tailer must
-// demote the stuck in_progress to completed so allDone goes true in the UI.
-func TestTailer_TaskReminder_DemotesPhantomInProgress(t *testing.T) {
+// TestTailer_TaskReminder_PrunesAbsentTasks covers the dual role of the
+// snapshot reconcile: long-session pruning (#389) and the original phantom
+// in_progress fix (#282). A task whose ID is absent from the latest
+// task_reminder snapshot is removed from metrics.tasks entirely — Claude
+// Code's UI mirrors only the current batch, and so do we. As a side effect
+// of that policy, a stale TaskUpdate(taskId=…) that never receives a
+// matching completed can no longer leave a stuck in_progress entry: when
+// Claude drops the ID from its snapshot, we drop the row.
+func TestTailer_TaskReminder_PrunesAbsentTasks(t *testing.T) {
 	events := []map[string]interface{}{
+		// First batch — three tasks, all eventually completed.
 		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
-			"subject": "Stale task", "activeForm": "Stale-tasking",
+			"subject": "Old A", "activeForm": "Old-Aing",
 		}),
 		makeToolUseEvent("tu_2", "TaskCreate", map[string]interface{}{
-			"subject": "New task", "activeForm": "New-tasking",
+			"subject": "Old B", "activeForm": "Old-Bing",
 		}),
-		// Bogus TaskUpdate against a stale ID — never followed by completed.
-		makeToolUseEvent("tu_3", "TaskUpdate", map[string]interface{}{
-			"taskId": "1", "status": "in_progress",
+		makeToolUseEvent("tu_3", "TaskCreate", map[string]interface{}{
+			"subject": "Old C", "activeForm": "Old-Cing",
 		}),
 		makeToolUseEvent("tu_4", "TaskUpdate", map[string]interface{}{
+			"taskId": "1", "status": "completed",
+		}),
+		makeToolUseEvent("tu_5", "TaskUpdate", map[string]interface{}{
 			"taskId": "2", "status": "completed",
 		}),
-		// Snapshot omits task 1 entirely — Claude's view doesn't track it.
+		// Stale TaskUpdate for ID 3 — never gets a matching completed,
+		// the kind of phantom drift that motivated #282.
+		makeToolUseEvent("tu_6", "TaskUpdate", map[string]interface{}{
+			"taskId": "3", "status": "in_progress",
+		}),
+		// Second batch — IDs 4 and 5 (taskSeq monotonic across batches).
+		makeToolUseEvent("tu_7", "TaskCreate", map[string]interface{}{
+			"subject": "New A", "activeForm": "New-Aing",
+		}),
+		makeToolUseEvent("tu_8", "TaskCreate", map[string]interface{}{
+			"subject": "New B", "activeForm": "New-Bing",
+		}),
+		makeToolUseEvent("tu_9", "TaskUpdate", map[string]interface{}{
+			"taskId": "4", "status": "in_progress",
+		}),
+		// Snapshot reflects only the new batch — IDs 1, 2, 3 are gone.
 		makeReminderEvent([]map[string]interface{}{
-			{"id": "2", "subject": "New task", "status": "completed"},
+			{"id": "4", "subject": "New A", "status": "in_progress"},
+			{"id": "5", "subject": "New B", "status": "pending"},
 		}),
 	}
 
@@ -1563,29 +1586,24 @@ func TestTailer_TaskReminder_DemotesPhantomInProgress(t *testing.T) {
 		t.Fatalf("TailAndProcess: %v", err)
 	}
 	if len(m.Tasks) != 2 {
-		t.Fatalf("Tasks len = %d, want 2", len(m.Tasks))
+		t.Fatalf("Tasks len = %d, want 2 (only current batch); tasks=%+v", len(m.Tasks), m.Tasks)
 	}
-	if m.Tasks[0].ID != "1" || m.Tasks[0].Status != tailer.TaskStatusCompleted {
-		t.Errorf("phantom task 1 not reconciled: %+v", m.Tasks[0])
+	if m.Tasks[0].ID != "4" || m.Tasks[0].Status != tailer.TaskStatusInProgress {
+		t.Errorf("task[0] = %+v, want id=4 in_progress", m.Tasks[0])
 	}
-	if m.Tasks[1].ID != "2" || m.Tasks[1].Status != tailer.TaskStatusCompleted {
-		t.Errorf("task 2 = %+v", m.Tasks[1])
+	if m.Tasks[1].ID != "5" || m.Tasks[1].Status != tailer.TaskStatusPending {
+		t.Errorf("task[1] = %+v, want id=5 pending", m.Tasks[1])
 	}
-	allDone := true
-	for _, task := range m.Tasks {
-		if task.Status != tailer.TaskStatusCompleted {
-			allDone = false
-		}
-	}
-	if !allDone {
-		t.Errorf("expected allDone=true after reconciliation; tasks=%+v", m.Tasks)
-	}
+	// The len=2 + ID-4 + ID-5 assertions above prove the stale in_progress
+	// task 3 was pruned (the #282 phantom case).
 }
 
-// TestTailer_TaskReminder_EmptySnapshotDemotesAll covers the legitimate
-// "nothing active" reminder — a `content:[]` snapshot must demote every
-// in_progress task to completed.
-func TestTailer_TaskReminder_EmptySnapshotDemotesAll(t *testing.T) {
+// TestTailer_TaskReminder_EmptySnapshotPrunesAll covers the "nothing active"
+// reminder — a `content:[]` snapshot is the explicit "no current batch"
+// signal Claude Code emits at turn boundaries, and it must clear the slice
+// completely. Mirrors the empty-content task_reminder attachments observed
+// in real transcripts (see #282 timeline, 11:00–11:06).
+func TestTailer_TaskReminder_EmptySnapshotPrunesAll(t *testing.T) {
 	events := []map[string]interface{}{
 		makeToolUseEvent("tu_1", "TaskCreate", map[string]interface{}{
 			"subject": "A", "activeForm": "Aing",
@@ -1606,10 +1624,8 @@ func TestTailer_TaskReminder_EmptySnapshotDemotesAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TailAndProcess: %v", err)
 	}
-	for i, task := range m.Tasks {
-		if task.Status != tailer.TaskStatusCompleted {
-			t.Errorf("task[%d] %+v should be completed after empty reminder", i, task)
-		}
+	if len(m.Tasks) != 0 {
+		t.Errorf("expected empty Tasks after empty reminder; got %+v", m.Tasks)
 	}
 }
 

@@ -21,6 +21,7 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
+    "estimated_cost_usd": 0.14643,
     "cum_input_tokens": 29190,
     "cum_output_tokens": 16,
     "model_name": "gpt-5.5"

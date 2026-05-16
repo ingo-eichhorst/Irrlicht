@@ -101,6 +101,10 @@ func (cm *CapacityManager) maybeReload() bool {
 func (cm *CapacityManager) GetModelCapacity(modelName string) ModelCapacity {
 	cm.maybeReload()
 
+	if canonical, ok := modelAliases[modelName]; ok {
+		modelName = canonical
+	}
+
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
@@ -137,7 +141,11 @@ func (cm *CapacityManager) logPricingMiss(modelName string) {
 	}
 	if !cm.loggedMisses[modelName] {
 		cm.loggedMisses[modelName] = true
-		log.Printf("irrlicht/capacity: no pricing for model %q — cost will be 0 until LiteLLM cache is refreshed", modelName)
+		if canonical, ok := modelAliases[modelName]; ok {
+			log.Printf("irrlicht/capacity: no pricing for model %q (resolved via alias to canonical %q) — cost will be 0 until LiteLLM cache is refreshed", modelName, canonical)
+		} else {
+			log.Printf("irrlicht/capacity: no pricing for model %q — cost will be 0 until LiteLLM cache is refreshed", modelName)
+		}
 	}
 	cm.loggedMissesMu.Unlock()
 }

@@ -91,8 +91,8 @@ An agent is "NEW" only if both:
 
 The canonical source of truth is `core/adapters/inbound/agents/` + `core/adapters/inbound/orchestrators/`. As of this writing:
 
-- `live`: Claude Code (`anthropics/claude-code`), OpenAI Codex (`openai/codex`), Pi (`badlogic/pi-mono`), Gas Town (`gastownhall/gastown`).
-- `planned`: Gemini CLI, Cursor, Amp, Claude Squad, OpenCode, Qwen Code, Crush, Continue, Goose, Aider, Kilo Code, Paperclip, Ruflo, Multiclaude, SWE-agent.
+- `live`: Claude Code (`anthropics/claude-code`), OpenAI Codex (`openai/codex`), Pi (`earendil-works/pi`, renamed from `badlogic/pi-mono` in v0.74), Gas Town (`gastownhall/gastown`), Aider (`Aider-AI/aider`), OpenCode (`anomalyco/opencode`).
+- `planned`: Gemini CLI, Cursor, Amp, Claude Squad, Qwen Code, Crush, Continue, Goose, Kilo Code, Paperclip, Ruflo, Multiclaude, SWE-agent.
 - Everything else: `none`.
 
 Before each run, `ls core/adapters/inbound/agents/` and `ls core/adapters/inbound/orchestrators/` to confirm the list is still correct. If the set of live adapters has changed, update this section and apply the change to `agent-data.json`.

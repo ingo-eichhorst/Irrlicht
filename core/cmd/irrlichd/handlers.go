@@ -46,6 +46,13 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		// Cross-account rate-limit inheritance (issue #309): wrapper
+		// sessions (Pi, OpenCode) inherit the subscription quota
+		// snapshot from a first-party CLI authenticated to the same
+		// OAuth account. Mutates `sessions` in place — the dashboard
+		// builder then sees the inherited snapshots and the chip
+		// renders for the wrapper just like it does for the donor.
+		services.InheritRateLimits(sessions, "")
 		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
 		if tracker != nil {
 			attachGroupCosts(resp, tracker, cache)
@@ -84,6 +91,20 @@ func attachGroupCosts(groups []*session.AgentGroup, tracker outbound.CostTracker
 		if len(costs) > 0 {
 			g.Costs = costs
 		}
+	}
+}
+
+// handleGetVersion serves the daemon's build version. Frontends use it to
+// render `Irrlicht v$VERSION` in their app header without baking the value
+// into their own bundle.
+func handleGetVersion(version string) http.HandlerFunc {
+	type versionResp struct {
+		Version string `json:"version"`
+	}
+	body, _ := json.Marshal(versionResp{Version: version})
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
 	}
 }
 

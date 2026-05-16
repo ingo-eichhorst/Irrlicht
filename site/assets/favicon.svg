@@ -1,23 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" role="img" aria-label="Irrlicht">
   <defs>
-    <radialGradient id="g" cx="50%" cy="60%" r="50%">
-      <stop offset="0%" stop-color="#c4b5fd"/>
-      <stop offset="40%" stop-color="#8B5CF6"/>
-      <stop offset="100%" stop-color="#4c1d95" stop-opacity="0"/>
+    <linearGradient id="flameGradient" x1="0.38" y1="0.08" x2="0.62" y2="0.95">
+      <stop offset="0%" stop-color="#E9DDFF"/>
+      <stop offset="24%" stop-color="#C9B2FF"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="76%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
+    <radialGradient id="innerGlowTop" cx="0.35" cy="0.18" r="0.85">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="25%" stop-color="#F5F0FF" stop-opacity="0.20"/>
+      <stop offset="54%" stop-color="#D9C8FF" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
     </radialGradient>
-    <filter id="glow">
-      <feGaussianBlur stdDeviation="1.5" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
+    <radialGradient id="innerGlowBottom" cx="0.53" cy="0.92" r="0.42">
+      <stop offset="0%" stop-color="#B691FF" stop-opacity="0.28"/>
+      <stop offset="45%" stop-color="#8B5CF6" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="flameMask">
+      <path fill="white" d="M584 157C609 199 615 250 609 308C604 362 581 412 526 464C474 513 424 562 392 625C356 695 349 790 372 869C410 1001 516 1065 635 1065C790 1065 888 956 888 785C888 718 858 654 800 615C791 609 787 612 788 624C789 644 795 661 794 683C792 743 755 784 697 784C654 784 625 751 624 699C623 661 644 621 670 581C706 526 734 484 734 416C734 321 680 246 598 167C593 162 588 158 584 157Z"/>
+    </mask>
   </defs>
-  <!-- outer glow -->
-  <circle cx="16" cy="17" r="10" fill="url(#g)" opacity="0.5"/>
-  <!-- wisp flame -->
-  <path d="M16 4 C13 10, 9 14, 10 19 C10.5 22, 12 25, 16 26 C20 25, 21.5 22, 22 19 C23 14, 19 10, 16 4Z"
-        fill="#8B5CF6" filter="url(#glow)" opacity="0.9"/>
-  <!-- bright core -->
-  <path d="M16 10 C14.5 14, 12.5 16, 13 19 C13.3 21, 14.5 23, 16 23.5 C17.5 23, 18.7 21, 19 19 C19.5 16, 17.5 14, 16 10Z"
-        fill="#c4b5fd"/>
-  <!-- white hot center -->
-  <ellipse cx="16" cy="18" rx="2" ry="3.5" fill="#ede9fe" opacity="0.7"/>
+  <path fill="url(#flameGradient)" d="M584 157C609 199 615 250 609 308C604 362 581 412 526 464C474 513 424 562 392 625C356 695 349 790 372 869C410 1001 516 1065 635 1065C790 1065 888 956 888 785C888 718 858 654 800 615C791 609 787 612 788 624C789 644 795 661 794 683C792 743 755 784 697 784C654 784 625 751 624 699C623 661 644 621 670 581C706 526 734 484 734 416C734 321 680 246 598 167C593 162 588 158 584 157Z"/>
+  <g mask="url(#flameMask)">
+    <ellipse cx="565" cy="275" rx="180" ry="210" fill="url(#innerGlowTop)"/>
+    <ellipse cx="635" cy="920" rx="250" ry="220" fill="url(#innerGlowBottom)"/>
+  </g>
 </svg>

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 )
 
@@ -409,5 +410,216 @@ func TestHandlePIDAssigned_LauncherCaptureIsIdempotent(t *testing.T) {
 	}
 	if repo.states["s"].Launcher == nil || repo.states["s"].Launcher.TermProgram != "iTerm.app" {
 		t.Errorf("launcher clobbered by later PID assignment: %+v", repo.states["s"].Launcher)
+	}
+}
+
+// TestBackfillLauncher_KittyFieldsMergedFromFreshEnv exercises the
+// SeedPIDs → handleAlivePIDState → backfillLauncher path for issue #326:
+// pre-existing kitty sessions that shipped with KittyPID == 0 (because
+// the daemon binary at session-birth didn't whitelist KITTY_PID, or
+// because the agent's env was unreadable via sysctl) must pick up
+// KittyPID / KittyListenOn / KittyWindowID on the next daemon startup
+// from a fresh env read. Existing fields must not be clobbered.
+func TestBackfillLauncher_KittyFieldsMergedFromFreshEnv(t *testing.T) {
+	repo := newMockRepo()
+	// Session has a partial kitty launcher: term_program is set but none of
+	// the kitty signals — exactly the shape of a pi session pre-fix or a
+	// session captured by a v0.4.0 daemon.
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		PID:       os.Getpid(), // alive — handleAlivePIDState's syscall.Kill probe must succeed
+		UpdatedAt: 0,
+		Launcher: &session.Launcher{
+			TermProgram: "kitty",
+			TTY:         "/dev/ttys001", // already populated; must survive merge
+		},
+	}
+
+	pm := newPIDManagerForTest(repo)
+	pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
+		return &session.Launcher{
+			TermProgram:   "kitty",
+			TTY:           "/dev/ttys999", // intentionally different — should NOT overwrite
+			KittyPID:      31155,
+			KittyListenOn: "unix:/tmp/kitty-31155",
+			KittyWindowID: "2",
+		}
+	})
+
+	pm.SeedPIDs([]*session.SessionState{repo.states["s"]})
+
+	got := repo.states["s"].Launcher
+	if got == nil {
+		t.Fatal("launcher went nil after backfill")
+	}
+	// New fields filled in from fresh env.
+	if got.KittyPID != 31155 {
+		t.Errorf("KittyPID: got %d, want 31155", got.KittyPID)
+	}
+	if got.KittyListenOn != "unix:/tmp/kitty-31155" {
+		t.Errorf("KittyListenOn: got %q, want unix:/tmp/kitty-31155", got.KittyListenOn)
+	}
+	if got.KittyWindowID != "2" {
+		t.Errorf("KittyWindowID: got %q, want 2", got.KittyWindowID)
+	}
+	// Pre-existing fields untouched.
+	if got.TermProgram != "kitty" {
+		t.Errorf("TermProgram clobbered: %q", got.TermProgram)
+	}
+	if got.TTY != "/dev/ttys001" {
+		t.Errorf("TTY clobbered by fresh value: got %q, want /dev/ttys001", got.TTY)
+	}
+	// Modified state must be persisted via Save (UpdatedAt updated from 0).
+	if repo.states["s"].UpdatedAt == 0 {
+		t.Errorf("UpdatedAt not refreshed after merge")
+	}
+}
+
+// TestBackfillLauncher_NoChangeWhenNothingMissing verifies the early-return
+// path: a session with a complete kitty launcher must not trigger a fresh
+// env read on each SeedPIDs invocation (which would be a wasted syscall
+// and, on macOS, a wasted kitten shell-out per session).
+func TestBackfillLauncher_NoChangeWhenNothingMissing(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		PID:       os.Getpid(),
+		UpdatedAt: 42,
+		Launcher: &session.Launcher{
+			TermProgram:   "kitty",
+			TTY:           "/dev/ttys001",
+			KittyPID:      31155,
+			KittyListenOn: "unix:/tmp/kitty-31155",
+			KittyWindowID: "1",
+		},
+	}
+
+	pm := newPIDManagerForTest(repo)
+	var calls int
+	pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
+		calls++
+		return &session.Launcher{TermProgram: "iTerm.app"} // would corrupt if called
+	})
+
+	pm.SeedPIDs([]*session.SessionState{repo.states["s"]})
+
+	if calls != 0 {
+		t.Errorf("env reader invoked when launcher was complete: %d calls", calls)
+	}
+	if repo.states["s"].Launcher.TermProgram != "kitty" {
+		t.Errorf("launcher mutated: %+v", repo.states["s"].Launcher)
+	}
+	if repo.states["s"].UpdatedAt != 42 {
+		t.Errorf("UpdatedAt mutated despite no change: got %d, want 42", repo.states["s"].UpdatedAt)
+	}
+}
+
+// TestBackfillLauncher_NonKittyUnaffected ensures the kitty-specific merge
+// doesn't fire for sessions on other terminals — there's no reason for an
+// iTerm session to trigger a kitten shell-out.
+func TestBackfillLauncher_NonKittyUnaffected(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		PID:       os.Getpid(),
+		UpdatedAt: 42,
+		Launcher: &session.Launcher{
+			TermProgram: "iTerm.app",
+			TTY:         "/dev/ttys001",
+		},
+	}
+
+	pm := newPIDManagerForTest(repo)
+	var calls int
+	pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
+		calls++
+		// Even if a fresh read suggested kitty fields, the missing-checks
+		// gate `isKitty := TermProgram == "kitty"` — none of the
+		// missingKitty* flags will be true for an iTerm launcher.
+		return &session.Launcher{TermProgram: "iTerm.app", KittyPID: 9999}
+	})
+
+	pm.SeedPIDs([]*session.SessionState{repo.states["s"]})
+
+	if calls != 0 {
+		t.Errorf("env reader fired for non-kitty session: %d calls", calls)
+	}
+	if repo.states["s"].Launcher.KittyPID != 0 {
+		t.Errorf("KittyPID leaked into non-kitty launcher: %d", repo.states["s"].Launcher.KittyPID)
+	}
+}
+
+// TestTryDiscoverPID_ProcSession_BypassesDiscoverFn is the regression guard for
+// issue #345. Pre-sessions (proc-<pid>) encode their PID in the session ID, so
+// TryDiscoverPID must not invoke the adapter's CWD-based discoverFn for them —
+// doing so misattributes the PID to a sibling agent process in the same CWD
+// and triggers the same-PID cleanup that evicts the legitimate neighbor.
+func TestTryDiscoverPID_ProcSession_BypassesDiscoverFn(t *testing.T) {
+	repo := newMockRepo()
+
+	// Neighbor session that shares the encoded PID space: it has a *different*
+	// PID, so the same-PID cleanup must NOT touch it after we assign 12345.
+	repo.states["neighbor-uuid"] = &session.SessionState{
+		SessionID:      "neighbor-uuid",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            99999,
+		TranscriptPath: filepath.Join(t.TempDir(), "neighbor.jsonl"),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	// Pre-session as the scanner emits it: PID=0, ID encodes the PID.
+	repo.states["proc-12345"] = &session.SessionState{
+		SessionID: "proc-12345",
+		Adapter:   "claude-code",
+		State:     session.StateReady,
+		PID:       0,
+		CWD:       "/tmp/shared-cwd",
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	// Stub discoverFn that fails the test if it is ever called.
+	discoverCalls := 0
+	discovers := map[string]agent.PIDDiscoverFunc{
+		"claude-code": func(cwd, transcriptPath string, disambiguate func([]int) int) (int, error) {
+			discoverCalls++
+			// Return a wrong PID to make sure the test fails loudly if the
+			// short-circuit regresses — this is exactly the bug scenario:
+			// CWD-based discovery returning the neighbor's PID.
+			return 99999, nil
+		},
+	}
+
+	pm := services.NewPIDManager(
+		newMockProcessWatcher(),
+		repo,
+		&mockLogger{},
+		nil,
+		10*time.Minute,
+		discovers,
+		nil,
+		nil,
+		func(string) {},
+	)
+
+	if !pm.TryDiscoverPID("proc-12345", "/tmp/shared-cwd", "", "claude-code") {
+		t.Fatal("TryDiscoverPID returned false for proc-12345")
+	}
+
+	if discoverCalls != 0 {
+		t.Errorf("adapter discoverFn was called %d times for a proc-<pid> session; want 0", discoverCalls)
+	}
+
+	if got := repo.states["proc-12345"]; got == nil {
+		t.Fatal("proc-12345 was deleted")
+	} else if got.PID != 12345 {
+		t.Errorf("proc-12345 PID = %d, want 12345", got.PID)
+	}
+
+	if repo.states["neighbor-uuid"] == nil {
+		t.Fatal("neighbor-uuid was evicted by same-PID cleanup — issue #345 regression")
 	}
 }

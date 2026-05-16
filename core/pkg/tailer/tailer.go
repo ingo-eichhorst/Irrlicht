@@ -129,10 +129,35 @@ type SessionMetrics struct {
 	// missing working→waiting step (issue #150).
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
 
+	// NoSubstantiveActivity is true when a TailAndProcess pass consumed new
+	// transcript content but every parsed line was Skip=true and produced no
+	// state-relevant change (no SubagentCompletions, no TaskSnapshot, no
+	// processParsedEvent call). Lets the detector treat post-turn writes
+	// like Claude Code's `system/away_summary` recap as activity for
+	// timestamp purposes only — the state machine must not be re-run, since
+	// LastEventType still carries the prior turn_done and rule 4 would
+	// bounce a ready session back to working. Per-pass transient
+	// (issue #329).
+	NoSubstantiveActivity bool `json:"-"`
+
 	// Tasks is the current task list for this session, accumulated from
 	// TaskCreate / TaskUpdate tool_use events in the Claude Code transcript.
 	// Nil for sessions that have not called TaskCreate.
 	Tasks []Task `json:"tasks,omitempty"`
+
+	// RateLimit is the most recent rate-limit snapshot observed for this
+	// session. Populated by parsers that surface subscription quota (codex
+	// from token_count events) and by the Claude Code statusline hook
+	// receiver (which calls IngestRateLimit directly). Nil when no
+	// snapshot has been seen.
+	RateLimit *RateLimitSnapshot `json:"rate_limit,omitempty"`
+
+	// RateLimitHistory is a small rolling buffer of changed snapshots used
+	// to compute a burn-rate forecast. Sample-on-change: duplicates of the
+	// most recent used_percent values are dropped before append, so the
+	// slope calculation isn't diluted by zero-delta statusline ticks
+	// (issue #309). Capped at rateLimitHistoryCap entries.
+	RateLimitHistory []RateLimitSnapshot `json:"-"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -227,7 +252,20 @@ type TranscriptTailer struct {
 	// synthesize turn_done when the file has been quiet long enough. Zero
 	// means no line has been seen yet.
 	lastLineSeenAt time.Time
+
+	// rateLimit is the most recent snapshot observed; rateLimitHistory holds
+	// the rolling sample-on-change buffer (capped at rateLimitHistoryCap).
+	// In-memory only — after a daemon restart, the next few token_count or
+	// statusline events repopulate the history before forecasting resumes.
+	rateLimit        *RateLimitSnapshot
+	rateLimitHistory []RateLimitSnapshot
 }
+
+// rateLimitHistoryCap caps the rolling history at a small number of changed
+// samples. Larger windows blur the slope across burn-rate regime changes; a
+// 5-sample window is responsive to recent activity without being thrown off
+// by a single jumpy reading.
+const rateLimitHistoryCap = 5
 
 // NewTranscriptTailer creates a new tailer for the given transcript path.
 // The parser handles format-specific line parsing; adapter is used for model
@@ -256,6 +294,7 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		SchemaVersion:      2,
 		LastOffset:         t.lastOffset,
 		CumProviderCostUSD: t.cumProviderCostUSD,
+		ModelName:          t.metrics.ModelName,
 	}
 	if len(t.cumByModel) > 0 {
 		// Direct assignment is safe: the caller JSON-marshals immediately
@@ -292,6 +331,9 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		}
 	}
 	t.cumProviderCostUSD = s.CumProviderCostUSD
+	if s.ModelName != "" {
+		t.metrics.ModelName = s.ModelName
+	}
 	if s.ParserState != nil {
 		if pp, ok := t.parser.(ParserStateProvider); ok {
 			pp.SetParserLedger(*s.ParserState)
@@ -322,6 +364,17 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// both open and close within this single pass (the collapsed-window
 	// case from issue #150).
 	sawUserBlockingClosedThisPass := false
+
+	// Track whether this pass observed any state-relevant change. Set
+	// only when at least one parsed line was seen AND none of them
+	// produced substantive output (no processParsedEvent call, no
+	// subagent completion, no task snapshot). An empty pass (zero
+	// parsed lines, e.g. fswatcher fired on an unchanged file) leaves
+	// the flag at its zero value so the detector's classifier still
+	// runs — needed for hook-driven synthetic activity events that
+	// re-classify against stale metrics. See issue #329.
+	linesParsedThisPass := 0
+	substantiveThisPass := false
 
 	// Per-pass signals must be cleared so the detector only drains events
 	// discovered in this scan (see issue #134).
@@ -421,14 +474,21 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 			// but carry an authoritative TaskSnapshot the tailer must apply
 			// (issue #282).
 			if parsed != nil {
+				linesParsedThisPass++
 				t.applyMetadata(parsed)
 				if len(parsed.SubagentCompletions) > 0 {
 					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
+					substantiveThisPass = true
+				}
+				if parsed.TaskSnapshot != nil {
+					substantiveThisPass = true
 				}
 				t.reconcileTaskSnapshot(parsed)
 			}
 			continue
 		}
+		linesParsedThisPass++
+		substantiveThisPass = true
 		t.processParsedEvent(parsed, &sawUserBlockingClosedThisPass)
 	}
 
@@ -443,12 +503,14 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	if flusher, ok := t.parser.(idleFlusher); ok && !t.lastLineSeenAt.IsZero() {
 		if ev := flusher.IdleFlush(time.Since(t.lastLineSeenAt)); ev != nil {
 			t.processParsedEvent(ev, &sawUserBlockingClosedThisPass)
+			substantiveThisPass = true
 		}
 	}
 
 	// Compute current metrics.
 	t.computeMetrics()
 	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
+	t.metrics.NoSubstantiveActivity = linesParsedThisPass > 0 && !substantiveThisPass
 
 	// Model config fallback.
 	if t.metrics.ModelName == "" {
@@ -564,20 +626,23 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 
 // reconcileTaskSnapshot applies a Claude Code task_reminder snapshot from
 // parsed (when present) to the running tasks slice. Reminders are
-// authoritative over local state in two ways:
+// authoritative over local state:
 //
-//  1. Phantom demotion: a local in_progress task whose ID is missing from
-//     the snapshot is set to completed (Claude has dropped it from active
-//     tracking) — this is the primary fix for the stale TaskUpdate bug.
+//  1. Prune: a local task whose ID is missing from the snapshot is removed.
+//     Claude Code's UI only shows the current batch — when it stops tracking
+//     a task, we drop it too. This both fixes the phantom in_progress bug
+//     from #282 (no entry means no stuck status) and prevents unbounded dot
+//     accumulation in long sessions (#389).
 //  2. Present divergence: for any ID present in the snapshot whose status
-//     differs from local state, the snapshot's status wins. Strictly more
-//     than a "phantom only" rule — Claude's view is authoritative whenever
-//     it speaks. Safe under transcript ordering because reminders appear
-//     on user turns, after the assistant tool_use that emitted any deltas
-//     for that turn.
+//     differs from local state, the snapshot's status wins. Claude's view
+//     is authoritative whenever it speaks. Safe under transcript ordering
+//     because reminders appear on user turns, after the assistant tool_use
+//     that emitted any deltas for that turn.
 //
 // Snapshots that mention IDs we never saw a TaskCreate for are ignored;
-// the reconcile only updates pre-existing tasks. See issue #282.
+// the reconcile only acts on pre-existing tasks. t.taskSeq is never reset,
+// so monotonic IDs continue to match Claude's sequential numbering across
+// pruned batches. See issues #282 and #389.
 func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 	if parsed == nil || parsed.TaskSnapshot == nil || len(t.tasks) == 0 {
 		return
@@ -586,12 +651,16 @@ func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 	for _, entry := range *parsed.TaskSnapshot {
 		snapByID[entry.ID] = entry
 	}
+	kept := make([]Task, 0, len(t.tasks))
 	for i := range t.tasks {
 		entry, present := snapByID[t.tasks[i].ID]
 		if !present {
-			if t.tasks[i].Status == TaskStatusInProgress {
-				log.Printf("irrlicht/tailer: reconciling phantom in_progress task id=%s subject=%q → completed (not in task_reminder snapshot) in %s", t.tasks[i].ID, t.tasks[i].Subject, t.path)
-				t.tasks[i].Status = TaskStatusCompleted
+			// Quiet on the common case (completed tasks pruned at batch
+			// turnover). Pending/in_progress prunes still log — they're
+			// the #282-style "Claude dropped a task it claimed to track"
+			// signal worth surfacing.
+			if t.tasks[i].Status != TaskStatusCompleted {
+				log.Printf("irrlicht/tailer: pruning %s task id=%s subject=%q (absent from task_reminder snapshot) in %s", t.tasks[i].Status, t.tasks[i].ID, t.tasks[i].Subject, t.path)
 			}
 			continue
 		}
@@ -599,7 +668,9 @@ func (t *TranscriptTailer) reconcileTaskSnapshot(parsed *ParsedEvent) {
 			log.Printf("irrlicht/tailer: reconciling task id=%s status %s → %s from task_reminder in %s", t.tasks[i].ID, t.tasks[i].Status, entry.Status, t.path)
 			t.tasks[i].Status = entry.Status
 		}
+		kept = append(kept, t.tasks[i])
 	}
+	t.tasks = kept
 }
 
 // processParsedEvent applies a single non-skipped ParsedEvent to the tailer's

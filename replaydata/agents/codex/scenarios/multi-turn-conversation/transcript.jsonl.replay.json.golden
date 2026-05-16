@@ -27,6 +27,7 @@
       "agent finished turn → ready": 2,
       "force ready→working on first activity": 1
     },
+    "estimated_cost_usd": 0.2033625,
     "cum_input_tokens": 80985,
     "cum_output_tokens": 60,
     "model_name": "gpt-5.4"

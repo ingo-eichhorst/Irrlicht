@@ -75,18 +75,21 @@ func TestReplayWithSidecar_GoldenFixture(t *testing.T) {
 		t.Fatalf("runExtendedCheck: %v", err)
 	}
 
+	// The sidecar (recorded by a pre-#329 daemon) ends with a spurious
+	// `ready→working→ready` pair at seq 297/298 — 1ms apart, the classic
+	// away_summary-class flicker. With the #329 fix, processActivity
+	// short-circuits skip-only passes and no longer emits that pair, so
+	// OrderedMatches < RecordedCount is expected. The first 8 transitions
+	// still match the daemon recording exactly.
 	const (
 		wantRecorded = 10
-		wantMatches  = 10
+		wantMatches  = 8
 	)
 	if check.RecordedCount != wantRecorded {
 		t.Errorf("recorded transitions: got %d, want %d", check.RecordedCount, wantRecorded)
 	}
 	if check.OrderedMatches != wantMatches {
 		t.Errorf("ordered matches: got %d, want %d", check.OrderedMatches, wantMatches)
-	}
-	if len(check.OrderedMismatches) != 0 {
-		t.Errorf("ordered mismatches: got %d, want 0 — %+v", len(check.OrderedMismatches), check.OrderedMismatches)
 	}
 	if len(check.MissingKinds) != 0 {
 		t.Errorf("missing kinds: got %v, want none", check.MissingKinds)
@@ -104,8 +107,6 @@ func TestReplayWithSidecar_GoldenFixture(t *testing.T) {
 		"waiting→working",
 		"working→waiting",
 		"waiting→working",
-		"working→ready",
-		"ready→working",
 		"working→ready",
 	}
 	if got, want := len(report.Transitions), len(wantSequence); got != want {
@@ -167,12 +168,11 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 		}
 	}
 
-	// Lifetime 2 must produce exactly the four recorded transitions, at
-	// the four lifetime-2 fs-event timestamps (seq 719/721/723/726).
-	// Each fires slightly before the recorded state_transition (seq
-	// 720/722/724/725) because the daemon emits the state_transition
-	// after classify completes — microsecond skew, not a semantic
-	// difference.
+	// Lifetime 2's recorded sequence (pre-#329 daemon) ends with a
+	// spurious ready→working→ready pair at the same timestamp
+	// (21:11:50.310406) — the same skip-only-pass flicker the #329 fix
+	// eliminates. Post-fix the replay produces only the first two
+	// lifetime-2 transitions; the recorded pair at seq 724/725 is gone.
 	lifetime2Want := []struct {
 		ts        string
 		prevState string
@@ -180,8 +180,6 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 	}{
 		{"2026-04-11T21:11:45.046448+02:00", session.StateReady, session.StateWorking},
 		{"2026-04-11T21:11:47.76431+02:00", session.StateWorking, session.StateReady},
-		{"2026-04-11T21:11:50.310406+02:00", session.StateReady, session.StateWorking},
-		{"2026-04-11T21:11:50.310406+02:00", session.StateWorking, session.StateReady},
 	}
 	var lifetime2Got []transition
 	for _, tr := range report.Transitions {
@@ -207,8 +205,18 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 		}
 	}
 
-	// The 10 recorded transitions must still be seen and the first 10
-	// replayed transitions must ordered-match them by state.
+	// The sidecar still has 10 recorded transitions (pre-#329 daemon).
+	// Two effects shape OrderedMatches:
+	//   * #329 fix dropped same-timestamp ready→working→ready flicker pairs
+	//     in both lifetimes.
+	//   * #381 fix widened IsWaitingForUserInput to catch imperative cues,
+	//     so the first foreground-wave wrap-up — "All waves complete (6
+	//     foreground subagents). Check the UI for the full picture." — now
+	//     classifies as working→waiting (cue: verb+determiner "Check the
+	//     UI") where the pre-fix daemon recorded working→ready. The
+	//     classifier-emitted waiting episode and its subsequent unwind
+	//     shift index alignment, so only the very first (ready→working)
+	//     transition still lines up by index against the recording.
 	check, err := runExtendedCheck(sidecar, report.Transitions)
 	if err != nil {
 		t.Fatalf("runExtendedCheck: %v", err)
@@ -216,8 +224,8 @@ func TestReplayWithSidecar_ContinueFixture(t *testing.T) {
 	if check.RecordedCount != 10 {
 		t.Errorf("recorded transitions: got %d, want 10", check.RecordedCount)
 	}
-	if check.OrderedMatches != 10 {
-		t.Errorf("ordered matches: got %d, want 10", check.OrderedMatches)
+	if check.OrderedMatches != 1 {
+		t.Errorf("ordered matches: got %d, want 1", check.OrderedMatches)
 	}
 }
 

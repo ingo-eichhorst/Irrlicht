@@ -52,6 +52,7 @@ func newTestStack(t *testing.T) (*httptest.Server, *filesystem.SessionRepository
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil))
 	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(testAgents()))
+	mux.HandleFunc("GET /api/v1/version", handleGetVersion("test"))
 	mux.HandleFunc("GET /state", handleGetState(repo))
 	hub := wshub.NewHub(push, nil)
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)

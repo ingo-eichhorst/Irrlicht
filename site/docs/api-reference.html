@@ -48,6 +48,7 @@
 
     <div class="sidebar-section">
       <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
@@ -178,9 +179,17 @@
 
       <p>Backward-compatible endpoint for the Gas Town orchestrator state.</p>
 
+      <h3>GET /api/v1/version</h3>
+
+      <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
+
+      <pre><code>{
+  "version": "0.4.4"
+}</code></pre>
+
       <h3>GET /api/v1/agents</h3>
 
-      <p>Returns the registered adapter branding so frontends can look up an adapter's display name and icon by <code>name</code> instead of hardcoding their own switches. Order mirrors <code>agentCfgs</code> in <code>core/cmd/irrlichd/main.go</code>; frontends should treat ordering as informational only and key by <code>name</code>.</p>
+      <p>Returns the registered adapter branding so frontends can look up an adapter's display name and icon by <code>name</code> instead of hardcoding their own switches. Order mirrors <code>allAgents</code> in <code>core/cmd/irrlichd/main.go</code>; frontends should treat ordering as informational only and key by <code>name</code>.</p>
 
       <pre><code>[
   {
@@ -225,7 +234,7 @@
           <tr>
             <td><code>adapter</code></td>
             <td>string</td>
-            <td><code>claude-code</code> or <code>codex</code></td>
+            <td>One of <code>claude-code</code>, <code>codex</code>, <code>pi</code>, <code>aider</code>, <code>opencode</code>, or empty (legacy / unknown)</td>
           </tr>
           <tr>
             <td><code>compaction_state</code></td>

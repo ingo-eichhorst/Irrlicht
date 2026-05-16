@@ -19,7 +19,7 @@ struct MenuBarStatusRenderer {
     private static let height: CGFloat = 18
     private static let fontSize: CGFloat = 10
     private static let maxVisibleGroups = 5
-    private static let overflowFillHex = "8E8E93"
+    private static let overflowFillHex = IrrSVG.cancelled
     private static let segmentOrder: [SessionState.State] = [.waiting, .working, .ready]
 
     static func buildStatusImage(

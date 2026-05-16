@@ -1,10 +1,9 @@
 import SwiftUI
 
-// Colors match the web frontend palette and SessionState.State.color.
 private let stateColors: [String: Color] = [
-    "working": Color(hex: "#8B5CF6"),
-    "waiting": Color(hex: "#FF9500"),
-    "ready":   Color(hex: "#34C759"),
+    "working": IrrColors.working,
+    "waiting": IrrColors.waiting,
+    "ready":   IrrColors.ready,
 ]
 
 /// A compact horizontal bar that visualises per-session state history.
@@ -34,7 +33,7 @@ struct HistoryBarView: View {
                 context.fill(Path(rect), with: .color(color))
             }
         }
-        .background(Color.secondary.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 2))
+        .background(IrrColors.trackFill)
+        .clipShape(RoundedRectangle(cornerRadius: IrrRadius.xs))
     }
 }

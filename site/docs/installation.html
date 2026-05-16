@@ -47,6 +47,7 @@
 
     <div class="sidebar-section">
       <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
@@ -105,6 +106,10 @@
 
       <!-- ── Homebrew Install ── -->
       <h2>Install via Homebrew (Recommended)</h2>
+      <img src="../assets/mascot/mascot-purple-laptop-coding.webp"
+           alt=""
+           class="mascot mascot-float-right"
+           loading="lazy" />
 
       <p>For Mac users with <a href="https://brew.sh">Homebrew</a>, this is the simplest path. The cask points at the same signed DMG as the GitHub release, strips the quarantine attribute on first install, and lets <code>brew upgrade</code> handle future versions.</p>
 
@@ -163,6 +168,7 @@ curl -fsSL https://irrlicht.io/install.sh | sh -s -- --version 0.3.4</code></pre
         <li>
           <strong>Launch the app</strong>
           <p>Open <strong>Irrlicht</strong> from Applications. A dimmed grey flame appears in the menu bar, and the daemon starts automatically in the background.</p>
+          <p>On first launch the app also registers itself as a macOS login item (via <code>SMAppService</code>), so the menu-bar overlay is up before you open your first terminal after a reboot. Toggle this off in <em>Preferences &rarr; "Start Irrlicht at login"</em> if you prefer to launch the app manually; the choice is persisted and the default never re-applies.</p>
         </li>
       </ol>
 
@@ -214,7 +220,7 @@ cd Irrlicht
 
       <ul>
         <li><strong>The app manages everything</strong> &mdash; the embedded daemon starts automatically when the app launches. No separate services or LaunchAgents needed.</li>
-        <li><strong>The menu-bar app</strong> appears in your menu bar as a sparkle icon. Click it to see the current state of all detected AI agent sessions.</li>
+        <li><strong>The menu-bar app</strong> appears in your menu bar as a flame icon. Click it to see the current state of all detected AI agent sessions.</li>
       </ul>
 
       <h3>Verify the daemon is running</h3>
