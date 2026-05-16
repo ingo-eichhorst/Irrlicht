@@ -76,6 +76,87 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.enricher.PruneMetrics(state.TranscriptPath)
 }
 
+// rotateOnNewTranscript handles the claudecode /clear pattern: when a
+// new transcript file appears in a projectDir that already hosts a
+// real session, the existing session was abandoned in place. Emits
+// transcript_removed + dashboard delete for the old session BEFORE
+// the new one is registered, so events.jsonl and the dashboard show
+// clean rotation rather than the brief overlap the same-PID cleanup
+// path produces (issue #169 round 2).
+//
+// Heuristic: same projectDir + state=ready + last-activity within
+// 60s = /clear. Stale orphans (>60s idle) are handled separately by
+// the staleness check. Multi-session-same-cwd is rare for claudecode
+// (different sessions typically open in different cwds) and the
+// PIDManager same-PID cleanup at pid_discovered remains the
+// authoritative safety net — this path only optimizes the timing.
+//
+// Gated to claudecode adapter because /clear's UUID-rotation semantics
+// is adapter-specific. Other adapters either don't have /clear or
+// don't rotate transcript files.
+func (d *SessionDetector) rotateOnNewTranscript(id agent.Identity, ev agent.Event) {
+	if id.Name != "claudecode" {
+		return
+	}
+	states, err := d.repo.ListAll()
+	if err != nil {
+		return
+	}
+	now := time.Now().Unix()
+	for _, old := range states {
+		if old.SessionID == ev.SessionID {
+			continue
+		}
+		// Same project dir (claudecode hashes cwd into the path) AND a
+		// real UUID-keyed session (skip pre-sessions, those are
+		// handled by their own removal path).
+		if old.TranscriptPath == "" {
+			continue
+		}
+		// Project dir derived from transcript path == new ev.ProjectDir
+		// would be cleaner, but the same projectDir tag from agent.Event
+		// is propagated through fswatcher and matches what onRemoved
+		// uses to scope cleanup. Compare via projectSessions instead so
+		// the dependency on the tag's exact string format is internal.
+		d.mu.Lock()
+		oldDir, ok := d.projectSessions[old.SessionID]
+		d.mu.Unlock()
+		if !ok || oldDir != ev.ProjectDir {
+			continue
+		}
+		if old.State != session.StateReady {
+			continue
+		}
+		if now-old.UpdatedAt > 60 {
+			continue // stale orphan, not a /clear
+		}
+		if old.ParentSessionID != "" {
+			continue // subagent — not a /clear target
+		}
+
+		d.log.LogInfo("session-detector", old.SessionID,
+			fmt.Sprintf("rotated by new session %s in same project dir — /clear detected", ev.SessionID))
+
+		// Record the lifecycle event FIRST so events.jsonl shows the
+		// old session ending before the new one's transcript_new.
+		d.record(lifecycle.Event{
+			Kind:           lifecycle.KindTranscriptRemoved,
+			SessionID:      old.SessionID,
+			Adapter:        old.Adapter,
+			TranscriptPath: old.TranscriptPath,
+		})
+
+		// Mirror the same-PID cleanup's repo + broadcast path so the
+		// dashboard sees the old session disappear immediately.
+		d.mu.Lock()
+		delete(d.projectSessions, old.SessionID)
+		d.deletedSessions[old.SessionID] = now
+		d.mu.Unlock()
+		_ = d.repo.Delete(old.SessionID)
+		d.broadcast(outbound.PushTypeDeleted, old)
+	}
+}
+
 // HandleProcessExit deletes a session when its process exits.
 func (d *SessionDetector) HandleProcessExit(pid int, sessionID string) {
 	d.pidMgr.HandleProcessExit(pid, sessionID)
