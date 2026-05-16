@@ -20,8 +20,6 @@
       --muted: #8e96b3;
       --header-bg: rgba(8, 12, 22, 0.85);
       --ctx-bar-track: rgba(255, 255, 255, 0.06);
-      --sub-dot-open: rgba(139, 92, 246, 0.55);
-      --sub-dot-filled: #34C759;
       --noise-opacity: 0.035;
       --grid-color: rgba(100, 140, 255, 0.3);
       --grid-opacity: 0.03;
@@ -64,8 +62,6 @@
         --muted: #6e6e73;
         --header-bg: rgba(255, 255, 255, 0.85);
         --ctx-bar-track: rgba(0, 0, 0, 0.08);
-        --sub-dot-open: rgba(139, 92, 246, 0.45);
-        --sub-dot-filled: #34C759;
         --noise-opacity: 0;
         --grid-color: rgba(60, 100, 200, 0.18);
         --grid-opacity: 0.04;
@@ -83,8 +79,6 @@
       --muted: #6e6e73;
       --header-bg: rgba(255, 255, 255, 0.85);
       --ctx-bar-track: rgba(0, 0, 0, 0.08);
-      --sub-dot-open: rgba(139, 92, 246, 0.45);
-      --sub-dot-filled: #34C759;
       --noise-opacity: 0;
       --grid-color: rgba(60, 100, 200, 0.18);
       --grid-opacity: 0.04;
@@ -652,46 +646,6 @@
       min-width: 38px;
       text-align: right;
       font-variant-numeric: tabular-nums;
-    }
-
-    /* Subagent dot-matrix indicator — rendered under a session row when it
-       has running sub-agents. Open circles = pending, filled = settled.
-       Mirrors overlay anatomy in assets/overlay-reference.png. */
-    .sub-matrix-row {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 1px 10px 4px 24px;
-      font-family: var(--font-mono);
-      font-size: 9px;
-    }
-    .sub-matrix-row.child { padding-left: 44px; }
-    .sub-matrix-counter {
-      color: var(--muted);
-      flex-shrink: 0;
-      min-width: 38px;
-      text-align: right;
-      font-variant-numeric: tabular-nums;
-      padding-top: 2px;
-    }
-    .sub-matrix-dots {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, 10px);
-      gap: 3px;
-      flex: 1;
-    }
-    .sub-matrix-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      box-sizing: border-box;
-    }
-    .sub-matrix-dot.settled {
-      background: var(--sub-dot-filled);
-    }
-    .sub-matrix-dot.open {
-      background: transparent;
-      border: 1.5px solid var(--sub-dot-open);
     }
 
     /* Connection banner — surfaces when the WebSocket is reconnecting or
@@ -2131,11 +2085,6 @@
               if (tasksOpen) {
                 items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
               }
-              // Sub-agents render as a dot matrix under the parent (replaces
-              // per-child rows). Issue #354.
-              if (a.children && a.children.length > 0) {
-                items.push({type: 'submatrix', key: 'sm:' + a.session_id, agent: a, isChild: false});
-              }
             }
           }
         }
@@ -2146,7 +2095,6 @@
           item => {
             if (item.type === 'group') return createGroupHeader(item.group);
             if (item.type === 'alert') return createAlertRow(item.pressure);
-            if (item.type === 'submatrix') return createSubMatrixRow(item.agent, item.isChild);
             if (item.type === 'tasks') return createTaskListRow(item.agent, item.isChild);
             if (item.type === 'question') return createQuestionRow(item.agent, item.isChild);
             const el = createSessionRow(item.agent, item.isChild);
@@ -2156,7 +2104,6 @@
           (el, item) => {
             if (item.type === 'group') { updateGroupHeader(el, item.group); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
-            if (item.type === 'submatrix') { updateSubMatrixRow(el, item.agent); return; }
             if (item.type === 'tasks') { updateTaskListRow(el, item.agent); return; }
             if (item.type === 'question') { updateQuestionRow(el, item.agent); return; }
             updateSessionRow(el, item.agent, item.isChild);
@@ -2196,49 +2143,14 @@
       el.innerHTML = '<span class="' + cls + '">\u26A0 Switch to a fresh session soon</span>';
     }
 
-    // Subagent dot-matrix indicator. Rendered under a parent session row
-    // when it has sub-agents (children[]). Open circles = pending,
-    // filled = settled. Mirrors the inline indicator visible in
-    // assets/overlay-reference.png under row 2.
     // Shared factory for trailing-row variants rendered beneath the parent
-    // session row (tasks, submatrix, question).
+    // session row (tasks, question).
     function makeRow(className, innerHTML, agent, update, isChild) {
       const el = document.createElement('div');
       el.className = className + (isChild ? ' child' : '');
       if (innerHTML) el.innerHTML = innerHTML;
       update(el, agent);
       return el;
-    }
-
-    function createSubMatrixRow(agent, isChild) {
-      return makeRow('sub-matrix-row',
-        '<span class="sub-matrix-counter"></span><div class="sub-matrix-dots"></div>',
-        agent, updateSubMatrixRow, isChild);
-    }
-
-    function updateSubMatrixRow(el, agent) {
-      const children = agent.children || [];
-      const total = children.length;
-      if (total === 0) { el.style.display = 'none'; return; }
-      el.style.display = '';
-      const settled = children.filter(c => c.state === 'ready').length;
-      // Cache the (settled,total) pair so we don't burn an innerHTML write on
-      // every render tick when nothing has changed.
-      const sig = settled + '/' + total;
-      if (el.dataset.sig !== sig) {
-        el.dataset.sig = sig;
-        el.querySelector('.sub-matrix-counter').textContent = settled + ' / ' + total;
-        const dots = el.querySelector('.sub-matrix-dots');
-        // Bound to a sane cap to avoid pathological DOM growth on a runaway
-        // agent \u2014 the screenshot reference goes up to 96, so 1000 is a
-        // generous ceiling that still renders inside one CSS grid.
-        const cap = Math.min(total, 1000);
-        const filled = Math.min(settled, cap);
-        let html = '';
-        for (let i = 0; i < filled; i++) html += '<span class="sub-matrix-dot settled"></span>';
-        for (let i = filled; i < cap; i++) html += '<span class="sub-matrix-dot open"></span>';
-        dots.innerHTML = html;
-      }
     }
 
     // Task progress strip \u2014 rendered under a parent session row when the
