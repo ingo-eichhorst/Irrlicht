@@ -1,6 +1,6 @@
 cask "irrlicht" do
   version "0.4.5"
-  sha256 "6d27ca4db3176a7c53523a9e43c7f15a3f95d03376c0cf3616d0f8e32396010b"
+  sha256 "6ace4040800cb0bc936433315a7446e5c1dded25dd004433b5b67a95e793b996"
 
   url "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v#{version}/Irrlicht-#{version}.dmg",
       verified: "github.com/ingo-eichhorst/Irrlicht/"
