@@ -110,6 +110,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	if covPath := s.resolveCoveragePath(); covPath != "" {
 		if b, err := os.ReadFile(covPath); err == nil {
 			b = annotateCatalogCodes(b)
+			b = annotateMeasurements(b, s.RepoRoot)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set("X-Catalog-Source", "coverage")
 			w.Write(b)
@@ -172,6 +173,130 @@ func annotateCatalogCodes(b []byte) []byte {
 		return b
 	}
 	return out
+}
+
+// annotateMeasurements walks each scenarios[].coverage[<agent>] cell
+// and decorates it with a `measurement` object derived from the
+// scenario's expected.jsonl + events.jsonl (if present). Lets the
+// overview UI render BOTH the maintainer's matrix verdict (coverage
+// breadth) AND the measured execution state — they're separate signals
+// and the matrix can be stale relative to what the current recording
+// actually proves.
+//
+// Output shape per cell, when there's a recording:
+//   "measurement": {
+//     "status": "pass" | "fail" | "known_failing" | "no_recording" | "no_expected",
+//     "summary": "X/N phases passed"
+//   }
+//
+// Failure is graceful — bad JSON returns the input unchanged.
+func annotateMeasurements(b []byte, repoRoot string) []byte {
+	var top map[string]any
+	if err := json.Unmarshal(b, &top); err != nil {
+		return b
+	}
+	rawScenarios, ok := top["scenarios"].([]any)
+	if !ok {
+		return b
+	}
+	for _, raw := range rawScenarios {
+		sc, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		sid, _ := sc["id"].(string)
+		if sid == "" {
+			continue
+		}
+		coverage, ok := sc["coverage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for agentSlug, cellRaw := range coverage {
+			cell, ok := cellRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			cell["measurement"] = measureScenario(repoRoot, agentSlug, sid)
+		}
+	}
+	out, err := json.Marshal(top)
+	if err != nil {
+		return b
+	}
+	return out
+}
+
+// measureScenario probes one (agent, scenario) cell: looks for a
+// recording, looks for expected.jsonl, runs the validator. Returns a
+// compact summary suitable for embedding in the catalog response.
+//
+// The matrix's `scenarioID` is the coverage_id (e.g. "user-esc-interrupt"),
+// while replaydata folders use the recipe `name` (e.g. "interrupted-turn").
+// scenarios.json carries the mapping; we resolve it here so the matrix's
+// scenario id is the only thing the caller needs to know.
+func measureScenario(repoRoot, agent, scenarioID string) map[string]any {
+	folder := resolveScenarioFolder(repoRoot, scenarioID)
+	if folder == "" {
+		folder = scenarioID // try the coverage id directly as a last resort
+	}
+	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
+	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err != nil {
+		return map[string]any{"status": "no_recording"}
+	}
+	if _, err := os.Stat(filepath.Join(scenarioDir, "expected.jsonl")); err != nil {
+		return map[string]any{"status": "no_expected"}
+	}
+	rep, err := validate.ValidateExpected(scenarioDir)
+	if err != nil || rep == nil {
+		return map[string]any{"status": "validator_error"}
+	}
+	knownFailing := rep.Meta.KnownFailing
+	switch {
+	case rep.Pass && !knownFailing:
+		return map[string]any{"status": "pass", "summary": rep.Summary}
+	case rep.Pass && knownFailing:
+		// Validator passing despite a known_failing flag means the gap
+		// closed — surface so the maintainer drops the flag.
+		return map[string]any{"status": "known_failing_now_passing", "summary": rep.Summary}
+	case knownFailing:
+		return map[string]any{"status": "known_failing", "summary": rep.Summary}
+	default:
+		return map[string]any{"status": "fail", "summary": rep.Summary}
+	}
+}
+
+// resolveScenarioFolder maps a coverage_id (the matrix's scenario id)
+// to the replaydata folder name. Most scenarios use the same string
+// for both, but a handful diverge (basic-turn → baseline-hello, etc.)
+// per scenarios.json's optional `coverage_id` field.
+//
+// Returns the folder name when the mapping resolves, "" otherwise.
+func resolveScenarioFolder(repoRoot, coverageID string) string {
+	path := filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var doc struct {
+		Scenarios []struct {
+			Name       string `json:"name"`
+			CoverageID string `json:"coverage_id"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return ""
+	}
+	for _, sc := range doc.Scenarios {
+		cid := sc.CoverageID
+		if cid == "" {
+			cid = sc.Name
+		}
+		if cid == coverageID {
+			return sc.Name
+		}
+	}
+	return ""
 }
 
 // handleScenarioSpec parses .specs/agent-scenarios.md on demand and

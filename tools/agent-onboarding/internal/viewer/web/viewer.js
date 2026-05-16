@@ -280,6 +280,10 @@ function renderCoverageMatrix(detail) {
       // Build a multi-line tooltip
       const lines = [`${agent}: agent_supports=${sup}, irrlicht_observes=${obs}`];
       if (cov.notes) lines.push(cov.notes);
+      const meas = cov.measurement;
+      if (meas && meas.status && meas.status !== "no_recording" && meas.status !== "no_expected") {
+        lines.push(`measurement: ${meas.status}${meas.summary ? " (" + meas.summary + ")" : ""}`);
+      }
       lines.push(rec ? `↻ click to open recording` : `(no recording committed)`);
       badge.title = lines.join("\n");
       if (rec) {
@@ -288,6 +292,16 @@ function renderCoverageMatrix(detail) {
         });
       }
       cell.appendChild(badge);
+      // Measurement indicator: a small second chip showing what the
+      // expected.jsonl validator says about the recorded fixture. Sits
+      // next to the verdict badge so an operator can spot when matrix
+      // verdict (coverage breadth) and execution state diverge — e.g.
+      // matrix says "partial" but the recipe we DID record passes 11/11.
+      const measChip = renderMeasurementChip(meas, sup, obs);
+      if (measChip) {
+        measChip.style.marginLeft = "4px";
+        cell.appendChild(measChip);
+      }
       row.appendChild(cell);
     }
     tbody.appendChild(row);
@@ -300,6 +314,7 @@ function renderCoverageMatrix(detail) {
   const sum = document.createElement("div");
   sum.style.cssText = "margin-top: 8px; display: flex; gap: 14px; font-size: 11px; color: #555;";
   let recorded = 0, observableNow = 0, supported = 0, total = 0;
+  let measPass = 0, measFail = 0, measKF = 0, measMismatch = 0;
   for (const sc of catalog.scenarios) {
     for (const agent of agents) {
       total++;
@@ -308,6 +323,15 @@ function renderCoverageMatrix(detail) {
       if (cov.agent_supports === "yes") supported++;
       if (cov.agent_supports === "yes" && cov.irrlicht_observes === "yes") observableNow++;
       if (recIndex.has(`${agent}/${sc.id}`)) recorded++;
+      const m = cov.measurement;
+      if (m && m.status === "pass") measPass++;
+      if (m && m.status === "fail") measFail++;
+      if (m && m.status === "known_failing") measKF++;
+      if (m && m.status === "known_failing_now_passing") measMismatch++;
+      // Verdict↔measurement mismatch
+      const sup = cov.agent_supports, obs = cov.irrlicht_observes;
+      if (m && obs === "partial" && m.status === "pass") measMismatch++;
+      if (m && sup === "yes" && obs === "yes" && (m.status === "fail" || m.status === "known_failing")) measMismatch++;
     }
   }
   sum.innerHTML = `
@@ -315,6 +339,11 @@ function renderCoverageMatrix(detail) {
     <span><b>${observableNow}</b> fully observable now</span>
     <span><b>${supported}</b> agent-supported</span>
     <span><b>${total}</b> total cells</span>
+    <span style="margin-left:14px;">|</span>
+    <span><b>${measPass}</b> measured ✓</span>
+    <span><b>${measKF}</b> known_failing ⚠</span>
+    <span><b>${measFail}</b> failing ✗</span>
+    ${measMismatch > 0 ? `<span style="color:#c0392b;font-weight:600;"><b>${measMismatch}</b> verdict↔measurement mismatch</span>` : ""}
   `;
   panel.appendChild(sum);
 
@@ -322,11 +351,17 @@ function renderCoverageMatrix(detail) {
   const legend = document.createElement("div");
   legend.style.cssText = "margin-top: 8px; display: flex; gap: 12px; font-size: 11px; color: #555; flex-wrap: wrap;";
   legend.innerHTML = `
-    <span>Legend:</span>
-    <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 6px;border-radius:8px;">●●</span> agent supports + irrlicht observes</span>
-    <span><span style="background:#fde7c1;color:#8a4500;padding:1px 6px;border-radius:8px;">●◐</span> partial somewhere</span>
+    <span>Verdict:</span>
+    <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 6px;border-radius:8px;">●●</span> supports + observes</span>
+    <span><span style="background:#fde7c1;color:#8a4500;padding:1px 6px;border-radius:8px;">●◐</span> partial</span>
     <span><span style="background:#f8c8c8;color:#8a0000;padding:1px 6px;border-radius:8px;">✗</span> no</span>
     <span><span style="background:#e5e5e5;color:#555;padding:1px 6px;border-radius:8px;">?</span> unknown</span>
+    <span style="margin-left:14px;">Measurement:</span>
+    <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 6px;border-radius:8px;font-size:11px;">✓</span> recording passes spec</span>
+    <span><span style="background:#fff7d6;color:#8a4500;padding:1px 6px;border-radius:8px;font-size:11px;">⚠</span> known_failing</span>
+    <span><span style="background:#f8c8c8;color:#8a0000;padding:1px 6px;border-radius:8px;font-size:11px;">✗</span> fails spec</span>
+    <span><span style="background:#cfe7ff;color:#1c3f7a;padding:1px 6px;border-radius:8px;font-size:11px;">↑</span> known_failing now passing</span>
+    <span style="margin-left:14px;color:#c0392b;font-weight:600;">red border</span> = verdict ≠ measurement
   `;
   panel.appendChild(legend);
 }
@@ -609,6 +644,51 @@ function coverageBadge(sup, obs) {
   if (sup === "unknown" || obs === "unknown") return {label: "?", bg: "#e5e5e5", fg: "#555"};
   if (sup === "partial" || obs === "partial") return {label: "●◐", bg: "#fde7c1", fg: "#8a4500"};
   return {label: "—", bg: "transparent", fg: "#ccc"};
+}
+
+// renderMeasurementChip returns a small second pill that reflects what
+// expected.jsonl actually says about the recorded recipe. Distinct
+// signal from the verdict badge (coverage breadth) so divergence is
+// visible at a glance. Returns null when there's nothing to render
+// (no recording or no expected.jsonl yet).
+//
+// Also highlights when the verdict badge and the measurement disagree —
+// e.g. matrix "partial" but recipe passes clean, or matrix "yes" but
+// recipe fails. The border around the chip turns red on disagreement.
+function renderMeasurementChip(meas, sup, obs) {
+  if (!meas || !meas.status) return null;
+  const palette = {
+    pass:                       {label: "✓", bg: "#d6f0d4", fg: "#1f5a1d", desc: "recording passes spec"},
+    known_failing:              {label: "⚠", bg: "#fff7d6", fg: "#8a4500", desc: "known_failing flagged by author"},
+    known_failing_now_passing:  {label: "↑", bg: "#cfe7ff", fg: "#1c3f7a", desc: "marked known_failing but now passes — drop the flag"},
+    fail:                       {label: "✗", bg: "#f8c8c8", fg: "#8a0000", desc: "recording fails spec"},
+    validator_error:            {label: "!", bg: "#e5e5e5", fg: "#555",    desc: "validator error"},
+  };
+  const p = palette[meas.status];
+  if (!p) return null; // no_recording / no_expected → render nothing
+  const chip = document.createElement("span");
+  chip.textContent = p.label;
+  chip.style.cssText = `display: inline-block; padding: 1px 6px; border-radius: 8px; ` +
+    `font: inherit; font-size: 11px; font-weight: 600; line-height: 1; ` +
+    `background: ${p.bg}; color: ${p.fg}; vertical-align: middle;`;
+  // Divergence highlight: matrix says "partial" but recipe passes
+  // clean OR matrix says "yes" but recipe fails. The verdict-vs-measurement
+  // mismatch is the actionable signal — usually a stale matrix entry.
+  const verdictExpectsPass = (sup === "yes" && obs === "yes");
+  const verdictExpectsPartial = (obs === "partial" || sup === "partial");
+  const isClean = meas.status === "pass";
+  const isFailing = meas.status === "fail" || meas.status === "known_failing";
+  let mismatch = false;
+  if (verdictExpectsPartial && isClean) mismatch = true;
+  if (verdictExpectsPass && isFailing) mismatch = true;
+  if (meas.status === "known_failing_now_passing") mismatch = true;
+  if (mismatch) {
+    chip.style.boxShadow = "0 0 0 2px #c0392b";
+    chip.title = `${p.desc}${meas.summary ? " · " + meas.summary : ""}  — matrix verdict (${obs}) diverges; consider updating`;
+  } else {
+    chip.title = `${p.desc}${meas.summary ? " · " + meas.summary : ""}`;
+  }
+  return chip;
 }
 
 // renderScenariosMatrix paints the older 8×5 by_adapter view from
