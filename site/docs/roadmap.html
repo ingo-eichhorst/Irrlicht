@@ -251,6 +251,31 @@
     border: 1px solid var(--border);
   }
 
+  /* Row-level concept tile (future releases) or supporting image at row
+     bottom (past trunk rows). Sits outside the milestone bullets. */
+  .release-figure {
+    margin: 1rem 0 0.25rem;
+    padding-left: 1rem;
+    max-width: 720px;
+  }
+  .release-figure picture,
+  .release-figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    opacity: 0.92;
+    transition: opacity 0.2s;
+  }
+  .release-figure:hover picture,
+  .release-figure:hover img { opacity: 1; }
+  /* Future-section figures are slightly subdued so they read as concept. */
+  .future .release-figure picture,
+  .future .release-figure img { opacity: 0.78; }
+  .future .release-figure:hover picture,
+  .future .release-figure:hover img { opacity: 0.95; }
+
   /* Light one-liner for patch releases that shipped a smaller note-worthy
      change — visually subordinate to the bulleted milestones list. */
   .release-note {
@@ -418,6 +443,12 @@
               <li>Windows 11 desktop <span class="ref">&middot; reincarnates <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/180" target="_blank" rel="noopener">#180</a></span> <span class="desc">&mdash; tray app + WebView2 popover.</span></li>
               <li>Hosted relay beta at <code>relay.irrlicht.app</code> <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server" target="_blank" rel="noopener">Relay wiki</a></span> <span class="desc">&mdash; same binary, public URL, auth-on-by-default.</span></li>
             </ul>
+            <figure class="release-figure">
+              <picture>
+                <source srcset="../assets/roadmap/v1.0/second-desktop.webp" type="image/webp">
+                <img src="../assets/roadmap/v1.0/second-desktop.png" alt="Concept: three tray-app thumbnails for Linux (GNOME), Windows 11 (notification area), and the hosted relay at relay.irrlicht.app" loading="lazy">
+              </picture>
+            </figure>
           </div>
 
           <!-- v0.9 -->
@@ -434,6 +465,12 @@
               <li>StandBy / Live Activities tile on iOS <span class="ref">&middot; Platform Rollout &sect;6</span> <span class="desc">&mdash; aggregated status on the lock screen.</span></li>
               <li>macOS WidgetKit <span class="ref">&middot; reincarnates <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/254" target="_blank" rel="noopener">#254</a></span> <span class="desc">&mdash; overlay design now settled; widget reads the shared snapshot.</span></li>
             </ul>
+            <figure class="release-figure">
+              <picture>
+                <source srcset="../assets/roadmap/v0.9/wearables-android.webp" type="image/webp">
+                <img src="../assets/roadmap/v0.9/wearables-android.png" alt="Concept: Apple Watch showing working/waiting/ready counts, an Android phone with the same session list, and a StandBy iOS tile with aggregate counts" loading="lazy">
+              </picture>
+            </figure>
           </div>
 
           <!-- v0.8 -->
@@ -449,6 +486,12 @@
               <li>iPadOS adaptive layout <span class="ref">&middot; Platform Rollout Phase 4</span> <span class="desc">&mdash; master/detail on iPad, same target as iOS.</span></li>
               <li><code>IrrlichtCore</code> Swift package <span class="ref">&middot; Platform Rollout Phase 3</span> <span class="desc">&mdash; shared models / SessionStream / reconnect / notification logic extracted from <code>platforms/macos/</code>.</span></li>
             </ul>
+            <figure class="release-figure">
+              <picture>
+                <source srcset="../assets/roadmap/v0.8/ios-family.webp" type="image/webp">
+                <img src="../assets/roadmap/v0.8/ios-family.png" alt="Concept: iPhone and iPad showing the Irrlicht session list — adaptive layout from a shared IrrlichtCore Swift package" loading="lazy">
+              </picture>
+            </figure>
           </div>
 
           <!-- v0.7 -->
@@ -458,12 +501,18 @@
               <span class="release-date">~mid-Jul 2026</span>
               <span class="release-pill pill-later">later</span>
             </div>
-            <div class="release-theme">Productivity &amp; cache analytics + relay polish</div>
+            <div class="release-theme">Relay v0 completes + productivity metrics</div>
             <ul class="milestones">
+              <li>Relay v0 completes &mdash; macOS multi-source UI <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server" target="_blank" rel="noopener">Relay wiki</a></span> <span class="desc">&mdash; bearer-token auth, <code>SessionStream</code> refactor, Settings &rarr; Relay Servers pane (wiki phases 4&ndash;6). The user-visible payoff of v0.5's foundation: aggregate laptop + remote-box + VM sessions into one list with source badges. Unblocks iOS in v0.8. Phase 7 LAN-direct mode for Tailscale users ships alongside.</span></li>
               <li>Yield ratio per project <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/373" target="_blank" rel="noopener">#373</a></span> <span class="desc">&mdash; productive vs reverted spend.</span></li>
               <li>Cache-creation regression detection <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/374" target="_blank" rel="noopener">#374</a></span> <span class="desc">&mdash; attribute prompt-cache regressions to upstream agent versions.</span></li>
-              <li>Relay v0 polish <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server" target="_blank" rel="noopener">Relay wiki</a></span> <span class="desc">&mdash; bearer-token auth, macOS multi-source UI, LAN-direct mode (wiki phases 4&ndash;6); follow-on to v0.5's first cut.</span></li>
             </ul>
+            <figure class="release-figure">
+              <picture>
+                <source srcset="../assets/roadmap/v0.7/productivity-metrics.webp" type="image/webp">
+                <img src="../assets/roadmap/v0.7/productivity-metrics.png" alt="Concept: a yield-ratio donut chart (73% kept, 27% reverted) next to a cache-hit-rate line chart with a marked regression at version v2.1.130" loading="lazy">
+              </picture>
+            </figure>
           </div>
 
           <!-- v0.6 -->
@@ -481,6 +530,12 @@
               <li>Cost-anomaly indicator <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/372" target="_blank" rel="noopener">#372</a></span> <span class="desc">&mdash; flag sessions running materially above the project's peer average.</span></li>
               <li>Automated adapter onboarding pipeline <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/268" target="_blank" rel="noopener">#268</a></span> <span class="desc">&mdash; new adapters land with fixtures and scenario matrix populated end-to-end.</span></li>
             </ul>
+            <figure class="release-figure">
+              <picture>
+                <source srcset="../assets/roadmap/v0.6/vscode-panel.webp" type="image/webp">
+                <img src="../assets/roadmap/v0.6/vscode-panel.png" alt="Concept: a Visual Studio Code window with an Irrlicht panel docked on the left, hosting the dashboard webview inline with the editor" loading="lazy">
+              </picture>
+            </figure>
           </div>
 
           <!-- v0.5 — in flight -->
@@ -492,13 +547,19 @@
             </div>
             <div class="release-theme">macOS hardening + relay v0 + Kiro.dev</div>
             <ul class="milestones">
-              <li>Relay server v0 &mdash; first version <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/188" target="_blank" rel="noopener">#188</a> &middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server" target="_blank" rel="noopener">Relay wiki</a></span> <span class="desc">&mdash; wire protocol + daemon forwarder + standalone relay binary; aggregates sessions across machines (wiki phases 1&ndash;3). Foundation that iOS, watchOS, and the hosted relay all depend on.</span></li>
+              <li>Relay server v0 &mdash; first version <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/188" target="_blank" rel="noopener">#188</a> &middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server" target="_blank" rel="noopener">Relay wiki</a></span> <span class="desc">&mdash; wire protocol + daemon forwarder + standalone relay binary (wiki phases 0&ndash;3). One-binary hub-mode replaces the half-built <code>IRRLICHT_BIND_ADDR</code> + <code>IRRLICHT_MDNS</code> network-exposure pair with a single explicit knob. Foundation that iOS, watchOS, and the hosted relay all depend on.</span></li>
               <li>Kiro.dev adapter <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/280" target="_blank" rel="noopener">#280</a></span> <span class="desc">&mdash; sixth coding-agent backend alongside Claude Code, Codex, Pi, Aider, and OpenCode.</span></li>
               <li>Sparkle auto-update for the macOS app + daemon <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/129" target="_blank" rel="noopener">#129</a></span> <span class="desc">&mdash; app updates itself in place.</span></li>
               <li>Claude Code Agent View as an orchestrator <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/312" target="_blank" rel="noopener">#312</a></span> <span class="desc">&mdash; new orchestrator alongside Gas Town and the inline-subagent path.</span></li>
               <li>Focus state restoration groundwork <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/357" target="_blank" rel="noopener">#357</a></span> <span class="desc">&mdash; DND-aware notifications return once Developer ID lands.</span></li>
               <li>OpenCode adapter maturity <span class="desc">&mdash; tail latency and task surfacing reach parity with the other adapters.</span></li>
             </ul>
+            <figure class="release-figure">
+              <picture>
+                <source srcset="../assets/roadmap/v0.5/relay-topology.webp" type="image/webp">
+                <img src="../assets/roadmap/v0.5/relay-topology.png" alt="Concept: three machines (laptop, desk, VM) each running irrlichd, all pushing to one hub-mode irrlichd; the macOS app sees the aggregated session list" loading="lazy">
+              </picture>
+            </figure>
           </div>
 
         </div>
@@ -536,7 +597,14 @@
                   </picture>
                 </figure>
               </li>
-              <li>Unified per-row state icons across web and macOS <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/382" target="_blank" rel="noopener">#382</a></span> <span class="desc">&mdash; heartbeat halo / pause bars / checkmark, same vocabulary in both surfaces.</span></li>
+              <li>Unified per-row state icons across web and macOS <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/382" target="_blank" rel="noopener">#382</a></span> <span class="desc">&mdash; heartbeat halo / pause bars / checkmark, same vocabulary in both surfaces.</span>
+                <figure>
+                  <picture>
+                    <source srcset="../assets/releases/v0.4.5/state-icons.webp" type="image/webp">
+                    <img src="../assets/releases/v0.4.5/state-icons.png" alt="The three Irrlicht state icons: working = breathing dot, waiting = pause bars, ready = checkmark" loading="lazy">
+                  </picture>
+                </figure>
+              </li>
             </ul>
             <div class="also-shipped"><a href="https://github.com/ingo-eichhorst/Irrlicht/issues/350" target="_blank" rel="noopener">#350</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/360" target="_blank" rel="noopener">#360</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/367" target="_blank" rel="noopener">#367</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/368" target="_blank" rel="noopener">#368</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/370" target="_blank" rel="noopener">#370</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/371" target="_blank" rel="noopener">#371</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/375" target="_blank" rel="noopener">#375</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/376" target="_blank" rel="noopener">#376</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/377" target="_blank" rel="noopener">#377</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/380" target="_blank" rel="noopener">#380</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/381" target="_blank" rel="noopener">#381</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/383" target="_blank" rel="noopener">#383</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/390" target="_blank" rel="noopener">#390</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/391" target="_blank" rel="noopener">#391</a></div>
           </div>
@@ -547,7 +615,14 @@
               <span class="release-date">2026-05-16</span>
             </div>
             <ul class="milestones">
-              <li>Web dashboard reaches overlay parity, beta <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/354" target="_blank" rel="noopener">#354</a></span> <span class="desc">&mdash; <code>http://127.0.0.1:7837</code> mirrors the macOS overlay row anatomy, header controls, and settings.</span></li>
+              <li>Web dashboard reaches overlay parity, beta <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/354" target="_blank" rel="noopener">#354</a></span> <span class="desc">&mdash; <code>http://127.0.0.1:7837</code> mirrors the macOS overlay row anatomy, header controls, and settings.</span>
+                <figure>
+                  <picture>
+                    <source srcset="../assets/releases/v0.4.4/overlay-reference.webp" type="image/webp">
+                    <img src="../assets/releases/v0.4.4/overlay-reference.png" alt="The macOS overlay reference design that v0.4.4 web dashboard now mirrors" loading="lazy">
+                  </picture>
+                </figure>
+              </li>
             </ul>
             <p class="release-note">Codex sessions price at real-dollar instead of $0 (split-event <code>token_count</code> attributed to session model) <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/361" target="_blank" rel="noopener">#361</a>; adapters honor agent-CLI env vars for relocated session dirs (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/349" target="_blank" rel="noopener">#349</a>).</p>
             <div class="also-shipped"><a href="https://github.com/ingo-eichhorst/Irrlicht/issues/233" target="_blank" rel="noopener">#233</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/338" target="_blank" rel="noopener">#338</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/350" target="_blank" rel="noopener">#350</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/352" target="_blank" rel="noopener">#352</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/353" target="_blank" rel="noopener">#353</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/355" target="_blank" rel="noopener">#355</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/356" target="_blank" rel="noopener">#356</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/357" target="_blank" rel="noopener">#357</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/358" target="_blank" rel="noopener">#358</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/359" target="_blank" rel="noopener">#359</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/360" target="_blank" rel="noopener">#360</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/362" target="_blank" rel="noopener">#362</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/363" target="_blank" rel="noopener">#363</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/364" target="_blank" rel="noopener">#364</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/365" target="_blank" rel="noopener">#365</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/366" target="_blank" rel="noopener">#366</a></div>
@@ -672,7 +747,14 @@
               <span class="release-date">2026-04-24</span>
             </div>
             <ul class="milestones">
-              <li>Agent history bar &mdash; per-session state timeline with 1s / 10s / 60s granularity <span class="desc">&mdash; cycling mode button switches between context display and history; persists across daemon restarts.</span></li>
+              <li>Agent history bar &mdash; per-session state timeline with 1s / 10s / 60s granularity <span class="desc">&mdash; cycling mode button switches between context display and history; persists across daemon restarts.</span>
+                <figure>
+                  <picture>
+                    <source srcset="../assets/releases/v0.3.7/agent-history-bar.webp" type="image/webp">
+                    <img src="../assets/releases/v0.3.7/agent-history-bar.png" alt="Session rows showing per-row colored history timelines and a waiting-question block" loading="lazy">
+                  </picture>
+                </figure>
+              </li>
             </ul>
             <p class="release-note">Click-to-focus extends to 17 terminal/IDE hosts (Zed, Rio, Tabby, WaveTerm, Alacritty, Nova, Kitty, JetBrains family, &hellip;); Claude Code task-list progress dots in the session row.</p>
             <div class="also-shipped"><a href="https://github.com/ingo-eichhorst/Irrlicht/issues/66" target="_blank" rel="noopener">#66</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/69" target="_blank" rel="noopener">#69</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/171" target="_blank" rel="noopener">#171</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/177" target="_blank" rel="noopener">#177</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/181" target="_blank" rel="noopener">#181</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/183" target="_blank" rel="noopener">#183</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/185" target="_blank" rel="noopener">#185</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/189" target="_blank" rel="noopener">#189</a></div>
@@ -784,7 +866,14 @@
               <span class="release-date">2026-04-04</span>
             </div>
             <ul class="milestones">
-              <li>Subagent lifecycle end-to-end <span class="desc">&mdash; background and foreground subagents detected, tracked, and shown as children with a purple count badge on the parent; cascade cleanup on parent exit.</span></li>
+              <li>Subagent lifecycle end-to-end <span class="desc">&mdash; background and foreground subagents detected, tracked, and shown as children with a purple count badge on the parent; cascade cleanup on parent exit.</span>
+                <figure>
+                  <picture>
+                    <source srcset="../assets/releases/v0.2.3/subagent-lifecycle.webp" type="image/webp">
+                    <img src="../assets/releases/v0.2.3/subagent-lifecycle.png" alt="Session row with a purple subagent count badge showing 2 child sessions" loading="lazy">
+                  </picture>
+                </figure>
+              </li>
               <li>Hierarchical dashboard API <span class="desc">&mdash; <code>GET /api/v1/sessions</code> returns Orchestrator &rarr; Group &rarr; Agent &rarr; Children with <code>SubagentSummary</code> counts.</span></li>
             </ul>
             <p class="release-note">PID-discovery retry with backoff (500ms, 1s, 2s) plus CWD fallback resolves multi-instance race.</p>
