@@ -75,6 +75,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | macOS (menu bar app)  | beta    | [Releases](https://github.com/ingo-eichhorst/Irrlicht/releases/latest) |
 | Web dashboard         | beta    | `http://127.0.0.1:7837`   |
 | CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) |
+| VS Code extension     | planned | tracked in [#350](https://github.com/ingo-eichhorst/Irrlicht/issues/350) |
 | Linux                 | planned | —                         |
 | Windows               | planned | —                         |
 
