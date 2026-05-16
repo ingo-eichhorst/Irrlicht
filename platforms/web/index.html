@@ -437,13 +437,24 @@
       display: block;
     }
 
-    /* Reduced-motion: hide the animated halo so only the steady inner dot
-       remains. SMIL doesn't honor prefers-reduced-motion natively, so we
-       hide the halo element via CSS. */
+    /* Working state — opacity-only "breathe" on a large solid dot.
+       Footprint is r=7 of 20 viewBox (70 % of cell), so the dot stays
+       clearly visible even if the animation is dropped by the renderer
+       or disabled for reduced-motion. */
+    @keyframes irrlicht-breathe {
+      0%, 100% { opacity: 0.55; }
+      50%      { opacity: 1; }
+    }
+    .row-state-icon svg circle.core,
+    .app-state-icon svg circle.core {
+      animation: irrlicht-breathe 1.4s ease-in-out infinite;
+      transform-origin: 50% 50%;
+    }
     @media (prefers-reduced-motion: reduce) {
-      .row-state-icon svg circle.halo,
-      .app-state-icon svg circle.halo {
-        display: none;
+      .row-state-icon svg circle.core,
+      .app-state-icon svg circle.core {
+        animation: none;
+        opacity: 1;
       }
     }
 
@@ -1429,7 +1440,7 @@
 
     // --- SVG Icons (compact 12px) ---
     const svgIcons = {
-      working: '<svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.6" fill="#8B5CF6"/><circle class="halo" cx="10" cy="10" r="3" fill="none" stroke="#8B5CF6" stroke-width="1.5"><animate attributeName="r" values="3;9" dur="1.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.85;0" dur="1.6s" repeatCount="indefinite"/><animate attributeName="stroke-width" values="1.5;0.4" dur="1.6s" repeatCount="indefinite"/></circle></svg>',
+      working: '<svg viewBox="0 0 20 20" fill="none"><circle class="core" cx="10" cy="10" r="7" fill="#8B5CF6"/></svg>',
       waiting: '<svg viewBox="0 0 16 16" fill="none"><rect x="4" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/><rect x="9.5" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/></svg>',
       ready: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#34C759" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="#34C759" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
       cancelled: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8E8E93" stroke-width="1.5"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/></svg>',

@@ -3,12 +3,13 @@ import SwiftUI
 /// Per-row session-state glyph, unified with the web dashboard
 /// (`platforms/web/index.html` `svgIcons`):
 ///
-/// - working: solid inner dot + animated halo ring (expands and fades).
+/// - working: large solid dot (r = 7/20 of frame), opacity-only breathe
+///            between 0.55 and 1.0 over 1.4 s.
 /// - waiting: two-bar pause.
 /// - ready:   SF Symbol `checkmark.circle.fill` (unchanged from before).
 ///
-/// The halo animation is suppressed when the user has enabled Reduce Motion;
-/// only the steady inner dot remains.
+/// The opacity animation is suppressed when the user has enabled Reduce
+/// Motion; the dot remains at full opacity, fully visible.
 struct SessionStateIcon: View {
     let state: SessionState.State
     let size: CGFloat
@@ -27,44 +28,36 @@ struct SessionStateIcon: View {
     }
 }
 
-/// Heartbeat halo — mirrors the SMIL `<animate>` in the web SVG:
-/// halo scales r 3→9 (i.e. 1.0×→3.0× starting size), opacity 0.85→0,
-/// stroke 1.5→0.4 over 1.6s, repeating forever.
+/// Breathing solid dot — mirrors the web `.row-state-icon svg circle.core`
+/// keyframes (`irrlicht-breathe`): opacity 0.55 ↔ 1.0 over 1.4 s, ease-in-out,
+/// autoreversing. No scaling — the dot is always at its full r=7/20 footprint
+/// (70 % of the cell) so it stays clearly visible even if the animation drops
+/// frames or stops entirely. v0.4.5's halo-based glyph degraded to the tiny
+/// inner dot on macOS frame-degradation and on reduced-motion; this design
+/// removes that failure mode by construction.
 private struct WorkingIcon: View {
     let size: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animating = false
+    @State private var dim = false
 
-    private static let period: Double = 1.6
-    private static let coreRatio: CGFloat = 2.6 / 20   // SVG dot radius / viewBox
-    private static let haloStartRatio: CGFloat = 3 / 20
-    private static let haloEndScale: CGFloat = 9 / 3   // r=3 → r=9
+    private static let period: Double = 1.4
+    private static let dotRatio: CGFloat = 7 / 20   // r=7 of viewBox 20
+    private static let dimOpacity: Double = 0.55
 
     var body: some View {
-        ZStack {
-            // Steady inner dot
-            Circle()
-                .fill(IrrColors.working)
-                .frame(width: size * Self.coreRatio * 2,
-                       height: size * Self.coreRatio * 2)
-
-            if !reduceMotion {
-                let haloDiameter = size * Self.haloStartRatio * 2
-                Circle()
-                    .stroke(IrrColors.working,
-                            lineWidth: animating ? 0.4 : 1.5)
-                    .frame(width: haloDiameter, height: haloDiameter)
-                    .scaleEffect(animating ? Self.haloEndScale : 1.0)
-                    .opacity(animating ? 0 : 0.85)
-                    .animation(
-                        .linear(duration: Self.period)
-                            .repeatForever(autoreverses: false),
-                        value: animating
-                    )
-            }
-        }
-        .frame(width: size, height: size)
-        .onAppear { animating = true }
+        let diameter = size * Self.dotRatio * 2
+        Circle()
+            .fill(IrrColors.working)
+            .frame(width: diameter, height: diameter)
+            .opacity(reduceMotion ? 1 : (dim ? Self.dimOpacity : 1))
+            .animation(
+                reduceMotion ? nil :
+                    .easeInOut(duration: Self.period / 2)
+                        .repeatForever(autoreverses: true),
+                value: dim
+            )
+            .frame(width: size, height: size)
+            .onAppear { if !reduceMotion { dim = true } }
     }
 }
 
