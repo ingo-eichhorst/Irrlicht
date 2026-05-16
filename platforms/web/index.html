@@ -1567,6 +1567,11 @@
             }
             target.agents.push(a);
             entry.group = target;
+            // Children's sessionIndex entries still point at the old group;
+            // refresh them so any future site that reads child.entry.group
+            // (e.g. a parent-deletion cleanup that drills into children)
+            // doesn't follow a reference to a group we just spliced out.
+            indexChildren(target, a);
             if (oldGroup.agents.length === 0) {
               var gi = dashboardGroups.indexOf(oldGroup);
               if (gi >= 0) dashboardGroups.splice(gi, 1);
