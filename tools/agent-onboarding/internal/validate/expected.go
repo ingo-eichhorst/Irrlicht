@@ -58,6 +58,17 @@ type ExpectedMeta struct {
 // Phases form a DAG via RelativeTo. "start" refers to the recording's
 // first event timestamp. All other RelativeTo values must reference
 // a phase declared EARLIER in the file (no forward refs).
+//
+// Session-identity predicates (optional, mutually exclusive):
+//   - SameSessionAs: <phase name> — the matched event's session_id
+//     must equal the session_id matched by an earlier-named phase.
+//     Use this to pin a phase to a specific session row (e.g. assert
+//     v2_turn_start fires on the SAME session as v2_session_birth,
+//     not on a leftover transition from v1).
+//   - NewSession: true — the matched event's session_id must NOT
+//     equal any previously-matched phase's session_id. Use this to
+//     assert "this phase happens on a brand-new session" (e.g. the
+//     post-/clear UUID after session-reset).
 type ExpectedPhase struct {
 	Phase             string   `json:"phase"`
 	ExpectedState     string   `json:"expected_state,omitempty"`
@@ -65,6 +76,8 @@ type ExpectedPhase struct {
 	RelativeTo        string   `json:"relative_to,omitempty"`
 	MaxDelayMs        int64    `json:"max_delay_ms,omitempty"`
 	DurationAtLeastMs int64    `json:"duration_at_least_ms,omitempty"`
+	SameSessionAs     string   `json:"same_session_as,omitempty"`
+	NewSession        bool     `json:"new_session,omitempty"`
 	Invariants        []string `json:"invariants,omitempty"`
 	Trigger           string   `json:"trigger,omitempty"` // documentation-only this iteration
 	Text              string   `json:"text,omitempty"`
@@ -209,6 +222,9 @@ func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {
 		if p.ExpectedState != "" && p.Kind != "" {
 			return meta, nil, fmt.Errorf("line %d (%q): expected_state and kind are mutually exclusive", lineNum, p.Phase)
 		}
+		if p.SameSessionAs != "" && p.NewSession {
+			return meta, nil, fmt.Errorf("line %d (%q): same_session_as and new_session are mutually exclusive", lineNum, p.Phase)
+		}
 		phases = append(phases, p)
 	}
 	return meta, phases, scanner.Err()
@@ -251,30 +267,70 @@ func matchPhase(p ExpectedPhase, events []recordedEvent, anchorTs map[string]tim
 		return r
 	}
 
+	// Resolve session-id constraint up front so candidate filtering is
+	// cheap inside the loop. SameSessionAs pins the matched session_id
+	// to a specific earlier phase's match; NewSession requires a
+	// session_id we haven't seen yet.
+	var requireSID string
+	if p.SameSessionAs != "" {
+		sid, ok := matchedSid[p.SameSessionAs]
+		if !ok {
+			r.Reason = fmt.Sprintf("same_session_as references unknown phase %q", p.SameSessionAs)
+			return r
+		}
+		requireSID = sid
+	}
+	var seenSIDs map[string]struct{}
+	if p.NewSession {
+		seenSIDs = make(map[string]struct{}, len(matchedSid))
+		for _, sid := range matchedSid {
+			seenSIDs[sid] = struct{}{}
+		}
+	}
+
 	// 1. Find the first event matching expected_state or kind, at or
-	//    after the anchor. Skip events strictly before anchor — earlier
-	//    matches belong to an earlier phase.
+	//    after the anchor, satisfying any session-id constraint. Skip
+	//    events strictly before anchor — earlier matches belong to an
+	//    earlier phase.
 	var matched *recordedEvent
 	for i := range events {
 		ev := &events[i]
 		if ev.Ts.Before(anchor) {
 			continue
 		}
+		kindOK := false
 		if p.ExpectedState != "" && ev.Kind == "state_transition" && ev.NewState == p.ExpectedState {
-			matched = ev
-			break
+			kindOK = true
+		} else if p.Kind != "" && ev.Kind == p.Kind {
+			kindOK = true
 		}
-		if p.Kind != "" && ev.Kind == p.Kind {
-			matched = ev
-			break
+		if !kindOK {
+			continue
 		}
+		if requireSID != "" && ev.SessionID != requireSID {
+			continue
+		}
+		if p.NewSession {
+			if _, seen := seenSIDs[ev.SessionID]; seen {
+				continue
+			}
+		}
+		matched = ev
+		break
 	}
 	if matched == nil {
 		want := p.ExpectedState
 		if want == "" {
 			want = p.Kind
 		}
-		r.Reason = fmt.Sprintf("no event matching %q found at or after anchor %q", want, anchorName)
+		switch {
+		case requireSID != "":
+			r.Reason = fmt.Sprintf("no event matching %q found for session %q at or after anchor %q", want, requireSID, anchorName)
+		case p.NewSession:
+			r.Reason = fmt.Sprintf("no event matching %q on a NEW session found at or after anchor %q (all candidates were already-seen session ids)", want, anchorName)
+		default:
+			r.Reason = fmt.Sprintf("no event matching %q found at or after anchor %q", want, anchorName)
+		}
 		return r
 	}
 	r.MatchedTs = matched.Ts

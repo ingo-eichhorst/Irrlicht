@@ -408,6 +408,17 @@ Field semantics:
   anchor. Omit for "any time after anchor".
 - `duration_at_least_ms` — for idle/dwell phases. Asserts the
   `expected_state` persists at least this long without flipping away.
+- `same_session_as` — optional. Pins the matched event's `session_id`
+  to a specific earlier phase's match. Use this when an arc spans
+  multiple state transitions on the SAME session and you want to
+  reject candidates from a co-occurring different session (e.g.
+  during a /clear handoff, pin v1's turn phases to the original UUID
+  so a transition on the post-/clear UUID can't satisfy them).
+- `new_session` — optional bool. When true, the matched event's
+  `session_id` must NOT equal any previously-matched phase's
+  session_id. Use this to assert "a brand-new session appears here"
+  — the strongest observable proof that a /clear or fork created a
+  fresh transcript. Mutually exclusive with `same_session_as`.
 - `invariants` — plain-English negative assertions over the phase's
   time window. Two DSL forms supported:
   - `"no <kind> for <session-noun>"` — e.g. `"no transcript_removed for primary session"`

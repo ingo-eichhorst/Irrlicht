@@ -127,6 +127,140 @@ func TestValidateExpected_maxDelayCatchesDrift(t *testing.T) {
 	}
 }
 
+// TestValidateExpected_sameSessionAs_filtersByID — same_session_as
+// pins a phase to the session_id matched by an earlier phase. With two
+// sessions both transitioning to ready, the second phase should match
+// the OLDER session's ready, not the newer one.
+func TestValidateExpected_sameSessionAs_filtersByID(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"sess-a"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:00.001Z","kind":"state_transition","session_id":"sess-a","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"sess-a","new_state":"working"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:02Z","kind":"state_transition","session_id":"sess-b","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:03Z","kind":"state_transition","session_id":"sess-a","new_state":"ready"}`+"\n")
+	// turn_end pinned to sess-a should match the +3s ready, NOT the
+	// +2s sess-b ready that happens earlier.
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"a_birth","expected_state":"ready","relative_to":"start","text":"sess-a appears"}`+"\n"+
+			`{"phase":"a_working","expected_state":"working","relative_to":"a_birth","same_session_as":"a_birth","text":"sess-a goes working"}`+"\n"+
+			`{"phase":"a_ready","expected_state":"ready","relative_to":"a_working","same_session_as":"a_birth","text":"sess-a returns to ready (must skip sess-b's intervening ready)"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if !report.Pass {
+		for _, p := range report.Phases {
+			t.Logf("phase %s: pass=%v reason=%q", p.Phase, p.Pass, p.Reason)
+		}
+		t.Fatal("expected all phases to pass with same_session_as filtering")
+	}
+	// Verify a_ready matched at +3s, not +2s
+	if got := report.Phases[2].DeltaMs; got != 2000 {
+		t.Errorf("a_ready delta_ms = %d (expected 2000ms past a_working), reason=%q", got, report.Phases[2].Reason)
+	}
+}
+
+// TestValidateExpected_sameSessionAs_rejectsWhenNoMatch — when no
+// event for the required session_id exists after the anchor, the
+// phase fails with a session-specific error message.
+func TestValidateExpected_sameSessionAs_rejectsWhenNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"sess-a"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:00.001Z","kind":"state_transition","session_id":"sess-a","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"transcript_removed","session_id":"OTHER-SESS"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"birth","expected_state":"ready","relative_to":"start","text":"sess-a birth"}`+"\n"+
+			`{"phase":"ended","kind":"transcript_removed","same_session_as":"birth","relative_to":"birth","text":"transcript_removed for sess-a specifically — none exists"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if report.Pass {
+		t.Fatal("expected failure — no transcript_removed exists for sess-a")
+	}
+	reason := report.Phases[1].Reason
+	if !strings.Contains(reason, "sess-a") {
+		t.Errorf("expected reason to name the required session_id, got %q", reason)
+	}
+}
+
+// TestValidateExpected_newSession_requiresFreshID — new_session: true
+// rejects events whose session_id was matched by an earlier phase.
+// Models the post-/clear path: v2_session_birth must NOT match a
+// stale transition on the original UUID.
+func TestValidateExpected_newSession_requiresFreshID(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"old"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:00.001Z","kind":"state_transition","session_id":"old","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"old","new_state":"working"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:02Z","kind":"state_transition","session_id":"old","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:03Z","kind":"state_transition","session_id":"new","new_state":"ready"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"v1","expected_state":"ready","relative_to":"start","text":"old session ready"}`+"\n"+
+			`{"phase":"v1_done","expected_state":"ready","relative_to":"v1","same_session_as":"v1","max_delay_ms":5000,"text":"old session returns to ready"}`+"\n"+
+			`{"phase":"v2_birth","expected_state":"ready","relative_to":"v1_done","new_session":true,"max_delay_ms":5000,"text":"new session ready — must skip the old session's intervening ready transitions"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if !report.Pass {
+		for _, p := range report.Phases {
+			t.Logf("phase %s: pass=%v reason=%q", p.Phase, p.Pass, p.Reason)
+		}
+		t.Fatal("expected all phases to pass — new_session should skip 'old' and find 'new'")
+	}
+}
+
+// TestValidateExpected_newSession_failsWhenOnlyOldSeen — when the
+// only candidate is the already-matched session_id, the phase fails
+// with a new-session-specific error message.
+func TestValidateExpected_newSession_failsWhenOnlyOldSeen(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "events.jsonl"),
+		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"only"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:00.001Z","kind":"state_transition","session_id":"only","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"only","new_state":"ready"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"v1","expected_state":"ready","relative_to":"start","text":"only session"}`+"\n"+
+			`{"phase":"v2_birth","expected_state":"ready","relative_to":"v1","new_session":true,"max_delay_ms":5000,"text":"no actual new session — should fail"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if report.Pass {
+		t.Fatal("expected failure — no new session_id ever appears")
+	}
+	reason := report.Phases[1].Reason
+	if !strings.Contains(reason, "NEW session") {
+		t.Errorf("expected reason to mention new-session requirement, got %q", reason)
+	}
+}
+
+// TestValidateExpected_sameAndNewMutuallyExclusive — load-time
+// rejection when a phase declares both same_session_as and
+// new_session: true.
+func TestValidateExpected_sameAndNewMutuallyExclusive(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "events.jsonl"), "")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"bad","expected_state":"ready","relative_to":"start","same_session_as":"x","new_session":true,"text":"can't have both"}`+"\n")
+	_, err := ValidateExpected(dir)
+	if err == nil {
+		t.Fatal("expected load-time error for mutually-exclusive predicates")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected error to mention 'mutually exclusive', got %q", err.Error())
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
