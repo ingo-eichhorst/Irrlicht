@@ -95,12 +95,13 @@ func TestIngestRateLimit_NilNoOp(t *testing.T) {
 	}
 }
 
-// TestComputeMetrics_NullsStaleSnapshot wires the stale-check through
-// the real TailAndProcess path: ingest a snapshot with a past
-// resets_at, run a pass against an empty transcript, and assert the
-// surfaced metrics.RateLimit is nil. Catches regressions where the
-// stale logic is renamed/moved but the call-site isn't updated.
-func TestComputeMetrics_NullsStaleSnapshot(t *testing.T) {
+// TestComputeMetrics_PreservesStaleSnapshot pins the post-iteration
+// behaviour: the daemon used to null stale snapshots, but that left
+// the macOS overlay header empty when Claude Code's statusline
+// stuttered. The UI now decorates stale data with a dimmer chip; the
+// daemon must surface the snapshot unchanged so the UI has data to
+// decorate.
+func TestComputeMetrics_PreservesStaleSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "transcript.jsonl")
 	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
@@ -108,51 +109,21 @@ func TestComputeMetrics_NullsStaleSnapshot(t *testing.T) {
 	}
 	tt := NewTranscriptTailer(path, nil, "test")
 	staleResets := time.Now().Add(-1 * time.Hour).Unix()
-	tt.IngestRateLimit(&RateLimitSnapshot{
+	snap := &RateLimitSnapshot{
 		SampledAt: time.Now().Add(-2 * time.Hour).Unix(),
 		Windows: []RateLimitWindow{
 			{UsedPercent: 47, WindowMinutes: 300, ResetsAt: staleResets},
 		},
-	})
+	}
+	tt.IngestRateLimit(snap)
 	m, err := tt.TailAndProcess()
 	if err != nil {
 		t.Fatalf("TailAndProcess: %v", err)
 	}
-	if m.RateLimit != nil {
-		t.Errorf("expected stale snapshot to be nulled, got %+v", m.RateLimit)
+	if m.RateLimit == nil {
+		t.Fatal("expected stale snapshot to be preserved on metrics, got nil")
 	}
-	if len(m.RateLimitHistory) != 0 {
-		t.Errorf("expected history to be cleared, got %d entries", len(m.RateLimitHistory))
-	}
-}
-
-func TestRateLimitHasStaleWindow(t *testing.T) {
-	now := time.Unix(2000, 0)
-	cases := []struct {
-		name string
-		snap *RateLimitSnapshot
-		want bool
-	}{
-		{"nil snapshot", nil, false},
-		{"no windows", &RateLimitSnapshot{}, false},
-		{"all future resets", &RateLimitSnapshot{Windows: []RateLimitWindow{
-			{ResetsAt: 3000}, {ResetsAt: 4000},
-		}}, false},
-		{"any past reset triggers stale", &RateLimitSnapshot{Windows: []RateLimitWindow{
-			{ResetsAt: 1000}, {ResetsAt: 4000},
-		}}, true},
-		{"all past", &RateLimitSnapshot{Windows: []RateLimitWindow{
-			{ResetsAt: 1000}, {ResetsAt: 1500},
-		}}, true},
-		{"zero ResetsAt ignored (treated as no data)", &RateLimitSnapshot{Windows: []RateLimitWindow{
-			{ResetsAt: 0}, {ResetsAt: 0},
-		}}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := rateLimitHasStaleWindow(tc.snap, now); got != tc.want {
-				t.Errorf("rateLimitHasStaleWindow = %v, want %v", got, tc.want)
-			}
-		})
+	if m.RateLimit.Windows[0].UsedPercent != 47 {
+		t.Errorf("unexpected snapshot mutation: %+v", m.RateLimit)
 	}
 }

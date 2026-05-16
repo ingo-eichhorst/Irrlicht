@@ -437,6 +437,7 @@ struct SessionListView: View {
         let session: SessionState
         let imminent: RateLimitWindowInfo?
         let totalCostUSD: Double
+        let isStale: Bool
     }
 
     /// All chips to render, one per subscription/usage provider. See
@@ -459,6 +460,12 @@ struct SessionListView: View {
         var imminent: RateLimitWindowInfo?
         var totalCostUSD: Double
         var mode: QuotaMode
+        /// True when any window's resetsAt is at or before now — the
+        /// snapshot describes a window the provider has rolled over
+        /// without us seeing a fresh tick. Surfaced via dimmer chip
+        /// rendering + tooltip note rather than dropped entirely, so
+        /// users see the last-known state instead of an empty header.
+        var isStale: Bool
 
         func toWidgetData(id: String) -> QuotaWidgetData {
             QuotaWidgetData(
@@ -467,7 +474,8 @@ struct SessionListView: View {
                 snapshot: snapshot,
                 session: session,
                 imminent: imminent,
-                totalCostUSD: totalCostUSD
+                totalCostUSD: totalCostUSD,
+                isStale: isStale
             )
         }
     }
@@ -496,7 +504,8 @@ struct SessionListView: View {
     /// daemon-side per-provider cost tracker (issue #385).
     private func mergeIntoBuckets(session: SessionState, into buckets: inout [String: ChipBucket]) {
         guard let snap = session.metrics?.rateLimit else { return }
-        if snap.windows.contains(where: { $0.resetsAt <= Date() }) { return }
+        let now = Date()
+        let snapIsStale = snap.windows.contains(where: { $0.resetsAt <= now })
         let key = snap.providerKey(adapter: session.adapter)
             ?? "unknown:\(session.adapter ?? "")"
         let mode = resolveChipMode(snap: snap, providerKey: key)
@@ -511,7 +520,17 @@ struct SessionListView: View {
                 existing.snapshot = snap
                 existing.session = session
                 existing.imminent = imminent
-            } else if snap.sampledAt > existing.snapshot.sampledAt {
+                existing.isStale = snapIsStale
+            } else if existing.isStale && !snapIsStale {
+                // Always prefer a fresh snapshot over a stale one,
+                // regardless of which has the higher sampledAt — a
+                // pre-rollover snapshot can be "newer" by timestamp
+                // but still describe a window that already reset.
+                existing.snapshot = snap
+                existing.session = session
+                existing.imminent = imminent
+                existing.isStale = false
+            } else if existing.isStale == snapIsStale && snap.sampledAt > existing.snapshot.sampledAt {
                 existing.snapshot = snap
                 existing.session = session
                 existing.imminent = imminent
@@ -524,7 +543,8 @@ struct SessionListView: View {
                 session: session,
                 imminent: imminent,
                 totalCostUSD: sessionCost,
-                mode: mode
+                mode: mode,
+                isStale: snapIsStale
             )
         }
     }
@@ -581,6 +601,11 @@ struct SessionListView: View {
                 quotaUsageBody(d, compact: compact)
             }
         }
+        // Stale snapshots render at half opacity so the user can tell
+        // the data pre-dates the current window — the values are still
+        // visible (better than an empty header) but visibly muted, and
+        // the tooltip names the staleness explicitly.
+        .opacity(d.isStale ? 0.5 : 1.0)
         .tooltip(quotaTooltip(d))
     }
 
@@ -634,7 +659,9 @@ struct SessionListView: View {
                 .foregroundColor(.secondary)
                 .frame(width: 14, alignment: .leading)
 
-            quotaBar(percent: w.usedPercent, color: barColor(w.usedPercent))
+            quotaBar(percent: w.usedPercent,
+                     color: barColor(used: w.usedPercent, pace: quotaPacePercent(w)),
+                     pacePercent: quotaPacePercent(w))
                 .frame(width: compact ? 40 : 70, height: 5)
 
             Text("\(Int(w.usedPercent.rounded()))%")
@@ -652,11 +679,35 @@ struct SessionListView: View {
         }
     }
 
-    /// A simple rounded-rect progress bar. ZStack so the fill and the
-    /// track render with the same corner radius without clipping
+    /// "Expected percent used if you've been pacing evenly through the
+    /// window so far." Anchored to current wall-clock time, not the
+    /// snapshot's `sampledAt` — the marker should always reflect where
+    /// the user *should be* right now, independent of when the
+    /// snapshot was last refreshed.
+    ///
+    /// Returns nil when the window can't be paced: zero-duration,
+    /// missing `resetsAt`, or a `resetsAt` that's already in the past
+    /// (which the daemon's stale-check should have dropped, but
+    /// belt-and-braces here too).
+    private func quotaPacePercent(_ w: RateLimitWindowInfo) -> Double? {
+        guard w.windowMinutes > 0 else { return nil }
+        guard w.resetsAt.timeIntervalSince1970 > 0 else { return nil }
+        let windowSeconds = Double(w.windowMinutes) * 60
+        let windowStart = w.resetsAt.addingTimeInterval(-windowSeconds)
+        let elapsed = Date().timeIntervalSince(windowStart)
+        let pct = (elapsed / windowSeconds) * 100.0
+        return min(100, max(0, pct))
+    }
+
+    /// A rounded-rect progress bar with an optional vertical pace
+    /// marker (thin red line at `pacePercent`). The marker reads
+    /// "where you should be if you've been pacing evenly" — fill past
+    /// the marker means burning quota faster than the window's linear
+    /// rate; fill behind it means headroom. ZStack so the fill, track,
+    /// and marker render with the same corner radius without clipping
     /// artifacts at small sizes.
     @ViewBuilder
-    private func quotaBar(percent: Double, color: Color) -> some View {
+    private func quotaBar(percent: Double, color: Color, pacePercent: Double?) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2.5)
@@ -664,6 +715,12 @@ struct SessionListView: View {
                 RoundedRectangle(cornerRadius: 2.5)
                     .fill(color)
                     .frame(width: geo.size.width * min(1.0, max(0.0, percent / 100.0)))
+                if let pace = pacePercent, (0...100).contains(pace) {
+                    Rectangle()
+                        .fill(Color.red)
+                        .frame(width: 1)
+                        .offset(x: geo.size.width * (pace / 100.0) - 0.5)
+                }
             }
         }
     }
@@ -672,6 +729,9 @@ struct SessionListView: View {
         var lines: [String] = []
         if let plan = d.snapshot.planTypeLabel {
             lines.append(plan)
+        }
+        if d.isStale {
+            lines.append("⚠️ snapshot pre-dates current window — waiting for next statusline tick")
         }
         switch d.mode {
         case .subscription:
@@ -684,7 +744,17 @@ struct SessionListView: View {
                 let pct = "\(Int(w.usedPercent.rounded()))%"
                 let label = quotaWindowLabel(w.windowMinutes)
                 let resets = formatTimeUntil(w.resetsAt)
-                lines.append("\(label): \(pct) · resets in \(resets)")
+                var line = "\(label): \(pct) · resets in \(resets)"
+                if let pace = quotaPacePercent(w) {
+                    let paceInt = Int(pace.rounded())
+                    let delta = Int(w.usedPercent.rounded()) - paceInt
+                    let verdict: String
+                    if delta > 0 { verdict = "ahead by \(delta)pt" }
+                    else if delta < 0 { verdict = "behind by \(-delta)pt" }
+                    else { verdict = "on pace" }
+                    line += " · pace \(paceInt)% (\(verdict))"
+                }
+                lines.append(line)
             }
             if let eta = d.session.metrics?.rateLimitForecastEta {
                 lines.append("Projected cap: \(formatClockTime(eta))")
@@ -721,13 +791,43 @@ struct SessionListView: View {
         }
     }
 
-    private func barColor(_ pct: Double) -> Color {
-        switch pct {
-        case 90...: return IrrColors.pressureCritical
-        case 80..<90: return IrrColors.pressureHigh
-        case 60..<80: return IrrColors.pressureMedium
-        default: return IrrColors.pressureLow
+    /// Pace-aware bar tint. The ramp is driven by how far the fill is
+    /// *ahead of* the steady-state pace marker rather than by raw
+    /// `used_percent` alone — burning 60% in the first hour of a 5h
+    /// window is more alarming than burning 60% in the fourth hour.
+    ///
+    /// Red is intentionally absent from the fill palette so it doesn't
+    /// blur into the red pace marker: high-severity states use orange.
+    /// Note: the `IrrColors.pressure*` tokens are misnamed —
+    /// `pressureMedium` is system orange and `pressureHigh` is system
+    /// red — so we bypass them and use SwiftUI's `.yellow` / `.orange`
+    /// directly for unambiguous intent.
+    ///
+    /// Rules:
+    ///   - `used - pace` ≥ 15pt, or `used` ≥ 85% → orange: you're
+    ///     burning fast enough to blow the window before reset, or
+    ///     the cap is imminent regardless of pace.
+    ///   - `used - pace` ≥ 5pt                   → yellow: noticeable
+    ///     overshoot but recoverable.
+    ///   - otherwise                              → green: on pace or
+    ///     behind, plenty of headroom.
+    ///
+    /// When `pace` is nil (no expiry data on the window) we fall back
+    /// to a purely absolute ramp so the chip still has a sensible
+    /// color in that edge case.
+    private func barColor(used: Double, pace: Double?) -> Color {
+        if used >= 85 { return .orange }
+        guard let pace = pace else {
+            switch used {
+            case 70...: return .orange
+            case 50...: return .yellow
+            default: return IrrColors.pressureLow
+            }
         }
+        let delta = used - pace
+        if delta >= 15 { return .orange }
+        if delta >= 5 { return .yellow }
+        return IrrColors.pressureLow
     }
 
     private func formatClockTime(_ date: Date) -> String {

@@ -79,30 +79,6 @@ func (t *TranscriptTailer) rateLimitChanged(snap *RateLimitSnapshot) bool {
 	return false
 }
 
-// rateLimitHasStaleWindow reports whether snap contains at least one
-// window whose ResetsAt is at or before now — the signal that the
-// provider has rolled that window over since the last statusline tick
-// and our cached percent reading no longer matches reality. The whole
-// snapshot is treated as stale (rather than just the offending window)
-// because `sampled_at` is shared across windows: a stale 5h means the
-// whole snapshot pre-dates whatever the provider currently reports.
-//
-// A nil receiver or empty Windows is not stale (nothing to invalidate).
-// Windows with ResetsAt == 0 are treated as "no expiry data, can't
-// judge" — also not stale.
-func rateLimitHasStaleWindow(snap *RateLimitSnapshot, now time.Time) bool {
-	if snap == nil || len(snap.Windows) == 0 {
-		return false
-	}
-	nowUnix := now.Unix()
-	for _, w := range snap.Windows {
-		if w.ResetsAt > 0 && w.ResetsAt <= nowUnix {
-			return true
-		}
-	}
-	return false
-}
-
 // rateLimitRolledOver returns true when any window's ResetsAt has advanced
 // since the most recent history entry — the signal that the provider rolled
 // over to a fresh quota window and previous slope data is stale.
@@ -325,6 +301,19 @@ func (t *TranscriptTailer) computeMetrics() {
 	// more output). Skipping this would return CumInputTokens=0 in that window.
 	t.computeCumulativeTokens()
 
+	// Rate-limit snapshot has the same "must run even on empty pass"
+	// property — Claude Code's statusline hook can populate t.rateLimit
+	// out of band (no transcript line drives it), and the surface
+	// metrics need to expose that even on the first poll before any
+	// transcript activity exists. Lives above the early-return guard
+	// so an idle session still surfaces its last-known snapshot.
+	t.metrics.RateLimit = t.rateLimit
+	if len(t.rateLimitHistory) > 0 {
+		t.metrics.RateLimitHistory = append([]RateLimitSnapshot(nil), t.rateLimitHistory...)
+	} else {
+		t.metrics.RateLimitHistory = nil
+	}
+
 	if len(t.metrics.MessageHistory) == 0 {
 		t.metrics.MessagesPerMinute = 0
 		t.metrics.ElapsedSeconds = 0
@@ -376,23 +365,9 @@ func (t *TranscriptTailer) computeMetrics() {
 	t.metrics.LastWasToolDenial = t.lastWasToolDenial
 	t.metrics.LastCWD = t.lastCWD
 	t.metrics.LastAssistantText = t.lastAssistantText
-	// Drop snapshots once any window has rolled over but no fresh
-	// statusline tick has arrived. Our cached percent reading then
-	// describes a window the provider has already reset, and the
-	// tooltip would render "resets in 0m" while the real reset
-	// happened minutes ago. Better to surface "no chip" until the
-	// next tick lands than to render stale data (issue #309 phase-5
-	// hotfix).
-	if rateLimitHasStaleWindow(t.rateLimit, time.Now()) {
-		t.rateLimit = nil
-		t.rateLimitHistory = nil
-	}
-	t.metrics.RateLimit = t.rateLimit
-	if len(t.rateLimitHistory) > 0 {
-		t.metrics.RateLimitHistory = append([]RateLimitSnapshot(nil), t.rateLimitHistory...)
-	} else {
-		t.metrics.RateLimitHistory = nil
-	}
+	// (rate-limit fields are populated above the empty-MessageHistory
+	// early return so an idle session still surfaces its last-known
+	// snapshot — UI decorates staleness rather than dropping it.)
 	if len(t.tasks) > 0 {
 		t.metrics.Tasks = append([]Task(nil), t.tasks...)
 	} else {
