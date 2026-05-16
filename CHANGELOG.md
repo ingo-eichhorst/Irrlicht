@@ -7,6 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Release artifacts (DMG, PKG, universal `irrlichd` binary, checksums) are
 attached to each [GitHub release](https://github.com/ingo-eichhorst/Irrlicht/releases).
 
+For what's *coming next* (v0.5 / v0.6 / v0.7 and the platform rollout
+beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
+
 ## [Unreleased]
 
 ## [0.4.5] — 2026-05-16
