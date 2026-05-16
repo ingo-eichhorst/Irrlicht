@@ -21,6 +21,23 @@ The argument (if any) is the bump type: `patch` (default), `minor`, or `major`.
    - `minor`: 0.2.3 → 0.3.0
    - `major`: 0.2.3 → 1.0.0
 3. Set `$NEW_VERSION` for all subsequent steps.
+4. **Capture the release base SHA** — load-bearing for the race guard in
+   Step 7b. The Swift build + DMG packaging takes ~5 minutes; a maintainer
+   PR squash-merged during that window will silently end up on top of the
+   release commit, included in the v$NEW_VERSION tree but absent from the
+   release notes and built against stale artifacts. v0.4.5 shipped through
+   exactly this race (PR #379 landed mid-build; required an amend PR + a
+   force-pushed tag to recover).
+
+   ```bash
+   git fetch origin main
+   BASE_SHA=$(git rev-parse origin/main)
+   echo "$BASE_SHA" > /tmp/irrlicht-release-base.sha
+   echo "release base: $BASE_SHA"
+   ```
+
+   Keep `BASE_SHA` (or the file) accessible through Step 7b. Step 7b's
+   race-guard check fails the release if `origin/main` has moved past it.
 
 ## Step 1.5: Refresh Model Aliases (codeburn sync)
 
@@ -558,20 +575,75 @@ git commit -m "chore: release v$NEW_VERSION"
 git push -u origin "release/v$NEW_VERSION"
 ```
 
-### 7b. Open and merge the release PR
+### 7b. Open the release PR
 
 Use the release notes drafted in Step 2 as the PR body so the same prose
-ships in three places (PR, CHANGELOG, GitHub release). Squash-merge so
-`main` gets exactly one commit titled `chore: release v$NEW_VERSION (#N)`.
+ships in three places (PR, CHANGELOG, GitHub release).
 
 ```bash
 gh pr create --title "chore: release v$NEW_VERSION" \
-  --body "<drafted release notes from Step 2>"
+  --body-file /tmp/release-notes-v$NEW_VERSION.md
 
 # Wait for mergeability if needed:
 gh pr view --json mergeable,mergeStateStatus \
   --jq '"mergeable=\(.mergeable) state=\(.mergeStateStatus)"'
+```
 
+### 7b-guard. Race check — has `origin/main` moved since Step 1?
+
+**Load-bearing — do not skip.** If a maintainer squash-merged another
+PR into `main` while you were building artifacts (~5 min window for
+Swift + DMG), the squash-merge in Step 7b will silently land your
+release commit on top of that PR. The v$NEW_VERSION tag will then
+include code you never built artifacts for, never tested in this run,
+and never mentioned in the release notes. v0.4.5 shipped through this
+exact race and required an amend PR + force-pushed tag to recover.
+
+```bash
+if [ ! -s /tmp/irrlicht-release-base.sha ]; then
+  echo "FAIL: /tmp/irrlicht-release-base.sha missing or empty."
+  echo "Step 1.4 didn't run, or /tmp was cleared between sessions."
+  echo "Re-run Step 1.4 to capture BASE_SHA before merging."
+  exit 1
+fi
+BASE_SHA=$(cat /tmp/irrlicht-release-base.sha)
+git fetch origin main
+CURRENT_MAIN=$(git rev-parse origin/main)
+if [ "$BASE_SHA" != "$CURRENT_MAIN" ]; then
+  echo "RACE DETECTED: origin/main moved during release window."
+  echo "  base at Step 1:  $BASE_SHA"
+  echo "  current main:    $CURRENT_MAIN"
+  echo ""
+  echo "Commits that landed mid-release:"
+  git log --oneline "$BASE_SHA..$CURRENT_MAIN"
+  echo ""
+  echo "DO NOT MERGE THE RELEASE PR. Recovery:"
+  echo "  1. Rebase release/v$NEW_VERSION onto origin/main:"
+  echo "       git checkout release/v$NEW_VERSION && git rebase origin/main"
+  echo "  2. Add the new commit(s) above to CHANGELOG.md + site/docs/changelog.html."
+  echo "  3. Re-run Step 5 (tests) + Step 6 (build artifacts) on the new base."
+  echo "  4. Re-run Step 6.5 (bump cask sha to the new DMG)."
+  echo "  5. Force-push the rebased branch:"
+  echo "       git push -f origin release/v$NEW_VERSION"
+  echo "     The existing PR will update — do NOT re-run gh pr create."
+  echo "  6. Update BASE_SHA, then re-run this guard:"
+  echo "       git rev-parse origin/main > /tmp/irrlicht-release-base.sha"
+  echo "     and proceed to Step 7b-merge once it reports unchanged."
+  exit 1
+fi
+echo "OK release base unchanged; safe to merge"
+```
+
+If the race is detected, follow the recovery above instead of patching
+post-merge. A force-rebase before merge is much cleaner than an
+amend-PR-plus-force-tag-move after the fact (v0.4.5's recovery path).
+
+### 7b-merge. Squash-merge the release PR
+
+Squash-merge so `main` gets exactly one commit titled
+`chore: release v$NEW_VERSION (#N)`.
+
+```bash
 gh pr merge --squash
 ```
 
