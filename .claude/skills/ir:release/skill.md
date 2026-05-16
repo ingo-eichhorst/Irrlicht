@@ -600,6 +600,12 @@ and never mentioned in the release notes. v0.4.5 shipped through this
 exact race and required an amend PR + force-pushed tag to recover.
 
 ```bash
+if [ ! -s /tmp/irrlicht-release-base.sha ]; then
+  echo "FAIL: /tmp/irrlicht-release-base.sha missing or empty."
+  echo "Step 1.4 didn't run, or /tmp was cleared between sessions."
+  echo "Re-run Step 1.4 to capture BASE_SHA before merging."
+  exit 1
+fi
 BASE_SHA=$(cat /tmp/irrlicht-release-base.sha)
 git fetch origin main
 CURRENT_MAIN=$(git rev-parse origin/main)
@@ -613,11 +619,16 @@ if [ "$BASE_SHA" != "$CURRENT_MAIN" ]; then
   echo ""
   echo "DO NOT MERGE THE RELEASE PR. Recovery:"
   echo "  1. Rebase release/v$NEW_VERSION onto origin/main:"
-  echo "     git checkout release/v$NEW_VERSION && git rebase origin/main"
+  echo "       git checkout release/v$NEW_VERSION && git rebase origin/main"
   echo "  2. Add the new commit(s) above to CHANGELOG.md + site/docs/changelog.html."
   echo "  3. Re-run Step 5 (tests) + Step 6 (build artifacts) on the new base."
   echo "  4. Re-run Step 6.5 (bump cask sha to the new DMG)."
-  echo "  5. Force-push the rebased branch and re-run Step 7b from the top."
+  echo "  5. Force-push the rebased branch:"
+  echo "       git push -f origin release/v$NEW_VERSION"
+  echo "     The existing PR will update — do NOT re-run gh pr create."
+  echo "  6. Update BASE_SHA, then re-run this guard:"
+  echo "       git rev-parse origin/main > /tmp/irrlicht-release-base.sha"
+  echo "     and proceed to Step 7b-merge once it reports unchanged."
   exit 1
 fi
 echo "OK release base unchanged; safe to merge"
