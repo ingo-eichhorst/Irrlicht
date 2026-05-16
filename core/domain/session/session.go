@@ -254,8 +254,7 @@ func ExtractQuestionSnippet(text string) string {
 // question requests that should still register as a waiting turn. Bucketed
 // from the coverage matrix in issue #381: A direct ask, B approval framing,
 // C action gates, D curated imperatives (multi-word to minimise FPs),
-// E trailing soft asks. All compile case-insensitive and run only against
-// the trailing 1–2 sentences of LastAssistantText (see ExtractWaitingCue).
+// E trailing soft asks.
 //
 // The set favours recall: first-person intent statements that share an
 // imperative shape ("Let me verify it's right.", "I'll check the logs.",
