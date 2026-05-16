@@ -22,6 +22,44 @@ The argument (if any) is the bump type: `patch` (default), `minor`, or `major`.
    - `major`: 0.2.3 → 1.0.0
 3. Set `$NEW_VERSION` for all subsequent steps.
 
+## Step 1.5: Refresh Model Aliases (codeburn sync)
+
+Run the `/ir:refresh-aliases` workflow inline before drafting release notes so
+any new frontend aliases ship with this release instead of waiting another
+cycle. The map in `core/pkg/capacity/aliases.go` is a hand-translated port of
+codeburn's `BUILTIN_ALIASES`; new entries upstream mean real users on new
+frontends (Cursor variants, Antigravity Gemini models, etc.) price at $0
+until we sync.
+
+1. Fetch upstream and diff against the in-repo map (see
+   `.claude/skills/ir:refresh-aliases/skill.md` for the full workflow).
+2. If the diff is empty: continue to Step 2. No-op is the common case.
+3. If **Added** entries exist: append them to `core/pkg/capacity/aliases.go`
+   in the appropriate grouping section, preserving the per-group comments.
+   The table-driven test (`TestModelAliases_ResolveToCanonical`) auto-covers
+   new entries — Step 5 will catch a mistyped canonical.
+4. If **Changed** entries exist: pause and surface to the maintainer. A
+   canonical-target change is rare (model rename or codeburn correction) and
+   warrants review before shipping.
+5. If **Removed** entries exist: leave the local entry in place — codeburn
+   may have dropped something we still need. Note in the release notes if
+   you want to track it.
+6. If any Added/Changed canonical isn't in LiteLLM's table (check via
+   `~/.local/share/irrlicht/model-capacity-cache.json`), the alias still
+   resolves to a zero-value capacity — flag for follow-up but don't block
+   the release.
+
+If the refresh fetch fails (offline, upstream 5xx), **continue the
+release** with the existing map — this step is "best effort, fail soft."
+Don't block shipping on a transient upstream outage. Log a one-line note
+in the release notes if the fetch was skipped.
+
+When this step adds entries, mention them under **Fixed** in the
+CHANGELOG / release notes drafted in Step 2 — phrase it as
+"price non-Anthropic-frontend sessions correctly: added N new aliases
+synced from codeburn (Cursor / OMP / Antigravity / …)" so users on
+those frontends know the gap closed.
+
 ## Step 2: Gather Changes
 
 1. Run `git log --oneline $(git describe --tags --abbrev=0)..HEAD --no-merges` to list all commits since the last release.

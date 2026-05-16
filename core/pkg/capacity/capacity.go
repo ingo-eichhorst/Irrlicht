@@ -101,6 +101,10 @@ func (cm *CapacityManager) maybeReload() bool {
 func (cm *CapacityManager) GetModelCapacity(modelName string) ModelCapacity {
 	cm.maybeReload()
 
+	if canonical, ok := modelAliases[modelName]; ok {
+		modelName = canonical
+	}
+
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
