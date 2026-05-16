@@ -302,10 +302,10 @@ struct SessionListView: View {
             HStack(spacing: 6) {
                 headerTitleView
 
-                // Em-dash + glyphs are visually redundant once the quota
+                // Em-dash + glyphs are visually redundant once any quota
                 // chip is filling the slot — the chip already implies
-                // session activity. Hide them while the chip is present.
-                if quotaWidgetData == nil || !showQuotaForecast {
+                // session activity. Hide them while a chip is present.
+                if quotaChipData.isEmpty || !showQuotaForecast {
                     Text("—")
                         .foregroundColor(.secondary)
 
@@ -347,59 +347,76 @@ struct SessionListView: View {
         }
     }
     
-    /// Header slot shown to the left of the session glyphs. When any
-    /// visible session carries a rate-limit snapshot (and the user hasn't
-    /// hidden the quota chip in Settings), we render a provider chip with
-    /// stacked 5h/7d progress bars — matching the design mockup in
-    /// issue #309. Otherwise the slot is empty; the app version is
-    /// reachable from Settings rather than the header.
-    ///
-    /// Aggregation: pick the snapshot with the highest UsedPercent across
-    /// all visible sessions. The subscription bucket is account-scoped, so
-    /// every session on a single account reports the same numbers; `max`
-    /// is just robust to per-session staleness during the first few
-    /// post-restart ticks.
+    /// Header slot shown to the left of the session glyphs. Renders one
+    /// chip per subscription provider whose sessions have surfaced quota
+    /// data (Anthropic, OpenAI, …) — matching mockup 2 in issue #309.
+    /// Empty when no provider has a snapshot; the app version lives in
+    /// Settings rather than competing for this slot.
     @ViewBuilder
     private var headerTitleView: some View {
-        if showQuotaForecast, let widget = quotaWidgetData {
-            quotaChipView(widget)
+        if showQuotaForecast {
+            let chips = quotaChipData
+            if !chips.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(chips) { chip in
+                        quotaChipView(chip, compact: chips.count > 1)
+                    }
+                }
+            } else {
+                EmptyView()
+            }
         } else {
             EmptyView()
         }
     }
 
-    /// Snapshot picked for the header chip plus the adapter that produced
-    /// it (so the chip can render the correct provider icon). Nil when no
-    /// session has a usable snapshot.
-    private struct QuotaWidgetData {
+    /// One chip's worth of data: a representative snapshot for the
+    /// provider, the session that carries it (for icon lookup and forecast
+    /// access), and the most-imminent window for sort + headline display.
+    /// `id` is the providerKey so SwiftUI ForEach has a stable identity.
+    private struct QuotaWidgetData: Identifiable {
+        let id: String
         let snapshot: RateLimitInfo
         let session: SessionState
         let imminent: RateLimitWindowInfo
     }
 
-    private var quotaWidgetData: QuotaWidgetData? {
-        var best: QuotaWidgetData?
+    /// All chips to render, one per subscription provider. Groups
+    /// sessions by provider, picks the most-stressed snapshot within
+    /// each group as the representative reading (the bucket is
+    /// account-scoped, so every same-account session reports identical
+    /// numbers — `max` is just robust to per-session staleness).
+    /// Sorted by `imminent.usedPercent` descending so the provider
+    /// closest to its cap is leftmost.
+    private var quotaChipData: [QuotaWidgetData] {
+        var byProvider: [String: QuotaWidgetData] = [:]
         for session in sessionManager.sessions {
             guard let snap = session.metrics?.rateLimit else { continue }
             guard let imm = snap.imminentWindow else { continue }
-            let candidate = QuotaWidgetData(snapshot: snap, session: session, imminent: imm)
-            if let current = best {
-                if imm.usedPercent > current.imminent.usedPercent {
-                    best = candidate
+            // Without a providerKey the chip has no brand and shouldn't be
+            // aggregated — fall back to "unknown" so wrapper sessions
+            // (Pi, OpenCode) with subscription-shaped data still render
+            // their own chip rather than be silently dropped.
+            let key = snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")"
+            let candidate = QuotaWidgetData(id: key, snapshot: snap, session: session, imminent: imm)
+            if let existing = byProvider[key] {
+                if imm.usedPercent > existing.imminent.usedPercent {
+                    byProvider[key] = candidate
                 }
             } else {
-                best = candidate
+                byProvider[key] = candidate
             }
         }
-        return best
+        return byProvider.values.sorted { $0.imminent.usedPercent > $1.imminent.usedPercent }
     }
 
-    /// The chip-style header widget: provider icon on the left, two
-    /// horizontal progress bars stacked on the right (5h primary + 7d
-    /// secondary). Each bar carries its window label, percent, and reset
-    /// time inline. Matches mockup 1 in issue #309.
+    /// The chip-style header widget: provider icon + stacked 5h/7d bars.
+    /// Matches mockup 1 (single chip) and mockup 2 (multiple chips
+    /// side-by-side) in issue #309. The `compact` flag tightens spacing
+    /// and drops the inline reset time when several chips share the
+    /// header — full info is always available in the tooltip.
     @ViewBuilder
-    private func quotaChipView(_ d: QuotaWidgetData) -> some View {
+    private func quotaChipView(_ d: QuotaWidgetData, compact: Bool) -> some View {
         HStack(spacing: 6) {
             // Provider icon (Anthropic / OpenAI) when we can infer one;
             // otherwise fall back to the adapter icon so the chip never
@@ -413,17 +430,18 @@ struct SessionListView: View {
             }
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
-                    quotaWindowRow(window)
+                    quotaWindowRow(window, compact: compact)
                 }
             }
         }
         .tooltip(quotaTooltip(d))
     }
 
-    /// One row inside the chip: window label · filled bar · percent · reset
-    /// time. Bar fill color comes from the pressure ramp.
+    /// One row inside a chip. In compact mode (multiple chips visible)
+    /// the inline reset time is dropped — it lives in the tooltip — and
+    /// the bar shrinks so two or three chips fit in the 380pt header.
     @ViewBuilder
-    private func quotaWindowRow(_ w: RateLimitWindowInfo) -> some View {
+    private func quotaWindowRow(_ w: RateLimitWindowInfo, compact: Bool) -> some View {
         HStack(spacing: 6) {
             Text(quotaWindowLabel(w.windowMinutes))
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -431,18 +449,20 @@ struct SessionListView: View {
                 .frame(width: 14, alignment: .leading)
 
             quotaBar(percent: w.usedPercent, color: barColor(w.usedPercent))
-                .frame(width: 70, height: 5)
+                .frame(width: compact ? 40 : 70, height: 5)
 
             Text("\(Int(w.usedPercent.rounded()))%")
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundColor(.primary)
                 .frame(width: 28, alignment: .trailing)
 
-            Text("resets \(formatResetTime(w.resetsAt))")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            if !compact {
+                Text("resets \(formatResetTime(w.resetsAt))")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
         }
     }
 
