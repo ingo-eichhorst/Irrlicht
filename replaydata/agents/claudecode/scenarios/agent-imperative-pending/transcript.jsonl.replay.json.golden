@@ -70,7 +70,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": true,
-      "last_assistant_text_head": "What would you like me to work on?"
+      "last_assistant_text_head": "Take a look at the icon and let me know if it's right before I commit."
     }
   ]
 }
