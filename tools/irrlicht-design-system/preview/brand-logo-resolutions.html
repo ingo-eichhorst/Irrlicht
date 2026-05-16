@@ -9,6 +9,7 @@ body{overflow-y:auto}
 .size-cell .dim{font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8}
 
 .style-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+.state-grid{grid-template-columns:repeat(4,1fr)}
 .tile{aspect-ratio:1;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:14px;border:1px solid rgba(255,255,255,0.04);position:relative;overflow:hidden}
 .tile .name{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:inherit;opacity:0.75}
 .tile-dark{background:#080c16}
@@ -33,17 +34,32 @@ body{overflow-y:auto}
 
 .swatches{display:flex;gap:8px;align-items:center}
 .swatch{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,0.06)}
+.palette-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.palette-label{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:#5a6378;min-width:72px}
+.swatch-chip{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,0.06)}
+.palette-row .hex{font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8;margin-right:8px}
 </style></head><body><div class="card">
 
 <!-- ────── FLAME MARK · COLOR STYLES ────── -->
 <div>
   <div class="section-head">Flame mark &mdash; color styles</div>
   <div class="style-grid">
-    <div class="tile tile-dark"><svg id="flame-full" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">full-color</div></div>
-    <div class="tile tile-dark"><svg id="flame-mono" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">mono&nbsp;purple</div></div>
-    <div class="tile tile-dark"><svg id="flame-white" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">white&nbsp;knockout</div></div>
-    <div class="tile tile-light"><svg id="flame-black" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">solid&nbsp;black</div></div>
-    <div class="tile tile-dark"><svg id="flame-off" width="52" height="52" viewBox="0 0 32 32"></svg><div class="name">extinguished</div></div>
+    <div class="tile tile-dark"><svg id="flame-full" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">full-color</div></div>
+    <div class="tile tile-dark"><svg id="flame-mono" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">mono&nbsp;purple</div></div>
+    <div class="tile tile-dark"><svg id="flame-white" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">white&nbsp;knockout</div></div>
+    <div class="tile tile-light"><svg id="flame-black" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">solid&nbsp;black</div></div>
+    <div class="tile tile-dark"><svg id="flame-off" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">extinguished</div></div>
+  </div>
+</div>
+
+<!-- ────── FLAME MARK · STATE COLORS ────── -->
+<div>
+  <div class="section-head">Flame mark &mdash; state colors</div>
+  <div class="style-grid state-grid">
+    <div class="tile tile-dark"><svg id="flame-state-purple" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">working</div></div>
+    <div class="tile tile-dark"><svg id="flame-state-orange" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">waiting</div></div>
+    <div class="tile tile-dark"><svg id="flame-state-green" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">ready</div></div>
+    <div class="tile tile-dark"><svg id="flame-state-off" width="52" height="52" viewBox="0 0 1254 1254"></svg><div class="name">no&nbsp;sessions</div></div>
   </div>
 </div>
 
@@ -51,12 +67,12 @@ body{overflow-y:auto}
 <div>
   <div class="section-head">Sizes &mdash; the flame stays legible down to 16px</div>
   <div class="size-row" style="margin-top:14px">
-    <div class="size-cell"><svg class="flame-live" width="16" height="16" viewBox="0 0 32 32"></svg><div class="lbl">favicon</div><div class="dim">16</div></div>
-    <div class="size-cell"><svg class="flame-live" width="24" height="24" viewBox="0 0 32 32"></svg><div class="lbl">menu bar</div><div class="dim">24</div></div>
-    <div class="size-cell"><svg class="flame-live" width="32" height="32" viewBox="0 0 32 32"></svg><div class="lbl">nav</div><div class="dim">32</div></div>
-    <div class="size-cell"><svg class="flame-live" width="48" height="48" viewBox="0 0 32 32"></svg><div class="lbl">card</div><div class="dim">48</div></div>
-    <div class="size-cell"><svg class="flame-live" width="80" height="80" viewBox="0 0 32 32"></svg><div class="lbl">hero inset</div><div class="dim">80</div></div>
-    <div class="size-cell"><svg class="flame-live" width="128" height="128" viewBox="0 0 32 32"></svg><div class="lbl">app icon</div><div class="dim">128</div></div>
+    <div class="size-cell"><svg class="flame-live" width="16" height="16" viewBox="0 0 1254 1254"></svg><div class="lbl">favicon</div><div class="dim">16</div></div>
+    <div class="size-cell"><svg class="flame-live" width="24" height="24" viewBox="0 0 1254 1254"></svg><div class="lbl">menu bar</div><div class="dim">24</div></div>
+    <div class="size-cell"><svg class="flame-live" width="32" height="32" viewBox="0 0 1254 1254"></svg><div class="lbl">nav</div><div class="dim">32</div></div>
+    <div class="size-cell"><svg class="flame-live" width="48" height="48" viewBox="0 0 1254 1254"></svg><div class="lbl">card</div><div class="dim">48</div></div>
+    <div class="size-cell"><svg class="flame-live" width="80" height="80" viewBox="0 0 1254 1254"></svg><div class="lbl">hero inset</div><div class="dim">80</div></div>
+    <div class="size-cell"><svg class="flame-live" width="128" height="128" viewBox="0 0 1254 1254"></svg><div class="lbl">app icon</div><div class="dim">128</div></div>
   </div>
 </div>
 
@@ -65,17 +81,17 @@ body{overflow-y:auto}
   <div class="section-head">Horizontal lockups</div>
   <div class="lockup-row" style="margin-top:14px">
     <div class="lockup">
-      <svg class="flame-live" width="26" height="26" viewBox="0 0 32 32"></svg>
+      <svg class="flame-live" width="26" height="26" viewBox="0 0 1254 1254"></svg>
       <div class="lockup-wm-mono">irr<span class="pct">licht</span></div>
       <div class="lockup-meta">mono &middot; app &amp; ui</div>
     </div>
     <div class="lockup">
-      <svg class="flame-live" width="38" height="38" viewBox="0 0 32 32"></svg>
+      <svg class="flame-live" width="38" height="38" viewBox="0 0 1254 1254"></svg>
       <div class="lockup-wm-serif gradient">Irrlicht</div>
       <div class="lockup-meta">serif &middot; marketing</div>
     </div>
     <div class="lockup light">
-      <svg class="flame-black-live" width="26" height="26" viewBox="0 0 32 32"></svg>
+      <svg class="flame-black-live" width="26" height="26" viewBox="0 0 1254 1254"></svg>
       <div class="lockup-wm-mono">irr<span class="pct">licht</span></div>
       <div class="lockup-meta">mono &middot; light bg</div>
     </div>
@@ -85,61 +101,113 @@ body{overflow-y:auto}
 <!-- ────── COLOR VALUES ────── -->
 <div>
   <div class="section-head">Palette used in the mark</div>
-  <div class="swatches" style="margin-top:10px;gap:14px;flex-wrap:wrap">
-    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#e9d5ff"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#e9d5ff<span style="color:#5a6378"> &middot; crown</span></span></div>
-    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#a78bfa"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#a78bfa<span style="color:#5a6378"> &middot; body mid</span></span></div>
-    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#8B5CF6"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#8B5CF6<span style="color:#5a6378"> &middot; primary</span></span></div>
-    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#6d28d9"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#6d28d9<span style="color:#5a6378"> &middot; base</span></span></div>
-    <div style="display:flex;align-items:center;gap:6px"><span class="swatch" style="background:#6b7280"></span><span style="font-family:'DM Mono',monospace;font-size:10px;color:#c8cdd8">#6b7280<span style="color:#5a6378"> &middot; extinguished</span></span></div>
+  <div class="palette-rows" style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
+    <div class="palette-row">
+      <span class="palette-label">working</span>
+      <span class="swatch-chip" style="background:#B8F6FF"></span><span class="hex">#B8F6FF</span>
+      <span class="swatch-chip" style="background:#4F88FF"></span><span class="hex">#4F88FF</span>
+      <span class="swatch-chip" style="background:#B55CFF"></span><span class="hex">#B55CFF</span>
+    </div>
+    <div class="palette-row">
+      <span class="palette-label">waiting</span>
+      <span class="swatch-chip" style="background:#FFF3B0"></span><span class="hex">#FFF3B0</span>
+      <span class="swatch-chip" style="background:#FFAA3A"></span><span class="hex">#FFAA3A</span>
+      <span class="swatch-chip" style="background:#FF5A34"></span><span class="hex">#FF5A34</span>
+    </div>
+    <div class="palette-row">
+      <span class="palette-label">ready</span>
+      <span class="swatch-chip" style="background:#ECFFF4"></span><span class="hex">#ECFFF4</span>
+      <span class="swatch-chip" style="background:#4ADE80"></span><span class="hex">#4ADE80</span>
+      <span class="swatch-chip" style="background:#16A34A"></span><span class="hex">#16A34A</span>
+    </div>
+    <div class="palette-row">
+      <span class="palette-label">mono</span>
+      <span class="swatch-chip" style="background:#6B3AF1"></span><span class="hex">#6B3AF1</span>
+      <span class="swatch-chip" style="background:#6b7280"></span><span class="hex">#6b7280 &middot; extinguished</span>
+    </div>
   </div>
 </div>
 
 </div>
 
 <script>
-// The flame path — reused everywhere
-const OUTER = "M16 3.5 C 14.2 8, 11 11.5, 10.3 16 C 9.8 19.5, 10.5 23, 13 25 C 14.2 25.9, 15.1 26.5, 16 26.8 C 16.9 26.5, 17.9 25.9, 19.2 24.8 C 21.6 22.8, 22.2 19.5, 21.7 16.2 C 21 11.7, 17.8 8, 16 3.5 Z";
-const INNER = "M16 9.5 C 14.9 13, 13.1 15.2, 12.9 17.8 C 12.7 20.2, 13.8 22.4, 15.3 23.3 C 15.6 23.5, 15.8 23.6, 16 23.6 C 16.2 23.6, 16.4 23.5, 16.8 23.2 C 18.4 22.1, 19.2 20, 19 17.7 C 18.8 15.2, 17.1 13, 16 9.5 Z";
+// Single-path flame silhouette — designed at viewBox 0 0 1254 1254
+const FLAME = "M584 157C609 199 615 250 609 308C604 362 581 412 526 464C474 513 424 562 392 625C356 695 349 790 372 869C410 1001 516 1065 635 1065C790 1065 888 956 888 785C888 718 858 654 800 615C791 609 787 612 788 624C789 644 795 661 794 683C792 743 755 784 697 784C654 784 625 751 624 699C623 661 644 621 670 581C706 526 734 484 734 416C734 321 680 246 598 167C593 162 588 158 584 157Z";
 
-function flameFull(uid) {
+// Gradient stop palettes per hue, lifted verbatim from assets/irrlicht_flame_gradient_*.svg
+const HUES = {
+  purple: {
+    linear: [['0%','#B8F6FF',1],['24%','#7ED6FF',1],['50%','#4F88FF',1],['76%','#765DFF',1],['100%','#B55CFF',1]],
+    innerTop: [['0%','#FFFFFF',0.40],['33%','#E3FBFF',0.24],['67%','#9BE6FF',0.08],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#F5A2FF',0.42],['45%','#D37BFF',0.19],['100%','#FFFFFF',0]],
+    baseGlow: [['0%','#8F4BFF',0.98],['42%','#5D45FF',0.62],['75%','#2F3CFF',0.28],['100%','#1D2EFF',0]]
+  },
+  orange: {
+    linear: [['0%','#FFF3B0',1],['24%','#FFD36B',1],['50%','#FFAA3A',1],['76%','#FF7C2E',1],['100%','#FF5A34',1]],
+    innerTop: [['0%','#FFFFFF',0.36],['33%','#FFF6D5',0.22],['67%','#FFD88D',0.08],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#FFC18C',0.45],['45%','#FF9F69',0.22],['100%','#FFFFFF',0]],
+    baseGlow: [['0%','#FF8C2A',0.98],['42%','#FF6A2D',0.65],['75%','#FF4B36',0.28],['100%','#FF3A4A',0]]
+  },
+  green: {
+    linear: [['0%','#ECFFF4',1],['22%','#B4F5C8',1],['48%','#4ADE80',1],['76%','#22C55E',1],['100%','#16A34A',1]],
+    innerTop: [['0%','#FFFFFF',0.35],['25%','#F3FFF7',0.22],['54%','#C8FFD9',0.08],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#92F6AE',0.35],['45%','#4ADE80',0.16],['100%','#FFFFFF',0]],
+    baseGlow: [['0%','#22C55E',0.98],['42%','#16A34A',0.62],['75%','#15803D',0.28],['100%','#166534',0]]
+  }
+};
+
+const stops = arr => arr.map(([o,c,a]) => `<stop offset="${o}" stop-color="${c}" stop-opacity="${a}"/>`).join('');
+
+function flameFull(uid, hue = 'purple') {
+  const h = HUES[hue];
   return `<defs>
-    <linearGradient id="fb${uid}" x1="50%" y1="0%" x2="50%" y2="100%">
-      <stop offset="0%" stop-color="#e9d5ff"/><stop offset="35%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#6d28d9"/>
-    </linearGradient>
-    <linearGradient id="fc${uid}" x1="50%" y1="20%" x2="50%" y2="100%">
-      <stop offset="0%" stop-color="#fef9ff"/><stop offset="60%" stop-color="#ede9fe"/><stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.6"/>
-    </linearGradient>
+    <linearGradient id="fg${uid}" x1="0.38" y1="0.08" x2="0.62" y2="0.95">${stops(h.linear)}</linearGradient>
+    <radialGradient id="gt${uid}" cx="0.35" cy="0.18" r="0.85">${stops(h.innerTop)}</radialGradient>
+    <radialGradient id="gb${uid}" cx="0.53" cy="0.92" r="0.42">${stops(h.innerBottom)}</radialGradient>
+    <radialGradient id="bg${uid}" cx="50%" cy="50%" r="50%">${stops(h.baseGlow)}</radialGradient>
+    <filter id="og${uid}" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="14" result="b1"/>
+      <feColorMatrix in="b1" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.55 0" result="g1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="36" result="b2"/>
+      <feColorMatrix in="b2" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.18 0" result="g2"/>
+      <feMerge><feMergeNode in="g2"/><feMergeNode in="g1"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <mask id="m${uid}"><path fill="white" d="${FLAME}"/></mask>
   </defs>
-  <path d="${OUTER}" fill="url(#fb${uid})"/>
-  <path d="${INNER}" fill="url(#fc${uid})" opacity="0.95"/>
-  <ellipse cx="16" cy="19.2" rx="1.5" ry="3" fill="#fff" opacity="0.75"/>`;
+  <ellipse cx="627" cy="1060" rx="155" ry="52" fill="url(#bg${uid})" opacity="0.9"/>
+  <g filter="url(#og${uid})">
+    <path fill="url(#fg${uid})" d="${FLAME}"/>
+    <g mask="url(#m${uid})">
+      <ellipse cx="565" cy="275" rx="180" ry="210" fill="url(#gt${uid})"/>
+      <ellipse cx="635" cy="920" rx="250" ry="220" fill="url(#gb${uid})"/>
+    </g>
+  </g>`;
 }
 function flameMono(color) {
-  return `<path d="${OUTER}" fill="${color}" opacity="0.95"/>
-  <path d="${INNER}" fill="${color}" opacity="0.55"/>
-  <ellipse cx="16" cy="19.2" rx="1.5" ry="3" fill="${color}" opacity="0.35"/>`;
+  return `<path d="${FLAME}" fill="${color}"/>`;
 }
-function flameOff() {
+function flameOff(uid = 'o') {
   return `<defs>
-    <linearGradient id="ob" x1="50%" y1="0%" x2="50%" y2="100%">
+    <linearGradient id="ob${uid}" x1="50%" y1="0%" x2="50%" y2="100%">
       <stop offset="0%" stop-color="#6b7280" stop-opacity="0.7"/><stop offset="100%" stop-color="#3f4551" stop-opacity="0.95"/>
     </linearGradient>
-    <linearGradient id="oc" x1="50%" y1="20%" x2="50%" y2="100%">
-      <stop offset="0%" stop-color="#9ca3af" stop-opacity="0.6"/><stop offset="100%" stop-color="#6b7280" stop-opacity="0.3"/>
-    </linearGradient>
   </defs>
-  <path d="${OUTER}" fill="url(#ob)"/>
-  <path d="${INNER}" fill="url(#oc)"/>`;
+  <path d="${FLAME}" fill="url(#ob${uid})"/>`;
 }
 
-document.getElementById('flame-full').innerHTML = flameFull('a');
-document.getElementById('flame-mono').innerHTML = flameMono('#8B5CF6');
+document.getElementById('flame-full').innerHTML = flameFull('a', 'purple');
+document.getElementById('flame-mono').innerHTML = flameMono('#6B3AF1');
 document.getElementById('flame-white').innerHTML = flameMono('#ffffff');
 document.getElementById('flame-black').innerHTML = flameMono('#050a14');
-document.getElementById('flame-off').innerHTML = flameOff();
+document.getElementById('flame-off').innerHTML = flameOff('grid');
+
+document.getElementById('flame-state-purple').innerHTML = flameFull('sp', 'purple');
+document.getElementById('flame-state-orange').innerHTML = flameFull('so', 'orange');
+document.getElementById('flame-state-green').innerHTML = flameFull('sg', 'green');
+document.getElementById('flame-state-off').innerHTML = flameOff('state');
 
 let liveId = 0;
-document.querySelectorAll('.flame-live').forEach(el => { el.innerHTML = flameFull('l' + (liveId++)); });
+document.querySelectorAll('.flame-live').forEach(el => { el.innerHTML = flameFull('l' + (liveId++), 'purple'); });
 document.querySelectorAll('.flame-black-live').forEach(el => { el.innerHTML = flameMono('#0f1628'); });
 </script>
 </body></html>

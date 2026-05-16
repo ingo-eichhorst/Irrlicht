@@ -5,7 +5,10 @@
 .wordmark-mono svg{filter:drop-shadow(0 0 8px rgba(139,92,246,0.4))}
 .wordmark-serif{font-family:'Cormorant Garamond',serif;font-weight:300;font-size:34px;letter-spacing:0.08em;background:linear-gradient(135deg,#8B5CF6 0%,#c084fc 50%,#FF9500 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .cluster{display:flex;align-items:center;gap:14px}
-.orb{width:22px;height:22px;border-radius:50%}
+.wisp-state{width:22px;height:22px}
+.wisp-state.purple{filter:drop-shadow(0 0 10px rgba(139,92,246,0.55))}
+.wisp-state.orange{filter:drop-shadow(0 0 10px rgba(255,149,0,0.55))}
+.wisp-state.green{filter:drop-shadow(0 0 10px rgba(52,199,89,0.55))}
 .wisp-off{filter:drop-shadow(0 0 4px rgba(107,114,128,0.25));opacity:0.85}
 .sep{width:1px;height:18px;background:rgba(138,92,246,0.14);margin:0 2px}
 .head{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.2em;text-transform:uppercase;color:#5a6378;margin-bottom:6px}
@@ -13,19 +16,7 @@
 </style></head><body><div class="card">
 <div><div class="head">Mono lock-up &mdash; app / UI</div>
   <div class="wordmark-mono">
-    <svg width="22" height="22" viewBox="0 0 32 32">
-      <defs>
-        <linearGradient id="wbody" x1="50%" y1="0%" x2="50%" y2="100%">
-          <stop offset="0%" stop-color="#e9d5ff"/><stop offset="35%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#6d28d9"/>
-        </linearGradient>
-        <linearGradient id="wcore" x1="50%" y1="20%" x2="50%" y2="100%">
-          <stop offset="0%" stop-color="#fef9ff"/><stop offset="60%" stop-color="#ede9fe"/><stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.6"/>
-        </linearGradient>
-      </defs>
-      <path d="M16 3.5 C 14.2 8, 11 11.5, 10.3 16 C 9.8 19.5, 10.5 23, 13 25 C 14.2 25.9, 15.1 26.5, 16 26.8 C 16.9 26.5, 17.9 25.9, 19.2 24.8 C 21.6 22.8, 22.2 19.5, 21.7 16.2 C 21 11.7, 17.8 8, 16 3.5 Z" fill="url(#wbody)"/>
-      <path d="M16 9.5 C 14.9 13, 13.1 15.2, 12.9 17.8 C 12.7 20.2, 13.8 22.4, 15.3 23.3 C 15.6 23.5, 15.8 23.6, 16 23.6 C 16.2 23.6, 16.4 23.5, 16.8 23.2 C 18.4 22.1, 19.2 20, 19 17.7 C 18.8 15.2, 17.1 13, 16 9.5 Z" fill="url(#wcore)" opacity="0.95"/>
-      <ellipse cx="16" cy="19.2" rx="1.5" ry="3" fill="#ffffff" opacity="0.75"/>
-    </svg>
+    <svg id="lockup-flame" width="22" height="22" viewBox="0 0 1254 1254"></svg>
     <span style="color:#e8ecf4">irr<span style="color:#8B5CF6">licht</span></span>
   </div>
 </div>
@@ -33,22 +24,80 @@
 <div><div class="head">Serif display &mdash; marketing hero</div><div class="wordmark-serif">Irrlicht</div></div>
 
 <div><div class="head">Lights signature</div><div class="cluster">
-  <div class="orb" style="background:#8B5CF6;box-shadow:0 0 14px #8B5CF6,0 0 40px rgba(139,92,246,0.4)"></div>
-  <div class="orb" style="background:#FF9500;box-shadow:0 0 14px #FF9500,0 0 40px rgba(255,149,0,0.4)"></div>
-  <div class="orb" style="background:#34C759;box-shadow:0 0 14px #34C759,0 0 40px rgba(52,199,89,0.4)"></div>
+  <svg id="state-purple" class="wisp-state purple" width="22" height="22" viewBox="0 0 1254 1254"></svg>
+  <svg id="state-orange" class="wisp-state orange" width="22" height="22" viewBox="0 0 1254 1254"></svg>
+  <svg id="state-green" class="wisp-state green" width="22" height="22" viewBox="0 0 1254 1254"></svg>
   <div class="sep"></div>
-  <svg class="wisp-off" width="22" height="22" viewBox="0 0 32 32">
-    <defs>
-      <linearGradient id="offbody" x1="50%" y1="0%" x2="50%" y2="100%">
-        <stop offset="0%" stop-color="#6b7280" stop-opacity="0.7"/><stop offset="100%" stop-color="#3f4551" stop-opacity="0.95"/>
-      </linearGradient>
-      <linearGradient id="offcore" x1="50%" y1="20%" x2="50%" y2="100%">
-        <stop offset="0%" stop-color="#9ca3af" stop-opacity="0.6"/><stop offset="100%" stop-color="#6b7280" stop-opacity="0.3"/>
-      </linearGradient>
-    </defs>
-    <path d="M16 3.5 C 14.2 8, 11 11.5, 10.3 16 C 9.8 19.5, 10.5 23, 13 25 C 14.2 25.9, 15.1 26.5, 16 26.8 C 16.9 26.5, 17.9 25.9, 19.2 24.8 C 21.6 22.8, 22.2 19.5, 21.7 16.2 C 21 11.7, 17.8 8, 16 3.5 Z" fill="url(#offbody)"/>
-    <path d="M16 9.5 C 14.9 13, 13.1 15.2, 12.9 17.8 C 12.7 20.2, 13.8 22.4, 15.3 23.3 C 15.6 23.5, 15.8 23.6, 16 23.6 C 16.2 23.6, 16.4 23.5, 16.8 23.2 C 18.4 22.1, 19.2 20, 19 17.7 C 18.8 15.2, 17.1 13, 16 9.5 Z" fill="url(#offcore)"/>
-  </svg>
+  <svg id="state-off" class="wisp-off" width="22" height="22" viewBox="0 0 1254 1254"></svg>
   <span class="caption">working &middot; waiting &middot; ready &middot; no sessions</span>
 </div></div>
-</div></body></html>
+</div>
+
+<script>
+const FLAME = "M584 157C609 199 615 250 609 308C604 362 581 412 526 464C474 513 424 562 392 625C356 695 349 790 372 869C410 1001 516 1065 635 1065C790 1065 888 956 888 785C888 718 858 654 800 615C791 609 787 612 788 624C789 644 795 661 794 683C792 743 755 784 697 784C654 784 625 751 624 699C623 661 644 621 670 581C706 526 734 484 734 416C734 321 680 246 598 167C593 162 588 158 584 157Z";
+
+const HUES = {
+  purple: {
+    linear: [['0%','#B8F6FF',1],['24%','#7ED6FF',1],['50%','#4F88FF',1],['76%','#765DFF',1],['100%','#B55CFF',1]],
+    innerTop: [['0%','#FFFFFF',0.40],['33%','#E3FBFF',0.24],['67%','#9BE6FF',0.08],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#F5A2FF',0.42],['45%','#D37BFF',0.19],['100%','#FFFFFF',0]],
+    baseGlow: [['0%','#8F4BFF',0.98],['42%','#5D45FF',0.62],['75%','#2F3CFF',0.28],['100%','#1D2EFF',0]]
+  },
+  orange: {
+    linear: [['0%','#FFF3B0',1],['24%','#FFD36B',1],['50%','#FFAA3A',1],['76%','#FF7C2E',1],['100%','#FF5A34',1]],
+    innerTop: [['0%','#FFFFFF',0.36],['33%','#FFF6D5',0.22],['67%','#FFD88D',0.08],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#FFC18C',0.45],['45%','#FF9F69',0.22],['100%','#FFFFFF',0]],
+    baseGlow: [['0%','#FF8C2A',0.98],['42%','#FF6A2D',0.65],['75%','#FF4B36',0.28],['100%','#FF3A4A',0]]
+  },
+  green: {
+    linear: [['0%','#ECFFF4',1],['22%','#B4F5C8',1],['48%','#4ADE80',1],['76%','#22C55E',1],['100%','#16A34A',1]],
+    innerTop: [['0%','#FFFFFF',0.35],['25%','#F3FFF7',0.22],['54%','#C8FFD9',0.08],['100%','#FFFFFF',0]],
+    innerBottom: [['0%','#92F6AE',0.35],['45%','#4ADE80',0.16],['100%','#FFFFFF',0]],
+    baseGlow: [['0%','#22C55E',0.98],['42%','#16A34A',0.62],['75%','#15803D',0.28],['100%','#166534',0]]
+  }
+};
+
+const stops = arr => arr.map(([o,c,a]) => `<stop offset="${o}" stop-color="${c}" stop-opacity="${a}"/>`).join('');
+
+function flameFull(uid, hue) {
+  const h = HUES[hue];
+  return `<defs>
+    <linearGradient id="fg${uid}" x1="0.38" y1="0.08" x2="0.62" y2="0.95">${stops(h.linear)}</linearGradient>
+    <radialGradient id="gt${uid}" cx="0.35" cy="0.18" r="0.85">${stops(h.innerTop)}</radialGradient>
+    <radialGradient id="gb${uid}" cx="0.53" cy="0.92" r="0.42">${stops(h.innerBottom)}</radialGradient>
+    <radialGradient id="bg${uid}" cx="50%" cy="50%" r="50%">${stops(h.baseGlow)}</radialGradient>
+    <filter id="og${uid}" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="14" result="b1"/>
+      <feColorMatrix in="b1" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.55 0" result="g1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="36" result="b2"/>
+      <feColorMatrix in="b2" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.18 0" result="g2"/>
+      <feMerge><feMergeNode in="g2"/><feMergeNode in="g1"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <mask id="m${uid}"><path fill="white" d="${FLAME}"/></mask>
+  </defs>
+  <ellipse cx="627" cy="1060" rx="155" ry="52" fill="url(#bg${uid})" opacity="0.9"/>
+  <g filter="url(#og${uid})">
+    <path fill="url(#fg${uid})" d="${FLAME}"/>
+    <g mask="url(#m${uid})">
+      <ellipse cx="565" cy="275" rx="180" ry="210" fill="url(#gt${uid})"/>
+      <ellipse cx="635" cy="920" rx="250" ry="220" fill="url(#gb${uid})"/>
+    </g>
+  </g>`;
+}
+
+function flameOff(uid) {
+  return `<defs>
+    <linearGradient id="ob${uid}" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#6b7280" stop-opacity="0.7"/><stop offset="100%" stop-color="#3f4551" stop-opacity="0.95"/>
+    </linearGradient>
+  </defs>
+  <path d="${FLAME}" fill="url(#ob${uid})"/>`;
+}
+
+document.getElementById('lockup-flame').innerHTML = flameFull('lk', 'purple');
+document.getElementById('state-purple').innerHTML = flameFull('sp', 'purple');
+document.getElementById('state-orange').innerHTML = flameFull('so', 'orange');
+document.getElementById('state-green').innerHTML = flameFull('sg', 'green');
+document.getElementById('state-off').innerHTML = flameOff('off');
+</script>
+</body></html>
