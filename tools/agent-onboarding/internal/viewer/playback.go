@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
@@ -593,11 +594,13 @@ func (m *PlaybackManager) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// handleAgents returns a minimal agent metadata list compatible with the
-// dashboard's /api/v1/agents consumer. Synthesized from a hardcoded
-// adapter table here — the daemon's real list isn't reachable from the
-// viewer, and we only need enough fidelity for the dashboard to render
-// session rows correctly.
+// handleAgents returns the same shape as the daemon's /api/v1/agents
+// endpoint, sourced from agents.All() so the dashboard renders each
+// session row with the real per-adapter brand icon (Claude Code, Codex,
+// Pi, aider, OpenCode) instead of a grey-circle stub. Names are
+// normalized to match the spellings handleSessions writes onto
+// SessionState.Adapter (e.g. "claude-code" → "claudecode") so the
+// dashboard's session-to-agent join keys correctly.
 func (m *PlaybackManager) handleAgents(w http.ResponseWriter, r *http.Request) {
 	type agentEntry struct {
 		Name         string `json:"name"`
@@ -605,17 +608,18 @@ func (m *PlaybackManager) handleAgents(w http.ResponseWriter, r *http.Request) {
 		IconSVGLight string `json:"icon_svg_light"`
 		IconSVGDark  string `json:"icon_svg_dark"`
 	}
-	entries := []agentEntry{
-		{Name: "claudecode", DisplayName: "Claude Code", IconSVGLight: stubSVG, IconSVGDark: stubSVG},
-		{Name: "codex", DisplayName: "Codex", IconSVGLight: stubSVG, IconSVGDark: stubSVG},
-		{Name: "aider", DisplayName: "aider", IconSVGLight: stubSVG, IconSVGDark: stubSVG},
-		{Name: "pi", DisplayName: "Pi", IconSVGLight: stubSVG, IconSVGDark: stubSVG},
-		{Name: "opencode", DisplayName: "OpenCode", IconSVGLight: stubSVG, IconSVGDark: stubSVG},
+	all := agents.All()
+	entries := make([]agentEntry, 0, len(all))
+	for _, a := range all {
+		entries = append(entries, agentEntry{
+			Name:         normalizeAdapter(a.Identity.Name),
+			DisplayName:  a.Identity.DisplayName,
+			IconSVGLight: a.Identity.IconSVGLight,
+			IconSVGDark:  a.Identity.IconSVGDark,
+		})
 	}
 	writeJSON(w, entries)
 }
-
-const stubSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5" fill="#888"/></svg>`
 
 // normalizeAdapter maps the various adapter-name spellings present in
 // historical recordings to the canonical slug the agents-endpoint

@@ -153,31 +153,88 @@ function navigate(hash) {
 // Hash shapes:
 //   ""              → overview
 //   "#/"            → overview
-//   "#/scenario/<id>"                       → scenario coverage detail
-//   "#/recording/<agent>/<subtree>/<id>"    → recording playback
+//   "#/scenario/<id>"                                  → scenario coverage detail
+//   "#/recording/<agent>/<subtree>/<id>"               → recording playback (latest)
+//   "#/recording/<agent>/<subtree>/<id>/<archive>"     → recording playback (specific archive)
+//
+// Any recording URL may carry a "?focus=<key>" suffix where key is a
+// section anchor (supports, observes, recipe, spec, recordings,
+// validation). Used by the pipeline-strip segments to scroll the
+// matching panel into view on entry.
+//
 // Unknown hashes fall back to overview.
 function route() {
   const hash = location.hash || "#/";
+  // Peel off the optional ?focus=<key> suffix before path matching.
+  const focusMatch = hash.match(/\?focus=([a-z]+)$/);
+  const focus = focusMatch ? focusMatch[1] : "";
+  const pathPart = focus ? hash.slice(0, hash.lastIndexOf("?")) : hash;
+
   let m;
-  if ((m = hash.match(/^#\/scenario\/([^/]+)\/?$/))) {
+  if ((m = pathPart.match(/^#\/scenario\/([^/]+)\/?$/))) {
     loadCoverageDetail(decodeURIComponent(m[1]));
     return;
   }
-  if ((m = hash.match(/^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)\/?$/))) {
+  if ((m = pathPart.match(/^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/))) {
     const agent = decodeURIComponent(m[1]);
     const subtree = decodeURIComponent(m[2]);
     const id = decodeURIComponent(m[3]);
+    const archive = m[4] ? decodeURIComponent(m[4]) : "";
     const rec = scenariosList.find(r => r.agent === agent && r.subtree === subtree && r.id === id);
     if (!rec) {
       console.warn("route: no recording for", hash, "— falling back to overview");
       navigate("#/");
       return;
     }
-    loadScenario(rec);
+    loadScenario(rec, archive, focus);
     return;
   }
   // Default: overview. Strip any unknown hash content from the title.
   loadOverview();
+}
+
+// scrollFocusInto scrolls the panel matching [data-anchor="<key>"]
+// (or [data-anchor-alias~="<key>"]) into view. No-op if the key is
+// empty or no such panel exists for this cell.
+//
+// The panels are appended asynchronously by renderRecordingPanels
+// (inside the dropdown-selection-changed handler), so the target may
+// not exist on the first scheduled tick. We poll up to ~800ms with
+// setTimeout (rather than rAF — Chrome throttles rAF in background
+// tabs and pauses it altogether when the tab isn't visible).
+// Implemented imperatively (compute offset, set scrollTop) because
+// Element.scrollIntoView is inconsistent inside grid items with
+// internal overflow-y: auto.
+function scrollFocusInto(focus) {
+  if (!focus) return;
+  const safe = CSS.escape(focus);
+  const sel = `[data-anchor="${safe}"], [data-anchor-alias~="${safe}"]`;
+  const start = Date.now();
+  function tick() {
+    const target = document.querySelector(sel);
+    if (!target) {
+      if (Date.now() - start < 800) {
+        setTimeout(tick, 50);
+      }
+      return;
+    }
+    // Walk up to the nearest scrollable ancestor.
+    let container = target.parentElement;
+    while (container && container !== document.body) {
+      const style = getComputedStyle(container);
+      if (/(auto|scroll|overlay)/.test(style.overflowY)) break;
+      container = container.parentElement;
+    }
+    if (!container || container === document.body) {
+      window.scrollTo({top: target.getBoundingClientRect().top + window.scrollY, behavior: "auto"});
+      return;
+    }
+    const cRect = container.getBoundingClientRect();
+    const tRect = target.getBoundingClientRect();
+    const offset = (tRect.top - cRect.top) + container.scrollTop - 8; // 8px slack
+    container.scrollTo({top: offset, behavior: "auto"});
+  }
+  setTimeout(tick, 30);
 }
 
 // loadOverview swaps the main pane to the scenario coverage matrix.
@@ -364,28 +421,57 @@ function renderCoverageMatrix(detail) {
   `;
   panel.appendChild(sum);
 
-  // Explainer / legend — describes the 5-segment strip
+  // Explainer / legend — describes the 6-segment strip and the full
+  // state vocabulary for each segment. Each row lists one segment, what
+  // it tests, and every glyph that can appear in it with its meaning.
   const legend = document.createElement("div");
-  legend.style.cssText = "margin-top: 10px; padding: 8px 10px; background: #fafaf2; border: 1px solid #e8e6da; border-radius: 4px; font-size: 11px; color: #555;";
+  legend.style.cssText = "margin-top: 10px; padding: 10px 12px; background: #fafaf2; border: 1px solid #e8e6da; border-radius: 4px; font-size: 11px; color: #444;";
+  // Helper: render one inline state chip + its label.
+  const stateChip = (label, bg, fg, meaning) =>
+    `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px;white-space:nowrap;">` +
+    `<span style="background:${bg};color:${fg};padding:1px 5px;border-radius:3px;font-weight:600;min-width:18px;text-align:center;display:inline-block;">${label}</span>` +
+    `<span>${meaning}</span></span>`;
+  // Helper: render one segment row (segment name + states).
+  const row = (idx, name, blurb, states) =>
+    `<div style="display:flex;gap:10px;align-items:flex-start;padding:4px 0;border-top:1px solid #ece9dd;">` +
+    `<div style="min-width:120px;color:#222;"><b>${idx}. ${name}</b><div style="color:#777;font-weight:400;">${blurb}</div></div>` +
+    `<div style="flex:1;">${states}</div></div>`;
   legend.innerHTML = `
-    <div style="font-weight:600;margin-bottom:4px;">How to read each cell — 5-segment pipeline</div>
-    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
-      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">●●</span>
-        <b>Assessment</b> — agent supports + irrlicht observes (matrix verdict)</span>
-      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">✎</span>
-        <b>Recipe</b> — driver script authored in scenarios.json</span>
-      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">§</span>
-        <b>Spec</b> — expected.jsonl phase assertions authored</span>
-      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">3</span>
-        <b>Recordings</b> — count (latest + archived)</span>
-      <span><span style="background:#d6f0d4;color:#1f5a1d;padding:1px 4px;border-radius:3px;font-weight:600;">✓</span>
-        <b>Validation</b> — latest passes spec (✗ fails, ⚠ known_failing, ↑ now passes)</span>
-    </div>
-    <div style="margin-top:6px;color:#888;">
-      Empty segments = pipeline stops there. Red outline = matrix ≠ measurement (regression).
-      Amber outline = matrix marked partial but recording passes clean (stale verdict).
-      Blue outline = known_failing flag should be dropped.
-      Click a cell to open the recording (or scenario detail if none).
+    <div style="font-weight:600;margin-bottom:6px;color:#222;">How to read each cell — 6-segment pipeline</div>
+    ${row("1", "Supports", "agent CLI implements the feature — glyph ⚙, color = state",
+      stateChip("⚙", "#d6f0d4", "#1f5a1d", "yes — fully supported") +
+      stateChip("⚙", "#fde7c1", "#8a4500", "partial — partially supported") +
+      stateChip("⚙", "#f8c8c8", "#8a0000", "no — freezes the pipeline") +
+      stateChip("⚙", "#e5e5e5", "#555",    "unknown — needs assessment") +
+      stateChip("⚙", "#eeece4", "#999",    "n/a"))}
+    ${row("2", "Observes", "irrlicht emits the right events.jsonl — glyph ◉, color = state",
+      stateChip("◉", "#d6f0d4", "#1f5a1d", "yes — full coverage") +
+      stateChip("◉", "#fde7c1", "#8a4500", "partial — some signals missing") +
+      stateChip("◉", "#f8c8c8", "#8a0000", "no — daemon gap") +
+      stateChip("◉", "#e5e5e5", "#555",    "unknown — needs assessment") +
+      stateChip("◉", "#eeece4", "#999",    "n/a — agent doesn't support feature"))}
+    ${row("3", "Recipe", "driver script in scenarios.json",
+      stateChip("✎", "#d6f0d4", "#1f5a1d", "authored") +
+      stateChip("·", "transparent", "#bbb",  "not yet authored"))}
+    ${row("4", "Spec", "expected.jsonl phase assertions",
+      stateChip("§", "#d6f0d4", "#1f5a1d", "authored") +
+      stateChip("·", "transparent", "#bbb",  "not yet authored"))}
+    ${row("5", "Recordings", "count of fixtures captured",
+      stateChip("N", "#d6f0d4", "#1f5a1d", "N total (latest + archived)") +
+      stateChip("·", "transparent", "#bbb",  "none yet"))}
+    ${row("6", "Validation", "latest recording vs spec",
+      stateChip("✓", "#d6f0d4", "#1f5a1d", "pass — all phases matched") +
+      stateChip("✗", "#f8c8c8", "#8a0000", "fail — at least one phase failed") +
+      stateChip("⚠", "#fff7d6", "#8a4500", "known_failing — documented gap") +
+      stateChip("↑", "#cfe7ff", "#1c3f7a", "known_failing now passing — flag stale") +
+      stateChip("!", "#e5e5e5", "#555",    "validator error") +
+      stateChip("·", "transparent", "#bbb",  "no recording / no spec"))}
+    <div style="margin-top:8px;padding-top:6px;border-top:1px solid #ece9dd;color:#666;">
+      <b>Cell outlines</b> (drift between verdict and measurement):
+      <span style="display:inline-block;border:1px solid #c0392b;background:#fff5f5;padding:1px 6px;border-radius:3px;margin:0 4px;">red</span> matrix says yes but recording fails
+      <span style="display:inline-block;border:1px solid #d68a2a;background:#fffaf0;padding:1px 6px;border-radius:3px;margin:0 4px;">amber</span> matrix marked partial but recording passes (stale verdict)
+      <span style="display:inline-block;border:1px solid #1c3f7a;background:#f0f5ff;padding:1px 6px;border-radius:3px;margin:0 4px;">blue</span> known_failing flag should be dropped.
+      <div style="margin-top:4px;color:#888;">Click a cell to open the recording (or scenario detail if none).</div>
     </div>
   `;
   panel.appendChild(legend);
@@ -663,6 +749,40 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[c]);
 }
 
+// renderRecipePanel renders the by_adapter recipe entry for this
+// cell on the recording-detail page — same shape used by the
+// scenario-coverage page, just framed as a standalone panel so the
+// pipeline-strip ✎ segment has a scroll target. `recipe` is the
+// scenarios.json -> scenarios[].by_adapter[<agent>] block, or null
+// if no recipe is authored.
+function renderRecipePanel(recipe) {
+  const p = panel("Recipe", "recipe");
+  if (!recipe || !Array.isArray(recipe.script) || recipe.script.length === 0) {
+    p.appendChild(text("No recipe authored for this cell. The translate skill produces the by_adapter entry; pipeline stops here until that lands."));
+    return p;
+  }
+  const intro = document.createElement("div");
+  intro.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
+  const driver = recipe.driver || (recipe.interactive ? "Interactive (tmux REPL)" : "Headless one-shot");
+  intro.innerHTML = `<b>Driver:</b> ${escapeHtml(driver)}` +
+    (recipe.timeout_seconds ? ` · <b>Timeout:</b> ${recipe.timeout_seconds}s` : "");
+  p.appendChild(intro);
+  const stepsWrap = document.createElement("div");
+  stepsWrap.innerHTML = renderStepScript(recipe.script);
+  p.appendChild(stepsWrap);
+  if (Array.isArray(recipe.preconditions) && recipe.preconditions.length > 0) {
+    const pcWrap = document.createElement("div");
+    pcWrap.innerHTML = renderChecklistBlock("Preconditions", recipe.preconditions, "□");
+    p.appendChild(pcWrap);
+  }
+  if (Array.isArray(recipe.verify) && recipe.verify.length > 0) {
+    const vWrap = document.createElement("div");
+    vWrap.innerHTML = renderChecklistBlock("Verify after recording", recipe.verify, "□");
+    p.appendChild(vWrap);
+  }
+  return p;
+}
+
 function coverageBadge(sup, obs) {
   if (sup === "no" || obs === "no") return {label: "✗", bg: "#f8c8c8", fg: "#8a0000"};
   if (sup === "yes" && obs === "yes") return {label: "●●", bg: "#d6f0d4", fg: "#1f5a1d"};
@@ -671,16 +791,37 @@ function coverageBadge(sup, obs) {
   return {label: "—", bg: "transparent", fg: "#ccc"};
 }
 
-// renderPipelineStrip paints a compact 5-segment indicator that
+// _axisBadge returns chip data for ONE assessment axis.
+//   axis = "supports" → glyph is ⚙ (gear, "agent has this capability")
+//   axis = "observes" → glyph is ◉ (fisheye, "irrlicht watches this")
+// The glyph identifies WHICH axis the chip is for; the chip color
+// carries the state. Splits the old combined ●●/●◐ badge into two
+// segments with the same visual weight as the downstream Recipe /
+// Spec / Recordings / Validation glyphs (✎ § N ✓).
+function _axisBadge(value, axis) {
+  const label = axis === "observes" ? "◉" : "⚙";
+  switch (value) {
+    case "yes":     return {label, bg: "#d6f0d4", fg: "#1f5a1d"};
+    case "partial": return {label, bg: "#fde7c1", fg: "#8a4500"};
+    case "no":      return {label, bg: "#f8c8c8", fg: "#8a0000"};
+    case "n/a":     return {label, bg: "#eeece4", fg: "#999"};
+    default:        return {label, bg: "#e5e5e5", fg: "#555"}; // unknown / undefined
+  }
+}
+
+// renderPipelineStrip paints a compact 6-segment indicator that
 // summarizes where a single (agent × scenario) cell sits in the
 // onboarding workflow:
 //
-//   [ Assessment ][ Recipe ][ Spec ][ N recordings ][ Validation ]
+//   [ Supports ][ Observes ][ Recipe ][ Spec ][ N recordings ][ Validation ]
 //
-// Reads left-to-right as a progression. Filled segments = stage
-// complete; dim = stage not reached. A cell-level outline highlights
-// drift between the maintainer's verdict and the measured outcome
-// (matrix-stale or regression).
+// Each segment is its OWN clickable button that jumps to the
+// corresponding section on the cell's detail page (via the
+// ?focus=<key> hash suffix). Reads left-to-right as a progression.
+// Filled segments = stage complete; dim = stage not reached.
+//
+// A cell-level outline highlights drift between the maintainer's
+// verdict and the measured outcome (matrix-stale or regression).
 //
 // Inputs:
 //   agent — adapter slug for tooltip labelling and the navigation target
@@ -694,47 +835,77 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
   const meas = cov.measurement || {};
 
   // agent_supports=no freezes the whole pipeline — nothing downstream
-  // matters. Mark "blocked" via the assessment segment styling and
-  // collapse subsequent stages.
+  // matters. The Supports segment shows the ✗; everything after Observes
+  // collapses to dim placeholders.
   const blocked = (sup === "no");
 
-  const wrap = document.createElement(rec ? "button" : "div");
+  // Outer container is a plain <div>; each segment is its own button.
+  // This is the change from a single composite button to a true
+  // toolbar of six controls.
+  const wrap = document.createElement("div");
   wrap.style.cssText = "display: inline-flex; gap: 2px; padding: 2px; " +
     "background: transparent; border: 1px solid transparent; border-radius: 4px; " +
-    "font: inherit; align-items: center; cursor: " + (rec ? "pointer" : "default") + ";";
+    "font: inherit; align-items: center;";
 
-  // Build 5 segments.
-  const cb = coverageBadge(sup, obs);
-  wrap.appendChild(_pipeSeg(cb.label, cb.bg, cb.fg));
+  // jump builds the navigation target for one segment. If rec exists
+  // (cell has a recording), we land on the recording-detail page;
+  // otherwise on the scenario-coverage page. Both routes honor
+  // ?focus=<key>.
+  const jump = (focusKey) => () => {
+    if (rec) {
+      navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}?focus=${focusKey}`);
+    } else {
+      navigate(`#/scenario/${scenarioID}?focus=${focusKey}`);
+    }
+  };
+
+  // Build 6 segments. Segments 1 + 2 are the two assessment axes,
+  // each its own button; both jump to the same Assessment panel
+  // (its chips render the two axes individually inside).
+  const supChip = _axisBadge(sup, "supports");
+  const obsChip = _axisBadge(obs, "observes");
+  wrap.appendChild(_pipeBtn(supChip.label, supChip.bg, supChip.fg,
+    jump("supports"), false, "Supports — agent CLI implements this feature"));
+  wrap.appendChild(_pipeBtn(obsChip.label, obsChip.bg, obsChip.fg,
+    jump("observes"), false, "Observes — irrlicht emits the right events"));
   if (blocked) {
-    // Three further "blocked" segments so the cell width stays
-    // consistent across rows.
-    wrap.appendChild(_pipeSeg("·", "transparent", "#bbb"));
-    wrap.appendChild(_pipeSeg("·", "transparent", "#bbb"));
-    wrap.appendChild(_pipeSeg("·", "transparent", "#bbb"));
-    wrap.appendChild(_pipeSeg("·", "transparent", "#bbb"));
+    // Four disabled placeholders so the cell width stays consistent
+    // across rows when supports=no freezes the pipeline.
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true,
+      "Pipeline frozen — agent_supports=no"));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
   } else {
     const recipe = pipe.recipe || {};
     const spec = pipe.spec || {};
     const rcs = pipe.recordings || {};
     // Recipe
     wrap.appendChild(recipe.authored
-      ? _pipeSeg("✎", "#d6f0d4", "#1f5a1d")
-      : _pipeSeg("·", "transparent", "#bbb"));
+      ? _pipeBtn("✎", "#d6f0d4", "#1f5a1d", jump("recipe"), false,
+          `Recipe authored (${recipe.step_count} steps)`)
+      : _pipeBtn("·", "transparent", "#bbb", jump("recipe"), false,
+          "Recipe — not authored yet"));
     // Spec
     wrap.appendChild(spec.authored
-      ? _pipeSeg("§", "#d6f0d4", "#1f5a1d")
-      : _pipeSeg("·", "transparent", "#bbb"));
+      ? _pipeBtn("§", "#d6f0d4", "#1f5a1d", jump("spec"), false,
+          `Spec authored (${spec.phase_count} phases)`)
+      : _pipeBtn("·", "transparent", "#bbb", jump("spec"), false,
+          "Spec — not authored yet"));
     // Recordings count (latest counts as 1; archive_count is additional)
     const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
     wrap.appendChild(totalRecs > 0
-      ? _pipeSeg(String(totalRecs), "#d6f0d4", "#1f5a1d")
-      : _pipeSeg("·", "transparent", "#bbb"));
+      ? _pipeBtn(String(totalRecs), "#d6f0d4", "#1f5a1d", jump("recordings"), false,
+          `${totalRecs} recording${totalRecs === 1 ? "" : "s"}`)
+      : _pipeBtn("·", "transparent", "#bbb", jump("recordings"), false,
+          "No recordings yet"));
     // Validation
     const v = _validationGlyph(meas.status);
     wrap.appendChild(v
-      ? _pipeSeg(v.label, v.bg, v.fg)
-      : _pipeSeg("·", "transparent", "#bbb"));
+      ? _pipeBtn(v.label, v.bg, v.fg, jump("validation"), false,
+          `Validation: ${meas.status}`)
+      : _pipeBtn("·", "transparent", "#bbb", jump("validation"), false,
+          "Validation — no recording yet"));
   }
 
   // Drift outlines
@@ -783,15 +954,8 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
   } else if (wrap.style.border && wrap.style.border.includes("#1c3f7a")) {
     lines.push(`↑ flag drop: marked known_failing but now passes`);
   }
-  lines.push(rec ? `↻ click to open recording` : `(no recording yet — click to open scenario spec)`);
+  lines.push(`↻ click a segment to jump to its section`);
   wrap.title = lines.join("\n");
-
-  if (rec) {
-    wrap.onclick = () => navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
-  } else {
-    wrap.onclick = () => navigate(`#/scenario/${scenarioID}`);
-    wrap.style.cursor = "pointer";
-  }
 
   return wrap;
 }
@@ -803,6 +967,30 @@ function _pipeSeg(label, bg, fg) {
     `border-radius: 3px; font: inherit; font-size: 11px; font-weight: 600; ` +
     `line-height: 1; text-align: center; background: ${bg}; color: ${fg};`;
   return seg;
+}
+
+// _pipeBtn is the per-segment button. Same visual chip as _pipeSeg
+// but wrapped in a <button> with its own onclick + tooltip.
+// disabled=true grays out and makes it non-clickable (used for the
+// blocked placeholders when supports=no).
+function _pipeBtn(label, bg, fg, onclick, disabled, title) {
+  const btn = document.createElement("button");
+  btn.textContent = label;
+  btn.style.cssText = `display: inline-block; min-width: 18px; padding: 2px 5px; ` +
+    `border-radius: 3px; border: 0; font: inherit; font-size: 11px; font-weight: 600; ` +
+    `line-height: 1; text-align: center; background: ${bg}; color: ${fg}; ` +
+    `cursor: ${disabled ? "default" : "pointer"};` +
+    (disabled ? " opacity: 0.6;" : "");
+  if (title) btn.title = title;
+  if (disabled) {
+    btn.disabled = true;
+  } else if (onclick) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onclick();
+    });
+  }
+  return btn;
 }
 
 function _validationGlyph(status) {
@@ -941,7 +1129,14 @@ function renderScenariosMatrix(detail) {
   detail.appendChild(panel);
 }
 
-async function loadScenario(s) {
+// loadScenario renders the detail page. `initialArchive` is the
+// optional archive name from the URL (#/recording/.../.../<archive>).
+// "" or unspecified → start on the latest recording; otherwise the
+// archive selector starts pre-pointed at the named archive (silently
+// falls back to latest if the archive doesn't exist for this cell).
+// `focus` is the optional ?focus=<key> from the URL — scrolls the
+// matching panel into view after render. Empty → no scroll.
+async function loadScenario(s, initialArchive, focus) {
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
   // Find the sidebar button by data-rec-key (set in init() when the
   // button was created). Deep links come through route() without a
@@ -958,9 +1153,18 @@ async function loadScenario(s) {
   const detail = document.getElementById("detail");
   detail.innerHTML = `<p>Loading…</p>`;
 
-  const [data, archives] = await Promise.all([
+  const [data, archives, recipes, catalog] = await Promise.all([
     fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}`).then(r => r.json()),
     fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
+    // Recipes for the new Recipe panel target on this page (anchor:
+    // recipe). Same payload the coverage page uses. Look up the
+    // by_adapter entry under the scenario name and agent slug.
+    fetch(`/api/recipes`).then(r => r.ok ? r.json() : null).catch(() => null),
+    // Coverage catalog: lets us render a stub Assessment panel from
+    // the matrix verdict + notes when no assessment.json exists.
+    // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
+    // land nowhere for most cells.
+    fetch(`/api/catalog`).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   detail.innerHTML = "";
 
@@ -974,7 +1178,44 @@ async function loadScenario(s) {
   //   3. Container below — holds Playback / Meta / GT / Transitions
   //      / Tools / Validate / Signals. Rendered conditionally based
   //      on dropdown state; empty when "(none)" is selected.
-  detail.appendChild(renderRecordingHistory(s, data, archives));
+  // Look up the per-cell recipe entry. /api/recipes returns the full
+  // scenarios.json document; find the matching scenario + adapter
+  // block. coverage_id is the canonical join key; fall back to the
+  // raw scenario name for older entries.
+  let recipeEntry = null;
+  if (recipes && Array.isArray(recipes.scenarios)) {
+    for (const sc of recipes.scenarios) {
+      if (sc.coverage_id === s.id || sc.name === s.id) {
+        recipeEntry = sc.by_adapter && sc.by_adapter[s.agent];
+        break;
+      }
+    }
+  }
+  // Look up the per-cell coverage entry for the Assessment-fallback
+  // panel. Used when no assessment.json exists on disk — the panel
+  // still renders so the ⚙ / ◉ pipeline-strip anchors have a target.
+  let coverageEntry = null;
+  if (catalog && Array.isArray(catalog.scenarios)) {
+    for (const sc of catalog.scenarios) {
+      if (sc.id === s.id) {
+        coverageEntry = sc.coverage && sc.coverage[s.agent];
+        break;
+      }
+    }
+  }
+
+  // Cell-level panels rendered at the page top — independent of the
+  // selected recording so they don't blink on dropdown changes.
+  // Order mirrors the pipeline strip left-to-right:
+  //   Assessment (⚙ ◉) → Recipe (✎) → Recording (N) → Spec/Validation (§ ✓) → recording-specific panels.
+  if (data.assessment) {
+    detail.appendChild(renderAssessment(data.assessment));
+  } else {
+    detail.appendChild(renderAssessmentFallback(coverageEntry));
+  }
+  detail.appendChild(renderRecipePanel(recipeEntry));
+  detail.appendChild(renderRecordingHistory(s, data, archives, initialArchive || "", recipeEntry, coverageEntry));
+  scrollFocusInto(focus || "");
 }
 
 function renderMeta(data) {
@@ -1055,7 +1296,12 @@ function renderMeta(data) {
 //     read fine via the literal `##` prefix)
 //   - sources list with URL anchors where applicable
 function renderAssessment(a) {
-  const p = panel("Assessment");
+  // anchor "supports" — pipeline-strip segments ⚙ AND ◉ both land
+  // here (the panel's chips render the two axes individually).
+  const p = panel("Assessment", "supports");
+  // Also tag with the observes alias so [data-anchor="observes"]
+  // resolves to the same panel.
+  p.setAttribute("data-anchor-alias", "observes");
   // Dated subtitle.
   const sub = document.createElement("div");
   sub.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
@@ -1121,6 +1367,39 @@ function renderAssessment(a) {
   return p;
 }
 
+// renderAssessmentFallback paints a stub Assessment panel for cells
+// without an assessment.json artifact. Just the matrix verdict
+// (agent_supports + irrlicht_observes chips) + notes line. Keeps the
+// ⚙ / ◉ pipeline-strip anchors landable even when no rich record
+// exists. coverageEntry may be null if /api/catalog didn't return one
+// for this cell.
+function renderAssessmentFallback(coverageEntry) {
+  // anchor "supports" + alias "observes" — matches renderAssessment so
+  // both pipeline-strip segments resolve here.
+  const p = panel("Assessment", "supports");
+  p.setAttribute("data-anchor-alias", "observes");
+  const subtitle = document.createElement("div");
+  subtitle.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
+  subtitle.textContent = "from matrix verdict — no point-in-time assessment.json on disk yet";
+  p.appendChild(subtitle);
+  if (!coverageEntry) {
+    p.appendChild(text("Coverage matrix has no entry for this cell. Add one in .specs/agent-scenarios-coverage.json."));
+    return p;
+  }
+  const row = document.createElement("div");
+  row.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px;";
+  row.appendChild(_assessmentChip("Agent", coverageEntry.agent_supports));
+  row.appendChild(_assessmentChip("Irrlicht", coverageEntry.irrlicht_observes));
+  p.appendChild(row);
+  if (coverageEntry.notes) {
+    const notes = document.createElement("div");
+    notes.style.cssText = "font-size: 12px; line-height: 1.5; color: #333; padding: 8px 10px; background: #fafaf6; border: 1px solid #ece9dd; border-radius: 4px;";
+    notes.textContent = coverageEntry.notes;
+    p.appendChild(notes);
+  }
+  return p;
+}
+
 // _assessmentChip maps the agent_supports / irrlicht_observes enum
 // values ("yes" / "partial" / "no" / "unknown" / "n/a") to user-facing
 // display labels ("full" / "partial" / "none" / "unknown" / "n/a") and
@@ -1152,12 +1431,21 @@ function _assessmentChip(prefix, value) {
 //                          spec" rather than "0/N passed against nothing".
 function renderExpected(data, mode) {
   const specOnly = mode === "spec";
-  const p = panel("Spec expectations");
+  // anchor "spec" — pipeline-strip segment § lands here.
+  const p = panel("Spec expectations", "spec");
   if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
     p.appendChild(text("No expected.jsonl for this scenario. Author one per the translate skill's Step 3.5."));
     return p;
   }
   const rep = data.expected;
+  // Anchor target for the pipeline-strip ✓ segment ("validation").
+  // The summary chip just below carries the pass/fail signal; we add
+  // a small heading so the scroll lands on a labelled anchor.
+  const valHeading = document.createElement("h4");
+  valHeading.dataset.anchor = "validation";
+  valHeading.style.cssText = "font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin: 0 0 6px 0; font-weight: 600;";
+  valHeading.textContent = "Validation";
+  p.appendChild(valHeading);
   const summary = document.createElement("div");
   summary.style.cssText = "margin-bottom: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;";
   if (specOnly) {
@@ -1290,11 +1578,12 @@ function truncate(s, n) {
 //               to the archive's events via /api/replay/start's recording
 //               field. Validate + Signals panels stay hidden because
 //               promote-recording.sh doesn't archive those today.
-function renderRecordingHistory(s, latestData, archives) {
+function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry) {
   const wrap = document.createElement("div");
 
   // 1. The selector panel (top, controls everything below).
-  const selPanel = panel("Recording");
+  //    anchor "recordings" — pipeline-strip segment N jumps here.
+  const selPanel = panel("Recording", "recordings");
   const intro = document.createElement("div");
   intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
   const archCount = (archives || []).length;
@@ -1350,8 +1639,11 @@ function renderRecordingHistory(s, latestData, archives) {
   // Default = the newest recording (top-level events.jsonl). URL deep-
   // links (#/recording/...) imply "show me this recording", which means
   // the latest by default; users explicitly switch to (none) for spec-
-  // only view.
-  select.value = "";
+  // only view. When the URL specifies an archive segment
+  // (#/recording/.../.../<archive>) AND the archive exists for this
+  // cell, the dropdown opens pre-pointed at it.
+  const archMatch = initialArchive && (archives || []).some(a => a.name === initialArchive);
+  select.value = archMatch ? initialArchive : "";
   selPanel.appendChild(select);
 
   const manifestBox = document.createElement("div");
@@ -1455,13 +1747,11 @@ function renderRecordingHistory(s, latestData, archives) {
 
   function renderRecordingPanels(d, archiveName) {
     below.innerHTML = "";
-    // Assessment first — it's about the cell itself, independent of
-    // any particular recording, so it reads naturally at the top of
-    // the detail page. Absent for cells that haven't been assessed
-    // yet (no assessment.json on disk).
-    if (d.assessment) {
-      below.appendChild(renderAssessment(d.assessment));
-    }
+    // Assessment and Recipe are now rendered at the page level in
+    // loadScenario (above this dropdown) — they're cell-level info
+    // and shouldn't re-render on dropdown changes. The panels here
+    // are only the recording-specific ones.
+    //
     // Playback retargets to the archive when archiveName is set —
     // /api/replay/start accepts a `recording` field that resolves to
     // <scenarioDir>/recordings/<name>.
@@ -1473,8 +1763,23 @@ function renderRecordingHistory(s, latestData, archives) {
     }
   }
 
-  select.addEventListener("change", selectionChanged);
-  // Initial render reflects the default selection (Latest).
+  select.addEventListener("change", () => {
+    // Keep the URL in sync with the dropdown so the link can be
+    // copy-pasted to share a specific recording. Latest collapses to
+    // the bare cell URL (no archive segment); "(none)" stays on the
+    // bare cell URL too — it's a UI-only sub-state. Use
+    // history.replaceState rather than navigate() to avoid spamming
+    // browser history with every dropdown click.
+    const v = select.value;
+    const base = `#/recording/${s.agent}/${s.subtree}/${s.id}`;
+    const next = (v && v !== "__none__") ? `${base}/${encodeURIComponent(v)}` : base;
+    if (location.hash !== next) {
+      history.replaceState(null, "", next);
+    }
+    selectionChanged();
+  });
+  // Initial render reflects the default selection (Latest or the
+  // archive named in the URL).
   selectionChanged();
 
   return wrap;
@@ -2323,9 +2628,14 @@ function mkButton(label) {
   return b;
 }
 
-function panel(title) {
+// panel makes a standard panel <div class="panel"><h3>title</h3></div>.
+// anchorKey: optional — sets data-anchor so the pipeline-strip
+// segments (and other deep-link consumers) can find this panel via
+// [data-anchor="<key>"] and scrollIntoView.
+function panel(title, anchorKey) {
   const p = document.createElement("div");
   p.className = "panel";
+  if (anchorKey) p.dataset.anchor = anchorKey;
   const h = document.createElement("h3");
   h.textContent = title;
   p.appendChild(h);
