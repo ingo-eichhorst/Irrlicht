@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scenario_id": "synchronous-slash-command",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-17T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code has a family of synchronous, local-only slash commands that never round-trip to the model: `/help`, `/cost`, `/status`, `/model` (the picker), `/context`, `/clear` (UI-side), `/config`, etc. When the user invokes one of these, the TUI renders the response locally; if anything lands in the JSONL transcript at all, it's a local-command wrapper, not a real user turn or assistant message.\n\nThe parser explicitly recognises and discards these wrappers. `isLocalCommandContent` (parser.go:216-225) returns true for content starting with `<local-command`, `<command-name>`, `<bash-input>`, or `<bash-stdout>`, and callers drop the event before it reaches state machinery. That's exactly the right behaviour for this scenario.\n\nThe spec's two Expected bullets:\n\n**Bullet 1 — state stays `ready` throughout.** Because no genuine `user` message is appended (only the local-command wrapper, which the parser filters), the daemon emits no state_transition for the slash command. The session sits in `ready` before, during, and after. The phase contract for this scenario asserts a `ready` invariant across the slash-command phase.\n\n**Bullet 2 — no `→ working` transition recorded for the slash command itself.** Direct consequence of the above. The parser's local-command filter is the load-bearing piece here, and `parser_test.go` covers it as a regression test.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe slash command's textual response (e.g. `/cost` output, `/help` text) is rendered in the TUI but never appears as a transcript event, so the daemon has nothing to surface. This is correct: the scenario's premise is precisely that there's no model call to observe.\n\n## Caveat on which commands count\n\nNot every slash command is synchronous. `/compact` triggers a real model call (context summarisation) and belongs to `Context compaction`. `/init` writes files via tool calls. The recipe must restrict itself to genuinely local commands (`/help`, `/cost`, `/status`, `/model`) to satisfy the spec's no-LLM-call premise.",
+  "caveats": [
+    "`/clear` resets the conversation and mints a fresh session UUID — observable as a `session_birth` event. That belongs to the `Session reset` scenario, not this one. The recipe must avoid it.",
+    "`/compact` and `/init` call the model and would invalidate this scenario. Stick to `/help`, `/cost`, `/status`, `/model`.",
+    "If Anthropic changes the TUI to log slash-command invocations as real user messages, this scenario would start failing. The parser's local-command filter is the contract that catches such regressions."
+  ],
+  "sources": [
+    {"kind": "file", "ref": ".specs/agent-scenarios.md", "note": "Section 'Feature: Synchronous slash command (no LLM call)' (lines 140-145) — two Expected bullets."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go", "note": "isLocalCommandContent (216-225) filters <local-command>, <command-name>, <bash-input>, <bash-stdout> wrappers so they don't drive state."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser_test.go", "note": "Parser test suite covers local-command filtering — regression guard for this scenario."}
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "scenario_id": "autonomous-loop-iteration-limit",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-18T00:00:00Z",
+  "agent_supports": "no",
+  "irrlicht_observes": "n/a",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: no\nirrlicht_observes: n/a\n\n## Reasoning\n\nThis scenario is the failure-mode pair of `autonomous-loop`: it asserts that when an autonomous self-prompting agent hits its iteration cap (or token/time budget) without completing the goal, state still settles to `ready` rather than sticking in `working`.\n\nThe precondition — an autonomous self-prompting mode — does not exist in claudecode (see the `autonomous-loop` assessment for this adapter). claudecode has no `--max-iterations` knob, no `/goal` runner, and no headless loop construct that can hit an iteration limit. There is nothing to budget-cap because there is no loop in the first place.\n\nWhat claudecode *does* have is the orthogonal 5-hour subscription quota, which is the separate `token-quota-exhausted` scenario and is assessed there. That budget surfaces inside a single user-initiated turn, not at the end of an autonomous run, so it does not satisfy the spec's framing of 'iteration cap reached'.\n\nBecause the underlying capability is absent, irrlicht has nothing to observe — verdict is `n/a` on the transport axis. The matrix cell is consistent with `autonomous-loop` being `no`.\n\n## What would change this verdict\n\nIf claudecode adds an autonomous loop with an iteration cap, the parser would need to verify that the cap-reached path emits a clean `working → ready` transition (not a stuck `working` or a crash-shaped exit). Today there is no loop to cap.",
+  "caveats": [
+    "Do not confuse this with `token-quota-exhausted`: the 5-hour Claude Code budget is a subscription quota that interrupts a single human-driven turn, not an iteration cap on an autonomous loop. The two scenarios test orthogonal failure modes; only the latter is in scope for claudecode.",
+    "Subagent tool calls (`Task`) can fan out internally, but each subagent is bounded by its own turn and surfaces as a child session — there is no top-level iteration counter for the parent to overshoot."
+  ],
+  "sources": [
+    {"kind": "file", "ref": ".specs/agent-scenarios.md", "note": "Feature: Autonomous loop iteration limit reached at line 170 — the precondition is an autonomous-mode agent. claudecode is not in the canonical list (Codex /goal, Plandex full-auto, SWE-agent, Goose recipes)."},
+    {"kind": "file", "ref": "replaydata/agents/claudecode/scenarios/autonomous-loop/assessment.json", "note": "Sibling assessment establishes that claudecode has no autonomous-loop primitive — this scenario inherits that absence."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/agent.go", "note": "ExactName{Name: \"claude\"} — adapter watches the interactive process; no autonomous-loop wiring exists."}
+  ]
+}

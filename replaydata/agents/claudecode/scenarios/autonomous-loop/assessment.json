@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "scenario_id": "autonomous-loop",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-18T00:00:00Z",
+  "agent_supports": "no",
+  "irrlicht_observes": "n/a",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: no\nirrlicht_observes: n/a\n\n## Reasoning\n\nThe spec describes a continuous self-prompting mode where the agent picks its own next steps without user prompts between internal iterations — the canonical examples cited are Codex `/goal`, Plandex full-auto, SWE-agent, and Goose recipes.\n\nClaude Code does not ship an equivalent autonomous-loop mode. The interactive TUI is strictly turn-driven: each user prompt produces exactly one assistant turn that ends with either a final assistant message (→ `ready`) or a tool-permission prompt (→ `waiting`). The CLI exposes no `/goal`, no `--auto`, no recipe runner, and no headless equivalent that loops on a self-generated objective. `claude -p` (headless) is single-shot — it prints one response and exits. The closest user-visible loop construct is the manual `claude --resume` cycle, but that still requires the human to advance each turn.\n\nBecause the agent does not produce the behaviour, there is nothing for irrlicht's parser to observe. The 'no `ready` between internal iterations' invariant the spec asserts only makes sense against an agent that actually self-prompts, which claudecode does not. The matrix cell is correctly recorded as `agent_supports: no` and consequently `irrlicht_observes: n/a` — there is no transport judgement to make until the underlying capability exists.\n\n## What would change this verdict\n\nIf Anthropic ships an autonomous-loop primitive (e.g. an `--auto` flag or a `Task`-driven loop visible to the top-level session rather than to subagents), this cell would re-open. The parser would need to verify that internal iterations stay on the same JSONL transcript (no session_birth) and that no `working → ready → working` flicker appears between iterations. Today neither is testable.",
+  "caveats": [
+    "Claude Code's `Task` subagent tool does perform multi-step work without user prompts, but each Task is scoped as a child session with its own ParentSessionID — that is the foreground-subagent scenario, not an autonomous loop on the parent. The parent session still alternates `working`/`ready` per user turn.",
+    "Plan mode (Shift+Tab) is also not an autonomous loop: it gates execution behind an explicit human approve/edit step before the agent proceeds — that's the plan-mode approval scenario."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/agent.go", "note": "ExactName{Name: \"claude\"} — the adapter watches the single interactive process; there is no autonomous-loop entry point distinct from a normal claudecode session."},
+    {"kind": "file", "ref": ".specs/agent-scenarios.md", "note": "Feature: Autonomous loop (self-prompting) at line 160 cites Codex `/goal`, Plandex, SWE-agent, Goose — explicitly NOT claudecode."},
+    {"kind": "doc", "ref": "claude --help (Claude Code 1.x, May 2026)", "note": "No `--auto`, no `/goal`-equivalent slash command, no recipe runner. Headless mode (`-p`) is single-shot."}
+  ]
+}

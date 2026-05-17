@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "scenario_id": "streaming-partial-writes",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-18T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code natively streams assistant output in chunks: every assistant JSONL line carries a `stop_reason` that is either nil/non-terminal while the turn is still in flight, or one of the terminal values (`end_turn`, `stop_sequence`, `refusal`, `tool_use`) when the turn finishes. The transcript file is append-only, so the tailer naturally sees the deltas land one line at a time.\n\nThe spec's only assertion is that state stays `working` across all partial flushes and does NOT flicker to `ready` before the turn's terminal line. irrlicht's claudecode parser handles this explicitly in `resolveAssistantStreaming` (parser.go:288): any assistant event whose `stop_reason` is not on the terminal allow-list is downgraded to the `assistant_streaming` event type, which is excluded from `IsAgentDone()`. The allow-list approach is deliberately defensive — unknown future stop reasons default to 'assume streaming' (the safe side of the Bug-D flicker, issue #102).\n\nFurthermore, the parser exposes `PendingContribution()` (parser.go:485) and implements `PendingContributor`, so the tailer surfaces the in-progress turn's cost during streaming without committing it as a completed contribution. The request-ID-scoped dedup in `applyRequestIDContribution` (parser.go:260) keeps multiple streaming events with the same `requestId` collapsed into one contribution that is only flushed when the next `requestId` (i.e. next turn) arrives.\n\nObservability ladder: (1) every partial flush appears as a `transcript_activity` event but does NOT promote to a state transition; (2) state band stays solid `working` across the chunks; (3) the terminal `end_turn` line (or a follow-up `turn_done` system event) lands the single `working → ready` transition.",
+  "caveats": [
+    "Recording this is mostly a question of provoking a verbose enough response. A long prose answer (e.g. 'write a 500-word essay about X') reliably emits several intermediate assistant events with non-terminal stop_reason. The recipe wouldn't add new step types — it's a vanilla send/wait, but the phase contract should assert an invariant `no state_transition_to_ready_before_turn_done` across the streaming window.",
+    "Unknown future stop_reason values are mapped to streaming (allow-list default). If Anthropic introduces a new terminal stop_reason without updating the allow-list, the turn would appear to stick in `working` until the next user input — a known trade-off documented in the resolveAssistantStreaming comment."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go", "note": "resolveAssistantStreaming (line 288) — non-terminal stop_reason downgrades to assistant_streaming, excluded from IsAgentDone(). Terminal allow-list: end_turn, stop_sequence, refusal, tool_use."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go", "note": "applyRequestIDContribution (line 260) and PendingContribution (line 485) — request-ID-scoped dedup keeps streaming chunks from emitting duplicate completed contributions."},
+    {"kind": "issue", "ref": "ingo-eichhorst/Irrlicht#102", "note": "Bug D in the streaming-flicker family — drove the resolveAssistantStreaming allow-list approach so unknown stop_reasons default to 'assume streaming'."}
+  ]
+}
