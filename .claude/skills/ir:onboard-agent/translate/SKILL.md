@@ -25,7 +25,9 @@ viewer's scenario detail page renders the new fields automatically.
 
 > **Stages 2 + 3 of the cell lifecycle.** This skill covers recipe
 > authoring (Stage 2) AND spec authoring (Stage 3, Step 3.5 below) for
-> one cell. Stage 1 (assessment) is handled by [`../survey/SKILL.md`];
+> one cell. Stage 1 (assessment) is handled by
+> [`../assess/SKILL.md`](../assess/SKILL.md) for one cell, or
+> [`../survey/SKILL.md`](../survey/SKILL.md) for whole-agent batches.
 > Stages 4–5 (recording + validation) are
 > [`run-cell.sh`](../scripts/run-cell.sh) + `promote-recording.sh` +
 > `expected-validate`. The end-to-end walkthrough across all five

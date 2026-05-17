@@ -14,8 +14,8 @@ to fill each segment.
   for this agent  by_adapter[a]   phase DSL       transcript.jsonl  phase + manifest
        │              │                │                │                  │
        ▼              ▼                ▼                ▼                  ▼
-  /survey skill   /translate      author              run-cell.sh        expected-
-  + matrix edit   (.claude/...)   manually            + promote.sh       validate
+  /assess skill   /translate      author              run-cell.sh        expected-
+  (or /survey)    (.claude/...)   manually            + promote.sh       validate
 ```
 
 If `agent_supports == "no"` at Stage 1, the pipeline is frozen — no
@@ -41,10 +41,12 @@ observe it?
   viewer. The first artifact a cell produces — exists even before
   any recording.
 
-**Tool:** `/ir:onboard-agent survey <agent>` (see `survey/SKILL.md`)
-or, for a single scenario refresh, a focused research pass (read
-agent docs / changelogs / source). Don't default to `unknown` — only
-record it when an honest search came up empty.
+**Tool:** `/ir:onboard-agent assess <agent> <scenario>` (see
+[`assess/SKILL.md`](assess/SKILL.md)) for one cell. For batched
+matrix-wide work across all scenarios of one agent, use
+`/ir:onboard-agent survey <agent>` (see `survey/SKILL.md`). Don't
+default to `unknown` — only record it when an honest search came up
+empty.
 
 **Matrix entry shape (rollup):**
 
@@ -106,10 +108,11 @@ Authoring rule: if you're tempted to downgrade the verdict to
 canonical spec actually requires the missing observation. If not,
 keep the verdict honest (`yes`) and surface the gap as a caveat.
 
-**Authoring flow (today):** dispatch a research subagent for the
-cell, capture its output, hand-author the JSON file. A future
-`/ir:onboard-agent assess <agent> <scenario>` skill could automate
-this.
+**Authoring flow:** `/ir:onboard-agent assess <agent> <scenario>`
+dispatches a research subagent, synthesizes the verdict + caveats +
+sources, and writes the JSON. Re-runs overwrite silently. See
+[`assess/SKILL.md`](assess/SKILL.md) for the per-step recipe and
+worked examples.
 
 **Transcription:** the maintainer copies the verdict + a one-line
 note from `assessment.json` into `.specs/agent-scenarios-coverage.json`.

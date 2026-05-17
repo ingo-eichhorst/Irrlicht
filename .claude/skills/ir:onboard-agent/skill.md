@@ -72,6 +72,16 @@ hermetic and don't need auth.
   Maintainer reviews + merges into `.specs/agent-scenarios-coverage.json`.
   See `survey/SKILL.md` for the dispatch recipe. No live agent CLI is
   invoked. Re-run on each agent version bump.
+- **`/ir:onboard-agent assess <agent> <scenario-id>`** — per-cell
+  assessment mode (Mode E). Researches one specific (agent × scenario)
+  cell and writes `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json`
+  with the structured verdict + body + caveats + sources rendered on the
+  viewer's detail page. Re-runs overwrite silently (git preserves
+  history). See `assess/SKILL.md` for the per-step recipe and the
+  worked examples (`claudecode × checkpoint-rewind`,
+  `claudecode × cloud-background-agent`). Run before `translate` so the
+  recipe author knows whether the cell is supposed to record or to
+  remain frozen as `agent_supports: no`.
 - **`/ir:onboard-agent translate <agent> <scenario-id>`** — per-cell
   translation mode (Mode D). Reads the prose spec in
   `.specs/agent-scenarios.md`, looks up the coverage verdict, and
@@ -100,8 +110,8 @@ canonical walkthrough.
                     by_adapter[a]      phase DSL           transcript.jsonl     phase
         │                │                  │                    │                    │
         ▼                ▼                  ▼                    ▼                    ▼
-   /survey skill    /translate         author              run-cell.sh           expected-
-   + matrix edit                       manually            + promote.sh          validate
+   /assess skill    /translate         author              run-cell.sh           expected-
+   (or /survey)                        manually            + promote.sh          validate
 ```
 
 See [`cell-lifecycle.md`](cell-lifecycle.md) for:
@@ -114,9 +124,9 @@ See [`cell-lifecycle.md`](cell-lifecycle.md) for:
 - explicit out-of-scope items
 
 When in doubt about a stage, jump to that section in
-`cell-lifecycle.md`. The subskills below (`survey/`, `translate/`)
-implement individual stages; the lifecycle doc is how they fit
-together.
+`cell-lifecycle.md`. The subskills below (`survey/`, `assess/`,
+`translate/`) implement individual stages; the lifecycle doc is how
+they fit together.
 
 ## Step 1: Understand the task
 
@@ -127,6 +137,8 @@ Parse the invocation into one of:
 - `diff_only` — `--diff` flag
 - `discover` — `--new <slug>`; load `discovery-instructions.md` and follow that recipe instead of Steps 2–5 below
 - `survey` — `survey <agent>`; load `survey/SKILL.md` and follow that recipe instead of Steps 2–5 below
+- `assess` — `assess <agent> <scenario>`; load `assess/SKILL.md` and follow that recipe instead of Steps 2–5 below
+- `translate` — `translate <agent> <scenario>`; load `translate/SKILL.md` and follow that recipe instead of Steps 2–5 below
 - `pipeline` — `pipeline <agent> [<scenario>]`; load `pipeline/SKILL.md` and follow that recipe instead of Steps 2–5 below
 
 If the invocation is ambiguous, ask the user which mode to run.
