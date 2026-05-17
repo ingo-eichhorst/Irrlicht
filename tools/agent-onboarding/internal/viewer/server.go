@@ -368,9 +368,46 @@ func loadRecipeMap(repoRoot string) map[string]recipeEntry {
 		if cid == "" {
 			cid = sc.Name
 		}
-		out[cid] = recipeEntry{Name: sc.Name, CoverageID: cid, ByAdapter: sc.ByAdapter}
+		// Multiple scenarios may share a coverage_id (e.g. basic-turn is
+		// targeted by both baseline-hello and multi-turn-conversation).
+		// Prefer the entry whose folder has on-disk artifacts
+		// (expected.jsonl) so the pipeline-strip annotation reflects the
+		// canonical recording rather than whichever happened to be
+		// listed last in the file.
+		incoming := recipeEntry{Name: sc.Name, CoverageID: cid, ByAdapter: sc.ByAdapter}
+		if existing, dup := out[cid]; dup {
+			incomingHasSpec := hasExpectedJSONL(repoRoot, sc.Name)
+			existingHasSpec := hasExpectedJSONL(repoRoot, existing.Name)
+			// Keep existing unless the incoming candidate is strictly
+			// better (it has expected.jsonl, the existing one doesn't).
+			if !(incomingHasSpec && !existingHasSpec) {
+				continue
+			}
+		}
+		out[cid] = incoming
 	}
 	return out
+}
+
+// hasExpectedJSONL reports whether any agent's scenario folder for the
+// given scenario `name` contains an expected.jsonl. Used by
+// loadRecipeMap to disambiguate coverage_id collisions in favour of
+// the scenario whose folder actually backs the matrix cell.
+func hasExpectedJSONL(repoRoot, scenarioName string) bool {
+	agentsDir := filepath.Join(repoRoot, "replaydata", "agents")
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(agentsDir, e.Name(), "scenarios", scenarioName, "expected.jsonl")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveScenarioFolderFromMap is the in-memory equivalent of
