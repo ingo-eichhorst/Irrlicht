@@ -63,6 +63,14 @@ type Playback struct {
 	// Paused tracks the UI-perceived state; the state machine handles
 	// the actual pause via its command channel.
 	Paused bool
+
+	// enricher is the broadcaster decorator that populates
+	// SessionState.Metrics on session events. Held on the Playback so
+	// the Snapshot path (GET /api/v1/sessions) can apply the same
+	// enrichment as the broadcast path (WebSocket stream) — otherwise
+	// the dashboard's initial fetch shows empty metrics and only
+	// catches up after the next state transition.
+	enricher *metricsEnricher
 }
 
 // wsHandler is the subset of websocket.NewHub's return we exercise. The
@@ -93,6 +101,15 @@ type PlaybackManager struct {
 	// kept as a separate field so we don't lose the concrete type behind
 	// the PushBroadcaster interface.
 	diag *loggedBroadcaster
+
+	// metricsEnabled toggles construction of a per-playback
+	// metrics.Adapter inside the enricher. Always true for the real
+	// viewer; tests can leave it false to keep their fixtures simple.
+	// A fresh collector per playback is intentional: metrics.Adapter
+	// caches per-transcript tailers, and after one pass the tailer's
+	// lastOffset sits at EOF — reusing it on a re-replay would read
+	// zero bytes and return total_tokens=0.
+	metricsEnabled bool
 }
 
 // NewPlaybackManager wires the manager and its shared WebSocket hub.
@@ -109,9 +126,10 @@ func NewPlaybackManager(repoRoot string) *PlaybackManager {
 	push := services.NewPushService()
 	logged := newLoggedBroadcaster(push)
 	m := &PlaybackManager{
-		repoRoot:    repoRoot,
-		broadcaster: logged,
-		diag:        logged,
+		repoRoot:       repoRoot,
+		broadcaster:    logged,
+		diag:           logged,
+		metricsEnabled: true,
 	}
 	m.hub = websocket.NewHub(logged, m.connectSnapshots)
 	return m
@@ -262,7 +280,17 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 
 	m.stopCurrent()
 
-	machine := replay.New(events, m.broadcaster, speed)
+	// Per-playback metrics enricher: wraps the manager's shared
+	// broadcaster so each session row carries model / tokens / cost /
+	// context % from the recorded transcript.jsonl. Fresh wrapper per
+	// playback so its sessionID cache doesn't bleed across recordings.
+	var bc outbound.PushBroadcaster = m.broadcaster
+	var enricher *metricsEnricher
+	if m.metricsEnabled {
+		enricher = newMetricsEnricher(m.broadcaster, buildMetricsCollector(), eventsDir)
+		bc = enricher
+	}
+	machine := replay.New(events, bc, speed)
 	// Apply event 0 synchronously BEFORE returning to the frontend so
 	// the dashboard's initial /api/v1/sessions fetch sees a non-empty
 	// snapshot. Otherwise there's a race window where Run()'s
@@ -285,6 +313,7 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		DashboardURL: "/dashboard",
 		EventsDir:    eventsDir,
 		Recording:    recording,
+		enricher:     enricher,
 	}
 
 	m.mu.Lock()
@@ -349,6 +378,10 @@ func (m *PlaybackManager) SetSpeed(speed float64) {
 
 // Snapshot returns the current synthetic sessions (whatever the state
 // machine has accumulated so far). Used by GET /api/v1/sessions.
+// Sessions are enriched with metrics (model / tokens / cost / context %)
+// when a per-playback enricher is configured, so the dashboard's
+// initial fetch carries the same metrics shape the WebSocket stream
+// emits — no "metrics-after-first-update" gap.
 func (m *PlaybackManager) Snapshot() []*session.SessionState {
 	m.mu.Lock()
 	pb := m.current
@@ -356,7 +389,19 @@ func (m *PlaybackManager) Snapshot() []*session.SessionState {
 	if pb == nil || pb.machine == nil {
 		return nil
 	}
-	return pb.machine.Snapshot()
+	sessions := pb.machine.Snapshot()
+	if pb.enricher != nil {
+		for i, s := range sessions {
+			if s.Metrics == nil {
+				if mm := pb.enricher.lookup(s.SessionID, s.Adapter); mm != nil {
+					cp := *s
+					cp.Metrics = mm
+					sessions[i] = &cp
+				}
+			}
+		}
+	}
+	return sessions
 }
 
 // stopCurrent cancels the current playback and clears it. Safe to call
