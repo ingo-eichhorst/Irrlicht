@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
@@ -106,30 +107,221 @@ func (s *Server) staticHandler() http.Handler {
 // Re-reads on every request so maintainer edits land on next page
 // refresh without a server rebuild.
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
-	// 1. Prefer the richer coverage file when it's reachable.
-	if covPath := s.resolveCoveragePath(); covPath != "" {
-		if b, err := os.ReadFile(covPath); err == nil {
-			b = annotateCatalogCodes(b)
-			b = annotateMeasurements(b, s.RepoRoot)
-			b = annotatePipelineState(b, s.RepoRoot)
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.Header().Set("X-Catalog-Source", "coverage")
-			w.Write(b)
-			return
-		}
-	}
-	// 2. Fall back to scenarios.json — the run-cell.sh catalog. Smaller
-	//    surface (only declared cells, no verdicts), but always present
-	//    in the repo so the matrix is never empty.
-	path := filepath.Join(s.RepoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
-	b, err := os.ReadFile(path)
+	// Catalog assembly. Source precedence:
+	//   1. Skeleton (scenarios + agents) is ALWAYS built from tracked
+	//      sources: scenarios.json's `catalog[]` field + agents.All().
+	//      This guarantees the dashboard reflects the on-disk state of
+	//      the repo, not a stale maintainer rollup.
+	//   2. Per-cell verdict (agent_supports, irrlicht_observes, notes,
+	//      confidence) comes from assessment.json when present (the
+	//      committed Stage-1 artifact).
+	//   3. If .specs/agent-scenarios-coverage.json is reachable, it
+	//      provides FALLBACK verdicts for cells that lack assessment.json.
+	//      Optional — maintainers without .specs/ see "unknown" until
+	//      assessments are authored.
+	//
+	// Annotation as today: codes, measurements, pipeline.
+	b, sourceTag, err := s.buildCatalogJSON()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("read scenarios.json: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("build catalog: %v", err), http.StatusInternalServerError)
 		return
 	}
+	b = annotateCatalogCodes(b)
+	b = annotateMeasurements(b, s.RepoRoot)
+	b = annotatePipelineState(b, s.RepoRoot)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("X-Catalog-Source", "scenarios")
+	w.Header().Set("X-Catalog-Source", sourceTag)
 	w.Write(b)
+}
+
+// buildCatalogJSON assembles the /api/catalog response from tracked
+// sources, with optional .specs/ overlay. Returns the marshaled JSON,
+// a source tag for the X-Catalog-Source header, and any error.
+//
+// Source tag is one of:
+//   - "tracked"               — no .specs/ overlay; verdicts from
+//                                assessment.json or "unknown"
+//   - "tracked+specs-overlay" — .specs/ present, used as fallback for
+//                                cells without assessment.json
+func (s *Server) buildCatalogJSON() ([]byte, string, error) {
+	// 1. Read tracked scenarios.json -> catalog[].
+	scenariosPath := filepath.Join(s.RepoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+	scenariosBytes, err := os.ReadFile(scenariosPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("read scenarios.json: %w", err)
+	}
+	var scenariosDoc struct {
+		Catalog []struct {
+			ID      string `json:"id"`
+			Section string `json:"section"`
+			Feature string `json:"feature"`
+		} `json:"catalog"`
+	}
+	if err := json.Unmarshal(scenariosBytes, &scenariosDoc); err != nil {
+		return nil, "", fmt.Errorf("parse scenarios.json: %w", err)
+	}
+
+	// 2. Agents list from the daemon's adapter registry. normalizeAdapter
+	//    maps hyphenated Identity.Name (e.g. "claude-code") to the
+	//    canonical slug used on disk under replaydata/agents/ and in
+	//    .specs/ (e.g. "claudecode"). Without this, assessment.json
+	//    lookups would fail for adapters whose internal slug differs
+	//    from their replaydata path.
+	allAgents := agents.All()
+	agentEntries := make([]map[string]any, 0, len(allAgents))
+	agentSlugs := make([]string, 0, len(allAgents))
+	for _, a := range allAgents {
+		slug := normalizeAdapter(a.Identity.Name)
+		agentEntries = append(agentEntries, map[string]any{
+			"id":        slug,
+			"onboarded": true,
+		})
+		agentSlugs = append(agentSlugs, slug)
+	}
+
+	// 3. Load .specs/ overlay if reachable.
+	overlay := loadSpecsOverlay(s.resolveCoveragePath())
+	sourceTag := "tracked"
+	if overlay != nil {
+		sourceTag = "tracked+specs-overlay"
+	}
+
+	// 4. Build scenarios[] with coverage[] per agent. Precedence per cell:
+	//    assessment.json > .specs/ overlay > "unknown".
+	scenarios := make([]map[string]any, 0, len(scenariosDoc.Catalog))
+	for _, sc := range scenariosDoc.Catalog {
+		coverage := make(map[string]any, len(agentSlugs))
+		for _, slug := range agentSlugs {
+			coverage[slug] = buildCellVerdict(s.RepoRoot, slug, sc.ID, overlay)
+		}
+		scenarios = append(scenarios, map[string]any{
+			"id":       sc.ID,
+			"section":  sc.Section,
+			"feature":  sc.Feature,
+			"coverage": coverage,
+		})
+	}
+
+	out := map[string]any{
+		"version":        1,
+		"generated_at":   time.Now().UTC().Format("2006-01-02"),
+		"source_catalog": ".claude/skills/ir:onboard-agent/scenarios.json (catalog)",
+		"agents":         agentEntries,
+		"scenarios":      scenarios,
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, "", err
+	}
+	return b, sourceTag, nil
+}
+
+// buildCellVerdict produces one coverage[agent] entry. Reads
+// replaydata/agents/<agent>/scenarios/<scenarioID>/assessment.json when
+// present; falls back to the .specs/ overlay entry; falls back to
+// "unknown" with no notes.
+func buildCellVerdict(repoRoot, agentSlug, scenarioID string, overlay map[string]map[string]map[string]any) map[string]any {
+	// Default placeholder.
+	cell := map[string]any{
+		"agent_supports":    "unknown",
+		"irrlicht_observes": "unknown",
+		"notes":             "",
+	}
+	// .specs/ overlay fallback.
+	if overlay != nil {
+		if sc, ok := overlay[scenarioID]; ok {
+			if v, ok := sc[agentSlug]; ok {
+				if s, ok := v["agent_supports"].(string); ok && s != "" {
+					cell["agent_supports"] = s
+				}
+				if o, ok := v["irrlicht_observes"].(string); ok && o != "" {
+					cell["irrlicht_observes"] = o
+				}
+				if n, ok := v["notes"].(string); ok {
+					cell["notes"] = n
+				}
+			}
+		}
+	}
+	// assessment.json overrides if present.
+	apath := filepath.Join(repoRoot, "replaydata", "agents", agentSlug, "scenarios", scenarioID, "assessment.json")
+	if b, err := os.ReadFile(apath); err == nil {
+		var asmt struct {
+			AgentSupports    string  `json:"agent_supports"`
+			IrrlichtObserves string  `json:"irrlicht_observes"`
+			Confidence       float64 `json:"confidence"`
+			Body             string  `json:"body"`
+			Notes            string  `json:"notes"`
+		}
+		if json.Unmarshal(b, &asmt) == nil {
+			if asmt.AgentSupports != "" {
+				cell["agent_supports"] = asmt.AgentSupports
+			}
+			if asmt.IrrlichtObserves != "" {
+				cell["irrlicht_observes"] = asmt.IrrlichtObserves
+			}
+			if asmt.Confidence > 0 {
+				cell["confidence"] = asmt.Confidence
+			}
+			// Prefer explicit notes field; fall back to first paragraph of body.
+			if asmt.Notes != "" {
+				cell["notes"] = asmt.Notes
+			} else if asmt.Body != "" {
+				cell["notes"] = firstParagraph(asmt.Body)
+			}
+		}
+	}
+	return cell
+}
+
+// loadSpecsOverlay reads .specs/agent-scenarios-coverage.json (if it
+// exists) and returns a flat map keyed by scenarioID → agentSlug →
+// verdict fields. Returns nil if the file is unreachable or malformed
+// — callers treat nil as "no overlay" and rely on assessment.json plus
+// the "unknown" default.
+func loadSpecsOverlay(covPath string) map[string]map[string]map[string]any {
+	if covPath == "" {
+		return nil
+	}
+	b, err := os.ReadFile(covPath)
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Scenarios []struct {
+			ID       string                            `json:"id"`
+			Coverage map[string]map[string]interface{} `json:"coverage"`
+		} `json:"scenarios"`
+	}
+	if json.Unmarshal(b, &doc) != nil {
+		return nil
+	}
+	out := make(map[string]map[string]map[string]any, len(doc.Scenarios))
+	for _, sc := range doc.Scenarios {
+		if sc.ID == "" {
+			continue
+		}
+		out[sc.ID] = sc.Coverage
+	}
+	return out
+}
+
+// firstParagraph returns the first non-empty paragraph of a markdown
+// body, with surrounding whitespace trimmed. Used to derive a short
+// note from assessment.json.body when no explicit notes field is set.
+func firstParagraph(body string) string {
+	for _, para := range strings.Split(body, "\n\n") {
+		p := strings.TrimSpace(para)
+		// Skip leading headings like "## Verdict".
+		if strings.HasPrefix(p, "#") {
+			continue
+		}
+		if p != "" {
+			// Collapse internal newlines to spaces for compact inline display.
+			return strings.Join(strings.Fields(p), " ")
+		}
+	}
+	return ""
 }
 
 // annotateCatalogCodes walks the catalog JSON, assigns each scenario
