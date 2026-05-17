@@ -2137,24 +2137,8 @@
           ],
           "script": [
             {
-              "type": "slash",
-              "text": "/cost"
-            },
-            {
-              "type": "sleep",
-              "seconds": 2
-            },
-            {
-              "type": "slash",
-              "text": "/help"
-            },
-            {
-              "type": "sleep",
-              "seconds": 3
-            },
-            {
               "type": "send",
-              "text": "Reply with exactly the word: ok"
+              "text": "Reply with exactly: warm"
             },
             {
               "type": "wait_turn"
@@ -2162,6 +2146,22 @@
             {
               "type": "sleep",
               "seconds": 4
+            },
+            {
+              "type": "keys",
+              "keys": "/ c o s t Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "keys",
+              "keys": "/ h e l p Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
             }
           ],
           "verify": [
