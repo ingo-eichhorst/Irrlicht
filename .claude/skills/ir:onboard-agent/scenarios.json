@@ -10,7 +10,7 @@
 
   "scenarios": [
     {
-      "name": "baseline-hello",
+      "name": "basic-turn",
       "description": "Smallest possible round-trip. Verifies session detection and a clean ready→working→ready cycle.",
       "coverage_id": "basic-turn",
       "requires": ["headless_mode"],

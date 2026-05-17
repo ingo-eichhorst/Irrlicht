@@ -18,7 +18,7 @@ import (
 // parents.
 //
 // Callers pass "<adapter>/<scenario>/<basename>" — e.g.
-// "claudecode/baseline-hello/transcript.jsonl". The subtree segment
+// "claudecode/basic-turn/transcript.jsonl". The subtree segment
 // (scenarios/ or regression/) is auto-detected: scenarios/ is tried first
 // for the pipeline-managed catalog; regression/ is the fallback for
 // legacy ad-hoc captures (introduced by #268 Phase 1). If neither exists,

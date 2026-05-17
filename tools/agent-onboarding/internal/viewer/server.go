@@ -369,7 +369,7 @@ func loadRecipeMap(repoRoot string) map[string]recipeEntry {
 			cid = sc.Name
 		}
 		// Multiple scenarios may share a coverage_id (e.g. basic-turn is
-		// targeted by both baseline-hello and multi-turn-conversation).
+		// targeted by both basic-turn and multi-turn-conversation).
 		// Prefer the entry whose folder has on-disk artifacts
 		// (expected.jsonl) so the pipeline-strip annotation reflects the
 		// canonical recording rather than whichever happened to be
@@ -482,8 +482,9 @@ func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes map[str
 
 // resolveScenarioFolder maps a coverage_id (the matrix's scenario id)
 // to the replaydata folder name. Most scenarios use the same string
-// for both, but a handful diverge (basic-turn → baseline-hello, etc.)
-// per scenarios.json's optional `coverage_id` field.
+// for both, but a handful may diverge (when one coverage row is
+// targeted by multiple recipes) per scenarios.json's optional
+// `coverage_id` field.
 //
 // Returns the folder name when the mapping resolves, "" otherwise.
 func resolveScenarioFolder(repoRoot, coverageID string) string {
@@ -745,7 +746,7 @@ var featureSlugAliases = map[string]string{
 // book joined by each entry's `coverage_id` field.
 //
 // Multiple scenarios may share a coverage_id (e.g. basic-turn is
-// targeted by both baseline-hello and multi-turn-conversation). The
+// targeted by both basic-turn and multi-turn-conversation). The
 // client builds `recipesByCoverageId` as a 1:1 map and Map.set is
 // last-wins, so without server-side dedup the wrong recipe would
 // "own" the matrix row. We dedupe here using the same preference

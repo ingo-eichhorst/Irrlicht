@@ -14,7 +14,7 @@ import (
 // /api/scenarios returns both in sorted order.
 func TestScenariosList_walksReplaydataTree(t *testing.T) {
 	root := t.TempDir()
-	mkRecording(t, root, "claudecode", "scenarios", "baseline-hello",
+	mkRecording(t, root, "claudecode", "scenarios", "basic-turn",
 		map[string]string{"events.jsonl": ""})
 	mkRecording(t, root, "aider", "regression", "llm-error",
 		map[string]string{"transcript.md": ""})
@@ -35,7 +35,7 @@ func TestScenariosList_walksReplaydataTree(t *testing.T) {
 	if entries[0].Agent != "aider" || entries[0].Subtree != "regression" {
 		t.Errorf("entries[0]=%+v", entries[0])
 	}
-	if entries[1].Agent != "claudecode" || entries[1].ID != "baseline-hello" {
+	if entries[1].Agent != "claudecode" || entries[1].ID != "basic-turn" {
 		t.Errorf("entries[1]=%+v", entries[1])
 	}
 }

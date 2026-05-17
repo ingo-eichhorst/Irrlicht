@@ -43,7 +43,7 @@ hermetic and don't need auth.
   `<adapter>`. E.g. `/ir:onboard-agent claudecode` or
   `/ir:onboard-agent gastown`.
 - **`/ir:onboard-agent <adapter> <scenario>`** — run one specific cell. E.g.
-  `/ir:onboard-agent claudecode baseline-hello` or
+  `/ir:onboard-agent claudecode basic-turn` or
   `/ir:onboard-agent gastown agent-discovery`.
 - **`/ir:onboard-agent --attach <adapter> [<scenario>]`** — attached
   mode. Uses the user's already-running `irrlichd --record` instead of
@@ -356,7 +356,7 @@ Pick one:
 ### Per-cell output format (agent)
 
 ```
-[claudecode / baseline-hello]  verdict: OK
+[claudecode / basic-turn]  verdict: OK
   transitions: 6 → 6 (sequence unchanged)
   flicker_count: 0 → 0
   tool_calls: (none) → (none)
@@ -419,18 +419,18 @@ commit accepted cells.
 
 ```
 # Review each staged fixture vs current committed one:
-diff replaydata/agents/claudecode/baseline-hello.jsonl \
-     .build/refresh/claudecode/baseline-hello-20260424-152301/replaydata/agents/claudecode/baseline-hello.jsonl
+diff replaydata/agents/claudecode/basic-turn.jsonl \
+     .build/refresh/claudecode/basic-turn-20260424-152301/replaydata/agents/claudecode/basic-turn.jsonl
 
 # If satisfied, copy into replaydata/:
-cp .build/refresh/claudecode/baseline-hello-*/replaydata/agents/claudecode/baseline-hello.* \
+cp .build/refresh/claudecode/basic-turn-*/replaydata/agents/claudecode/basic-turn.* \
    replaydata/agents/claudecode/
 
 # Verify replay tests still pass:
 go test ./core/cmd/replay/... -run TestReplayWithSidecar
 
 # Commit:
-git add replaydata/agents/claudecode/baseline-hello.* && git commit -m "..."
+git add replaydata/agents/claudecode/basic-turn.* && git commit -m "..."
 ```
 
 ### Orchestrator cells
@@ -484,7 +484,7 @@ same step grammar:
   slash command.
 - `{"type": "interrupt"}` — Escape mid-turn (claudecode only).
 
-Single-turn scenarios (`baseline-hello`, `permission-hook-denial`, etc.)
+Single-turn scenarios (`basic-turn`, `permission-hook-denial`, etc.)
 use the simpler `"prompt": "…"` field — no script needed.
 
 ## Anti-patterns

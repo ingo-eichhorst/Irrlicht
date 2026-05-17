@@ -363,7 +363,13 @@ function renderCoverageMatrix(detail) {
         row.appendChild(cell);
         continue;
       }
-      const rec = recIndex.get(`${agent}/${sc.id}`);
+      // recIndex is keyed by on-disk folder name; sc.id is the
+      // coverage_id. Resolve coverage_id → folder via recipesByCoverageId
+      // so the pipeline-strip chip lands on the recording detail page
+      // (not /scenario/...) when folder name and coverage_id diverge.
+      const recipe = recipesByCoverageId.get(sc.id);
+      const folder = (recipe && recipe.name) || sc.id;
+      const rec = recIndex.get(`${agent}/${folder}`);
       const strip = renderPipelineStrip(agent, sc.id, cov, rec);
       cell.appendChild(strip);
       row.appendChild(cell);
@@ -1147,8 +1153,22 @@ async function loadScenario(s, initialArchive, focus) {
     sidebarBtn.classList.add("active");
     sidebarBtn.scrollIntoView({block: "nearest"});
   }
-  document.title = `Irrlicht — ${s.agent}/${s.subtree}/${s.id}`;
-  document.getElementById("title").textContent = s.id;
+  // Resolve folder name → coverage_id so the heading matches the
+  // overview matrix row label. Multiple recordings can share one
+  // coverage_id (e.g. basic-turn + multi-turn-conversation both
+  // map to basic-turn); the detail page shows the canonical
+  // coverage_id, with the folder name relegated to the breadcrumb.
+  // recipesByCoverageId is populated at init from /api/recipes, so
+  // this resolution is synchronous.
+  let coverageId = s.id;
+  for (const r of recipesByCoverageId.values()) {
+    if (r.name === s.id && r.coverage_id) {
+      coverageId = r.coverage_id;
+      break;
+    }
+  }
+  document.title = `Irrlicht — ${coverageId} (${s.agent})`;
+  document.getElementById("title").textContent = coverageId;
   document.getElementById("breadcrumb").textContent = `${s.agent} / ${s.subtree} / ${s.id}`;
   const detail = document.getElementById("detail");
   detail.innerHTML = `<p>Loading…</p>`;
@@ -1194,28 +1214,25 @@ async function loadScenario(s, initialArchive, focus) {
   // Look up the per-cell coverage entry for the Assessment-fallback
   // panel. Used when no assessment.json exists on disk — the panel
   // still renders so the ⚙ / ◉ pipeline-strip anchors have a target.
-  //
-  // The catalog is keyed by coverage_id (e.g. "basic-turn") while
-  // s.id is the on-disk folder name (e.g. "baseline-hello"). Those
-  // namespaces differ for many cells. First try recipesByCoverageId
-  // to map folder → coverage_id, then look the catalog entry up by
-  // that coverage_id. Falls back to direct folder-name match for
-  // scenarios where the recipe map doesn't carry a coverage_id.
-  let coverageId = s.id;
-  for (const r of recipesByCoverageId.values()) {
-    if (r.name === s.id && r.coverage_id) {
-      coverageId = r.coverage_id;
-      break;
-    }
-  }
+  // coverageId was resolved synchronously above (before the await)
+  // so the heading could render immediately.
   let coverageEntry = null;
+  let coverageFeature = "";
   if (catalog && Array.isArray(catalog.scenarios)) {
     for (const sc of catalog.scenarios) {
       if (sc.id === coverageId) {
         coverageEntry = sc.coverage && sc.coverage[s.agent];
+        coverageFeature = sc.feature || "";
         break;
       }
     }
+  }
+  // Now that the catalog has resolved, enrich the breadcrumb with the
+  // human-friendly feature label (mirrors the overview matrix row,
+  // which stacks the coverage_id over the feature name).
+  if (coverageFeature) {
+    document.getElementById("breadcrumb").textContent =
+      `${coverageFeature} · ${s.agent} / ${s.subtree} / ${s.id}`;
   }
 
   // Cell-level panels rendered at the page top — independent of the
