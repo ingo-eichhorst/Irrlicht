@@ -1,0 +1,15 @@
+{"seq":23,"ts":"2026-04-24T20:45:41.046134+02:00","kind":"transcript_new","session_id":"proc-41624","adapter":"claude-code","project_dir":"-Users-ingo-projects-irrlicht--claude-worktrees-86","cwd":"/Users/ingo/projects/irrlicht/.claude/worktrees/86"}
+{"seq":24,"ts":"2026-04-24T20:45:41.140269+02:00","kind":"presession_created","session_id":"proc-41624","adapter":"claude-code","project_dir":"-Users-ingo-projects-irrlicht--claude-worktrees-86","cwd":"/Users/ingo/projects/irrlicht/.claude/worktrees/86"}
+{"seq":25,"ts":"2026-04-24T20:45:41.140291+02:00","kind":"state_transition","session_id":"proc-41624","new_state":"ready","reason":"new session created"}
+{"seq":146,"ts":"2026-04-24T20:45:41.371577+02:00","kind":"presession_removed","session_id":"proc-41624","adapter":"claude-code"}
+{"seq":157,"ts":"2026-04-24T20:45:41.601344+02:00","kind":"pid_discovered","session_id":"proc-41624","pid":41624}
+{"seq":158,"ts":"2026-04-24T20:45:41.644981+02:00","kind":"transcript_new","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2","adapter":"claude-code","transcript_path":"/Users/ingo/.claude/projects/-Users-ingo-projects-irrlicht--claude-worktrees-86/8dcc178f-01c4-42b2-a1dc-5bada9da91e2.jsonl","file_size":16282,"project_dir":"-Users-ingo-projects-irrlicht--claude-worktrees-86"}
+{"seq":159,"ts":"2026-04-24T20:45:41.665701+02:00","kind":"state_transition","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2","new_state":"ready","reason":"new session created"}
+{"seq":160,"ts":"2026-04-24T20:45:41.667563+02:00","kind":"pid_discovered","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2","pid":41624}
+{"seq":161,"ts":"2026-04-24T20:45:42.5729+02:00","kind":"transcript_removed","session_id":"proc-41624","adapter":"claude-code"}
+{"seq":162,"ts":"2026-04-24T20:45:43.906835+02:00","kind":"transcript_activity","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2","adapter":"claude-code","transcript_path":"/Users/ingo/.claude/projects/-Users-ingo-projects-irrlicht--claude-worktrees-86/8dcc178f-01c4-42b2-a1dc-5bada9da91e2.jsonl","file_size":17467}
+{"seq":163,"ts":"2026-04-24T20:45:43.907282+02:00","kind":"state_transition","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2","prev_state":"ready","new_state":"working","reason":"force ready→working on first activity"}
+{"seq":164,"ts":"2026-04-24T20:45:43.907948+02:00","kind":"state_transition","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2","prev_state":"working","new_state":"ready","reason":"agent finished turn → ready"}
+{"seq":165,"ts":"2026-04-24T20:45:43.910113+02:00","kind":"transcript_activity","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2","adapter":"claude-code","transcript_path":"/Users/ingo/.claude/projects/-Users-ingo-projects-irrlicht--claude-worktrees-86/8dcc178f-01c4-42b2-a1dc-5bada9da91e2.jsonl","file_size":17588}
+{"seq":166,"ts":"2026-04-24T20:45:43.910121+02:00","kind":"debounce_coalesced","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2"}
+{"seq":167,"ts":"2026-04-24T20:45:44.277475+02:00","kind":"process_exited","session_id":"8dcc178f-01c4-42b2-a1dc-5bada9da91e2","pid":41624}
