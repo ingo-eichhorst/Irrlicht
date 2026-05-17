@@ -1194,10 +1194,24 @@ async function loadScenario(s, initialArchive, focus) {
   // Look up the per-cell coverage entry for the Assessment-fallback
   // panel. Used when no assessment.json exists on disk — the panel
   // still renders so the ⚙ / ◉ pipeline-strip anchors have a target.
+  //
+  // The catalog is keyed by coverage_id (e.g. "basic-turn") while
+  // s.id is the on-disk folder name (e.g. "baseline-hello"). Those
+  // namespaces differ for many cells. First try recipesByCoverageId
+  // to map folder → coverage_id, then look the catalog entry up by
+  // that coverage_id. Falls back to direct folder-name match for
+  // scenarios where the recipe map doesn't carry a coverage_id.
+  let coverageId = s.id;
+  for (const r of recipesByCoverageId.values()) {
+    if (r.name === s.id && r.coverage_id) {
+      coverageId = r.coverage_id;
+      break;
+    }
+  }
   let coverageEntry = null;
   if (catalog && Array.isArray(catalog.scenarios)) {
     for (const sc of catalog.scenarios) {
-      if (sc.id === s.id) {
+      if (sc.id === coverageId) {
         coverageEntry = sc.coverage && sc.coverage[s.agent];
         break;
       }

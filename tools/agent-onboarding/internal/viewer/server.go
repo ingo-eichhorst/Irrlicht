@@ -739,11 +739,18 @@ var featureSlugAliases = map[string]string{
 }
 
 // handleRecipes serves the run-cell.sh scenario recipe catalog
-// (.claude/skills/ir:onboard-agent/scenarios.json) verbatim. This is
-// always the worktree's copy — recipes are version-controlled. Used
-// alongside /api/catalog: the catalog is the maintainer's "what could
-// be tested" matrix, recipes is the "how it's actually driven" recipe
+// (.claude/skills/ir:onboard-agent/scenarios.json). Used alongside
+// /api/catalog: the catalog is the maintainer's "what could be
+// tested" matrix, recipes is the "how it's actually driven" recipe
 // book joined by each entry's `coverage_id` field.
+//
+// Multiple scenarios may share a coverage_id (e.g. basic-turn is
+// targeted by both baseline-hello and multi-turn-conversation). The
+// client builds `recipesByCoverageId` as a 1:1 map and Map.set is
+// last-wins, so without server-side dedup the wrong recipe would
+// "own" the matrix row. We dedupe here using the same preference
+// rule loadRecipeMap uses (favour the entry whose folder has
+// expected.jsonl on disk).
 func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(s.RepoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
 	b, err := os.ReadFile(path)
@@ -751,8 +758,91 @@ func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("read scenarios.json: %v", err), http.StatusInternalServerError)
 		return
 	}
+	deduped, err := dedupeRecipesByCoverageID(b, s.RepoRoot)
+	if err != nil {
+		// On any parse failure, fall back to serving the raw file —
+		// the client may handle it less correctly but better than 500.
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Write(b)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Write(b)
+	w.Write(deduped)
+}
+
+// dedupeRecipesByCoverageID parses scenarios.json's `scenarios` array,
+// drops shadowed entries that share a coverage_id, and returns the
+// re-serialized document. Preference order on collision: the entry
+// whose scenario name has an expected.jsonl on disk wins. Ties
+// resolved by first-occurrence order in the file. Non-`scenarios`
+// fields (like `orchestrator_scenarios`) are passed through
+// untouched.
+func dedupeRecipesByCoverageID(raw []byte, repoRoot string) ([]byte, error) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	scenariosRaw, ok := doc["scenarios"]
+	if !ok {
+		return raw, nil
+	}
+	var scenarios []json.RawMessage
+	if err := json.Unmarshal(scenariosRaw, &scenarios); err != nil {
+		return nil, err
+	}
+	// Identify shadowed indices.
+	type slot struct {
+		index int
+		name  string
+	}
+	winners := map[string]slot{} // coverage_id -> chosen slot
+	type entryHeader struct {
+		Name       string `json:"name"`
+		CoverageID string `json:"coverage_id"`
+	}
+	keepIdx := make([]bool, len(scenarios))
+	for i := range scenarios {
+		keepIdx[i] = true
+	}
+	for i, sc := range scenarios {
+		var h entryHeader
+		if err := json.Unmarshal(sc, &h); err != nil {
+			continue
+		}
+		cid := h.CoverageID
+		if cid == "" {
+			cid = h.Name
+		}
+		if cid == "" {
+			continue
+		}
+		if existing, dup := winners[cid]; dup {
+			incomingHas := hasExpectedJSONL(repoRoot, h.Name)
+			existingHas := hasExpectedJSONL(repoRoot, existing.name)
+			if incomingHas && !existingHas {
+				// Incoming is strictly better — drop the existing one.
+				keepIdx[existing.index] = false
+				winners[cid] = slot{index: i, name: h.Name}
+			} else {
+				// Keep the existing; drop incoming.
+				keepIdx[i] = false
+			}
+			continue
+		}
+		winners[cid] = slot{index: i, name: h.Name}
+	}
+	filtered := make([]json.RawMessage, 0, len(scenarios))
+	for i, sc := range scenarios {
+		if keepIdx[i] {
+			filtered = append(filtered, sc)
+		}
+	}
+	newScenarios, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, err
+	}
+	doc["scenarios"] = newScenarios
+	return json.Marshal(doc)
 }
 
 // resolveCoveragePath finds the maintainer's
