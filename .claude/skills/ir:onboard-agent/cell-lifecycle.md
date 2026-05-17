@@ -14,8 +14,8 @@ to fill each segment.
   for this agent  by_adapter[a]   phase DSL       transcript.jsonl  phase + manifest
        │              │                │                │                  │
        ▼              ▼                ▼                ▼                  ▼
-  /assess skill   /translate      author              run-cell.sh        expected-
-  (or /survey)    (.claude/...)   manually            + promote.sh       validate
+   /assess          /recipe         /spec               /record            /validate
+  (or /survey)
 ```
 
 If `agent_supports == "no"` at Stage 1, the pipeline is frozen — no
@@ -151,8 +151,8 @@ for this specific agent CLI?
 **File:** `.claude/skills/ir:onboard-agent/scenarios.json` →
 `scenarios[].by_adapter[<agent>]`.
 
-**Tool:** `/ir:onboard-agent translate <agent> <scenario-id>` (see
-`translate/SKILL.md` for the per-step recipe and worked example).
+**Tool:** `/ir:onboard-agent recipe <agent> <scenario-id>` (see
+[`recipe/SKILL.md`](recipe/SKILL.md) for the per-step guide).
 
 **Output shape:**
 
@@ -211,7 +211,9 @@ recipe runs?
 **File:**
 `replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl`.
 
-**Tool:** hand-authored per `translate/SKILL.md` Step 3.5.
+**Tool:** `/ir:onboard-agent spec <agent> <scenario-id>` (see
+[`spec/SKILL.md`](spec/SKILL.md) for the phase DSL reference + the
+authoring walkthrough).
 
 **Shape:** one meta line + N phase lines:
 
@@ -276,17 +278,10 @@ against a live agent?
 - `replaydata/agents/<agent>/scenarios/<scenario>/manifest.json`
 - `replaydata/agents/<agent>/scenarios/<scenario>/recordings/<TS>_irrlichd-<ver>/` (previous recordings, archived)
 
-**Tools:**
-
-```bash
-# 1. Drive the recipe against a live daemon.
-#    --attach mode uses an irrlichd already running with --record.
-.claude/skills/ir:onboard-agent/scripts/run-cell.sh --attach <agent> <scenario>
-
-# 2. Promote the staged recording into replaydata/.
-STAGE=.build/refresh/<agent>/<scenario>-<TS>
-tools/promote-recording.sh "$STAGE" <agent> <scenario>
-```
+**Tool:** `/ir:onboard-agent record <agent> <scenario>` (see
+[`record/SKILL.md`](record/SKILL.md) for `--attach` mode, the
+preconditions, and the determinism re-record check). Wraps
+`scripts/run-cell.sh` + `tools/promote-recording.sh`.
 
 **Prerequisites:**
 
@@ -323,18 +318,10 @@ items. A timeout or driver error is a recipe bug; tighten the recipe
 
 **Question:** Does the recording satisfy the spec?
 
-**Tool:**
-
-```bash
-go run ./tools/agent-onboarding/cmd/expected-validate \
-  replaydata/agents/<agent>/scenarios/<scenario>
-```
-
-Or via the regression script:
-
-```bash
-tools/replay-fixtures.sh
-```
+**Tool:** `/ir:onboard-agent validate <agent> <scenario>` (see
+[`validate/SKILL.md`](validate/SKILL.md) for the decision tree and
+drift-detection loop). Wraps the `expected-validate` binary. To
+run across the full tree at once: `tools/replay-fixtures.sh`.
 
 **Output:** `N/M phases passed`, per-phase reasons, structured JSON
 suitable for the viewer's Spec expectations panel.
@@ -411,11 +398,11 @@ Taking `claudecode/session-reset` as a worked example:
 
 | Stage | Artifact                                                                                                           | Tool                         |
 |---    |---                                                                                                                 |---                            |
-| 1     | matrix entry `irrlicht_observes: "yes"` after issue #169 daemon fix                                               | `/survey` or focused research |
-| 2     | `scenarios.json` `by_adapter.claudecode.script` — send + wait_turn + sleep + reset_session + send + wait_turn      | `/translate`                  |
-| 3     | `replaydata/.../session-reset/expected.jsonl` — 9 phases including `same_session_as: v1_session_handoff` and `new_session: true` on v2 | hand-authored                 |
-| 4     | `replaydata/.../session-reset/{events,transcript}.jsonl` + `manifest.json` + N archived `recordings/<ts>_irrlichd-<ver>/` | `run-cell.sh` + `promote-recording.sh` |
-| 5     | `9/9 phases passed`                                                                                                | `expected-validate`           |
+| 1     | matrix entry `irrlicht_observes: "yes"` after issue #169 daemon fix                                               | `/assess` (or `/survey`)      |
+| 2     | `scenarios.json` `by_adapter.claudecode.script` — send + wait_turn + sleep + reset_session + send + wait_turn      | `/recipe`                     |
+| 3     | `replaydata/.../session-reset/expected.jsonl` — 9 phases including `same_session_as: v1_session_handoff` and `new_session: true` on v2 | `/spec`                       |
+| 4     | `replaydata/.../session-reset/{events,transcript}.jsonl` + `manifest.json` + N archived `recordings/<ts>_irrlichd-<ver>/` | `/record`                     |
+| 5     | `9/9 phases passed`                                                                                                | `/validate`                   |
 
 On the overview, this row's claudecode cell now renders `●● ✎ § N ✓`
 — full pipeline lit, no drift outline.

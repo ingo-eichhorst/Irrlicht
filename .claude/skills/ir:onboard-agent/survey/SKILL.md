@@ -17,7 +17,7 @@ the coverage matrix.
 
 > **Stage 1 of the cell lifecycle.** This is the assessment phase — see
 > [`../cell-lifecycle.md`](../cell-lifecycle.md) for how the verdict
-> produced here feeds Stage 2 (recipe authoring via `translate/`) and
+> produced here feeds Stage 2 (recipe authoring via `recipe/`) and
 > beyond.
 
 ## Invocation

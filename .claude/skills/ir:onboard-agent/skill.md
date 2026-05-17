@@ -72,27 +72,36 @@ hermetic and don't need auth.
   Maintainer reviews + merges into `.specs/agent-scenarios-coverage.json`.
   See `survey/SKILL.md` for the dispatch recipe. No live agent CLI is
   invoked. Re-run on each agent version bump.
-- **`/ir:onboard-agent assess <agent> <scenario-id>`** — per-cell
-  assessment mode (Mode E). Researches one specific (agent × scenario)
-  cell and writes `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json`
-  with the structured verdict + body + caveats + sources rendered on the
-  viewer's detail page. Re-runs overwrite silently (git preserves
-  history). See `assess/SKILL.md` for the per-step recipe and the
-  worked examples (`claudecode × checkpoint-rewind`,
-  `claudecode × cloud-background-agent`). Run before `translate` so the
-  recipe author knows whether the cell is supposed to record or to
-  remain frozen as `agent_supports: no`.
-- **`/ir:onboard-agent translate <agent> <scenario-id>`** — per-cell
-  translation mode (Mode D). Reads the prose spec in
-  `.specs/agent-scenarios.md`, looks up the coverage verdict, and
-  emits a deterministic recipe (preconditions, exact driver steps,
-  irrlicht-side verify assertions) into
-  `.claude/skills/ir:onboard-agent/scenarios.json`. The viewer's
-  scenario detail page renders the new fields automatically. See
-  `translate/SKILL.md` for the per-step recipe and the worked example
-  (`claudecode × session-start`). Run before
-  `/ir:onboard-agent <agent> <scenario>` so the cell has a recipe to
-  drive against.
+### Per-stage subcommands (one per UI pipeline segment)
+
+The five `cell-lifecycle.md` stages each have a dedicated subcommand
+that maps 1:1 to the viewer's pipeline strip (⚙ ◉ ✎ § N ✓). Run
+them in order; later stages refuse to proceed if earlier stages
+haven't landed their artifact.
+
+- **`/ir:onboard-agent assess <agent> <scenario>`** — **Stage 1**.
+  Researches one cell and writes `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json`
+  (verdict + body + caveats + sources). See `assess/SKILL.md`.
+- **`/ir:onboard-agent recipe <agent> <scenario>`** — **Stage 2**.
+  Authors the deterministic driver script (preconditions, `script`
+  steps, verify items) into `scenarios.json -> scenarios[].by_adapter[<agent>]`.
+  See `recipe/SKILL.md`. (Renamed from `translate`.)
+- **`/ir:onboard-agent spec <agent> <scenario>`** — **Stage 3**.
+  Authors `replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl`
+  — the phase DSL that every recording is validated against. See
+  `spec/SKILL.md`. Author this BEFORE the recipe so the recipe's
+  `verify` items line up with concrete spec phases.
+- **`/ir:onboard-agent record <agent> <scenario>`** — **Stage 4**.
+  Drives the recipe against a live agent CLI + `irrlichd --record`,
+  archives the previous capture, promotes the new one. `--attach`
+  flag uses the user's running daemon. See `record/SKILL.md`.
+  (Alias for the bare `/ir:onboard-agent <agent> <scenario>` form
+  below.)
+- **`/ir:onboard-agent validate <agent> <scenario>`** — **Stage 5**.
+  Runs `expected-validate` against the latest recording (or a
+  specific archive) and reports per-phase pass/fail. Auto-invoked
+  by `record`; re-runnable by hand for drift detection. See
+  `validate/SKILL.md`.
 
 The adapter argument disambiguates which axis is being run: agent adapters
 (`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator
@@ -110,8 +119,8 @@ canonical walkthrough.
                     by_adapter[a]      phase DSL           transcript.jsonl     phase
         │                │                  │                    │                    │
         ▼                ▼                  ▼                    ▼                    ▼
-   /assess skill    /translate         author              run-cell.sh           expected-
-   (or /survey)                        manually            + promote.sh          validate
+    /assess          /recipe            /spec               /record              /validate
+   (or /survey)
 ```
 
 See [`cell-lifecycle.md`](cell-lifecycle.md) for:
@@ -124,9 +133,10 @@ See [`cell-lifecycle.md`](cell-lifecycle.md) for:
 - explicit out-of-scope items
 
 When in doubt about a stage, jump to that section in
-`cell-lifecycle.md`. The subskills below (`survey/`, `assess/`,
-`translate/`) implement individual stages; the lifecycle doc is how
-they fit together.
+`cell-lifecycle.md`. The subskills (`assess/`, `recipe/`, `spec/`,
+`record/`, `validate/`) implement individual stages; `survey/` is
+the matrix-wide variant of assess. The lifecycle doc is how they
+fit together.
 
 ## Step 1: Understand the task
 
@@ -137,8 +147,11 @@ Parse the invocation into one of:
 - `diff_only` — `--diff` flag
 - `discover` — `--new <slug>`; load `discovery-instructions.md` and follow that recipe instead of Steps 2–5 below
 - `survey` — `survey <agent>`; load `survey/SKILL.md` and follow that recipe instead of Steps 2–5 below
-- `assess` — `assess <agent> <scenario>`; load `assess/SKILL.md` and follow that recipe instead of Steps 2–5 below
-- `translate` — `translate <agent> <scenario>`; load `translate/SKILL.md` and follow that recipe instead of Steps 2–5 below
+- `assess` — `assess <agent> <scenario>`; load `assess/SKILL.md` (Stage 1)
+- `recipe` — `recipe <agent> <scenario>`; load `recipe/SKILL.md` (Stage 2)
+- `spec` — `spec <agent> <scenario>`; load `spec/SKILL.md` (Stage 3)
+- `record` — `record <agent> <scenario>`; load `record/SKILL.md` (Stage 4)
+- `validate` — `validate <agent> <scenario>`; load `validate/SKILL.md` (Stage 5)
 - `pipeline` — `pipeline <agent> [<scenario>]`; load `pipeline/SKILL.md` and follow that recipe instead of Steps 2–5 below
 
 If the invocation is ambiguous, ask the user which mode to run.

@@ -19,7 +19,7 @@ scenario, and can irrlicht observe it" for ONE cell.
 > batch-survey every scenario for one agent (Stage 1 across a full
 > matrix column). Use **this skill** when you want a deep, sourced
 > assessment for a single cell — typically before authoring the
-> recipe with [`../translate/SKILL.md`](../translate/SKILL.md).
+> recipe with [`../recipe/SKILL.md`](../recipe/SKILL.md).
 >
 > The end-to-end walkthrough across all five stages is
 > [`../cell-lifecycle.md`](../cell-lifecycle.md).
@@ -300,7 +300,7 @@ The matrix update is the maintainer's call — this skill never writes
 - It does not modify `.specs/agent-scenarios-coverage.json`. The
   matrix is the maintainer's editorial truth.
 - It does not produce the recipe — that's
-  [`../translate/SKILL.md`](../translate/SKILL.md).
+  [`../recipe/SKILL.md`](../recipe/SKILL.md).
 - It does not run a recording. Stage 4 is `run-cell.sh` +
   `promote-recording.sh`.
 - It does not validate against `expected.jsonl`. Stage 5 is

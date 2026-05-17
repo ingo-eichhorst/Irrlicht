@@ -677,7 +677,7 @@ function buildAgentPlanPanel(sc, agent, recipe) {
       html += `<div style="font-size: 11px; color: #888; margin-top: 6px;">${meta.join(" · ")}</div>`;
     }
     // Preconditions / setup / verify — only present on recipes that
-    // have been translated by the per-cell workflow (see translate/SKILL.md).
+    // have been authored by the per-cell workflow (see recipe/SKILL.md).
     if (Array.isArray(a.preconditions) && a.preconditions.length) {
       html += renderChecklistBlock("Preconditions", a.preconditions, "□");
     }
@@ -764,7 +764,7 @@ function escapeHtml(s) {
 function renderRecipePanel(recipe) {
   const p = panel("Recipe", "recipe");
   if (!recipe || !Array.isArray(recipe.script) || recipe.script.length === 0) {
-    p.appendChild(text("No recipe authored for this cell. The translate skill produces the by_adapter entry; pipeline stops here until that lands."));
+    p.appendChild(text("No recipe authored for this cell. The /ir:onboard-agent recipe skill produces the by_adapter entry; pipeline stops here until that lands."));
     return p;
   }
   const intro = document.createElement("div");
@@ -1483,7 +1483,7 @@ function renderExpected(data, mode) {
   // anchor "spec" — pipeline-strip segment § lands here.
   const p = panel("Spec expectations", "spec");
   if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
-    p.appendChild(text("No expected.jsonl for this scenario. Author one per the translate skill's Step 3.5."));
+    p.appendChild(text("No expected.jsonl for this scenario. Author one via /ir:onboard-agent spec <agent> <scenario>."));
     return p;
   }
   const rep = data.expected;

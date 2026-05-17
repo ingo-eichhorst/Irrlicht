@@ -1,18 +1,18 @@
 ---
-name: ir:onboard-agent/translate
+name: ir:onboard-agent/recipe
 description: >
-  Mode D — per-cell scenario translation. Given one (agent, scenario)
-  cell from the coverage matrix, produce a deterministic recording
-  recipe (preconditions, exact driver steps, irrlicht-side verify
-  assertions) and append it to .claude/skills/ir:onboard-agent/scenarios.json.
-  Invoked as `/ir:onboard-agent translate <agent> <scenario-id>`.
+  Per-cell recipe authoring (Stage 2). Given one (agent, scenario)
+  cell, produces a deterministic recording recipe (preconditions,
+  exact driver steps, irrlicht-side verify assertions) and writes it
+  into .claude/skills/ir:onboard-agent/scenarios.json -> scenarios[].by_adapter[<agent>].
+  Invoked as `/ir:onboard-agent recipe <agent> <scenario-id>`.
   Designed for careful, gated execution — each step has a verification
   checkpoint, and the skill is expected to take a long time (often
   30–60 minutes per cell) in exchange for recipes that re-record
   deterministically for years.
 ---
 
-# Mode D: per-cell translation
+# Recipe authoring (Stage 2)
 
 Reads the prose spec for one scenario, looks up the agent's
 applicability verdict, consults the adapter's transport knowledge,
@@ -23,15 +23,18 @@ The recipe goes into `.claude/skills/ir:onboard-agent/scenarios.json` —
 the same file `run-cell.sh` reads when you later record the cell. The
 viewer's scenario detail page renders the new fields automatically.
 
-> **Stages 2 + 3 of the cell lifecycle.** This skill covers recipe
-> authoring (Stage 2) AND spec authoring (Stage 3, Step 3.5 below) for
-> one cell. Stage 1 (assessment) is handled by
-> [`../assess/SKILL.md`](../assess/SKILL.md) for one cell, or
-> [`../survey/SKILL.md`](../survey/SKILL.md) for whole-agent batches.
-> Stages 4–5 (recording + validation) are
-> [`run-cell.sh`](../scripts/run-cell.sh) + `promote-recording.sh` +
-> `expected-validate`. The end-to-end walkthrough across all five
-> stages is [`../cell-lifecycle.md`](../cell-lifecycle.md).
+> **Stage 2 of the cell lifecycle.** This skill covers ONLY recipe
+> authoring. Other stages have their own skills:
+> - Stage 1 (assessment) → [`../assess/SKILL.md`](../assess/SKILL.md)
+>   (single cell) or [`../survey/SKILL.md`](../survey/SKILL.md)
+>   (whole-agent batch).
+> - Stage 3 (spec) → [`../spec/SKILL.md`](../spec/SKILL.md). The
+>   spec (`expected.jsonl`) is the benchmark every recording is
+>   validated against. **Author the spec BEFORE the recipe** so the
+>   recipe's `verify` items line up with spec phases.
+> - Stage 4 (recording) → [`../record/SKILL.md`](../record/SKILL.md).
+> - Stage 5 (validation) → [`../validate/SKILL.md`](../validate/SKILL.md).
+> - End-to-end walkthrough → [`../cell-lifecycle.md`](../cell-lifecycle.md).
 
 ## Working approach
 
@@ -48,10 +51,11 @@ Three rules govern every step below:
    adapter's transport knowledge are the *only* sources of truth.
    Don't guess from the agent's general reputation or from
    third-party tutorials; if a primary source doesn't speak to a
-   behavior, mark it `unknown` and stop. Re-run Mode C
-   (`/ir:onboard-agent survey <agent>`) to lift the verdict before
-   continuing — fabricating a recipe against an unknown verdict
-   produces a recording that proves the wrong thing.
+   behavior, mark it `unknown` and stop. Re-run
+   `/ir:onboard-agent assess <agent> <scenario>` (or the whole-agent
+   `survey`) to lift the verdict before continuing — fabricating a
+   recipe against an unknown verdict produces a recording that
+   proves the wrong thing.
 
 2. **Verification gates between steps.** Each step below ends with
    a `► Verify before moving on:` checklist. Don't proceed to the
@@ -68,8 +72,8 @@ Three rules govern every step below:
      undefined antecedents).
    - *Why this exact recipe shape?* — every non-obvious choice
      (lazy-transcript nudge, fresh-cwd-per-restart, trailing sleep,
-     etc.) gets a sentence of "why" so the next translator doesn't
-     remove it thinking it's vestigial.
+     etc.) gets a sentence of "why" so the next recipe author
+     doesn't remove it thinking it's vestigial.
    - *How is it going to differ between runs?* — anything model-
      dependent (token counts, exact assistant wording, timing
      within a few hundred ms) is called out so a re-record diff
@@ -85,14 +89,15 @@ Three rules govern every step below:
 
 If a step's verification can't be satisfied with the inputs at hand,
 **stop and ask the maintainer** rather than guess. A missing piece
-of evidence is a real signal — translate that into either a
-`prerequisites_hint` on the survey or a `partial` verdict, then
-re-translate after the maintainer fills the gap.
+of evidence is a real signal — encode it as either a
+`prerequisites_hint` on the survey or a `partial` verdict on the
+assessment, then re-author the recipe after the maintainer fills
+the gap.
 
 ## Invocation
 
 ```
-/ir:onboard-agent translate <agent> <scenario-id>
+/ir:onboard-agent recipe <agent> <scenario-id>
 ```
 
 - `<agent>` — the adapter slug (`claudecode`, `codex`, `pi`, `aider`,
@@ -189,7 +194,8 @@ recording.
   and stop.
 - `agent_supports == "unknown"` → flip to Mode C
   (`/ir:onboard-agent survey <agent>`) first to lift the verdict;
-  re-run translate after the maintainer merges the survey.
+  re-run `/ir:onboard-agent recipe` after the maintainer merges
+  the survey.
 
 ► **Verify before moving on:**
 - [ ] The verdict cell exists for `<agent>` in
@@ -272,8 +278,8 @@ finalizing the script:
   trailing sleep ≥6 s (one full idle-flush cycle plus slack) before
   daemon shutdown, otherwise the final ready transition is missed.
 
-If you discover a new quirk while translating a cell, add it here so
-the next translator doesn't have to re-discover it.
+If you discover a new quirk while authoring a recipe, add it here
+so the next recipe author doesn't have to re-discover it.
 
 ► **Verify before moving on:**
 - [ ] Read the adapter's `config.go` and confirmed the transcript
@@ -380,113 +386,27 @@ Verify-list patterns for multi-variant recipes:
   grey gaps in the state band" — verified by opening the
   playback page in the viewer.
 
-### Step 3.5 — Author `expected.jsonl` FIRST
+### Step 3.5 — Author the spec FIRST (separate skill)
 
-**Before writing the recipe, write `expected.jsonl`.** This is the
-spec-grounded benchmark every future re-recording will be checked
-against. The file lives at
-`replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl`.
-It is the single source of behavioral truth — re-recording cannot
-silently rebase it, so regressions surface as validation failures
-rather than disappearing into a refreshed offset file.
+**Before writing the recipe, the spec must exist.** Run
+`/ir:onboard-agent spec <agent> <scenario>` to produce
+`replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl` —
+the phase DSL the validator runs against every recording. See
+[`../spec/SKILL.md`](../spec/SKILL.md) for the full authoring guide
+(schema, field semantics, anti-patterns, validation).
 
-Schema (one meta line + N phase lines):
-
-```jsonl
-{"schema_version":1,"scenario_id":"<id>","source":".specs/agent-scenarios.md → Feature: <name>","notes":"..."}
-{"phase":"session_birth","expected_state":"ready","relative_to":"start","max_delay_ms":1000,"text":"Session appears in ready within 1s"}
-{"phase":"pid_bind","kind":"pid_discovered","relative_to":"start","max_delay_ms":1000,"text":"PID bound within 1s"}
-{"phase":"first_turn_start","expected_state":"working","relative_to":"session_birth","text":"User prompt → working"}
-{"phase":"idle_window","expected_state":"ready","relative_to":"first_turn_start","duration_at_least_ms":15000,"invariants":["no transcript_removed for primary session","no state_transition to working"],"text":"..."}
-```
-
-Field semantics:
-
-- `phase` — spec-grounded label (kebab or snake case). Same names work
-  across agents. For multi-variant recordings prefix with `v1_`, `v2_`,
-  etc. so phases are unambiguous.
-- `expected_state` — one of `ready` / `working` / `waiting`. Asserts a
-  state-band transition.
-- `kind` — daemon event kind (e.g. `pid_discovered`, `process_exited`).
-  Asserts a lifecycle event rather than a state. Phases have EXACTLY
-  ONE of `expected_state` or `kind`.
-- `relative_to` — anchor phase name. `"start"` means recording start.
-  All other values must reference a phase declared EARLIER in the file.
-  When chaining variants, use the previous variant's `*_exit` phase as
-  the anchor.
-- `max_delay_ms` — phase event must arrive within this delay of the
-  anchor. Omit for "any time after anchor".
-- `duration_at_least_ms` — for idle/dwell phases. Asserts the
-  `expected_state` persists at least this long without flipping away.
-- `same_session_as` — optional. Pins the matched event's `session_id`
-  to a specific earlier phase's match. Use this when an arc spans
-  multiple state transitions on the SAME session and you want to
-  reject candidates from a co-occurring different session (e.g.
-  during a /clear handoff, pin v1's turn phases to the original UUID
-  so a transition on the post-/clear UUID can't satisfy them).
-- `new_session` — optional bool. When true, the matched event's
-  `session_id` must NOT equal any previously-matched phase's
-  session_id. Use this to assert "a brand-new session appears here"
-  — the strongest observable proof that a /clear or fork created a
-  fresh transcript. Mutually exclusive with `same_session_as`.
-- `invariants` — plain-English negative assertions over the phase's
-  time window. Two DSL forms supported:
-  - `"no <kind> for <session-noun>"` — e.g. `"no transcript_removed for primary session"`
-  - `"no state_transition to <state>"` — e.g. `"no state_transition to working"`
-  Unknown forms are silently skipped (graceful degradation).
-- `trigger` — optional documentation hint (`user_prompt`, `tool_call`,
-  `interrupt`, `process_exit`). No validator semantics this iteration.
-- `text` — the spec's wording for the assertion. Operator-facing.
-
-**CRITICAL — what NEVER appears in `expected.jsonl`:**
-
-- Absolute `ts_offset_ms` values. The whole point of expected.jsonl is
-  that the same file validates every re-record regardless of when it
-  ran. Express timing as `max_delay_ms` relative to a previously-
-  declared phase, not as an absolute offset.
-- Numbers copied from a specific recording. If you find yourself
-  measuring events and writing the offsets down verbatim, step back —
-  the spec describes a *bound* (within N ms of phase X), not the
-  particular offset this recording happened to produce.
-
-**Common phase-chaining pitfall:** when matching the post-turn
-`ready`, anchor it to a `working` phase (not to the session's first
-`ready`) so the validator doesn't match the UUID-handoff ready
-instead. The committed `session-end` recipe is the worked example —
-each variant has `_session_birth` → `_turn_start` → `_turn_done` →
-`_exit` in that order.
-
-When you finish writing the file, run the validator dry against the
-existing recording (if one exists):
-
-```bash
-go run ./tools/agent-onboarding/cmd/expected-validate \
-  replaydata/agents/<agent>/scenarios/<scenario>
-```
-
-If a recording doesn't exist yet, the validator returns "no
-expected.jsonl present" — that's fine; you'll re-run after Step 6.
+Why first: this recipe's Step 4 maps each spec phase to one or more
+plain-English `verify` strings. Without the spec, you'd be writing
+recipe verify items against your own imagination instead of against
+the authoritative phase list.
 
 ► **Verify before moving on:**
-- [ ] `expected.jsonl` covers every spec Expected: bullet — count
-  bullets in the spec, count phases in the file (or invariants for
-  negative assertions), make them match.
-- [ ] No phase has both `expected_state` AND `kind`. No phase has
-  neither. Mutually exclusive by validator rules.
-- [ ] No `relative_to` references a phase declared later in the file.
-  No "forward" anchors.
-- [ ] No absolute offsets. Run `grep ts_offset_ms expected.jsonl`;
-  it must return nothing.
-- [ ] `text` fields read like the spec's wording, not like the
-  recipe's mechanism. (E.g. say "Session appears in ready within
-  1s", not "transcript_new event arrives within 1000 ms".)
-- [ ] If an existing recording is present, the dry-run validator
-  passes against it. If it fails, either the recording was made
-  against a regressed daemon (file an issue and don't "fix"
-  expected.jsonl), or the recipe doesn't actually exercise the
-  spec's scenario (fix the recipe in Step 5).
+- [ ] `replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl`
+  exists and covers every Expected: bullet in the prose spec.
+- [ ] Its dry-run against any existing recording passes (or returns
+  "no recording present").
 
-### Step 4 — Translate Expected bullets into verify strings
+### Step 4 — Translate spec phases into recipe verify strings
 
 Each spec `Expected:` bullet maps to one or more `verify` strings.
 Keep the wording user-observable — anchored to `events.jsonl` events,
@@ -547,72 +467,27 @@ duplicate entry.
   them; no implicit assumption that the operator will reorder
   anything.
 
-### Step 6 — Record and validate against the spec
+### Step 6 — Hand off to record + validate
 
-Run the recording once to validate the recipe end-to-end:
+The recipe is in `scenarios.json`. The next two stages happen via
+their own skills:
 
-```bash
-.claude/skills/ir:onboard-agent/scripts/run-cell.sh --attach <agent> <scenario-id>
-```
+- **Stage 4 (recording).** Run
+  `/ir:onboard-agent record <agent> <scenario>` (alias for the
+  unkeyed `/ir:onboard-agent <agent> <scenario>`). See
+  [`../record/SKILL.md`](../record/SKILL.md) for `--attach` mode,
+  the run-cell.sh + promote-recording.sh pipeline, and the
+  determinism re-record check.
+- **Stage 5 (validation).** `promote-recording.sh` auto-invokes
+  the expected-validator at the end of recording. To re-run by
+  hand: `/ir:onboard-agent validate <agent> <scenario>`. See
+  [`../validate/SKILL.md`](../validate/SKILL.md) for the decision
+  tree and drift-detection loop.
 
-If it succeeds and the recording's structural events match the
-recipe's `verify` list, promote it via the helper script:
-
-```bash
-STAGE=.build/refresh/<agent>/<scenario-id>-<timestamp>
-./tools/promote-recording.sh "$STAGE" <agent> <scenario-id>
-```
-
-The helper:
-
-1. Archives the previous top-level recording into
-   `replaydata/agents/<agent>/scenarios/<scenario-id>/recordings/<ts>_<daemon-ver>/`
-   along with a `manifest.json` (daemon version, agent CLI version,
-   recipe hash, frozen expected pass rate, recording start ts). This
-   builds the history the viewer's recording-history dropdown reads.
-2. Copies the staged recording into the top-level slot and writes a
-   top-level `manifest.json` describing the new latest.
-3. Re-runs the expected-validator against the new recording. **Exits
-   non-zero if validation fails** — leaving the new files in place
-   but flagging the drift so the maintainer reviews before the
-   archive becomes the de-facto latest. To roll back, move the
-   most-recent archive's files back to the top level:
-   `mv recordings/<latest>/{events,transcript}.jsonl ./`.
-
-The recipe's plain-English `verify` items and `expected.jsonl` should
-agree on the same set of assertions.
-
-► **Verify before declaring done:**
-- [ ] Recording was committed via `--attach` mode against the user's
-  real daemon (not isolated mode), and the events.jsonl matches every
-  bullet in the recipe's `verify` list. Mismatches are fixable: tighten
-  the recipe (more sleep, different step ordering) and re-record until
-  it's stable across two consecutive runs.
-- [ ] **The spec-grounded expected validator passes against the new
-  recording**: `go run ./tools/agent-onboarding/cmd/expected-validate
-  replaydata/agents/<agent>/scenarios/<scenario>` exits 0. This is
-  the load-bearing assertion — a fail here means either the recipe
-  doesn't exercise the spec (fix recipe + re-record) OR the daemon
-  drifted from the spec (file an issue and STOP — do NOT update
-  expected.jsonl to match a regression).
-- [ ] `tools/replay-fixtures.sh` runs green against the new fixture
-  (replays the recording AND runs expected-validate; both must pass).
-- [ ] `go test ./tools/agent-onboarding/... -race -count=1` runs
-  green (catches schema mismatches and viewer-side breaks).
-- [ ] Open the viewer playback page for the new recording. Visual
-  spot-checks:
-  - State band reflects what the verify list asserts.
-  - Turn lane shows the right number of user/assistant ticks.
-  - "Spec expectations" panel shows the right pass/fail per phase.
-  - "Emitted state transitions" panel lists each session ending in
-    `→ ∅` (or whatever the recipe documented).
-- [ ] Re-record once more from scratch (`run-cell.sh --attach …`).
-  Promote into a sibling dir under `.build/refresh/` and diff
-  structural fields (state-transition order, session count,
-  process_exited count) against the committed fixture. **They must
-  match.** Drift here means the recipe has variance that will bite
-  someone in six months. Both recordings should pass the same
-  unchanged `expected.jsonl`.
+After both stages pass, the recipe is done. The recipe's plain-
+English `verify` items and the spec's `expected.jsonl` should agree
+on the same set of assertions — Stage 4 + 5 are the load-bearing
+check that they do.
 
 ## Determinism budget
 
@@ -653,9 +528,10 @@ the driver controls completion timing instead of inferring it from
   after the last interaction so `run-cell.sh`'s daemon kill doesn't
   race the classifier's final-state emission. The trailing-sleep rule
   from iteration 4 (multi-turn-conversation) still applies here.
-- **Don't translate a scenario whose verdict is `agent_supports:
-  "no"`.** Mark `applicable: false` and move on — fabricating a
-  recipe just produces a recording that proves the wrong thing.
+- **Don't author a recipe for a scenario whose verdict is
+  `agent_supports: "no"`.** Mark `applicable: false` and move on —
+  fabricating a recipe just produces a recording that proves the
+  wrong thing.
 - **Don't write `verify` items as machine assertions.** The recipe's
   `verify` field is plain-English for the operator to spot-check
   (e.g. "events.jsonl contains a transcript_new event within 1000 ms");
@@ -663,13 +539,13 @@ the driver controls completion timing instead of inferring it from
   as phase declarations. Both exist — the recipe `verify` is the
   maintainer-facing docs; `expected.jsonl` is what the validator
   runs against.
-- **Don't translate only the primary variant when the spec has
-  multiple `Scenario:` blocks.** Default to chaining all variants
-  in one recording (see "Multi-variant scenarios"). Splitting them
-  forfeits the timeline-visual story (state band arcs separated by
-  grey gaps) and produces N partial recordings instead of one
-  complete one. Only split when the variants require fundamentally
-  different setup that can't share a recording.
+- **Don't restrict the recipe to only the primary variant when the
+  spec has multiple `Scenario:` blocks.** Default to chaining all
+  variants in one recording (see "Multi-variant scenarios").
+  Splitting them forfeits the timeline-visual story (state band
+  arcs separated by grey gaps) and produces N partial recordings
+  instead of one complete one. Only split when the variants require
+  fundamentally different setup that can't share a recording.
 - **Don't reuse a cwd across `restart` steps.** Claudecode caches
   trust per-directory; reusing the cwd skips the trust dialog and
   the wait-for-trust loop hangs. The driver mints `cwd-2`, `cwd-3`
@@ -702,7 +578,7 @@ the driver controls completion timing instead of inferring it from
 ## When to re-run
 
 - The scenario's spec changes (`.specs/agent-scenarios.md` edited):
-  re-translate so the recipe's `verify` items still match the spec's
+  re-author so the recipe's `verify` items still match the spec's
   `Expected:` bullets.
 - The agent ships a major version that changes the relevant transport
   (new `--session-id` semantics, new hook URL, etc.).
@@ -716,5 +592,5 @@ the driver controls completion timing instead of inferring it from
 - It does not modify `.specs/agent-scenarios-coverage.json`. The
   coverage file is the maintainer's editorial truth; the recipe in
   `scenarios.json` is the operational instance.
-- It does not edit `.specs/agent-scenarios.md`. Mode D consumes the
-  spec; it doesn't write it back.
+- It does not edit `.specs/agent-scenarios.md`. The recipe skill
+  consumes the prose spec; it doesn't write it back.
