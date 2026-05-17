@@ -54,24 +54,23 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
     return;
   }
   // Group by subtree (scenarios vs regression) first, then by agent.
-  // Each top-level h1 splits the sidebar into two visually distinct
-  // sections so pipeline-managed recordings and regression captures
-  // don't sit next to each other unannounced.
+  // Each level is a <details>/<summary> so the list stays scannable
+  // even when many recordings accumulate. Open/closed state persists
+  // in localStorage; the path leading to the currently-selected
+  // recording is force-expanded on render.
   const bySubtree = {scenarios: {}, regression: {}};
   for (const s of scenarios) {
     if (!bySubtree[s.subtree]) bySubtree[s.subtree] = {};
     (bySubtree[s.subtree][s.agent] ||= []).push(s);
   }
+  const activePath = sidebarActivePath();
   for (const subtree of ["scenarios", "regression"]) {
     const agents = bySubtree[subtree];
     if (!agents || Object.keys(agents).length === 0) continue;
-    const h1 = document.createElement("h1");
-    h1.textContent = subtree;
-    sidebar.appendChild(h1);
+    const totalCount = Object.values(agents).reduce((n, arr) => n + arr.length, 0);
+    const subtreeDet = makeSidebarGroup("subtree-group", `sidebar.subtree.${subtree}`, subtree, totalCount, activePath.subtree === subtree);
     for (const agent of Object.keys(agents).sort()) {
-      const h2 = document.createElement("h2");
-      h2.textContent = agent;
-      sidebar.appendChild(h2);
+      const agentDet = makeSidebarGroup("agent-group", `sidebar.agent.${subtree}.${agent}`, agent, agents[agent].length, activePath.subtree === subtree && activePath.agent === agent);
       for (const s of agents[agent]) {
         // <button> rather than <a> so the element is reliably
         // click-triggerable from any input source (mouse, keyboard,
@@ -83,15 +82,58 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
         el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
         el.textContent = s.id;
         el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
-        sidebar.appendChild(el);
+        agentDet.appendChild(el);
       }
+      subtreeDet.appendChild(agentDet);
     }
+    sidebar.appendChild(subtreeDet);
   }
   // Wire the router and dispatch the initial route. Deep links land
   // directly on the requested view; bare `/` falls through to overview.
   window.addEventListener("hashchange", route);
   route();
 })();
+
+// makeSidebarGroup builds one collapsible <details> with a styled
+// <summary> (chevron + label + count). Open state persists per
+// storageKey in localStorage; forceOpen overrides closed when the
+// active selection lives inside this group.
+function makeSidebarGroup(className, storageKey, label, count, forceOpen) {
+  const det = document.createElement("details");
+  det.className = className;
+  // localStorage stores "1" (open) / "0" (closed). Default open for
+  // first-time users so they discover what's inside.
+  const stored = localStorage.getItem(storageKey);
+  const isOpen = forceOpen || stored === null || stored === "1";
+  if (isOpen) det.open = true;
+  const sum = document.createElement("summary");
+  const chev = document.createElement("span");
+  chev.className = "chev";
+  chev.textContent = "▸";
+  sum.appendChild(chev);
+  const labelEl = document.createElement("span");
+  labelEl.textContent = label;
+  sum.appendChild(labelEl);
+  const countEl = document.createElement("span");
+  countEl.className = "group-count";
+  countEl.textContent = count;
+  sum.appendChild(countEl);
+  det.appendChild(sum);
+  det.addEventListener("toggle", () => {
+    localStorage.setItem(storageKey, det.open ? "1" : "0");
+  });
+  return det;
+}
+
+// sidebarActivePath inspects the current hash and returns {subtree,
+// agent} when on a recording route, so makeSidebarGroup can
+// auto-expand the path leading to the selection. {null, null}
+// otherwise.
+function sidebarActivePath() {
+  const m = (location.hash || "").match(/^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)/);
+  if (!m) return {subtree: null, agent: null};
+  return {agent: decodeURIComponent(m[1]), subtree: decodeURIComponent(m[2])};
+}
 
 // navigate updates location.hash and lets the hashchange listener do
 // the dispatch. Centralizing through this single helper makes sure
