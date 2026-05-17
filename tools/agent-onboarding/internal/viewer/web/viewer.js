@@ -273,7 +273,12 @@ function loadOverview() {
     return;
   }
 
-  if (catalogSource === "coverage") {
+  // Pick renderer by shape, not source tag. The matrix shape carries a
+  // `coverage` map on each entry (added by the server-side assembler);
+  // the legacy `scenarios.json` shape carries `by_adapter` instead.
+  const hasMatrixShape = catalog.scenarios.length > 0 &&
+    catalog.scenarios[0] && typeof catalog.scenarios[0].coverage === "object";
+  if (hasMatrixShape) {
     renderCoverageMatrix(detail);
   } else {
     renderScenariosMatrix(detail);
