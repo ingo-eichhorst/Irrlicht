@@ -29,15 +29,24 @@ the next.
 **Question:** Does this agent support the scenario? Can irrlicht
 observe it?
 
-**File:** `.specs/agent-scenarios-coverage.json` (gitignored,
-maintainer-owned in the main checkout).
+**Files:**
+
+- `.specs/agent-scenarios-coverage.json` — current-state rollup
+  (gitignored, maintainer-owned in the main checkout). The matrix
+  the overview reads.
+- `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json` —
+  point-in-time record of one assessment moment (committed). Carries
+  the timestamp, verdict, prose reasoning, and sources behind the
+  matrix entry. Surfaced on the scenario-agent detail page in the
+  viewer. The first artifact a cell produces — exists even before
+  any recording.
 
 **Tool:** `/ir:onboard-agent survey <agent>` (see `survey/SKILL.md`)
 or, for a single scenario refresh, a focused research pass (read
 agent docs / changelogs / source). Don't default to `unknown` — only
 record it when an honest search came up empty.
 
-**Output shape per cell:**
+**Matrix entry shape (rollup):**
 
 ```json
 {
@@ -47,14 +56,50 @@ record it when an honest search came up empty.
 }
 ```
 
+**Assessment artifact shape (record):**
+
+```json
+{
+  "schema_version": 1,
+  "scenario_id": "<id>",
+  "agent": "<agent-slug>",
+  "assessed_at": "2026-05-17T00:00:00Z",
+  "agent_supports": "yes" | "no" | "partial" | "unknown",
+  "irrlicht_observes": "yes" | "no" | "partial" | "unknown" | "n/a",
+  "confidence": 0.0-1.0,
+  "body": "markdown prose — Verdict, Reasoning, etc.",
+  "sources": [
+    {"kind": "url",  "ref": "https://...",     "note": "..."},
+    {"kind": "file", "ref": "path/to/file.go", "note": "..."}
+  ]
+}
+```
+
+One file per (agent, scenario); re-assessment overwrites it (git
+preserves history). The viewer renders the body as preformatted
+wrapping text — markdown headings (`## Verdict`) read fine as-is.
+
+**Authoring flow (today):** dispatch a research subagent for the
+cell, capture its output, hand-author the JSON file. A future
+`/ir:onboard-agent assess <agent> <scenario>` skill could automate
+this.
+
+**Transcription:** the maintainer copies the verdict + a one-line
+note from `assessment.json` into `.specs/agent-scenarios-coverage.json`.
+The artifact is the source-of-record; the matrix is the rollup the
+overview reads.
+
 **Success criterion:** the verdict is honest about what's true *now*
-(agent docs may have changed since last assessment), and the notes
-line names the specific feature (e.g. `/rewind` for claudecode
-checkpoint, `<turn_aborted>` marker for codex interrupts).
+(agent docs may have changed since last assessment), the notes line
+names the specific feature (e.g. `/rewind` for claudecode checkpoint,
+`<turn_aborted>` marker for codex interrupts), and `assessment.json`
+cites at least the primary source(s) consulted.
 
 **When `agent_supports == "no"`:** Stop. Don't author a recipe; the
-cell stays frozen on the overview as `✗`. Periodic re-assessment
-(when a new agent version ships) may unlock it.
+cell stays frozen on the overview as `✗`. The `assessment.json`
+still goes in — it documents *why* the cell is blocked and what
+would unblock it. Periodic re-assessment (when a new agent version
+ships) may unlock it.
 
 **Common stale signals to re-check:**
 
@@ -64,6 +109,7 @@ cell stays frozen on the overview as `✗`. Periodic re-assessment
   notes.
 - An archived recording exists with `partial` verdict but its
   measurement now passes clean — drift signal; matrix is stale.
+- `assessed_at` is older than the agent's last major version bump.
 
 ---
 

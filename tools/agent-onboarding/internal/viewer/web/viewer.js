@@ -1002,6 +1002,105 @@ function renderMeta(data) {
   return p;
 }
 
+// renderAssessment paints the Stage 1 (Assessment) point-in-time
+// record loaded from <scenarioDir>/assessment.json. Surfaces:
+//   - dated subtitle (when the assessment was made)
+//   - verdict chips for agent_supports + irrlicht_observes, using the
+//     "full / partial / none / unknown / n/a" display labels mapped
+//     from the underlying enum values
+//   - optional confidence pill
+//   - prose body (markdown rendered as preformatted text — headings
+//     read fine via the literal `##` prefix)
+//   - sources list with URL anchors where applicable
+function renderAssessment(a) {
+  const p = panel("Assessment");
+  // Dated subtitle.
+  const sub = document.createElement("div");
+  sub.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
+  const when = a.assessed_at ? a.assessed_at.replace("T", " ").replace(/\.\d+Z?$/, "").replace(/Z$/, " UTC") : "date unknown";
+  sub.textContent = `assessed ${when}`;
+  p.appendChild(sub);
+  // Verdict chips row.
+  const row = document.createElement("div");
+  row.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px;";
+  row.appendChild(_assessmentChip("Agent", a.agent_supports));
+  row.appendChild(_assessmentChip("Irrlicht", a.irrlicht_observes));
+  if (typeof a.confidence === "number") {
+    const conf = document.createElement("span");
+    conf.style.cssText = "padding: 2px 8px; background: #f5f4ee; border: 1px solid #ece9dd; border-radius: 10px; font-size: 11px; font-family: monospace; color: #555;";
+    conf.textContent = `confidence ${a.confidence.toFixed(2)}`;
+    row.appendChild(conf);
+  }
+  p.appendChild(row);
+  // Body — render as preformatted wrapping text. Markdown headings
+  // (e.g. "## Verdict") show with their leading hashes; readable as-is.
+  if (a.body) {
+    const body = document.createElement("pre");
+    body.style.cssText = "white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; line-height: 1.5; color: #222; margin: 0 0 10px 0; padding: 10px; background: #fafaf6; border: 1px solid #ece9dd; border-radius: 4px;";
+    body.textContent = a.body;
+    p.appendChild(body);
+  }
+  // Sources list.
+  if (Array.isArray(a.sources) && a.sources.length > 0) {
+    const h = document.createElement("div");
+    h.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
+    h.textContent = "Sources";
+    p.appendChild(h);
+    const ul = document.createElement("ul");
+    ul.style.cssText = "margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5;";
+    for (const src of a.sources) {
+      const li = document.createElement("li");
+      const kind = document.createElement("span");
+      kind.style.cssText = "color: #888; margin-right: 6px; font-family: monospace; font-size: 11px;";
+      kind.textContent = src.kind || "src";
+      li.appendChild(kind);
+      if (src.kind === "url" && src.ref) {
+        const a = document.createElement("a");
+        a.href = src.ref;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = src.ref;
+        li.appendChild(a);
+      } else if (src.ref) {
+        const code = document.createElement("code");
+        code.textContent = src.ref;
+        li.appendChild(code);
+      }
+      if (src.note) {
+        const note = document.createElement("span");
+        note.style.cssText = "color: #555; margin-left: 6px;";
+        note.textContent = `— ${src.note}`;
+        li.appendChild(note);
+      }
+      ul.appendChild(li);
+    }
+    p.appendChild(ul);
+  }
+  return p;
+}
+
+// _assessmentChip maps the agent_supports / irrlicht_observes enum
+// values ("yes" / "partial" / "no" / "unknown" / "n/a") to user-facing
+// display labels ("full" / "partial" / "none" / "unknown" / "n/a") and
+// the color palette already used by coverageBadge() / the pipeline
+// strip Assessment segment. The schema stays on the enum values; the
+// labels are presentation-only.
+function _assessmentChip(prefix, value) {
+  const v = String(value || "unknown");
+  let label, bg, fg;
+  switch (v) {
+    case "yes":     label = "full";    bg = "#d6f0d4"; fg = "#1f5a1d"; break;
+    case "partial": label = "partial"; bg = "#fde7c1"; fg = "#8a4500"; break;
+    case "no":      label = "none";    bg = "#f8c8c8"; fg = "#8a0000"; break;
+    case "n/a":     label = "n/a";     bg = "#eeece4"; fg = "#666";    break;
+    default:        label = "unknown"; bg = "#e5e5e5"; fg = "#555";    break;
+  }
+  const chip = document.createElement("span");
+  chip.style.cssText = `display: inline-flex; align-items: center; padding: 3px 10px; background: ${bg}; color: ${fg}; border-radius: 12px; font-size: 12px; font-weight: 500;`;
+  chip.textContent = `${prefix}: ${label}`;
+  return chip;
+}
+
 // renderExpected paints the spec-grounded expected.jsonl validation
 // report. Two modes:
 //   "validate" (default) — full UI with pass/fail summary, result + delta
@@ -1314,6 +1413,13 @@ function renderRecordingHistory(s, latestData, archives) {
 
   function renderRecordingPanels(d, archiveName) {
     below.innerHTML = "";
+    // Assessment first — it's about the cell itself, independent of
+    // any particular recording, so it reads naturally at the top of
+    // the detail page. Absent for cells that haven't been assessed
+    // yet (no assessment.json on disk).
+    if (d.assessment) {
+      below.appendChild(renderAssessment(d.assessment));
+    }
     // Playback retargets to the archive when archiveName is set —
     // /api/replay/start accepts a `recording` field that resolves to
     // <scenarioDir>/recordings/<name>.

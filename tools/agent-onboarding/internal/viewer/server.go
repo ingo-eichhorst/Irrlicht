@@ -808,6 +808,32 @@ type ScenarioDetail struct {
 	Transitions    []json.RawMessage        `json:"transitions"`               // state_transition rows from events.jsonl
 	Tools          []ToolCall               `json:"tools,omitempty"`           // tool_use blocks extracted from transcript.jsonl
 	LatestManifest *RecordingArchive        `json:"latest_manifest,omitempty"` // synthesized manifest for the live top-level recording, mirroring archive manifest fields so the viewer can render a uniform metadata panel
+	Assessment     *AssessmentReport        `json:"assessment,omitempty"`      // Stage 1 (Assessment) point-in-time record from assessment.json, if present
+}
+
+// AssessmentReport is the persisted artifact of one Stage-1 assessment
+// (per cell-lifecycle.md). One file per (agent, scenario) at
+// replaydata/agents/<agent>/scenarios/<scenario>/assessment.json,
+// overwritten on re-assessment — git is the history. The matrix in
+// .specs/agent-scenarios-coverage.json is the current-state rollup;
+// this struct preserves when and why the verdict was reached.
+type AssessmentReport struct {
+	SchemaVersion    int                `json:"schema_version"`
+	ScenarioID       string             `json:"scenario_id"`
+	Agent            string             `json:"agent"`
+	AssessedAt       string             `json:"assessed_at"`
+	AgentSupports    string             `json:"agent_supports"`    // yes / partial / no / unknown
+	IrrlichtObserves string             `json:"irrlicht_observes"` // yes / partial / no / unknown / n/a
+	Confidence       float64            `json:"confidence,omitempty"`
+	Body             string             `json:"body"`
+	Sources          []AssessmentSource `json:"sources,omitempty"`
+}
+
+// AssessmentSource is one citation backing an assessment verdict.
+type AssessmentSource struct {
+	Kind string `json:"kind"` // "url" | "file" | other
+	Ref  string `json:"ref"`
+	Note string `json:"note,omitempty"`
 }
 
 // ToolCall is one Anthropic-style tool_use block lifted from the
@@ -881,7 +907,24 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Tools = extractToolCalls(filepath.Join(scenarioDir, "transcript.jsonl"))
 	d.LatestManifest = buildLatestManifest(scenarioDir, agent, &d, s.RepoRoot)
+	d.Assessment = loadAssessment(scenarioDir)
 	writeJSON(w, d)
+}
+
+// loadAssessment reads <scenarioDir>/assessment.json if present.
+// Returns nil on any error (missing file, malformed JSON) — the
+// frontend treats absence as "no assessment recorded yet" and skips
+// the panel.
+func loadAssessment(scenarioDir string) *AssessmentReport {
+	b, err := os.ReadFile(filepath.Join(scenarioDir, "assessment.json"))
+	if err != nil {
+		return nil
+	}
+	var rep AssessmentReport
+	if err := json.Unmarshal(b, &rep); err != nil {
+		return nil
+	}
+	return &rep
 }
 
 // buildLatestManifest produces a RecordingArchive-shaped manifest for
