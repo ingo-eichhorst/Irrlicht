@@ -68,6 +68,10 @@ record it when an honest search came up empty.
   "irrlicht_observes": "yes" | "no" | "partial" | "unknown" | "n/a",
   "confidence": 0.0-1.0,
   "body": "markdown prose — Verdict, Reasoning, etc.",
+  "caveats": [
+    "Known limitation or metric drift the verdict doesn't capture.",
+    "One short sentence per caveat. The viewer renders these as a yellow callout above Sources."
+  ],
   "sources": [
     {"kind": "url",  "ref": "https://...",     "note": "..."},
     {"kind": "file", "ref": "path/to/file.go", "note": "..."}
@@ -78,6 +82,29 @@ record it when an honest search came up empty.
 One file per (agent, scenario); re-assessment overwrites it (git
 preserves history). The viewer renders the body as preformatted
 wrapping text — markdown headings (`## Verdict`) read fine as-is.
+
+**When to use `caveats`:** the spec for many cells is narrower than
+"irrlicht has zero blind spots about the feature." A cell can be
+`irrlicht_observes: yes` for spec purposes while still having known
+limitations that a maintainer should be aware of. Use the caveats
+array to capture them. Two common patterns:
+
+1. **Feature invisible to file-watching but spec-compliant anyway.**
+   E.g. `claudecode/checkpoint-rewind`: the rewind itself produces no
+   transcript event, but the spec only requires correct state
+   after — which irrlicht delivers. Caveat: "Rewind events are
+   invisible … spec compliance is unaffected."
+
+2. **Metric drift downstream of an unobserved event.** Same example:
+   after a rewind, irrlicht's context-utilization % overstates
+   what claude actually has in context (claude reads a truncated
+   subset of the transcript; irrlicht sums the whole file).
+   Caveat: "Context utilization % may overstate after …".
+
+Authoring rule: if you're tempted to downgrade the verdict to
+`partial` because of a known-but-narrow gap, ask first whether the
+canonical spec actually requires the missing observation. If not,
+keep the verdict honest (`yes`) and surface the gap as a caveat.
 
 **Authoring flow (today):** dispatch a research subagent for the
 cell, capture its output, hand-author the JSON file. A future

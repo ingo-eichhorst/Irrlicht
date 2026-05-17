@@ -827,6 +827,13 @@ type AssessmentReport struct {
 	Confidence       float64            `json:"confidence,omitempty"`
 	Body             string             `json:"body"`
 	Sources          []AssessmentSource `json:"sources,omitempty"`
+	// Caveats documents known limitations / metric drifts that don't
+	// invalidate the verdict but a maintainer should know about. E.g.
+	// "feature is invisible to file-watching, but spec compliance is
+	// unaffected" or "context utilization % overstates after a rewind".
+	// One string per caveat, plain prose. Rendered as a bulleted
+	// list in the viewer's Assessment panel.
+	Caveats []string `json:"caveats,omitempty"`
 }
 
 // AssessmentSource is one citation backing an assessment verdict.

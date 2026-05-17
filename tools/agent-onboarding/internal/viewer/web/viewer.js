@@ -1328,6 +1328,24 @@ function renderAssessment(a) {
     body.textContent = a.body;
     p.appendChild(body);
   }
+  // Caveats — known limitations / metric drifts the verdict doesn't
+  // capture but a reader should know about. Rendered as a labelled
+  // box above sources so they're visually prominent.
+  if (Array.isArray(a.caveats) && a.caveats.length > 0) {
+    const cavHead = document.createElement("div");
+    cavHead.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
+    cavHead.textContent = "Caveats";
+    p.appendChild(cavHead);
+    const cavBox = document.createElement("ul");
+    cavBox.style.cssText = "margin: 0 0 10px 0; padding: 8px 10px 8px 28px; font-size: 12px; line-height: 1.5; color: #5a4500; background: #fff7e6; border: 1px solid #f5d886; border-radius: 4px;";
+    for (const c of a.caveats) {
+      const li = document.createElement("li");
+      li.textContent = c;
+      li.style.marginBottom = "4px";
+      cavBox.appendChild(li);
+    }
+    p.appendChild(cavBox);
+  }
   // Sources list.
   if (Array.isArray(a.sources) && a.sources.length > 0) {
     const h = document.createElement("div");
