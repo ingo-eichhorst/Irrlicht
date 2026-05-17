@@ -1,28 +1,53 @@
 ---
 name: ir:onboard-agent/assess
 description: >
-  Per-cell scenario assessment. Researches one (agent, scenario) cell
-  via the agent's docs, changelog, and source, plus the adapter's
-  transport, and writes a structured `assessment.json` artifact under
-  `replaydata/agents/<agent>/scenarios/<scenario>/`. Invoked as
-  `/ir:onboard-agent assess <agent> <scenario-id>`. Re-runs overwrite
-  silently — git preserves history.
+  Stage 1 of the cell lifecycle. Researches one (agent, scenario)
+  cell (or a column / row of cells) and writes structured assessment
+  artifacts. Three forms:
+  `/ir:onboard-agent assess <agent> <scenario>` writes a rich
+  `assessment.json` under `replaydata/agents/<agent>/scenarios/<scenario>/`.
+  `/ir:onboard-agent assess --column <agent>` writes a candidate
+  matrix column at `.specs/agent-assess-<agent>.json` covering every
+  scenario.
+  `/ir:onboard-agent assess --row <scenario>` writes a candidate
+  matrix row at `.specs/scenario-assess-<scenario>.json` covering
+  every adapter. Re-runs overwrite silently — git preserves history.
 ---
 
-# Mode E: per-cell assessment
+# Assessment (Stage 1)
 
 Produces the artifact for **Stage 1 of the cell lifecycle**: a
 structured, dated, sourced record of "does this agent support this
-scenario, and can irrlicht observe it" for ONE cell.
+scenario, and can irrlicht observe it." Three scopes share the same
+verb:
 
-> Use [`../survey/SKILL.md`](../survey/SKILL.md) when you want to
-> batch-survey every scenario for one agent (Stage 1 across a full
-> matrix column). Use **this skill** when you want a deep, sourced
-> assessment for a single cell — typically before authoring the
-> recipe with [`../recipe/SKILL.md`](../recipe/SKILL.md).
->
-> The end-to-end walkthrough across all five stages is
-> [`../cell-lifecycle.md`](../cell-lifecycle.md).
+- **Single cell** (deep, rich) — `assess <agent> <scenario>`. Writes
+  a committed `assessment.json` with full `body` (markdown
+  reasoning), `caveats`, and `sources`. The viewer renders this on
+  the cell detail page.
+- **Column** (one agent, all scenarios) — `assess --column <agent>`.
+  Writes a candidate matrix column to `.specs/agent-assess-<agent>.json`
+  (gitignored, maintainer-owned) with short per-scenario verdicts.
+  Used at agent-onboarding time and on each agent version bump.
+- **Row** (one scenario, all adapters) — `assess --row <scenario>`.
+  Writes a candidate matrix row to `.specs/scenario-assess-<scenario>.json`
+  with short per-adapter verdicts. Used when a new scenario lands
+  in `.specs/agent-scenarios.md` and you want a first-pass column
+  across all 5 adapters.
+
+The column and row forms produce CANDIDATES for the maintainer to
+review and transcribe into `.specs/agent-scenarios-coverage.json`.
+The single-cell form is the source-of-record artifact the viewer
+displays — typically you use it AFTER a column or row scan flagged
+the cell as interesting (low confidence, surprising verdict, etc.).
+
+> Stage 1 sits at the head of the pipeline. The verdict here
+> determines whether Stage 2 (recipe) proceeds. Other stages:
+> [`../recipe/SKILL.md`](../recipe/SKILL.md),
+> [`../spec/SKILL.md`](../spec/SKILL.md),
+> [`../record/SKILL.md`](../record/SKILL.md),
+> [`../validate/SKILL.md`](../validate/SKILL.md). End-to-end
+> walkthrough → [`../cell-lifecycle.md`](../cell-lifecycle.md).
 
 ## Working approach
 
@@ -50,7 +75,9 @@ Three rules:
 ## Invocation
 
 ```
-/ir:onboard-agent assess <agent> <scenario-id>
+/ir:onboard-agent assess <agent> <scenario-id>    # single cell — rich assessment.json
+/ir:onboard-agent assess --column <agent>         # one agent, all scenarios — candidate column
+/ir:onboard-agent assess --row <scenario>         # one scenario, all adapters — candidate row
 ```
 
 - `<agent>` — adapter slug (`claudecode`, `codex`, `pi`, `aider`,
@@ -101,7 +128,11 @@ Shape (per `cell-lifecycle.md` Stage 1):
 Overwrite the existing file silently when re-running. Git preserves
 the previous version.
 
-## Steps
+## Steps (single cell)
+
+The steps below cover the **single-cell** form. For
+[`--column`](#column-and-row-batch-modes) and `--row`, jump to
+"Batch modes" further down.
 
 ### Step 1 — Read the prose spec
 
@@ -260,6 +291,111 @@ Then a transcription hint IF the new verdict differs from the matrix
 
 The matrix update is the maintainer's call — this skill never writes
 `.specs/`.
+
+## Column and row batch modes
+
+The two batch forms produce **candidate** matrix scans instead of
+rich per-cell artifacts. They're the right tool when the goal is
+"first-pass verdicts across many cells, fast, for the maintainer to
+review before committing." Both go through `assess/run-batch.sh`
+under the hood.
+
+### `--column <agent>` workflow
+
+```
+/ir:onboard-agent assess --column <agent>
+```
+
+Produces `.specs/agent-assess-<agent>.json` — one verdict entry per
+scenario in the canonical catalog. Steps:
+
+1. **Gather inputs.**
+   ```bash
+   .claude/skills/ir:onboard-agent/assess/run-batch.sh prepare --column <agent>
+   ```
+   Prints to stdout the agent slug, catalog paths, the canonical
+   scenario ID list, and the inline column-mode prompt
+   (`assess/prompts/column.md`).
+2. **Dispatch a research subagent** (`Agent` tool,
+   `subagent_type: general-purpose`) with the full output of Step 1
+   as the prompt. The subagent reads the agent's docs site,
+   changelog, source, and decides a verdict for every scenario in
+   the canonical list — missing or extra IDs are a hard failure.
+   Cites ≥1 source per verdict.
+3. **Capture** the subagent's JSON to
+   `.build/assess/<agent>-<TS>.json` (local-only, never committed).
+4. **Validate.**
+   ```bash
+   .claude/skills/ir:onboard-agent/assess/run-batch.sh validate <candidate.json>
+   ```
+   Checks shape against `assess/schema/column.schema.json` AND
+   cross-references every scenario ID against the canonical
+   catalog. Common failures + their fixes:
+   - *scenario id not in catalog: `<id>`* — subagent invented an
+     ID. Tell it to use only the canonical list.
+   - *scenario id missing from column: `<id>`* — subagent skipped
+     one. Add a verdict (often `"unknown"` with a brief note).
+   - *`<sid>`: sources must be a non-empty array* — verdict lacks
+     citations. Reject and re-prompt.
+5. **Commit.**
+   ```bash
+   .claude/skills/ir:onboard-agent/assess/run-batch.sh commit --column <agent> <candidate.json>
+   ```
+   Writes `.specs/agent-assess-<agent>.json` (backs up any prior
+   version to `.bak`). Still gitignored; the maintainer transcribes
+   into `.specs/agent-scenarios-coverage.json` after review.
+6. **Surface low-confidence cells.**
+   ```bash
+   jq -r '.scenarios | to_entries[]
+          | select(.value.confidence < 0.7)
+          | "\(.key)  [\(.value.agent_supports), conf=\(.value.confidence)]  \(.value.notes // "")"' \
+     .specs/agent-assess-<agent>.json
+   ```
+   These are the cells worth deep-diving with single-cell `assess`.
+
+### `--row <scenario>` workflow
+
+```
+/ir:onboard-agent assess --row <scenario>
+```
+
+Produces `.specs/scenario-assess-<scenario>.json` — one verdict per
+adapter in `agents[]`. Same flow as `--column` but inverted axis:
+
+1. `run-batch.sh prepare --row <scenario>` — prints scenario spec,
+   the adapter list, and the row-mode prompt (`assess/prompts/row.md`).
+2. Dispatch a subagent; for each adapter, it reads docs + adapter
+   source under `core/adapters/inbound/agents/<adapter>/` and
+   produces a verdict.
+3. Capture to `.build/assess/<scenario>-<TS>.json`.
+4. `run-batch.sh validate <candidate.json>` (auto-detects row vs
+   column by inspecting top-level fields).
+5. `run-batch.sh commit --row <scenario> <candidate.json>` — writes
+   `.specs/scenario-assess-<scenario>.json`.
+6. Low-confidence sweep:
+   ```bash
+   jq -r '.adapters | to_entries[]
+          | select(.value.confidence < 0.7)
+          | "\(.key)  [\(.value.agent_supports), conf=\(.value.confidence)]"' \
+     .specs/scenario-assess-<scenario>.json
+   ```
+
+Adapters whose capabilities clearly preclude the scenario (e.g.
+opencode has no PID binding for a PID-required scenario) may be
+omitted from the row — implicit verdict is `"n/a"`. The subagent's
+column prompt covers when to omit vs include with `"unknown"`.
+
+### When to use which form
+
+- **`--column <agent>`** — agent onboarding day-1, agent version
+  bump, or matrix maintenance for one column.
+- **`--row <scenario>`** — a new scenario landed in
+  `.specs/agent-scenarios.md`; want quick verdicts for all adapters
+  at once before promoting any to recipe+record.
+- **Single cell** — depth-dive after a column/row scan flagged
+  uncertainty, OR when a maintainer wants the viewer-rendered
+  `assessment.json` artifact (with body + caveats) for one
+  important cell.
 
 ## Anti-patterns
 

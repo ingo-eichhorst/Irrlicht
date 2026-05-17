@@ -26,8 +26,8 @@ viewer's scenario detail page renders the new fields automatically.
 > **Stage 2 of the cell lifecycle.** This skill covers ONLY recipe
 > authoring. Other stages have their own skills:
 > - Stage 1 (assessment) → [`../assess/SKILL.md`](../assess/SKILL.md)
->   (single cell) or [`../survey/SKILL.md`](../survey/SKILL.md)
->   (whole-agent batch).
+>   — single cell, or `--column <agent>` / `--row <scenario>` for
+>   matrix scans.
 > - Stage 3 (spec) → [`../spec/SKILL.md`](../spec/SKILL.md). The
 >   spec (`expected.jsonl`) is the benchmark every recording is
 >   validated against. **Author the spec BEFORE the recipe** so the
@@ -52,10 +52,10 @@ Three rules govern every step below:
    Don't guess from the agent's general reputation or from
    third-party tutorials; if a primary source doesn't speak to a
    behavior, mark it `unknown` and stop. Re-run
-   `/ir:onboard-agent assess <agent> <scenario>` (or the whole-agent
-   `survey`) to lift the verdict before continuing — fabricating a
-   recipe against an unknown verdict produces a recording that
-   proves the wrong thing.
+   `/ir:onboard-agent assess <agent> <scenario>` (or
+   `assess --column <agent>` for a batch scan) to lift the verdict
+   before continuing — fabricating a recipe against an unknown
+   verdict produces a recording that proves the wrong thing.
 
 2. **Verification gates between steps.** Each step below ends with
    a `► Verify before moving on:` checklist. Don't proceed to the
@@ -90,9 +90,9 @@ Three rules govern every step below:
 If a step's verification can't be satisfied with the inputs at hand,
 **stop and ask the maintainer** rather than guess. A missing piece
 of evidence is a real signal — encode it as either a
-`prerequisites_hint` on the survey or a `partial` verdict on the
-assessment, then re-author the recipe after the maintainer fills
-the gap.
+`prerequisites_hint` on the column scan or a `partial` verdict on
+the cell's assessment, then re-author the recipe after the
+maintainer fills the gap.
 
 ## Invocation
 
@@ -192,10 +192,10 @@ recording.
 - `agent_supports == "no"` → DO NOT fabricate. Add a
   `by_adapter.<agent>` entry with only `{"applicable": false, "notes": "..."}`
   and stop.
-- `agent_supports == "unknown"` → flip to Mode C
-  (`/ir:onboard-agent survey <agent>`) first to lift the verdict;
-  re-run `/ir:onboard-agent recipe` after the maintainer merges
-  the survey.
+- `agent_supports == "unknown"` → run
+  `/ir:onboard-agent assess <agent> <scenario>` first to lift the
+  verdict; re-run `/ir:onboard-agent recipe` after the maintainer
+  merges the resulting assessment into the matrix.
 
 ► **Verify before moving on:**
 - [ ] The verdict cell exists for `<agent>` in

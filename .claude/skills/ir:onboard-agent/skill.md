@@ -66,12 +66,6 @@ hermetic and don't need auth.
   previously unknown agent on the web via subagents and proposes a
   `capabilities.json`. See `discovery-instructions.md` for the dispatch
   recipe. No live agent CLI is invoked.
-- **`/ir:onboard-agent survey <agent>`** — applicability survey mode.
-  Researches the agent's docs / changelog / source and proposes a candidate
-  `coverage[<agent>]` column for every scenario in `.specs/agent-scenarios.md`.
-  Maintainer reviews + merges into `.specs/agent-scenarios-coverage.json`.
-  See `survey/SKILL.md` for the dispatch recipe. No live agent CLI is
-  invoked. Re-run on each agent version bump.
 ### Per-stage subcommands (one per UI pipeline segment)
 
 The five `cell-lifecycle.md` stages each have a dedicated subcommand
@@ -79,9 +73,18 @@ that maps 1:1 to the viewer's pipeline strip (⚙ ◉ ✎ § N ✓). Run
 them in order; later stages refuse to proceed if earlier stages
 haven't landed their artifact.
 
-- **`/ir:onboard-agent assess <agent> <scenario>`** — **Stage 1**.
-  Researches one cell and writes `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json`
-  (verdict + body + caveats + sources). See `assess/SKILL.md`.
+- **`/ir:onboard-agent assess`** — **Stage 1**. Three scopes share
+  the same verb:
+  - `assess <agent> <scenario>` — single cell. Writes a rich
+    `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json`
+    (verdict + body + caveats + sources).
+  - `assess --column <agent>` — one agent, all scenarios. Writes a
+    candidate column at `.specs/agent-assess-<agent>.json` for the
+    maintainer to transcribe into the rollup matrix. (Replaces the
+    former `survey` skill.)
+  - `assess --row <scenario>` — one scenario, all adapters. Writes
+    a candidate row at `.specs/scenario-assess-<scenario>.json`.
+  See `assess/SKILL.md`.
 - **`/ir:onboard-agent recipe <agent> <scenario>`** — **Stage 2**.
   Authors the deterministic driver script (preconditions, `script`
   steps, verify items) into `scenarios.json -> scenarios[].by_adapter[<agent>]`.
@@ -120,7 +123,6 @@ canonical walkthrough.
         │                │                  │                    │                    │
         ▼                ▼                  ▼                    ▼                    ▼
     /assess          /recipe            /spec               /record              /validate
-   (or /survey)
 ```
 
 See [`cell-lifecycle.md`](cell-lifecycle.md) for:
@@ -134,9 +136,8 @@ See [`cell-lifecycle.md`](cell-lifecycle.md) for:
 
 When in doubt about a stage, jump to that section in
 `cell-lifecycle.md`. The subskills (`assess/`, `recipe/`, `spec/`,
-`record/`, `validate/`) implement individual stages; `survey/` is
-the matrix-wide variant of assess. The lifecycle doc is how they
-fit together.
+`record/`, `validate/`) implement individual stages. The lifecycle
+doc is how they fit together.
 
 ## Step 1: Understand the task
 
@@ -146,8 +147,7 @@ Parse the invocation into one of:
 - `run_one` — one adapter + one scenario
 - `diff_only` — `--diff` flag
 - `discover` — `--new <slug>`; load `discovery-instructions.md` and follow that recipe instead of Steps 2–5 below
-- `survey` — `survey <agent>`; load `survey/SKILL.md` and follow that recipe instead of Steps 2–5 below
-- `assess` — `assess <agent> <scenario>`; load `assess/SKILL.md` (Stage 1)
+- `assess` — `assess <agent> <scenario>` (single) | `assess --column <agent>` | `assess --row <scenario>`; load `assess/SKILL.md` (Stage 1)
 - `recipe` — `recipe <agent> <scenario>`; load `recipe/SKILL.md` (Stage 2)
 - `spec` — `spec <agent> <scenario>`; load `spec/SKILL.md` (Stage 3)
 - `record` — `record <agent> <scenario>`; load `record/SKILL.md` (Stage 4)

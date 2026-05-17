@@ -35,7 +35,7 @@ import (
 
 // slugRE constrains user-supplied URL components (agent, scenario id) so
 // they can never traverse out of replaydata/agents/. Matches the same
-// shape the survey schema enforces for agent slugs.
+// shape the assess schema enforces for agent slugs.
 var slugRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 //go:embed web/*

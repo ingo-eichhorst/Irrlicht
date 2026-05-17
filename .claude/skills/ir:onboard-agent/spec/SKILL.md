@@ -25,7 +25,8 @@ indefinitely.
 > (recipe) so the recipe's `verify` items line up with concrete spec
 > phases. Other stages:
 > - Stage 1 (assessment) → [`../assess/SKILL.md`](../assess/SKILL.md)
->   / [`../survey/SKILL.md`](../survey/SKILL.md).
+>   — single cell, or `--column <agent>` / `--row <scenario>` for
+>   batch scans.
 > - Stage 2 (recipe) → [`../recipe/SKILL.md`](../recipe/SKILL.md).
 > - Stage 4 (recording) → [`../record/SKILL.md`](../record/SKILL.md).
 > - Stage 5 (validation) → [`../validate/SKILL.md`](../validate/SKILL.md).

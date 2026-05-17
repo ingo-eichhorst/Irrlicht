@@ -15,7 +15,6 @@ to fill each segment.
        │              │                │                │                  │
        ▼              ▼                ▼                ▼                  ▼
    /assess          /recipe         /spec               /record            /validate
-  (or /survey)
 ```
 
 If `agent_supports == "no"` at Stage 1, the pipeline is frozen — no
@@ -43,10 +42,10 @@ observe it?
 
 **Tool:** `/ir:onboard-agent assess <agent> <scenario>` (see
 [`assess/SKILL.md`](assess/SKILL.md)) for one cell. For batched
-matrix-wide work across all scenarios of one agent, use
-`/ir:onboard-agent survey <agent>` (see `survey/SKILL.md`). Don't
-default to `unknown` — only record it when an honest search came up
-empty.
+scope, pass `--column <agent>` (all scenarios for one agent) or
+`--row <scenario>` (all adapters for one scenario) — both write
+candidate JSON to `.specs/` for maintainer review. Don't default
+to `unknown` — only record it when an honest search came up empty.
 
 **Matrix entry shape (rollup):**
 
@@ -398,7 +397,7 @@ Taking `claudecode/session-reset` as a worked example:
 
 | Stage | Artifact                                                                                                           | Tool                         |
 |---    |---                                                                                                                 |---                            |
-| 1     | matrix entry `irrlicht_observes: "yes"` after issue #169 daemon fix                                               | `/assess` (or `/survey`)      |
+| 1     | matrix entry `irrlicht_observes: "yes"` after issue #169 daemon fix                                               | `/assess`                     |
 | 2     | `scenarios.json` `by_adapter.claudecode.script` — send + wait_turn + sleep + reset_session + send + wait_turn      | `/recipe`                     |
 | 3     | `replaydata/.../session-reset/expected.jsonl` — 9 phases including `same_session_as: v1_session_handoff` and `new_session: true` on v2 | `/spec`                       |
 | 4     | `replaydata/.../session-reset/{events,transcript}.jsonl` + `manifest.json` + N archived `recordings/<ts>_irrlichd-<ver>/` | `/record`                     |

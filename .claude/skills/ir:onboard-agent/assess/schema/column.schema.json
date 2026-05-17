@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/ingo-eichhorst/Irrlicht/.claude/skills/ir:onboard-agent/survey/schema/survey-result.schema.json",
-  "title": "Agent applicability survey result",
-  "description": "Output of `/ir:onboard-agent survey <agent>`. Maps every scenario in .specs/agent-scenarios.md to a candidate applicability verdict for one agent, with citations. Consumed by the maintainer to update the coverage matrix; never auto-applied. Schema validates structural shape only — cross-referencing against the canonical scenario IDs (in .specs/agent-scenarios-coverage.json) is done at runtime by run-survey.sh.",
+  "$id": "https://github.com/ingo-eichhorst/Irrlicht/.claude/skills/ir:onboard-agent/assess/schema/column.schema.json",
+  "title": "Agent applicability assessment result (column mode)",
+  "description": "Output of `/ir:onboard-agent assess --column <agent>`. Maps every scenario in .specs/agent-scenarios.md to a candidate applicability verdict for one agent, with citations. Consumed by the maintainer to update the coverage matrix; never auto-applied. Schema validates structural shape only — cross-referencing against the canonical scenario IDs (in .specs/agent-scenarios-coverage.json) is done at runtime by run-batch.sh.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "agent", "agent_version", "surveyed_at", "scenarios"],
@@ -36,7 +36,7 @@
     },
     "scenarios": {
       "type": "object",
-      "description": "Keyed by scenario ID (kebab-case slug from .specs/agent-scenarios-coverage.json). run-survey.sh enforces that every key resolves to a known scenario ID and that every scenario in the catalog appears.",
+      "description": "Keyed by scenario ID (kebab-case slug from .specs/agent-scenarios-coverage.json). run-batch.sh enforces that every key resolves to a known scenario ID and that every scenario in the catalog appears.",
       "additionalProperties": { "$ref": "#/definitions/scenarioVerdict" }
     }
   },

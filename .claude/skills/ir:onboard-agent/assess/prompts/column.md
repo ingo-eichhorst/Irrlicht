@@ -1,4 +1,4 @@
-# Agent applicability survey
+# Agent applicability assessment (column mode)
 
 You are surveying ONE coding-agent CLI to decide, for each scenario in irrlicht's catalog, whether that agent **as-shipped** supports the behavior the scenario tests. Your output becomes a candidate `coverage[<agent>]` column for the maintainer to review and merge into `.specs/agent-scenarios-coverage.json`. You do not modify that file directly.
 
@@ -32,7 +32,7 @@ If a feature is genuinely undocumented, set `agent_supports: "unknown"` with low
 
 ## Output
 
-Write a single JSON document validating against `survey/schema/survey-result.schema.json`. The top-level shape:
+Write a single JSON document validating against `assess/schema/column.schema.json`. The top-level shape:
 
 ```json
 {
@@ -48,7 +48,7 @@ Write a single JSON document validating against `survey/schema/survey-result.sch
 }
 ```
 
-**Every scenario ID from `.specs/agent-scenarios-coverage.json` must appear exactly once.** Missing or extra keys cause `run-survey.sh` to reject the output.
+**Every scenario ID from `.specs/agent-scenarios-coverage.json` must appear exactly once.** Missing or extra keys cause `run-batch.sh` to reject the output.
 
 ### Each verdict
 
@@ -114,4 +114,4 @@ Omit the field if no such gate exists.
 - Don't invent URLs. Every `ref` must resolve to a real page or file you actually read.
 - Don't editorialize about quality. Just record support / non-support / partial with the caveat.
 
-When done, print the JSON document and stop. `run-survey.sh` writes it to disk and validates.
+When done, print the JSON document and stop. `run-batch.sh` writes it to disk and validates.
