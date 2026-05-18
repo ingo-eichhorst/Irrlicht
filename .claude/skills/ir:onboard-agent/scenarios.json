@@ -2688,14 +2688,21 @@
           "script": [
             {
               "type": "slash",
-              "text": "/goal Reply with exactly one word: done. The goal is met once you have replied done."
+              "text": "/goal You have run two bash commands so far this session: `echo iter1` and `echo iter2`, in that exact order. Run them one at a time across iterations."
             },
             {
               "type": "wait_turn"
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 4
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
             },
             {
               "type": "slash",
@@ -2712,7 +2719,7 @@
             "no state_transition to waiting (no permission gates expected)"
           ],
           "settings": {},
-          "timeout_seconds": 180
+          "timeout_seconds": 240
         }
       }
     }
