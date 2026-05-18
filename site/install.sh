@@ -151,9 +151,10 @@ command -v shasum >/dev/null 2>&1 || fail "shasum is required but not found."
 
 if [ -z "$VERSION" ]; then
     step "Detecting latest version"
-    VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-        | awk -F'"' '/"tag_name"/ {print $4; exit}' \
-        | sed 's/^v//')
+    # Follow the /releases/latest redirect to avoid GitHub API rate limits
+    VERSION=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+        "https://github.com/$REPO/releases/latest" \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$')
     [ -n "$VERSION" ] || fail "Could not detect latest version"
     printf 'v%s\n' "$VERSION"
 fi
