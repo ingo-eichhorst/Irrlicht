@@ -2722,6 +2722,59 @@
           "timeout_seconds": 240
         }
       }
+    },
+    {
+      "name": "autonomous-loop-iteration-limit",
+      "description": "Claudecode /goal with an unsatisfiable condition; the recipe lets the loop run a few iterations then sends /goal clear as a stand-in for the max_iterations cap (which is not deterministically forceable today). The state arc on cap-hit and on /goal clear is identical: end_turn followed by ready with no further Stop-hook re-prompts. Tests the loop's graceful-termination shape from the spec.",
+      "coverage_id": "autonomous-loop-iteration-limit",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "min_turns": 2,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd is recording",
+            "/goal requires a trusted workspace and hooks enabled"
+          ],
+          "setup": [
+            "Driver generates a fresh UUID + cwd"
+          ],
+          "script": [
+            {
+              "type": "slash",
+              "text": "/goal You have replied with the integer that is both odd and even simultaneously. This goal is impossible. Keep guessing."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            },
+            {
+              "type": "slash",
+              "text": "/goal clear"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains at least 2 working->ready transitions on the same UUID",
+            "final state of the session is ready after /goal clear",
+            "no state_transition to waiting"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
     }
   ],
   "orchestrator_scenarios": [
