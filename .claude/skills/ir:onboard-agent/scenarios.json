@@ -2611,18 +2611,18 @@
           "script": [
             {
               "type": "send",
-              "text": "Count slowly from 1 to 100, with a brief one-sentence explanation for each number. Take your time."
+              "text": "Count slowly from 1 to 100, with a brief one-sentence explanation for each number. Take your time and stream the response."
             },
             {
               "type": "sleep",
-              "seconds": 4
+              "seconds": 10
             },
             {
               "type": "interrupt"
             },
             {
               "type": "sleep",
-              "seconds": 5
+              "seconds": 10
             }
           ],
           "verify": [
