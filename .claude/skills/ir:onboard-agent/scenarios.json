@@ -1520,6 +1520,18 @@
           ],
           "script": [
             {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "S-Tab"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
               "type": "send",
               "text": "Read CHANGELOG.md and tell me the most recent release date."
             },
