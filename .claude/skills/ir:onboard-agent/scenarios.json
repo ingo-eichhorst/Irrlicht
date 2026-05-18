@@ -149,6 +149,11 @@
       "feature": "Foreground subagent"
     },
     {
+      "id": "task-tool",
+      "section": "Subagents",
+      "feature": "Task tool (parallel spawn)"
+    },
+    {
       "id": "background-subagent",
       "section": "Subagents",
       "feature": "Background subagent"
@@ -2744,6 +2749,58 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "task-tool",
+      "description": "Parallel Task-tool spawn: parent kicks off two concurrent subagents in a single turn, each reading a different seed file. Generalizes foreground-subagent (single child) to the parallel-multi shape that the Task tool is most commonly used for and that the dashboard surfaces as nested child rows under a parent.",
+      "coverage_id": "task-tool",
+      "requires": [
+        "headless_mode",
+        "subagents"
+      ],
+      "verify": {
+        "parent_linked_min": 2,
+        "subagent_transcripts_min": 2,
+        "final_state": "ready",
+        "contains_tool_call": "Agent"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd is recording (--attach or isolated)",
+            "claude session can spawn at least 2 subagents in parallel (default model has Task/Agent tool exposed)"
+          ],
+          "setup": [
+            "Driver seeds two files in <staging>/cwd: README.md (one H1 heading) and CHANGELOG.md (one release date). Subagents have deterministic content to read."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "In a SINGLE turn, use the Task tool TWICE in parallel: one subagent reads README.md and reports the first heading; the other reads CHANGELOG.md and reports the most recent release date. Wait for BOTH subagents to finish, then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the parent UUID entering ready, then a single ready->working transition",
+            "events.jsonl contains AT LEAST 2 parent_linked events pointing at the parent UUID",
+            "transcript.jsonl contains AT LEAST 2 tool_use blocks with name=Agent (the two Task invocations)",
+            "two subagent transcripts appear under ~/.claude/projects/<slug>/<parent>/subagents/agent-<uuid>.jsonl",
+            "no state_transition to ready or waiting fires on the parent UUID between child2_parent_linked and the final working->ready (parent stays working until the LAST child reports back)",
+            "events.jsonl shows exactly one working->ready transition for the parent UUID at turn end",
+            "final session state for the parent is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 360
         }
       }
     }
