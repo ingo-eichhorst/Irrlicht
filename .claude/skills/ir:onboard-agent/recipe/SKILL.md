@@ -574,6 +574,30 @@ the driver controls completion timing instead of inferring it from
   ready (done), the first match is the handoff, not the turn end. Insert
   a `_turn_start` phase (matching `working`) between them so
   `_turn_done` anchors to it and naturally matches the post-turn ready.
+- **Don't author multi-entity recipes whose entities complete
+  simultaneously.** When the recording exercises multiple subagents
+  / sessions / iterations whose VISIBLE-OVER-TIME state is what the
+  dashboard surfaces (subagent count chip, in-progress iteration
+  counter, etc.), give each entity a deterministic stagger so the
+  decrement is observable as a sequence of events, not a single
+  jump. **Worked example — `claudecode/task-tool` iteration 1:** the
+  v1 recipe asked the parent to launch TWO subagents that each
+  *read a file*. Both subagents finished within ~1s of each other,
+  so the dashboard's subagent count went `2 → 0` in one tick — the
+  spec passed 8/8 phases on structural assertions (`parent_linked`
+  count, parent working span, terminal ready) but the recording
+  failed the unspoken intent: the count-chip animation never
+  played, because there was no observable middle state. **v2 fix:**
+  three subagents each running `bash sleep N` for `N = 5/10/15`
+  seconds. Completion times are now deterministic and ordered, and
+  the spec chains `child1_done → child2_done → child3_done` via
+  `relative_to` + `same_session_as` so the validator confirms the
+  staggered order, not just the eventual count. The shape that
+  matters for the dashboard now matches the shape the validator
+  enforces. Generalize: **the recipe must exercise the user-visible
+  surface, not just the daemon's structural events**. If you can't
+  describe what an operator would SEE animate in the dashboard,
+  the recipe is probably too thin.
 
 ## When to re-run
 
