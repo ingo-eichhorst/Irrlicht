@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 31,
+    "consumed_events": 31,
+    "total_transitions": 7,
+    "first_event_time": "2026-05-18T20:52:50.573Z",
+    "last_event_time": "2026-05-18T20:53:12.254Z",
+    "wall_clock_session_duration": 21681000000,
+    "state_durations": {
+      "ready": 11851000000,
+      "working": 9830000000
+    },
+    "flicker_count": 4,
+    "flickers_by_category": {
+      "ready_between_working": 2,
+      "working_between_ready": 2
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 2,
+      "force ready→working on first activity": 2
+    },
+    "estimated_cost_usd": 0.07060934999999999,
+    "cum_input_tokens": 9,
+    "cum_output_tokens": 494,
+    "cum_cache_read_tokens": 96262,
+    "cum_cache_creation_tokens": 9145,
+    "model_name": "claude-sonnet-4-6"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-05-18T20:52:50.573Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 11,
+      "virtual_time": "2026-05-18T20:52:55.266Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 15,
+      "virtual_time": "2026-05-18T20:53:01.054Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Scheduled the next iteration to run `echo iter2`."
+    },
+    {
+      "index": 3,
+      "event_index": 18,
+      "virtual_time": "2026-05-18T20:53:03.346Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Scheduled the next iteration to run `echo iter2`."
+    },
+    {
+      "index": 4,
+      "event_index": 18,
+      "virtual_time": "2026-05-18T20:53:03.346Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Scheduled the next iteration to run `echo iter2`."
+    },
+    {
+      "index": 5,
+      "event_index": 24,
+      "virtual_time": "2026-05-18T20:53:08.212Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 30,
+      "virtual_time": "2026-05-18T20:53:12.254Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Both commands have now run: `echo iter1` in the first iteration, `echo iter2` in…"
+    }
+  ]
+}

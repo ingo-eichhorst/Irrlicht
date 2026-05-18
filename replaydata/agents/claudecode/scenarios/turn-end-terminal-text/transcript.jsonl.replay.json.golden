@@ -8,15 +8,14 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 8,
-    "consumed_events": 8,
+    "total_events": 12,
+    "consumed_events": 12,
     "total_transitions": 3,
-    "first_event_time": "2026-05-17T17:59:14.043Z",
-    "last_event_time": "2026-05-17T17:59:17.443Z",
-    "wall_clock_session_duration": 3400000000,
+    "first_event_time": "2026-05-17T22:21:09.703Z",
+    "last_event_time": "2026-05-17T22:21:11.801Z",
+    "wall_clock_session_duration": 2098000000,
     "state_durations": {
-      "ready": 1303000000,
-      "working": 2097000000
+      "working": 2098000000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -25,17 +24,18 @@
     "flickers_by_reason": {
       "force ready→working on first activity": 1
     },
-    "estimated_cost_usd": 0.21573,
+    "estimated_cost_usd": 0.093191,
     "cum_input_tokens": 6,
-    "cum_output_tokens": 6,
-    "cum_cache_creation_tokens": 34488,
+    "cum_output_tokens": 7,
+    "cum_cache_read_tokens": 17797,
+    "cum_cache_creation_tokens": 13454,
     "model_name": "claude-opus-4-7"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T17:59:14.043Z",
+      "virtual_time": "2026-05-17T22:21:09.703Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,8 +48,8 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "2026-05-17T17:59:15.346Z",
+      "event_index": 6,
+      "virtual_time": "2026-05-17T22:21:09.703Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -62,18 +62,18 @@
     },
     {
       "index": 2,
-      "event_index": 7,
-      "virtual_time": "2026-05-17T17:59:17.443Z",
+      "event_index": 11,
+      "virtual_time": "2026-05-17T22:21:11.801Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
+      "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "ok"
+      "last_assistant_text_head": "hello world"
     }
   ]
 }

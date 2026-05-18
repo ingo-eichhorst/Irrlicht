@@ -8,34 +8,29 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 8,
-    "consumed_events": 8,
+    "total_events": 12,
+    "consumed_events": 12,
     "total_transitions": 3,
-    "first_event_time": "2026-05-17T17:59:14.043Z",
-    "last_event_time": "2026-05-17T17:59:17.443Z",
-    "wall_clock_session_duration": 3400000000,
+    "first_event_time": "2026-05-18T22:11:57.177Z",
+    "last_event_time": "2026-05-18T22:12:07.262Z",
+    "wall_clock_session_duration": 10085000000,
     "state_durations": {
-      "ready": 1303000000,
-      "working": 2097000000
+      "working": 10085000000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
-    "estimated_cost_usd": 0.21573,
-    "cum_input_tokens": 6,
-    "cum_output_tokens": 6,
-    "cum_cache_creation_tokens": 34488,
-    "model_name": "claude-opus-4-7"
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "cum_input_tokens": 3,
+    "cum_output_tokens": 1,
+    "cum_cache_read_tokens": 12753,
+    "cum_cache_creation_tokens": 8244,
+    "model_name": "\u003csynthetic\u003e"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T17:59:14.043Z",
+      "virtual_time": "2026-05-18T22:11:57.177Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -49,7 +44,7 @@
     {
       "index": 1,
       "event_index": 5,
-      "virtual_time": "2026-05-17T17:59:15.346Z",
+      "virtual_time": "2026-05-18T22:11:57.177Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -62,18 +57,17 @@
     },
     {
       "index": 2,
-      "event_index": 7,
-      "virtual_time": "2026-05-17T17:59:17.443Z",
+      "event_index": 11,
+      "virtual_time": "2026-05-18T22:12:07.262Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
+      "reason": "user ESC interrupt while working → ready",
+      "last_event_type": "user",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "ok"
+      "waiting_for_user_input": false
     }
   ]
 }

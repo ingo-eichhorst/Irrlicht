@@ -32,18 +32,26 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		// Only POST should consume the request counter. HEAD/OPTIONS preflights
+		// or SDK probes would otherwise burn the happy-path slot.
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		_, _ = io.Copy(io.Discard, r.Body)
 		n := reqCount.Add(1)
-		log.Printf("/v1/messages #%d", n)
+		log.Printf("POST /v1/messages #%d", n)
 		if n == 1 {
 			streamHappyPath(w)
 			return
 		}
-		// Second and subsequent: quota exhausted (429).
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("anthropic-ratelimit-unified-status", "allowed_warning")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = fmt.Fprintln(w, `{"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit (https://docs.anthropic.com/en/api/rate-limits). Please retry later."}}`)
+	})
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("unhandled %s %s", r.Method, r.URL.Path)
@@ -67,13 +75,11 @@ func streamHappyPath(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
+	flusher := w.(http.Flusher)
 
 	write := func(event, data string) {
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
-		if flusher != nil {
-			flusher.Flush()
-		}
+		flusher.Flush()
 	}
 	write("message_start", `{"type":"message_start","message":{"id":"msg_mock_001","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`)
 	write("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
