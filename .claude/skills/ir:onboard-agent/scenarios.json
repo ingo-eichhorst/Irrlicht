@@ -2754,15 +2754,15 @@
     },
     {
       "name": "task-tool",
-      "description": "Parallel Task-tool spawn: parent kicks off two concurrent subagents in a single turn, each reading a different seed file. Generalizes foreground-subagent (single child) to the parallel-multi shape that the Task tool is most commonly used for and that the dashboard surfaces as nested child rows under a parent.",
+      "description": "Staggered Task-tool fan-out: parent kicks off three concurrent subagents in one turn, each running bash sleep N (5/10/15s). The recording shows the dashboard subagent count decrement 3 → 2 → 1 → 0 over ~15s, then the parent transitions working → ready after the last child reports. Generalizes foreground-subagent (1 child) and the prior task-tool recipe (2 children) to the three-stagger shape that exercises the dashboard count chip end-to-end.",
       "coverage_id": "task-tool",
       "requires": [
         "headless_mode",
         "subagents"
       ],
       "verify": {
-        "parent_linked_min": 2,
-        "subagent_transcripts_min": 2,
+        "parent_linked_min": 3,
+        "subagent_transcripts_min": 3,
         "final_state": "ready",
         "contains_tool_call": "Agent"
       },
@@ -2780,14 +2780,14 @@
           "script": [
             {
               "type": "send",
-              "text": "In a SINGLE turn, use the Task tool TWICE in parallel: one subagent reads README.md and reports the first heading; the other reads CHANGELOG.md and reports the most recent release date. Wait for BOTH subagents to finish, then reply 'done'."
+              "text": "In a SINGLE turn, use the Task tool THREE times in parallel. Each subagent receives the general-purpose type. Subagent A: run bash 'sleep 5 && echo A done'. Subagent B: run bash 'sleep 10 && echo B done'. Subagent C: run bash 'sleep 15 && echo C done'. After all three subagents report back, reply 'done'."
             },
             {
               "type": "wait_turn"
             },
             {
               "type": "sleep",
-              "seconds": 6
+              "seconds": 8
             }
           ],
           "verify": [
@@ -2800,7 +2800,7 @@
             "final session state for the parent is ready"
           ],
           "settings": {},
-          "timeout_seconds": 360
+          "timeout_seconds": 420
         }
       }
     }
