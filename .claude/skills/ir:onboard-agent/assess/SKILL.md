@@ -178,6 +178,51 @@ that the maintainer should add a column.
 - [ ] Current verdict captured (or "no entry"). Don't proceed if you
   haven't tried — drift detection depends on the comparison.
 
+### Step 2.5 — Confirm the agent's surface BEFORE declaring `agent_supports: no`
+
+If you're about to write `agent_supports: no`, the bar is higher than
+"`agent --help` doesn't mention it." Many features live inside the
+REPL as slash commands or hooks, not as top-level CLI flags. Before
+locking in `no`:
+
+1. **`strings <agent-binary>` for the feature's keywords.** Run e.g.
+   `strings $(which claude) | grep -iE "<feature>|/<slash>"` for any
+   string the feature would mention — slash command syntax, telemetry
+   event names, preamble constants, error messages. This catches
+   REPL-only features that `--help` never lists.
+2. **Search the agent's official docs / changelog / source repo** for
+   the same keywords. Vendor docs sometimes lag the binary; the
+   binary's strings are authoritative for "what shipped."
+3. **Scan obvious related slash commands.** `/help`, `/cost`,
+   `/model`, `/agents`, `/clear` are well known; less obvious ones
+   (`/goal`, `/compact`, `/init`, `/rewind`) are easy to miss when
+   you're only reading `--help`.
+
+**Worked example (the canonical miss):** the 2026-05-17 batch
+assessment wrote `claudecode/autonomous-loop: agent_supports: no`
+because `claude --help` lacks any `--auto` / `--goal` flag. A user
+correction pointed at the live `/goal` slash command. Re-running
+`strings $(which claude) | grep -iE "goal|autonomous"` surfaced
+`/goal <condition>`, `/goal clear`, `/goal active`,
+`AUTONOMOUS_LOOP_PREAMBLE`, `goal_status` / `goal_set` / `goal_met`
+telemetry events, and the Stop-hook re-prompt mechanism — all of
+which made the correct verdict `agent_supports: yes`,
+`irrlicht_observes: partial`. The fix landed in commits `3e33768`
+and `6898561`; corrected assessments live at
+`replaydata/agents/claudecode/scenarios/autonomous-loop/assessment.json`
+and `.../autonomous-loop-iteration-limit/assessment.json`.
+
+If the strings scan still finds nothing, THEN `agent_supports: no` is
+honest — and the `sources` array MUST cite the binary scan that
+came up empty so future audits don't re-litigate the same question.
+
+► **Verify before moving on:**
+- [ ] Ran a `strings` (or equivalent) scan against the agent binary
+  for the feature's keywords. Empty result is fine but cite it.
+- [ ] Checked vendor docs / changelog for the feature.
+- [ ] For REPL-driven agents, considered whether the feature is a
+  slash command rather than a CLI flag.
+
 ### Step 3 — Read the adapter's transport
 
 ```
