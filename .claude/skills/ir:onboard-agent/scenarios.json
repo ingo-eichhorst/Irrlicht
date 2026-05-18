@@ -2260,66 +2260,37 @@
     },
     {
       "name": "token-quota-exhausted",
-      "description": "Agent hits a hard token cap or subscription quota mid-turn (canonical example: Claude Code's 5-hour subscription budget). Expected arc per spec: ready → working → ready, state must not stick in working, subsequent prompts may not produce a new turn until the budget resets. Per the assessment (irrlicht_observes: partial, confidence 0.55), Bucket A (transcript epilogue with quota-error text) lands at ready correctly via classifier rule 2b; the 'state stays ready under follow-up prompts' bullet is the partial gap — current parser shows a fast working→ready flicker on the next user input because rule 4 still treats a user-line as → working. Recipe is NOT runnable today: triggering quota exhaustion in a real recording would burn the maintainer's actual Anthropic subscription. Deferred until a mock/env-injection path exists (e.g. ANTHROPIC_BASE_URL stub returning 429).",
+      "description": "Mocked 429 recording: a local Anthropic-compatible stub (tools/mock-anthropic-429.go) returns 200 + end_turn on the first /v1/messages request and HTTP 429 on the second. claude runs under --bare so it reads ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (OAuth/keychain are bypassed). The bespoke recorder at tools/record-token-quota-exhausted.sh handles launch, driving, and fixture staging — the standard driver-claudecode-interactive.sh does not pass --bare.",
       "coverage_id": "token-quota-exhausted",
       "requires": [
         "headless_mode"
       ],
       "verify": {
+        "min_turns": 1,
         "final_state": "ready",
-        "transitions_topology": [
-          "ready",
-          "working",
-          "ready"
-        ]
+        "has_waiting_state": false
       },
       "by_adapter": {
         "claudecode": {
-          "applicable": false,
-          "reason": "Triggering claudecode's 5-hour subscription quota in a live recording would burn the maintainer's actual Anthropic subscription budget; deferred until a mock/env-injection path exists (e.g. an ANTHROPIC_BASE_URL stub that returns a 429 quota-error response, or a pre-recorded JSONL replay). Per the assessment the 'state stays ready under follow-up prompts' bullet is also a partial-observation gap in the current classifier (rule 4 flips a user-line → working before the next quota-error response flips it back), so even with a stub the spec assertion would need softening or a parser refinement that recognises quota-error response shapes.",
-          "preconditions_when_unblocked": [
-            "claude CLI on PATH and authenticated",
-            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
-            "a controlled quota-error transport — either a mock ANTHROPIC_BASE_URL, a pre-recorded JSONL replay, OR a test account that is genuinely near its 5h cap and can safely be exhausted",
-            "no other claudecode session uses the recipe's UUID"
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH",
+            "go on PATH (to build the mock)",
+            "irrlichd running with --record (recording is captured via attached daemon)",
+            "port 18765 available on localhost"
           ],
-          "future_setup_sketch": [
-            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
-            "Driver points claude at a stub ANTHROPIC_BASE_URL that returns 429 'quota_exceeded' on the next POST",
-            "Driver issues one normal turn first to confirm the session is healthy, then issues the quota-bound turn and asserts working→ready via the synthesized error-bearing assistant line"
+          "setup": [
+            "tools/record-token-quota-exhausted.sh builds the mock, launches it, drives claude under --bare, and stages the fixture under .build/refresh/claudecode/token-quota-exhausted-<TS>/."
           ],
-          "future_script_sketch": [
-            {
-              "type": "send",
-              "text": "Reply with exactly the word: ok"
-            },
-            {
-              "type": "wait_turn"
-            },
-            {
-              "type": "sleep",
-              "seconds": 3
-            },
-            {
-              "type": "send",
-              "text": "Trigger the quota-bound turn (stubbed 429 response)"
-            },
-            {
-              "type": "wait_turn"
-            },
-            {
-              "type": "sleep",
-              "seconds": 4
-            }
-          ],
-          "future_verify_sketch": [
-            "events.jsonl shows ready → working when the quota-bound user prompt lands",
-            "events.jsonl shows working → ready when the quota-error response is written to the transcript (or when the system/turn_duration / Stop hook fires)",
-            "session state does NOT stick in working — recovery within the sweep interval",
-            "(soft) follow-up user prompts after the quota hit do not produce a sustained working span — see assessment caveat 2"
+          "driver": "tools/record-token-quota-exhausted.sh",
+          "verify": [
+            "events.jsonl shows session_birth → prompt1 working/ready arc → prompt2 working/ready arc",
+            "final state of the session is ready",
+            "no state_transition to waiting (no permission gates expected)",
+            "the second prompt's working→ready transition is the quota-exhausted code path"
           ],
           "settings": {},
-          "timeout_seconds": 180
+          "timeout_seconds": 120
         }
       }
     },
