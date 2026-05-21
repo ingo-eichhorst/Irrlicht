@@ -246,6 +246,11 @@ cd Irrlicht
         The daemon listens on <code>127.0.0.1:7837</code> by default. This port is not exposed to the network. See the <a href="configuration.html">Configuration</a> page to change the bind address or port.
       </div>
 
+      <div class="callout callout-tip">
+        <strong>Restart Claude Code after first launch</strong>
+        On first launch, Irrlicht registers a <code>statusLine.command</code> entry in <code>~/.claude/settings.json</code>. Any Claude Code session already running at that point won't pick it up &mdash; close and reopen it once to activate the integration.
+      </div>
+
       <!-- ── Uninstalling ── -->
       <h2 id="uninstalling">Uninstalling</h2>
 

@@ -179,12 +179,17 @@ func TestUnchainStatuslineCommand_StandaloneReturnsEmpty(t *testing.T) {
 }
 
 func TestChainStatuslineCommand_WrapUsesBashEnvelope(t *testing.T) {
-	got := chainStatuslineCommand("/usr/local/bin/my-statusline")
+	user := "/usr/local/bin/my-statusline"
+	got := chainStatuslineCommand(user)
 	if !strings.HasPrefix(got, `bash -c 'tee >(`) {
 		t.Errorf("expected bash -c envelope, got %q", got)
 	}
-	if !strings.HasSuffix(got, `|| true'`) {
-		t.Errorf("expected trailing `|| true'`, got %q", got)
+	// v3: curl sits in the process sub; user command is last (ends with user+quote).
+	if !strings.HasSuffix(got, user+`'`) {
+		t.Errorf("expected user command at end of pipeline, got %q", got)
+	}
+	if !strings.Contains(got, statuslineSentinel) {
+		t.Errorf("expected sentinel in process sub, got %q", got)
 	}
 }
 
@@ -234,15 +239,21 @@ func TestUnchainStatuslineCommand_ToleratesExtraWhitespace(t *testing.T) {
 	}
 }
 
-func TestChainStatuslineCommand_MigratesV1WrapToV2(t *testing.T) {
+func TestChainStatuslineCommand_MigratesOldWrapsToV3(t *testing.T) {
 	userCmd := "bash ~/.claude/interplay-statusline.sh"
+	// v1 (no bash envelope)
 	v1 := "tee >(" + userCmd + ") | curl -fsS --max-time 1 -X POST --data-binary @- " +
 		"http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true"
-	got := chainStatuslineCommand(v1)
-	if !strings.HasPrefix(got, `bash -c 'tee >(`) {
-		t.Fatalf("expected v2 (bash -c) form after migration, got %q", got)
-	}
-	if !strings.Contains(got, userCmd) {
-		t.Errorf("expected user command to survive migration, got %q", got)
+	// v2 (user command in process sub)
+	v2 := `bash -c 'tee >(` + userCmd + `) | curl -fsS --max-time 1 -X POST --data-binary @- ` +
+		`http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true'`
+	for _, old := range []string{v1, v2} {
+		got := chainStatuslineCommand(old)
+		if !strings.HasPrefix(got, v3WrapPrefix) {
+			t.Errorf("expected v3 form after migration, got %q", got)
+		}
+		if !strings.Contains(got, userCmd) {
+			t.Errorf("expected user command to survive migration, got %q", got)
+		}
 	}
 }

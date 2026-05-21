@@ -11,10 +11,15 @@ import (
 )
 
 // unchainBoundary matches the boundary between the user's tee-fed
-// command and our trailing curl pipeline. Whitespace-tolerant so a
-// hand-edited wrap with extra spaces still round-trips through
-// unchainStatuslineCommand.
+// command and the trailing curl pipeline in the legacy v1/v2 wrap format.
+// Whitespace-tolerant so a hand-edited wrap with extra spaces still
+// round-trips through unchainStatuslineCommand.
 var unchainBoundary = regexp.MustCompile(`\)\s*\|\s*curl\s`)
+
+// v3WrapPrefix is the fixed leading literal of the current wrap format.
+// The user's command follows immediately after this prefix and is
+// terminated by a closing single quote.
+const v3WrapPrefix = `bash -c 'tee >(` + installedStatuslineCommand + `) | `
 
 // statuslineSentinel is the substring that identifies an irrlicht-managed
 // statusline command. Used for idempotency checks and chained-command
@@ -141,11 +146,14 @@ func writeStatuslineCommand(settings map[string]interface{}, cmd string) {
 //
 // Internal shape, inside `bash -c "…"`:
 //
-//	tee >(<user command>) | curl -fsS … >/dev/null 2>&1 || true
+//	tee >(curl -fsS … >/dev/null 2>&1 || true) | <user command>
 //
-// The user's command sees a copy of stdin via `tee`; the trailing curl
-// branch carries stdin onward to our endpoint. The `|| true` keeps the
-// overall command status zero so Claude Code doesn't surface a failure.
+// curl runs in a process substitution so it receives a copy of stdin
+// without sitting in the main pipeline. The user's command runs last in
+// the pipeline, so its stdout flows directly back to Claude Code, which
+// reads it to display the status line text. Prior wrap formats (v1: bare
+// tee pipeline; v2: user command in the process sub) are migrated on the
+// next daemon start via unchainStatuslineCommand + re-chain.
 func chainStatuslineCommand(current string) string {
 	if current == "" || current == installedStatuslineCommand {
 		return installedStatuslineCommand
@@ -169,21 +177,33 @@ func chainStatuslineCommand(current string) string {
 // wrapStatuslineCommand builds the canonical chained form for the given
 // user command. Single-quotes inside the user's command are escaped so the
 // command can be embedded in `bash -c '…'` without breaking quoting.
+// curl sits in a process substitution so its stdout (silenced via
+// >/dev/null) doesn't sit in the main pipeline; the user command
+// runs last so its stdout reaches Claude Code directly.
 func wrapStatuslineCommand(user string) string {
 	escaped := strings.ReplaceAll(user, "'", `'\''`)
-	return `bash -c 'tee >(` + escaped + `) | curl -fsS --max-time 1 -X POST --data-binary @- ` +
-		`http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true'`
+	return v3WrapPrefix + escaped + `'`
 }
 
 // unchainStatuslineCommand returns the user's original command when current
 // was a chained wrap, or "" otherwise (standalone install, unknown shape).
 //
-// Recognises both wrap formats:
-//   - v1 (broken under sh): `tee >(<user>) | curl … sentinel … || true`
-//   - v2 (canonical):       `bash -c 'tee >(<user>) | curl … sentinel … || true'`
+// Recognises three wrap formats:
+//   - v3 (current):  `bash -c 'tee >(<curl+sentinel>) | <user>'`
+//   - v2 (legacy):   `bash -c 'tee >(<user>) | curl … sentinel … || true'`
+//   - v1 (broken):   `tee >(<user>) | curl … sentinel … || true`
 //
-// The v1 form is still recognised for migration; new installs always emit v2.
+// v1 and v2 are still recognised for migration; new installs always emit v3.
 func unchainStatuslineCommand(current string) string {
+	// v3: user command follows the fixed curl-in-sub prefix and a closing quote.
+	// Note: v2 also ends with "'" (its bash -c closing quote), but v2 starts
+	// with `bash -c 'tee >(user`, not `bash -c 'tee >(curl`, so the HasPrefix
+	// check is unambiguous.
+	if strings.HasPrefix(current, v3WrapPrefix) && strings.HasSuffix(current, "'") {
+		inner := current[len(v3WrapPrefix) : len(current)-1]
+		return strings.ReplaceAll(inner, `'\''`, "'")
+	}
+	// v1/v2: user command is before the `) | curl ` boundary.
 	for _, prefix := range []string{`bash -c 'tee >(`, `tee >(`} {
 		if !strings.HasPrefix(current, prefix) {
 			continue
