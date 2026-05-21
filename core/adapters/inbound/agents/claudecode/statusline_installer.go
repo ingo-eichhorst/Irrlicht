@@ -177,8 +177,8 @@ func chainStatuslineCommand(current string) string {
 // wrapStatuslineCommand builds the canonical chained form for the given
 // user command. Single-quotes inside the user's command are escaped so the
 // command can be embedded in `bash -c '…'` without breaking quoting.
-// curl sits in a process substitution so its stdin (and stdout via
-// >/dev/null) don't interfere with the main pipeline; the user command
+// curl sits in a process substitution so its stdout (silenced via
+// >/dev/null) doesn't sit in the main pipeline; the user command
 // runs last so its stdout reaches Claude Code directly.
 func wrapStatuslineCommand(user string) string {
 	escaped := strings.ReplaceAll(user, "'", `'\''`)
@@ -195,7 +195,10 @@ func wrapStatuslineCommand(user string) string {
 //
 // v1 and v2 are still recognised for migration; new installs always emit v3.
 func unchainStatuslineCommand(current string) string {
-	// v3: user command is after the fixed curl-in-sub prefix.
+	// v3: user command follows the fixed curl-in-sub prefix and a closing quote.
+	// Note: v2 also ends with "'" (its bash -c closing quote), but v2 starts
+	// with `bash -c 'tee >(user`, not `bash -c 'tee >(curl`, so the HasPrefix
+	// check is unambiguous.
 	if strings.HasPrefix(current, v3WrapPrefix) && strings.HasSuffix(current, "'") {
 		inner := current[len(v3WrapPrefix) : len(current)-1]
 		return strings.ReplaceAll(inner, `'\''`, "'")
