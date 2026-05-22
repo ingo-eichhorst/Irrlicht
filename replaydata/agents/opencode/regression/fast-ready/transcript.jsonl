@@ -1,0 +1,4 @@
+{"type":"text","text":"What is 2+2?","_role":"user","_cwd":"/Users/test/myproject","_ts":1700000000000}
+{"type":"step-start","snapshot":"abc123","_role":"assistant","_cwd":"/Users/test/myproject","_ts":1700000000100}
+{"type":"text","text":"4","_role":"assistant","_cwd":"/Users/test/myproject","_ts":1700000000500}
+{"type":"step-finish","reason":"stop","tokens":{"input":100,"output":5,"reasoning":0,"total":105,"cache":{"read":0,"write":0}},"cost":0.001,"_model":"claude-sonnet-4-5","_role":"assistant","_cwd":"/Users/test/myproject","_ts":1700000003000}

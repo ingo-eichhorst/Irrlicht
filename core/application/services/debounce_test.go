@@ -183,3 +183,63 @@ func TestDebounce_RemovedCleansUpTimer(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestDebounce_TerminalEventShortCircuits(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "term1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/term1.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     1,
+	})
+
+	// First non-terminal event — fires immediately (leading edge) and starts the 2s timer.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "term1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/term1.jsonl",
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	repo.mu.Lock()
+	savesAfterFirst := repo.saves
+	repo.mu.Unlock()
+
+	// Terminal event mid-window — should fire immediately, not after 2s.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "term1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/term1.jsonl",
+		Terminal:       true,
+	}
+
+	// Wait well under the 2s debounce window.
+	time.Sleep(100 * time.Millisecond)
+
+	repo.mu.Lock()
+	savesAfterTerminal := repo.saves
+	repo.mu.Unlock()
+
+	if savesAfterTerminal <= savesAfterFirst {
+		t.Errorf("terminal event should trigger processActivity immediately: saves before=%d after=%d", savesAfterFirst, savesAfterTerminal)
+	}
+
+	cancel()
+	<-done
+}

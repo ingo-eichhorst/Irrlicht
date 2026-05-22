@@ -217,7 +217,17 @@ func (d *SessionDetector) onActivity(id agent.Identity, ev agent.Event) {
 		return
 	}
 
-	// Subsequent event within the debounce window — coalesce.
+	// Subsequent event within the debounce window.
+	if ev.Terminal {
+		// Turn-end signal: short-circuit the debounce, fire immediately.
+		entry.timer.Stop()
+		delete(d.debounce, sid)
+		d.debounceMu.Unlock()
+		d.processActivity(id, ev)
+		return
+	}
+
+	// Coalesce.
 	entry.latest = ev
 	entry.pending = true
 	entry.timer.Reset(activityDebounceWindow)
