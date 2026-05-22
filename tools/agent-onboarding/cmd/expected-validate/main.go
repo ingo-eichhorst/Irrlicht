@@ -29,8 +29,10 @@ func main() {
 		os.Exit(2)
 	}
 	if report == nil {
-		// No expected.jsonl present — nothing to validate. Pass.
-		fmt.Println(`{"pass": true, "skipped": "no expected.jsonl present"}`)
+		// Nothing to validate — either expected.jsonl is missing (no
+		// spec declared yet) or events.jsonl is missing (applicable:
+		// false scenario whose recording cannot be captured today).
+		fmt.Println(`{"pass": true, "skipped": "nothing to validate (no expected.jsonl or no events.jsonl)"}`)
 		os.Exit(0)
 	}
 	enc := json.NewEncoder(os.Stdout)

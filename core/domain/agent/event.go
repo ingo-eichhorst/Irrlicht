@@ -25,4 +25,5 @@ type Event struct {
 	Size            int64  // Current file size in bytes (0 for removals)
 	CWD             string // Working directory of the agent process (set by process scanner)
 	ParentSessionID string // Parent session ID for subagent sessions (empty for top-level)
+	Terminal        bool   // true when this activity event ends the agent's turn (fast-path debounce)
 }

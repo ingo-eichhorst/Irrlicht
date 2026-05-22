@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -419,6 +420,24 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 	}
 }
 
+// isTerminalPart reports whether a part JSON blob is a step-finish with a
+// turn-ending reason (stop / interrupted / length / error). Returns false for
+// tool-calls pauses or any parse failure — fail-open.
+func isTerminalPart(data string) bool {
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+		return false
+	}
+	if t, _ := raw["type"].(string); t != "step-finish" {
+		return false
+	}
+	switch reason, _ := raw["reason"].(string); reason {
+	case "stop", "interrupted", "length", "error", "content-filter":
+		return true
+	}
+	return false
+}
+
 // scanParts queries new/updated part rows for a session since lastCursor and
 // emits EventActivity events. Updates the cursor on success.
 //
@@ -449,6 +468,7 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 
 	var maxSeen int64
 	hasActivity := false
+	hasTerminal := false
 	newSeenIDs := make(map[string]struct{})
 
 	for rows.Next() {
@@ -472,7 +492,9 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 			newSeenIDs[partID] = struct{}{}
 		}
 		hasActivity = true
-		_ = partData // activity signalled via EventActivity; parsing in metrics collector
+		if !hasTerminal && isTerminalPart(partData) {
+			hasTerminal = true
+		}
 		_ = msgData
 	}
 
@@ -493,6 +515,7 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 			ProjectDir:     filepath.Base(directory),
 			TranscriptPath: w.dbPath + "-wal" + "?session=" + sessionID,
 			CWD:            directory,
+			Terminal:       hasTerminal,
 		})
 	}
 }

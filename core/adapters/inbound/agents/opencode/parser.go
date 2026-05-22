@@ -133,6 +133,9 @@ func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer
 				CacheCreation5m: snap.CacheCreation,
 			}
 			modelName, _ := raw["_model"].(string)
+			if modelName != "" {
+				ev.ModelName = modelName
+			}
 			cost := extractCost(raw)
 			contrib := &tailer.PerTurnContribution{
 				Model: modelName,
@@ -160,6 +163,9 @@ func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer
 		ev.EventType = "turn_done"
 	case "error":
 		// API or other error — the agent stopped generating.
+		ev.EventType = "turn_done"
+	case "content-filter":
+		// Model output was filtered — generation is definitively done.
 		ev.EventType = "turn_done"
 	default:
 		// Unknown reason — conservatively treat as assistant_message.

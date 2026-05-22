@@ -128,8 +128,11 @@ type recordedEvent struct {
 
 // ValidateExpected loads expected.jsonl + events.jsonl from
 // scenarioDir and validates the recording against the spec-grounded
-// expectations. Returns nil + nil if scenarioDir has no expected.jsonl
-// (no expectations declared yet → nothing to validate, not a fail).
+// expectations. Returns nil + nil when there is nothing to validate:
+// either expected.jsonl is missing (no expectations declared yet) OR
+// events.jsonl is missing (recording not yet captured — typical for
+// applicable:false scenarios where the spec is committed but the
+// driver can't produce a recording today).
 func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
 	return ValidateExpectedAgainst(
 		filepath.Join(scenarioDir, "expected.jsonl"),
@@ -147,6 +150,9 @@ func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
 func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, error) {
 	if _, err := os.Stat(expectedPath); err != nil {
 		return nil, nil // not configured for this scenario
+	}
+	if _, err := os.Stat(eventsPath); err != nil {
+		return nil, nil // events.jsonl not captured yet — same shape as no expected.jsonl
 	}
 	meta, phases, err := loadExpected(expectedPath)
 	if err != nil {

@@ -33,6 +33,8 @@ const (
 
 	// Debounce: records coalescing for faithful replay.
 	KindDebounceCoalesced Kind = "debounce_coalesced"
+	// Terminal event bypassed the debounce window entirely.
+	KindDebounceTerminal Kind = "debounce_terminal"
 
 	// Agent hooks (future: issue #108).
 	KindHookReceived Kind = "hook_received"

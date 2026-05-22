@@ -571,3 +571,29 @@ func drainEvents(ch <-chan agent.Event) {
 		}
 	}
 }
+
+func TestIsTerminalPart(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"stop", `{"type":"step-finish","reason":"stop"}`, true},
+		{"interrupted", `{"type":"step-finish","reason":"interrupted"}`, true},
+		{"length", `{"type":"step-finish","reason":"length"}`, true},
+		{"error", `{"type":"step-finish","reason":"error"}`, true},
+		{"content-filter", `{"type":"step-finish","reason":"content-filter"}`, true},
+		{"tool-calls", `{"type":"step-finish","reason":"tool-calls"}`, false},
+		{"unknown-reason", `{"type":"step-finish","reason":"unknown"}`, false},
+		{"not-step-finish", `{"type":"text","text":"hello"}`, false},
+		{"malformed-json", `{not valid json`, false},
+		{"empty", `{}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTerminalPart(tc.data); got != tc.want {
+				t.Errorf("isTerminalPart(%q) = %v, want %v", tc.data, got, tc.want)
+			}
+		})
+	}
+}

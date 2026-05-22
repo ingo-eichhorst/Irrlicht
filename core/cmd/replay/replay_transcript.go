@@ -242,6 +242,9 @@ func loadEvents(path string) ([]rawEvent, error) {
 				} else if parsed, err := time.Parse("2006-01-02T15:04:05.000Z", v); err == nil {
 					ts = parsed
 				}
+			} else if v, ok := raw["_ts"].(float64); ok && v > 0 {
+				// OpenCode transcripts carry _ts as Unix milliseconds.
+				ts = time.UnixMilli(int64(v)).UTC()
 			}
 		}
 

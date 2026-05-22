@@ -11,21 +11,23 @@
     "total_events": 12,
     "consumed_events": 12,
     "total_transitions": 3,
-    "first_event_time": "0001-01-01T00:00:00Z",
-    "last_event_time": "0001-01-01T00:00:00Z",
-    "wall_clock_session_duration": 0,
-    "state_durations": {},
+    "first_event_time": "2025-04-26T20:40:00Z",
+    "last_event_time": "2025-04-26T20:40:02.3Z",
+    "wall_clock_session_duration": 2300000000,
+    "state_durations": {
+      "ready": 2300000000
+    },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
     "estimated_cost_usd": 0.0002,
-    "model_name": "claude-sonnet-4-6"
+    "model_name": "claude-sonnet-4-5"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "0001-01-01T00:00:00Z",
+      "virtual_time": "2025-04-26T20:40:00Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -39,7 +41,7 @@
     {
       "index": 1,
       "event_index": 11,
-      "virtual_time": "0001-01-01T00:00:00Z",
+      "virtual_time": "2025-04-26T20:40:02.3Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -54,7 +56,7 @@
     {
       "index": 2,
       "event_index": 11,
-      "virtual_time": "0001-01-01T00:00:00Z",
+      "virtual_time": "2025-04-26T20:40:02.3Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",

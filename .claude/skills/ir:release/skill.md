@@ -392,10 +392,11 @@ on any unauthorized link:
 
 ```bash
 # Each entry is "framework-name | reason | fix-pointer".
-# Add more here as we discover them. When DevID is in (#233) the
-# entitlement-bearing entries can be removed from this list.
+# Static Intents.framework is still forbidden even with DevID: FocusMonitor.swift
+# intentionally uses NSClassFromString dispatch to avoid the TCC preflight.
+# Remove this entry once #357 restores the static import Intents path.
 FORBIDDEN_FRAMEWORKS=(
-  "Intents.framework|preflights kTCCServiceListenEvent at startup; needs com.apple.developer.focus-status (DevID-gated)|FocusMonitor.swift uses NSClassFromString dispatch since #358 — keep that pattern"
+  "Intents.framework|preflights kTCCServiceListenEvent at startup; FocusMonitor.swift uses NSClassFromString dispatch — keep that pattern until #357 restores static import|do not add import Intents statically until #357"
 )
 
 violations=0
@@ -468,34 +469,18 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    the full template below verbatim, substituting only `$NEW_VERSION` and
    the build number.
 
-   **Coupling rule (counterintuitive — read this before changing the
-   template):** the relationship between `Irrlicht.entitlements`, the
-   Info.plist `NS*UsageDescription` keys, and the linked frameworks is
-   *inverted* for ad-hoc-signed builds.
+   **Coupling rule:** the build now uses Developer ID signing with the
+   entitlements file, so `com.apple.developer.focus-status` is properly
+   claimed. `FocusMonitor.swift` detects the Developer ID signature at
+   runtime and loads `INFocusStatusCenter` via `NSClassFromString` —
+   no static `Intents.framework` link. (#357 tracks the eventual cleanup
+   to static `import Intents` once we confirm the dynamic gate is no
+   longer needed.)
 
-   - **Apple-restricted entitlements** (e.g. `com.apple.developer.focus-status`)
-     cannot be claimed by an ad-hoc-signed binary — AMFI rejects the
-     bundle at launch with `launchd POSIX 153` / "Launchd job spawn
-     failed" (v0.4.3 crash, fixed in #356).
-   - **`NS*UsageDescription` keys for those entitlements** can still
-     trigger a TCC SIGABRT if the matching framework is *statically
-     linked* — TCC preflights `kTCCServiceListenEvent` (and similar)
-     at process startup whenever it sees the framework, regardless of
-     whether any API is actually called. **`NSFocusStatusUsageDescription`
-     in particular crashes ad-hoc-signed builds that link
-     `Intents.framework`** (v0.4.3 crash, fixed in #358).
-   - **The fix is structural, not declarative.** Source code must not
-     statically link those frameworks on ad-hoc builds. `FocusMonitor.swift`
-     uses a Developer-ID-signature runtime gate + `NSClassFromString`
-     dispatch for exactly this reason (#357 tracks the eventual
-     restoration of the static path once Developer ID lands).
-
-   For the Info.plist template below, the practical consequences are:
-
-   | Key | Include for ad-hoc? | Include once DevID lands (#233 / #357)? |
+   | Key | Include for ad-hoc? | Include for DevID (current)? |
    |---|---|---|
    | `NSAppleEventsUsageDescription` | Yes | Yes |
-   | `NSFocusStatusUsageDescription` | **No** — even though `FocusMonitor.swift` exists in source, the runtime gate keeps Intents.framework unloaded. Adding the key with no framework reference is harmless; adding it once the framework is linked is a SIGABRT. | Yes (alongside the entitlement re-claim). |
+   | `NSFocusStatusUsageDescription` | **No** — the runtime gate keeps Intents.framework unloaded on ad-hoc builds; the key + a statically linked Intents causes a TCC SIGABRT (v0.4.3). | **Yes** — DevID is in place (#233/#357). The entitlement is authorized and the key is included in the template. |
    | Anything new | Audit the source. If the relevant Swift code uses `import <Framework>` directly, the binary will link the framework, and TCC may preflight at startup. Either gate the source (FocusMonitor pattern) or skip the usage description until DevID. |
 
    ```xml
@@ -529,37 +514,106 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
        <true/>
        <key>NSAppleEventsUsageDescription</key>
        <string>Irrlicht needs to send Apple Events to focus terminal and IDE windows when you click a session in the menu bar.</string>
+       <key>NSFocusStatusUsageDescription</key>
+       <string>Irrlicht uses macOS Focus status to silence notification sounds and spoken alerts while you're in Do Not Disturb, Sleep, or any other Focus mode.</string>
        <key>NSHumanReadableCopyright</key>
        <string>Copyright © 2026 Ingo Eichhorst. MIT License.</string>
        <key>NSPrincipalClass</key>
        <string>NSApplication</string>
+       <key>SUFeedURL</key>
+       <string>https://irrlicht.io/appcast.xml</string>
+       <key>SUPublicEDKey</key>
+       <string>nKRcUPAmK6syLFEvp9O30FFvjhTIfGxYVv/6y8zpZI0=</string>
+       <key>SUEnableAutomaticChecks</key>
+       <true/>
    </dict>
    </plist>
    ```
 
-7. Ad-hoc code sign. **Do not pass `--entitlements`.** AMFI (Apple Mobile
-   File Integrity) rejects ad-hoc-signed binaries that claim Apple-restricted
-   entitlements; `com.apple.developer.focus-status` (in
-   `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements`) is one such
-   entitlement. Applying the entitlements file at sign time bakes that claim
-   into the binary, which `amfid` then refuses to launch — surfacing as
-   `launchd POSIX 153` / `Launchd job spawn failed` on first launch (#356).
-   The `Irrlicht.entitlements` file is preserved in the repo for the future
-   Developer-ID-signed + notarized path (separate work, tracked under #233);
-   until that lands, it must not be applied. When DevID arrives, restore the
-   `--entitlements` flag *and* re-add `NSFocusStatusUsageDescription` to the
-   Info.plist template above *and* restore the static `import Intents` /
-   direct API usage in `FocusMonitor.swift` (#357 tracks the full restoration
-   checklist — there are three coupled touchpoints that all flip together).
+7. **Sign with Developer ID, then notarize and staple the DMG.**
+
+   One-time credential setup (skip if already done):
    ```bash
-   codesign --force --deep --sign - "$APP_STAGING/Contents/MacOS/irrlichd"
-   codesign --force --deep --sign - "$APP_STAGING"
-   codesign --verify --deep --strict "$APP_STAGING"
-   # Sanity check — must be empty (matches v0.4.2 working behavior).
-   codesign -d --entitlements - "$APP_STAGING" 2>&1 | grep -q '\[Key\]' \
-     && { echo "FAIL: entitlements baked into ad-hoc binary"; exit 1; } \
-     || echo "OK no entitlements (AMFI won't reject)"
+   xcrun notarytool store-credentials irrlicht-notarytool \
+       --apple-id <your@apple.id> --team-id 93Y3GMJAMV
    ```
+
+   Sign and verify. Sparkle's nested helpers (XPC services, Updater.app,
+   Autoupdate, the framework binary) must each be signed deepest-first
+   before the outer bundle so `codesign --verify --deep --strict` accepts
+   the chain. Order per https://sparkle-project.org/documentation/sandboxing/.
+   ```bash
+   DEVID="Developer ID Application: Ingo Eichhorst (93Y3GMJAMV)"
+   ENTITLEMENTS="$(pwd)/platforms/macos/Irrlicht/Resources/Irrlicht.entitlements"
+   SPARKLE_FW="$APP_STAGING/Contents/Frameworks/Sparkle.framework"
+   SPARKLE_VERSION_DIR="$SPARKLE_FW/Versions/Current"
+
+   for xpc in "$SPARKLE_VERSION_DIR"/XPCServices/*.xpc; do
+       codesign --force --sign "$DEVID" --options runtime --timestamp "$xpc"
+   done
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       "$SPARKLE_VERSION_DIR/Updater.app"
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       "$SPARKLE_VERSION_DIR/Autoupdate"
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       "$SPARKLE_VERSION_DIR/Sparkle"
+   codesign --force --sign "$DEVID" --options runtime --timestamp "$SPARKLE_FW"
+
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       "$APP_STAGING/Contents/MacOS/irrlichd"
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       "$APP_STAGING/Contents/MacOS/irrlicht-focus"
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       --entitlements "$ENTITLEMENTS" "$APP_STAGING"
+   codesign --verify --deep --strict "$APP_STAGING"
+   codesign -d --entitlements - "$APP_STAGING" 2>&1 | grep -q 'com.apple.developer.focus-status' \
+     && echo "OK: focus-status entitlement present" \
+     || { echo "FAIL: focus-status entitlement missing"; exit 1; }
+   ```
+
+   Notarize and staple the DMG after packaging (step 9):
+   ```bash
+   xcrun notarytool submit /tmp/Irrlicht-${NEW_VERSION}.dmg \
+       --keychain-profile irrlicht-notarytool --wait
+   xcrun stapler staple /tmp/Irrlicht-${NEW_VERSION}.dmg
+   xcrun stapler validate /tmp/Irrlicht-${NEW_VERSION}.dmg
+   spctl -a -t open --context context:primary-signature -v /tmp/Irrlicht-${NEW_VERSION}.dmg
+   ```
+
+   Sign the DMG with Sparkle's EdDSA key and append a new entry to
+   `site/appcast.xml` so existing installs receive the update prompt.
+   The private key lives in the maintainer's macOS Keychain (and is
+   backed up at `~/Documents/better-be-great/projects/irrlicht/sparkle_ed25519_private.key`).
+   ```bash
+   SIGN_UPDATE="platforms/macos/.build/artifacts/sparkle/Sparkle/bin/sign_update"
+   # sign_update emits a single line like:
+   #   sparkle:edSignature="…" length="…"
+   SIGN_OUTPUT=$("$SIGN_UPDATE" /tmp/Irrlicht-${NEW_VERSION}.dmg)
+   ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
+   DMG_LENGTH=$(echo "$SIGN_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+   RFC822_DATE=$(LC_ALL=C date -u +'%a, %d %b %Y %H:%M:%S +0000')
+   ```
+   Insert a new `<item>` block at the top of `<channel>` in `site/appcast.xml`,
+   filling in the version, date, edSignature, length, and download URL:
+   ```xml
+   <item>
+       <title>Version ${NEW_VERSION}</title>
+       <pubDate>${RFC822_DATE}</pubDate>
+       <sparkle:version>${NEW_VERSION}</sparkle:version>
+       <sparkle:shortVersionString>${NEW_VERSION}</sparkle:shortVersionString>
+       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+       <sparkle:releaseNotesLink>https://irrlicht.io/docs/changelog.html#v${NEW_VERSION//./-}</sparkle:releaseNotesLink>
+       <enclosure
+           url="https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/Irrlicht-${NEW_VERSION}.dmg"
+           sparkle:edSignature="${ED_SIGNATURE}"
+           length="${DMG_LENGTH}"
+           type="application/octet-stream" />
+   </item>
+   ```
+   Run `xmllint --noout site/appcast.xml` before committing. The release
+   commit in step 10 must include `site/appcast.xml` — GitHub Pages serves
+   it from `https://irrlicht.io/appcast.xml` so existing installs see the
+   new entry.
 8. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
    the process is still alive, has spawned `irrlichd`, and that the daemon
    serves the dashboard at `127.0.0.1:7837/`.
@@ -635,9 +689,11 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
       symbol just before `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__` is
       the API or framework the preflight checked.
    3. Compare `codesign -d --entitlements -` output against the prior
-      release. New entitlement entries on an ad-hoc binary are killed
-      by AMFI with POSIX 153 (v0.4.3 mode, fixed in #356; the entitlement
-      audit in step 7 should have caught it).
+      release. The DevID-signed binary should carry exactly
+      `com.apple.developer.focus-status`. Extra or missing entitlements
+      vs. `Irrlicht.entitlements` indicate a codesign step error — fix
+      and re-sign before shipping (v0.4.3 mode: AMFI kills mismatched
+      entitlements with POSIX 153, fixed in #356).
    4. If steps 1–3 all clear, copy the bundle to `/Applications/` (kill
       the prior install first) and retry. A real shipping defect will
       crash from both paths; an environment-only failure will only crash
@@ -664,7 +720,7 @@ pkgbuild --root "$APP_STAGING" --identifier io.irrlicht.app --version $NEW_VERSI
 
 ### ZIP archive (for curl installer)
 Used by `https://irrlicht.io/install.sh`. Must be created with `ditto` so
-macOS metadata (including the ad-hoc code signature) is preserved.
+macOS metadata (including the code signature) is preserved.
 
 ```bash
 ditto -c -k --sequesterRsrc --keepParent "$APP_STAGING" /tmp/Irrlicht-$NEW_VERSION.zip
@@ -970,13 +1026,12 @@ without `--push`; the verification will report a mismatch you can ignore.
    INSTALLED=$(defaults read /Applications/Irrlicht.app/Contents/Info CFBundleShortVersionString)
    [ "$INSTALLED" = "$NEW_VERSION" ] || { echo "FAIL: canary installed v$INSTALLED, expected v$NEW_VERSION"; exit 1; }
 
-   # Confirm no entitlements baked in (matches the build-time guard in
-   # Step 6 step 6, but on the actual shipping artifact this time —
-   # paranoia is cheap).
-   codesign -d --entitlements - /Applications/Irrlicht.app 2>&1 | grep -q '\[Key\]' \
-     && { echo "FAIL: shipping binary has entitlements baked in"; exit 1; }
+   # Confirm focus-status entitlement is present (matches the build-time
+   # guard in step 7, but on the actual shipping artifact this time).
+   codesign -d --entitlements - /Applications/Irrlicht.app 2>&1 | grep -q 'com.apple.developer.focus-status' \
+     || { echo "FAIL: shipping binary missing focus-status entitlement"; exit 1; }
 
-   echo "OK canary install: v$INSTALLED, no entitlements, running"
+   echo "OK canary install: v$INSTALLED, focus-status entitlement present, running"
    ```
 5. **Installer-script staleness check.** `irrlicht.io/install.sh` is
    served by GitHub Pages and lags `main` by a few minutes after a merge:
