@@ -567,7 +567,7 @@
         <!-- ════════════════════════════════════════════════════════════
              "YOU ARE HERE" — today
              ════════════════════════════════════════════════════════════ -->
-        <div class="timeline-now"><span>2026-05-17 &middot; today</span></div>
+        <div class="timeline-now"><span>2026-05-22 &middot; today</span></div>
 
         <!-- ════════════════════════════════════════════════════════════
              PAST
@@ -575,6 +575,20 @@
         <div class="timeline-section past">
 
           <!-- v0.4 cycle: each patch carries its actual shipped milestones -->
+          <div class="release patch">
+            <div class="release-head">
+              <span class="release-version">v0.4.7</span>
+              <span class="release-date">2026-05-22</span>
+            </div>
+            <ul class="milestones">
+              <li>Sparkle 2.x auto-update integration <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/413" target="_blank" rel="noopener">#413</a></span> <span class="desc">&mdash; in-app update prompts with a signed EdDSA appcast at <code>irrlicht.io/appcast.xml</code>. First Sparkle-enabled release; v0.4.6 users need one manual upgrade before auto-updates begin.</span></li>
+              <li>Developer-ID signed + Apple-notarized DMG <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/409" target="_blank" rel="noopener">#409</a></span> <span class="desc">&mdash; first launch through curl installer or Homebrew cask no longer trips Gatekeeper; quarantine-strip workarounds removed.</span></li>
+              <li>OpenCode <code>todowrite</code> as task-progress dots <span class="ref">&middot; <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/410" target="_blank" rel="noopener">#410</a></span> <span class="desc">&mdash; dashboard parity with Claude Code&rsquo;s TaskCreate/TaskUpdate pipeline.</span></li>
+            </ul>
+            <p class="release-note">OpenCode working&rarr;ready tail latency drops ~2.5&nbsp;s <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/412" target="_blank" rel="noopener">#412</a>; Claude Code wrapped command preserves user statusLine output <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/404" target="_blank" rel="noopener">#404</a>; curl installer survives GitHub API rate limits <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/401" target="_blank" rel="noopener">#401</a>; <code>get-task-allow</code> removed from production entitlements before notarization <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/407" target="_blank" rel="noopener">#407</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/415" target="_blank" rel="noopener">#415</a>; <code>/ir:onboard-agent</code> pipeline lands with first-class opencode driver <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/328" target="_blank" rel="noopener">#328</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/408" target="_blank" rel="noopener">#408</a>; Focus entitlement + DevID codesigning restored <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/406" target="_blank" rel="noopener">#406</a>; coverage-viewer and find-flicker-sessions retired <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/411" target="_blank" rel="noopener">#411</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/414" target="_blank" rel="noopener">#414</a>; kitty docs clarify full-restart requirement <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/402" target="_blank" rel="noopener">#402</a>.</p>
+            <div class="also-shipped"><a href="https://github.com/ingo-eichhorst/Irrlicht/issues/129" target="_blank" rel="noopener">#129</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/169" target="_blank" rel="noopener">#169</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/233" target="_blank" rel="noopener">#233</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/277" target="_blank" rel="noopener">#277</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/278" target="_blank" rel="noopener">#278</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/326" target="_blank" rel="noopener">#326</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/357" target="_blank" rel="noopener">#357</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/403" target="_blank" rel="noopener">#403</a> <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/405" target="_blank" rel="noopener">#405</a></div>
+          </div>
+
           <div class="release patch">
             <div class="release-head">
               <span class="release-version">v0.4.6</span>

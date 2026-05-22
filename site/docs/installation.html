@@ -116,7 +116,7 @@
            class="mascot mascot-float-right"
            loading="lazy" />
 
-      <p>For Mac users with <a href="https://brew.sh">Homebrew</a>, this is the simplest path. The cask points at the same signed DMG as the GitHub release, strips the quarantine attribute on first install, and lets <code>brew upgrade</code> handle future versions.</p>
+      <p>For Mac users with <a href="https://brew.sh">Homebrew</a>, this is the simplest path. The cask points at the same Developer-ID signed + Apple-notarized DMG as the GitHub release, and lets <code>brew upgrade</code> handle future versions. Starting in v0.4.7 the app also auto-updates itself via Sparkle, so manual upgrades become optional.</p>
 
       <pre><code>brew tap ingo-eichhorst/irrlicht
 brew install --cask irrlicht</code></pre>
@@ -128,7 +128,7 @@ brew install --cask irrlicht</code></pre>
       <!-- ── Curl Install ── -->
       <h2>Install via curl</h2>
 
-      <p>One command. No Gatekeeper prompts. The script downloads the signed app, verifies the SHA-256 checksum, strips the quarantine attribute, and launches it.</p>
+      <p>One command. No Gatekeeper prompts. The script downloads the Developer-ID signed and Apple-notarized app, verifies the SHA-256 checksum, and launches it.</p>
 
       <pre><code>curl -fsSL https://irrlicht.io/install.sh | sh</code></pre>
 
