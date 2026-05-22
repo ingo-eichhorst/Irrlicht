@@ -88,7 +88,7 @@ run_send() {
   set +e
   ( cd "$RUN_CWD" && \
     timeout --signal=SIGINT --kill-after=10 "$remaining" \
-      opencode run --format default -- "$text" "${args[@]}" \
+      opencode run --format default ${args[@]+"${args[@]}"} -- "$text" \
       >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr" )
   local rc=$?
   set -e
@@ -153,15 +153,21 @@ echo "${SESSION_ID:-}" > "$STAGING/session.uuid"
 TRANSCRIPT_OUT="$STAGING/opencode-transcript.jsonl"
 : > "$TRANSCRIPT_OUT"
 if [[ -n "$SESSION_ID" ]]; then
-  sqlite3 -readonly "$OPENCODE_DB" <<SQL >> "$TRANSCRIPT_OUT"
+  # Role lives inside message.data JSON (no top-level column), so extract
+  # it with json_extract. modelID lives in message.data.model.modelID.
+  # Concurrent reads against opencode's running DB are safe — opencode
+  # writes in WAL mode and sqlite3's default open mode tolerates a
+  # parallel writer. The -readonly flag fails on this DB because it
+  # disables the WAL fallback path; omit it.
+  sqlite3 "$OPENCODE_DB" <<SQL >> "$TRANSCRIPT_OUT"
 .mode list
 .separator ""
 SELECT json_set(
   p.data,
-  '\$._role', m.role,
-  '\$._cwd',  s.directory,
-  '\$._ts',   p.time_updated,
-  '\$._model', json_extract(m.data, '\$.modelID')
+  '\$._role',  json_extract(m.data, '\$.role'),
+  '\$._cwd',   s.directory,
+  '\$._ts',    p.time_updated,
+  '\$._model', json_extract(m.data, '\$.model.modelID')
 )
 FROM part p
 JOIN message m ON p.message_id = m.id
