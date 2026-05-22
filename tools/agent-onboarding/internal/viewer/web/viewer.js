@@ -31,6 +31,16 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
       if (r.coverage_id) recipesByCoverageId.set(r.coverage_id, r);
     }
   }
+  // Map scenario id → catalog code (e.g. "5.4") so the sidebar can
+  // prefix labels and sort in the same order as the overview matrix.
+  // Regression-subtree recordings aren't in the catalog and stay
+  // uncoded — they fall through to alphabetical at the end.
+  const codeById = new Map();
+  if (catalog && Array.isArray(catalog.scenarios)) {
+    for (const sc of catalog.scenarios) {
+      if (sc.code && sc.id) codeById.set(sc.id, sc.code);
+    }
+  }
   const sidebar = document.getElementById("scenarios");
   sidebar.innerHTML = "";
 
@@ -71,6 +81,16 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
     const subtreeDet = makeSidebarGroup("subtree-group", `sidebar.subtree.${subtree}`, subtree, totalCount, activePath.subtree === subtree);
     for (const agent of Object.keys(agents).sort()) {
       const agentDet = makeSidebarGroup("agent-group", `sidebar.agent.${subtree}.${agent}`, agent, agents[agent].length, activePath.subtree === subtree && activePath.agent === agent);
+      // Sort by catalog code (e.g. "5.4") so the order mirrors the
+      // overview matrix. Items without a code (regression subtree)
+      // sort to the end, alphabetically.
+      agents[agent].sort((a, b) => {
+        const [as, ai] = parseCatalogCode(codeById.get(a.id));
+        const [bs, bi] = parseCatalogCode(codeById.get(b.id));
+        if (as !== bs) return as - bs;
+        if (ai !== bi) return ai - bi;
+        return a.id.localeCompare(b.id);
+      });
       for (const s of agents[agent]) {
         // <button> rather than <a> so the element is reliably
         // click-triggerable from any input source (mouse, keyboard,
@@ -80,7 +100,8 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
         const el = document.createElement("button");
         el.className = "scn";
         el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
-        el.textContent = s.id;
+        const code = codeById.get(s.id);
+        el.textContent = code ? `${code} ${s.id}` : s.id;
         el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
         agentDet.appendChild(el);
       }
@@ -93,6 +114,14 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
   window.addEventListener("hashchange", route);
   route();
 })();
+
+// parseCatalogCode splits a catalog code ("5.4") into [section, index]
+// for numeric sort. Missing/blank codes sort to the end.
+function parseCatalogCode(code) {
+  if (!code) return [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER];
+  const [s, i] = code.split(".").map(n => parseInt(n, 10));
+  return [Number.isFinite(s) ? s : Number.MAX_SAFE_INTEGER, Number.isFinite(i) ? i : Number.MAX_SAFE_INTEGER];
+}
 
 // makeSidebarGroup builds one collapsible <details> with a styled
 // <summary> (chevron + label + count). Open state persists per
