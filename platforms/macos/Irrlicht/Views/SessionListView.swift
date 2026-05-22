@@ -184,8 +184,10 @@ struct SessionListView: View {
 
     @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var gasTownProvider: GasTownProvider
+    @EnvironmentObject var updateManager: UpdateManager
     @State private var isQuitButtonHovered = false
     @State private var isSettingsButtonHovered = false
+    @State private var isUpdatesButtonHovered = false
     @State private var showSettings = false
     @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
@@ -225,6 +227,24 @@ struct SessionListView: View {
                     }
                     .buttonStyle(.plain)
                     .tooltip("Open settings panel")
+
+                    Divider().frame(height: 20)
+
+                    Button(action: { updateManager.checkForUpdates() }) {
+                        Text("Check for Updates\u{2026}")
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(isUpdatesButtonHovered ? IrrColors.surfaceHover : Color.clear)
+                            .contentShape(Rectangle())
+                            .onHover { hovering in
+                                isUpdatesButtonHovered = hovering
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .tooltip("Check for app updates")
 
                     Divider().frame(height: 20)
 

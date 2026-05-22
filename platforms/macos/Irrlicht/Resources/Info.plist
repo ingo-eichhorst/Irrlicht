@@ -34,5 +34,11 @@
     <string>Copyright © 2024 Anthropic. All rights reserved.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>SUFeedURL</key>
+    <string>https://irrlicht.io/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>nKRcUPAmK6syLFEvp9O30FFvjhTIfGxYVv/6y8zpZI0=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>
