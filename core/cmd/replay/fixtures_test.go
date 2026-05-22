@@ -76,6 +76,14 @@ func discoverReplayFixtures(t *testing.T, root string) []string {
 		if base == "events.jsonl" || strings.HasSuffix(path, ".events.jsonl") {
 			return nil
 		}
+		// Skip non-transcript .jsonl files. expected.jsonl is the
+		// spec-grounded assertion file; ground_truth/signals/frames
+		// are retired Mode B artifacts that may still exist in older
+		// recordings or git history.
+		if base == "expected.jsonl" || base == "ground_truth.jsonl" ||
+			base == "signals.jsonl" || base == "frames.jsonl" {
+			return nil
+		}
 		out = append(out, path)
 		return nil
 	})

@@ -12,6 +12,22 @@
 
 Use `./.build` for build artifacts.
 
+## Building the daemon
+
+- **Release builds**: `tools/build-release.sh` reads the base version from
+  `version.json` and produces signed universal binaries + the installer.
+  The binary's `--version` output is the bare version (e.g. `0.3.13`) so
+  release tags stay clean.
+- **Dev builds**: `tools/build-dev.sh` produces a native binary at
+  `core/bin/irrlichd` with a version string like `0.3.13+1f702e7.dirty`
+  — base version plus short SHA plus `.dirty` if the worktree has
+  uncommitted changes. `+` is semver build metadata so dev binaries never
+  compare as "newer" than their base release.
+- The string is computed by `tools/version.sh` (pass `--base` for the
+  bare version.json value). `promote-recording.sh` captures it into
+  archive and top-level `manifest.json` files so the viewer's metadata
+  panel shows which dev build produced each recording.
+
 ## Web frontend
 
 The dashboard is a single file: `platforms/web/index.html`. Edit it in

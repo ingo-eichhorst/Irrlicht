@@ -276,7 +276,7 @@ mkdir -p .build/manual-<slug>/{recordings,workspace}
   git config user.email t@l && git config user.name t && \
   echo "# t" > README.md && git add . && git commit -q -m init)
 
-PROMPT="$(jq -r '.scenarios[] | select(.name=="baseline-hello") | .by_adapter.claudecode.prompt' \
+PROMPT="$(jq -r '.scenarios[] | select(.name=="basic-turn") | .by_adapter.claudecode.prompt' \
   .claude/skills/ir:onboard-agent/scenarios.json)"
 
 IRRLICHT_RECORDINGS_DIR=$(pwd)/.build/manual-<slug>/recordings \
@@ -358,11 +358,11 @@ running locally; reproducing them does not require any cloud API key.
 
 1. Install LM Studio and pull instruction-tuned models. Two recommended:
    ```bash
-   lms get gemma-4-e2b-it             # ~1 GB; fine for baseline-hello
+   lms get gemma-4-e2b-it             # ~1 GB; fine for basic-turn
    lms get gemma-4-26b-a4b            # ~13 GB; needed for tool-call /
                                       # multi-turn / interrupt scenarios
    ```
-   The smaller `gemma-4-e2b-it` is enough for `baseline-hello` (single
+   The smaller `gemma-4-e2b-it` is enough for `basic-turn` (single
    short reply). Tool-call and interactive scenarios from #217
    (`full-lifecycle-toolcall`, `multi-turn-conversation`,
    `interrupted-turn`, `model-switch`) need `gemma-4-26b-a4b` — the
@@ -377,7 +377,7 @@ running locally; reproducing them does not require any cloud API key.
    export OPENAI_API_BASE="http://localhost:1234/v1"
    export OPENAI_API_KEY="lm-studio"   # any non-empty value
    # Default to the larger model so interactive/toolcall scenarios work.
-   # Override per-scenario when re-recording baseline-hello against the
+   # Override per-scenario when re-recording basic-turn against the
    # smaller model committed in #216.
    export IRRLICHT_AIDER_MODEL="openai/gemma-4-26b-a4b"
    ```

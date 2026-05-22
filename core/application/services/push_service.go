@@ -43,6 +43,15 @@ func (p *pushService) Unsubscribe(ch chan outbound.PushMessage) {
 	}
 }
 
+// Subscribers returns the current number of attached subscriber channels.
+// Used by the agent-onboarding viewer's diagnostic broadcaster decorator
+// to record sub_count alongside each broadcast.
+func (p *pushService) Subscribers() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.subs)
+}
+
 // Broadcast sends the message to all subscribers. Slow subscribers are skipped.
 func (p *pushService) Broadcast(msg outbound.PushMessage) {
 	p.mu.Lock()

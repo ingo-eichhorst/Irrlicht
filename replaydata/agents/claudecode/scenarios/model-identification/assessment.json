@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "scenario_id": "model-identification",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-18T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code records the active model on every assistant event under `message.model` (and on some system/metadata events under `model` / `request.model` / `metadata.model`). The parser's `extractClaudeCodeModel` walks these paths and runs the value through `tailer.NormalizeModelName` (lowercases, strips provider prefixes), producing a stable string like `claude-sonnet-4-5` or `claude-opus-4-7[1m]`.\n\nThe context window comes from two sources, in priority order:\n1. `raw.context_management.context_window` — the most accurate, server-reported value.\n2. The `[1m]` suffix heuristic — sets ContextWindow to 1_000_000 for opted-in extended-context models.\n3. Fallback: the LiteLLM-derived alias table (downstream of the parser) supplies a default per model name.\n\nLaunching with `--model claude-opus-4-7` puts that model into the first assistant event's `message.model` field; the parser captures it before any other event and `SessionMetrics.ModelName` is populated from the first turn onward.\n\nSpec bullets:\n- 'ModelName = <launch model> (not \"unknown\")' — extractClaudeCodeModel returns the normalized launch model from `message.model`. The default-unknown path only triggers when no event has yet carried a model field; once the first assistant event arrives, ModelName is set.\n- 'ContextWindow matches the model's published window' — context_management.context_window takes precedence when present; otherwise the alias table fills it.\n\n## What irrlicht does NOT see (and why that's OK)\n\nIf the recording cuts off before the first assistant event, ModelName will be 'unknown' — but that's a zero-turn session, not a real assertion of identification. The recipe must complete at least one turn.\n\nThe `[1m]` suffix detection is a string-match on the model name, which works for Claude's current opt-in extended-context flavour. Other providers may use a different convention; irrlicht's normalization layer would need extension for those — out of scope for the claudecode cell.",
+  "caveats": [
+    "ContextWindow may briefly read 0 between session detection and the first assistant event. The phase contract should assert ModelName/ContextWindow only after wait_turn, not at presession_created.",
+    "If LiteLLM aliases lag behind a newly released model name, ContextWindow falls back to the 32k sentinel and ContextWindowUnknown=true. This is a separable concern from model identification per se — ModelName will still be correct."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go L410-452", "note": "extractClaudeCodeModel walks raw.model / raw.request.model / raw.metadata.model / raw.message.model and pulls ContextWindow from raw.context_management.context_window (or the [1m] suffix)."},
+    {"kind": "file", "ref": "core/domain/session/session.go L31-44", "note": "SessionMetrics.ModelName, ContextWindow, ContextWindowUnknown — the merge logic at L627-628 keeps a known ModelName sticky across transient zero passes."},
+    {"kind": "spec", "ref": ".specs/agent-scenarios.md L424-429", "note": "Feature: Model identification — single-turn non-default model launch, ModelName != \"unknown\" and ContextWindow matches published window."}
+  ]
+}

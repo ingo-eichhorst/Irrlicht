@@ -1,20 +1,223 @@
 {
   "$schema_notes": "Canonical scenario catalogue for the ir:onboard-agent skill. Two parallel axes: 'scenarios' for prompt-driven agent adapters (claudecode/codex/pi) and 'orchestrator_scenarios' for polling-based orchestrator adapters (gastown). Agent scenarios are agent-agnostic — each declares 'requires' capabilities, and 'by_adapter' holds the per-adapter prompt/settings that elicit the behavior. An adapter whose Capabilities (declared in core/adapters/inbound/agents/*/config.go) do not satisfy 'requires' is excluded from that scenario (matrix cell = N/A). If the capabilities match but no 'by_adapter' entry exists, the matrix cell is 'missing-prompt' — actionable by adding one here. Orchestrator scenarios are driven by canned 'gt' CLI responses + seeded GT_ROOT sidecars and verified via snapshot golden compare in core/adapters/inbound/orchestrators/gastown/replay_test.go.",
-
   "min_versions": {
     "claudecode": "2.0.0",
     "codex": "0.50.0",
     "pi": "0.70.0",
     "aider": "0.86.0"
   },
-
+  "$catalog_notes": "Public catalog of all scenarios in the overview matrix. Mirrors the canonical id+section+feature list from .specs/agent-scenarios.md (gitignored, maintainer-owned). Repo-tracked so the dashboard can build the matrix without depending on .specs/. Order is significant — it determines the section.index code (e.g. 1.1, 2.3). 'scenarios' below is the recipe registry; entries here without a corresponding recipe render with no recipe authored.",
+  "catalog": [
+    {
+      "id": "session-start",
+      "section": "Session lifecycle",
+      "feature": "Session start"
+    },
+    {
+      "id": "session-end",
+      "section": "Session lifecycle",
+      "feature": "Session end"
+    },
+    {
+      "id": "long-idle-live-session",
+      "section": "Session lifecycle",
+      "feature": "Long-idle live session"
+    },
+    {
+      "id": "session-resume",
+      "section": "Session lifecycle",
+      "feature": "Session resume"
+    },
+    {
+      "id": "session-reset",
+      "section": "Session lifecycle",
+      "feature": "Session reset (/clear, /new)"
+    },
+    {
+      "id": "checkpoint-rewind",
+      "section": "Session lifecycle",
+      "feature": "Checkpoint rewind"
+    },
+    {
+      "id": "cloud-background-agent",
+      "section": "Session lifecycle",
+      "feature": "Cloud / background agent (remote process)"
+    },
+    {
+      "id": "basic-turn",
+      "section": "Turn shape",
+      "feature": "Basic turn"
+    },
+    {
+      "id": "auto-executed-tool-call",
+      "section": "Turn shape",
+      "feature": "Auto-executed tool call"
+    },
+    {
+      "id": "self-correction-iteration",
+      "section": "Turn shape",
+      "feature": "Self-correction iteration"
+    },
+    {
+      "id": "synchronous-slash-command",
+      "section": "Turn shape",
+      "feature": "Synchronous slash command (no LLM call)"
+    },
+    {
+      "id": "long-agentic-session-stress",
+      "section": "Turn shape",
+      "feature": "Long agentic session (stress)"
+    },
+    {
+      "id": "autonomous-loop",
+      "section": "Turn shape",
+      "feature": "Autonomous loop (self-prompting)"
+    },
+    {
+      "id": "autonomous-loop-iteration-limit",
+      "section": "Turn shape",
+      "feature": "Autonomous loop iteration limit reached"
+    },
+    {
+      "id": "token-quota-exhausted",
+      "section": "Turn shape",
+      "feature": "Token / quota budget exhausted"
+    },
+    {
+      "id": "mid-turn-message-queued",
+      "section": "Turn shape",
+      "feature": "Mid-turn user message queued"
+    },
+    {
+      "id": "auto-classified-permission",
+      "section": "Turn shape",
+      "feature": "Auto-classified permission approval"
+    },
+    {
+      "id": "context-compaction",
+      "section": "Turn shape",
+      "feature": "Context compaction"
+    },
+    {
+      "id": "turn-end-terminal-text",
+      "section": "Turn shape",
+      "feature": "Turn end via terminal text"
+    },
+    {
+      "id": "turn-aborted-by-error",
+      "section": "Turn shape",
+      "feature": "Turn aborted by error"
+    },
+    {
+      "id": "shell-escape-command",
+      "section": "Turn shape",
+      "feature": "Shell escape command"
+    },
+    {
+      "id": "oversized-transcript-line",
+      "section": "Turn shape",
+      "feature": "Oversized transcript line"
+    },
+    {
+      "id": "user-blocking-question",
+      "section": "Turn shape",
+      "feature": "User-blocking tool call (question)"
+    },
+    {
+      "id": "user-blocking-plan-mode-approval",
+      "section": "Turn shape",
+      "feature": "User-blocking tool call (plan-mode approval)"
+    },
+    {
+      "id": "tool-gate-permission-prompt",
+      "section": "Turn shape",
+      "feature": "Tool gate via permission prompt"
+    },
+    {
+      "id": "user-esc-interrupt",
+      "section": "Turn shape",
+      "feature": "User ESC interrupt"
+    },
+    {
+      "id": "streaming-partial-writes",
+      "section": "Turn shape",
+      "feature": "Streaming partial writes"
+    },
+    {
+      "id": "foreground-subagent",
+      "section": "Subagents",
+      "feature": "Foreground subagent"
+    },
+    {
+      "id": "task-tool",
+      "section": "Subagents",
+      "feature": "Task tool (parallel spawn)"
+    },
+    {
+      "id": "background-subagent",
+      "section": "Subagents",
+      "feature": "Background subagent"
+    },
+    {
+      "id": "background-process",
+      "section": "Subagents",
+      "feature": "Background process"
+    },
+    {
+      "id": "subagent-orphan-cleanup",
+      "section": "Subagents",
+      "feature": "Subagent orphan cleanup"
+    },
+    {
+      "id": "multiple-sessions-same-cwd",
+      "section": "Multi-session and multi-agent",
+      "feature": "Multiple sessions in same cwd"
+    },
+    {
+      "id": "multiple-agents-same-workspace",
+      "section": "Multi-session and multi-agent",
+      "feature": "Multiple agents in same workspace"
+    },
+    {
+      "id": "token-accounting",
+      "section": "Metrics",
+      "feature": "Token accounting"
+    },
+    {
+      "id": "model-identification",
+      "section": "Metrics",
+      "feature": "Model identification"
+    },
+    {
+      "id": "model-switch-midsession",
+      "section": "Metrics",
+      "feature": "Model switch mid-session"
+    },
+    {
+      "id": "architect-editor-pair",
+      "section": "Metrics",
+      "feature": "Architect/Editor model pair"
+    },
+    {
+      "id": "provider-failover-midturn",
+      "section": "Metrics",
+      "feature": "Provider failover mid-turn"
+    }
+  ],
   "scenarios": [
     {
-      "name": "baseline-hello",
+      "name": "basic-turn",
       "description": "Smallest possible round-trip. Verifies session detection and a clean ready→working→ready cycle.",
-      "requires": ["headless_mode"],
+      "coverage_id": "basic-turn",
+      "requires": [
+        "headless_mode"
+      ],
       "verify": {
-        "transitions_topology": ["ready", "working", "ready"],
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
         "tool_calls_max": 0,
         "final_state": "ready"
       },
@@ -41,11 +244,14 @@
         }
       }
     },
-
     {
       "name": "full-lifecycle-toolcall",
       "description": "Tool use triggers a working↔waiting cycle via the PostToolUse hook. Mirrors the shape of the committed 10-full-lifecycle-* fixture. The session ends in waiting (not ready) because the hook keeps the session permission-pending after the tool completes; that's the behavior we want to lock down.",
-      "requires": ["headless_mode", "tool_calls"],
+      "coverage_id": "auto-executed-tool-call",
+      "requires": [
+        "headless_mode",
+        "tool_calls"
+      ],
       "verify": {
         "contains_tool_call": true,
         "has_waiting_state": true
@@ -73,11 +279,13 @@
         }
       }
     },
-
     {
       "name": "agent-question-pending",
       "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a).",
-      "requires": ["headless_mode"],
+      "coverage_id": "user-blocking-question",
+      "requires": [
+        "headless_mode"
+      ],
       "verify": {
         "has_waiting_state": true,
         "final_state": "waiting"
@@ -105,11 +313,13 @@
         }
       }
     },
-
     {
       "name": "multi-turn-conversation",
       "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation.",
-      "requires": ["headless_mode"],
+      "coverage_id": "basic-turn",
+      "requires": [
+        "headless_mode"
+      ],
       "verify": {
         "min_turns": 3,
         "final_state": "ready"
@@ -117,59 +327,169 @@
       "by_adapter": {
         "aider": {
           "script": [
-            {"type": "send", "text": "Reply with exactly: turn-one"},
-            {"type": "wait_turn"},
-            {"type": "send", "text": "Reply with exactly: turn-two"},
-            {"type": "wait_turn"},
-            {"type": "send", "text": "Reply with exactly: turn-three"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
           ],
           "settings": {},
           "timeout_seconds": 300
         },
         "claudecode": {
           "script": [
-            {"type": "send", "text": "Reply with exactly: turn-one"},
-            {"type": "wait_turn"},
-            {"type": "send", "text": "Reply with exactly: turn-two"},
-            {"type": "wait_turn"},
-            {"type": "send", "text": "Reply with exactly: turn-three"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
           ],
           "settings": {},
           "timeout_seconds": 300
         },
         "codex": {
           "script": [
-            {"type": "send", "text": "Reply with exactly: turn-one"},
-            {"type": "wait_turn"},
-            {"type": "send", "text": "Reply with exactly: turn-two"},
-            {"type": "wait_turn"},
-            {"type": "send", "text": "Reply with exactly: turn-three"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
           ],
           "settings": {},
           "timeout_seconds": 300
         },
         "pi": {
           "script": [
-            {"type": "send", "text": "Reply with exactly: turn-one"},
-            {"type": "wait_turn"},
-            {"type": "send", "text": "Reply with exactly: turn-two"},
-            {"type": "wait_turn"},
-            {"type": "send", "text": "Reply with exactly: turn-three"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: turn-three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
           ],
           "settings": {},
           "timeout_seconds": 300
         }
       }
     },
-
     {
       "name": "interrupted-turn",
       "description": "User interrupts the agent mid-turn (interrupt key sent before the LLM round completes — Ctrl-C for aider, Escape for claudecode/codex/pi). The interrupted turn never produces a turn-done marker, so each adapter's parser must reset cleanly on the next user prompt.",
-      "requires": ["headless_mode"],
+      "coverage_id": "user-esc-interrupt",
+      "requires": [
+        "headless_mode"
+      ],
       "verify": {
         "contains_interrupt": true,
         "final_state": "ready"
@@ -177,59 +497,126 @@
       "by_adapter": {
         "aider": {
           "script": [
-            {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
-            {"type": "sleep", "seconds": 8},
-            {"type": "interrupt"},
-            {"type": "sleep", "seconds": 3},
-            {"type": "send", "text": "Reply with exactly: ok"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            },
+            {
+              "type": "interrupt"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            }
           ],
           "settings": {},
           "timeout_seconds": 360
         },
         "claudecode": {
           "script": [
-            {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
-            {"type": "sleep", "seconds": 4},
-            {"type": "interrupt"},
-            {"type": "sleep", "seconds": 3},
-            {"type": "send", "text": "Reply with exactly: ok"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "interrupt"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            }
           ],
           "settings": {},
           "timeout_seconds": 360
         },
         "codex": {
           "script": [
-            {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
-            {"type": "sleep", "seconds": 4},
-            {"type": "interrupt"},
-            {"type": "sleep", "seconds": 3},
-            {"type": "send", "text": "Reply with exactly: ok"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "interrupt"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            }
           ],
           "settings": {},
           "timeout_seconds": 360
         },
         "pi": {
           "script": [
-            {"type": "send", "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."},
-            {"type": "sleep", "seconds": 2},
-            {"type": "interrupt"},
-            {"type": "sleep", "seconds": 3},
-            {"type": "send", "text": "Reply with exactly: ok"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "interrupt"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            }
           ],
           "settings": {},
           "timeout_seconds": 360
         }
       }
     },
-
     {
       "name": "model-switch",
       "description": "User invokes /model mid-session to swap the LLM. Validates that the parser's per-turn Contribution.Model follows the latest `> Model:` line in the transcript. Aider-only — claude/codex/pi don't expose runtime model switching this way.",
-      "requires": ["headless_mode", "multi_model_orchestration"],
+      "coverage_id": "model-switch-midsession",
+      "requires": [
+        "headless_mode",
+        "multi_model_orchestration"
+      ],
       "verify": {
         "model_changed": true,
         "final_state": "ready"
@@ -237,23 +624,43 @@
       "by_adapter": {
         "aider": {
           "script": [
-            {"type": "send", "text": "Reply with exactly: first"},
-            {"type": "wait_turn"},
-            {"type": "slash", "text": "/model openai/gemma-4-e2b-it-uncensored"},
-            {"type": "sleep", "seconds": 2},
-            {"type": "send", "text": "Reply with exactly: second"},
-            {"type": "wait_turn"}
+            {
+              "type": "send",
+              "text": "Reply with exactly: first"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "slash",
+              "text": "/model openai/gemma-4-e2b-it-uncensored"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: second"
+            },
+            {
+              "type": "wait_turn"
+            }
           ],
           "settings": {},
           "timeout_seconds": 300
         }
       }
     },
-
     {
       "name": "permission-hook-denial",
       "description": "A failing Bash invocation fires the PostToolUseFailure hook, which drives a working→waiting→working→ready transition arc. Mirrors the committed 15-permission-hooks-* fixture. Uses a runtime failure (cat on a nonexistent file), not settings-based denial — settings-based deny just removes the tool from claude's toolset and no hook fires at all.",
-      "requires": ["headless_mode", "tool_calls", "permission_hooks"],
+      "coverage_id": "tool-gate-permission-prompt",
+      "requires": [
+        "headless_mode",
+        "tool_calls",
+        "permission_hooks"
+      ],
       "verify": {
         "contains_hook": "PostToolUseFailure",
         "tool_call_failed": true,
@@ -267,11 +674,509 @@
         }
       }
     },
-
+    {
+      "name": "checkpoint-rewind",
+      "description": "User rewinds to an earlier auto-checkpoint, restoring files and/or conversation; subsequent turns start cleanly from the rewound point. claudecode binds Esc+Esc as a rewind shortcut and /rewind as the picker. This recipe drives two normal turns, then triggers Esc+Esc to roll back, then runs a third turn — the goal is to capture what irrlicht observes when claudecode mutates its transcript backwards (the daemon's transcript_tailer is append-oriented and may treat a truncation as session-removed-then-reborn).",
+      "coverage_id": "checkpoint-rewind",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "final_state": "ready",
+        "tool_calls_max": 0,
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready"
+        ]
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "claude version with /rewind support (Esc+Esc shortcut) — confirmed in 2.1.x",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID",
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "/rewind"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "keys",
+              "keys": "Down"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "verify": [
+            "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
+            "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+            "events.jsonl contains ≥ 2 state_transition working entries (one per pre-rewind turn)",
+            "events.jsonl contains ≥ 2 state_transition ready entries returning from those turns",
+            "After Esc+Esc, the transcript file is mutated (truncated or rewritten); inspect events.jsonl for transcript_removed / transcript_new on the SAME session_id vs. just transcript_activity",
+            "Post-rewind turn shows a clean ready → working → ready arc on the rewound session",
+            "Final session state is ready",
+            "transcript.jsonl shows turns 1/2 then a structural break (truncation or marker) then turn 3"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cloud-background-agent",
+      "description": "Stub entry — claudecode is a local CLI with no first-party cloud variant, so this scenario is not recordable for that adapter. Forward-looking for Cursor Cloud / Codex Cloud / Copilot Cloud / Devin adapters when they exist.",
+      "coverage_id": "cloud-background-agent",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {},
+      "by_adapter": {
+        "claudecode": {
+          "applicable": false,
+          "notes": "agent_supports=no per coverage matrix — claudecode is local-only. Translator stops here; no recipe."
+        }
+      }
+    },
+    {
+      "name": "session-reset",
+      "description": "Claude session runs a no-op turn, then the user invokes /clear. The old session row should disappear from the dashboard and a new session_id should appear in ready. Adapter-specific note: claudecode's /clear creates a new transcript file under the same project slug; the driver's reset_session step auto-detects the new UUID and re-points subsequent turns at it. Coverage notes a known partial caveat (#169 stale PID metadata) — if the daemon retains the old session_id past /clear, this recipe surfaces that as a fail on the old_session_ended phase.",
+      "coverage_id": "session-reset",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready",
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd recording (--attach against --record daemon or isolated mode)"
+          ],
+          "setup": [
+            "Driver generates a fresh UUID for the first session; the reset_session step discovers the second UUID by scanning the project slug dir after /clear lands."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the FIRST UUID session entering ready, then a working/ready cycle for turn 1",
+            "after /clear, events.jsonl emits transcript_removed (and/or process_exited) for the first UUID — the 'old session disappears' assertion from the spec",
+            "events.jsonl contains a DIFFERENT UUID session appearing in ready after /clear (new session_id, fresh row)",
+            "the second turn's working/ready cycle is on the NEW UUID, not the old one",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 2 user lines and 2 assistant lines (the two transcripts are concatenated by the multi-session curate path)"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "session-resume",
+      "description": "Claude session is launched, runs one no-op turn, exits cleanly, then re-launches with the SAME --session-id and same cwd. The daemon should observe the same UUID re-appearing (not a new session row) and the second turn driving ready→working on that same session. Adapter-specific note: claudecode's resume mechanism is implicit — passing the same --session-id <UUID> at relaunch and using the same cwd causes claude to append to the existing transcript at ~/.claude/projects/<slug>/<UUID>.jsonl. The driver's new `resume` step does exactly that.",
+      "coverage_id": "session-resume",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "no other claudecode session uses the recipe's UUID"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID; the resume step reuses it.",
+            "Driver creates one cwd under <staging>/cwd/ and reuses it across both launches — claude caches trust per directory, so the second launch skips the trust dialog naturally."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "exit_clean"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "resume"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: again"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the FIRST launch's pre-session entering ready, then the UUID handing off to ready, then the working/ready cycle for turn 1",
+            "events.jsonl contains a process_exited event for the UUID after turn 1 (clean exit)",
+            "events.jsonl shows a SECOND pre-session entering ready (proc-<PID2>) after the first lifetime ends",
+            "the SAME UUID session_id re-appears in events.jsonl after the resume — NOT a new UUID. This proves the session row persisted across PID lifetimes (spec: 'Same session_id reappears')",
+            "second-lifetime working transition fires on the SAME UUID, then back to ready",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 2 user lines and 2 assistant lines — appended across both lifetimes since claude re-opens the existing transcript file"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "long-idle-live-session",
+      "description": "Claude session enters ready, sits idle past readyTTL, and resumes working on the next user prompt. The recording proves irrlicht's PID-liveness check keeps the session alive past the TTL cutoff (the session would otherwise be swept on idle). Note: the production readyTTL is 30 min; this recording uses IRRLICHT_READY_SESSION_TTL=15s on the daemon so the assertion 'session stayed past readyTTL' is testable in ~45s instead of 32min. The shortened TTL only affects the recording — production behavior is unchanged.",
+      "coverage_id": "long-idle-live-session",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is running with IRRLICHT_READY_SESSION_TTL=15s in its environment (the daemon's default 30 min would force a 32+ min recording)",
+            "irrlichd is in --record mode",
+            "no other claudecode session uses the recipe's UUID"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd (claude prompts for trust on first encounter)",
+            "Daemon's effective readyTTL must be < 30 s so the post-turn sleep can clearly exceed it. The driver script's first sleep (20 s) is calibrated to 1.33× a 15 s TTL — long enough to prove 'past TTL' without burning a full minute"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alive"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready after turn 1 completes (state_transition to ready)",
+            "no transcript_removed event fires for the UUID session during the 20 s idle window (the session must not be swept while the claude process is alive)",
+            "no state_transition to working or waiting fires during the 20 s idle window (state stays ready while idle)",
+            "after the second send, events.jsonl shows ready → working → ready for the same UUID (the long-idle session resumes normally)",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 2 user lines and 2 assistant lines"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "session-end",
+      "description": "Three claude lifetimes recorded back-to-back, one per session-end variant from .specs/agent-scenarios.md: (1) clean exit after a no-op turn, (2) SIGKILL while idle in ready, (3) SIGKILL mid-turn while still working. The recording lets irrlicht surface three ready→working→ready arcs separated by grey gaps in the state band. Each variant tests a different teardown path and the user-observable assertion that the session disappears regardless of how it ended.",
+      "coverage_id": "session-end",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses any of the recipe's UUIDs"
+          ],
+          "setup": [
+            "Driver generates 3 lowercased UUIDs: the staging-supplied one for the first session, and two via `uuidgen | tr '[:upper:]' '[:lower:]'` for the restart steps",
+            "Driver creates 3 fresh cwds under <staging>/cwd, cwd-2, cwd-3 so claudecode shows the trust dialog for each (claude caches trust per directory)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "exit_clean"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "restart"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "restart"
+            },
+            {
+              "type": "send",
+              "text": "Write a 200 word essay about the history of coffee."
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains exactly 3 distinct UUID session_ids (one per variant) plus their proc-<PID> pre-session rows",
+            "events.jsonl contains exactly 3 process_exited events, one per UUID",
+            "variant 1: the first UUID session has a state_transition to ready right after its turn completes, immediately preceding its process_exited",
+            "variant 2: the second UUID session ends in ready (idle) when sigkill fires; no state_transition to working appears after the process_exited",
+            "variant 3: the third UUID session is in working when sigkill fires; irrlichd's sweep-promotes-to-ready behavior may or may not produce a working→ready transition before transcript_removed, depending on the 8 s tail window — accept either shape",
+            "the state band in the viewer shows three colored arcs separated by grey gaps where no session is alive between variants",
+            "transcript.jsonl contains 3 user lines and 3 assistant lines, with the variant-3 assistant message bearing stop_reason=stop_sequence (interrupted)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "session-start",
+      "description": "Agent is launched in a fresh cwd, writes its first transcript line, sits idle. The recording proves irrlicht binds the session to ready + a PID within ~1s of agent launch. Adapter-specific note: claudecode does not create the per-session transcript file until the first user input lands — the recipe sends a 1-token nudge ('hi') so the transcript materializes and the UUID-keyed session row appears. The pre-session row (proc-<PID>) is observable from launch independent of the nudge.",
+      "coverage_id": "session-start",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created event for proc-<PID> within 1000 ms of the tmux new-session timestamp",
+            "events.jsonl contains a state_transition to ready for proc-<PID> within 100 ms of presession_created (pre-session immediately in ready)",
+            "events.jsonl contains a pid_discovered event for proc-<PID> within 1000 ms",
+            "events.jsonl contains a transcript_new event for the UUID session within 500 ms of the first send (claudecode creates the transcript on first input)",
+            "events.jsonl contains a state_transition to ready for the UUID session within 500 ms of transcript_new",
+            "events.jsonl contains a pid_discovered event for the UUID session (PID re-bound to the UUID at handoff)",
+            "events.jsonl contains a presession_removed event for proc-<PID> at handoff",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 1 user line and 1 assistant line"
+          ],
+          "settings": {},
+          "timeout_seconds": 90
+        }
+      }
+    },
     {
       "name": "subagent-spawn",
-      "description": "Parent emits multiple Agent tool calls; daemon links each child via parent_linked. Verifies subagent transcripts land under <parent>/subagents/ and the curator bundles them into <fixture>.subagents/. Mirrors the shape of the committed 13-full-lifecycle-continue-* fixture but reproducible.",
-      "requires": ["headless_mode", "subagents"],
+      "description": "Parent emits multiple Agent tool calls; daemon links each child via parent_linked. Verifies subagent transcripts land under <parent>/subagents/ and the curator bundles them into <fixture>.subagents/. This recipe doubles as the Task tool usage scenario (task #90): the Agent tool IS claudecode's Task tool, and the viewer's Tool Calls panel surfaces every invocation. For opencode the equivalent is gated on issue #277.",
+      "coverage_id": "foreground-subagent",
+      "requires": [
+        "headless_mode",
+        "subagents"
+      ],
       "verify": {
         "contains_tool_call": "Agent",
         "parent_linked_min": 2,
@@ -281,22 +1186,1640 @@
       },
       "by_adapter": {
         "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd recording — --attach against a --record daemon",
+            "claude session can spawn at least 3 subagents (default model has Agent tool exposed)"
+          ],
+          "setup": [
+            "Fresh cwd (claude's trust dialog appears once and the driver auto-accepts)"
+          ],
           "prompt": "Launch 3 Explore subagents in parallel via the Agent tool, in a single response. Subagent 1: count .go files in core/. Subagent 2: list test files in core/e2e/. Subagent 3: find imports of the 'sync' package across core/. After all three report back, reply 'done'.",
+          "verify": [
+            "events.jsonl contains at least 3 parent_linked events all pointing at the same parent UUID — one per subagent the Task tool spawned",
+            "transcript.jsonl contains tool_use blocks with name=Agent — the Task tool invocations (viewer's Tool Calls panel renders these)",
+            "every parent_linked'd subagent gets its own UUID-keyed transcript file under ~/.claude/projects/<slug>/<parent>/subagents/",
+            "the curator bundles the subagent transcripts into <fixture>.subagents/ so the fixture is portable",
+            "parent stays in working until the last subagent reports back, then ready",
+            "final session state is ready"
+          ],
           "settings": {},
           "timeout_seconds": 240
         }
       }
+    },
+    {
+      "name": "auto-classified-permission",
+      "description": "Claude Code running in auto mode receives a prompt that triggers a benign tool call (Bash 'echo hello' or Read on a project file) which the in-product auto-classifier approves without firing a permission prompt. The daemon must see ready→working→ready with no transition to waiting at any point. Locks down the safe-path branch of the March 2026 Auto Mode feature; the risky-path branch is owned by tool-gate-permission-prompt.",
+      "coverage_id": "auto-classified-permission",
+      "requires": [
+        "headless_mode",
+        "tool_calls"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "contains_tool_call": true,
+        "has_waiting_state": false
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key) — must be a release that ships Auto Mode (>= 2.1.112)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "Hook installer and statusline installer in place (daemon first-run setup) so the PermissionRequest hook path is wired"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "Driver enables auto mode (Shift+Tab until 'auto mode on' appears in the footer) before the first send",
+            "The tool call MUST be one the classifier auto-approves — a benign Bash 'echo' or a Read of a project-local file. Do NOT target .git/.claude/.vscode/.idea/.husky or network-egress shells (those flip to the risky-path scenario)"
+          ],
+          "script": [
+            {
+              "type": "keys",
+              "keys": "S-Tab"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "send",
+              "text": "Run bash 'echo hello' using the Bash tool, then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready, then exactly one ready→working transition",
+            "events.jsonl contains at least one tool_use event for the Bash tool inside the working span (proves the tool call actually fired)",
+            "events.jsonl contains NO state_transition to waiting for the UUID at any point (classifier auto-approved → PermissionRequest hook never fired → PermissionPending never set)",
+            "events.jsonl shows exactly one working→ready transition at turn end",
+            "final session state is ready",
+            "transcript.jsonl contains 1 user line and at least 2 assistant lines (tool_use + final reply)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "auto-executed-tool-call",
+      "description": "Claude executes a single auto-approved Bash tool call ('echo hello') inside one turn, then replies 'done'. Verifies the ready→working→ready arc with a tool_use mid-turn and the spec invariant that state never enters waiting for auto-executed tool calls. Distinct from full-lifecycle-toolcall, which deliberately exercises the PostToolUse hook to surface waiting; this scenario locks down the auto-approved happy path.",
+      "coverage_id": "auto-executed-tool-call",
+      "requires": [
+        "headless_mode",
+        "tool_calls"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "contains_tool_call": true,
+        "has_waiting_state": false
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "Claude Code launched in auto mode or with Bash pre-approved in settings — the recipe must NOT trip a permission gate"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "Auto mode is enabled by the driver (Shift+Tab until 'auto mode on' appears in the footer) so the safe Bash call is auto-classified"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run bash 'echo hello' using the Bash tool, then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows pre-session entering ready, then the UUID handing off to ready",
+            "events.jsonl shows exactly one ready→working transition and one working→ready transition for the UUID",
+            "events.jsonl contains at least one tool_use event for the Bash tool inside the working span",
+            "events.jsonl contains NO state_transition to waiting for the UUID during the entire run (auto-approved → PermissionPending never set)",
+            "final session state is ready",
+            "transcript.jsonl contains 1 user line and at least 2 assistant lines (tool_use + final reply)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "background-subagent",
+      "description": "Stub entry — claudecode's Task tool blocks the parent until the subagent reports back, so the scenario's defining shape (parent ready while named child continues working) is not producible from the current claude CLI. Forward-looking for any future claudecode background-task primitive or for adapters (OpenCode run_in_background) that already expose the capability.",
+      "coverage_id": "background-subagent",
+      "requires": [
+        "headless_mode",
+        "subagents"
+      ],
+      "verify": {
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": false,
+          "reason": "Task tool blocks the parent; no SendMessage-to-background-child primitive in current claudecode CLI. irrlicht's SubagentCount(parent) also does not currently distinguish background from foreground children — both layers need work upstream before this scenario is recordable."
+        }
+      }
+    },
+    {
+      "name": "context-compaction",
+      "description": "Claude session runs one normal turn to populate context, then the driver triggers /compact to compact the conversation history, then runs a second normal turn to prove the session continues working after compaction. Recording may be brittle: newer Claude Code (2.1.x+) writes a NEW transcript file at the compaction boundary, which can register as a fresh session row to irrlicht depending on session-stitching (see session-resume cell). Per assessment.json, irrlicht's CompactionState domain field is dead code — the dashboard cannot distinguish compaction from a normal long turn. The recipe therefore asserts only the visible state arc (ready→working→ready on each side of /compact).",
+      "coverage_id": "context-compaction",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "claude version supports /compact (≥ 2.1.x)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "slash",
+              "text": "/compact"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: still-here"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready after launch",
+            "events.jsonl shows ready→working→ready for the first turn",
+            "after /compact runs, the session settles back to ready (no stuck working, no waiting)",
+            "events.jsonl shows ready→working→ready for the post-compaction turn",
+            "final session state is ready",
+            "transcript.jsonl contains at least 2 user lines and at least 2 assistant lines (pre- and post-compaction turns); a compaction boundary marker may or may not be present depending on claude version"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    {
+      "name": "foreground-subagent",
+      "description": "Parent claude session uses the Task (Agent) tool to launch one foreground subagent. The subagent reads a small file and reports a result; the parent waits for the subagent to finish, then replies 'done'. Verifies the parent's ready→working→ready arc wraps the subagent's lifetime, the child sidechain transcript materializes under <parent>/subagents/, and the daemon emits parent_linked binding child→parent. Predecessor recipe is the orchestrator-side subagent-spawn (3 parallel children); this scenario locks down the minimal 1-child shape per the agent-level coverage matrix.",
+      "coverage_id": "foreground-subagent",
+      "requires": [
+        "headless_mode",
+        "subagents"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "contains_tool_call": "Agent",
+        "parent_linked_min": 1,
+        "subagent_transcripts_min": 1
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "claude session can spawn at least 1 subagent (default model has Task/Agent tool exposed)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (claude's trust dialog appears once and the driver auto-accepts)",
+            "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Use the Task tool to launch a general-purpose subagent that reads the README.md in the current directory and reports the first heading. Wait for the subagent to finish, then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the parent UUID entering ready, then a single ready→working transition driven by the user prompt",
+            "events.jsonl contains at least 1 parent_linked event pointing at the parent UUID — the child sidechain transcript was discovered and bound",
+            "transcript.jsonl contains a tool_use block with name=Agent (the Task tool invocation)",
+            "the subagent transcript is present under ~/.claude/projects/<slug>/<parent>/subagents/agent-<uuid>.jsonl",
+            "no state_transition to ready or waiting fires on the parent UUID between parent_linked and the final working→ready (parent stays working until the child reports back)",
+            "events.jsonl shows exactly one working→ready transition for the parent UUID at turn end",
+            "final session state for the parent is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    {
+      "name": "long-agentic-session-stress",
+      "description": "Compressed proxy for a real long session: 4 plain user prompts in one session. Spec asserts per-turn ready→working→ready arcs with no flicker WITHIN a turn, no stuck state. Tool calls were originally part of the recipe but the modern claudecode default (Sonnet 4.6 + high effort) refuses auto-mode for paid models, which stalls tool-call turns at the permission gate. Plain prompts keep the recording deterministic; the no-flicker-within-turn invariant is still meaningful because each turn still has multiple intermediate assistant chunks even without tool_use.",
+      "coverage_id": "long-agentic-session-stress",
+      "requires": [
+        "headless_mode",
+        "tool_calls"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "contains_tool_call": true,
+        "has_waiting_state": false
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "Claude Code launched in auto mode (Read/Bash/Write pre-approved) so no turn trips a permission gate — otherwise state would legitimately enter waiting and the no-flicker invariant would need to allow it",
+            "cwd under <staging>/cwd/ contains a CHANGELOG.md file (driver writes a stub if not present)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "Driver seeds CHANGELOG.md in cwd with a small fixture (e.g. '## 0.4.0 - 2026-05-01\\n- initial') so turn 1's Read finds something",
+            "Auto mode is enabled by the driver (Shift+Tab until 'auto mode on' appears in the footer) so Bash/Read/Write are auto-classified"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: beta"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: gamma"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: delta"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready after launch",
+            "for EACH of the 4 turns: exactly one ready→working transition, at least one tool_use event inside the working span, exactly one working→ready transition at turn end",
+            "across the entire session, NO state_transition to ready fires inside any turn's working span (no flicker between failing/succeeding tool_use and the next tool_use inside the same turn)",
+            "across the entire session, NO state_transition to waiting fires (auto mode means no permission gate)",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 4 user lines and at least 8 assistant lines (tool_use + final reply per turn)"
+          ],
+          "settings": {},
+          "timeout_seconds": 600
+        }
+      }
+    },
+    {
+      "name": "mid-turn-message-queued",
+      "description": "Claude is given a slow count-to-10 prompt; while the agent is mid-turn, the driver types a follow-up message into the TUI which claudecode queues until a safe point. The daemon must see a single contiguous working span with no flicker to ready when the queued input lands, and the cycle must still end at ready once everything is consumed. Locks down the parser's transcript-driven state classification against a future regression where queued text appears as a synthetic user-line before consumption.",
+      "coverage_id": "mid-turn-message-queued",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "final_state": "ready",
+        "has_waiting_state": false
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "Claude Code launched in auto mode so neither prompt trips a permission gate"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "The first prompt must keep claude busy long enough (a few seconds) to type a follow-up into the TUI — a slow count-to-10 with explicit pauses is sufficient",
+            "The mid-turn follow-up is delivered via tmux send-keys ending in Enter; claudecode's TUI buffers the text and consumes it at the next safe point (post-tool boundary or turn end)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Count from 1 to 10, one number per line, with a brief pause between each. Then on the last line reply with exactly the word: done"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "keys",
+              "keys": "f o l l o w u p Space q u e u e d Enter"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID entering ready, then a ready→working transition for the first prompt",
+            "events.jsonl contains NO state_transition to ready between the first ready→working and the queued-message consumption (the working span must be contiguous through the queued arrival)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span",
+            "events.jsonl eventually shows a working→ready transition; final session state is ready",
+            "transcript.jsonl contains at least 1 user line for the initial prompt; the queued follow-up may appear as a second user line (consumed as a new turn) or be folded into the first turn — either shape is acceptable per spec"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    {
+      "name": "model-identification",
+      "description": "Single no-op turn in a claudecode session launched with a non-default model (e.g. --model claude-opus-4-7). Locks down that extractClaudeCodeModel pulls the model name from raw.message.model on the first assistant event and that SessionMetrics.ModelName is populated (not 'unknown') and ContextWindow matches the model's published window (via raw.context_management.context_window when present, the [1m] suffix heuristic, or the LiteLLM alias-table fallback). The state arc is the basic-turn arc; the assertion lives in events.jsonl payload.",
+      "coverage_id": "model-identification",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "final_state": "ready",
+        "tool_calls_max": 0,
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "model_present": true
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "no other claudecode session uses the recipe's UUID",
+            "the chosen non-default model name is available on the maintainer's account (e.g. claude-opus-4-7 or claude-sonnet-4-5)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "Driver launches claude with --model <non-default-model> so the first assistant event's message.model field carries that name from turn 1",
+            "Assertions on ModelName/ContextWindow are checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first assistant event (per assessment caveat)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows one ready→working→ready cycle on the UUID",
+            "events.jsonl carries a model_name on the post-turn state_transition / metric snapshot equal to the normalized launch model (e.g. 'claude-opus-4-7' or 'claude-sonnet-4-5'), NOT 'unknown'",
+            "SessionMetrics.ContextWindow after turn_end matches the launch model's published window (1_000_000 for [1m] flavours; per-model default from the alias table otherwise)",
+            "SessionMetrics.ContextWindowUnknown is false after turn_end (unless the alias table is lagging — see assessment caveat 2)",
+            "transcript.jsonl contains 1 user line and ≥ 1 assistant line",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "model-switch-midsession",
+      "description": "Two no-op turns in a single claudecode session separated by a /model slash command that swaps the active model. Locks down (a) the parser's per-turn Contribution.Model attribution (turn 1 → model A, turn 2 → model B), (b) MergeMetrics' latest-non-unknown-wins rule promoting ModelName to model B by t2_end, and (c) the isLocalCommandContent filter dropping the /model wrapper so no state machinery fires during the switch window (no working/waiting flicker). TotalTokens accumulates across the two models (T2 > T1). NOTE: claudecode's /model picker is interactive; the recipe drives the TUI via send + keys + sleep. If the picker UX is unreliable across claude versions, the recipe author may need to extend the driver with model-picker-specific support (e.g. a dedicated model_switch step).",
+      "coverage_id": "model-switch-midsession",
+      "requires": [
+        "headless_mode",
+        "multi_model_orchestration"
+      ],
+      "verify": {
+        "min_turns": 2,
+        "final_state": "ready",
+        "model_changed": true,
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready"
+        ],
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "no other claudecode session uses the recipe's UUID",
+            "both model A (launch model, e.g. claude-sonnet-4-5) and model B (switch target, e.g. claude-opus-4-7) are available on the maintainer's account",
+            "the running claude CLI version supports the /model slash command with arrow-key selection in the picker (confirmed in 2.1.x)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "Driver launches claude with --model <model-A> so turn 1 is attributed to A",
+            "Between turns the driver opens /model, selects model B with Down+Enter (or up arrow depending on picker order), and waits for the picker to dismiss before the next send",
+            "Compare ModelName against the NORMALIZED form (lowercased, provider-prefix stripped) — not the typed form (assessment caveat 2)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: turn-one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "slash",
+              "text": "/model"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Down"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: turn-two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows two ready→working→ready cycles on the same UUID (one per turn)",
+            "events.jsonl carries model_name = <model A normalized> on the t1_end state_transition / metric snapshot",
+            "events.jsonl carries model_name = <model B normalized> on the t2_end state_transition / metric snapshot (latest-wins)",
+            "events.jsonl shows NO state_transition to working or waiting during the /model picker window between t1_end and t2_start (the <local-command> wrappers are filtered by isLocalCommandContent)",
+            "PerTurnContribution.Model for turn 1 = model A; for turn 2 = model B (per-turn cost attribution)",
+            "SessionMetrics.TotalTokens after t2_end > TotalTokens after t1_end (accumulates across both models)",
+            "transcript.jsonl contains exactly 2 user lines and ≥ 2 assistant lines (the /model slash itself does NOT appear as a user line)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "multiple-agents-same-workspace",
+      "description": "Stub entry — capability is supported by all adapters and irrlicht (per-adapter ProcessMatcher, disjoint transcript roots, per-session metrics keyed by (adapter, session_id)). Recording is blocked on the driver: current ir:onboard-agent orchestrates one CLI at a time and has no cross-adapter parallel mode. Becomes recordable once the driver gains a paired-adapter step type that can drive `claude` and `codex` (or `claude` + `pi`) concurrently in the same cwd.",
+      "coverage_id": "multiple-agents-same-workspace",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": false,
+          "reason": "requires a second agent CLI (codex/pi) running in parallel; current driver orchestrates one CLI at a time. The matrix pairs this cell to both claudecode and codex adapters — once the cross-adapter driver exists, a single recording satisfies both rows."
+        }
+      }
+    },
+    {
+      "name": "multiple-sessions-same-cwd",
+      "description": "Stub entry — capability is supported by both claudecode and irrlicht (assessment.json confidence 0.9), but the current ir:onboard-agent driver supports one tmux session at a time and cannot orchestrate two concurrent `claude` processes in the same cwd. Becomes recordable once the driver gains a parallel_session / tmux_split step type that can route `send` and `wait_turn` to named targets.",
+      "coverage_id": "multiple-sessions-same-cwd",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": false,
+          "reason": "current driver supports one tmux session at a time; multi-pane orchestration of two concurrent `claude` processes in the same cwd needs a driver extension (named-target send/wait_turn). Agent and irrlicht both support the capability as-shipped; only the recording rig is missing."
+        }
+      }
+    },
+    {
+      "name": "oversized-transcript-line",
+      "description": "Claude is prompted to emit a single very long sentence (≥5000 words, no embedded newlines) so the transcript flushes one large JSONL line. Recording may be brittle: 5000 words is moderate (~30 KB) — well under irrlicht's 64 MB tailer cap (issue #270) and also under bufio.Scanner's old 2 MB limit, so the test is a sanity-check rather than a true cap-stress. The spec asserts only the visible state arc (ready→working→ready); the absence of a parser stall is INFERRED from the arc completing. Per assessment.json caveats, manufacturing a truly oversized (>2 MB) line from a real claude CLI is awkward — a follow-up cell can hand-craft a synthetic >2 MB line into the live transcript file if deeper cap-stress coverage is needed.",
+      "coverage_id": "oversized-transcript-line",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a single very long sentence on one line. Make it at least 5000 words. Do not use newlines except at the end."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready after launch",
+            "events.jsonl shows exactly one ready→working transition for the UUID",
+            "events.jsonl shows exactly one working→ready transition at turn end (completion of the arc is the parser-resilience proof; if the tailer wedged on the long line this transition would never fire)",
+            "irrlichd logs do NOT contain a 'skipping oversized line' warning for the UUID's transcript (a 5000-word line is well under the 64 MB cap)",
+            "final session state is ready",
+            "transcript.jsonl contains 1 user line and at least 1 assistant line; the assistant line is a single long JSONL row with no embedded newlines in message.content"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
+        }
+      }
+    },
+    {
+      "name": "self-correction-iteration",
+      "description": "Claude runs bash 'false' (which fails), inspects the failing tool_result, retries with bash 'echo recovered', then replies 'done'. The whole arc must show a single contiguous working span — no flicker to ready or waiting between the failed attempt and the recovery. Locks down the parser's terminal-stop_reason gate (intermediate tool_use/tool_result pairs do not change state).",
+      "coverage_id": "self-correction-iteration",
+      "requires": [
+        "headless_mode",
+        "tool_calls"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "contains_tool_call": true,
+        "has_waiting_state": false
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "Claude Code launched in auto mode (Bash auto-approved) so neither attempt trips a permission gate"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "Auto mode is enabled by the driver (Shift+Tab until 'auto mode on' appears in the footer)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run bash 'false' first; if it fails, retry with bash 'echo recovered'. Then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working transition for the UUID",
+            "events.jsonl contains at least 2 tool_use events for the Bash tool inside the working span (the failing attempt and the recovery)",
+            "events.jsonl contains NO state_transition to ready between the failing tool_result and the recovery tool_use",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span",
+            "events.jsonl shows exactly one working→ready transition at turn end",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "shell-escape-command",
+      "description": "Driver types Claude Code's !cmd shell-escape (`!echo hello`) in the interactive REPL. claude runs the shell command locally without an LLM round-trip and writes <bash-input>/<bash-stdout> wrapper events to the transcript. Per parser.go:216-225, irrlicht's claudecode parser deliberately skips these wrapper events, so state must stay in ready throughout (no synthesized turn). The recipe then sends a normal user prompt to prove the session is still alive and a real prompt still drives the ready→working→ready arc. Verdict adopts the intent reading of the spec (no stuck in working) per assessment.json — the alternative literal reading would require a parser change to synthesize a transition arc.",
+      "coverage_id": "shell-escape-command",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "claude is launched in interactive TUI mode so the ! shell-escape syntax is available"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/"
+          ],
+          "script": [
+            {
+              "type": "keys",
+              "keys": "! e c h o Space h e l l o Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alive"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready after launch",
+            "during the ~5 s window after the !echo shell-escape, NO state_transition to working fires for the UUID (the parser must skip <bash-input>/<bash-stdout> wrappers)",
+            "during that window, NO state_transition to waiting fires",
+            "after the normal user prompt, events.jsonl shows ready→working→ready for the UUID",
+            "final session state is ready",
+            "transcript.jsonl contains the shell-escape wrapper lines (<bash-input> / <bash-stdout>) plus 1 user line and at least 1 assistant line for the final turn"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "streaming-partial-writes",
+      "description": "Claude streams a multi-sentence prose response across several JSONL chunks. The parser must keep the session in working across all intermediate assistant_streaming events (non-terminal stop_reason) and only flip to ready when the terminal end_turn event lands. This locks down the Bug-D streaming-flicker family (issue #102): resolveAssistantStreaming (parser.go:288) downgrades non-terminal stop_reasons to assistant_streaming, which is excluded from IsAgentDone(). The streaming_window phase pins the no-flicker invariant.",
+      "coverage_id": "streaming-partial-writes",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a 5-sentence story about a robot. Each sentence on its own line."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready after launch",
+            "events.jsonl shows exactly one ready→working transition for the UUID",
+            "across the streaming window (multiple assistant_streaming events with non-terminal stop_reason), NO state_transition to ready fires before the terminal end_turn line",
+            "NO state_transition to waiting fires during the streaming window",
+            "events.jsonl shows exactly one working→ready transition at turn end",
+            "final session state is ready",
+            "transcript.jsonl contains 1 user line and at least 2 assistant lines (intermediate streaming chunks + terminal)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "subagent-orphan-cleanup",
+      "description": "Parent claude session launches a foreground subagent via the Task tool; once the parent_linked event fires and the child sidechain transcript is visible, the recipe SIGKILLs the parent's process group, leaving the child orphaned. The daemon's pid_manager sweep must emit process_exited for both parent and child without a spurious state_transition to working for the orphaned child during cleanup. Regression coverage for issue #321 (zombie-on-restart). The spec describes a 5-child variant; this recipe records the minimal 1-child shape since the no-working-transition invariant is identical for any N≥1.",
+      "coverage_id": "subagent-orphan-cleanup",
+      "requires": [
+        "headless_mode",
+        "subagents"
+      ],
+      "verify": {
+        "final_state": "ready",
+        "parent_linked_min": 1,
+        "subagent_transcripts_min": 1
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "the sigkill driver step kills the entire claude process group (not just the parent PID) so the child is left orphaned rather than reaped by its own clean exit",
+            "claude session can spawn at least 1 subagent (default model has Task/Agent tool exposed)"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "A README.md is seeded so the subagent has something to read while the parent is alive — the subagent must still be in flight when SIGKILL lands"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Use the Task tool to launch a general-purpose subagent that reads README.md three times in a row and then waits 30 seconds before reporting back. Do not reply to me until the subagent is done."
+            },
+            {
+              "type": "sleep",
+              "seconds": 12
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a parent_linked event for the child UUID pointing at the parent UUID — the child transcript was discovered before SIGKILL",
+            "events.jsonl contains exactly one process_exited event for the parent UUID",
+            "events.jsonl contains exactly one process_exited event for the child UUID",
+            "no state_transition to working fires for the child UUID after the parent's process_exited (issue #321 regression invariant)",
+            "no state_transition to waiting fires for the child UUID after the parent's process_exited",
+            "after readyTTL, both rows are removed via transcript_removed (cleanup-to-removal window may be ~30s depending on readyTTL)",
+            "transcript.jsonl contains the parent's user line plus at least one assistant tool_use=Agent, and the child sidechain transcript under <parent>/subagents/ is bundled into <fixture>.subagents/"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "synchronous-slash-command",
+      "description": "Claude session receives two synchronous slash commands (/cost and /help) that do not call the model, then a tiny normal prompt to prove the session is still alive. State must stay ready throughout the slash-command window — the parser's isLocalCommandContent filter drops the <local-command> wrappers so no state machinery fires. Locks down the regression where a future TUI change logs slash invocations as real user messages.",
+      "coverage_id": "synchronous-slash-command",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "final_state": "ready",
+        "tool_calls_max": 0,
+        "has_waiting_state": false
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "The slash commands chosen (/cost, /help) must remain local-only in the running claude CLI version — if Anthropic ever routes /cost through the model the scenario premise breaks"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "Avoid /clear (mints a fresh session UUID — different scenario) and /compact, /init (real model calls — different scenarios)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly: warm"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "keys",
+              "keys": "/ c o s t Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "keys",
+              "keys": "/ h e l p Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the UUID session entering ready at session birth and staying ready throughout the /cost + /help window (no state_transition to working fires until the final 'Reply with...' send)",
+            "events.jsonl contains NO state_transition to waiting at any point during the slash-command window",
+            "events.jsonl shows exactly one ready→working→ready cycle for the entire run — driven by the final normal turn only",
+            "transcript.jsonl contains exactly 1 user line and 1 assistant line (the slash commands do NOT appear as user turns; their <local-command> wrappers are filtered by the parser)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "token-accounting",
+      "description": "Three back-to-back no-op turns ('Reply with the word: ok') in a single claudecode session. Exercises the per-turn UsageBreakdown extraction (input/output/cache tokens from raw.message.usage) and the monotonic accumulation into SessionMetrics.TotalTokens across multiple requestId boundaries. The state arc is unremarkable (three ready→working→ready cycles); the assertion lives in events.jsonl payload — each turn boundary emits a PerTurnContribution and TotalTokens is non-decreasing turn-over-turn. Token & cost extraction is already covered by basic-turn for a single turn; this recipe locks down the multi-turn accumulator.",
+      "coverage_id": "token-accounting",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "min_turns": 3,
+        "final_state": "ready",
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready",
+          "working",
+          "ready"
+        ],
+        "tool_calls_max": 0
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "no other claudecode session uses the recipe's UUID"
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "No special model or context flags — default model is fine; the assertion is about token accumulation, not which model produced the tokens"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows three ready→working→ready cycles on the same UUID (one per turn)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown for each of the three turns; input_tokens + output_tokens > 0 on every turn",
+            "SessionMetrics.TotalTokens after turn 1 > 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic across 3 turns)",
+            "transcript.jsonl contains exactly 3 user lines and ≥ 3 assistant lines",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "token-quota-exhausted",
+      "description": "Mocked 429 recording: a local Anthropic-compatible stub (tools/mock-anthropic-429.go) returns 200 + end_turn on the first /v1/messages request and HTTP 429 on the second. claude runs under --bare so it reads ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (OAuth/keychain are bypassed). The bespoke recorder at tools/record-token-quota-exhausted.sh handles launch, driving, and fixture staging — the standard driver-claudecode-interactive.sh does not pass --bare.",
+      "coverage_id": "token-quota-exhausted",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "min_turns": 1,
+        "final_state": "ready",
+        "has_waiting_state": false
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH",
+            "go on PATH (to build the mock)",
+            "irrlichd running with --record (recording is captured via attached daemon)",
+            "port 18765 available on localhost"
+          ],
+          "setup": [
+            "tools/record-token-quota-exhausted.sh builds the mock, launches it, drives claude under --bare, and stages the fixture under .build/refresh/claudecode/token-quota-exhausted-<TS>/."
+          ],
+          "driver": "tools/record-token-quota-exhausted.sh",
+          "verify": [
+            "events.jsonl shows session_birth → prompt1 working/ready arc → prompt2 working/ready arc",
+            "final state of the session is ready",
+            "no state_transition to waiting (no permission gates expected)",
+            "the second prompt's working→ready transition is the quota-exhausted code path"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "tool-gate-permission-prompt",
+      "description": "Claude invokes the Bash tool; a PreToolUse hook returns permissionDecision=ask, deterministically opening the permission prompt. Validates the rule-0 (PermissionPending=true → waiting) path in state_classifier.go, which is the most authoritative gate and predates HasOpenToolCall — defends against the race fixed in #108 where the hook fires before the JSONL tool_use line lands. Recipe captures entry into waiting and stops; the second-scenario variant (late PostToolUse after ready) is a no-op in the classifier and not exercised here.",
+      "coverage_id": "tool-gate-permission-prompt",
+      "requires": [
+        "headless_mode",
+        "tool_calls",
+        "permission_hooks"
+      ],
+      "verify": {
+        "has_waiting_state": true,
+        "final_state": "waiting"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "irrlicht's Claude hook installer has run (hookinstaller.go) so PermissionRequest / PostToolUse hooks route to the daemon",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID",
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)",
+            "Project-local settings.json includes the PreToolUse 'ask' hook below so Bash invocations open the permission prompt deterministically (no reliance on claude's allowlist heuristics)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run bash 'echo hello' using the Bash tool."
+            },
+            {
+              "type": "sleep",
+              "seconds": 15
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
+            "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+            "events.jsonl contains a state_transition to working for the UUID after the prompt lands",
+            "events.jsonl contains a state_transition to waiting for the UUID once the PreToolUse hook fires (PermissionPending=true → rule 0)",
+            "events.jsonl contains NO state_transition to ready for the UUID after the waiting transition (recipe terminates while session is in waiting)",
+            "final session state is waiting",
+            "transcript.jsonl contains 1 user line and at least 1 assistant line; one assistant message has a tool_use with name=Bash that is gated by the permission prompt"
+          ],
+          "settings": {
+            "hooks": {
+              "PreToolUse": [
+                {
+                  "matcher": "Bash",
+                  "hooks": [
+                    {
+                      "type": "command",
+                      "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "timeout_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "turn-aborted-by-error",
+      "description": "Agent's model call fails mid-turn (network error, provider 5xx, timeout). No normal turn-end signal is emitted. Expected arc per spec: ready → working, then → ready within the sweep interval after the agent gives up. Per the assessment (irrlicht_observes: partial, confidence 0.55) failures split into three buckets: Bucket A (transcript epilogue with synthesized error text → observable via classifier rule 2b), Bucket B (pure mid-stream network failure with NO transcript write → currently UNOBSERVABLE because there is no inactivity sweep on the working state since PR #106 removed the stale-tool timer), Bucket C (system/turn_duration on abnormal exit → observable via turn_done). Recipe is NOT runnable today: inducing a deterministic mid-turn API error requires network/env manipulation the driver does not support, and Bucket B would not be observable anyway.",
+      "coverage_id": "turn-aborted-by-error",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "final_state": "ready",
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ]
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": false,
+          "reason": "Triggering a controlled mid-turn API error from claudecode requires network manipulation (pfctl block on api.anthropic.com, or pointing ANTHROPIC_BASE_URL at a port that refuses connections) or quota exhaustion; the current driver has no deterministic mechanism. Even with a mechanism, Bucket B (silent mid-stream network failure with no transcript write) would not be observable today: the classifier has no inactivity-driven working→ready sweep (the stale-tool timer that used to mitigate this was removed in PR #106 as a flicker source on long Bash runs). Buckets A and C land at ready correctly, so a future runnable variant should target one of those — e.g. an ANTHROPIC_BASE_URL stub that returns a 5xx with a synthesized error-body that claudecode appends to the transcript.",
+          "preconditions_when_unblocked": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "a deterministic mid-turn failure transport — a stub ANTHROPIC_BASE_URL returning 5xx after partial stream (Bucket A) OR a claude version with system/turn_duration on abnormal exit (Bucket C). Bucket B (silent network drop) is intentionally out of scope until a working-state inactivity sweep is reintroduced.",
+            "no other claudecode session uses the recipe's UUID"
+          ],
+          "future_setup_sketch": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
+            "Driver sets ANTHROPIC_BASE_URL to a stub that responds 200 with stream start, then 503 after the first chunk (Bucket A) — forces claudecode to write a synthesized error-bearing assistant line",
+            "OR: driver toggles network mid-turn (pfctl block) and relies on Bucket C's system/turn_duration / Stop-hook integration"
+          ],
+          "future_script_sketch": [
+            {
+              "type": "send",
+              "text": "Long prompt that will fail mid-stream (stubbed 503)"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "future_verify_sketch": [
+            "events.jsonl shows ready → working when the user prompt lands",
+            "events.jsonl shows working → ready within the sweep interval after the API call fails (Bucket A via terminal stop_reason on the error-bearing assistant line; Bucket C via turn_done from system/turn_duration)",
+            "session state does NOT stick in working — recovery within sweep interval",
+            "Bucket B (silent mid-stream failure with no transcript write) is intentionally excluded: not observable today without a working-state inactivity sweep"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "turn-end-terminal-text",
+      "description": "Smallest tool-less round-trip pinning the terminal-text end signal: the assistant produces a final message with stop_reason: end_turn and no tool_use, and the classifier drives working→ready via rule 2b. Overlaps intentionally with basic-turn — this cell focuses on the end-signal mechanism (parser.resolveAssistantStreaming's terminal stop_reason allow-list, the Bug-D fix from issue #102), rather than the broader happy-path lifecycle.",
+      "coverage_id": "turn-end-terminal-text",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "transitions_topology": [
+          "ready",
+          "working",
+          "ready"
+        ],
+        "tool_calls_max": 0,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly: hello world"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
+            "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+            "events.jsonl contains exactly one state_transition to working and exactly one state_transition to ready for the UUID",
+            "events.jsonl contains NO tool_use events for the UUID",
+            "transcript.jsonl's final assistant message has stop_reason=end_turn",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 1 user line and 1 assistant line"
+          ],
+          "settings": {},
+          "timeout_seconds": 60
+        }
+      }
+    },
+    {
+      "name": "user-blocking-plan-mode-approval",
+      "description": "Claude is toggled into plan mode via Shift+Tab, then prompted to make a plan; the agent emits an ExitPlanMode tool_use and pauses for approval. Validates the same waiting path as user-blocking-question but via the ExitPlanMode branch (tailer_config.go user-blocking tool list, hooks.go toolExitPlanMode case). Recipe captures only entry into waiting; the approve/reject continuation is structurally identical to other waiting-resume paths. CAVEAT: Shift+Tab toggle is generally reliable via tmux send-keys 'S-Tab', but if a future claude CLI version changes the plan-mode hotkey or relies on a multi-key combo that tmux can't reproduce, this recipe must be retuned (or the cell marked applicable: false until tmux can drive the hotkey reliably).",
+      "coverage_id": "user-blocking-plan-mode-approval",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "has_waiting_state": true,
+        "final_state": "waiting"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "claude version where Shift+Tab toggles plan mode from the prompt (confirmed in 2.1.x)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID",
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)",
+            "After launch and before the first send, toggle plan mode via Shift+Tab (driver step: keys 'S-Tab')"
+          ],
+          "script": [
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "S-Tab"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "send",
+              "text": "Make a plan for adding a hello-world Python script to this repo. Use ExitPlanMode when the plan is ready."
+            },
+            {
+              "type": "sleep",
+              "seconds": 15
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
+            "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+            "events.jsonl contains a state_transition to working for the UUID after the prompt lands",
+            "events.jsonl contains a state_transition to waiting for the UUID once the assistant emits the ExitPlanMode tool_use",
+            "events.jsonl contains NO state_transition to ready for the UUID after the waiting transition (recipe terminates while session is in waiting)",
+            "final session state is waiting",
+            "transcript.jsonl contains 1 user line and at least 1 assistant line; one assistant message has a tool_use with name=ExitPlanMode"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "user-blocking-question",
+      "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a). The recipe deliberately stops at the waiting episode and does not answer the question — locking down the entry into waiting. The coalesced-flush second-scenario variant (#150) is covered by unit tests around ShouldSynthesizeCollapsedWaiting.",
+      "coverage_id": "user-blocking-question",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "has_waiting_state": true,
+        "final_state": "waiting"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID (run-cell.sh does this via uuidgen | tr '[:upper:]' '[:lower:]')",
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly one short clarifying question, ending in a question mark. No other text."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
+            "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+            "events.jsonl contains exactly one state_transition to working for the UUID",
+            "events.jsonl contains exactly one state_transition to waiting for the UUID after the assistant's question-mark reply",
+            "events.jsonl contains NO state_transition to ready for the UUID after the waiting transition (recipe terminates while session is in waiting)",
+            "final session state is waiting",
+            "transcript.jsonl contains exactly 1 user line and 1 assistant line, with the assistant text ending in '?'"
+          ],
+          "settings": {},
+          "timeout_seconds": 90
+        }
+      }
+    },
+    {
+      "name": "user-esc-interrupt",
+      "description": "User cancels a long turn with ESC. Validates parser.recordUserInterruptFlags (sets ev.IsUserInterrupt on '[Request interrupted by user]' marker), the sticky LastWasUserInterrupt flag in tailer.go, and classifier rule 3 driving working→ready with reason 'user ESC interrupt'. Spec: ready→working→ready; state does not stick in working post-interrupt. The driver's 'interrupt' step sends Escape to the tmux pane.",
+      "coverage_id": "user-esc-interrupt",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "contains_interrupt": true,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "claude version where ESC interrupts the in-flight turn (confirmed in 2.1.x)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "no other claudecode session uses the same UUID"
+          ],
+          "setup": [
+            "Generate a fresh lowercased session UUID",
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Count slowly from 1 to 100, with a brief one-sentence explanation for each number. Take your time and stream the response."
+            },
+            {
+              "type": "sleep",
+              "seconds": 10
+            },
+            {
+              "type": "interrupt"
+            },
+            {
+              "type": "sleep",
+              "seconds": 10
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created for proc-<PID> within 1000 ms",
+            "events.jsonl contains a transcript_new for the UUID session within 500 ms of the first send",
+            "events.jsonl contains a state_transition to working for the UUID after the prompt lands",
+            "transcript.jsonl contains a user message whose first content text begins with '[Request interrupted by user]' (and NOT 'for tool use')",
+            "events.jsonl contains a state_transition to ready for the UUID after the interrupt marker is parsed (rule 3 fires on LastWasUserInterrupt + LastEventType=user + !HasOpenToolCall)",
+            "final session state is ready",
+            "transcript.jsonl contains exactly 1 user prompt line, 1 interrupt-marker user line, and at least 1 partial assistant line"
+          ],
+          "settings": {},
+          "timeout_seconds": 90
+        }
+      }
+    },
+    {
+      "name": "autonomous-loop",
+      "description": "Claudecode /goal autonomous self-prompting loop. /goal <condition> registers a Stop hook that re-prompts with the condition after each turn ends; the agent iterates until goal_status.met == true or /goal clear fires. The recording uses a goal that converges in 2-3 iterations.",
+      "coverage_id": "autonomous-loop",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "min_turns": 2,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd is recording (--attach or isolated mode)",
+            "/goal requires a trusted workspace and hooks enabled (default settings satisfy both)"
+          ],
+          "setup": [
+            "Driver generates a fresh UUID + cwd; trust dialog is accepted automatically"
+          ],
+          "script": [
+            {
+              "type": "slash",
+              "text": "/goal You have run two bash commands so far this session: `echo iter1` and `echo iter2`, in that exact order. Run them one at a time across iterations."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/goal clear"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains at least 2 working→ready transitions on the same UUID — the /goal set + at least one Stop-hook iteration",
+            "final state of the session is ready after /goal clear",
+            "no state_transition to waiting (no permission gates expected)"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    {
+      "name": "autonomous-loop-iteration-limit",
+      "description": "Claudecode /goal with an unsatisfiable condition; the recipe lets the loop run a few iterations then sends /goal clear as a stand-in for the max_iterations cap (which is not deterministically forceable today). The state arc on cap-hit and on /goal clear is identical: end_turn followed by ready with no further Stop-hook re-prompts. Tests the loop's graceful-termination shape from the spec.",
+      "coverage_id": "autonomous-loop-iteration-limit",
+      "requires": [
+        "headless_mode"
+      ],
+      "verify": {
+        "min_turns": 2,
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd is recording",
+            "/goal requires a trusted workspace and hooks enabled"
+          ],
+          "setup": [
+            "Driver generates a fresh UUID + cwd"
+          ],
+          "script": [
+            {
+              "type": "slash",
+              "text": "/goal You have replied with the integer that is both odd and even simultaneously. This goal is impossible. Keep guessing."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            },
+            {
+              "type": "slash",
+              "text": "/goal clear"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains at least 2 working->ready transitions on the same UUID",
+            "final state of the session is ready after /goal clear",
+            "no state_transition to waiting"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "task-tool",
+      "description": "Staggered Task-tool fan-out: parent kicks off three concurrent subagents in one turn, each running bash sleep N (5/10/15s). The recording shows the dashboard subagent count decrement 3 → 2 → 1 → 0 over ~15s, then the parent transitions working → ready after the last child reports. Generalizes foreground-subagent (1 child) and the prior task-tool recipe (2 children) to the three-stagger shape that exercises the dashboard count chip end-to-end.",
+      "coverage_id": "task-tool",
+      "requires": [
+        "headless_mode",
+        "subagents"
+      ],
+      "verify": {
+        "parent_linked_min": 3,
+        "subagent_transcripts_min": 3,
+        "final_state": "ready",
+        "contains_tool_call": "Agent"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated",
+            "irrlichd is recording (--attach or isolated)",
+            "claude session can spawn at least 2 subagents in parallel (default model has Task/Agent tool exposed)"
+          ],
+          "setup": [
+            "Driver seeds two files in <staging>/cwd: README.md (one H1 heading) and CHANGELOG.md (one release date). Subagents have deterministic content to read."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "In a SINGLE turn, use the Task tool THREE times in parallel. Each subagent receives the general-purpose type. Subagent A: run bash 'sleep 5 && echo A done'. Subagent B: run bash 'sleep 10 && echo B done'. Subagent C: run bash 'sleep 15 && echo C done'. After all three subagents report back, reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the parent UUID entering ready, then a single ready->working transition",
+            "events.jsonl contains AT LEAST 2 parent_linked events pointing at the parent UUID",
+            "transcript.jsonl contains AT LEAST 2 tool_use blocks with name=Agent (the two Task invocations)",
+            "two subagent transcripts appear under ~/.claude/projects/<slug>/<parent>/subagents/agent-<uuid>.jsonl",
+            "no state_transition to ready or waiting fires on the parent UUID between child2_parent_linked and the final working->ready (parent stays working until the LAST child reports back)",
+            "events.jsonl shows exactly one working->ready transition for the parent UUID at turn end",
+            "final session state for the parent is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 420
+        }
+      }
     }
   ],
-
   "orchestrator_scenarios": [
     {
       "name": "agent-discovery",
       "description": "Two rigs declared in rigs.json; gt rig list returns the same set. Verifies that both rigs surface as codebases with their default workers (witness, refinery), and that mayor/deacon appear as idle global agents when no sessions match.",
       "verify": {
         "codebases_count": 2,
-        "codebases_names": ["gastown", "irrlicht"],
-        "global_agents_roles": ["mayor", "deacon", "boot"]
+        "codebases_names": [
+          "gastown",
+          "irrlicht"
+        ],
+        "global_agents_roles": [
+          "mayor",
+          "deacon",
+          "boot"
+        ]
       },
       "by_orchestrator": {
         "gastown": {
@@ -310,7 +2833,10 @@
       "description": "Two sessions are active with CWDs under <rig>/witness and <rig>/refinery. The poller must populate worker.SessionID for those roles via deriveRole/CWD matching.",
       "verify": {
         "workers_with_session_min": 2,
-        "expected_session_ids": ["sess-witness-001", "sess-refinery-001"]
+        "expected_session_ids": [
+          "sess-witness-001",
+          "sess-refinery-001"
+        ]
       },
       "by_orchestrator": {
         "gastown": {
@@ -324,7 +2850,9 @@
       "description": "Daemon reports running=false and the rig is degraded. Verifies that orchestrator.State.Running and Codebase.Status reflect aggregated multi-source state.",
       "verify": {
         "running": false,
-        "codebase_statuses": ["degraded"]
+        "codebase_statuses": [
+          "degraded"
+        ]
       },
       "by_orchestrator": {
         "gastown": {
@@ -337,7 +2865,11 @@
       "name": "agent-join-leave",
       "description": "Polecat workforce churns over 3 polls: tick-001 has 1 polecat, tick-002 adds a second, tick-003 removes the second. Verifies that the snapshot stream reflects each join/leave on its own poll cycle.",
       "verify": {
-        "polecat_count_per_tick": [1, 2, 1]
+        "polecat_count_per_tick": [
+          1,
+          2,
+          1
+        ]
       },
       "by_orchestrator": {
         "gastown": {
@@ -350,8 +2882,16 @@
       "name": "polling-lifecycle",
       "description": "gt CLI is healthy on tick 1, fails completely on tick 2 (poller falls back to cached rigs.json sidecar; polecats/dogs/boot become empty since they have no fallback), then recovers on tick 3. Verifies the production fallback path through the rigs.json sidecar.",
       "verify": {
-        "codebases_count_per_tick": [1, 1, 1],
-        "boot_present_per_tick": [true, false, true]
+        "codebases_count_per_tick": [
+          1,
+          1,
+          1
+        ],
+        "boot_present_per_tick": [
+          true,
+          false,
+          true
+        ]
       },
       "by_orchestrator": {
         "gastown": {

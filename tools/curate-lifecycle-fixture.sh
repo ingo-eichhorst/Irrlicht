@@ -112,6 +112,16 @@ CHILD_COUNT=$(printf '%s\n' "$CHILD_IDS" | grep -c . || true)
 # the parent plus every discovered child.
 SESSION_SET=$(printf '%s\n%s\n' "$SESSION_ID" "$CHILD_IDS" | grep -v '^$')
 
+# Multi-session: when the driver chained `restart` steps (claudecode's
+# session-end scenario records three lifetimes in one recording), the
+# secondary UUIDs come in via $IRRLICHT_EXTRA_SESSION_IDS as a
+# comma-separated list. Union them into SESSION_SET so the filter
+# accepts events from all sessions in the recording.
+if [[ -n "${IRRLICHT_EXTRA_SESSION_IDS:-}" ]]; then
+  EXTRA_NEWLINE=$(echo "$IRRLICHT_EXTRA_SESSION_IDS" | tr ',' '\n' | grep -v '^$')
+  SESSION_SET=$(printf '%s\n%s\n' "$SESSION_SET" "$EXTRA_NEWLINE" | grep -v '^$' | sort -u)
+fi
+
 # Pull in pre-session events (proc-<pid>) whose pid matches a
 # pid_discovered for any session in the set. The scanner emits
 # presession_created/removed under session_id="proc-<pid>" before the
@@ -141,7 +151,21 @@ if [[ "$EVENT_COUNT" -eq 0 ]]; then
   exit 1
 fi
 
-cp "$TRANSCRIPT" "$OUT_TRANSCRIPT"
+# Transcript: single-session is a straight copy. Multi-session
+# (IRRLICHT_EXTRA_TRANSCRIPTS set by run-cell.sh) concatenates all
+# transcripts in the order the driver chained the sessions. Each
+# line is a self-contained JSON record so concat is safe.
+if [[ -n "${IRRLICHT_EXTRA_TRANSCRIPTS:-}" ]]; then
+  : > "$OUT_TRANSCRIPT"
+  while IFS= read -r tpath; do
+    [[ -z "$tpath" ]] && continue
+    if [[ -f "$tpath" ]]; then
+      cat "$tpath" >> "$OUT_TRANSCRIPT"
+    fi
+  done <<< "$IRRLICHT_EXTRA_TRANSCRIPTS"
+else
+  cp "$TRANSCRIPT" "$OUT_TRANSCRIPT"
+fi
 
 # Copy all subagent transcripts, if any. The real-world layout is
 # <project-dir>/<parent-id>/subagents/<agent-id>.jsonl (Claude Code's

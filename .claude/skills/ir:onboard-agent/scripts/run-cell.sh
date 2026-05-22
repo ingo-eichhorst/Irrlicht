@@ -34,12 +34,37 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
 SCENARIOS_JSON="$SKILL_DIR/scenarios.json"
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: run-cell.sh <adapter> <scenario-name>" >&2
+RECORDER="off"
+ATTACH=0
+positional=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --recorder=on)  RECORDER="on"; shift ;;
+    --recorder=off) RECORDER="off"; shift ;;
+    --recorder)
+      echo "use --recorder=on or --recorder=off (no separate value)" >&2; exit 2 ;;
+    --attach|-a) ATTACH=1; shift ;;
+    -h|--help)
+      echo "usage: run-cell.sh [--recorder=on|off] [--attach] <adapter> <scenario-name>" >&2; exit 0 ;;
+    --) shift; positional+=("$@"); break ;;
+    -*) echo "unknown flag: $1" >&2; exit 2 ;;
+    *)  positional+=("$1"); shift ;;
+  esac
+done
+if [[ ${#positional[@]} -ne 2 ]]; then
+  echo "usage: run-cell.sh [--recorder=on|off] [--attach] <adapter> <scenario-name>" >&2
   exit 2
 fi
-ADAPTER="$1"
-SCENARIO="$2"
+ADAPTER="${positional[0]}"
+SCENARIO="${positional[1]}"
+
+# --recorder=on is a deprecated no-op flag. Mode B's sensor recorder
+# (signals.jsonl + frames + ground_truth) has been retired in favor of
+# expected.jsonl as the single source of behavioral truth. Accept the
+# flag for compatibility with older callers but emit nothing.
+if [[ "$RECORDER" == "on" ]]; then
+  echo "note: --recorder=on is deprecated (Mode B retired); flag has no effect." >&2
+fi
 
 # Look up the cell from scenarios.json. Absent cell → refuse.
 # A cell carries either `prompt` (single-shot, headless driver) or `script`
@@ -72,7 +97,7 @@ if [[ -z "$PROMPT" && -z "$SCRIPT_JSON" ]]; then
 fi
 
 # --- Precheck ------------------------------------------------------------
-"$SCRIPT_DIR/precheck.sh" "$ADAPTER" "$SCENARIOS_JSON"
+ATTACH="$ATTACH" "$SCRIPT_DIR/precheck.sh" "$ADAPTER" "$SCENARIOS_JSON"
 
 # --- Staging -------------------------------------------------------------
 TS="$(date -u +%Y%m%dT%H%M%S)"
@@ -90,49 +115,82 @@ UUID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
 REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
 
-# --- Launch isolated daemon ---------------------------------------------
-DAEMON_LOG="$STAGING/daemon.log"
-IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
-  IRRLICHT_BIND_ADDR="127.0.0.1:7837" \
-  "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
-DAEMON_PID=$!
-echo "daemon started (pid $DAEMON_PID)"
-
-# Cleanup: graceful shutdown. Runs once: either via explicit call before
-# transcript resolution (we must drain before continuing), or as the EXIT
-# trap if we fail before reaching that point. `trap - EXIT` after the
-# explicit call prevents double-invocation.
-SHUTDOWN_REASON="unknown"
-cleanup() {
-  if kill -0 "$DAEMON_PID" 2>/dev/null; then
-    SHUTDOWN_REASON="sigint"
-    kill -INT "$DAEMON_PID" 2>/dev/null || true
-    # 6s grace = 5s recorder flush interval + 1s slack.
-    for _ in $(seq 1 12); do
-      kill -0 "$DAEMON_PID" 2>/dev/null || { echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"; return; }
-      sleep 0.5
-    done
-    SHUTDOWN_REASON="sigterm"
-    kill -TERM "$DAEMON_PID" 2>/dev/null || true
-    for _ in $(seq 1 6); do
-      kill -0 "$DAEMON_PID" 2>/dev/null || { echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"; return; }
-      sleep 0.5
-    done
-    SHUTDOWN_REASON="sigkill"
-    kill -KILL "$DAEMON_PID" 2>/dev/null || true
+# --- Daemon source ------------------------------------------------------
+# Two modes:
+#  - isolated (default): spawn a dedicated `irrlichd --record` on port
+#    7837 with $STAGING/recordings as its recordings dir. Killed after
+#    the driver returns so the recorder flushes cleanly.
+#  - attached ($ATTACH=1): use the user's already-running irrlichd.
+#    Dashboard stays connected for the whole recording. We don't spawn
+#    or kill anything; instead we capture the start timestamp now, sleep
+#    long enough after the driver returns for the recorder's 5s
+#    periodic flush, and pick the recording file from whatever the
+#    daemon is writing to (env override > default
+#    ~/.local/share/irrlicht/recordings/).
+DAEMON_PID=""
+if [[ "$ATTACH" == "1" ]]; then
+  ATTACHED_RECORDINGS_DIR="${IRRLICHT_RECORDINGS_DIR:-$HOME/.local/share/irrlicht/recordings}"
+  if [[ ! -d "$ATTACHED_RECORDINGS_DIR" ]]; then
+    echo "attach: recordings dir not found: $ATTACHED_RECORDINGS_DIR" >&2
+    echo "        set IRRLICHT_RECORDINGS_DIR or ensure the daemon is running with --record" >&2
+    exit 1
   fi
-  echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"
-}
-trap cleanup EXIT
+  # Marker file pre-dating the driver run; used later to pick out
+  # recording files touched while the driver ran.
+  ATTACH_MARKER="$STAGING/attach.start"
+  : > "$ATTACH_MARKER"
+  # Validate the daemon is actually recording — the dir must contain at
+  # least one .jsonl. (A daemon not in --record mode has an empty dir.)
+  if ! ls "$ATTACHED_RECORDINGS_DIR"/*.jsonl >/dev/null 2>&1; then
+    echo "attach: $ATTACHED_RECORDINGS_DIR contains no .jsonl files" >&2
+    echo "        is the running irrlichd in --record mode?" >&2
+    exit 1
+  fi
+  echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
+else
+  DAEMON_LOG="$STAGING/daemon.log"
+  IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
+    IRRLICHT_BIND_ADDR="127.0.0.1:7837" \
+    "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
+  DAEMON_PID=$!
+  echo "daemon started (pid $DAEMON_PID)"
 
-# Wait up to 10s for the unix socket to appear — signals the daemon is
-# ready to accept connections.
-SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"
-for _ in $(seq 1 40); do
-  [[ -S "$SOCK" ]] && break
-  sleep 0.25
-done
-[[ -S "$SOCK" ]] || { echo "daemon socket never appeared: $SOCK" >&2; exit 1; }
+  # Cleanup: graceful shutdown. Runs once: either via explicit call
+  # before transcript resolution (we must drain before continuing), or
+  # as the EXIT trap if we fail before reaching that point. `trap - EXIT`
+  # after the explicit call prevents double-invocation.
+  SHUTDOWN_REASON="unknown"
+  cleanup() {
+    if kill -0 "$DAEMON_PID" 2>/dev/null; then
+      SHUTDOWN_REASON="sigint"
+      kill -INT "$DAEMON_PID" 2>/dev/null || true
+      # 6s grace = 5s recorder flush interval + 1s slack.
+      for _ in $(seq 1 12); do
+        kill -0 "$DAEMON_PID" 2>/dev/null || { echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"; return; }
+        sleep 0.5
+      done
+      SHUTDOWN_REASON="sigterm"
+      kill -TERM "$DAEMON_PID" 2>/dev/null || true
+      for _ in $(seq 1 6); do
+        kill -0 "$DAEMON_PID" 2>/dev/null || { echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"; return; }
+        sleep 0.5
+      done
+      SHUTDOWN_REASON="sigkill"
+      kill -KILL "$DAEMON_PID" 2>/dev/null || true
+    fi
+    echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"
+  }
+  trap cleanup EXIT
+
+  # Wait up to 10s for the unix socket to appear — signals the daemon is
+  # ready to accept connections.
+  SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"
+  for _ in $(seq 1 40); do
+    [[ -S "$SOCK" ]] && break
+    sleep 0.25
+  done
+  [[ -S "$SOCK" ]] || { echo "daemon socket never appeared: $SOCK" >&2; exit 1; }
+fi
 
 # --- Drive the agent ----------------------------------------------------
 # Drivers are responsible for resolving the transcript path and writing
@@ -154,16 +212,64 @@ set +e
 set -e
 DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown")"
 
-# Drain the daemon now — the recorder must flush before we curate.
-cleanup
-trap - EXIT
+# Flush the daemon's recorder before we curate.
+#  - isolated: SIGINT and wait for graceful shutdown (flushes on Close).
+#  - attached: just wait 6s — the recorder's 5s periodic flush + 1s
+#    slack is enough to land all writes from this run on disk. The
+#    user's daemon keeps running and the dashboard stays connected.
+if [[ "$ATTACH" == "1" ]]; then
+  SHUTDOWN_REASON="attached"
+  echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"
+  echo "attach: waiting 6s for recorder flush..."
+  sleep 6
+else
+  cleanup
+  trap - EXIT
+fi
 
 # --- Read driver-resolved transcript + actual UUID ----------------------
 TRANSCRIPT="$(cat "$STAGING/transcript.path" 2>/dev/null || true)"
 ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
 
+# Multi-session: drivers that chain `restart` steps (e.g. claudecode's
+# session-end scenario) write the full UUID + transcript lists to
+# session.uuids / transcript.paths. Curate picks them up via env so
+# the fixture's events.jsonl filter includes all sessions and the
+# transcript output concatenates them in order.
+if [[ -f "$STAGING/session.uuids" ]]; then
+  uuid_count=$(grep -c . "$STAGING/session.uuids" || echo 0)
+  if [[ "$uuid_count" -gt 1 ]]; then
+    EXTRA_IDS=""
+    while IFS= read -r u; do
+      [[ -z "$u" ]] && continue
+      [[ "$u" == "$ACTUAL_UUID" ]] && continue
+      EXTRA_IDS+="${EXTRA_IDS:+,}${u}"
+    done < "$STAGING/session.uuids"
+    export IRRLICHT_EXTRA_SESSION_IDS="$EXTRA_IDS"
+    # Concatenate all transcript paths (newline-separated) so curate
+    # can build a single transcript.jsonl in chronological order.
+    export IRRLICHT_EXTRA_TRANSCRIPTS="$(cat "$STAGING/transcript.paths")"
+    echo "multi-session: primary=$ACTUAL_UUID, extras=$EXTRA_IDS"
+  fi
+fi
+
 # --- Locate the recording file ------------------------------------------
-RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
+# Isolated mode: one .jsonl in $STAGING/recordings/.
+# Attached mode: pick the file(s) in the running daemon's recordings
+# dir that the daemon was writing to during this run (i.e. mtime newer
+# than the attach marker we dropped before the driver ran). The daemon
+# rotates by start-time so a recording in progress always has the
+# newest mtime; multiple may match if the daemon rotated mid-run.
+if [[ "$ATTACH" == "1" ]]; then
+  RECORDING="$(find "$ATTACHED_RECORDINGS_DIR" -maxdepth 1 -name '*.jsonl' -type f -newer "$ATTACH_MARKER" 2>/dev/null | sort | tail -n1)"
+  if [[ -z "$RECORDING" ]]; then
+    # Fall back to the most-recent file regardless of mtime, in case
+    # the daemon's writes haven't bumped the mtime past our marker.
+    RECORDING="$(find "$ATTACHED_RECORDINGS_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | xargs ls -1t 2>/dev/null | head -n1)"
+  fi
+else
+  RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
+fi
 
 # --- Daemon-recorded session-id mapping ---------------------------------
 # The daemon's session_id often differs from the agent's native UUID:

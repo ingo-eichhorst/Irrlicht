@@ -18,9 +18,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
-	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/opencode"
-	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	sessionshandler "irrlicht/core/adapters/inbound/sessions"
@@ -33,7 +31,6 @@ import (
 	"irrlicht/core/adapters/outbound/recorder"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
-	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/pkg/tailer"
@@ -152,15 +149,10 @@ func main() {
 	// Unified registration for every inbound agent adapter. Wiring below
 	// (fswatchers, process scanners, metrics parser map, PID discovery map)
 	// derives from this single slice — the only place new agents need to be
-	// listed. Order matters: the metrics collector uses the first entry's
-	// parser as the fallback for unknown adapter names.
-	allAgents := []agent.Agent{
-		claudecode.Agent(),
-		codex.Agent(),
-		pi.Agent(),
-		aider.Agent(),
-		opencode.Agent(),
-	}
+	// listed. The slice itself lives in core/adapters/inbound/agents/all.go
+	// so the agent-onboarding viewer can build the same metrics Registry
+	// during replay without duplicating the construction.
+	allAgents := agents.All()
 
 	// Build the per-adapter parser map and patch in the FilesUnderCWD
 	// (aider) and ProcessOwnedStore (opencode) entries that agents.Parsers

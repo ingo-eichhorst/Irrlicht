@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "scenario_id": "long-idle-live-session",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-17T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nThe spec asserts three observables: (1) the session does NOT disappear past readyTTL, (2) state remains `ready` during idle, and (3) the next user prompt resumes `ready → working` normally. All three are within claudecode + irrlicht's transport.\n\nClaude Code is a long-lived TUI process — once launched, it sits in its REPL until the user explicitly exits. irrlicht's adapter ties session lifetime to PID liveness (`ExactName{Name: \"claude\"}` via pgrep) rather than to a fixed timer. The classifier's `readyTTL` is the timeout for ready-state STALE sessions (no live process backing them); for sessions whose PID is still alive, the session stays in `ready` indefinitely. The `idle_window` phase in the spec asserts this with `duration_at_least_ms: 15000` plus invariants (no transcript_removed, no spurious state_transition to working/waiting), and the matrix notes for this cell already cite '#321 zombie-on-restart fixed in 0.4.x' — the PID liveness path is exercised by the current daemon.\n\nThe second-turn behaviour is the normal turn arc: a fresh `send` after the idle window drives state to `working` via the JSONL transcript's user-line append; the assistant's response settles back to `ready`. The recipe's 20-second sleep between turns clears any reasonable readyTTL.",
+  "caveats": [
+    "Recording exercises a 15-20 s idle window; production sessions sit idle for hours. The phase contract uses duration_at_least_ms (not _at_most_ms), so longer real-world idles are by definition still passing. The phase budget is the floor, not the ceiling.",
+    "If a future daemon version reintroduces a session-level idle timer (separate from PID liveness), the idle_window invariants would fire and this spec would catch the regression. That's the test's intent."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/agent.go", "note": "ExactName{Name: \"claude\"} process matcher — session lifetime is tied to PID liveness, not a timer."},
+    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/scenarios.json", "note": "by_adapter.claudecode.script for long-idle-live-session — 6 steps: send + wait + 20s sleep + send + wait + 5s tail."},
+    {"kind": "issue", "ref": "ingo-eichhorst/Irrlicht#321", "note": "Zombie-on-restart fix in 0.4.x exercises the PID-liveness path this scenario depends on."}
+  ]
+}

@@ -8,29 +8,29 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 21,
-    "consumed_events": 21,
+    "total_events": 20,
+    "consumed_events": 20,
     "total_transitions": 3,
-    "first_event_time": "2026-05-01T11:21:56.472Z",
-    "last_event_time": "2026-05-01T11:22:29.843Z",
-    "wall_clock_session_duration": 33371000000,
+    "first_event_time": "2026-05-16T20:57:12.532Z",
+    "last_event_time": "2026-05-16T20:59:14.457Z",
+    "wall_clock_session_duration": 121925000000,
     "state_durations": {
-      "ready": 184000000,
-      "working": 33187000000
+      "ready": 692000000,
+      "working": 121233000000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "estimated_cost_usd": 0.061735,
-    "cum_input_tokens": 24568,
-    "cum_output_tokens": 21,
-    "model_name": "gpt-5.4"
+    "estimated_cost_usd": 0.147535,
+    "cum_input_tokens": 29417,
+    "cum_output_tokens": 15,
+    "model_name": "gpt-5.5"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-01T11:21:56.472Z",
+      "virtual_time": "2026-05-16T20:57:12.532Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -44,7 +44,7 @@
     {
       "index": 1,
       "event_index": 7,
-      "virtual_time": "2026-05-01T11:21:56.656Z",
+      "virtual_time": "2026-05-16T20:57:13.224Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -57,8 +57,8 @@
     },
     {
       "index": 2,
-      "event_index": 20,
-      "virtual_time": "2026-05-01T11:22:29.843Z",
+      "event_index": 19,
+      "virtual_time": "2026-05-16T20:59:14.457Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
