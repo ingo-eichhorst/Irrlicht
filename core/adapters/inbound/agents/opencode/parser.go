@@ -148,6 +148,9 @@ func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer
 	case "error":
 		// API or other error — the agent stopped generating.
 		ev.EventType = "turn_done"
+	case "content-filter":
+		// Model output was filtered — generation is definitively done.
+		ev.EventType = "turn_done"
 	default:
 		// Unknown reason — conservatively treat as assistant_message.
 		ev.EventType = "assistant_message"
