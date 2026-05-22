@@ -55,6 +55,12 @@
       "feature": "Auto-executed tool call"
     },
     {
+      "id": "todowrite",
+      "section": "Turn shape",
+      "feature": "Todowrite tool observability",
+      "requires": ["todowrite"]
+    },
+    {
       "id": "self-correction-iteration",
       "section": "Turn shape",
       "feature": "Self-correction iteration"

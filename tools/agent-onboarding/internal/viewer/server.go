@@ -392,6 +392,7 @@ func annotateMeasurements(b []byte, repoRoot string) []byte {
 	if !ok {
 		return b
 	}
+	recipes := loadRecipeMap(repoRoot)
 	for _, raw := range rawScenarios {
 		sc, ok := raw.(map[string]any)
 		if !ok {
@@ -410,7 +411,7 @@ func annotateMeasurements(b []byte, repoRoot string) []byte {
 			if !ok {
 				continue
 			}
-			cell["measurement"] = measureScenario(repoRoot, agentSlug, sid)
+			cell["measurement"] = measureScenario(repoRoot, agentSlug, sid, recipes)
 		}
 	}
 	out, err := json.Marshal(top)
@@ -428,8 +429,8 @@ func annotateMeasurements(b []byte, repoRoot string) []byte {
 // while replaydata folders use the recipe `name` (e.g. "interrupted-turn").
 // scenarios.json carries the mapping; we resolve it here so the matrix's
 // scenario id is the only thing the caller needs to know.
-func measureScenario(repoRoot, agent, scenarioID string) map[string]any {
-	folder := resolveScenarioFolder(repoRoot, scenarioID)
+func measureScenario(repoRoot, agent, scenarioID string, recipes map[string]recipeEntry) map[string]any {
+	folder := resolveScenarioFolderFromMap(recipes, scenarioID)
 	if folder == "" {
 		folder = scenarioID // try the coverage id directly as a last resort
 	}
@@ -670,40 +671,6 @@ func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes map[str
 	out["recordings"] = map[string]any{"latest": latest, "archive_count": archiveCount}
 
 	return out
-}
-
-// resolveScenarioFolder maps a coverage_id (the matrix's scenario id)
-// to the replaydata folder name. Most scenarios use the same string
-// for both, but a handful may diverge (when one coverage row is
-// targeted by multiple recipes) per scenarios.json's optional
-// `coverage_id` field.
-//
-// Returns the folder name when the mapping resolves, "" otherwise.
-func resolveScenarioFolder(repoRoot, coverageID string) string {
-	path := filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var doc struct {
-		Scenarios []struct {
-			Name       string `json:"name"`
-			CoverageID string `json:"coverage_id"`
-		} `json:"scenarios"`
-	}
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return ""
-	}
-	for _, sc := range doc.Scenarios {
-		cid := sc.CoverageID
-		if cid == "" {
-			cid = sc.Name
-		}
-		if cid == coverageID {
-			return sc.Name
-		}
-	}
-	return ""
 }
 
 // handleScenarioSpec parses .specs/agent-scenarios.md on demand and
@@ -1654,9 +1621,13 @@ func readTransitionsRaw(path string) []json.RawMessage {
 			// so the reader can spot the lifecycle exit.
 			raw["kind"] = json.RawMessage(`"state_transition"`)
 			raw["new_state"] = json.RawMessage(`"∅"`)
-			raw["reason"] = json.RawMessage(`"` + kind + `"`)
+			if kindJSON, err := json.Marshal(kind); err == nil {
+				raw["reason"] = json.RawMessage(kindJSON)
+			}
 			if prev := lastState[sid]; prev != "" {
-				raw["prev_state"] = json.RawMessage(`"` + prev + `"`)
+				if prevJSON, err := json.Marshal(prev); err == nil {
+					raw["prev_state"] = json.RawMessage(prevJSON)
+				}
 			}
 			b, _ := json.Marshal(raw)
 			out = append(out, b)

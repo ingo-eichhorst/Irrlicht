@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scenario_id": "task-tool",
+  "scenario_id": "foreground-subagent",
   "agent": "opencode",
   "assessed_at": "2026-05-22T00:00:00Z",
   "agent_supports": "yes",
@@ -30,7 +30,7 @@
     },
     {
       "kind": "file",
-      "ref": "replaydata/agents/claudecode/scenarios/task-tool/assessment.json",
+      "ref": "replaydata/agents/claudecode/scenarios/foreground-subagent/assessment.json",
       "note": "Reference assessment for the parallel-spawn shape; this assessment generalizes it to OpenCode's SQLite transport."
     },
     {

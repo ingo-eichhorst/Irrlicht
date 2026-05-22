@@ -30,12 +30,34 @@ if (!window.matchMedia) {
   });
 }
 
-// Stub WebSocket so connect() is a no-op
+// Stub WebSocket — supports ws.onopen/onmessage/onerror/onclose assignments
+// (irrlicht.js uses property assignment, not addEventListener). Tests can
+// call lastMockWebSocket.simulateOpen() / simulateMessage(data) to exercise
+// the connect() and reconnect paths.
 class MockWebSocket {
-  constructor() {}
+  constructor(url) {
+    this.url = url;
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    this.onclose = null;
+    this.readyState = 0; // CONNECTING
+    global.lastMockWebSocket = this;
+  }
   addEventListener() {}
   send() {}
-  close() {}
+  close() {
+    this.readyState = 3; // CLOSED
+    if (this.onclose) this.onclose({ code: 1000, reason: '' });
+  }
+  simulateOpen() {
+    this.readyState = 1; // OPEN
+    if (this.onopen) this.onopen({});
+  }
+  simulateMessage(data) {
+    const payload = typeof data === 'string' ? data : JSON.stringify(data);
+    if (this.onmessage) this.onmessage({ data: payload });
+  }
 }
 global.WebSocket = MockWebSocket;
 
