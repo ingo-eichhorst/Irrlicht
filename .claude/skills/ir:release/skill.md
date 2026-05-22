@@ -566,9 +566,26 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    codesign --force --sign "$DEVID" --options runtime --timestamp \
        --entitlements "$ENTITLEMENTS" "$APP_STAGING"
    codesign --verify --deep --strict "$APP_STAGING"
-   codesign -d --entitlements - "$APP_STAGING" 2>&1 | grep -q 'com.apple.developer.focus-status' \
+   # Extract entitlements as XML once for two value-aware XPath checks below.
+   # macOS 13+ emits binary plist by default; plutil normalizes to XML so a
+   # `<false/>` declaration doesn't false-match against a key-only grep.
+   ENTS_XML=$(codesign -d --entitlements - "$APP_STAGING" 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null)
+   FOCUS_TRUE=$(echo "$ENTS_XML" | xmllint --xpath \
+     "boolean(/plist/dict/key[text()='com.apple.developer.focus-status']/following-sibling::*[1][self::true])" \
+     - 2>/dev/null)
+   GTA_TRUE=$(echo "$ENTS_XML" | xmllint --xpath \
+     "boolean(/plist/dict/key[text()='com.apple.security.get-task-allow']/following-sibling::*[1][self::true])" \
+     - 2>/dev/null)
+   [ "$FOCUS_TRUE" = "true" ] \
      && echo "OK: focus-status entitlement present" \
-     || { echo "FAIL: focus-status entitlement missing"; exit 1; }
+     || { echo "FAIL: focus-status entitlement missing or false"; exit 1; }
+   # get-task-allow is debug-only; Apple's notarization service rejects any
+   # binary with the entitlement set to true (#407). Fail the release here,
+   # before the DMG is submitted to notarytool. Match on value, not key — an
+   # explicit <false/> declaration is harmless and shouldn't fail the build.
+   [ "$GTA_TRUE" = "true" ] \
+     && { echo "FAIL: get-task-allow=true — notarization will reject"; exit 1; } \
+     || echo "OK: get-task-allow not true"
    ```
 
    Notarize and staple the DMG after packaging (step 9):
@@ -1026,12 +1043,21 @@ without `--push`; the verification will report a mismatch you can ignore.
    INSTALLED=$(defaults read /Applications/Irrlicht.app/Contents/Info CFBundleShortVersionString)
    [ "$INSTALLED" = "$NEW_VERSION" ] || { echo "FAIL: canary installed v$INSTALLED, expected v$NEW_VERSION"; exit 1; }
 
-   # Confirm focus-status entitlement is present (matches the build-time
-   # guard in step 7, but on the actual shipping artifact this time).
-   codesign -d --entitlements - /Applications/Irrlicht.app 2>&1 | grep -q 'com.apple.developer.focus-status' \
-     || { echo "FAIL: shipping binary missing focus-status entitlement"; exit 1; }
+   # Confirm focus-status=true and get-task-allow != true on the actual
+   # shipping artifact (matches the build-time guards in step 7). Value-aware
+   # XPath rather than key-grep so an explicit <false/> on get-task-allow
+   # doesn't false-fail the canary (#407).
+   CANARY_XML=$(codesign -d --entitlements - /Applications/Irrlicht.app 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null)
+   FOCUS_TRUE=$(echo "$CANARY_XML" | xmllint --xpath \
+     "boolean(/plist/dict/key[text()='com.apple.developer.focus-status']/following-sibling::*[1][self::true])" \
+     - 2>/dev/null)
+   GTA_TRUE=$(echo "$CANARY_XML" | xmllint --xpath \
+     "boolean(/plist/dict/key[text()='com.apple.security.get-task-allow']/following-sibling::*[1][self::true])" \
+     - 2>/dev/null)
+   [ "$FOCUS_TRUE" = "true" ] || { echo "FAIL: shipping binary missing focus-status entitlement"; exit 1; }
+   [ "$GTA_TRUE" = "true" ] && { echo "FAIL: shipping binary has get-task-allow=true — notarization should have rejected this"; exit 1; }
 
-   echo "OK canary install: v$INSTALLED, focus-status entitlement present, running"
+   echo "OK canary install: v$INSTALLED, focus-status=true, get-task-allow not true, running"
    ```
 5. **Installer-script staleness check.** `irrlicht.io/install.sh` is
    served by GitHub Pages and lags `main` by a few minutes after a merge:
