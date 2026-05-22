@@ -1,7 +1,9 @@
 package services
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -288,6 +290,114 @@ func TestReadCodexAccountID_ErrorPaths(t *testing.T) {
 func TestReadCodexAccountID_MissingFileReturnsEmpty(t *testing.T) {
 	if got := readCodexAccountID(t.TempDir()); got != "" {
 		t.Errorf("expected empty for missing file, got %q", got)
+	}
+}
+
+// makeJWT builds a synthetic JWT with the given JSON payload string.
+// The signature is junk — we never verify it.
+func makeJWT(payloadJSON string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(payloadJSON))
+	return fmt.Sprintf("%s.%s.fakesig", header, payload)
+}
+
+func TestOpenCodeJWTAccountID(t *testing.T) {
+	claimKey := "https://api.openai.com/auth.chatgpt_account_id"
+	cases := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{
+			name:  "valid jwt with claim",
+			token: makeJWT(fmt.Sprintf(`{%q:"acct-jwt123"}`, claimKey)),
+			want:  "acct-jwt123",
+		},
+		{
+			name:  "valid jwt missing claim",
+			token: makeJWT(`{"sub":"user@example.com"}`),
+			want:  "",
+		},
+		{
+			name:  "too few segments",
+			token: "header.payload",
+			want:  "",
+		},
+		{
+			name:  "bad base64 in payload",
+			token: "header.!!!.sig",
+			want:  "",
+		},
+		{
+			name:  "claim value is not a string",
+			token: makeJWT(fmt.Sprintf(`{%q:42}`, claimKey)),
+			want:  "",
+		},
+		{
+			name:  "empty token",
+			token: "",
+			want:  "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := openCodeJWTAccountID(tc.token); got != tc.want {
+				t.Errorf("openCodeJWTAccountID = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInheritRateLimits_OpenCodeOpenAIInheritsFromCodex(t *testing.T) {
+	const accountID = "acct-jwt123"
+	claimKey := "https://api.openai.com/auth.chatgpt_account_id"
+	jwt := makeJWT(fmt.Sprintf(`{%q:%q}`, claimKey, accountID))
+
+	home := stageAuth(t, map[string]any{
+		".codex/auth.json": map[string]any{
+			"auth_mode": "chatgpt",
+			"tokens":    map[string]any{"account_id": accountID},
+		},
+		".local/share/opencode/auth.json": map[string]any{
+			"openai-oauth": map[string]any{
+				"type":         "oauth",
+				"access_token": jwt,
+			},
+		},
+	})
+
+	codex := donorCodex(1000, 35)
+	opencode := emptyWrapper("opencode", "opencode-1")
+	InheritRateLimits([]*session.SessionState{codex, opencode}, home)
+
+	if opencode.Metrics.RateLimit == nil {
+		t.Fatal("expected opencode session to inherit codex snapshot via JWT account_id")
+	}
+	if opencode.Metrics.RateLimit.SampledAt != 1000 {
+		t.Errorf("inherited snapshot timestamp mismatch: got %d", opencode.Metrics.RateLimit.SampledAt)
+	}
+}
+
+func TestInheritRateLimits_OpenCodeOpenAINoInheritWhenJWTMissing(t *testing.T) {
+	home := stageAuth(t, map[string]any{
+		".codex/auth.json": map[string]any{
+			"auth_mode": "chatgpt",
+			"tokens":    map[string]any{"account_id": "acct-xyz"},
+		},
+		".local/share/opencode/auth.json": map[string]any{
+			"openai-oauth": map[string]any{
+				"type": "oauth",
+				// no access_token field
+			},
+		},
+	})
+
+	codex := donorCodex(1000, 35)
+	opencode := emptyWrapper("opencode", "opencode-1")
+	InheritRateLimits([]*session.SessionState{codex, opencode}, home)
+
+	if opencode.Metrics.RateLimit != nil {
+		t.Fatal("expected no inheritance when access_token is absent")
 	}
 }
 
