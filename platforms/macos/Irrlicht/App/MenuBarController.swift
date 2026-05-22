@@ -20,6 +20,7 @@ final class MenuBarController: NSObject {
     private let daemonManager: DaemonManager
     private let sessionManager: SessionManager
     private let gasTownProvider: GasTownProvider
+    private let updateManager: UpdateManager
 
     private let statusItem: NSStatusItem
     private let panel: NSPanel
@@ -35,17 +36,20 @@ final class MenuBarController: NSObject {
     init(
         daemonManager: DaemonManager,
         sessionManager: SessionManager,
-        gasTownProvider: GasTownProvider
+        gasTownProvider: GasTownProvider,
+        updateManager: UpdateManager
     ) {
         self.daemonManager = daemonManager
         self.sessionManager = sessionManager
         self.gasTownProvider = gasTownProvider
+        self.updateManager = updateManager
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         let root = SessionListView()
             .environmentObject(daemonManager)
             .environmentObject(sessionManager)
             .environmentObject(gasTownProvider)
+            .environmentObject(updateManager)
         self.hostingController = NSHostingController(rootView: AnyView(root))
 
         self.panel = NSPanel(

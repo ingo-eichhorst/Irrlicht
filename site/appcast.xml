@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Irrlicht</title>
+        <link>https://irrlicht.io/appcast.xml</link>
+        <description>Auto-update feed for the Irrlicht macOS app.</description>
+        <language>en</language>
+        <item>
+            <title>Version 0.4.6</title>
+            <pubDate>Sat, 16 May 2026 22:58:38 +0000</pubDate>
+            <sparkle:version>0.4.6</sparkle:version>
+            <sparkle:shortVersionString>0.4.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://irrlicht.io/docs/changelog.html#v0-4-6</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/ingo-eichhorst/Irrlicht/releases/download/v0.4.6/Irrlicht-0.4.6.dmg"
+                sparkle:edSignature="6tk2f8JvSKUPHSvdAuXgzH3laIdbXf0XjPMHH5nxs3ws9u0DwxMm1rzUCI1fg1FudiGI776/mPKCyZ8YlxvdDg=="
+                length="12835182"
+                type="application/octet-stream" />
+        </item>
+    </channel>
+</rss>

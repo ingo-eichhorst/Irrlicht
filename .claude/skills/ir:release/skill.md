@@ -520,6 +520,12 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
        <string>Copyright © 2026 Ingo Eichhorst. MIT License.</string>
        <key>NSPrincipalClass</key>
        <string>NSApplication</string>
+       <key>SUFeedURL</key>
+       <string>https://irrlicht.io/appcast.xml</string>
+       <key>SUPublicEDKey</key>
+       <string>nKRcUPAmK6syLFEvp9O30FFvjhTIfGxYVv/6y8zpZI0=</string>
+       <key>SUEnableAutomaticChecks</key>
+       <true/>
    </dict>
    </plist>
    ```
@@ -532,10 +538,26 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
        --apple-id <your@apple.id> --team-id 93Y3GMJAMV
    ```
 
-   Sign and verify:
+   Sign and verify. Sparkle's nested helpers (XPC services, Updater.app,
+   Autoupdate, the framework binary) must each be signed deepest-first
+   before the outer bundle so `codesign --verify --deep --strict` accepts
+   the chain. Order per https://sparkle-project.org/documentation/sandboxing/.
    ```bash
    DEVID="Developer ID Application: Ingo Eichhorst (93Y3GMJAMV)"
    ENTITLEMENTS="$(pwd)/platforms/macos/Irrlicht/Resources/Irrlicht.entitlements"
+   SPARKLE_FW="$APP_STAGING/Contents/Frameworks/Sparkle.framework"
+   SPARKLE_VERSION_DIR="$SPARKLE_FW/Versions/Current"
+
+   for xpc in "$SPARKLE_VERSION_DIR"/XPCServices/*.xpc; do
+       codesign --force --sign "$DEVID" --options runtime --timestamp "$xpc"
+   done
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       "$SPARKLE_VERSION_DIR/Updater.app"
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       "$SPARKLE_VERSION_DIR/Autoupdate"
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+       "$SPARKLE_VERSION_DIR/Sparkle"
+   codesign --force --sign "$DEVID" --options runtime --timestamp "$SPARKLE_FW"
 
    codesign --force --sign "$DEVID" --options runtime --timestamp \
        "$APP_STAGING/Contents/MacOS/irrlichd"
@@ -557,6 +579,41 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    xcrun stapler validate /tmp/Irrlicht-${NEW_VERSION}.dmg
    spctl -a -t open --context context:primary-signature -v /tmp/Irrlicht-${NEW_VERSION}.dmg
    ```
+
+   Sign the DMG with Sparkle's EdDSA key and append a new entry to
+   `site/appcast.xml` so existing installs receive the update prompt.
+   The private key lives in the maintainer's macOS Keychain (and is
+   backed up at `~/Documents/better-be-great/projects/irrlicht/sparkle_ed25519_private.key`).
+   ```bash
+   SIGN_UPDATE="platforms/macos/.build/artifacts/sparkle/Sparkle/bin/sign_update"
+   # sign_update emits a single line like:
+   #   sparkle:edSignature="…" length="…"
+   SIGN_OUTPUT=$("$SIGN_UPDATE" /tmp/Irrlicht-${NEW_VERSION}.dmg)
+   ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
+   DMG_LENGTH=$(echo "$SIGN_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+   RFC822_DATE=$(LC_ALL=C date -u +'%a, %d %b %Y %H:%M:%S +0000')
+   ```
+   Insert a new `<item>` block at the top of `<channel>` in `site/appcast.xml`,
+   filling in the version, date, edSignature, length, and download URL:
+   ```xml
+   <item>
+       <title>Version ${NEW_VERSION}</title>
+       <pubDate>${RFC822_DATE}</pubDate>
+       <sparkle:version>${NEW_VERSION}</sparkle:version>
+       <sparkle:shortVersionString>${NEW_VERSION}</sparkle:shortVersionString>
+       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+       <sparkle:releaseNotesLink>https://irrlicht.io/docs/changelog.html#v${NEW_VERSION//./-}</sparkle:releaseNotesLink>
+       <enclosure
+           url="https://github.com/ingo-eichhorst/Irrlicht/releases/download/v${NEW_VERSION}/Irrlicht-${NEW_VERSION}.dmg"
+           sparkle:edSignature="${ED_SIGNATURE}"
+           length="${DMG_LENGTH}"
+           type="application/octet-stream" />
+   </item>
+   ```
+   Run `xmllint --noout site/appcast.xml` before committing. The release
+   commit in step 10 must include `site/appcast.xml` — GitHub Pages serves
+   it from `https://irrlicht.io/appcast.xml` so existing installs see the
+   new entry.
 8. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
    the process is still alive, has spawned `irrlichd`, and that the daemon
    serves the dashboard at `127.0.0.1:7837/`.

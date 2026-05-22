@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let daemonManager = DaemonManager()
     let sessionManager = SessionManager()
     let gasTownProvider = GasTownProvider()
+    let updateManager = UpdateManager()
 
     private var menuBarController: MenuBarController?
 
@@ -37,7 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController = MenuBarController(
             daemonManager: daemonManager,
             sessionManager: sessionManager,
-            gasTownProvider: gasTownProvider
+            gasTownProvider: gasTownProvider,
+            updateManager: updateManager
         )
 
         // Wire gasTownProvider before daemon starts (hydration needs it).

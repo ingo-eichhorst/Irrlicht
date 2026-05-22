@@ -104,11 +104,30 @@ cp "$BUILD_DIR/irrlicht-focus-darwin-universal" "$APP_CONTENTS/MacOS/irrlicht-fo
 chmod 755 "$APP_CONTENTS/MacOS/irrlicht-focus"
 echo "  Embedded daemon and irrlicht-focus in app bundle"
 
+# Embed Sparkle.framework so the Sparkle auto-updater finds itself at runtime.
+# SwiftPM copies Sparkle.framework next to the executable in its build output;
+# in the .app bundle the conventional home is Contents/Frameworks/, so we
+# copy it there and add an @executable_path/../Frameworks rpath to the main
+# binary (the SwiftPM-built executable only has @loader_path, which points
+# at Contents/MacOS/ inside the bundle).
+SPARKLE_SRC="platforms/macos/.build/apple/Products/Release/Sparkle.framework"
+if [ ! -d "$SPARKLE_SRC" ]; then
+    SPARKLE_SRC=$(find platforms/macos/.build -name "Sparkle.framework" -type d -not -path "*artifacts*" | grep -i release | head -1)
+fi
+if [ -z "$SPARKLE_SRC" ] || [ ! -d "$SPARKLE_SRC" ]; then
+    echo "ERROR: Could not find Sparkle.framework in SwiftPM build output"
+    exit 1
+fi
+mkdir -p "$APP_CONTENTS/Frameworks"
+cp -R "$SPARKLE_SRC" "$APP_CONTENTS/Frameworks/Sparkle.framework"
+# Only add the rpath if it isn't already present — install_name_tool errors
+# on duplicates, and SwiftPM may grow this rpath itself in a future toolchain.
+if ! otool -l "$APP_CONTENTS/MacOS/${APP_NAME}" | grep -q "@executable_path/../Frameworks"; then
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_CONTENTS/MacOS/${APP_NAME}"
+fi
+echo "  Embedded Sparkle.framework"
+
 # Generate Info.plist with resolved variables.
-# NOTE: this script does NOT codesign the bundle — signing (and applying
-# Irrlicht.entitlements) happens in the `/ir:release` skill flow. Without
-# that sign step, entitlements like com.apple.developer.focus-status carry
-# no privileges in the produced bundle.
 cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -146,6 +165,12 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
     <string>Copyright 2024 Anthropic. All rights reserved.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>SUFeedURL</key>
+    <string>https://irrlicht.io/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>nKRcUPAmK6syLFEvp9O30FFvjhTIfGxYVv/6y8zpZI0=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>
 PLIST
@@ -153,11 +178,35 @@ PLIST
 echo "  Created $APP_BUNDLE"
 
 # ── 3b. Sign app bundle ────────────────────────────────────────────────
+# Sparkle's nested helpers (Downloader.xpc, Installer.xpc, Updater.app,
+# Autoupdate, the framework binary itself) must each be signed deepest-first
+# before the outer bundle so that `codesign --verify --deep --strict` accepts
+# the chain. Order per https://sparkle-project.org/documentation/sandboxing/.
 echo ""
 ENTITLEMENTS="platforms/macos/Irrlicht/Resources/Irrlicht.entitlements"
+SPARKLE_FW="$APP_CONTENTS/Frameworks/Sparkle.framework"
+SPARKLE_VERSION_DIR="$SPARKLE_FW/Versions/Current"
+
+sign_sparkle() {
+    local sign_args=("$@")
+    for xpc in "$SPARKLE_VERSION_DIR"/XPCServices/*.xpc; do
+        [ -d "$xpc" ] || continue
+        codesign --force "${sign_args[@]}" "$xpc"
+    done
+    if [ -d "$SPARKLE_VERSION_DIR/Updater.app" ]; then
+        codesign --force "${sign_args[@]}" "$SPARKLE_VERSION_DIR/Updater.app"
+    fi
+    if [ -f "$SPARKLE_VERSION_DIR/Autoupdate" ]; then
+        codesign --force "${sign_args[@]}" "$SPARKLE_VERSION_DIR/Autoupdate"
+    fi
+    codesign --force "${sign_args[@]}" "$SPARKLE_VERSION_DIR/Sparkle"
+    codesign --force "${sign_args[@]}" "$SPARKLE_FW"
+}
+
 if [ -n "${DEVELOPER_ID:-}" ]; then
     echo "Signing app bundle with Developer ID..."
     SIGN_IDENTITY="Developer ID Application: ${DEVELOPER_ID}"
+    sign_sparkle --sign "$SIGN_IDENTITY" --options runtime --timestamp
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
         "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
@@ -170,8 +219,10 @@ if [ -n "${DEVELOPER_ID:-}" ]; then
     echo "  Signed $APP_BUNDLE (Developer ID)"
 else
     echo "Signing app bundle (ad-hoc — set DEVELOPER_ID to use Developer ID cert)..."
-    codesign --force --deep --sign - "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
-    codesign --force --deep --sign - "$APP_BUNDLE"
+    sign_sparkle --sign -
+    codesign --force --sign - "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
+    codesign --force --sign - "$APP_CONTENTS/MacOS/irrlicht-focus"
+    codesign --force --sign - "$APP_BUNDLE"
     codesign --verify --deep --strict "$APP_BUNDLE"
     echo "  Ad-hoc signed $APP_BUNDLE"
 fi

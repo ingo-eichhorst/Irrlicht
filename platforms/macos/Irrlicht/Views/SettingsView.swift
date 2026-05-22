@@ -4,6 +4,7 @@ import UserNotifications
 
 struct SettingsView: View {
     @Binding var isPresented: Bool
+    @EnvironmentObject var updateManager: UpdateManager
     @AppStorage("debugMode") private var debugMode: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
@@ -131,6 +132,46 @@ struct SettingsView: View {
             .onChange(of: notifyOnWaiting) { _ in checkNotificationAuth() }
             .onChange(of: notifyOnContextPressure) { _ in checkNotificationAuth() }
 
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Updates")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
+                LeadingToggle(
+                    isOn: $updateManager.automaticallyChecksForUpdates,
+                    label: "Automatically check for updates"
+                )
+
+                HStack {
+                    Text("Current version")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(appVersion)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                }
+
+                HStack {
+                    Text("Last checked")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(lastCheckedDescription)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Button("Check for Updates…") {
+                    updateManager.checkForUpdates()
+                }
+                .controlSize(.small)
+            }
+            .onAppear { updateManager.refresh() }
+
             Spacer()
 
             Divider()
@@ -145,9 +186,16 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 360, height: 740)
+        .frame(width: 360, height: 860)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
+    }
+
+    private var lastCheckedDescription: String {
+        guard let date = updateManager.lastUpdateCheckDate else { return "Never" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     /// One row of the Providers section: provider name + segmented
