@@ -102,7 +102,7 @@ maintainer fills the gap.
 
 - `<agent>` — the adapter slug (`claudecode`, `codex`, `pi`, `aider`,
   `opencode`).
-- `<scenario-id>` — the kebab id used in `.specs/agent-scenarios-coverage.json`
+- `<scenario-id>` — the kebab id used in `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`
   (e.g. `session-start`, `user-esc-interrupt`, `auto-executed-tool-call`).
 
 Worked examples committed (both under `scenarios.json -> scenarios[]`):
@@ -124,7 +124,7 @@ A single entry in `scenarios.json -> scenarios[]` with this shape:
 {
   "name": "<scenario-id>",                  // same as coverage_id by default
   "description": "<one-paragraph what+why>",// drawn from the spec's Scenario: text
-  "coverage_id": "<scenario-id>",           // joins to .specs/agent-scenarios-coverage.json
+  "coverage_id": "<scenario-id>",           // joins to .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json
   "idle_only": true|false,                  // true when there's no `send` step
   "requires": [...],                        // capability requirements
   "verify": {...},                          // top-level invariants
@@ -169,6 +169,8 @@ prerequisites, different agent CLIs) that can't share one
 recording.
 
 ► **Verify before moving on:**
+- [ ] Located the `### <scenario-id>` section in `.claude/skills/ir:onboard-agent/scenario-meanings.md` and read all five fields (Essence, User-observable signal, Primitive exercised, Not to be confused with, Conceptual flow).
+- [ ] If the scenario ID is missing from `scenario-meanings.md` — STOP. Ask the maintainer to add the entry before proceeding.
 - [ ] Captured every word of the Scenario: paragraph(s) and every
   Expected: bullet — paraphrasing loses precision.
 - [ ] Counted the number of variants. If >1, decide chain-in-one vs
@@ -182,7 +184,7 @@ recording.
 ### Step 2 — Read the verdict
 
 ```
-.specs/agent-scenarios-coverage.json   →   .scenarios[].coverage[<agent>]
+.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json   →   .scenarios[].coverage[<agent>]
 ```
 
 - `agent_supports == "yes"` → produce the recipe normally.
@@ -199,7 +201,7 @@ recording.
 
 ► **Verify before moving on:**
 - [ ] The verdict cell exists for `<agent>` in
-  `.specs/agent-scenarios-coverage.json` — no fabricating a column.
+  `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` — no fabricating a column.
 - [ ] If `agent_supports == "partial"`, the coverage `notes` field
   is non-empty AND you understand the caveat well enough to mirror
   it into `preconditions`. If the notes are vague (e.g. "needs
@@ -613,7 +615,7 @@ the driver controls completion timing instead of inferring it from
 - It does not run the recording. After the recipe is in
   `scenarios.json`, the maintainer runs `/ir:onboard-agent <agent>
   <scenario>` (or `--attach <agent> <scenario>`) to actually record.
-- It does not modify `.specs/agent-scenarios-coverage.json`. The
+- It does not modify `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`. The
   coverage file is the maintainer's editorial truth; the recipe in
   `scenarios.json` is the operational instance.
 - It does not edit `.specs/agent-scenarios.md`. The recipe skill

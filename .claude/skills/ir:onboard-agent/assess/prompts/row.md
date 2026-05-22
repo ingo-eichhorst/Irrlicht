@@ -1,14 +1,14 @@
 # Scenario applicability assessment (row mode)
 
-You are assessing ONE irrlicht scenario across every coding-agent CLI in the catalog. Your output becomes a candidate matrix-row for the maintainer to review and merge into `.specs/agent-scenarios-coverage.json`. You do not modify that file directly.
+You are assessing ONE irrlicht scenario across every coding-agent CLI in the catalog. Your output becomes a candidate matrix-row for the maintainer to review and merge into `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`. You do not modify that file directly.
 
 ## Inputs you will be given
 
 - `SCENARIO_ID` — the kebab-case scenario slug (e.g. `basic-turn`, `session-resume`, `cloud-background-agent`).
-- The list of adapter slugs (`agents[]` in `.specs/agent-scenarios-coverage.json`).
+- The list of adapter slugs (`agents[]` in `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`).
 - The full scenario catalog, supplied in two forms:
   - `.specs/agent-scenarios.md` — prose `Feature → Scenario → Expected` block for the scenario you're assessing. Read this carefully.
-  - `.specs/agent-scenarios-coverage.json` — canonical adapter list.
+  - `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` — canonical adapter list.
 
 Read both. The IDs in the JSON are authoritative for output keys.
 

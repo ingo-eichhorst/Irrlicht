@@ -36,7 +36,7 @@ verb:
   across all 5 adapters.
 
 The column and row forms produce CANDIDATES for the maintainer to
-review and transcribe into `.specs/agent-scenarios-coverage.json`.
+review and transcribe into `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`.
 The single-cell form is the source-of-record artifact the viewer
 displays — typically you use it AFTER a column or row scan flagged
 the cell as interesting (low confidence, surprising verdict, etc.).
@@ -54,7 +54,7 @@ the cell as interesting (low confidence, surprising verdict, etc.).
 A cell's `assessment.json` is the source-of-record for "what we
 believe about this cell right now, and why." A maintainer transcribes
 the verdict + a one-line note into the rollup matrix
-(`.specs/agent-scenarios-coverage.json`), but the artifact is what
+(`.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`), but the artifact is what
 the viewer renders on the detail page and what later audits read.
 
 Three rules:
@@ -82,7 +82,7 @@ Three rules:
 
 - `<agent>` — adapter slug (`claudecode`, `codex`, `pi`, `aider`,
   `opencode`).
-- `<scenario-id>` — coverage id from `.specs/agent-scenarios-coverage.json`
+- `<scenario-id>` — coverage id from `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`
   (e.g. `checkpoint-rewind`, `cloud-background-agent`).
 
 Worked examples committed:
@@ -152,13 +152,14 @@ rollup of the same data). Don't fabricate a scenario.
 ► **Verify before moving on:**
 - [ ] Found the Feature: heading. If not, the `<scenario-id>` is
   wrong or the spec is missing — stop and surface the gap.
+- [ ] Located the `### <scenario-id>` section in `.claude/skills/ir:onboard-agent/scenario-meanings.md` and captured the **Primitive exercised** field verbatim. This field is the canonical capability key anchor — use it in Step 4 to drive `capabilities.json` assignment. If the scenario ID is missing from `scenario-meanings.md` — STOP and ask the maintainer to add it.
 - [ ] Captured every Expected: bullet. Each one is a candidate
   assertion you'll judge `irrlicht_observes` against.
 
 ### Step 2 — Read the current matrix verdict
 
 ```
-.specs/agent-scenarios-coverage.json   →   .scenarios[].coverage[<agent>]
+.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json   →   .scenarios[].coverage[<agent>]
 ```
 
 Or `curl http://127.0.0.1:8765/api/catalog | jq` when `.specs/` is
@@ -276,6 +277,12 @@ Ask it to:
 - Decide `agent_supports` honestly.
 - Derive `irrlicht_observes` from the transport read (Step 3) and
   whatever it learns about the agent's emission shape.
+- Map the **Primitive exercised** field from Step 1 to the matching
+  key in `replaydata/agents/<agent>/capabilities.json`. Use the
+  primitive text to identify the correct feature flag — do NOT infer
+  a capability key from general knowledge; derive it directly from
+  the primitive text and the existing keys in `capabilities.json`.
+  Update or confirm that key in the output.
 - Identify caveats — name each one explicitly with the pattern it
   fits.
 - Calibrate `confidence` (`0.9+` only when behavior is documented
@@ -331,7 +338,7 @@ Then a transcription hint IF the new verdict differs from the matrix
 
 ```
 ⓘ matrix says <old_supports>/<old_observes>; consider updating
-  .specs/agent-scenarios-coverage.json -> .scenarios[<id>].coverage.<agent>
+  .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json -> .scenarios[<id>].coverage.<agent>
 ```
 
 The matrix update is the maintainer's call — this skill never writes
@@ -388,7 +395,7 @@ scenario in the canonical catalog. Steps:
    ```
    Writes `.specs/agent-assess-<agent>.json` (backs up any prior
    version to `.bak`). Still gitignored; the maintainer transcribes
-   into `.specs/agent-scenarios-coverage.json` after review.
+   into `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` after review.
 6. **Surface low-confidence cells.**
    ```bash
    jq -r '.scenarios | to_entries[]
@@ -456,7 +463,7 @@ column prompt covers when to omit vs include with `"unknown"`.
   has the exact behavior." `0.7-0.85` is the honest band for a
   thorough multi-source read.
 - **Don't write the matrix.** Phase 2 here is the artifact; the
-  rollup in `.specs/agent-scenarios-coverage.json` is maintainer-
+  rollup in `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` is maintainer-
   owned. Report the transcription hint and stop.
 - **Don't dispatch the subagent without the adapter-transport read.**
   Step 3 is what grounds the `irrlicht_observes` claim. A subagent
@@ -478,7 +485,7 @@ column prompt covers when to omit vs include with `"unknown"`.
 
 ## What this mode does NOT do
 
-- It does not modify `.specs/agent-scenarios-coverage.json`. The
+- It does not modify `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`. The
   matrix is the maintainer's editorial truth.
 - It does not produce the recipe — that's
   [`../recipe/SKILL.md`](../recipe/SKILL.md).

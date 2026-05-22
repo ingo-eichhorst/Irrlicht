@@ -42,7 +42,7 @@ indefinitely.
   `opencode`). Different agents may need different phase names
   (e.g. lazy-transcript adapters add a `pid_bind` phase tied to
   `transcript_new`); the spec is per-cell, not agent-agnostic.
-- `<scenario-id>` — kebab id from `.specs/agent-scenarios-coverage.json`.
+- `<scenario-id>` — kebab id from `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`.
 
 ## Output
 
