@@ -87,6 +87,61 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2>v0.4.7 <small>(2026-05-22)</small></h2>
+
+      <h3>macOS distribution levels up: Sparkle auto-updates and a notarized DMG, plus OpenCode task progress reaches dashboard parity.</h3>
+
+      <h4>Added</h4>
+      <ul>
+        <li><strong>Sparkle 2.x auto-update integration</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/413" target="_blank" rel="noopener">#413</a>) &mdash; the app now checks for updates on launch and offers a one-click upgrade; a manual &ldquo;Check for Updates&hellip;&rdquo; button lives in both the popover and the Settings panel. Signed appcast served from <code>irrlicht.io/appcast.xml</code>. First Sparkle-enabled release is v0.4.7; users on v0.4.6 must do one manual upgrade before auto-updates begin.</li>
+        <li><strong>Web dashboard ports the macOS overlay&rsquo;s provider quota chip</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/417" target="_blank" rel="noopener">#417</a>, closes <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/387" target="_blank" rel="noopener">#387</a>) &mdash; popover and dashboard now show identical 5h/7d subscription bars (or cumulative usage spend) for the same <code>/api/v1/sessions</code> response. Settings modal gains a Provider-quota section with the same auto/subscription/usage controls as the macOS app.</li>
+        <li><strong>OpenCode <code>todowrite</code> snapshots surface as task-progress dots</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/410" target="_blank" rel="noopener">#410</a>, closes <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/277" target="_blank" rel="noopener">#277</a>) &mdash; parity with Claude Code&rsquo;s TaskCreate/TaskUpdate pipeline. Content-keyed deltas survive OpenCode&rsquo;s lack of stable todo IDs.</li>
+      </ul>
+
+      <h4>Fixed</h4>
+      <ul>
+        <li><strong>OpenCode working&rarr;ready latency</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/412" target="_blank" rel="noopener">#412</a>, closes <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/278" target="_blank" rel="noopener">#278</a>) &mdash; sessions flip from working to ready ~2.5&nbsp;s faster.</li>
+        <li><strong>Claude Code wrapped command preserves user statusLine output</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/404" target="_blank" rel="noopener">#404</a>).</li>
+        <li><strong>Curl installer survives GitHub API rate limits</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/401" target="_blank" rel="noopener">#401</a>) &mdash; falls back to the redirect-based latest-release URL when the API returns 403.</li>
+      </ul>
+
+      <h4>Changed / Distribution</h4>
+      <ul>
+        <li><strong>Developer-ID signed + Apple-notarized DMG</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/406" target="_blank" rel="noopener">#406</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/409" target="_blank" rel="noopener">#409</a>, closes <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/233" target="_blank" rel="noopener">#233</a>) &mdash; first launch through the curl installer or Homebrew cask no longer trips Gatekeeper; the quarantine-strip workarounds in <code>site/install.sh</code> and the cask postflight are gone.</li>
+        <li><strong><code>com.apple.security.get-task-allow</code> removed from production entitlements</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/407" target="_blank" rel="noopener">#407</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/415" target="_blank" rel="noopener">#415</a>) &mdash; Apple notarization rejects binaries with the debug entitlement set to true. Build-time + canary-install guards both assert it is absent on the shipping artifact.</li>
+      </ul>
+
+      <h4>Docs</h4>
+      <ul>
+        <li><strong>Kitty terminal-host docs</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/402" target="_blank" rel="noopener">#402</a>) &mdash; clarify that font/config changes require a full app restart, not just a reload.</li>
+      </ul>
+
+      <h4>Removed</h4>
+      <ul>
+        <li><strong><code>tools/coverage-viewer</code> and <code>tools/find-flicker-sessions.sh</code> deleted</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/411" target="_blank" rel="noopener">#411</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/414" target="_blank" rel="noopener">#414</a>) &mdash; superseded by the unified agent-onboarding viewer at <code>tools/agent-onboarding</code>.</li>
+      </ul>
+
+      <h4>Internal</h4>
+      <ul>
+        <li><strong><code>/ir:onboard-agent</code> pipeline lands</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/328" target="_blank" rel="noopener">#328</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/408" target="_blank" rel="noopener">#408</a>) &mdash; drives every adapter through a shared agent-agnostic scenario catalogue keyed by capabilities; records lifecycle fixtures and surfaces material drift vs. committed recordings. First-class opencode driver added in this release.</li>
+      </ul>
+
+      <h4>Deferred</h4>
+      <ul>
+        <li><strong>Model alias map sync from codeburn skipped</strong> &mdash; 13 upstream additions remain unsynced; several target canonicals (e.g. <code>gpt-5.3-codex</code>) are not yet in LiteLLM&rsquo;s pricing table, so adding them now would still resolve to zero-cost capacity. Will land in a follow-up once LiteLLM catches up.</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>Sparkle 2.x integration (#413)</strong> &mdash; Sparkle 2.9.2 added via SwiftPM with a thin <code>UpdateManager</code> wrapping <code>SPUStandardUpdaterController</code>. EdDSA public key <code>nKRcUPAmK6syLFEvp9O30FFvjhTIfGxYVv/6y8zpZI0=</code> baked into both the tracked <code>Info.plist</code> and the <code>tools/build-release.sh</code> heredoc. <code>tools/build-release.sh</code> copies <code>Sparkle.framework</code> into <code>Contents/Frameworks/</code>, adds the <code>@executable_path/../Frameworks</code> rpath, and signs the nested helpers (Downloader.xpc, Installer.xpc, Updater.app, Autoupdate, framework binary) deepest-first before the outer bundle. New <code>site/appcast.xml</code> ships with one signed entry for v0.4.6 so the feed serves a valid response immediately. <strong>After installing v0.4.7, drag the app to <code>/Applications/</code></strong> &mdash; Sparkle refuses to self-update from a Gatekeeper-translocated <code>~/Downloads/</code> path.</li>
+        <li><strong>Notarized + DevID signed DMG (#406, #409)</strong> &mdash; <code>tools/build-release.sh</code> signs with the Developer ID cert + hardened runtime + entitlements when <code>DEVELOPER_ID</code> is set; notarizes and staples when <code>NOTARYTOOL_KEYCHAIN_PROFILE</code> is also set. The build exits 1 if <code>DEVELOPER_ID</code> is set without <code>NOTARYTOOL_KEYCHAIN_PROFILE</code>. <code>FocusMonitor.swift</code> detects the DevID signature at runtime and loads <code>INFocusStatusCenter</code> via <code>NSClassFromString</code> rather than statically linking <code>Intents.framework</code>.</li>
+        <li><strong><code>get-task-allow</code> removed from prod entitlements (#407, #415)</strong> &mdash; <code>Irrlicht-dev.entitlements</code> still carries it for local Xcode debug. The verification uses value-aware XPath rather than key-grep so an explicit <code>&lt;false/&gt;</code> doesn&rsquo;t false-fail; the canary install check re-runs the assertion against the actually-shipping bundle.</li>
+        <li><strong>OpenCode todowrite (#410)</strong> &mdash; <code>opencode.Parser</code> is stateful: each snapshot translates into the minimal TaskCreate/TaskUpdate delta sequence the tailer expects, content-keyed because OpenCode&rsquo;s todos carry no stable IDs. A ~15-line accumulator in <code>opencode/metrics.go</code> populates <code>metrics.Tasks</code> on the SQLite metrics path. New <code>TestComputeMetrics_TodowriteTasks</code> drives <code>querySessionMetrics</code> with a synthetic SQLite DB.</li>
+        <li><strong>OpenCode latency (#412)</strong> &mdash; eliminates a ~2.5&nbsp;s tail where the SQLite metrics path waited on a debounce timer that no longer applied once the session went idle. New <code>core/application/services/debounce_test.go</code> pins the timing invariant.</li>
+        <li><strong>/ir:onboard-agent pipeline (#328, #408)</strong> &mdash; unifies fixture refresh + adapter bootstrap + new-agent onboarding into one skill. Drives the real CLI through a shared agent-agnostic scenario catalogue keyed by <code>requires: [capability]</code>; adapters declare <code>Capabilities</code> and matrix cells fall out automatically. New <code>drive-opencode-interactive.sh</code> driver: each <code>send</code> step is an <code>opencode run --session &lt;id&gt;</code> subprocess; post-run SQLite export to the parts JSONL the parser expects.</li>
+        <li><strong>Installer rate-limit hardening (#401)</strong> &mdash; <code>site/install.sh</code> falls back to the <code>/releases/latest</code> redirect URL when the GitHub API returns 403.</li>
+      </ul>
+
       <h2>v0.4.6 <small>(2026-05-17)</small></h2>
 
       <h3>Public roadmap page lands, with screenshots and concept tiles for every release row</h3>

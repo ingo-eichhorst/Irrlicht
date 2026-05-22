@@ -97,6 +97,22 @@ cp "$SWIFT_BIN" "$APP_CONTENTS/MacOS/${APP_NAME}"
 # <exe>/../Resources/web (see resolveUIDir in core/cmd/irrlichd/main.go).
 cp platforms/web/index.html "$APP_CONTENTS/Resources/web/index.html"
 
+# AppIcon — required for menu bar / Finder display.
+cp platforms/macos/Irrlicht/Resources/AppIcon.icns "$APP_CONTENTS/Resources/AppIcon.icns"
+
+# SwiftPM resource bundle — Bundle.module.url(...) aborts during its own
+# initialization if this bundle isn't present (the ?? fallback never runs).
+# Missing this bundle shipped a broken v0.3.4 that crashed at launch.
+SWIFTPM_RESOURCES="platforms/macos/.build/apple/Products/Release/Irrlicht_Irrlicht.bundle"
+if [ ! -d "$SWIFTPM_RESOURCES" ]; then
+    SWIFTPM_RESOURCES=$(find platforms/macos/.build -name "Irrlicht_Irrlicht.bundle" -type d -not -path "*debug*" | head -1)
+fi
+if [ -z "$SWIFTPM_RESOURCES" ] || [ ! -d "$SWIFTPM_RESOURCES" ]; then
+    echo "ERROR: Could not find Irrlicht_Irrlicht.bundle in SwiftPM build output"
+    exit 1
+fi
+cp -R "$SWIFTPM_RESOURCES" "$APP_CONTENTS/Resources/Irrlicht_Irrlicht.bundle"
+
 # Embed daemon and CLI tools inside the app bundle (single-artifact distribution)
 cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
 chmod 755 "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
@@ -138,7 +154,7 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
     <key>CFBundleIconFile</key>
-    <string></string>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -159,8 +175,6 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
     <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Irrlicht uses AppleScript to bring the correct iTerm2 or Terminal.app window and tab to the front when you click a session row.</string>
-    <key>NSFocusStatusUsageDescription</key>
-    <string>Irrlicht uses macOS Focus status to silence notification sounds and spoken alerts while you're in Do Not Disturb, Sleep, or any other Focus mode.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2024 Anthropic. All rights reserved.</string>
     <key>NSPrincipalClass</key>
@@ -176,6 +190,23 @@ cat > "$APP_CONTENTS/Info.plist" <<PLIST
 PLIST
 
 echo "  Created $APP_BUNDLE"
+
+# Embed provisioning profile — required for restricted entitlements (focus-status)
+# under Developer ID distribution. Set PROVISIONING_PROFILE to the path of the
+# .provisionprofile downloaded from developer.apple.com.
+if [ -n "${PROVISIONING_PROFILE:-}" ]; then
+    if [ ! -f "$PROVISIONING_PROFILE" ]; then
+        echo "ERROR: PROVISIONING_PROFILE set but file not found: $PROVISIONING_PROFILE"
+        exit 1
+    fi
+    cp "$PROVISIONING_PROFILE" "$APP_CONTENTS/embedded.provisionprofile"
+    echo "  Embedded provisioning profile: $PROVISIONING_PROFILE"
+elif [ -n "${DEVELOPER_ID:-}" ]; then
+    echo "WARNING: DEVELOPER_ID is set but PROVISIONING_PROFILE is not."
+    echo "         The focus-status entitlement requires a Developer ID provisioning"
+    echo "         profile to be honoured at runtime. Download one from developer.apple.com"
+    echo "         and re-run with PROVISIONING_PROFILE=/path/to/profile.provisionprofile"
+fi
 
 # ── 3b. Sign app bundle ────────────────────────────────────────────────
 # Sparkle's nested helpers (Downloader.xpc, Installer.xpc, Updater.app,
@@ -207,6 +238,10 @@ if [ -n "${DEVELOPER_ID:-}" ]; then
     echo "Signing app bundle with Developer ID..."
     SIGN_IDENTITY="Developer ID Application: ${DEVELOPER_ID}"
     sign_sparkle --sign "$SIGN_IDENTITY" --options runtime --timestamp
+    # Sign the SwiftPM resource bundle — Sequoia AMFI POSIX 153-kills the app
+    # at launch if any nested bundle under Contents/Resources is unsigned.
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+        "$APP_CONTENTS/Resources/Irrlicht_Irrlicht.bundle"
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
         "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
@@ -214,12 +249,19 @@ if [ -n "${DEVELOPER_ID:-}" ]; then
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
         --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
     codesign --verify --deep --strict "$APP_BUNDLE"
-    codesign -d --entitlements - "$APP_BUNDLE" 2>&1 | grep -q "focus-status" \
-        || { echo "ERROR: focus-status entitlement not present in signed bundle"; exit 1; }
-    echo "  Signed $APP_BUNDLE (Developer ID)"
+    # Value-aware XPath: a <false/> declaration on get-task-allow is harmless
+    # and shouldn't fail the build; only an explicit <true/> blocks notarization.
+    # `:-` returns the raw plist XML; bare `-` returns human-readable text.
+    ENTS_XML=$(codesign -d --entitlements :- "$APP_BUNDLE" 2>/dev/null)
+    GTA_TRUE=$(echo "$ENTS_XML" | xmllint --xpath \
+      "boolean(/plist/dict/key[text()='com.apple.security.get-task-allow']/following-sibling::*[1][self::true])" \
+      - 2>/dev/null)
+    [ "$GTA_TRUE" = "true" ] && { echo "ERROR: get-task-allow=true in signed bundle — notarization would reject"; exit 1; } || true
+    echo "  Signed $APP_BUNDLE (Developer ID); get-task-allow not true"
 else
     echo "Signing app bundle (ad-hoc — set DEVELOPER_ID to use Developer ID cert)..."
     sign_sparkle --sign -
+    codesign --force --sign - "$APP_CONTENTS/Resources/Irrlicht_Irrlicht.bundle"
     codesign --force --sign - "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
     codesign --force --sign - "$APP_CONTENTS/MacOS/irrlicht-focus"
     codesign --force --sign - "$APP_BUNDLE"

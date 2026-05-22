@@ -12,8 +12,48 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-05-22
+
+### macOS distribution levels up: Sparkle auto-updates and a notarized DMG, plus OpenCode task progress reaches dashboard parity.
+
+### Added
+- **Sparkle 2.x auto-update integration** (#413) — the app now checks for updates on launch and offers a one-click upgrade; a manual "Check for Updates…" button lives in both the popover and the Settings panel. Public EdDSA key baked into the Info.plist; signed appcast served from `irrlicht.io/appcast.xml`. First Sparkle-enabled release is v0.4.7; users on v0.4.6 must do one manual upgrade before auto-updates begin.
+- **Web dashboard ports the macOS overlay's provider quota chip** (#417, closes #387) — popover and dashboard now show identical 5h/7d subscription bars (or cumulative usage spend) for the same `/api/v1/sessions` response. Stacked bars with pace marker and matching color thresholds; Settings modal gains a Provider-quota section with the same auto/subscription/usage controls as the macOS app.
+- **OpenCode `todowrite` snapshots now surface as task-progress dots** (#410, closes #277) — parity with Claude Code's TaskCreate/TaskUpdate pipeline. Content-keyed deltas survive OpenCode's lack of stable todo IDs.
+
+### Fixed
+- **OpenCode working→ready latency** (#412, closes #278) — sessions flip from working to ready ~2.5 s faster; the SQLite metrics path was waiting on a debounce timer that no longer applies once the session is idle.
+- **Claude Code wrapped command preserves user statusLine output** (#404) — irrlicht's status injection no longer overwrites a user's custom statusLine config.
+- **Curl installer survives GitHub API rate limits** (#401) — falls back to the redirect-based latest-release URL when the API returns 403.
+
+### Changed / Distribution
+- **Developer-ID signed + Apple-notarized DMG** (#406, #409, closes #233) — first launch through the curl installer or Homebrew cask no longer trips Gatekeeper; the quarantine-strip workarounds in `site/install.sh` and the cask postflight are gone. Build script exits 1 if `DEVELOPER_ID` is set without `NOTARYTOOL_KEYCHAIN_PROFILE` to prevent shipping an un-notarized DMG.
+- **`com.apple.security.get-task-allow` removed from production entitlements** (#407, #415) — Apple notarization rejects binaries with the debug entitlement set to true. Build-time + canary-install guards both assert the entitlement is absent on the shipping artifact, using value-aware XPath so an explicit `<false/>` doesn't false-fail.
+
+### Regressed (temporary)
+- **Focus-aware DND notification silencing disabled** — `com.apple.developer.focus-status` is a restricted entitlement that requires an embedded provisioning profile from Apple's developer portal; the Developer-ID cert alone doesn't grant it, so AMFI was killing v0.4.7 launches with POSIX 153. Entitlement stripped to unblock notarized shipping. The DND-silencing path from #338 is dark until a follow-up lands the provisioning profile work. Tracked in a fresh issue.
+
+### Docs
+- **Kitty terminal-host docs** (#402) — clarify that font/config changes require a full app restart, not just a reload.
+
 ### Removed
-- **`tools/coverage-viewer` deleted** — the standalone matrix/drilldown/swim-lane viewer (port 7838) is removed. Its views will be folded into the agent-onboarding viewer (`tools/agent-onboarding`, port 8765) as needed. The 0.3.9 CHANGELOG entry documenting the original ship is preserved as historical record. (#411)
+- **`tools/coverage-viewer` and `tools/find-flicker-sessions.sh` deleted** (#411, #414) — superseded by the unified agent-onboarding viewer (`tools/agent-onboarding`, port 8765).
+
+### Internal
+- **`/ir:onboard-agent` pipeline lands** (#328, #408) — drives every adapter through a shared agent-agnostic scenario catalogue keyed by capabilities; records lifecycle fixtures and surfaces material drift vs. committed recordings. First-class opencode driver added in this release. Scenarios marked `applicable: false` for the current adapter are now skipped rather than miscounted as failures.
+
+### Deferred
+- **Model alias map sync from codeburn skipped this release** — 13 upstream additions remain unsynced; several target canonicals (e.g. `gpt-5.3-codex`) are not yet in LiteLLM's pricing table, so adding them now would still resolve to zero-cost capacity. Will land in a follow-up once LiteLLM catches up.
+
+### Technical appendix
+
+- **Sparkle 2.x integration (#413)** — Sparkle 2.9.2 added via SwiftPM with a thin `UpdateManager` wrapping `SPUStandardUpdaterController` under `platforms/macos/Irrlicht/Managers/`. EdDSA keypair generated; public key `nKRcUPAmK6syLFEvp9O30FFvjhTIfGxYVv/6y8zpZI0=` baked into both the tracked `Info.plist` and the `tools/build-release.sh` heredoc. Settings panel gains an Updates section; popover gains a "Check for Updates…" row between Settings and Quit. `tools/build-release.sh` copies `Sparkle.framework` into `Contents/Frameworks/`, adds the `@executable_path/../Frameworks` rpath, and signs the nested helpers (Downloader.xpc, Installer.xpc, Updater.app, Autoupdate, framework binary) deepest-first before the outer bundle in both DevID and ad-hoc branches. New `site/appcast.xml` ships with one signed entry for v0.4.6 so the feed serves a valid response immediately. Private key lives in macOS Keychain with an out-of-band backup. **After installing v0.4.7, drag the app to `/Applications/`** — Sparkle refuses to self-update from a Gatekeeper-translocated `~/Downloads/` path.
+- **Notarized + Developer-ID signed DMG (#406, #409)** — `tools/build-release.sh` signs the app bundle with the Developer ID cert + hardened runtime + entitlements when `DEVELOPER_ID` is set; notarizes and staples the DMG when `NOTARYTOOL_KEYCHAIN_PROFILE` is also set. The build exits 1 if `DEVELOPER_ID` is set but `NOTARYTOOL_KEYCHAIN_PROFILE` is not — a DevID-signed-but-un-notarized DMG would block Gatekeeper now that the cask postflight is gone. Build script now also signs the SwiftPM resource bundle (`Irrlicht_Irrlicht.bundle`) and copies AppIcon to Resources/ before the outer sign — both were missing and would have produced unsignable / iconless bundles. `FocusMonitor.swift`'s NSClassFromString-dispatch pattern remains for the future provisioning-profile path; the entitlements file ships empty in v0.4.7 because the focus-status restricted entitlement needs a portal-provisioned profile that we don't have yet (kept the dynamic-dispatch source so re-enabling is a one-line entitlements + cert-profile change).
+- **`get-task-allow` removed from production entitlements (#407, #415)** — `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements` no longer declares `com.apple.security.get-task-allow=true`. `Irrlicht-dev.entitlements` still carries it for local Xcode debug builds. The build's entitlement verification uses value-aware XPath rather than key-grep so an explicit `<false/>` doesn't false-fail. The canary install check in step 9 re-runs the same assertion against the actually-shipping bundle.
+- **OpenCode todowrite → task-progress dots (#410)** — `opencode.Parser` is now stateful: each `todowrite` snapshot translates into the minimal `TaskCreate` / `TaskUpdate` delta sequence the tailer expects, content-keyed because OpenCode's todos carry no stable IDs. A parallel ~15-line accumulator in `core/adapters/inbound/agents/opencode/metrics.go` populates `metrics.Tasks` on the SQLite metrics path (replay-only would have been a single-file change). Replay fixture `replaydata/agents/opencode/regression/todowrite-basic/` covers the create / status-change / append / non-pending-on-first-sight matrix. New `TestComputeMetrics_TodowriteTasks` drives `querySessionMetrics` with a synthetic SQLite DB to cover the inline TaskDelta fold.
+- **OpenCode latency fix (#412)** — eliminates a ~2.5 s tail where the SQLite metrics path waited on a debounce timer that no longer applied once the session went idle. New `core/application/services/debounce_test.go` pins the timing invariant.
+- **`/ir:onboard-agent` pipeline (#328, #408)** — unifies fixture refresh + adapter bootstrap + new-agent onboarding into one skill. Drives the real CLI (currently `claude` and `opencode`) through a shared agent-agnostic scenario catalogue keyed by `requires: [capability]`; adapters declare `Capabilities` and the matrix cells fall out automatically. New `drive-opencode-interactive.sh` driver: each `send` step is an `opencode run --session <id>` subprocess; post-run SQLite export to the parts JSONL the parser expects.
+- **Installer rate-limit hardening (#401)** — `site/install.sh` falls back to the `/releases/latest` redirect URL when the GitHub API returns 403.
 
 ## [0.4.6] — 2026-05-17
 
@@ -776,7 +816,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.7
 [0.4.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.6
 [0.4.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.5
 [0.4.4]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.4.4
