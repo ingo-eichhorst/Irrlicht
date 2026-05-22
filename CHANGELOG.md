@@ -12,6 +12,9 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+### Removed
+- **`tools/coverage-viewer` deleted** — the standalone matrix/drilldown/swim-lane viewer (port 7838) is removed. Its views will be folded into the agent-onboarding viewer (`tools/agent-onboarding`, port 8765) as needed. The 0.3.9 CHANGELOG entry documenting the original ship is preserved as historical record. (#411)
+
 ## [0.4.6] — 2026-05-17
 
 ### Public roadmap page lands, with screenshots and concept tiles for every release row
