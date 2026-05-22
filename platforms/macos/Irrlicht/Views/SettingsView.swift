@@ -140,10 +140,7 @@ struct SettingsView: View {
                     .fontWeight(.medium)
 
                 LeadingToggle(
-                    isOn: Binding(
-                        get: { updateManager.automaticallyChecksForUpdates },
-                        set: { updateManager.automaticallyChecksForUpdates = $0 }
-                    ),
+                    isOn: $updateManager.automaticallyChecksForUpdates,
                     label: "Automatically check for updates"
                 )
 
@@ -173,6 +170,7 @@ struct SettingsView: View {
                 }
                 .controlSize(.small)
             }
+            .onAppear { updateManager.refresh() }
 
             Spacer()
 

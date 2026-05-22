@@ -9,6 +9,11 @@ import os
 /// Sparkle's standard UI handles the find/download/install/relaunch flow,
 /// including the "You're up to date" sheet, so this class only exposes the
 /// preferences toggle, the last-checked timestamp, and a manual trigger.
+///
+/// `lastUpdateCheckDate` is refreshed lazily: on demand via `refresh()` from
+/// Settings.onAppear and 1s after a manual `checkForUpdates()` call. There's
+/// no background polling — auto-checks run ~daily, and the only place the
+/// timestamp is visible is the Settings panel.
 @MainActor
 final class UpdateManager: ObservableObject {
     @Published var automaticallyChecksForUpdates: Bool {
@@ -21,7 +26,6 @@ final class UpdateManager: ObservableObject {
 
     private let controller: SPUStandardUpdaterController
     private let logger = Logger(subsystem: "io.irrlicht.app", category: "UpdateManager")
-    private var pollTask: Task<Void, Never>?
 
     init() {
         controller = SPUStandardUpdaterController(
@@ -32,29 +36,26 @@ final class UpdateManager: ObservableObject {
         automaticallyChecksForUpdates = controller.updater.automaticallyChecksForUpdates
         lastUpdateCheckDate = controller.updater.lastUpdateCheckDate
         logger.info("Sparkle updater started (auto checks: \(self.automaticallyChecksForUpdates, privacy: .public))")
-        startPollingLastCheckDate()
-    }
-
-    deinit {
-        pollTask?.cancel()
     }
 
     func checkForUpdates() {
         controller.checkForUpdates(nil)
+        // Sparkle writes lastUpdateCheckDate asynchronously after the check
+        // completes. Re-read it shortly after so Settings shows a fresh value
+        // when the user dismisses the "no updates" sheet.
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            self?.refresh()
+        }
     }
 
-    /// Sparkle does not publish KVO notifications for `lastUpdateCheckDate`,
-    /// so refresh the mirror periodically to keep the Settings UI in sync.
-    private func startPollingLastCheckDate() {
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                guard let self else { return }
-                let current = self.controller.updater.lastUpdateCheckDate
-                if current != self.lastUpdateCheckDate {
-                    self.lastUpdateCheckDate = current
-                }
-            }
+    /// Pull the current `lastUpdateCheckDate` from Sparkle. Call from
+    /// `SettingsView.onAppear` so the displayed value is fresh whenever
+    /// the user opens the panel.
+    func refresh() {
+        let current = controller.updater.lastUpdateCheckDate
+        if current != lastUpdateCheckDate {
+            lastUpdateCheckDate = current
         }
     }
 }

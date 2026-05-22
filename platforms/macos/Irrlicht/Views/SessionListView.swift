@@ -231,10 +231,8 @@ struct SessionListView: View {
                     Divider().frame(height: 20)
 
                     Button(action: { updateManager.checkForUpdates() }) {
-                        Text("Check for Updates\u{2026}")
+                        Text("Updates\u{2026}")
                             .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                             .background(isUpdatesButtonHovered ? IrrColors.surfaceHover : Color.clear)

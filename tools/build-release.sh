@@ -120,7 +120,11 @@ if [ -z "$SPARKLE_SRC" ] || [ ! -d "$SPARKLE_SRC" ]; then
 fi
 mkdir -p "$APP_CONTENTS/Frameworks"
 cp -R "$SPARKLE_SRC" "$APP_CONTENTS/Frameworks/Sparkle.framework"
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_CONTENTS/MacOS/${APP_NAME}" 2>/dev/null || true
+# Only add the rpath if it isn't already present — install_name_tool errors
+# on duplicates, and SwiftPM may grow this rpath itself in a future toolchain.
+if ! otool -l "$APP_CONTENTS/MacOS/${APP_NAME}" | grep -q "@executable_path/../Frameworks"; then
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_CONTENTS/MacOS/${APP_NAME}"
+fi
 echo "  Embedded Sparkle.framework"
 
 # Generate Info.plist with resolved variables.
