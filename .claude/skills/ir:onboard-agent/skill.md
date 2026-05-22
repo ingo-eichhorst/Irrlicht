@@ -43,18 +43,101 @@ hermetic and don't need auth.
   `<adapter>`. E.g. `/ir:onboard-agent claudecode` or
   `/ir:onboard-agent gastown`.
 - **`/ir:onboard-agent <adapter> <scenario>`** — run one specific cell. E.g.
-  `/ir:onboard-agent claudecode baseline-hello` or
+  `/ir:onboard-agent claudecode basic-turn` or
   `/ir:onboard-agent gastown agent-discovery`.
+- **`/ir:onboard-agent --attach <adapter> [<scenario>]`** — attached
+  mode. Uses the user's already-running `irrlichd --record` instead of
+  spawning an isolated daemon on port 7837. The dashboard stays
+  connected for the whole recording — the scenario's session shows up
+  live alongside the user's other work. Requirements:
+  - `pgrep -x irrlichd` returns a PID (else the precheck refuses).
+  - The daemon was started with `--record` (else its recordings dir is
+    empty and the precheck refuses).
+  - Optional: `IRRLICHT_RECORDINGS_DIR=<path>` if the daemon's recording
+    dir isn't the default `~/.local/share/irrlicht/recordings/`.
+  
+  After the driver returns, run-cell sleeps 6 seconds for the
+  recorder's 5s periodic flush + 1s slack, then curates the staged
+  fixture from the daemon's recording file. The daemon is never
+  signalled; it keeps observing whatever sessions the user has open.
 - **`/ir:onboard-agent --diff`** — re-summarize the latest staged runs
   (under `.build/refresh/<adapter>/<scenario>-*/`) without re-running.
 - **`/ir:onboard-agent --new <slug>`** — discover mode. Researches a
   previously unknown agent on the web via subagents and proposes a
   `capabilities.json`. See `discovery-instructions.md` for the dispatch
   recipe. No live agent CLI is invoked.
+### Per-stage subcommands (one per UI pipeline segment)
+
+The five `cell-lifecycle.md` stages each have a dedicated subcommand
+that maps 1:1 to the viewer's pipeline strip (⚙ ◉ ✎ § N ✓). Run
+them in order; later stages refuse to proceed if earlier stages
+haven't landed their artifact.
+
+- **`/ir:onboard-agent assess`** — **Stage 1**. Three scopes share
+  the same verb:
+  - `assess <agent> <scenario>` — single cell. Writes a rich
+    `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json`
+    (verdict + body + caveats + sources).
+  - `assess --column <agent>` — one agent, all scenarios. Writes a
+    candidate column at `.specs/agent-assess-<agent>.json` for the
+    maintainer to transcribe into the rollup matrix. (Replaces the
+    former `survey` skill.)
+  - `assess --row <scenario>` — one scenario, all adapters. Writes
+    a candidate row at `.specs/scenario-assess-<scenario>.json`.
+  See `assess/SKILL.md`.
+- **`/ir:onboard-agent recipe <agent> <scenario>`** — **Stage 2**.
+  Authors the deterministic driver script (preconditions, `script`
+  steps, verify items) into `scenarios.json -> scenarios[].by_adapter[<agent>]`.
+  See `recipe/SKILL.md`. (Renamed from `translate`.)
+- **`/ir:onboard-agent spec <agent> <scenario>`** — **Stage 3**.
+  Authors `replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl`
+  — the phase DSL that every recording is validated against. See
+  `spec/SKILL.md`. Author this BEFORE the recipe so the recipe's
+  `verify` items line up with concrete spec phases.
+- **`/ir:onboard-agent record <agent> <scenario>`** — **Stage 4**.
+  Drives the recipe against a live agent CLI + `irrlichd --record`,
+  archives the previous capture, promotes the new one. `--attach`
+  flag uses the user's running daemon. See `record/SKILL.md`.
+  (Alias for the bare `/ir:onboard-agent <agent> <scenario>` form
+  below.)
+- **`/ir:onboard-agent validate <agent> <scenario>`** — **Stage 5**.
+  Runs `expected-validate` against the latest recording (or a
+  specific archive) and reports per-phase pass/fail. Auto-invoked
+  by `record`; re-runnable by hand for drift detection. See
+  `validate/SKILL.md`.
 
 The adapter argument disambiguates which axis is being run: agent adapters
 (`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator
 adapters (`gastown`) match `orchestrator_scenarios[].by_orchestrator`.
+
+## Cell lifecycle — end-to-end workflow for ONE (agent × scenario)
+
+Every cell moves through a 5-stage pipeline. The viewer renders these
+stages as a strip per cell (`●● ✎ § N ✓`); the doc below is the
+canonical walkthrough.
+
+```
+1. Assessment  →  2. Recipe       →  3. Spec          →  4. Recording      →  5. Validation
+   matrix verdict   scenarios.json     expected.jsonl      events.jsonl +       pass/fail per
+                    by_adapter[a]      phase DSL           transcript.jsonl     phase
+        │                │                  │                    │                    │
+        ▼                ▼                  ▼                    ▼                    ▼
+    /assess          /recipe            /spec               /record              /validate
+```
+
+See [`cell-lifecycle.md`](cell-lifecycle.md) for:
+
+- the canonical artifact + tool + success criterion per stage
+- the phase DSL field reference (`expected_state`, `same_session_as`,
+  `new_session`, etc.)
+- iteration loops (recording loop, daemon-fix loop, drift-detection)
+- a worked example (`claudecode/session-reset`)
+- explicit out-of-scope items
+
+When in doubt about a stage, jump to that section in
+`cell-lifecycle.md`. The subskills (`assess/`, `recipe/`, `spec/`,
+`record/`, `validate/`) implement individual stages. The lifecycle
+doc is how they fit together.
 
 ## Step 1: Understand the task
 
@@ -64,6 +147,12 @@ Parse the invocation into one of:
 - `run_one` — one adapter + one scenario
 - `diff_only` — `--diff` flag
 - `discover` — `--new <slug>`; load `discovery-instructions.md` and follow that recipe instead of Steps 2–5 below
+- `assess` — `assess <agent> <scenario>` (single) | `assess --column <agent>` | `assess --row <scenario>`; load `assess/SKILL.md` (Stage 1)
+- `recipe` — `recipe <agent> <scenario>`; load `recipe/SKILL.md` (Stage 2)
+- `spec` — `spec <agent> <scenario>`; load `spec/SKILL.md` (Stage 3)
+- `record` — `record <agent> <scenario>`; load `record/SKILL.md` (Stage 4)
+- `validate` — `validate <agent> <scenario>`; load `validate/SKILL.md` (Stage 5)
+- `pipeline` — `pipeline <agent> [<scenario>]`; load `pipeline/SKILL.md` and follow that recipe instead of Steps 2–5 below
 
 If the invocation is ambiguous, ask the user which mode to run.
 
@@ -292,7 +381,7 @@ Pick one:
 ### Per-cell output format (agent)
 
 ```
-[claudecode / baseline-hello]  verdict: OK
+[claudecode / basic-turn]  verdict: OK
   transitions: 6 → 6 (sequence unchanged)
   flicker_count: 0 → 0
   tool_calls: (none) → (none)
@@ -355,18 +444,18 @@ commit accepted cells.
 
 ```
 # Review each staged fixture vs current committed one:
-diff replaydata/agents/claudecode/baseline-hello.jsonl \
-     .build/refresh/claudecode/baseline-hello-20260424-152301/replaydata/agents/claudecode/baseline-hello.jsonl
+diff replaydata/agents/claudecode/basic-turn.jsonl \
+     .build/refresh/claudecode/basic-turn-20260424-152301/replaydata/agents/claudecode/basic-turn.jsonl
 
 # If satisfied, copy into replaydata/:
-cp .build/refresh/claudecode/baseline-hello-*/replaydata/agents/claudecode/baseline-hello.* \
+cp .build/refresh/claudecode/basic-turn-*/replaydata/agents/claudecode/basic-turn.* \
    replaydata/agents/claudecode/
 
 # Verify replay tests still pass:
 go test ./core/cmd/replay/... -run TestReplayWithSidecar
 
 # Commit:
-git add replaydata/agents/claudecode/baseline-hello.* && git commit -m "..."
+git add replaydata/agents/claudecode/basic-turn.* && git commit -m "..."
 ```
 
 ### Orchestrator cells
@@ -391,6 +480,38 @@ Do NOT run the `cp`, `-update-goldens`, or `git commit` yourself. The
 maintainer reviews and commits by hand — this skill never touches
 `replaydata/` directly.
 
+## Authoring scenarios
+
+When adding a new entry to `scenarios.json` or fixing an existing one,
+keep these step-script rules in mind. The four interactive drivers
+(`drive-claudecode-interactive.sh`, `drive-aider-interactive.sh`,
+`drive-codex-interactive.sh`, `drive-pi-interactive.sh`) all share the
+same step grammar:
+
+- `{"type": "send", "text": "…"}` — type text + press Enter.
+- `{"type": "wait_turn"}` — block until the agent finishes the current
+  turn (criteria differs per adapter; e.g. claudecode waits for
+  `stop_reason: "end_turn"` in the transcript).
+- `{"type": "sleep", "seconds": N}` — pause N seconds. Two mandatory
+  uses in multi-turn scenarios:
+  1. **Between every `wait_turn` and the next `send`** (≥ 3s). Without
+     it, drivers fire the next prompt within 100–800ms of the assistant
+     finishing, which is below the state classifier's transcript-activity
+     debounce window — the recorder coalesces all turns into one
+     `working` → `ready` span and the replayed state band can't show
+     per-turn cycles.
+  2. **After the LAST `wait_turn`** (≥ 4s). `run-cell.sh` kills the
+     daemon as soon as the driver returns. If the final
+     `working`→`ready` transition hasn't fired yet (still within the
+     classifier's dwell window) the recording ends mid-turn. Trailing
+     sleep lets the classifier emit the final `ready` before SIGINT.
+- `{"type": "slash", "text": "/cmd"}` — same as `send`, semantically a
+  slash command.
+- `{"type": "interrupt"}` — Escape mid-turn (claudecode only).
+
+Single-turn scenarios (`basic-turn`, `permission-hook-denial`, etc.)
+use the simpler `"prompt": "…"` field — no script needed.
+
 ## Anti-patterns
 
 - **Don't** skip normalization in Step 4. UUID/timestamp drift will make
@@ -404,6 +525,11 @@ maintainer reviews and commits by hand — this skill never touches
 - **Don't** invent prompts for adapters that don't have `by_adapter`
   entries. Report "missing-prompt" as actionable state — the user adds the
   prompt by editing `scenarios.json` and runs again.
+- **Don't** author a multi-turn script with back-to-back `wait_turn` →
+  `send` steps. The classifier won't register the intermediate `ready`
+  state and the recording loses per-turn fidelity. Insert
+  `{"type":"sleep","seconds":3}` after every `wait_turn` that is
+  followed by another `send`.
 - **Don't** diff exact text from transition reasons, assistant output, or
   tool-call arguments. Only structural invariants are stable across runs.
 - **Don't** run `go test -update-goldens` against `replaydata/orchestrators/`

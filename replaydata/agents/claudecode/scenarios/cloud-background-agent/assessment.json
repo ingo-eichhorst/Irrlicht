@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "scenario_id": "cloud-background-agent",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-17T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "no",
+  "confidence": 0.85,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: no\n\n## Reasoning\n\nClaude Code shipped multiple first-party cloud / background variants in 2025-2026 — the prior verdict of \"local CLI only; no first-party cloud variant\" no longer holds:\n\n- Claude Code on the web (claude.ai/code) runs tasks on Anthropic-managed cloud infrastructure; sessions persist across browser close.\n- Routines (launched ~2026-04) execute on Anthropic cloud on schedule, GitHub events, or via a per-routine HTTP endpoint POST /v1/claude_code/routines/{id}/fire.\n- The anthropics/claude-code-action GitHub Action runs the full Claude Code runtime inside a GHA runner.\n- --remote and --teleport flags move sessions between local terminal and cloud.\n\nFor irrlicht, none of these are observable today:\n\n- Cloud sessions don't write to ~/.claude/projects/ (cloud routines docs: \"Access to local files: No (fresh clone)\").\n- The /fire endpoint is fire-only — its OAuth token grants no read access. There's no documented streaming or polling endpoint for routine session state.\n- The existing claudecode adapter at core/adapters/inbound/agents/claudecode/agent.go uses FilesUnderRoot{~/.claude/projects, JSONL} + pgrep-based PID discovery. It can't see cloud-only sessions: no local file, no local PID.\n- --teleport pulls a cloud session into the local tree, at which point the existing adapter sees it — but by then the session has a local PID, which violates the scenario's \"no bound local PID\" expectation.\n\nGHA is the only cloud variant with a public observability surface today (via gh api workflow_run polling + webhook events). A future claudecodecloud adapter with a new RemoteAPI source variant could deliver partial coverage at ~2-3 days of work. Routines and web sessions are blocked on Anthropic shipping a session read API or webhook.\n\n## What would flip irrlicht_observes to yes\n\nAt least one of:\n- GET /v1/claude_code/sessions/{id} — current state, token spend, last activity\n- GET /v1/claude_code/sessions/{id}/events — SSE or long-poll for transitions\n- POST /v1/claude_code/webhooks — push notifications on session state changes\n\nPlus a read-scoped OAuth token (sk-ant-oat01-* is fire-only today).",
+  "sources": [
+    {"kind": "url", "ref": "https://code.claude.com/docs/en/claude-code-on-the-web", "note": "Cloud-hosted web client; sessions run on Anthropic infrastructure"},
+    {"kind": "url", "ref": "https://code.claude.com/docs/en/routines", "note": "Routines run on Anthropic cloud; /fire endpoint is fire-only behind experimental-cc-routine-2026-04-01 beta header"},
+    {"kind": "url", "ref": "https://code.claude.com/docs/en/scheduled-tasks", "note": "Comparison table: cloud routines have \"No (fresh clone)\" access to local files"},
+    {"kind": "url", "ref": "https://github.com/anthropics/claude-code-action", "note": "First-party GHA action runs the runtime inside a GitHub Actions runner"},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/agent.go", "note": "Existing adapter is FilesUnderRoot + pgrep — local only"},
+    {"kind": "file", "ref": "AGENTS.md", "note": "Adapter model: Source is a sealed sum (FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore) — no remote-API variant today"}
+  ]
+}

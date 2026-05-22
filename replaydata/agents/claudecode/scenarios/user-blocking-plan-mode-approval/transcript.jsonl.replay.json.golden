@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 20,
+    "consumed_events": 20,
+    "total_transitions": 2,
+    "first_event_time": "2026-05-17T22:22:54.398Z",
+    "last_event_time": "2026-05-17T22:23:08.541Z",
+    "wall_clock_session_duration": 14143000000,
+    "state_durations": {
+      "working": 14143000000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "estimated_cost_usd": 0.35141,
+    "cum_input_tokens": 18,
+    "cum_output_tokens": 646,
+    "cum_cache_read_tokens": 68160,
+    "cum_cache_creation_tokens": 30109,
+    "model_name": "claude-opus-4-7"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-05-17T22:22:54.398Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 6,
+      "virtual_time": "2026-05-17T22:22:54.398Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    }
+  ]
+}

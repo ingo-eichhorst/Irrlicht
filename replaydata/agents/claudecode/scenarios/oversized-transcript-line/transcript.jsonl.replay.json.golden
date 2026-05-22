@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 15,
+    "consumed_events": 15,
+    "total_transitions": 5,
+    "first_event_time": "2026-05-17T22:49:48.203Z",
+    "last_event_time": "2026-05-17T22:51:20.239Z",
+    "wall_clock_session_duration": 92036000000,
+    "state_durations": {
+      "ready": 89794000000,
+      "working": 2242000000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "estimated_cost_usd": 0.08968364999999999,
+    "cum_input_tokens": 3,
+    "cum_output_tokens": 3665,
+    "cum_cache_read_tokens": 12753,
+    "cum_cache_creation_tokens": 8233,
+    "model_name": "claude-sonnet-4-6"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-05-17T22:49:48.203Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 5,
+      "virtual_time": "2026-05-17T22:49:48.203Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 6,
+      "virtual_time": "2026-05-17T22:49:50.445Z",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 3,
+      "event_index": 14,
+      "virtual_time": "2026-05-17T22:51:20.239Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…er, which turns out, against all odds, to be enough, to be more than enough, …"
+    },
+    {
+      "index": 4,
+      "event_index": 14,
+      "virtual_time": "2026-05-17T22:51:20.239Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…er, which turns out, against all odds, to be enough, to be more than enough, …"
+    }
+  ]
+}

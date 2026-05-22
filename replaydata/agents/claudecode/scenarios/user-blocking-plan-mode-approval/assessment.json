@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scenario_id": "user-blocking-plan-mode-approval",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-17T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.85,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code's Plan Mode is toggled with Shift+Tab; when the agent finishes planning it emits a tool_use with `name: \"ExitPlanMode\"`, the TUI shows the approve/reject overlay, and the agent pauses until the user resolves it. From irrlicht's perspective ExitPlanMode is structurally identical to AskUserQuestion: both are listed in the user-blocking tool set at `core/pkg/tailer/tailer_config.go` (Agent, SendMessage, AskUserQuestion, ExitPlanMode), and both fire the PreToolUse hook branch at `core/adapters/inbound/agents/claudecode/hooks.go` (toolExitPlanMode case calls dispatch()).\n\n**Variant 1 — approve / reject.** While ExitPlanMode is the open tool, `NeedsUserAttention()` is true and `ClassifyState` rule 1 drives `working → waiting`. The PermissionPending flag from the PreToolUse hook fires rule 0 in the same direction (race-free). Crucially the spec asserts that state never entered `ready` between the plan emission and the user reply — that's preserved because the open tool keeps `HasOpenToolCall=true` and `IsAgentDone()` returns false while the user-blocking tool is open (see the open-tool-name check in `core/pkg/tailer/tool_call_test.go` line ~1080 covering both AskUserQuestion and ExitPlanMode). When the user approves/rejects, the tool_result lands, `HasOpenToolCall` clears, the next assistant message drives `waiting → working`, and the eventual turn_done lands `→ ready`.\n\n**Variant 2 — user dismisses by sending a new prompt instead of approving.** Claude Code closes the plan-mode overlay when it sees the next user input; this writes a tool_result (often with an error/cancel marker) and a new user message in close succession. In the tailer, ExitPlanMode is the same `SawUserBlockingToolClosedThisPass` shape as AskUserQuestion — `ShouldSynthesizeCollapsedWaiting` (state_classifier.go) recovers any collapsed waiting episode, and the fresh user message drives `waiting → working → ready` on the new prompt. So the session does not stick in `waiting`; the new prompt counts as turn-resume input exactly as the spec requires.",
+  "caveats": [
+    "Reliably driving the `claude` CLI into plan mode from a headless tmux session requires sending Shift+Tab before the first prompt; the recipe must use the tmux keys `S-Tab` (or equivalent) rather than typing a string. This is a recording-mechanics caveat, not an observability gap.",
+    "Variant 2 (dismissal via new prompt) depends on Claude Code's TUI choosing to write a tool_result for the cancelled ExitPlanMode rather than just truncating the open tool. If a future CLI version skips the tool_result, irrlicht's open-tool window would be closed only by the next assistant message — still observable, but the same-pass collapse path would not fire. Test catches that regression by re-running the recipe."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/pkg/tailer/tailer_config.go", "note": "User-blocking tool list includes ExitPlanMode — drives NeedsUserAttention() the same way AskUserQuestion does."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/hooks.go", "note": "PreToolUse handler matches toolExitPlanMode and flips PermissionPending (issue #307)."},
+    {"kind": "file", "ref": "core/application/services/state_classifier.go", "note": "ClassifyState rule 1 + ShouldSynthesizeCollapsedWaiting handle both the live-waiting and collapsed-flush variants for ExitPlanMode identically to AskUserQuestion."},
+    {"kind": "file", "ref": "core/pkg/tailer/tool_call_test.go", "note": "Open-tool tests pin ExitPlanMode alongside AskUserQuestion as HasOpenToolCall=true contributors."}
+  ]
+}

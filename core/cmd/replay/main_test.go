@@ -13,22 +13,39 @@ import (
 )
 
 // fixturePath returns an absolute path to a fixture under the repo-root
-// replaydata/agents/<adapter>/scenarios/<scenario>/ tree. The test binary runs
-// from the package directory (core/cmd/replay), so we walk up three parents.
+// replaydata/agents/<adapter>/<subtree>/<scenario>/ tree. The test binary
+// runs from the package directory (core/cmd/replay), so we walk up three
+// parents.
 //
 // Callers pass "<adapter>/<scenario>/<basename>" — e.g.
-// "claudecode/baseline-hello/transcript.jsonl". The "scenarios/" segment is
-// inserted by this helper.
+// "claudecode/basic-turn/transcript.jsonl". The subtree segment
+// (scenarios/ or regression/) is auto-detected: scenarios/ is tried first
+// for the pipeline-managed catalog; regression/ is the fallback for
+// legacy ad-hoc captures (introduced by #268 Phase 1). If neither exists,
+// the scenarios/ path is returned so the caller surfaces a clear
+// "no such file" error pointing at the expected location.
 func fixturePath(t *testing.T, rel string) string {
 	t.Helper()
 	parts := strings.SplitN(rel, "/", 2)
-	var resolved string
+	var candidates []string
 	if len(parts) == 2 {
-		resolved = filepath.Join("..", "..", "..", "replaydata", "agents", parts[0], "scenarios", parts[1])
+		candidates = []string{
+			filepath.Join("..", "..", "..", "replaydata", "agents", parts[0], "scenarios", parts[1]),
+			filepath.Join("..", "..", "..", "replaydata", "agents", parts[0], "regression", parts[1]),
+		}
 	} else {
-		resolved = filepath.Join("..", "..", "..", "replaydata", "agents", rel)
+		candidates = []string{filepath.Join("..", "..", "..", "replaydata", "agents", rel)}
 	}
-	abs, err := filepath.Abs(resolved)
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			abs, err := filepath.Abs(c)
+			if err != nil {
+				t.Fatalf("abs fixture path: %v", err)
+			}
+			return abs
+		}
+	}
+	abs, err := filepath.Abs(candidates[0])
 	if err != nil {
 		t.Fatalf("abs fixture path: %v", err)
 	}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "scenario_id": "multiple-agents-same-workspace",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-18T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.85,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nThis cell is really an irrlicht-dispatcher test that happens to be filed under the claudecode adapter. The scenario co-launches a `claude` and a non-claude (e.g. `codex`) process in the same cwd and asserts that irrlicht reports two rows under their correct adapter labels with no cross-contamination.\n\nirrlicht's design isolates adapters at three layers, all of which are exercised here:\n1. **Process matching** — each adapter declares its own `ProcessMatcher` (claudecode: `ExactName{Name: \"claude\"}`; codex: `ExactName{Name: \"codex\"}`). The process scanner runs each matcher independently and tags each PID with the originating adapter name.\n2. **Transcript roots** — adapters declare disjoint `FilesUnderRoot.Dir` paths (claudecode: `~/.claude/projects/`; codex: `~/.codex/sessions/`). The fswatcher attaches a per-root parser-factory derived from `Parsers(allAgents)` in `maps.go`, so a JSONL line under the claudecode root can never be fed to the codex parser.\n3. **Per-session metrics** — `SessionState` carries an adapter-name field; metrics, subagent counts, and parent linkage all key off the (adapter, session_id) tuple. There is no global per-cwd aggregation in the domain.\n\nSpec bullets map cleanly:\n- 'Each session appears with its correct adapter label' — adapter is recorded at presession_created via the matcher-tagged scan result.\n- 'States transition independently per agent' — the two tailers are different goroutines reading different files; the state classifier is per-session.\n- 'No cross-contamination of metrics, parent linkage, or subagent counts' — subagent counters are registered per adapter name in `SubagentCounters(allAgents)` and only invoked for sessions of that adapter.\n\n## What irrlicht does NOT see (and why that's OK)\n\nirrlicht has no first-class notion of a 'workspace' — there is no row that says 'cwd X has these N agents'. The dashboard groups by cwd visually, but the daemon's session list is flat. That's correct for this scenario: the spec asks only about per-session correctness, not aggregate workspace state.",
+  "caveats": [
+    "The recipe must run two different agent CLIs concurrently, which means the test rig needs codex (or pi, or aider) installed and authenticated alongside claudecode. The matrix already pairs this cell to both claudecode and codex rows — the codex-side assessment.json will mirror the same verdict.",
+    "Adapter labels are stable strings (`claudecode`, `codex`) but display names can drift; the assertion in the recipe should be on the wire-level adapter name field, not the macOS display string."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/maps.go", "note": "Parsers / PIDDiscoverers / ProcessNames / SubagentCounters are all keyed by adapter Identity.Name — there is no shared global parser or counter that could leak state between adapters."},
+    {"kind": "file", "ref": "core/cmd/irrlichd/wiring.go", "note": "Source-variant dispatch wires each adapter's FilesUnderRoot.Dir to its own fswatcher; the parser-factory map ensures lines under claudecode's root use the claudecode parser only."},
+    {"kind": "spec", "ref": ".specs/agent-scenarios.md L398-404", "note": "Feature: Multiple agents in same workspace — three Expected bullets (correct adapter labels, independent transitions, no metrics/parent/subagent cross-contamination)."}
+  ]
+}

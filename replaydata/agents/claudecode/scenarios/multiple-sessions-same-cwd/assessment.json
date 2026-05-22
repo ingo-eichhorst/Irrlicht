@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "scenario_id": "multiple-sessions-same-cwd",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-18T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code supports launching multiple concurrent CLI sessions in the same cwd as-shipped. Each `claude` invocation mints (or accepts via `--session-id`) a fresh UUID and writes to its own transcript at `~/.claude/projects/<slug>/<UUID>.jsonl`. Two sessions in the same cwd produce two distinct transcripts because the path is keyed by UUID, not cwd.\n\nirrlicht observes both sessions via the standard transport. The fswatcher on `~/.claude/projects/` picks up two new files (one per UUID) and the JSONL parser instantiates a fresh stateful `Parser{}` per file via `JSONLineParser.NewParser`. The process scanner uses `ExactName{Name: \"claude\"}` (pgrep -x), which returns every running `claude` PID; `DiscoverPID` in `pid.go` reconciles transcript ↔ PID via the cwd + start-time heuristic, and ties each session row to its own PID.\n\nSpec bullets map cleanly:\n- 'Two distinct sessions appear, each with its own session_id and PID' — two transcripts → two SessionState rows; each row's PID comes from independent DiscoverPID resolution.\n- 'Each session's state transitions independently — no state flapping between rows' — the tailer is per-file (one goroutine, one Parser) so a turn on session A's transcript only updates session A's metrics. There is no shared-cwd state on the session domain object.\n- 'PID-to-session binding is stable across both' — once `DiscoverPID` binds, the binding persists until process_exited; the dispatcher keys per-session, not per-cwd.\n\n## What irrlicht does NOT see (and why that's OK)\n\nNothing meaningful is invisible here — the two sessions are operationally identical to two sessions in different cwds. The only subtle case is the cwd-trust dialog: claudecode caches per-directory trust, so the second instance launched in an already-trusted cwd skips the dialog entirely.",
+  "caveats": [
+    "Recording recipe must launch two `claude` processes in the same cwd with distinct `--session-id` UUIDs and drive them in parallel (tmux split windows or two background sends). A naive single-shell recipe will serialize the turns.",
+    "DiscoverPID's cwd+start-time heuristic is the critical seam — if both sessions start within the same scanner tick the assignment can briefly swap before stabilizing. The phase contract should anchor PID-to-session checks at a moment when both transcripts have written at least one line."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/agent.go", "note": "Source: FilesUnderRoot{Dir: ~/.claude/projects/, Parser: JSONLineParser{NewParser: () => &Parser{}}} — a fresh stateful parser per transcript file means two sessions in one cwd do not share parser state."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/pid.go", "note": "DiscoverPID maps (cwd, transcript) → PID by reconciling pgrep results against transcript metadata; two parallel `claude` processes in the same cwd are disambiguated by transcript UUID, not cwd alone."},
+    {"kind": "spec", "ref": ".specs/agent-scenarios.md L390-396", "note": "Feature: Multiple sessions in same cwd — three Expected bullets (distinct session_id+PID, independent transitions, stable PID binding)."}
+  ]
+}

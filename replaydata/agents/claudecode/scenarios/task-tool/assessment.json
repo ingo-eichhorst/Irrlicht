@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "scenario_id": "task-tool",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-18T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code ships the `Task` tool as its primary subagent primitive — the agent invokes `Task` (aliased as `Agent` in the tool-use JSONL) with a `subagent_type` and a `prompt`, which spawns a sidechain conversation under `~/.claude/projects/<slug>/<parent>/subagents/<child-uuid>.jsonl`. The parent's tool_use call carries the child's invocation arguments verbatim, and the parent's turn stays open until the child reports back via `task-notification` payloads. Both claudecode and opencode (which shares this primitive) surface the parent-child link in the dashboard via the daemon's `parent_linked` lifecycle event.\n\nThis scenario differs from the sibling `foreground-subagent` cell by exercising the **parallel-spawn shape** that production users invoke most: the parent kicks off 2-3 `Task` calls in a single turn, the children run concurrently, and the parent's working span lasts until ALL children report back. The dashboard renders this as a parent row with N child rows nested underneath — the canonical 'multiple subagents under one parent' visualization that the user mentions.\n\nThe spec's load-bearing assertions for parallel spawn (from `.specs/agent-scenarios.md → Feature: Foreground subagent → Scenario: Parent spawns 3 children in one turn`):\n\n1. **Parent: ready → working** at spawn. Observable: standard turn-start transition.\n2. **N child sessions appear, each with `ParentSessionID = parent.session_id`.** Observable: N `transcript_new` events for the sidechain transcripts, followed by N `parent_linked` events binding child→parent in the daemon's session detector (`core/adapters/inbound/agents/claudecode/session_detector_activity.go`).\n3. **`SubagentCount(parent) = N` while any child is alive.** Observable in irrlicht's `SessionMetrics.SubagentCount` (claudecode parser's `CountOpenSubagents` is 0 by design — file-presence is the source of truth — but the file-based count is what the dashboard surfaces).\n4. **`SubagentCount` decreases as each child ends.** Observable: each child's transcript ends with a terminal stop_reason, the file-based count drops.\n5. **Parent: working → ready only after the LAST child ends.** Observable: parent's `end_turn` doesn't fire until all task-notification payloads have landed and the parent's outstanding tool_use blocks (`PendingContribution`'s `outstanding_subagents` counter) are drained.\n\nAll five bullets land in irrlicht's existing transport — the parent-multiple-children shape is a generalization of the single-child case already recorded under `foreground-subagent`. The Task tool is the user-facing slash through which this happens, and the dashboard's parent-row-with-nested-children rendering is the visible artifact.\n\n## What irrlicht does NOT see (and why that's narrow)\n\nThe daemon's parent-child link is keyed on transcript file paths (children live under `<parent>/subagents/`), so any child that bypasses that path is invisible. In practice claudecode always writes to that path, so this isn't a real gap. Subagent-type discrimination (`general-purpose` vs `Explore` vs custom-named agents) is carried in the parent's tool_use JSON but not yet surfaced as a first-class daemon field — the dashboard shows the count but not the names. Follow-up enhancement, not a spec failure.",
+  "caveats": [
+    "Child-completion ORDER is asserted (child1 < child2 < child3 by chained relative_to + same_session_as anchors), matching the deterministic 5/10/15s sleep durations. The order in which children APPEAR in events.jsonl is filewatcher-discovery-dependent — the spec does not constrain appearance order.",
+    "claudecode caps the number of concurrent Task calls per turn (currently around 10 based on observed behavior); recipes should stay well below that. The recording uses 3 children with staggered 5/10/15s sleeps to keep the recording under ~30s while exercising the count-decrement shape.",
+    "Subagent type names (general-purpose, Explore, etc.) are not currently extracted into SessionMetrics — the dashboard surfaces 'N subagents' but not which kind. Future work."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+      "note": "Task/Agent tool_use detection; PendingContribution outstanding_subagents counter keeps the parent's turn open across children."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/session_detector_activity.go",
+      "note": "Discovers sidechain transcripts under <parent>/subagents/ via fswatcher; emits parent_linked events."
+    },
+    {
+      "kind": "file",
+      "ref": ".specs/agent-scenarios.md",
+      "note": "Feature: Foreground subagent → Scenario: Parent spawns 3 children in one turn (L331-338)."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/claudecode/scenarios/foreground-subagent/",
+      "note": "Sibling cell for single-child Task; this scenario generalizes to parallel multi-spawn."
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{"schema_version":1,"scenario_id":"basic-turn","source":".specs/agent-scenarios.md → Feature: Basic turn","notes":"Spec asserts: ready → working → ready and TotalTokens > 0 after the turn. The validator's phase DSL covers the state arc; the TotalTokens assertion isn't expressible today (no metric form in the invariant DSL)."}
+{"phase":"session_birth","expected_state":"ready","relative_to":"start","max_delay_ms":1000,"text":"Session appears in ready"}
+{"phase":"pid_bind","kind":"pid_discovered","relative_to":"start","max_delay_ms":1000,"text":"PID bound shortly after launch"}
+{"phase":"turn_start","expected_state":"working","relative_to":"session_birth","text":"User prompt → working"}
+{"phase":"turn_end","expected_state":"ready","relative_to":"turn_start","text":"Turn completes back to ready"}

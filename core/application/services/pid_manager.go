@@ -389,6 +389,19 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 		pm.log.LogInfo("session-detector", old.SessionID,
 			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
 
+		// Emit transcript_removed for the offline replay stream so the
+		// /clear pattern (one PID, UUID rotates) is recoverable from
+		// events.jsonl. Without this, replay-based analysis sees the
+		// old UUID's session_created and state transitions but never a
+		// corresponding removal — the session looks "leaked" in the
+		// recording. Issue #169.
+		pm.record(lifecycle.Event{
+			Kind:           lifecycle.KindTranscriptRemoved,
+			SessionID:      old.SessionID,
+			Adapter:        old.Adapter,
+			TranscriptPath: old.TranscriptPath,
+		})
+
 		if pm.onSessionDeleted != nil {
 			pm.onSessionDeleted(old.SessionID)
 		}

@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ingo-eichhorst/Irrlicht/.claude/skills/ir:onboard-agent/assess/schema/column.schema.json",
+  "title": "Agent applicability assessment result (column mode)",
+  "description": "Output of `/ir:onboard-agent assess --column <agent>`. Maps every scenario in .specs/agent-scenarios.md to a candidate applicability verdict for one agent, with citations. Consumed by the maintainer to update the coverage matrix; never auto-applied. Schema validates structural shape only — cross-referencing against the canonical scenario IDs (in .specs/agent-scenarios-coverage.json) is done at runtime by run-batch.sh.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "agent", "agent_version", "surveyed_at", "scenarios"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Bump when the schema shape changes."
+    },
+    "agent": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "description": "Adapter slug, e.g. \"claudecode\", \"codex\", \"aider\"."
+    },
+    "agent_version": {
+      "type": "string",
+      "description": "The agent's published version at survey time (e.g. \"2.1.140\"). Re-run the survey on bump."
+    },
+    "surveyed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp."
+    },
+    "survey_tool_version": {
+      "type": "string",
+      "description": "Git short SHA of the skill at run time. Optional; useful when comparing two surveys of the same agent."
+    },
+    "source_catalog": {
+      "type": "string",
+      "description": "Path of the scenario catalog the survey ran against (default `.specs/agent-scenarios.md`)."
+    },
+    "scenarios": {
+      "type": "object",
+      "description": "Keyed by scenario ID (kebab-case slug from .specs/agent-scenarios-coverage.json). run-batch.sh enforces that every key resolves to a known scenario ID and that every scenario in the catalog appears.",
+      "additionalProperties": { "$ref": "#/definitions/scenarioVerdict" }
+    }
+  },
+  "definitions": {
+    "scenarioVerdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_supports", "confidence", "sources"],
+      "properties": {
+        "agent_supports": {
+          "type": "string",
+          "enum": ["yes", "no", "partial", "unknown"],
+          "description": "Mirrors the `agent_supports` axis of .specs/agent-scenarios-coverage.json so the survey can be diffed against the committed matrix cell-for-cell."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "0..1. Low confidence (<0.5) flags cells the maintainer should hand-verify. `unknown` verdicts typically carry low confidence."
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Citations the verdict was derived from. At least one is required — the survey must show its work.",
+          "items": { "$ref": "#/definitions/source" }
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form. Names the gotcha, the issue number, or the unmet condition."
+        },
+        "prerequisites_hint": {
+          "type": "string",
+          "description": "If `agent_supports` is gated on maintainer-only setup (paid plan, signing cert, API key), a one-line description that the maintainer can copy into `replaydata/agents/<agent>/prerequisites.md`."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["url", "file", "changelog", "release_notes", "issue", "docs", "source_code"],
+          "description": "Coarse-grained citation type. `file` is a local path; everything else is a URL or identifier."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "URL or repo-relative file path. For `issue`, use the form `owner/repo#123` or a full URL."
+        },
+        "excerpt": {
+          "type": "string",
+          "description": "Optional verbatim quote (<=300 chars) so the maintainer can sanity-check the claim without re-fetching."
+        }
+      }
+    }
+  }
+}

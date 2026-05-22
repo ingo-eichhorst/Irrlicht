@@ -1,0 +1,67 @@
+name: Replaydata deletion guard
+
+# Fails any PR whose diff deletes a file under:
+#   replaydata/agents/*/scenarios/*/
+#   replaydata/agents/*/regression/*/
+#   replaydata/orchestrators/*/scenarios/*/
+#
+# Introduced by #268 Phase 1. The pipeline can ADD recordings (new captures
+# land in regression/; new pipeline-managed scenarios land in scenarios/) but
+# it must NEVER delete existing ones — they are load-bearing regression
+# tests, including the orphans migrated into regression/ in #268's Phase 1.
+#
+# Renames (git mv between subtrees) are NOT deletions and are allowed.
+
+on:
+  pull_request:
+    paths:
+      - 'replaydata/**'
+  workflow_dispatch:
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout PR head with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Detect deleted recording files
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          echo "Comparing base $base ..head $head"
+
+          # --diff-filter=D selects deletions only.
+          # `git diff` treats a rename as a (D, A) pair only if -M is below the
+          # threshold; with -M (the default for `git diff`) renames stay as
+          # renames and do NOT count as deletions. We pass --find-renames=50%
+          # explicitly so the threshold is documented and stable.
+          deletions=$(git diff --name-only --diff-filter=D --find-renames=50% "$base" "$head" -- \
+            'replaydata/agents/*/scenarios/*' \
+            'replaydata/agents/*/regression/*' \
+            'replaydata/orchestrators/*/scenarios/*' \
+            || true)
+
+          if [ -n "$deletions" ]; then
+            echo "::error::PR deletes load-bearing recording files. See https://github.com/ingo-eichhorst/Irrlicht/issues/268"
+            echo
+            echo "Deleted files:"
+            echo "$deletions" | sed 's/^/  - /'
+            echo
+            echo "These files are regression-test fixtures. If you genuinely need to remove"
+            echo "one (e.g. it corresponds to a feature that was rolled back), open an"
+            echo "issue first and get maintainer sign-off — do not delete it in a PR."
+            echo
+            echo "If you are renaming a file or moving it between subtrees (scenarios/ <-> "
+            echo "regression/), use \`git mv\` so git records a rename and this guard"
+            echo "passes."
+            exit 1
+          fi
+
+          echo "OK: no deletions under replaydata recording subtrees."
