@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"irrlicht/core/pkg/tailer"
 )
 
 func rawPart(fields map[string]interface{}) map[string]interface{} {
@@ -500,6 +502,155 @@ func TestParser_StepFinish_Stop_MissingCost(t *testing.T) {
 	}
 	if ev.Contribution.ProviderCostUSD != nil {
 		t.Error("expected nil ProviderCostUSD when cost field missing")
+	}
+}
+
+// --- todowrite ---
+
+// todowritePart builds a "tool" part row in the shape OpenCode writes for the
+// todowrite tool: an `input.todos` snapshot nested under `state`.
+func todowritePart(callID string, status string, todos []map[string]interface{}) map[string]interface{} {
+	items := make([]interface{}, 0, len(todos))
+	for _, td := range todos {
+		items = append(items, td)
+	}
+	return rawPart(map[string]interface{}{
+		"type":   "tool",
+		"tool":   "todowrite",
+		"callID": callID,
+		"state": map[string]interface{}{
+			"status": status,
+			"input": map[string]interface{}{
+				"todos": items,
+			},
+		},
+	})
+}
+
+func TestParser_Todowrite_FirstCallCreates(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(todowritePart("call_1", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "pending", "priority": "low"},
+		{"content": "Task B", "status": "pending", "priority": "low"},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.EventType != "function_call_output" {
+		t.Errorf("EventType = %q, want function_call_output", ev.EventType)
+	}
+	if len(ev.TaskDeltas) != 2 {
+		t.Fatalf("TaskDeltas len = %d, want 2", len(ev.TaskDeltas))
+	}
+	for i, d := range ev.TaskDeltas {
+		if d.Op != tailer.TaskOpCreate {
+			t.Errorf("TaskDeltas[%d].Op = %q, want create", i, d.Op)
+		}
+	}
+	if ev.TaskDeltas[0].Subject != "Task A" || ev.TaskDeltas[1].Subject != "Task B" {
+		t.Errorf("subjects = [%q, %q], want [Task A, Task B]",
+			ev.TaskDeltas[0].Subject, ev.TaskDeltas[1].Subject)
+	}
+}
+
+func TestParser_Todowrite_SecondCallUpdates(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(todowritePart("call_1", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "pending"},
+		{"content": "Task B", "status": "pending"},
+	}))
+	ev := p.ParseLine(todowritePart("call_2", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "in_progress"},
+		{"content": "Task B", "status": "pending"},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if len(ev.TaskDeltas) != 1 {
+		t.Fatalf("TaskDeltas len = %d, want 1 (only Task A status change)", len(ev.TaskDeltas))
+	}
+	d := ev.TaskDeltas[0]
+	if d.Op != tailer.TaskOpUpdate {
+		t.Errorf("Op = %q, want update", d.Op)
+	}
+	if d.ID != "1" {
+		t.Errorf("ID = %q, want \"1\"", d.ID)
+	}
+	if d.Status != "in_progress" {
+		t.Errorf("Status = %q, want in_progress", d.Status)
+	}
+}
+
+func TestParser_Todowrite_ThirdCallAppends(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(todowritePart("call_1", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "pending"},
+		{"content": "Task B", "status": "pending"},
+	}))
+	p.ParseLine(todowritePart("call_2", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "in_progress"},
+		{"content": "Task B", "status": "pending"},
+	}))
+	ev := p.ParseLine(todowritePart("call_3", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "completed"},
+		{"content": "Task B", "status": "in_progress"},
+		{"content": "Task C", "status": "pending"},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if len(ev.TaskDeltas) != 3 {
+		t.Fatalf("TaskDeltas len = %d, want 3 (Task A completed, Task B in_progress, Task C create)", len(ev.TaskDeltas))
+	}
+	if ev.TaskDeltas[0] != (tailer.TaskDelta{Op: tailer.TaskOpUpdate, ID: "1", Status: "completed"}) {
+		t.Errorf("deltas[0] = %+v, want update id=1 status=completed", ev.TaskDeltas[0])
+	}
+	if ev.TaskDeltas[1] != (tailer.TaskDelta{Op: tailer.TaskOpUpdate, ID: "2", Status: "in_progress"}) {
+		t.Errorf("deltas[1] = %+v, want update id=2 status=in_progress", ev.TaskDeltas[1])
+	}
+	if ev.TaskDeltas[2].Op != tailer.TaskOpCreate || ev.TaskDeltas[2].Subject != "Task C" {
+		t.Errorf("deltas[2] = %+v, want create subject=Task C", ev.TaskDeltas[2])
+	}
+}
+
+func TestParser_Todowrite_PendingOnCreateSkipsUpdate(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(todowritePart("call_1", "completed", []map[string]interface{}{
+		{"content": "Already in progress", "status": "in_progress"},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	// First sighting of "Already in progress" with status in_progress should
+	// emit BOTH a Create (default pending) AND an Update to reach in_progress —
+	// otherwise the tailer's seq matches the parser's but the status is wrong.
+	if len(ev.TaskDeltas) != 2 {
+		t.Fatalf("TaskDeltas len = %d, want 2 (create + update)", len(ev.TaskDeltas))
+	}
+	if ev.TaskDeltas[0].Op != tailer.TaskOpCreate {
+		t.Errorf("deltas[0].Op = %q, want create", ev.TaskDeltas[0].Op)
+	}
+	if ev.TaskDeltas[1] != (tailer.TaskDelta{Op: tailer.TaskOpUpdate, ID: "1", Status: "in_progress"}) {
+		t.Errorf("deltas[1] = %+v, want update id=1 status=in_progress", ev.TaskDeltas[1])
+	}
+}
+
+func TestParser_Todowrite_LifecycleStillFires(t *testing.T) {
+	// Regression: todowrite must still participate in the tool-call lifecycle
+	// (open on pending/running, close on completed/error). Without this the
+	// dashboard would never see the tool's open/close pair.
+	p := &Parser{}
+	ev := p.ParseLine(todowritePart("call_42", "completed", []map[string]interface{}{
+		{"content": "Single task", "status": "pending"},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.EventType != "function_call_output" {
+		t.Errorf("EventType = %q, want function_call_output", ev.EventType)
+	}
+	if len(ev.ToolResultIDs) != 1 || ev.ToolResultIDs[0] != "call_42" {
+		t.Errorf("ToolResultIDs = %v, want [call_42]", ev.ToolResultIDs)
 	}
 }
 

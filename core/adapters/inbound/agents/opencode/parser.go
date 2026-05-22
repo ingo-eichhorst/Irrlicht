@@ -1,8 +1,10 @@
 package opencode
 
 import (
-	"irrlicht/core/pkg/tailer"
+	"strconv"
 	"time"
+
+	"irrlicht/core/pkg/tailer"
 )
 
 // Parser implements tailer.TranscriptParser for OpenCode sessions.
@@ -23,9 +25,23 @@ import (
 // (role="assistant"). The parser extracts cost and token counts from
 // step-finish to populate PerTurnContribution.
 //
-// The parser is stateless: each part row is self-contained. The watcher
-// passes message role context via the synthetic "_role" key in the raw map.
-type Parser struct{}
+// The watcher passes message role context via the synthetic "_role" key in
+// the raw map.
+//
+// Parser keeps minimal state to translate OpenCode's snapshot-style
+// `todowrite` tool (which rewrites the entire todo list on every call) into
+// the canonical TaskCreate/TaskUpdate delta sequence the tailer expects.
+// Each Parser instance corresponds to one transcript/session scan; state
+// resets across scans because ComputeMetrics constructs a fresh Parser.
+type Parser struct {
+	// nextTaskID mirrors the tailer's monotonic taskSeq so emitted Update
+	// IDs match the IDs the tailer assigns at Create time.
+	nextTaskID int
+	// todoIDByContent maps a todo's `content` field to the synthetic ID
+	// assigned on first sight. OpenCode todos have no stable identifier;
+	// content is the closest thing to identity. Lazily initialized.
+	todoIDByContent map[string]string
+}
 
 // ParseLine parses a raw map representing one OpenCode part row into a
 // normalized ParsedEvent. The map is expected to contain the decoded JSON
@@ -60,7 +76,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		return parseTextPart(raw, ev)
 
 	case "tool":
-		return parseToolPart(raw, ev)
+		return p.parseToolPart(raw, ev)
 
 	default:
 		// snapshot, file, image, and other part types — skip
@@ -181,7 +197,12 @@ func parseTextPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 // The watcher emits a new ParseLine call for each relevant state transition:
 //   - status="pending" or "running" → open tool call → ToolUses
 //   - status="completed" or "error" → tool result → ToolResultIDs
-func parseToolPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.ParsedEvent {
+//
+// `todowrite` additionally carries an authoritative snapshot of the session's
+// todo list in state.input.todos; the snapshot is translated into TaskDeltas
+// so the dashboard's task-progress dots populate the same way they do for
+// Claude Code's TaskCreate/TaskUpdate tool calls. See issue #277.
+func (p *Parser) parseToolPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.ParsedEvent {
 	state, _ := raw["state"].(map[string]interface{})
 	if state == nil {
 		ev.Skip = true
@@ -211,8 +232,69 @@ func parseToolPart(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.P
 		}
 	default:
 		ev.Skip = true
+		return ev
+	}
+
+	if toolName == "todowrite" {
+		p.appendTodowriteDeltas(state, ev)
 	}
 	return ev
+}
+
+// appendTodowriteDeltas reads the todowrite snapshot from state.input.todos
+// and appends the minimal TaskCreate/TaskUpdate sequence that brings the
+// tailer's accumulated task list in line with the snapshot. Todos are keyed
+// by their `content` field (OpenCode does not assign stable IDs); the parser
+// tracks content→ID across calls so subsequent snapshots emit Updates rather
+// than duplicate Creates. Status updates are suppressed for pending entries
+// since `pending` is the default state the tailer assigns on Create.
+func (p *Parser) appendTodowriteDeltas(state map[string]interface{}, ev *tailer.ParsedEvent) {
+	input, _ := state["input"].(map[string]interface{})
+	if input == nil {
+		return
+	}
+	todos, _ := input["todos"].([]interface{})
+	if len(todos) == 0 {
+		return
+	}
+	for _, raw := range todos {
+		todo, _ := raw.(map[string]interface{})
+		if todo == nil {
+			continue
+		}
+		content, _ := todo["content"].(string)
+		status, _ := todo["status"].(string)
+		if content == "" {
+			continue
+		}
+		if id, seen := p.todoIDByContent[content]; seen {
+			if status != "" && status != tailer.TaskStatusPending {
+				ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+					Op:     tailer.TaskOpUpdate,
+					ID:     id,
+					Status: status,
+				})
+			}
+			continue
+		}
+		p.nextTaskID++
+		id := strconv.Itoa(p.nextTaskID)
+		if p.todoIDByContent == nil {
+			p.todoIDByContent = make(map[string]string)
+		}
+		p.todoIDByContent[content] = id
+		ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+			Op:      tailer.TaskOpCreate,
+			Subject: content,
+		})
+		if status != "" && status != tailer.TaskStatusPending {
+			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+				Op:     tailer.TaskOpUpdate,
+				ID:     id,
+				Status: status,
+			})
+		}
+	}
 }
 
 // extractCost reads the top-level "cost" field from a part data map.

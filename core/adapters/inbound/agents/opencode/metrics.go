@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,6 +92,11 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	hasData := false
 	var firstTS, lastTS time.Time
 
+	// Task accumulator mirrors the tailer's TaskDelta fold (tailer.go:708-728)
+	// because OpenCode's metrics path bypasses the tailer. See issue #277.
+	var tasks []session.Task
+	taskByID := make(map[string]int)
+
 	for rows.Next() {
 		var partData, msgData string
 		var timeUpdated int64
@@ -146,6 +152,25 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 			openTools = make(map[string]string)
 		}
 
+		for _, d := range ev.TaskDeltas {
+			switch d.Op {
+			case tailer.TaskOpCreate:
+				id := strconv.Itoa(len(tasks) + 1)
+				tasks = append(tasks, session.Task{
+					ID:          id,
+					Subject:     d.Subject,
+					Description: d.Description,
+					ActiveForm:  d.ActiveForm,
+					Status:      tailer.TaskStatusPending,
+				})
+				taskByID[id] = len(tasks) - 1
+			case tailer.TaskOpUpdate:
+				if idx, ok := taskByID[d.ID]; ok && d.Status != "" {
+					tasks[idx].Status = d.Status
+				}
+			}
+		}
+
 		// Accumulate cost/tokens from PerTurnContribution.
 		if ev.Contribution != nil {
 			cumInput += ev.Contribution.Usage.Input
@@ -187,6 +212,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	metrics.CumOutputTokens = cumOutput
 	metrics.CumCacheReadTokens = cumCacheRead
 	metrics.ElapsedSeconds = int64(lastTS.Sub(firstTS).Seconds())
+	metrics.Tasks = tasks
 
 	cm := capacity.DefaultCapacityManager()
 	metrics.ContextWindow, metrics.ContextUtilization, metrics.PressureLevel, metrics.ContextWindowUnknown =
