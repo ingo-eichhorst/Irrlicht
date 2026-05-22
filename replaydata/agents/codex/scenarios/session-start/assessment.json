@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scenario_id": "session-start",
+  "agent": "codex",
+  "assessed_at": "2026-05-23T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nThe scenario's two Expected bullets are (1) the session appears in `ready` within 1s of agent launch and (2) the PID is bound within 1s. Both are directly observable for the codex adapter. The daemon's process scanner emits a `presession_created` row keyed by `proc-<PID>` on first detection of the `codex` process, and codex eagerly creates its rollout transcript at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<UUID>.jsonl` on launch — so a `transcript_new` + `state_transition` → `ready` for the rollout-keyed session both land inside the daemon's first scanner tick (~30 ms in the captured recording).\n\nPID binding happens at the same tick via `pid_discovered`. No transcript-materialization lag like claudecode has; the proc-<PID> pre-session row is a thin transitional cushion (~800 ms in the recording) until the rollout transcript supersedes it.\n\nBoth spec bullets therefore land cleanly inside irrlicht's observability surface, anchored to agent launch.",
+  "caveats": [
+    "Codex's rollout file path encodes a UTC date directory (`YYYY/MM/DD/`), so the daemon's filesystem watcher must include that nested layout in its scan root — confirmed by FilesUnderRoot in core/adapters/inbound/agents/codex/agent.go."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/agent.go",
+      "note": "Identity.Name=codex, Source variant FilesUnderRoot under ~/.codex/sessions/, ExactName{Name: \"codex\"} process matcher."
+    }
+  ]
+}

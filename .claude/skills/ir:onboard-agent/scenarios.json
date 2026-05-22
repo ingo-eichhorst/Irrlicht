@@ -1167,6 +1167,94 @@
           ],
           "settings": {},
           "timeout_seconds": 90
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "prompt": "Output exactly the two characters: ok",
+          "verify": [
+            "events.jsonl contains a presession_created or transcript_new event within 1000 ms of agent launch",
+            "events.jsonl contains a state_transition to ready within 500 ms of session birth",
+            "events.jsonl contains a pid_discovered event within 1000 ms",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (PI_API_KEY or configured provider)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "prompt": "Reply with exactly the word: ok",
+          "verify": [
+            "events.jsonl contains a presession_created or transcript_new event within 1000 ms of agent launch",
+            "events.jsonl contains a state_transition to ready within 500 ms of session birth",
+            "events.jsonl contains a pid_discovered event within 1000 ms",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 90
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated (ANTHROPIC_API_KEY or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "prompt": "Reply with exactly the word: ok",
+          "verify": [
+            "events.jsonl contains a transcript_new event for the .aider.chat.history.md within 1000 ms of agent launch",
+            "events.jsonl contains a state_transition to ready within 500 ms of birth",
+            "events.jsonl contains a pid_discovered event within 1000 ms",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated (run a single message in opencode TUI to confirm)",
+            "irrlichd is recording with the opencode SQLite watcher enabled"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains an opencode session_created or transcript_new event within 1000 ms of agent launch",
+            "events.jsonl contains a state_transition to ready within 500 ms of session birth",
+            "events.jsonl contains a pid_discovered event within 1000 ms",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120
         }
       }
     },
