@@ -2366,7 +2366,7 @@
     },
     {
       "name": "turn-aborted-by-error",
-      "description": "Agent's model call fails mid-turn (network error, provider 5xx, timeout). No normal turn-end signal is emitted. Expected arc per spec: ready → working, then → ready within the sweep interval after the agent gives up. Per the assessment (irrlicht_observes: partial, confidence 0.55) failures split into three buckets: Bucket A (transcript epilogue with synthesized error text → observable via classifier rule 2b), Bucket B (pure mid-stream network failure with NO transcript write → currently UNOBSERVABLE because there is no inactivity sweep on the working state since PR #106 removed the stale-tool timer), Bucket C (system/turn_duration on abnormal exit → observable via turn_done). Recipe is NOT runnable today: inducing a deterministic mid-turn API error requires network/env manipulation the driver does not support, and Bucket B would not be observable anyway.",
+      "description": "Agent's model call fails mid-turn (network error, provider 5xx, timeout). No normal turn-end signal is emitted. Expected arc per spec: ready → working, then → ready within the sweep interval after the agent gives up. Failures split into three buckets: Bucket A (transcript epilogue with synthesized error text → observable via classifier rule 2b — CAPTURED via tools/mock-anthropic-5xx.go), Bucket B (pure mid-stream network failure with NO transcript write → currently UNOBSERVABLE because there is no inactivity sweep on the working state since PR #106 removed the stale-tool timer), Bucket C (system/turn_duration on abnormal exit → observable via turn_done — not yet captured separately).",
       "coverage_id": "turn-aborted-by-error",
       "requires": [
         "headless_mode"
@@ -2381,40 +2381,27 @@
       },
       "by_adapter": {
         "claudecode": {
-          "applicable": false,
-          "reason": "Triggering a controlled mid-turn API error from claudecode requires network manipulation (pfctl block on api.anthropic.com, or pointing ANTHROPIC_BASE_URL at a port that refuses connections) or quota exhaustion; the current driver has no deterministic mechanism. Even with a mechanism, Bucket B (silent mid-stream network failure with no transcript write) would not be observable today: the classifier has no inactivity-driven working→ready sweep (the stale-tool timer that used to mitigate this was removed in PR #106 as a flicker source on long Bash runs). Buckets A and C land at ready correctly, so a future runnable variant should target one of those — e.g. an ANTHROPIC_BASE_URL stub that returns a 5xx with a synthesized error-body that claudecode appends to the transcript.",
-          "preconditions_when_unblocked": [
-            "claude CLI on PATH and authenticated",
-            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
-            "a deterministic mid-turn failure transport — a stub ANTHROPIC_BASE_URL returning 5xx after partial stream (Bucket A) OR a claude version with system/turn_duration on abnormal exit (Bucket C). Bucket B (silent network drop) is intentionally out of scope until a working-state inactivity sweep is reintroduced.",
-            "no other claudecode session uses the recipe's UUID"
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH",
+            "go on PATH (to build the mock)",
+            "irrlichd running with --record (recording is captured via attached daemon)",
+            "port 18766 available on localhost"
           ],
-          "future_setup_sketch": [
-            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/",
-            "Driver sets ANTHROPIC_BASE_URL to a stub that responds 200 with stream start, then 503 after the first chunk (Bucket A) — forces claudecode to write a synthesized error-bearing assistant line",
-            "OR: driver toggles network mid-turn (pfctl block) and relies on Bucket C's system/turn_duration / Stop-hook integration"
+          "setup": [
+            "tools/record-turn-aborted-by-error.sh builds tools/mock-anthropic-5xx.go, launches it, drives claude under --bare against the mock, and stages the fixture under .build/refresh/claudecode/turn-aborted-by-error-<TS>/. The mock streams message_start + a partial content_block_delta then emits SSE `event: error` (overloaded_error); claudecode appends a synthesized 'API Error' assistant message with a terminal stop_reason and IsAgentDone() fires."
           ],
-          "future_script_sketch": [
-            {
-              "type": "send",
-              "text": "Long prompt that will fail mid-stream (stubbed 503)"
-            },
-            {
-              "type": "wait_turn"
-            },
-            {
-              "type": "sleep",
-              "seconds": 4
-            }
-          ],
-          "future_verify_sketch": [
+          "driver": "tools/record-turn-aborted-by-error.sh",
+          "verify": [
+            "events.jsonl shows session_birth → ready",
+            "events.jsonl shows pid_discovered within 1000 ms of birth",
             "events.jsonl shows ready → working when the user prompt lands",
-            "events.jsonl shows working → ready within the sweep interval after the API call fails (Bucket A via terminal stop_reason on the error-bearing assistant line; Bucket C via turn_done from system/turn_duration)",
-            "session state does NOT stick in working — recovery within sweep interval",
-            "Bucket B (silent mid-stream failure with no transcript write) is intentionally excluded: not observable today without a working-state inactivity sweep"
+            "events.jsonl shows working → ready after the mock's mid-stream error → synthesized assistant epilogue with terminal stop_reason (Bucket A path)",
+            "session state does NOT stick in working — recovery is event-driven (not via sweep, which doesn't exist today)",
+            "Bucket B (silent network drop with no transcript epilogue) and Bucket C (system/turn_duration on abnormal exit) are intentionally NOT exercised by this recipe — they remain documented gaps in assessment.json"
           ],
           "settings": {},
-          "timeout_seconds": 180
+          "timeout_seconds": 120
         }
       }
     },
