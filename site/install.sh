@@ -205,6 +205,8 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     install -m 755 "$TMPDIR/extract/irrlichd" "$DEST"
     mkdir -p "$UI_DIR"
     install -m 644 "$TMPDIR/extract/web/index.html" "$UI_DIR/index.html"
+    install -m 644 "$TMPDIR/extract/web/irrlicht.css" "$UI_DIR/irrlicht.css"
+    install -m 644 "$TMPDIR/extract/web/irrlicht.js"  "$UI_DIR/irrlicht.js"
     ok
 
     say ""

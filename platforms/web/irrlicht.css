@@ -1,0 +1,1152 @@
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      /* Dark palette — default. Light overrides live below. */
+      --bg: #080c16;
+      --bg-glow: #0d1424;
+      --surface: #0f1628;
+      --surface-hover: #141d34;
+      --border: #1a2340;
+      --border-subtle: #141c32;
+      --text: #d4daf0;
+      --text-bright: #edf0fa;
+      --muted: #8e96b3;
+      --header-bg: rgba(8, 12, 22, 0.85);
+      --ctx-bar-track: rgba(255, 255, 255, 0.06);
+      --noise-opacity: 0.035;
+      --grid-color: rgba(100, 140, 255, 0.3);
+      --grid-opacity: 0.03;
+      --working: #8B5CF6;
+      --working-dim: rgba(139, 92, 246, 0.12);
+      --working-glow: rgba(139, 92, 246, 0.25);
+      --waiting: #FF9500;
+      --waiting-dim: rgba(255, 149, 0, 0.12);
+      --waiting-glow: rgba(255, 149, 0, 0.2);
+      --ready: #34C759;
+      --ready-dim: rgba(52, 199, 89, 0.12);
+      --ready-glow: rgba(52, 199, 89, 0.2);
+      --cancelled: #8E8E93;
+      --cancelled-dim: rgba(142, 142, 147, 0.1);
+      /* Pressure-bar colors — mirror overlay's ContextBarColor / pressure_level mapping:
+         safe → low, caution → medium, warning → high, critical → critical. */
+      --pressure-low: #34C759;
+      --pressure-medium: #FF9500;
+      --pressure-high: #FF3B30;
+      --pressure-critical: #D70015;
+      --ws-connected: #34C759;
+      --ws-disconnected: #FF3B30;
+      --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Fira Mono", Menlo, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+
+    /* Light palette — applied automatically when OS prefers light, unless the
+       explicit override pins to dark. The same vars also apply when the user
+       toggles [data-theme="light"]. */
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        --bg: #f4f5f7;
+        --bg-glow: #ffffff;
+        --surface: #ffffff;
+        --surface-hover: #ebeef4;
+        --border: #d2d4dc;
+        --border-subtle: #e4e6ed;
+        --text: #1d1d1f;
+        --text-bright: #000000;
+        --muted: #6e6e73;
+        --header-bg: rgba(255, 255, 255, 0.85);
+        --ctx-bar-track: rgba(0, 0, 0, 0.08);
+        --noise-opacity: 0;
+        --grid-color: rgba(60, 100, 200, 0.18);
+        --grid-opacity: 0.04;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg: #f4f5f7;
+      --bg-glow: #ffffff;
+      --surface: #ffffff;
+      --surface-hover: #ebeef4;
+      --border: #d2d4dc;
+      --border-subtle: #e4e6ed;
+      --text: #1d1d1f;
+      --text-bright: #000000;
+      --muted: #6e6e73;
+      --header-bg: rgba(255, 255, 255, 0.85);
+      --ctx-bar-track: rgba(0, 0, 0, 0.08);
+      --noise-opacity: 0;
+      --grid-color: rgba(60, 100, 200, 0.18);
+      --grid-opacity: 0.04;
+    }
+
+    body {
+      background: var(--bg);
+      background-image:
+        radial-gradient(ellipse 80% 60% at 50% 40%, var(--bg-glow) 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Noise texture overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      opacity: var(--noise-opacity);
+      pointer-events: none;
+      z-index: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 256px 256px;
+    }
+
+    /* Faint grid pattern */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      opacity: var(--grid-opacity);
+      pointer-events: none;
+      z-index: 0;
+      background-image:
+        repeating-linear-gradient(0deg, transparent, transparent 59px, var(--grid-color) 59px, var(--grid-color) 60px),
+        repeating-linear-gradient(90deg, transparent, transparent 59px, var(--grid-color) 59px, var(--grid-color) 60px);
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--header-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+
+    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+    /* App title — mirrors overlay's "Irrlicht v$VERSION" left of the state icons. */
+    .app-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-bright);
+      white-space: nowrap;
+    }
+
+    .app-title .app-name { letter-spacing: 0; }
+    .app-title .app-version { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .app-title .app-sep { color: var(--muted); padding: 0 2px; }
+
+    /* Quota chips — provider-scoped rate-limit display that REPLACES the
+       app-title strip when one or more sessions carry a rate_limit snapshot.
+       Ports the macOS overlay's quotaChipView (SessionListView.swift:600) so
+       opening the popover and the web dashboard side-by-side shows identical
+       state for the same session list. */
+    .quota-chips {
+      display: none;
+      align-items: flex-start;
+      gap: 10px;
+      font-family: var(--font-mono);
+    }
+    header.has-quota-chips .app-title { display: none; }
+    header.has-quota-chips .quota-chips { display: flex; }
+
+    .quota-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 1px 0;
+    }
+    .quota-chip-icon {
+      display: inline-flex;
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      color: var(--text-bright);
+    }
+    .quota-chip-icon svg,
+    .quota-chip-icon img { width: 14px; height: 14px; display: block; }
+    .quota-chip-body {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 88px;
+    }
+    .quota-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 11px;
+    }
+    .quota-row-label {
+      font-size: 9px;
+      font-weight: 500;
+      color: var(--muted);
+      width: 14px;
+      text-align: left;
+    }
+    .quota-bar {
+      position: relative;
+      height: 5px;
+      width: 60px;
+      border-radius: 2.5px;
+      background: var(--ctx-bar-track);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    /* Single visible chip gets a slightly wider bar (matches macOS compact
+       vs. non-compact width: 60 vs 70). */
+    .quota-chips--single .quota-bar { width: 70px; }
+    .quota-bar-fill {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      border-radius: 2.5px;
+    }
+    .quota-bar-fill--green  { background: var(--pressure-low); }
+    .quota-bar-fill--yellow { background: #FFCC00; }
+    .quota-bar-fill--orange { background: var(--pressure-medium); }
+    /* Pace marker — thin red vertical bar at "where you should be if pacing
+       evenly through the window." Red is reserved for the marker so the
+       fill ramp (green→yellow→orange) doesn't visually blend with it. */
+    .quota-bar-pace {
+      position: absolute;
+      top: 0;
+      width: 1px;
+      height: 100%;
+      background: var(--pressure-high);
+    }
+    .quota-row-percent {
+      font-size: 9px;
+      font-weight: 500;
+      color: var(--text-bright);
+      font-variant-numeric: tabular-nums;
+      min-width: 28px;
+      text-align: right;
+    }
+    .quota-row-reset {
+      font-size: 9px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .quota-usage-headline {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-bright);
+      font-variant-numeric: tabular-nums;
+    }
+    .quota-usage-sublabel {
+      font-size: 9px;
+      color: var(--muted);
+    }
+    .quota-overflow {
+      display: inline-flex;
+      align-items: center;
+      align-self: center;
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--muted);
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--surface-hover);
+      cursor: default;
+    }
+    .quota-stale { opacity: 0.5; }
+
+    /* Aggregated state icons — up to 3 per-session glyphs colored by state,
+       or "N sessions" text when there are more. Mirrors `sessionIconsView` in
+       SessionListView.swift:346. */
+    .app-state-icons {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 14px;
+    }
+
+    .app-state-icon {
+      width: 14px;
+      height: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .app-state-icon svg {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+
+    .app-state-count {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text);
+    }
+
+    /* Single header cycling button — replaces the standalone view-mode-bar +
+       timeline granularity buttons. Mirrors overlay's mode-cycle-btn at
+       SessionListView.swift:314. */
+    .view-mode-cycle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.03em;
+      padding: 3px 8px;
+      cursor: pointer;
+      min-width: 56px;
+      text-align: center;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .view-mode-cycle:hover { border-color: var(--working); color: var(--text-bright); }
+    .view-mode-cycle.history { border-color: var(--working); color: var(--working); background: var(--working-dim); }
+
+    /* Theme toggle — explicit override that persists in localStorage; absent
+       value defers to the OS prefers-color-scheme media query. */
+    .theme-toggle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      width: 26px;
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .theme-toggle:hover { border-color: var(--working); color: var(--text-bright); }
+
+    .ws-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.03em;
+      color: var(--muted);
+    }
+
+    /* Filled dot mirrors overlay's statusIndicator at SessionListView.swift:366.
+       Color/label combos: green/"watching" (connected),
+       orange/"reconnecting"/"connecting", red/"disconnected". */
+    .ws-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--ws-disconnected);
+      box-shadow: 0 0 4px rgba(255, 59, 48, 0.4);
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+
+    .ws-dot.connected {
+      background: var(--ws-connected);
+      box-shadow: 0 0 4px rgba(52, 199, 89, 0.5);
+    }
+
+    .ws-dot.connecting,
+    .ws-dot.reconnecting {
+      background: var(--waiting);
+      box-shadow: 0 0 4px rgba(255, 149, 0, 0.5);
+      animation: ws-pulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes ws-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.85); }
+    }
+
+    main {
+      position: relative;
+      z-index: 1;
+      padding: 12px 20px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    /* Empty state */
+    #empty-state {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 100px 24px;
+      color: var(--muted);
+    }
+
+    .empty-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--muted);
+      opacity: 0.4;
+      animation: empty-breathe 3s ease-in-out infinite;
+      margin-bottom: 16px;
+    }
+
+    @keyframes empty-breathe {
+      0%, 100% { opacity: 0.15; transform: scale(0.9); }
+      50% { opacity: 0.5; transform: scale(1.1); }
+    }
+
+    #empty-state p {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    /* --- Timeline heatmap --- */
+    /* Per-row history bar — visible only in history modes; takes the same
+       slot the context bar occupies in Context mode. Floor mirrors macOS
+       HistoryBarView (SessionListView.swift:555) at 132×16, grown by the
+       same flex factors as .row-ctx-bar so the bar can absorb slack. */
+    .row-history {
+      flex: 2 1 100px;
+      min-width: 100px;
+      max-width: 320px;
+      height: 16px;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    /* --- Session list --- */
+    .session-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Group header */
+    .group-hdr {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px 4px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .group-hdr:hover { background: var(--surface-hover); border-radius: 4px; }
+
+    .group-chevron {
+      font-size: 8px;
+      color: var(--muted);
+      width: 10px;
+      text-align: center;
+      transition: transform 0.15s;
+    }
+
+    .group-chevron.collapsed { transform: rotate(-90deg); }
+
+    .group-name {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-bright);
+      letter-spacing: 0.02em;
+    }
+
+    .group-cost {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-left: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .group-cost:hover {
+      color: var(--text-bright);
+    }
+
+    .group-count {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-left: auto;
+    }
+
+    /* Session row — strict one-line layout. The branch column owns excess
+       width and ellipsises long names; all other columns are fixed so the
+       meta cluster (bar/tokens/cost/model/icon) never wraps onto a second
+       line. The macOS overlay row uses the same rule (one HStack, no
+       wrapping). */
+    .session-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: nowrap;
+      gap: 5px;
+      padding: 3px 10px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text);
+      border-radius: 3px;
+      min-width: 0;
+      /* Pin to the height the history bar (16) takes so toggling Context↔
+         history modes doesn't shift the row. Mirrors macOS row pin at
+         SessionListView.swift:586 (`.frame(minHeight: 16)`). */
+      min-height: 22px;
+      transition: background 0.12s;
+      opacity: 0;
+      animation: row-reveal 0.2s ease forwards;
+    }
+
+    .session-row:hover { background: var(--surface-hover); }
+
+    @keyframes row-reveal {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .session-row.child { padding-left: 30px; }
+
+    .row-state-icon {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+    }
+
+    .row-state-icon svg {
+      width: 12px;
+      height: 12px;
+      display: block;
+    }
+
+    .row-adapter-icon {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .row-adapter-icon img {
+      width: 12px;
+      height: 12px;
+      display: block;
+    }
+
+    /* Working state — opacity-only "breathe" on a large solid dot.
+       Footprint is r=7 of 20 viewBox (70 % of cell), so the dot stays
+       clearly visible even if the animation is dropped by the renderer
+       or disabled for reduced-motion. */
+    @keyframes irrlicht-breathe {
+      0%, 100% { opacity: 0.55; }
+      50%      { opacity: 1; }
+    }
+    .row-state-icon svg circle.core,
+    .app-state-icon svg circle.core {
+      animation: irrlicht-breathe 1.4s ease-in-out infinite;
+      transform-origin: 50% 50%;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .row-state-icon svg circle.core,
+      .app-state-icon svg circle.core {
+        animation: none;
+        opacity: 1;
+      }
+    }
+
+    .row-num {
+      width: 12px;
+      font-size: 9px;
+      font-weight: 500;
+      color: var(--muted);
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .row-branch {
+      color: var(--text);
+      font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      /* Floor mirrors macOS row (SessionListView.swift:501) at 64 px; on
+         wider viewports the branch grows to use the slack so long names
+         don't ellipsis-truncate when there's plenty of room. Capped so an
+         extreme-wide window doesn't dedicate half the row to the branch. */
+      flex: 1 1 64px;
+      min-width: 64px;
+      max-width: 220px;
+    }
+    .session-row.has-sub .row-branch { flex: 1 1 44px; min-width: 44px; }
+
+    /* Small subagent count badge — filled circle with running-count number,
+       sized to fit alongside the row's mono text. Mirrors macOS at
+       SessionListView.swift:481-490. */
+    .row-sub-badge {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 14px;
+      border-radius: 50%;
+      background: var(--working);
+      color: #fff;
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 14px;
+      text-align: center;
+      font-family: var(--font-sans);
+    }
+
+    .row-spacer { flex: 1 1 auto; min-width: 4px; }
+
+    /* Context bar — floor mirrors macOS ContextBar at SessionListView.swift:420
+       (100×13). On wider viewports the bar grows to use the slack so the
+       fill is more readable, capped so it doesn't dominate the row. The
+       grow factor is higher than branch's so the bar absorbs more slack. */
+    .row-ctx-bar {
+      position: relative;
+      height: 13px;
+      flex: 2 1 100px;
+      min-width: 100px;
+      max-width: 320px;
+      background: var(--ctx-bar-track);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .row-ctx-fill {
+      display: block;
+      height: 100%;
+      border-radius: 3px;
+      background: var(--pressure-low);
+      transition: width 0.4s ease, background 0.3s;
+    }
+
+    .row-ctx-fill.medium  { background: var(--pressure-medium); }
+    .row-ctx-fill.high    { background: var(--pressure-high); }
+    .row-ctx-fill.critical { background: var(--pressure-critical); }
+
+    /* Token count overlay sits on top of the bar and right-aligns. Color
+       picks the muted token for readability over both the unfilled track
+       and the filled portion (which is solid green). */
+    .row-ctx-label {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0 4px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    /* Standalone context % column — only shown when Settings.showCostDisplay
+       is OFF (so the cost column hides and we surface percentage instead). */
+    .row-ctx-pct {
+      font-size: 10px;
+      flex: 0 0 auto;
+      font-variant-numeric: tabular-nums;
+      min-width: 38px;
+      text-align: right;
+      color: var(--muted);
+    }
+    body:not(.no-cost) .row-ctx-pct { display: none; }
+
+    .row-cost {
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+      min-width: 48px;
+      text-align: right;
+    }
+
+    .row-model {
+      font-size: 10px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 120px;
+    }
+
+    .row-elapsed {
+      font-size: 9px;
+      color: var(--muted);
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+      min-width: 36px;
+      text-align: right;
+    }
+
+    .row-id {
+      font-size: 9px;
+      color: var(--muted);
+      opacity: 0.5;
+      flex-shrink: 0;
+    }
+
+    /* Waiting-question row — assistant's last message rendered beneath
+       the parent when the session is awaiting user input. Mirrors macOS
+       layout at SessionListView.swift:588-604 (waiting-colored text in a
+       padded, dim, rounded box, clamped to 3 lines). */
+    .row-question-row {
+      margin: 0 10px 4px 24px;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      line-height: 1.4;
+      color: var(--waiting);
+      background: var(--waiting-dim);
+      padding: 4px 6px;
+      border-radius: 4px;
+      cursor: default;
+    }
+    .row-question-row.child { margin-left: 44px; }
+
+    /* Task progress dots — rendered as a separate row beneath the parent
+       session row (see .row-tasks-row), mirroring TaskListView in the macOS
+       overlay (SessionListView.swift:746-769). */
+    .task-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      cursor: default;
+    }
+    .task-dot.task-pending    { background: transparent; border: 1.5px solid var(--working); }
+    .task-dot.task-in_progress { background: transparent; border: 1.5px solid var(--working); }
+    .task-dot.task-completed  { background: var(--ready); border: 1.5px solid var(--ready); }
+
+    .row-tasks-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 1px 10px 4px 24px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+    }
+    .row-tasks-row.child { padding-left: 44px; }
+    .row-tasks-dots {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 3px;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .row-tasks-counter {
+      color: var(--muted);
+      flex-shrink: 0;
+      min-width: 38px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Connection banner — surfaces when the WebSocket is reconnecting or
+       disconnected. Mirrors the inline error display in
+       SessionListView.swift:207-210. Hidden when connected (default). */
+    #connection-banner {
+      display: none;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 6px 10px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+    }
+    #connection-banner.reconnecting {
+      display: block;
+      background: var(--waiting-dim);
+      border-color: rgba(255, 149, 0, 0.4);
+      color: var(--waiting);
+    }
+    #connection-banner.disconnected {
+      display: block;
+      background: rgba(255, 59, 48, 0.1);
+      border-color: rgba(255, 59, 48, 0.4);
+      color: var(--pressure-high);
+    }
+
+    /* Pressure alert row */
+    .pressure-alert-row {
+      padding: 2px 10px 2px 30px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+    }
+    .pressure-alert-row span {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+    }
+    .pressure-alert-row .alert-high {
+      background: rgba(255, 59, 48, 0.1);
+      color: var(--pressure-high);
+    }
+    .pressure-alert-row .alert-critical {
+      background: rgba(215, 0, 21, 0.12);
+      color: var(--pressure-critical);
+    }
+
+    /* Gas Town section */
+    .gt-section {
+      margin-bottom: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .gt-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .gt-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-bright);
+      letter-spacing: 0.04em;
+    }
+
+    .gt-title .gt-emoji { font-size: 12px; }
+
+    .gt-status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .gt-status-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .gt-body { padding: 0; }
+
+    .gt-convoy-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .gt-convoy-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 12px 4px 24px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
+
+    .gt-convoy-row:last-child { border-bottom: none; }
+
+    .gt-convoy-name {
+      color: var(--text);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .gt-convoy-name.done { color: var(--muted); }
+
+    .gt-dotbar {
+      letter-spacing: 2px;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+
+    .gt-convoy-fraction {
+      font-size: 10px;
+      color: var(--muted);
+      flex-shrink: 0;
+      min-width: 36px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .gt-convoy-check {
+      color: var(--ready);
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+
+    /* Role badge on session rows */
+    .row-role-badge {
+      font-size: 10px; padding: 0 5px; height: 14px; border-radius: 3px;
+      background: rgba(139, 92, 246, 0.12); color: var(--working);
+      font-family: var(--font-mono); font-weight: 600;
+      display: flex; align-items: center; white-space: nowrap;
+      flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      max-width: 100px;
+    }
+    /* Active tool indicator — hidden for now (the overlay doesn't surface it
+       in the default row either). Keep the rule + JS update path so we can
+       re-enable later, but force-hide via CSS. */
+    .row-tool {
+      display: none !important;
+    }
+    /* Gas Town hierarchy */
+    .gt-agents-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 12px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap;
+    }
+    .gt-agent-chip {
+      display: flex; align-items: center; gap: 5px;
+      font-family: var(--font-mono); font-size: 10px; color: var(--text);
+      padding: 2px 7px; border-radius: 3px;
+      background: var(--surface-hover); border: 1px solid var(--border-subtle); cursor: default;
+    }
+    .gt-chip-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .gt-chip-id { font-size: 9px; color: var(--muted); }
+    .gt-rig-block { padding: 5px 12px; border-bottom: 1px solid var(--border-subtle); }
+    .gt-rig-block:last-of-type { border-bottom: none; }
+    .gt-rig-name {
+      font-family: var(--font-mono); font-size: 9px; font-weight: 700;
+      color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px;
+    }
+    .gt-workers { display: flex; flex-wrap: wrap; gap: 4px; }
+
+    /* Responsive — context bar is the load-bearing signal and never hides.
+       Breakpoints sized to the actual minimum width of fixed columns plus
+       gaps + padding (~400 px for everything visible; trim from there). */
+    @media (max-width: 768px) {
+      header { padding: 10px 14px; }
+      main { padding: 10px 14px; }
+      .row-model { max-width: 70px; }
+      .app-title .app-sep { display: none; }
+    }
+
+    @media (max-width: 420px) {
+      header { flex-wrap: wrap; gap: 8px; }
+      main { padding: 8px 10px; }
+      .row-cost { display: none; }
+      .app-state-icons { display: none; }
+      /* Two quota chips at ~108px each + gap + right-side header buttons
+         overflow narrow viewports. Mirror the .app-state-icons rule above:
+         hide the chip strip and restore the version title underneath. */
+      header.has-quota-chips .quota-chips { display: none; }
+      header.has-quota-chips .app-title { display: flex; }
+    }
+
+    @media (max-width: 360px) {
+      .row-model { display: none; }
+    }
+
+    @media (max-width: 320px) {
+      .row-adapter-icon { display: none; }
+    }
+
+    /* Display modes — driven by the single header cycling button. Context is
+       the default (show meta columns, hide history bar); 1s/10s/60s history
+       modes swap that. body.view-history is the umbrella class for any
+       history granularity. */
+    .row-history { display: none; }
+    body.view-history .row-ctx-bar { display: none !important; }
+    body.view-history .row-ctx-pct { display: none !important; }
+    body.view-history .row-cost    { display: none !important; }
+    body.view-history .row-model   { display: none !important; }
+    body.view-history .row-history { display: block !important; }
+
+    /* Settings-driven visibility (mirrors macOS SettingsView toggles).
+       - showCostDisplay: when off, hide the cost column (default on).
+       - debugMode: when off, hide the trailing row-id, row-elapsed, and
+         row-created chips (timestamps + ID are dev-only info, just like
+         the macOS overlay). */
+    body.no-cost .row-cost { display: none !important; }
+    body:not(.debug-mode) .row-id      { display: none !important; }
+    body:not(.debug-mode) .row-elapsed { display: none !important; }
+    body:not(.debug-mode) .row-created { display: none !important; }
+    .row-created {
+      font-size: 9px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      flex: 0 0 auto;
+    }
+
+    /* Settings modal */
+    .settings-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .settings-modal-backdrop.open { display: flex; }
+    .settings-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px 18px 14px;
+      width: 100%;
+      max-width: 420px;
+      max-height: calc(100vh - 48px);
+      overflow: auto;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+    }
+    .settings-modal h2 {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .settings-modal h2:not(:first-child) { margin-top: 14px; }
+    .settings-modal label {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 6px 4px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .settings-modal label:hover { background: var(--surface-hover); }
+    .settings-modal label input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 30px;
+      height: 16px;
+      border-radius: 8px;
+      background: var(--border);
+      position: relative;
+      cursor: pointer;
+      flex-shrink: 0;
+      margin-top: 1px;
+      transition: background 0.15s;
+    }
+    .settings-modal label input[type="checkbox"]::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--text-bright);
+      transition: left 0.15s, background 0.15s;
+    }
+    .settings-modal label input[type="checkbox"]:checked {
+      background: var(--working);
+    }
+    .settings-modal label input[type="checkbox"]:checked::after {
+      left: 16px;
+      background: #ffffff;
+    }
+    .settings-modal .settings-label-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .settings-modal .settings-label-text .settings-title { color: var(--text-bright); font-weight: 500; }
+    .settings-modal .settings-label-text .settings-hint { color: var(--muted); font-size: 11px; }
+    .settings-modal .settings-modal-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .settings-modal .settings-modal-footer .settings-perm-note {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      flex: 1;
+    }
+    .settings-modal .settings-modal-close {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 4px 12px;
+      cursor: pointer;
+    }
+    .settings-modal .settings-modal-close:hover { border-color: var(--working); color: var(--text-bright); }
+
+    /* Provider quota — per-provider mode selectors. Auto-populates the
+       observed-provider list (Anthropic / OpenAI / ...) whenever the
+       settings modal opens. Mirrors macOS Settings → Providers. */
+    .settings-modal .provider-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 4px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .settings-modal .provider-row:hover { background: var(--surface-hover); }
+    .settings-modal .provider-row .provider-name {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-bright);
+    }
+    .settings-modal .provider-row .provider-name svg,
+    .settings-modal .provider-row .provider-name img {
+      width: 14px;
+      height: 14px;
+      color: var(--text-bright);
+      display: block;
+    }
+    .settings-modal .provider-row select {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 3px 6px;
+      cursor: pointer;
+    }
+    .settings-modal .provider-empty {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 4px 4px 0;
+    }

@@ -61,7 +61,7 @@ TARBALL_STAGING="$BUILD_DIR/tarball-staging"
 rm -rf "$TARBALL_STAGING"
 mkdir -p "$TARBALL_STAGING/web"
 cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$TARBALL_STAGING/${DAEMON_NAME}"
-cp platforms/web/index.html "$TARBALL_STAGING/web/index.html"
+cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$TARBALL_STAGING/web/"
 tar -czf "$BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz" -C "$TARBALL_STAGING" .
 rm -rf "$TARBALL_STAGING"
 echo "  Created $BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz"
@@ -95,7 +95,7 @@ cp "$SWIFT_BIN" "$APP_CONTENTS/MacOS/${APP_NAME}"
 
 # Web UI lives next to the daemon — resolved by irrlichd at runtime via
 # <exe>/../Resources/web (see resolveUIDir in core/cmd/irrlichd/main.go).
-cp platforms/web/index.html "$APP_CONTENTS/Resources/web/index.html"
+cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$APP_CONTENTS/Resources/web/"
 
 # AppIcon — required for menu bar / Finder display.
 cp platforms/macos/Irrlicht/Resources/AppIcon.icns "$APP_CONTENTS/Resources/AppIcon.icns"

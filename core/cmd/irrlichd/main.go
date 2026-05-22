@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"mime"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -228,8 +229,12 @@ func main() {
 	mux.HandleFunc("GET /debug/pprof/symbol", localhostOnly(pprof.Symbol))
 	mux.HandleFunc("GET /debug/pprof/trace", localhostOnly(pprof.Trace))
 
-	// Static web UI: served from disk so the dashboard ships as an external
-	// file (one copy in the repo at platforms/web/index.html). API routes
+	// Ensure .js files are served as application/javascript regardless of the
+	// host OS mime.types database (absent on stripped Linux images).
+	_ = mime.AddExtensionType(".js", "application/javascript")
+
+	// Static web UI: served from disk so the dashboard ships as three files
+	// (index.html, irrlicht.css, irrlicht.js) under platforms/web/. API routes
 	// registered above take precedence over the catch-all "/".
 	if uiDir := resolveUIDir(); uiDir != "" {
 		logger.LogInfo("startup", "", fmt.Sprintf("serving UI from %s", uiDir))
