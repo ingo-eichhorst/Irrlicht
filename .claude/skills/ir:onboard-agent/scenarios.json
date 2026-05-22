@@ -4,7 +4,8 @@
     "claudecode": "2.0.0",
     "codex": "0.50.0",
     "pi": "0.70.0",
-    "aider": "0.86.0"
+    "aider": "0.86.0",
+    "opencode": "1.0.0"
   },
   "$catalog_notes": "Public catalog of all scenarios in the overview matrix. Mirrors the canonical id+section+feature list from .specs/agent-scenarios.md (gitignored, maintainer-owned). Repo-tracked so the dashboard can build the matrix without depending on .specs/. Order is significant — it determines the section.index code (e.g. 1.1, 2.3). 'scenarios' below is the recipe registry; entries here without a corresponding recipe render with no recipe authored.",
   "catalog": [
@@ -2797,6 +2798,42 @@
             "two subagent transcripts appear under ~/.claude/projects/<slug>/<parent>/subagents/agent-<uuid>.jsonl",
             "no state_transition to ready or waiting fires on the parent UUID between child2_parent_linked and the final working->ready (parent stays working until the LAST child reports back)",
             "events.jsonl shows exactly one working->ready transition for the parent UUID at turn end",
+            "final session state for the parent is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 420
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated (run a single message in opencode TUI to confirm)",
+            "irrlichd is recording (--attach or isolated) with the opencode SQLite watcher enabled",
+            "the default opencode model exposes the `task` tool (most chat models do; lightweight 'codex' models may not)"
+          ],
+          "setup": [
+            "Driver seeds two files in <staging>/cwd: README.md (one H1 heading) and CHANGELOG.md (one release date). Subagents have deterministic content to read.",
+            "Driver runs `opencode` in tmux against <staging>/cwd so each scenario gets a fresh project directory. OpenCode appends to the global ~/.local/share/opencode/opencode.db; sessions are isolated by their session id, not by cwd."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "In a SINGLE turn, use the `task` tool THREE times in parallel. Subagent A: run bash 'sleep 5 && echo A done'. Subagent B: run bash 'sleep 10 && echo B done'. Subagent C: run bash 'sleep 15 && echo C done'. After all three subagents report back, reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the parent session entering ready, then a single ready->working transition",
+            "events.jsonl contains AT LEAST 2 parent_linked events pointing at the parent session id",
+            "the parent session's transcript (SQLite parts) contains AT LEAST 2 tool parts with tool=task",
+            "two or more child session rows appear in ~/.local/share/opencode/opencode.db with parent_id = parent session id",
+            "no state_transition to ready or waiting fires on the parent between child2_parent_linked and the final working->ready (parent stays working until the LAST child reports back)",
+            "events.jsonl shows exactly one working->ready transition for the parent at turn end",
             "final session state for the parent is ready"
           ],
           "settings": {},
