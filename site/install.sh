@@ -237,10 +237,6 @@ step "Installing to /Applications"
 ditto -xk "$TMPDIR/$ASSET" /Applications/ || fail "Extract failed"
 ok
 
-step "Stripping quarantine attribute"
-xattr -dr com.apple.quarantine /Applications/Irrlicht.app 2>/dev/null || true
-ok
-
 step "Registering with LaunchServices"
 "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister" \
     -f /Applications/Irrlicht.app 2>/dev/null || true
