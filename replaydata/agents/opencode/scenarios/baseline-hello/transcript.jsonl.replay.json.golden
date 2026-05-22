@@ -18,7 +18,8 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "estimated_cost_usd": 0.012345
+    "estimated_cost_usd": 0.012345,
+    "model_name": "claude-sonnet-4-6"
   },
   "transitions": [
     {

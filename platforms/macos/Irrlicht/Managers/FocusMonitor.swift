@@ -26,11 +26,10 @@ protocol FocusStateProviding: AnyObject, Sendable {
 /// gated by `isDeveloperIDSigned` below. On ad-hoc builds the Intents framework
 /// is never loaded, so the TCC preflight never fires.
 ///
-/// **When Developer ID lands** (tracked under #233), restoring the real Focus
-/// read is automatic: the runtime gate flips to `true`, `loadIntents()` succeeds,
-/// and `isFocusActive` returns the live state. No new release is required to
-/// turn the feature on once a DevID-signed build hits users' machines. The
-/// follow-up issue tracking the full restoration is #357.
+/// **With Developer ID** (#233), the runtime gate flips to `true`,
+/// `resolveFocusStatusCenter()` succeeds, and `isFocusActive` returns the live
+/// state. Ad-hoc builds (CI, local dev without a DevID cert) fall back to
+/// `false` without loading Intents.framework.
 final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
     /// True when running as a real .app (production or dev bundle); false in
     /// xctest. The xctest host has no `.app` suffix on its bundle path, so we
@@ -51,7 +50,7 @@ final class FocusMonitor: FocusStateProviding, @unchecked Sendable {
             return
         }
         guard Self.isDeveloperIDSigned else {
-            print("🌙 FocusMonitor: ad-hoc signed — Focus suppression disabled until Developer-ID lands (#357).")
+            print("🌙 FocusMonitor: ad-hoc signed — Focus suppression disabled.")
             self.intentsCenter = nil
             return
         }

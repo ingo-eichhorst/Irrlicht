@@ -529,6 +529,8 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
        <true/>
        <key>NSAppleEventsUsageDescription</key>
        <string>Irrlicht needs to send Apple Events to focus terminal and IDE windows when you click a session in the menu bar.</string>
+       <key>NSFocusStatusUsageDescription</key>
+       <string>Irrlicht uses macOS Focus status to silence notification sounds and spoken alerts while you're in Do Not Disturb, Sleep, or any other Focus mode.</string>
        <key>NSHumanReadableCopyright</key>
        <string>Copyright © 2026 Ingo Eichhorst. MIT License.</string>
        <key>NSPrincipalClass</key>
@@ -537,28 +539,18 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    </plist>
    ```
 
-7. Ad-hoc code sign. **Do not pass `--entitlements`.** AMFI (Apple Mobile
-   File Integrity) rejects ad-hoc-signed binaries that claim Apple-restricted
-   entitlements; `com.apple.developer.focus-status` (in
-   `platforms/macos/Irrlicht/Resources/Irrlicht.entitlements`) is one such
-   entitlement. Applying the entitlements file at sign time bakes that claim
-   into the binary, which `amfid` then refuses to launch — surfacing as
-   `launchd POSIX 153` / `Launchd job spawn failed` on first launch (#356).
-   The `Irrlicht.entitlements` file is preserved in the repo for the future
-   Developer-ID-signed + notarized path (separate work, tracked under #233);
-   until that lands, it must not be applied. When DevID arrives, restore the
-   `--entitlements` flag *and* re-add `NSFocusStatusUsageDescription` to the
-   Info.plist template above *and* restore the static `import Intents` /
-   direct API usage in `FocusMonitor.swift` (#357 tracks the full restoration
-   checklist — there are three coupled touchpoints that all flip together).
+7. Developer-ID code sign with hardened runtime and entitlements.
    ```bash
-   codesign --force --deep --sign - "$APP_STAGING/Contents/MacOS/irrlichd"
-   codesign --force --deep --sign - "$APP_STAGING"
+   DEVID="Developer ID Application: Ingo Eichhorst (93Y3GMJAMV)"
+   ENTITLEMENTS="$(pwd)/platforms/macos/Irrlicht/Resources/Irrlicht.entitlements"
+   codesign --force --deep --sign "$DEVID" --options runtime --timestamp \
+     "$APP_STAGING/Contents/MacOS/irrlichd"
+   codesign --force --sign "$DEVID" --options runtime --timestamp \
+     --entitlements "$ENTITLEMENTS" "$APP_STAGING"
    codesign --verify --deep --strict "$APP_STAGING"
-   # Sanity check — must be empty (matches v0.4.2 working behavior).
-   codesign -d --entitlements - "$APP_STAGING" 2>&1 | grep -q '\[Key\]' \
-     && { echo "FAIL: entitlements baked into ad-hoc binary"; exit 1; } \
-     || echo "OK no entitlements (AMFI won't reject)"
+   codesign -d --entitlements - "$APP_STAGING" 2>&1 | grep -q 'focus-status' \
+     && echo "OK: focus-status entitlement present" \
+     || { echo "FAIL: focus-status entitlement missing"; exit 1; }
    ```
 8. **Smoke test before packaging** — launch the built app, wait ~2s, confirm
    the process is still alive, has spawned `irrlichd`, and that the daemon
@@ -635,9 +627,10 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
       symbol just before `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__` is
       the API or framework the preflight checked.
    3. Compare `codesign -d --entitlements -` output against the prior
-      release. New entitlement entries on an ad-hoc binary are killed
-      by AMFI with POSIX 153 (v0.4.3 mode, fixed in #356; the entitlement
-      audit in step 7 should have caught it).
+      release. The DevID-signed binary should carry exactly
+      `com.apple.developer.focus-status` (plus `get-task-allow` in dev
+      builds). Extra or missing entitlements vs. `Irrlicht.entitlements`
+      indicate a codesign step error — fix and re-sign before shipping.
    4. If steps 1–3 all clear, copy the bundle to `/Applications/` (kill
       the prior install first) and retry. A real shipping defect will
       crash from both paths; an environment-only failure will only crash
@@ -970,13 +963,12 @@ without `--push`; the verification will report a mismatch you can ignore.
    INSTALLED=$(defaults read /Applications/Irrlicht.app/Contents/Info CFBundleShortVersionString)
    [ "$INSTALLED" = "$NEW_VERSION" ] || { echo "FAIL: canary installed v$INSTALLED, expected v$NEW_VERSION"; exit 1; }
 
-   # Confirm no entitlements baked in (matches the build-time guard in
-   # Step 6 step 6, but on the actual shipping artifact this time —
-   # paranoia is cheap).
-   codesign -d --entitlements - /Applications/Irrlicht.app 2>&1 | grep -q '\[Key\]' \
-     && { echo "FAIL: shipping binary has entitlements baked in"; exit 1; }
+   # Confirm focus-status entitlement is present (matches the build-time
+   # guard in step 7, but on the actual shipping artifact this time).
+   codesign -d --entitlements - /Applications/Irrlicht.app 2>&1 | grep -q 'focus-status' \
+     || { echo "FAIL: shipping binary missing focus-status entitlement"; exit 1; }
 
-   echo "OK canary install: v$INSTALLED, no entitlements, running"
+   echo "OK canary install: v$INSTALLED, focus-status entitlement present, running"
    ```
 5. **Installer-script staleness check.** `irrlicht.io/install.sh` is
    served by GitHub Pages and lags `main` by a few minutes after a merge:
