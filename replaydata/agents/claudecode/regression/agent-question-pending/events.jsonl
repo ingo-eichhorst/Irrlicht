@@ -1,0 +1,15 @@
+{"seq":266,"ts":"2026-04-26T11:56:30.598866+02:00","kind":"transcript_new","session_id":"proc-1072","adapter":"claude-code","project_dir":"-Users-ingo-projects-irrlicht--claude-worktrees-228","cwd":"/Users/ingo/projects/irrlicht/.claude/worktrees/228"}
+{"seq":267,"ts":"2026-04-26T11:56:30.708915+02:00","kind":"presession_created","session_id":"proc-1072","adapter":"claude-code","project_dir":"-Users-ingo-projects-irrlicht--claude-worktrees-228","cwd":"/Users/ingo/projects/irrlicht/.claude/worktrees/228"}
+{"seq":268,"ts":"2026-04-26T11:56:30.709649+02:00","kind":"state_transition","session_id":"proc-1072","new_state":"ready","reason":"new session created"}
+{"seq":269,"ts":"2026-04-26T11:56:31.106951+02:00","kind":"pid_discovered","session_id":"proc-1072","pid":1072}
+{"seq":270,"ts":"2026-04-26T11:56:31.261069+02:00","kind":"transcript_new","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd","adapter":"claude-code","transcript_path":"/Users/ingo/.claude/projects/-Users-ingo-projects-irrlicht--claude-worktrees-228/ef21e42a-0206-4578-8b08-8a767d47f5fd.jsonl","file_size":16690,"project_dir":"-Users-ingo-projects-irrlicht--claude-worktrees-228"}
+{"seq":271,"ts":"2026-04-26T11:56:31.289609+02:00","kind":"state_transition","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd","new_state":"ready","reason":"new session created"}
+{"seq":272,"ts":"2026-04-26T11:56:31.290559+02:00","kind":"presession_removed","session_id":"proc-1072","adapter":"claude-code"}
+{"seq":273,"ts":"2026-04-26T11:56:31.29094+02:00","kind":"pid_discovered","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd","pid":1072}
+{"seq":274,"ts":"2026-04-26T11:56:31.593816+02:00","kind":"transcript_removed","session_id":"proc-1072","adapter":"claude-code"}
+{"seq":276,"ts":"2026-04-26T11:56:33.720226+02:00","kind":"transcript_activity","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd","adapter":"claude-code","transcript_path":"/Users/ingo/.claude/projects/-Users-ingo-projects-irrlicht--claude-worktrees-228/ef21e42a-0206-4578-8b08-8a767d47f5fd.jsonl","file_size":17911}
+{"seq":277,"ts":"2026-04-26T11:56:33.721381+02:00","kind":"state_transition","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd","prev_state":"ready","new_state":"working","reason":"force ready→working on first activity"}
+{"seq":278,"ts":"2026-04-26T11:56:33.721436+02:00","kind":"state_transition","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd","prev_state":"working","new_state":"waiting","reason":"turn ended with question → waiting"}
+{"seq":279,"ts":"2026-04-26T11:56:33.725525+02:00","kind":"transcript_activity","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd","adapter":"claude-code","transcript_path":"/Users/ingo/.claude/projects/-Users-ingo-projects-irrlicht--claude-worktrees-228/ef21e42a-0206-4578-8b08-8a767d47f5fd.jsonl","file_size":18092}
+{"seq":280,"ts":"2026-04-26T11:56:33.725558+02:00","kind":"debounce_coalesced","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd"}
+{"seq":281,"ts":"2026-04-26T11:56:34.124721+02:00","kind":"process_exited","session_id":"ef21e42a-0206-4578-8b08-8a767d47f5fd","pid":1072}
