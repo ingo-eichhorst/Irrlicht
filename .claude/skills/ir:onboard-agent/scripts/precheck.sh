@@ -30,7 +30,7 @@ fail() {
 
 # 1. Adapter is supported by a driver.
 case "$ADAPTER" in
-  claudecode|codex|pi|aider) ;;
+  claudecode|codex|pi|aider|opencode) ;;
   *)
     fail "unknown adapter: $ADAPTER"
     ;;
@@ -77,10 +77,11 @@ MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.min_versions[$a] // empty' "$SCENARIOS
 # claude --version → "X.Y.Z (...)"; codex --version → "codex-cli X.Y.Z";
 # pi --version → "X.Y.Z"; aider --version → "aider X.Y.Z".
 case "$ADAPTER" in
-  claudecode) CLI_BIN="claude"; VER_FIELD=1 ;;
-  codex)      CLI_BIN="codex";  VER_FIELD=2 ;;
-  pi)         CLI_BIN="pi";     VER_FIELD=1 ;;
-  aider)      CLI_BIN="aider";  VER_FIELD=2 ;;
+  claudecode) CLI_BIN="claude";   VER_FIELD=1 ;;
+  codex)      CLI_BIN="codex";    VER_FIELD=2 ;;
+  pi)         CLI_BIN="pi";       VER_FIELD=1 ;;
+  aider)      CLI_BIN="aider";    VER_FIELD=2 ;;
+  opencode)   CLI_BIN="opencode"; VER_FIELD=1 ;;
 esac
 
 command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"

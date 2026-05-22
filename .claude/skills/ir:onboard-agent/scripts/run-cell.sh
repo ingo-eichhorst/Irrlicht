@@ -350,22 +350,35 @@ if [[ -n "$REQUIRES_SUBAGENTS" ]]; then
   PARENT_LINKED_COUNT="$(jq -c --arg sid "$ACTUAL_UUID" \
     'select(.kind=="parent_linked" and .parent_session_id==$sid)' \
     "$RECORDING" | wc -l | tr -d ' ')"
-  SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$ACTUAL_UUID/subagents"
-  count_subagent_files() {
-    find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' '
-  }
-  SUBAGENT_FILES="$(count_subagent_files)"
-  # If the daemon saw parent_linked events but the child transcripts
-  # haven't been flushed to disk yet (race against the parent transcript's
-  # appearance), poll briefly. We only poll when we already know children
-  # exist — otherwise there's nothing to wait for.
-  if [[ "$PARENT_LINKED_COUNT" -gt 0 && "$SUBAGENT_FILES" -eq 0 ]]; then
-    for _ in $(seq 1 20); do
-      sleep 0.5
+  # File-based subagent transcript probe — applies only to adapters that
+  # write child sessions as separate .jsonl files (claudecode's
+  # <parent>/subagents/agent-<uuid>.jsonl convention). For adapters whose
+  # children live in a shared store (opencode = SQLite rows on the same
+  # DB), the parent_linked count alone is the spawn proof.
+  case "$ADAPTER" in
+    opencode)
+      SUBAGENT_FILES="$PARENT_LINKED_COUNT"
+      ;;
+    *)
+      SUBAGENT_DIR="$(dirname "$TRANSCRIPT")/$ACTUAL_UUID/subagents"
+      count_subagent_files() {
+        find "$SUBAGENT_DIR" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | wc -l | tr -d ' '
+      }
       SUBAGENT_FILES="$(count_subagent_files)"
-      [[ "$SUBAGENT_FILES" -gt 0 ]] && break
-    done
-  fi
+      # If the daemon saw parent_linked events but the child transcripts
+      # haven't been flushed to disk yet (race against the parent
+      # transcript's appearance), poll briefly. We only poll when we
+      # already know children exist — otherwise there's nothing to wait
+      # for.
+      if [[ "$PARENT_LINKED_COUNT" -gt 0 && "$SUBAGENT_FILES" -eq 0 ]]; then
+        for _ in $(seq 1 20); do
+          sleep 0.5
+          SUBAGENT_FILES="$(count_subagent_files)"
+          [[ "$SUBAGENT_FILES" -gt 0 ]] && break
+        done
+      fi
+      ;;
+  esac
   if [[ "$PARENT_LINKED_COUNT" -eq 0 || "$SUBAGENT_FILES" -eq 0 ]]; then
     write_error_manifest "no_subagents_spawned" \
       "$(jq -nc \

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,6 +92,11 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	hasData := false
 	var firstTS, lastTS time.Time
 
+	// Task accumulator mirrors the tailer's TaskDelta fold (tailer.go:708-728)
+	// because OpenCode's metrics path bypasses the tailer. See issue #277.
+	var tasks []session.Task
+	taskByID := make(map[string]int)
+
 	for rows.Next() {
 		var partData, msgData string
 		var timeUpdated int64
@@ -107,11 +113,20 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 			lastTS = ts
 		}
 
-		// Parse message data for role.
+		// Parse message data for role and model. OpenCode nests the model
+		// fields under message.data.model = {providerID, modelID}; older
+		// (or hypothetical future) builds may surface modelID at the top
+		// level, so fall back to that path if the nested one is empty.
 		var msgMap map[string]interface{}
 		_ = json.Unmarshal([]byte(msgData), &msgMap)
 		role, _ := msgMap["role"].(string)
-		modelID, _ := msgMap["modelID"].(string)
+		var modelID string
+		if model, ok := msgMap["model"].(map[string]interface{}); ok {
+			modelID, _ = model["modelID"].(string)
+		}
+		if modelID == "" {
+			modelID, _ = msgMap["modelID"].(string)
+		}
 		if modelID != "" {
 			metrics.ModelName = tailer.NormalizeModelName(modelID)
 		}
@@ -144,6 +159,53 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		}
 		if ev.ClearToolNames {
 			openTools = make(map[string]string)
+		}
+
+		for _, d := range ev.TaskDeltas {
+			switch d.Op {
+			case tailer.TaskOpCreate:
+				id := strconv.Itoa(len(tasks) + 1)
+				tasks = append(tasks, session.Task{
+					ID:          id,
+					Subject:     d.Subject,
+					Description: d.Description,
+					ActiveForm:  d.ActiveForm,
+					Status:      tailer.TaskStatusPending,
+				})
+				taskByID[id] = len(tasks) - 1
+			case tailer.TaskOpUpdate:
+				if idx, ok := taskByID[d.ID]; ok && d.Status != "" {
+					tasks[idx].Status = d.Status
+				}
+			}
+		}
+
+		// Snapshot reconcile — mirrors tailer.go:reconcileTaskSnapshot.
+		// `todowrite` is a full-list replace by OpenCode semantics, so a
+		// snapshot is authoritative for both pruning (todos removed from
+		// the call vanish from metrics.Tasks) and status reversions the
+		// delta path skips by design.
+		if ev.TaskSnapshot != nil && len(tasks) > 0 {
+			snapByID := make(map[string]tailer.TaskSnapshotEntry, len(*ev.TaskSnapshot))
+			for _, entry := range *ev.TaskSnapshot {
+				snapByID[entry.ID] = entry
+			}
+			kept := make([]session.Task, 0, len(tasks))
+			for i := range tasks {
+				entry, present := snapByID[tasks[i].ID]
+				if !present {
+					continue
+				}
+				if entry.Status != "" && entry.Status != tasks[i].Status {
+					tasks[i].Status = entry.Status
+				}
+				kept = append(kept, tasks[i])
+			}
+			tasks = kept
+			taskByID = make(map[string]int, len(tasks))
+			for i := range tasks {
+				taskByID[tasks[i].ID] = i
+			}
 		}
 
 		// Accumulate cost/tokens from PerTurnContribution.
@@ -187,6 +249,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	metrics.CumOutputTokens = cumOutput
 	metrics.CumCacheReadTokens = cumCacheRead
 	metrics.ElapsedSeconds = int64(lastTS.Sub(firstTS).Seconds())
+	metrics.Tasks = tasks
 
 	cm := capacity.DefaultCapacityManager()
 	metrics.ContextWindow, metrics.ContextUtilization, metrics.PressureLevel, metrics.ContextWindowUnknown =
