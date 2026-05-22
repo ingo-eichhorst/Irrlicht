@@ -2463,7 +2463,7 @@
     },
     {
       "name": "user-blocking-plan-mode-approval",
-      "description": "Claude is toggled into plan mode via Shift+Tab, then prompted to make a plan; the agent emits an ExitPlanMode tool_use and pauses for approval. Validates the same waiting path as user-blocking-question but via the ExitPlanMode branch (tailer_config.go user-blocking tool list, hooks.go toolExitPlanMode case). Recipe captures only entry into waiting; the approve/reject continuation is structurally identical to other waiting-resume paths. CAVEAT: Shift+Tab toggle is generally reliable via tmux send-keys 'S-Tab', but if a future claude CLI version changes the plan-mode hotkey or relies on a multi-key combo that tmux can't reproduce, this recipe must be retuned (or the cell marked applicable: false until tmux can drive the hotkey reliably).",
+      "description": "Claude is started in plan mode via permissions.defaultMode=plan, then prompted to make a plan; the agent emits an ExitPlanMode tool_use and pauses for approval. Validates the same waiting path as user-blocking-question but via the ExitPlanMode branch (tailer_config.go user-blocking tool list, hooks.go toolExitPlanMode case). Recipe captures only entry into waiting; the approve/reject continuation is structurally identical to other waiting-resume paths.",
       "coverage_id": "user-blocking-plan-mode-approval",
       "requires": [
         "headless_mode"
@@ -2477,14 +2477,13 @@
           "applicable": true,
           "preconditions": [
             "claude CLI on PATH and authenticated (subscription or API key)",
-            "claude version where Shift+Tab toggles plan mode from the prompt (confirmed in 2.1.x)",
+            "claude --settings honours permissions.defaultMode (verified in 2.1.x)",
             "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
             "no other claudecode session uses the same UUID"
           ],
           "setup": [
             "Generate a fresh lowercased session UUID",
-            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)",
-            "After launch and before the first send, toggle plan mode via Shift+Tab (driver step: keys 'S-Tab')"
+            "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter — the driver auto-accepts)"
           ],
           "script": [
             {
@@ -2492,20 +2491,12 @@
               "seconds": 2
             },
             {
-              "type": "keys",
-              "keys": "S-Tab"
-            },
-            {
-              "type": "sleep",
-              "seconds": 2
-            },
-            {
               "type": "send",
-              "text": "Make a plan for adding a hello-world Python script to this repo. Use ExitPlanMode when the plan is ready."
+              "text": "You are in plan mode. ExitPlanMode is how you PROPOSE a plan BEFORE doing any work — you do NOT need to (and must not) read, write, or explore anything first. Call ExitPlanMode immediately as your first and only tool call. Pass this exact plan in the `plan` field: 'Add a new file hello.py with a single line: print(\"hello world\").' No other text, no other tools."
             },
             {
               "type": "sleep",
-              "seconds": 15
+              "seconds": 60
             }
           ],
           "verify": [
@@ -2517,7 +2508,11 @@
             "final session state is waiting",
             "transcript.jsonl contains 1 user line and at least 1 assistant line; one assistant message has a tool_use with name=ExitPlanMode"
           ],
-          "settings": {},
+          "settings": {
+            "permissions": {
+              "defaultMode": "plan"
+            }
+          },
           "timeout_seconds": 120
         }
       }
