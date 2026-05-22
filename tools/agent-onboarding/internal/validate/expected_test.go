@@ -76,6 +76,26 @@ func TestValidateExpected_missingFileReturnsNil(t *testing.T) {
 	}
 }
 
+// TestValidateExpected_missingEventsReturnsNil — applicable:false
+// scenarios have a committed expected.jsonl spec but no events.jsonl
+// (driver can't produce a recording today). ValidateExpected must
+// return (nil, nil) so the test wrapper and CLI both treat the cell
+// as "nothing to validate" rather than erroring. Mirrors the missing-
+// expected.jsonl branch.
+func TestValidateExpected_missingEventsReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"p1","expected_state":"ready","relative_to":"start","text":"_"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if report != nil {
+		t.Fatalf("expected nil report when events.jsonl missing, got %+v", report)
+	}
+}
+
 // TestValidateExpected_corruptFileFails — a phase whose anchor doesn't
 // exist (typo in relative_to) should produce a failing report, not a
 // silent pass. This is the canary the user asked for: "manually
