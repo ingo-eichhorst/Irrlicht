@@ -2,7 +2,7 @@
   "schema_version": 1,
   "scenario_id": "model-switch-midsession",
   "agent": "claudecode",
-  "assessed_at": "2026-05-18T00:00:00Z",
+  "assessed_at": "2026-05-22T00:00:00Z",
   "agent_supports": "yes",
   "irrlicht_observes": "yes",
   "confidence": 0.85,
@@ -10,7 +10,8 @@
   "caveats": [
     "The recipe's between-turn step must be a TUI slash command, not a CLI flag: `claudecode` does not accept a mid-session model change via stdin in headless mode the same way. The driver may need to use tmux send-keys for /model.",
     "Model name normalization (lowercasing, prefix stripping) can mask whether the user typed `claude-sonnet-4-5` vs `Claude Sonnet 4.5`. The recipe should compare against the normalized form, not the typed form.",
-    "scenarios.json's existing model-switch entry only declares the aider branch; the claudecode branch needs to be added for this cell to be recordable."
+    "scenarios.json's existing model-switch entry only declares the aider branch; the claudecode branch needs to be added for this cell to be recordable.",
+    "Capture status (as of 2026-05-22, issue #405): the committed recording does NOT satisfy the spec — phase t2_start fails because the tmux /model picker doesn't deterministically select model B, and t2_end then cascades with an unknown-anchor error. expected.jsonl is marked known_failing pending a driver primitive that selects the /model picker target deterministically. The yes/yes verdict is unchanged: the daemon-side observability path is sound; only the capture/recording path is blocked."
   ],
   "sources": [
     {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go L260-279", "note": "applyRequestIDContribution sets PerTurnContribution.Model from extractClaudeCodeModel — per-turn model attribution is built in."},
