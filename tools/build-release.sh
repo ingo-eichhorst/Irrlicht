@@ -152,6 +152,30 @@ PLIST
 
 echo "  Created $APP_BUNDLE"
 
+# ── 3b. Sign app bundle ────────────────────────────────────────────────
+echo ""
+ENTITLEMENTS="platforms/macos/Irrlicht/Resources/Irrlicht.entitlements"
+if [ -n "${DEVELOPER_ID:-}" ]; then
+    echo "Signing app bundle with Developer ID..."
+    SIGN_IDENTITY="Developer ID Application: ${DEVELOPER_ID}"
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+        "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+        "$APP_CONTENTS/MacOS/irrlicht-focus"
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
+    codesign --verify --deep --strict "$APP_BUNDLE"
+    codesign -d --entitlements - "$APP_BUNDLE" 2>&1 | grep -q "focus-status" \
+        || { echo "ERROR: focus-status entitlement not present in signed bundle"; exit 1; }
+    echo "  Signed $APP_BUNDLE (Developer ID)"
+else
+    echo "Signing app bundle (ad-hoc — set DEVELOPER_ID to use Developer ID cert)..."
+    codesign --force --deep --sign - "$APP_CONTENTS/MacOS/${DAEMON_NAME}"
+    codesign --force --deep --sign - "$APP_BUNDLE"
+    codesign --verify --deep --strict "$APP_BUNDLE"
+    echo "  Ad-hoc signed $APP_BUNDLE"
+fi
+
 # ── 4. Create DMG (primary distribution) ──────────────────────────────
 echo ""
 echo "Creating DMG..."
@@ -170,6 +194,23 @@ hdiutil create -volname "Irrlicht $VERSION" \
 
 rm -rf "$DMG_STAGING"
 echo "  Created $BUILD_DIR/$DMG_NAME"
+
+# ── 4b. Notarize and staple DMG ────────────────────────────────────────
+if [ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]; then
+    echo ""
+    echo "Notarizing DMG..."
+    xcrun notarytool submit "$BUILD_DIR/$DMG_NAME" \
+        --keychain-profile "${NOTARYTOOL_KEYCHAIN_PROFILE}" \
+        --wait
+    echo "  Stapling notarization ticket..."
+    xcrun stapler staple "$BUILD_DIR/$DMG_NAME"
+    xcrun stapler validate "$BUILD_DIR/$DMG_NAME"
+    echo "  Notarized and stapled $DMG_NAME"
+elif [ -n "${DEVELOPER_ID:-}" ]; then
+    echo ""
+    echo "NOTE: DEVELOPER_ID is set but NOTARYTOOL_KEYCHAIN_PROFILE is not — skipping notarization."
+    echo "      Create a profile with: xcrun notarytool store-credentials <profile>"
+fi
 
 # ── 5. Create LaunchAgent plist (optional, for power users) ──────────
 echo ""

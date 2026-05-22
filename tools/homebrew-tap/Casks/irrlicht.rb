@@ -17,15 +17,6 @@ cask "irrlicht" do
 
   app "Irrlicht.app"
 
-  # The DMG is ad-hoc signed but not Apple-notarized. Strip the quarantine
-  # attribute so Gatekeeper won't block first launch. Remove this once the
-  # release flow notarizes (issue #187 follow-up).
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Irrlicht.app"],
-                   sudo: false
-  end
-
   # The cask install path doesn't register a LaunchAgent — the menu-bar app
   # spawns the embedded daemon itself. Power users who installed the
   # optional plist by hand can rm it themselves.
