@@ -392,6 +392,7 @@ func annotateMeasurements(b []byte, repoRoot string) []byte {
 	if !ok {
 		return b
 	}
+	recipes := loadRecipeMap(repoRoot)
 	for _, raw := range rawScenarios {
 		sc, ok := raw.(map[string]any)
 		if !ok {
@@ -405,12 +406,16 @@ func annotateMeasurements(b []byte, repoRoot string) []byte {
 		if !ok {
 			continue
 		}
+		folder := resolveScenarioFolderFromMap(recipes, sid)
+		if folder == "" {
+			folder = sid
+		}
 		for agentSlug, cellRaw := range coverage {
 			cell, ok := cellRaw.(map[string]any)
 			if !ok {
 				continue
 			}
-			cell["measurement"] = measureScenario(repoRoot, agentSlug, sid)
+			cell["measurement"] = measureScenario(repoRoot, agentSlug, folder)
 		}
 	}
 	out, err := json.Marshal(top)
@@ -428,11 +433,7 @@ func annotateMeasurements(b []byte, repoRoot string) []byte {
 // while replaydata folders use the recipe `name` (e.g. "interrupted-turn").
 // scenarios.json carries the mapping; we resolve it here so the matrix's
 // scenario id is the only thing the caller needs to know.
-func measureScenario(repoRoot, agent, scenarioID string) map[string]any {
-	folder := resolveScenarioFolder(repoRoot, scenarioID)
-	if folder == "" {
-		folder = scenarioID // try the coverage id directly as a last resort
-	}
+func measureScenario(repoRoot, agent, folder string) map[string]any {
 	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
 	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err != nil {
 		return map[string]any{"status": "no_recording"}
