@@ -635,6 +635,71 @@ func TestParser_Todowrite_PendingOnCreateSkipsUpdate(t *testing.T) {
 	}
 }
 
+func TestParser_Todowrite_SnapshotPrunesDeletedTodos(t *testing.T) {
+	// OpenCode's `todowrite` is a full-list replace — if a todo is
+	// missing from a subsequent snapshot, it has been removed. Parser
+	// must emit TaskSnapshot so the tailer / metrics accumulator can
+	// prune the stale entry.
+	p := &Parser{}
+	p.ParseLine(todowritePart("call_1", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "pending"},
+		{"content": "Task B", "status": "pending"},
+		{"content": "Task C", "status": "pending"},
+	}))
+	ev := p.ParseLine(todowritePart("call_2", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "pending"},
+		{"content": "Task B", "status": "pending"},
+		// Task C dropped.
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if ev.TaskSnapshot == nil {
+		t.Fatal("expected TaskSnapshot to be set")
+	}
+	if got, want := len(*ev.TaskSnapshot), 2; got != want {
+		t.Fatalf("snapshot len = %d, want %d", got, want)
+	}
+	ids := map[string]bool{}
+	for _, e := range *ev.TaskSnapshot {
+		ids[e.ID] = true
+	}
+	if !ids["1"] || !ids["2"] {
+		t.Errorf("snapshot IDs = %v, want {1, 2}", ids)
+	}
+	if ids["3"] {
+		t.Errorf("snapshot still contains pruned id=3: %v", ids)
+	}
+}
+
+func TestParser_Todowrite_SnapshotCarriesStatusReversion(t *testing.T) {
+	// A todo that flips from in_progress back to pending in a later
+	// snapshot must surface in TaskSnapshot with the new (pending)
+	// status — the Update path suppresses pending writes, so without
+	// the snapshot the tailer would freeze the stale in_progress.
+	p := &Parser{}
+	p.ParseLine(todowritePart("call_1", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "in_progress"},
+	}))
+	ev := p.ParseLine(todowritePart("call_2", "completed", []map[string]interface{}{
+		{"content": "Task A", "status": "pending"},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	// No Update delta because status is pending.
+	if len(ev.TaskDeltas) != 0 {
+		t.Errorf("TaskDeltas len = %d, want 0 (reversion via snapshot only)", len(ev.TaskDeltas))
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 1 {
+		t.Fatalf("TaskSnapshot = %v, want one entry", ev.TaskSnapshot)
+	}
+	got := (*ev.TaskSnapshot)[0]
+	if got.ID != "1" || got.Status != "pending" {
+		t.Errorf("snapshot entry = %+v, want {ID:1 Status:pending}", got)
+	}
+}
+
 func TestParser_Todowrite_LifecycleStillFires(t *testing.T) {
 	// Regression: todowrite must still participate in the tool-call lifecycle
 	// (open on pending/running, close on completed/error). Without this the

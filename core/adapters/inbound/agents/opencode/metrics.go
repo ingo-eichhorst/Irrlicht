@@ -113,11 +113,20 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 			lastTS = ts
 		}
 
-		// Parse message data for role.
+		// Parse message data for role and model. OpenCode nests the model
+		// fields under message.data.model = {providerID, modelID}; older
+		// (or hypothetical future) builds may surface modelID at the top
+		// level, so fall back to that path if the nested one is empty.
 		var msgMap map[string]interface{}
 		_ = json.Unmarshal([]byte(msgData), &msgMap)
 		role, _ := msgMap["role"].(string)
-		modelID, _ := msgMap["modelID"].(string)
+		var modelID string
+		if model, ok := msgMap["model"].(map[string]interface{}); ok {
+			modelID, _ = model["modelID"].(string)
+		}
+		if modelID == "" {
+			modelID, _ = msgMap["modelID"].(string)
+		}
 		if modelID != "" {
 			metrics.ModelName = tailer.NormalizeModelName(modelID)
 		}
@@ -168,6 +177,34 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 				if idx, ok := taskByID[d.ID]; ok && d.Status != "" {
 					tasks[idx].Status = d.Status
 				}
+			}
+		}
+
+		// Snapshot reconcile — mirrors tailer.go:reconcileTaskSnapshot.
+		// `todowrite` is a full-list replace by OpenCode semantics, so a
+		// snapshot is authoritative for both pruning (todos removed from
+		// the call vanish from metrics.Tasks) and status reversions the
+		// delta path skips by design.
+		if ev.TaskSnapshot != nil && len(tasks) > 0 {
+			snapByID := make(map[string]tailer.TaskSnapshotEntry, len(*ev.TaskSnapshot))
+			for _, entry := range *ev.TaskSnapshot {
+				snapByID[entry.ID] = entry
+			}
+			kept := make([]session.Task, 0, len(tasks))
+			for i := range tasks {
+				entry, present := snapByID[tasks[i].ID]
+				if !present {
+					continue
+				}
+				if entry.Status != "" && entry.Status != tasks[i].Status {
+					tasks[i].Status = entry.Status
+				}
+				kept = append(kept, tasks[i])
+			}
+			tasks = kept
+			taskByID = make(map[string]int, len(tasks))
+			for i := range tasks {
+				taskByID[tasks[i].ID] = i
 			}
 		}
 

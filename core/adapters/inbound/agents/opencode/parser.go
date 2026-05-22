@@ -242,12 +242,18 @@ func (p *Parser) parseToolPart(raw map[string]interface{}, ev *tailer.ParsedEven
 }
 
 // appendTodowriteDeltas reads the todowrite snapshot from state.input.todos
-// and appends the minimal TaskCreate/TaskUpdate sequence that brings the
-// tailer's accumulated task list in line with the snapshot. Todos are keyed
-// by their `content` field (OpenCode does not assign stable IDs); the parser
-// tracks content→ID across calls so subsequent snapshots emit Updates rather
-// than duplicate Creates. Status updates are suppressed for pending entries
-// since `pending` is the default state the tailer assigns on Create.
+// and (a) appends the minimal TaskCreate/TaskUpdate sequence that brings
+// the accumulator in line with the snapshot, and (b) emits a TaskSnapshot
+// listing every todo currently tracked by OpenCode for this call. The
+// snapshot is what the tailer's reconcileTaskSnapshot consumes to prune
+// entries that vanished from a later todowrite call and to honour status
+// reversions (e.g. in_progress → pending) the Update path skips by design.
+//
+// Todos are keyed by their `content` field — OpenCode does not assign
+// stable IDs, so two todos sharing the exact same content collapse into a
+// single tracked task. Acceptable trade-off: OpenCode's own UI treats
+// content as the user-visible label and never displays two todos with
+// identical text differently. The duplicate is silent, not noisy.
 func (p *Parser) appendTodowriteDeltas(state map[string]interface{}, ev *tailer.ParsedEvent) {
 	input, _ := state["input"].(map[string]interface{})
 	if input == nil {
@@ -257,6 +263,7 @@ func (p *Parser) appendTodowriteDeltas(state map[string]interface{}, ev *tailer.
 	if len(todos) == 0 {
 		return
 	}
+	snapshot := make([]tailer.TaskSnapshotEntry, 0, len(todos))
 	for _, raw := range todos {
 		todo, _ := raw.(map[string]interface{})
 		if todo == nil {
@@ -267,26 +274,24 @@ func (p *Parser) appendTodowriteDeltas(state map[string]interface{}, ev *tailer.
 		if content == "" {
 			continue
 		}
-		if id, seen := p.todoIDByContent[content]; seen {
-			if status != "" && status != tailer.TaskStatusPending {
-				ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-					Op:     tailer.TaskOpUpdate,
-					ID:     id,
-					Status: status,
-				})
+		id, seen := p.todoIDByContent[content]
+		if !seen {
+			p.nextTaskID++
+			id = strconv.Itoa(p.nextTaskID)
+			if p.todoIDByContent == nil {
+				p.todoIDByContent = make(map[string]string)
 			}
-			continue
+			p.todoIDByContent[content] = id
+			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+				Op:      tailer.TaskOpCreate,
+				Subject: content,
+			})
 		}
-		p.nextTaskID++
-		id := strconv.Itoa(p.nextTaskID)
-		if p.todoIDByContent == nil {
-			p.todoIDByContent = make(map[string]string)
-		}
-		p.todoIDByContent[content] = id
-		ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-			Op:      tailer.TaskOpCreate,
-			Subject: content,
-		})
+		// Emit an Update for any non-pending status — the tailer's Create
+		// path always starts a task at pending, so an Update is required
+		// to move it forward. Pending updates are handled by the snapshot
+		// reconcile below (it can drive a task BACK to pending, which the
+		// delta-only path silently skips).
 		if status != "" && status != tailer.TaskStatusPending {
 			ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
 				Op:     tailer.TaskOpUpdate,
@@ -294,6 +299,14 @@ func (p *Parser) appendTodowriteDeltas(state map[string]interface{}, ev *tailer.
 				Status: status,
 			})
 		}
+		snapshot = append(snapshot, tailer.TaskSnapshotEntry{
+			ID:      id,
+			Subject: content,
+			Status:  status,
+		})
+	}
+	if len(snapshot) > 0 {
+		ev.TaskSnapshot = &snapshot
 	}
 }
 

@@ -218,4 +218,105 @@ func TestComputeMetrics_TodowriteTasks(t *testing.T) {
 				i, got.ID, got.Subject, got.Status, exp.id, exp.subject, exp.status)
 		}
 	}
+	// The message row's `model.modelID` field must surface as
+	// metrics.ModelName — guards the schema fix where the prior code read
+	// the top-level msgMap["modelID"] that opencode never populates.
+	if metrics.ModelName != "test-model" {
+		t.Errorf("metrics.ModelName = %q, want %q", metrics.ModelName, "test-model")
+	}
+}
+
+// TestComputeMetrics_TodowriteSnapshotPrune drives a session where the
+// second todowrite call drops Task C and reverts Task A from in_progress
+// back to pending. The snapshot reconcile must (a) remove the dropped
+// task from metrics.Tasks and (b) walk the reverted task back to pending.
+func TestComputeMetrics_TodowriteSnapshotPrune(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	schema := []string{
+		`CREATE TABLE session (id text PRIMARY KEY, project_id text NOT NULL, parent_id text, slug text NOT NULL, directory text NOT NULL, title text NOT NULL, version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL);`,
+		`CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);`,
+		`CREATE TABLE part (id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);`,
+	}
+	for _, stmt := range schema {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("schema: %v", err)
+		}
+	}
+
+	const sid = "ses_test_prune"
+	if _, err := db.Exec(
+		`INSERT INTO session(id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, '', '', ?, '', '', 0, 0)`,
+		sid, "/tmp/d",
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+		"msg_1", sid, 1000, 1000,
+		`{"role":"assistant","model":{"modelID":"test-model"}}`,
+	); err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+
+	todoPart := func(callID string, todos []map[string]any) string {
+		raw := map[string]any{
+			"type":   "tool",
+			"tool":   "todowrite",
+			"callID": callID,
+			"state": map[string]any{
+				"status": "completed",
+				"input":  map[string]any{"todos": todos},
+			},
+		}
+		b, _ := json.Marshal(raw)
+		return string(b)
+	}
+
+	parts := []struct {
+		id      string
+		created int64
+		data    string
+	}{
+		{"part_1", 1100, todoPart("c1", []map[string]any{
+			{"content": "Task A", "status": "in_progress"},
+			{"content": "Task B", "status": "pending"},
+			{"content": "Task C", "status": "pending"},
+		})},
+		{"part_2", 1200, todoPart("c2", []map[string]any{
+			{"content": "Task A", "status": "pending"}, // reverted
+			{"content": "Task B", "status": "pending"}, // unchanged
+			// Task C dropped from the snapshot.
+		})},
+	}
+	for _, p := range parts {
+		if _, err := db.Exec(
+			`INSERT INTO part(id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+			p.id, "msg_1", sid, p.created, p.created, p.data,
+		); err != nil {
+			t.Fatalf("insert part %s: %v", p.id, err)
+		}
+	}
+
+	metrics, err := ComputeMetrics(dbPath, sid)
+	if err != nil {
+		t.Fatalf("ComputeMetrics: %v", err)
+	}
+	if metrics == nil {
+		t.Fatal("ComputeMetrics returned nil")
+	}
+	if len(metrics.Tasks) != 2 {
+		t.Fatalf("metrics.Tasks len = %d, want 2 (C pruned)", len(metrics.Tasks))
+	}
+	if got := metrics.Tasks[0]; got.ID != "1" || got.Subject != "Task A" || got.Status != "pending" {
+		t.Errorf("Tasks[0] = %+v, want {ID:1 Subject:Task A Status:pending}", got)
+	}
+	if got := metrics.Tasks[1]; got.ID != "2" || got.Subject != "Task B" || got.Status != "pending" {
+		t.Errorf("Tasks[1] = %+v, want {ID:2 Subject:Task B Status:pending}", got)
+	}
 }

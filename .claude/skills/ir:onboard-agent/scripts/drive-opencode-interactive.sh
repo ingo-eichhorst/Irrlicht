@@ -101,12 +101,13 @@ run_send() {
   esac
 
   # Capture the session id after the first send. The session row is
-  # created by `opencode run` and keyed on directory = $RUN_CWD; pick
-  # the most recently updated one to be robust against any racing
-  # auxiliary inserts.
+  # created by `opencode run` and keyed on directory = $RUN_CWD; order
+  # by time_created DESC so retries reusing a stale staging dir pick
+  # the NEW session, not a leftover row whose time_updated may briefly
+  # outrank the fresh row before its first part lands.
   if [[ -z "$SESSION_ID" ]]; then
     SESSION_ID=$(sqlite3 "$OPENCODE_DB" \
-      "SELECT id FROM session WHERE directory = '$RUN_CWD' ORDER BY time_updated DESC LIMIT 1;")
+      "SELECT id FROM session WHERE directory = '$RUN_CWD' ORDER BY time_created DESC LIMIT 1;")
     if [[ -z "$SESSION_ID" ]]; then
       echo "[driver] WARN: no session row found for cwd=$RUN_CWD" >&2
     else
@@ -131,7 +132,15 @@ for (( i = 0; i < STEP_COUNT; i++ )); do
       :
       ;;
     sleep)
-      SECONDS_=$(jq -r '.seconds' <<<"$STEP")
+      SECONDS_=$(jq -r '.seconds // empty' <<<"$STEP")
+      # Reject missing/non-numeric values so an authoring typo
+      # (`{"type":"sleep"}` without seconds) doesn't silently abort the
+      # whole script under `set -e` with no exit-reason file written.
+      if ! [[ "$SECONDS_" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "[driver] ERROR: sleep step missing or non-numeric 'seconds': $STEP" >&2
+        EXIT_REASON="nonzero(2)"
+        break
+      fi
       echo "[driver] sleep ${SECONDS_}s" >&2
       sleep "$SECONDS_"
       ;;
