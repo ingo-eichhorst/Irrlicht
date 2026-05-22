@@ -432,7 +432,7 @@ func isTerminalPart(data string) bool {
 		return false
 	}
 	switch reason, _ := raw["reason"].(string); reason {
-	case "stop", "interrupted", "length", "error":
+	case "stop", "interrupted", "length", "error", "content-filter":
 		return true
 	}
 	return false
@@ -492,7 +492,7 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 			newSeenIDs[partID] = struct{}{}
 		}
 		hasActivity = true
-		if isTerminalPart(partData) {
+		if !hasTerminal && isTerminalPart(partData) {
 			hasTerminal = true
 		}
 		_ = msgData

@@ -223,6 +223,7 @@ func (d *SessionDetector) onActivity(id agent.Identity, ev agent.Event) {
 		entry.timer.Stop()
 		delete(d.debounce, sid)
 		d.debounceMu.Unlock()
+		d.record(lifecycle.Event{Kind: lifecycle.KindDebounceTerminal, SessionID: ev.SessionID})
 		d.processActivity(id, ev)
 		return
 	}

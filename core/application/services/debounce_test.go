@@ -243,3 +243,52 @@ func TestDebounce_TerminalEventShortCircuits(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestDebounce_FirstEventTerminalFiresImmediately(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "term2",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/term2.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     1,
+	})
+
+	savesBefore := repo.saves
+
+	// First event for the session is already terminal — should fire immediately
+	// via the leading-edge path (no prior debounce entry).
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "term2",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/term2.jsonl",
+		Terminal:       true,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	repo.mu.Lock()
+	savesAfter := repo.saves
+	repo.mu.Unlock()
+
+	if savesAfter <= savesBefore {
+		t.Errorf("first terminal event should fire immediately: saves before=%d after=%d", savesBefore, savesAfter)
+	}
+
+	cancel()
+	<-done
+}
