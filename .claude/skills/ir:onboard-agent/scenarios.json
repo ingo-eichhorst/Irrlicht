@@ -1110,6 +1110,101 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "prompt": "Reply with exactly the word: ok",
+          "verify": [
+            "events.jsonl contains a presession_created and a transcript_new for the rollout session",
+            "events.jsonl contains a state_transition to ready, then working (during the turn), then ready (turn complete)",
+            "events.jsonl contains a process_exited fired AFTER the final ready (clean exit at end of headless invocation)",
+            "no state_transition to working or waiting between the final ready and process_exited",
+            "final session state is ready (before exit)"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "scope_note": "Codex's headless `codex exec` is single-shot, so only variant 1 (clean exit) is recorded. Variants 2 (SIGKILL idle) and 3 (SIGKILL mid-turn) require driver-level primitives the codex interactive driver does not currently expose."
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (PI_API_KEY or configured provider)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "prompt": "Reply with exactly the word: ok",
+          "verify": [
+            "events.jsonl contains a presession_created and a transcript_new for the pi session",
+            "events.jsonl contains a state_transition to ready, then working (during the turn), then ready (turn complete)",
+            "events.jsonl contains a process_exited fired AFTER the final ready (clean exit at end of headless invocation)",
+            "no state_transition to working or waiting between the final ready and process_exited",
+            "final session state is ready (before exit)"
+          ],
+          "settings": {},
+          "timeout_seconds": 90,
+          "scope_note": "Pi's headless `pi --print` is single-shot, so only variant 1 (clean exit) is recorded. Variants 2 (SIGKILL idle) and 3 (SIGKILL mid-turn) require driver-level primitives the pi interactive driver does not currently expose."
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated (ANTHROPIC_API_KEY or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "prompt": "Reply with exactly the word: ok",
+          "verify": [
+            "events.jsonl contains a transcript_new for .aider.chat.history.md and a state_transition to ready",
+            "events.jsonl contains a process_exited after the recording's working window closes",
+            "events.jsonl contains a transcript_removed once the aider process has gone",
+            "final session state is ready before process_exited"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "scope_note": "Aider's headless `--print` exits within ~250 ms, so only variant 1 (clean exit) is recorded. Variants 2 and 3 (SIGKILL while idle / mid-turn) require driver-level primitives the aider interactive driver does not currently expose, and aider's TUI is not designed to outlive a single --print invocation anyway."
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated",
+            "irrlichd is recording with the opencode SQLite watcher enabled"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created for proc-<PID> and a transcript_new for the opencode ses_… session",
+            "events.jsonl contains a state_transition to ready, then working (during the turn), then ready (turn complete)",
+            "events.jsonl contains a process_exited after the final ready (clean exit at end of `opencode run`)",
+            "no state_transition to working or waiting between the final ready and process_exited",
+            "final session state is ready (before exit)"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "scope_note": "OpenCode's `opencode run` is single-shot per invocation, so only variant 1 (clean exit) is recorded. Variants 2 and 3 (SIGKILL idle / mid-turn) require driver-level primitives the opencode interactive driver does not currently expose."
         }
       }
     },
