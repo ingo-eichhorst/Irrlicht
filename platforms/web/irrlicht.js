@@ -1989,4 +1989,5 @@
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
   formatCost, pressureClass, historyPriorityForState,
+  lastNotifiedPressure,
 };

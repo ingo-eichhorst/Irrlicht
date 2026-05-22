@@ -6,6 +6,7 @@ import {
   formatCost,
   pressureClass,
   historyPriorityForState,
+  lastNotifiedPressure,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -46,6 +47,8 @@ describe('rowLabel', () => {
 })
 
 describe('maybeNotifyOnUpdate', () => {
+  beforeEach(() => lastNotifiedPressure.clear())
+
   test('does nothing when next is null', () => {
     // should not throw
     maybeNotifyOnUpdate(null, null)
