@@ -3,6 +3,5 @@ go 1.25.0
 use (
 	./core
 	./tools/agent-onboarding
-	./tools/coverage-viewer
 	./tools/seed-demo-sessions
 )
