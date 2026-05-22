@@ -548,7 +548,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
    codesign --force --sign "$DEVID" --options runtime --timestamp \
      --entitlements "$ENTITLEMENTS" "$APP_STAGING"
    codesign --verify --deep --strict "$APP_STAGING"
-   codesign -d --entitlements - "$APP_STAGING" 2>&1 | grep -q 'focus-status' \
+   codesign -d --entitlements - "$APP_STAGING" 2>&1 | grep -q 'com.apple.developer.focus-status' \
      && echo "OK: focus-status entitlement present" \
      || { echo "FAIL: focus-status entitlement missing"; exit 1; }
    ```
@@ -965,7 +965,7 @@ without `--push`; the verification will report a mismatch you can ignore.
 
    # Confirm focus-status entitlement is present (matches the build-time
    # guard in step 7, but on the actual shipping artifact this time).
-   codesign -d --entitlements - /Applications/Irrlicht.app 2>&1 | grep -q 'focus-status' \
+   codesign -d --entitlements - /Applications/Irrlicht.app 2>&1 | grep -q 'com.apple.developer.focus-status' \
      || { echo "FAIL: shipping binary missing focus-status entitlement"; exit 1; }
 
    echo "OK canary install: v$INSTALLED, focus-status entitlement present, running"
