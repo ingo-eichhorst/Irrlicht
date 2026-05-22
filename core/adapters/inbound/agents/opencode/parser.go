@@ -117,6 +117,9 @@ func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer
 				CacheCreation5m: snap.CacheCreation,
 			}
 			modelName, _ := raw["_model"].(string)
+			if modelName != "" {
+				ev.ModelName = modelName
+			}
 			cost := extractCost(raw)
 			contrib := &tailer.PerTurnContribution{
 				Model: modelName,

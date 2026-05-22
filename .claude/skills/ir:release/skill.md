@@ -492,10 +492,10 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
 
    For the Info.plist template below, the practical consequences are:
 
-   | Key | Include for ad-hoc? | Include once DevID lands (#233 / #357)? |
+   | Key | Include for ad-hoc? | Include for DevID (current)? |
    |---|---|---|
    | `NSAppleEventsUsageDescription` | Yes | Yes |
-   | `NSFocusStatusUsageDescription` | **No** — even though `FocusMonitor.swift` exists in source, the runtime gate keeps Intents.framework unloaded. Adding the key with no framework reference is harmless; adding it once the framework is linked is a SIGABRT. | Yes (alongside the entitlement re-claim). |
+   | `NSFocusStatusUsageDescription` | **No** — the runtime gate keeps Intents.framework unloaded on ad-hoc builds; the key + a statically linked Intents causes a TCC SIGABRT (v0.4.3). | **Yes** — DevID is in place (#233/#357). The entitlement is authorized and the key is included in the template. |
    | Anything new | Audit the source. If the relevant Swift code uses `import <Framework>` directly, the binary will link the framework, and TCC may preflight at startup. Either gate the source (FocusMonitor pattern) or skip the usage description until DevID. |
 
    ```xml
