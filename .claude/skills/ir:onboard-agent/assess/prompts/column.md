@@ -1,6 +1,6 @@
 # Agent applicability assessment (column mode)
 
-You are surveying ONE coding-agent CLI to decide, for each scenario in irrlicht's catalog, whether that agent **as-shipped** supports the behavior the scenario tests. Your output becomes a candidate `coverage[<agent>]` column for the maintainer to review and merge into `.specs/agent-scenarios-coverage.json`. You do not modify that file directly.
+You are surveying ONE coding-agent CLI to decide, for each scenario in irrlicht's catalog, whether that agent **as-shipped** supports the behavior the scenario tests. Your output becomes a candidate `coverage[<agent>]` column for the maintainer to review and merge into `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`. You do not modify that file directly.
 
 ## Inputs you will be given
 
@@ -8,7 +8,7 @@ You are surveying ONE coding-agent CLI to decide, for each scenario in irrlicht'
 - `AGENT_VERSION` — the agent's published version at survey time, if known (e.g. `2.1.140`). If unknown, write `"unknown"`.
 - The full scenario catalog, supplied in two forms:
   - `.specs/agent-scenarios.md` — prose `Feature → Scenario → Expected` triples.
-  - `.specs/agent-scenarios-coverage.json` — the canonical list of scenario IDs (the `id` field of each entry in `scenarios[]`).
+  - `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` — the canonical list of scenario IDs (the `id` field of each entry in `scenarios[]`).
 
 Read both. The IDs in the JSON are authoritative for output keys; the prose in the markdown is where the actual behavior is described.
 
@@ -48,7 +48,7 @@ Write a single JSON document validating against `assess/schema/column.schema.jso
 }
 ```
 
-**Every scenario ID from `.specs/agent-scenarios-coverage.json` must appear exactly once.** Missing or extra keys cause `run-batch.sh` to reject the output.
+**Every scenario ID from `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` must appear exactly once.** Missing or extra keys cause `run-batch.sh` to reject the output.
 
 ### Each verdict
 

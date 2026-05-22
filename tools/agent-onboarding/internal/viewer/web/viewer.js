@@ -269,7 +269,7 @@ function scrollFocusInto(focus) {
 // loadOverview swaps the main pane to the scenario coverage matrix.
 // Two catalog shapes are supported:
 //
-//   coverage  (.specs/agent-scenarios-coverage.json, source of truth):
+//   coverage  (.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json, source of truth):
 //     38 scenarios × 5 agents. Each cell has agent_supports +
 //     irrlicht_observes verdicts (yes/no/partial/unknown) plus a notes
 //     field. Cell badge colors reflect the verdict combo.
@@ -288,7 +288,7 @@ function loadOverview() {
   document.title = "Irrlicht — Scenarios";
   document.getElementById("title").textContent = "Scenario coverage";
   const sourceLabel = catalogSource === "coverage"
-    ? ".specs/agent-scenarios-coverage.json (source of truth)"
+    ? ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json (source of truth)"
     : ".claude/skills/ir:onboard-agent/scenarios.json (fallback)";
   document.getElementById("breadcrumb").textContent =
     catalog ? `from ${sourceLabel} — refresh to pick up edits` : "catalog unavailable";
@@ -519,7 +519,7 @@ function renderCoverageMatrix(detail) {
 
 // loadCoverageDetail shows the per-agent testing plan for one
 // scenario from the coverage catalog. Combines:
-//   - Coverage data (.specs/agent-scenarios-coverage.json) — verdicts
+//   - Coverage data (.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json) — verdicts
 //     and maintainer notes per agent.
 //   - Recording recipe (scenarios.json) — joined by coverage_id —
 //     showing the actual driver (interactive tmux vs headless print),
@@ -1090,7 +1090,7 @@ function renderMeasurementChip(meas, sup, obs) {
 }
 
 // renderScenariosMatrix paints the older 8×5 by_adapter view from
-// scenarios.json (fallback when .specs/agent-scenarios-coverage.json
+// scenarios.json (fallback when .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json
 // isn't reachable).
 function renderScenariosMatrix(detail) {
   const adapterSet = new Set();
@@ -1466,7 +1466,7 @@ function renderAssessmentFallback(coverageEntry) {
   subtitle.textContent = "from matrix verdict — no point-in-time assessment.json on disk yet";
   p.appendChild(subtitle);
   if (!coverageEntry) {
-    p.appendChild(text("Coverage matrix has no entry for this cell. Add one in .specs/agent-scenarios-coverage.json."));
+    p.appendChild(text("Coverage matrix has no entry for this cell. Add one in .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json."));
     return p;
   }
   const row = document.createElement("div");
