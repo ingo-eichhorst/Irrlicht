@@ -207,9 +207,10 @@ if [ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]; then
     xcrun stapler validate "$BUILD_DIR/$DMG_NAME"
     echo "  Notarized and stapled $DMG_NAME"
 elif [ -n "${DEVELOPER_ID:-}" ]; then
-    echo ""
-    echo "NOTE: DEVELOPER_ID is set but NOTARYTOOL_KEYCHAIN_PROFILE is not — skipping notarization."
-    echo "      Create a profile with: xcrun notarytool store-credentials <profile>"
+    echo "ERROR: DEVELOPER_ID is set but NOTARYTOOL_KEYCHAIN_PROFILE is not."
+    echo "       A Developer ID-signed DMG must be notarized — without it Gatekeeper blocks launch."
+    echo "       Create a profile first: xcrun notarytool store-credentials <profile>"
+    exit 1
 fi
 
 # ── 5. Create LaunchAgent plist (optional, for power users) ──────────
