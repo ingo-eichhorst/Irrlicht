@@ -1009,6 +1009,184 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording (--attach against a --record daemon)",
+            "no other codex session uses the recipe's UUID"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/",
+            "Codex's REPL launched via drive-codex-interactive.sh stays alive across the recipe's two sends, so the daemon's process scanner observes one continuous PID across the 20 s idle window"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alive"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the codex rollout session entering ready after turn 1",
+            "no transcript_removed event fires for the rollout session during the 20 s idle window",
+            "after the second send, events.jsonl shows ready → working → ready for the same rollout session",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "scope_note": "Tests that codex's rollout-keyed session survives a 20 s idle window between turns. The daemon's production readyTTL is 30 min, so this recording validates 'session stays observed during idle' rather than 'past TTL' — that stricter assertion would require IRRLICHT_READY_SESSION_TTL=15s on the daemon."
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (PI_API_KEY)",
+            "irrlichd is recording (--attach against a --record daemon)",
+            "no concurrent pi REPL is running in the user's other terminal windows (the interactive driver assumes pi can take exclusive control)"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/",
+            "Pi's REPL launched via drive-pi-interactive.sh stays alive across the recipe's two sends"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alive"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the pi UUID session entering ready after turn 1",
+            "no transcript_removed event fires for the UUID session during the 20 s idle window",
+            "after the second send, events.jsonl shows ready → working → ready for the same UUID",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "scope_note": "See codex scope_note for the production readyTTL caveat."
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated (ANTHROPIC_API_KEY or OPENAI_API_KEY)",
+            "irrlichd is recording (--attach against a --record daemon)"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/ (drive-aider-interactive.sh git-inits it)",
+            "Aider's TUI launched via drive-aider-interactive.sh stays alive across the recipe's two sends"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alive"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows aider entering ready after turn 1 (idle-flush window may delay this by up to 5 s)",
+            "no transcript_removed event fires for the .aider.chat.history.md during the 20 s idle window",
+            "after the second send, events.jsonl shows working → ready for the second turn",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "scope_note": "Aider's idle-flush window (~5 s) means the post-turn ready transition lags actual LLM completion; the recipe budgets enough sleep around each turn to settle the classifier."
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated",
+            "irrlichd is recording with the opencode SQLite watcher enabled"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/",
+            "drive-opencode-interactive.sh issues two `opencode run --session <id>` invocations sharing the same session id, so the SQLite-backed session row spans the idle window"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alive"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the opencode ses_… session entering ready after turn 1",
+            "the same ses_… id is observed across both turns (single SQLite session row, not two)",
+            "after the second send, events.jsonl shows ready → working → ready for the same ses_… id",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240,
+          "scope_note": "OpenCode's process model is one `opencode run` invocation per turn (no persistent REPL); the SQLite session row chains them via --session. The daemon observes the session via SQLite polling rather than a continuous PID."
         }
       }
     },
