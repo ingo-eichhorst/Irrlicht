@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scenario_id": "subscription-detection",
+  "agent": "claudecode",
+  "assessed_at": "2026-05-23T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code emits subscription quota data via the statusline hook (POST /api/v1/hooks/claudecode/statusline). The key billing-model signal is structural: **subscription users get a `rate_limits` block in the hook payload; API-key, Bedrock, and Vertex users do not**.\n\nThe statusline handler in `core/adapters/inbound/agents/claudecode/statusline.go` converts the hook payload to a `session.RateLimitSnapshot` via `statuslineToSnapshot()`. The function returns nil when `rate_limits` is absent (API-key path) or when both `five_hour` and `seven_day` windows are nil. This nil/non-nil distinction is the irrlicht-observable subscription signal for Claude Code — PlanType is not populated from the statusline (the hook payload carries no plan_type field).\n\nFor the subscription variant of this scenario, the recording needs a Pro/Max session. The developer's normal session qualifies. A single turn is sufficient to trigger the statusline hook and produce a non-nil snapshot.\n\nFor the API-key variant, the recording requires a session backed by an API key (not a Pro subscription), so `rate_limits` is absent from the statusline payload. This requires a dedicated test key distinct from the developer's Pro session and is deferred to a separate fixture: `subscription-detection-apikey`.\n\n## What irrlicht does NOT see (and why that's OK)\n\nClaude Code's statusline does not include a `plan_type` string (pro, max, team). The only plan-type signal available is the presence of the `rate_limits` block itself, which distinguishes subscription from API-key. Finer-grained plan type (pro vs max) is not surfaced via the statusline hook today. The scenario therefore validates presence/absence of RateLimitSnapshot, not the value of PlanType.",
+  "caveats": [
+    "Recording the subscription variant requires the developer's normal Claude Code Pro/Max session — no special key needed.",
+    "The API-key variant (RateLimitSnapshot nil) is deferred to a separate scenario ID (subscription-detection-apikey) because it requires a different Claude Code session backed by an API key.",
+    "The statusline hook fires asynchronously on a timer in the Claude Code CLI; the recording script must keep the session alive long enough for at least one statusline tick to arrive after the turn completes. Typically one turn of moderate length is sufficient."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/statusline.go:114-136", "note": "statuslineToSnapshot() returns nil when rate_limits is absent or both windows are nil — the nil/non-nil distinction is the subscription signal."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/statusline.go:19", "note": "Comment explicitly states: 'API-key users, Bedrock, and Vertex don't get the rate_limits block'."},
+    {"kind": "spec", "ref": ".specs/agent-scenarios.md → Feature: Subscription detection", "note": "Subscription variant: RateLimitSnapshot non-nil with at least one Window entry."}
+  ]
+}

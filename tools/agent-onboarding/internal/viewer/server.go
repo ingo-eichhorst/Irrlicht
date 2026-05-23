@@ -91,7 +91,7 @@ func (s *Server) staticHandler() http.Handler {
 }
 
 // handleCatalog serves the maintainer-curated scenario coverage
-// catalog at `.specs/agent-scenarios-coverage.json` — the source of
+// catalog at `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` — the source of
 // truth for the per-agent applicability matrix (38 scenarios × 5
 // agents, each with agent_supports / irrlicht_observes verdicts and
 // notes). Falls back to `.claude/skills/ir:onboard-agent/scenarios.json`
@@ -116,7 +116,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	//   2. Per-cell verdict (agent_supports, irrlicht_observes, notes,
 	//      confidence) comes from assessment.json when present (the
 	//      committed Stage-1 artifact).
-	//   3. If .specs/agent-scenarios-coverage.json is reachable, it
+	//   3. If .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json is reachable, it
 	//      provides FALLBACK verdicts for cells that lack assessment.json.
 	//      Optional — maintainers without .specs/ see "unknown" until
 	//      assessments are authored.
@@ -275,7 +275,7 @@ func buildCellVerdict(repoRoot, agentSlug, scenarioID string, overlay map[string
 	return cell
 }
 
-// loadSpecsOverlay reads .specs/agent-scenarios-coverage.json (if it
+// loadSpecsOverlay reads .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json (if it
 // exists) and returns a flat map keyed by scenarioID → agentSlug →
 // verdict fields. Returns nil if the file is unreachable or malformed
 // — callers treat nil as "no overlay" and rely on assessment.json plus
@@ -743,40 +743,6 @@ func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes recipeI
 	return out
 }
 
-// resolveScenarioFolder maps a coverage_id (the matrix's scenario id)
-// to the replaydata folder name. Most scenarios use the same string
-// for both, but a handful may diverge (when one coverage row is
-// targeted by multiple recipes) per scenarios.json's optional
-// `coverage_id` field.
-//
-// Returns the folder name when the mapping resolves, "" otherwise.
-func resolveScenarioFolder(repoRoot, coverageID string) string {
-	path := filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var doc struct {
-		Scenarios []struct {
-			Name       string `json:"name"`
-			CoverageID string `json:"coverage_id"`
-		} `json:"scenarios"`
-	}
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return ""
-	}
-	for _, sc := range doc.Scenarios {
-		cid := sc.CoverageID
-		if cid == "" {
-			cid = sc.Name
-		}
-		if cid == coverageID {
-			return sc.Name
-		}
-	}
-	return ""
-}
-
 // handleScenarioSpec parses .specs/agent-scenarios.md on demand and
 // returns the structured spec for one scenario id. Lookup matches by
 // the kebab-case slug of each "### Feature: <name>" heading — same
@@ -957,7 +923,7 @@ func parseScenarioSpec(md string, id string) *ScenarioSpec {
 // "Session reset (`/clear`, `/new`)" into the kebab id "session-reset"
 // the coverage JSON uses. Strip parenthetical examples, lowercase,
 // keep alnum + hyphens. The mapping must match
-// .specs/agent-scenarios-coverage.json — there's a custom alias map
+// .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json — there's a custom alias map
 // for the handful of features whose canonical id diverges (e.g.
 // "User-blocking tool call (question)" → "user-blocking-question").
 func slugifyFeature(f string) string {
@@ -991,7 +957,7 @@ func slugifyFeature(f string) string {
 
 // featureSlugAliases handles the cases where the markdown Feature
 // heading wording doesn't slugify cleanly into the coverage id. Keep
-// this in sync with .specs/agent-scenarios-coverage.json — every id
+// this in sync with .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json — every id
 // not derivable via slugifyFeature's default rule must have an entry.
 var featureSlugAliases = map[string]string{
 	"User-blocking tool call (question)":         "user-blocking-question",
@@ -1211,12 +1177,12 @@ type entryHeader struct {
 }
 
 // resolveCoveragePath finds the maintainer's
-// .specs/agent-scenarios-coverage.json. Looks in the repo root first,
+// .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json. Looks in the repo root first,
 // then in the main checkout when the repo root is a git worktree.
 // Returns "" if neither has the file.
 func (s *Server) resolveCoveragePath() string {
 	// Direct hit (main checkout, or a worktree the user has populated).
-	direct := filepath.Join(s.RepoRoot, ".specs", "agent-scenarios-coverage.json")
+	direct := filepath.Join(s.RepoRoot, ".claude", "skills", "ir:onboard-agent", "agent-scenarios-coverage.json")
 	if _, err := os.Stat(direct); err == nil {
 		return direct
 	}
@@ -1242,7 +1208,7 @@ func (s *Server) resolveCoveragePath() string {
 	// gitdir = <main>/.git/worktrees/<id>; main checkout = grandparent
 	// of grandparent (worktrees/<id> → worktrees → .git → <main>).
 	main := filepath.Dir(filepath.Dir(filepath.Dir(gitdir)))
-	candidate := filepath.Join(main, ".specs", "agent-scenarios-coverage.json")
+	candidate := filepath.Join(main, ".claude", "skills", "ir:onboard-agent", "agent-scenarios-coverage.json")
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
 	}
@@ -1307,7 +1273,7 @@ type ScenarioDetail struct {
 // (per cell-lifecycle.md). One file per (agent, scenario) at
 // replaydata/agents/<agent>/scenarios/<scenario>/assessment.json,
 // overwritten on re-assessment — git is the history. The matrix in
-// .specs/agent-scenarios-coverage.json is the current-state rollup;
+// .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json is the current-state rollup;
 // this struct preserves when and why the verdict was reached.
 type AssessmentReport struct {
 	SchemaVersion    int                `json:"schema_version"`
@@ -1826,9 +1792,13 @@ func readTransitionsRaw(path string) []json.RawMessage {
 			// so the reader can spot the lifecycle exit.
 			raw["kind"] = json.RawMessage(`"state_transition"`)
 			raw["new_state"] = json.RawMessage(`"∅"`)
-			raw["reason"] = json.RawMessage(`"` + kind + `"`)
+			if kindJSON, err := json.Marshal(kind); err == nil {
+				raw["reason"] = json.RawMessage(kindJSON)
+			}
 			if prev := lastState[sid]; prev != "" {
-				raw["prev_state"] = json.RawMessage(`"` + prev + `"`)
+				if prevJSON, err := json.Marshal(prev); err == nil {
+					raw["prev_state"] = json.RawMessage(prevJSON)
+				}
 			}
 			b, _ := json.Marshal(raw)
 			out = append(out, b)

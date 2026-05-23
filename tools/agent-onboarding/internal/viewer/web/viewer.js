@@ -5,6 +5,15 @@
 
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 
+// inferDriverLabel returns "Interactive (tmux REPL)" when the adapter
+// entry has a non-empty script array, "Headless one-shot" otherwise.
+// Pure function — exported for unit tests.
+export function inferDriverLabel(a) {
+  if (!a) return "Headless one-shot";
+  if (Array.isArray(a.script) && a.script.length > 0) return "Interactive (tmux REPL)";
+  return "Headless one-shot";
+}
+
 // Module-level handles populated during init() and reused by the
 // Overview button + scenario clicks to swap views in the main pane.
 let scenariosList = [];   // live recordings from /api/scenarios
@@ -269,7 +278,7 @@ function scrollFocusInto(focus) {
 // loadOverview swaps the main pane to the scenario coverage matrix.
 // Two catalog shapes are supported:
 //
-//   coverage  (.specs/agent-scenarios-coverage.json, source of truth):
+//   coverage  (.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json, source of truth):
 //     38 scenarios × 5 agents. Each cell has agent_supports +
 //     irrlicht_observes verdicts (yes/no/partial/unknown) plus a notes
 //     field. Cell badge colors reflect the verdict combo.
@@ -288,7 +297,7 @@ function loadOverview() {
   document.title = "Irrlicht — Scenarios";
   document.getElementById("title").textContent = "Scenario coverage";
   const sourceLabel = catalogSource === "coverage"
-    ? ".specs/agent-scenarios-coverage.json (source of truth)"
+    ? ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json (source of truth)"
     : ".claude/skills/ir:onboard-agent/scenarios.json (fallback)";
   document.getElementById("breadcrumb").textContent =
     catalog ? `from ${sourceLabel} — refresh to pick up edits` : "catalog unavailable";
@@ -519,7 +528,7 @@ function renderCoverageMatrix(detail) {
 
 // loadCoverageDetail shows the per-agent testing plan for one
 // scenario from the coverage catalog. Combines:
-//   - Coverage data (.specs/agent-scenarios-coverage.json) — verdicts
+//   - Coverage data (.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json) — verdicts
 //     and maintainer notes per agent.
 //   - Recording recipe (scenarios.json) — joined by coverage_id —
 //     showing the actual driver (interactive tmux vs headless print),
@@ -785,10 +794,6 @@ function renderStepScript(steps) {
   return html;
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[c]);
-}
-
 // renderRecipePanel renders the by_adapter recipe entry for this
 // cell on the recording-detail page — same shape used by the
 // scenario-coverage page, just framed as a standalone panel so the
@@ -803,7 +808,7 @@ function renderRecipePanel(recipe) {
   }
   const intro = document.createElement("div");
   intro.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
-  const driver = recipe.driver || (recipe.interactive ? "Interactive (tmux REPL)" : "Headless one-shot");
+  const driver = inferDriverLabel(recipe);
   intro.innerHTML = `<b>Driver:</b> ${escapeHtml(driver)}` +
     (recipe.timeout_seconds ? ` · <b>Timeout:</b> ${recipe.timeout_seconds}s` : "");
   p.appendChild(intro);
@@ -1090,7 +1095,7 @@ function renderMeasurementChip(meas, sup, obs) {
 }
 
 // renderScenariosMatrix paints the older 8×5 by_adapter view from
-// scenarios.json (fallback when .specs/agent-scenarios-coverage.json
+// scenarios.json (fallback when .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json
 // isn't reachable).
 function renderScenariosMatrix(detail) {
   const adapterSet = new Set();
@@ -1466,7 +1471,7 @@ function renderAssessmentFallback(coverageEntry) {
   subtitle.textContent = "from matrix verdict — no point-in-time assessment.json on disk yet";
   p.appendChild(subtitle);
   if (!coverageEntry) {
-    p.appendChild(text("Coverage matrix has no entry for this cell. Add one in .specs/agent-scenarios-coverage.json."));
+    p.appendChild(text("Coverage matrix has no entry for this cell. Add one in .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json."));
     return p;
   }
   const row = document.createElement("div");

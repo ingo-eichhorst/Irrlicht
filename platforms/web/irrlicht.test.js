@@ -50,14 +50,31 @@ describe('maybeNotifyOnUpdate', () => {
   beforeEach(() => lastNotifiedPressure.clear())
 
   test('does nothing when next is null', () => {
-    // should not throw
     maybeNotifyOnUpdate(null, null)
+    expect(lastNotifiedPressure.size).toBe(0)
   })
 
-  test('handles state transition from working to ready without throwing', () => {
-    const prev = { state: 'working', session_id: 'abc', project_name: 'p' }
-    const next = { state: 'ready',   session_id: 'abc', project_name: 'p' }
+  test('records pressure level when session enters high-pressure state', () => {
+    const prev = { state: 'working', session_id: 's1', metrics: { pressure_level: 'none' } }
+    const next = { state: 'working', session_id: 's1', metrics: { pressure_level: 'warning' } }
     maybeNotifyOnUpdate(prev, next)
+    expect(lastNotifiedPressure.get('s1')).toBe('warning')
+  })
+
+  test('updates pressure record when level escalates from warning to critical', () => {
+    lastNotifiedPressure.set('s1', 'warning')
+    const prev = { state: 'working', session_id: 's1', metrics: { pressure_level: 'warning' } }
+    const next = { state: 'working', session_id: 's1', metrics: { pressure_level: 'critical' } }
+    maybeNotifyOnUpdate(prev, next)
+    expect(lastNotifiedPressure.get('s1')).toBe('critical')
+  })
+
+  test('clears pressure record when session pressure drops', () => {
+    lastNotifiedPressure.set('s1', 'warning')
+    const prev = { state: 'working', session_id: 's1', metrics: { pressure_level: 'warning' } }
+    const next = { state: 'ready',   session_id: 's1', metrics: { pressure_level: 'none' } }
+    maybeNotifyOnUpdate(prev, next)
+    expect(lastNotifiedPressure.has('s1')).toBe(false)
   })
 })
 

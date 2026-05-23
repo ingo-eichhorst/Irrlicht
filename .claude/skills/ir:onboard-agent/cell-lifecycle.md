@@ -30,7 +30,7 @@ observe it?
 
 **Files:**
 
-- `.specs/agent-scenarios-coverage.json` — current-state rollup
+- `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` — current-state rollup
   (gitignored, maintainer-owned in the main checkout). The matrix
   the overview reads.
 - `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json` —
@@ -114,7 +114,7 @@ sources, and writes the JSON. Re-runs overwrite silently. See
 worked examples.
 
 **Transcription:** the maintainer copies the verdict + a one-line
-note from `assessment.json` into `.specs/agent-scenarios-coverage.json`.
+note from `assessment.json` into `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`.
 The artifact is the source-of-record; the matrix is the rollup the
 overview reads.
 

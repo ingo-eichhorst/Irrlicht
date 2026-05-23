@@ -22,9 +22,11 @@
 package services
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,9 +58,10 @@ type authCacheEntry struct {
 	// One of the parsed-doc fields below is populated, depending on
 	// which reader filled the entry. Distinguishing by path keeps the
 	// readers type-safe without a generic any-typed payload.
-	codexAccountID string
-	piDoc          map[string]piAuthEntry
-	openCodeDoc    map[string]openCodeAuthEntry
+	codexAccountID        string
+	piDoc                 map[string]piAuthEntry
+	openCodeDoc           map[string]openCodeAuthEntry
+	openCodeOpenAIAccount string // extracted from JWT on parse, "" if absent/invalid
 }
 
 type piAuthEntry struct {
@@ -67,7 +70,8 @@ type piAuthEntry struct {
 }
 
 type openCodeAuthEntry struct {
-	Type string `json:"type"`
+	Type        string `json:"type"`
+	AccessToken string `json:"access_token"`
 }
 
 // readAuthCache returns the parsed entry for path, populating the
@@ -305,23 +309,18 @@ func parsePiAuth(data []byte) (authCacheEntry, bool) {
 // readOpenCodeInheritKey parses ~/.local/share/opencode/auth.json.
 // OpenCode names OAuth providers `anthropic-oauth` and `openai-oauth`
 // per its upstream docs; we map them onto irrlicht's canonical
-// "anthropic" / "openai" provider keys. Account anchor isn't surfaced
-// in the file we've seen — Anthropic always lands on the singleton
-// key, OpenAI is best-effort (would need to read the JWT to recover
-// the chatgpt account_id; out of scope for v1, so OpenCode→OpenAI
-// just doesn't inherit until that lands).
+// "anthropic" / "openai" provider keys. Anthropic uses a singleton key
+// (no account anchor). OpenAI account_id is recovered from the JWT
+// access_token's payload via openCodeJWTAccountID.
 func readOpenCodeInheritKey(home string) (AccountKey, bool) {
 	entry, ok := readAuthCache(filepath.Join(home, ".local", "share", "opencode", "auth.json"), parseOpenCodeAuth)
 	if !ok {
 		return AccountKey{}, false
 	}
 	if v, ok := entry.openCodeDoc["openai-oauth"]; ok && v.Type == "oauth" {
-		// AccountID unavailable in the OpenCode auth file shape
-		// observed so far — would need to decode the JWT access token
-		// to recover it. Leave inheritance disabled for this branch
-		// until we have data to verify the JWT extraction against.
-		// See issue #384.
-		return AccountKey{}, false
+		if entry.openCodeOpenAIAccount != "" {
+			return AccountKey{Provider: ProviderOpenAI, AccountID: entry.openCodeOpenAIAccount}, true
+		}
 	}
 	if v, ok := entry.openCodeDoc["anthropic-oauth"]; ok && v.Type == "oauth" {
 		return AccountKey{Provider: ProviderAnthropic}, true
@@ -334,5 +333,36 @@ func parseOpenCodeAuth(data []byte) (authCacheEntry, bool) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return authCacheEntry{}, false
 	}
-	return authCacheEntry{openCodeDoc: doc}, true
+	entry := authCacheEntry{openCodeDoc: doc}
+	if v, ok := doc["openai-oauth"]; ok {
+		entry.openCodeOpenAIAccount = openCodeJWTAccountID(v.AccessToken)
+	}
+	return entry, true
+}
+
+// openCodeJWTAccountID extracts https://api.openai.com/auth.chatgpt_account_id
+// from the payload segment of an OpenID Connect access token. The signature is
+// not verified — we only need the identity claim.
+func openCodeJWTAccountID(token string) string {
+	parts := strings.SplitN(token, ".", 3)
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	raw, ok := claims["https://api.openai.com/auth.chatgpt_account_id"]
+	if !ok {
+		return ""
+	}
+	var id string
+	if err := json.Unmarshal(raw, &id); err != nil {
+		return ""
+	}
+	return id
 }

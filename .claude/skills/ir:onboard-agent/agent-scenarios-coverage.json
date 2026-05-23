@@ -1,0 +1,1261 @@
+{
+  "version": 1,
+  "generated_at": "2026-05-14",
+  "source_catalog": ".specs/agent-scenarios.md",
+  "legend": {
+    "agent_supports": [
+      "yes",
+      "no",
+      "partial",
+      "unknown"
+    ],
+    "irrlicht_observes": [
+      "yes",
+      "no",
+      "partial",
+      "unknown",
+      "n/a"
+    ],
+    "notes": "Free-form. Empty when crystal clear. Otherwise names the gotcha, the issue number, or the unmet condition."
+  },
+  "agents": [
+    {
+      "id": "claudecode",
+      "onboarded": true
+    },
+    {
+      "id": "codex",
+      "onboarded": true
+    },
+    {
+      "id": "pi",
+      "onboarded": true
+    },
+    {
+      "id": "aider",
+      "onboarded": true
+    },
+    {
+      "id": "opencode",
+      "onboarded": true
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "session-start",
+      "section": "Session lifecycle",
+      "feature": "Session start",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "markdown transcript discovered lazily per cwd; session row appears only after first user message lands in .aider.chat.history.md"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "SQLite-backed; no PID binding required"
+        }
+      }
+    },
+    {
+      "id": "session-end",
+      "section": "Session lifecycle",
+      "feature": "Session end",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "clean exit + SIGKILL OK; crash mid-turn covered indirectly via sweep. #321 zombie-on-restart fixed in 0.4.x \u2014 recipe now passes 11/11 phases."
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "idle-flush turn-end adds ~5s before ready settles; markdown file persists after exit"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "#296 ghost sessions when no process; #278 ~2.5s tail latency on working\u2192ready"
+        }
+      }
+    },
+    {
+      "id": "long-idle-live-session",
+      "section": "Session lifecycle",
+      "feature": "Long-idle live session",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "PID liveness check holds session past readyTTL"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "no PID binding \u2014 liveness relies on DB watcher signal"
+        }
+      }
+    },
+    {
+      "id": "session-resume",
+      "section": "Session lifecycle",
+      "feature": "Session resume",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "--continue / --resume; transcript appended"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "/resume command + picker (2026)"
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "unknown",
+          "notes": "aider re-loads chat history from .aider.chat.history.md but no formal session-id concept"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "capabilities.json declares yes; ParentSessionID not populated recursively for resume chains"
+        }
+      }
+    },
+    {
+      "id": "session-reset",
+      "section": "Session lifecycle",
+      "feature": "Session reset (/clear, /new)",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "/clear rotates UUID; daemon emits transcript_removed for old UUID via PIDManager's same-PID cleanup (commit 56c4667 / issue #169). ~50ms overlap between new session's transcript_new and old session's transcript_removed is bounded by spec at 1s. Eliminating overlap entirely conflicts with multi-session-same-cwd support."
+        },
+        "codex": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "aider has no /clear analogue; restart creates new history file"
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "checkpoint-rewind",
+      "section": "Session lifecycle",
+      "feature": "Checkpoint rewind",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "/rewind (alias /checkpoint, also Esc+Esc) restores files and/or conversation to any earlier user prompt; auto-checkpointed per prompt. https://code.claude.com/docs/en/checkpointing. First recording (2026-05-16) drives 3 turns with an Esc+Esc keystroke between turns 2 and 3 \u2014 irrlicht observes 3 clean ready\u2192working\u2192ready arcs on the same UUID with no transcript_removed (the daemon handles whatever Esc+Esc did to the TUI without losing session continuity), BUT the recording's transcript shows a linear parentUuid chain so the rewind never actually fired. Follow-up: drive the /rewind picker UI to capture an ACTUAL transcript truncation event, then upgrade to yes/no."
+        },
+        "codex": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "No native rewind as of v0.130 (May 2026). Open feature requests #11626 + #12558 explicitly model after Claude Code; community discussion #9618 confirms status. Reassess on next major Codex release."
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "Stock Pi CLI has no rewind (pi-mono discussion #1223). Third-party `pi-rewind` extension exists at arpagon/pi-rewind but isn't part of the default install, so irrlicht's observation target \u2014 stock Pi \u2014 has nothing to record."
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "no",
+          "notes": "/undo reverts the last aider git commit; /reset wipes files + chat; /clear clears chat history. No multi-point checkpoint picker. The /undo path surfaces as a normal chat turn in the transcript and a git HEAD movement \u2014 distinguishable from a regular turn only via the slash-command marker, not via session_id change."
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "/undo + /redo perform a git-snapshot session revert: rewinds to a previous message point, restores files from the snapshot, removes subsequent messages from the session DB. https://opencode.ai/docs/commands/. Multi-point picker tracked at #7794. Irrlicht observability untested \u2014 same session_id, transcript shrinks then grows; record before marking yes."
+        }
+      }
+    },
+    {
+      "id": "cloud-background-agent",
+      "section": "Session lifecycle",
+      "feature": "Cloud / background agent (remote process)",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "local CLI only; no first-party cloud variant"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": "Codex Cloud exists; irrlicht has no API-based watcher"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "basic-turn",
+      "section": "Turn shape",
+      "feature": "Basic turn",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "idle-flush turn-end (~5s effective latency on working\u2192ready)"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "auto-executed-tool-call",
+      "section": "Turn shape",
+      "feature": "Auto-executed tool call",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "tool calls reduced to '> Applied edit' / '> Running' markdown markers; coarse-grained"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "self-correction-iteration",
+      "section": "Turn shape",
+      "feature": "Self-correction iteration",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "aider retries across turns rather than within; idle-flush splits attempts"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "synchronous-slash-command",
+      "section": "Turn shape",
+      "feature": "Synchronous slash command (no LLM call)",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "/help, /cost, /status \u2014 does irrlicht stay ready? Not validated"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "long-agentic-session-stress",
+      "section": "Turn shape",
+      "feature": "Long agentic session (stress)",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "#102 historical flicker (closed); long sessions stable on current adapter"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "#105 stale-tool timer flicker (closed); task_complete dependence creates fallback risk"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "compaction events risk working\u2192ready\u2192working flicker"
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "idle-flush windows compound on long sessions"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "autonomous-loop",
+      "section": "Turn shape",
+      "feature": "Autonomous loop (self-prompting)",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "unknown",
+          "notes": "no built-in autonomous loop; can be driven externally"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "Codex /goal command (Ralph loop)"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "unknown",
+          "notes": "architect mode does limited multi-step but not continuous self-prompt"
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "autonomous-loop-iteration-limit",
+      "section": "Turn shape",
+      "feature": "Autonomous loop iteration limit reached",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "/goal has caps"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "token-quota-exhausted",
+      "section": "Turn shape",
+      "feature": "Token / quota budget exhausted",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "5-hour budget hits do happen; state transition on quota end not specifically tested"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "LLM error blockquote treated as turn_done (#262); quota errors land in same path"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "step-finish reason=error covers"
+        }
+      }
+    },
+    {
+      "id": "mid-turn-message-queued",
+      "section": "Turn shape",
+      "feature": "Mid-turn user message queued",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "queue feature; state should stay working but not validated"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "TUI-based, no queue concept"
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "auto-classified-permission",
+      "section": "Turn shape",
+      "feature": "Auto-classified permission approval",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "Auto Mode shipped March 2026; irrlicht's PermissionPending path covers waiting on risky calls, but Auto-Mode classifier internals are agent-side"
+        },
+        "codex": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "n/a",
+          "notes": "/yes-always is blanket, not classifier-based"
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "context-compaction",
+      "section": "Turn shape",
+      "feature": "Context compaction",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "/compact runs as a turn; transitions should stay working then ready \u2014 not specifically validated"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "Compaction events emitted as bare 'assistant' (not turn-done); risk of working\u2192ready\u2192working flicker per exploration"
+        },
+        "aider": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "turn-end-terminal-text",
+      "section": "Turn shape",
+      "feature": "Turn end via terminal text",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "stop_reason=end_turn handled"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "task_complete handled"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "stopReason=stop handled (#119 fixed)"
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "idle-flush is the de-facto terminal signal; ~5s lag"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "step-finish reason=stop"
+        }
+      }
+    },
+    {
+      "id": "turn-aborted-by-error",
+      "section": "Turn shape",
+      "feature": "Turn aborted by error",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "#262 fixed \u2014 error blockquote emits turn_done early"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "step-finish reason=error"
+        }
+      }
+    },
+    {
+      "id": "shell-escape-command",
+      "section": "Turn shape",
+      "feature": "Shell escape command",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "#62 closed; ! prefix handled; BashExecution events skipped"
+        },
+        "codex": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "/run command available; observability folds into '> Running' tool marker"
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "oversized-transcript-line",
+      "section": "Turn shape",
+      "feature": "Oversized transcript line",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "#270 closed; stuck-working risk fixed but worth regression testing"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "RawLineParser; behavior on very long lines unvalidated"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "user-blocking-question",
+      "section": "Turn shape",
+      "feature": "User-blocking tool call (question)",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "AskUserQuestion detected explicitly; #150 + #307 fswatcher/JSONL race scenarios fixed"
+        },
+        "codex": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "no question tool in schema"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "no",
+          "notes": "aider can ask via /ask interactively but no JSONL-style tool marker; not detected"
+        },
+        "opencode": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "no AskUserQuestion equivalent matched"
+        }
+      }
+    },
+    {
+      "id": "user-blocking-plan-mode-approval",
+      "section": "Turn shape",
+      "feature": "User-blocking tool call (plan-mode approval)",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "ExitPlanMode tool detected; #152 fixed"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": "#322 OPEN \u2014 <proposed_plan> turns end as 'ready' instead of 'waiting'; #325 OPEN \u2014 dismissal leaves session stuck in waiting"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "no",
+          "notes": "plan_mode declared in capabilities.json but not detected in parser"
+        },
+        "opencode": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "no",
+          "notes": "Plan agent exists but not surfaced as waiting state"
+        }
+      }
+    },
+    {
+      "id": "tool-gate-permission-prompt",
+      "section": "Turn shape",
+      "feature": "Tool gate via permission prompt",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "PreToolUse/PostToolUse hooks wired via HTTP receiver; #204 closed (late hook bounce-back)"
+        },
+        "codex": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "capabilities.json: permission_hooks: false"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "no",
+          "notes": "aider's confirm prompts are stdin/TUI; not visible to irrlicht via transcript"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "capabilities.json declares permission_hooks: true; wiring/validation status unclear"
+        }
+      }
+    },
+    {
+      "id": "user-esc-interrupt",
+      "section": "Turn shape",
+      "feature": "User ESC interrupt",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "tool-denial + ESC marker recognized; #13 fixed"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "Ctrl-C in aider TUI; abort markdown signature may differ from claude ESC pattern"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "step-finish reason=interrupted handled"
+        }
+      }
+    },
+    {
+      "id": "streaming-partial-writes",
+      "section": "Turn shape",
+      "feature": "Streaming partial writes",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "task_complete fallback to assistant_message risks mid-stream flicker"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "compaction event interspersing risks flicker"
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "idle-flush may fire during slow remote model calls causing premature ready"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "foreground-subagent",
+      "section": "Subagents",
+      "feature": "Foreground subagent",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "file-based child transcripts; ParentSessionID inferred from filesystem; #133/#134 stop_reason=null fixed; #88 closed"
+        },
+        "codex": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "capabilities.json: subagents: false"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "explicit DB parent_session_id column; agent teams"
+        }
+      }
+    },
+    {
+      "id": "background-subagent",
+      "section": "Subagents",
+      "feature": "Background subagent",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "SendMessage continuation; parent-not-held semantics rely on surviveTurnDone list; per-flow validation incomplete"
+        },
+        "codex": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "peer-messaging agent teams; not validated as 'background' specifically"
+        }
+      }
+    },
+    {
+      "id": "background-process",
+      "section": "Subagents",
+      "feature": "Background process",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": "Bash run_in_background:true tool exists; irrlicht has no BackgroundProcessCount and does not track child PIDs from Bash"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": "shell tool can spawn background process; not tracked"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "subagent-orphan-cleanup",
+      "section": "Subagents",
+      "feature": "Subagent orphan cleanup",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "deleteWithChildren + orphan transcript predicates"
+        },
+        "codex": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "DB-backed children \u2014 cleanup path differs from PID-based; validation status unclear"
+        }
+      }
+    },
+    {
+      "id": "multiple-sessions-same-cwd",
+      "section": "Multi-session and multi-agent",
+      "feature": "Multiple sessions in same cwd",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "#60 / #109 fixes landed; PID-cwd disambiguation can still flap under odd timing"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "no",
+          "notes": "aider uses a single .aider.chat.history.md per cwd; two aiders in same cwd would race that file"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "DB-keyed sessions; cwd not the disambiguator"
+        }
+      }
+    },
+    {
+      "id": "multiple-agents-same-workspace",
+      "section": "Multi-session and multi-agent",
+      "feature": "Multiple agents in same workspace",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "claudecode + codex/pi/aider/opencode coexistence \u2014 adapter labels are independent"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "token-accounting",
+      "section": "Metrics",
+      "feature": "Token accounting",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "full per-turn deltas via request-ID dedup; cache_read routed to cache bucket"
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "cumulative cursor \u2192 delta math; cached_tokens deducted to avoid double-count"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "message.usage with cacheRead/cacheWrite; per-turn cost when present"
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "regex-parsed '> Tokens: N sent, M received'; no cache-bucket distinction"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "step-finish.tokens nested cache object; 5m + 1h cache creation tracked separately"
+        }
+      }
+    },
+    {
+      "id": "model-identification",
+      "section": "Metrics",
+      "feature": "Model identification",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "from message.model"
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "regex-parsed '> Model:' / '> Main model:'"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "step-finish.model"
+        }
+      }
+    },
+    {
+      "id": "model-switch-midsession",
+      "section": "Metrics",
+      "feature": "Model switch mid-session",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "codex": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": "no model change detection between turns per parser exploration"
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "architect/editor pair detected per turn but inter-turn switch may not refresh"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "mixed-model agent teams; per-step model captured"
+        }
+      }
+    },
+    {
+      "id": "architect-editor-pair",
+      "section": "Metrics",
+      "feature": "Architect/Editor model pair",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "single Anthropic model per turn"
+        },
+        "codex": {
+          "agent_supports": "partial",
+          "irrlicht_observes": "unknown",
+          "notes": "planning agent + executor exists; unclear if surfaced as two contributions"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "--architect ships two-model pair; markdown parser sees two '> Model:' lines but contribution attribution incomplete"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "agent teams can mix models; per-child captured but parent.ModelName semantics unclear"
+        }
+      }
+    },
+    {
+      "id": "provider-failover-midturn",
+      "section": "Metrics",
+      "feature": "Provider failover mid-turn",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": "single provider per session"
+        },
+        "codex": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "pi": {
+          "agent_supports": "no",
+          "irrlicht_observes": "n/a",
+          "notes": ""
+        },
+        "aider": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "aider can configure fallback models; mid-turn switch surfaced in transcript via '> Switching to model \u2026' (untested in irrlicht)"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "irrlicht_observes": "unknown",
+          "notes": "multi-provider model packs; failover observability not validated"
+        }
+      }
+    }
+  ]
+}

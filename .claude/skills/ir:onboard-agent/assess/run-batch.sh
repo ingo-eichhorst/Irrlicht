@@ -21,7 +21,7 @@ ROW_SCHEMA="$ASSESS_DIR/schema/row.schema.json"
 COLUMN_PROMPT="$ASSESS_DIR/prompts/column.md"
 ROW_PROMPT="$ASSESS_DIR/prompts/row.md"
 CATALOG_MD="$REPO_ROOT/.specs/agent-scenarios.md"
-CATALOG_JSON="$REPO_ROOT/.specs/agent-scenarios-coverage.json"
+CATALOG_JSON="$REPO_ROOT/.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json"
 
 die() { echo "error: $*" >&2; exit 2; }
 
@@ -189,11 +189,11 @@ cmd_commit() {
   echo "Maintainer next steps:"
   if [[ "$mode" == "--column" ]]; then
     echo "  1. Review verdicts: jq '.scenarios | to_entries[] | select(.value.confidence < 0.7)' $dst"
-    echo "  2. Update .specs/agent-scenarios-coverage.json column for agent \"$target\" where verdict + confidence look right."
+    echo "  2. Update .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json column for agent \"$target\" where verdict + confidence look right."
     echo "  3. Re-run column assess on agent version bump."
   else
     echo "  1. Review verdicts: jq '.adapters | to_entries[] | select(.value.confidence < 0.7)' $dst"
-    echo "  2. Update .specs/agent-scenarios-coverage.json row for scenario \"$target\" where verdict + confidence look right."
+    echo "  2. Update .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json row for scenario \"$target\" where verdict + confidence look right."
     echo "  3. Re-run row assess when the scenario's prose spec changes."
   fi
 }

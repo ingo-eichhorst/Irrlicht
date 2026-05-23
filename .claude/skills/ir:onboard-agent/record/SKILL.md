@@ -186,5 +186,5 @@ mv "$LATEST_ARCHIVE"/{events,transcript,manifest}.json[l]* "$SCENARIO_DIR"/
   [`../spec/SKILL.md`](../spec/SKILL.md). Without `expected.jsonl`,
   promote-recording.sh skips validation and just stamps the
   manifest with `expected_pass_rate: "no spec"`.
-- It does not modify `.specs/agent-scenarios-coverage.json`. The
+- It does not modify `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`. The
   matrix rollup is the maintainer's editorial truth.

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/ingo-eichhorst/Irrlicht/.claude/skills/ir:onboard-agent/assess/schema/row.schema.json",
   "title": "Scenario applicability assessment result (row mode)",
-  "description": "Output of `/ir:onboard-agent assess --row <scenario>`. Maps every adapter in .specs/agent-scenarios-coverage.json -> agents[] to a candidate applicability verdict for one scenario, with citations. Consumed by the maintainer to update the coverage matrix row-by-row; never auto-applied. Schema validates structural shape only — cross-referencing against canonical adapter IDs is done at runtime by run-batch.sh.",
+  "description": "Output of `/ir:onboard-agent assess --row <scenario>`. Maps every adapter in .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json -> agents[] to a candidate applicability verdict for one scenario, with citations. Consumed by the maintainer to update the coverage matrix row-by-row; never auto-applied. Schema validates structural shape only — cross-referencing against canonical adapter IDs is done at runtime by run-batch.sh.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "scenario", "surveyed_at", "adapters"],
@@ -15,7 +15,7 @@
     "scenario": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_-]*$",
-      "description": "Scenario ID (kebab-case slug from .specs/agent-scenarios-coverage.json -> scenarios[].id)."
+      "description": "Scenario ID (kebab-case slug from .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json -> scenarios[].id)."
     },
     "scenario_version": {
       "type": "string",
@@ -36,7 +36,7 @@
     },
     "adapters": {
       "type": "object",
-      "description": "Keyed by adapter ID (lowercase slug from .specs/agent-scenarios-coverage.json -> agents[].id). Not every adapter has to appear — adapters whose capabilities[] don't include the scenario's required features may be omitted, with the implicit verdict 'n/a'. run-batch.sh checks that every key resolves to a known adapter ID.",
+      "description": "Keyed by adapter ID (lowercase slug from .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json -> agents[].id). Not every adapter has to appear — adapters whose capabilities[] don't include the scenario's required features may be omitted, with the implicit verdict 'n/a'. run-batch.sh checks that every key resolves to a known adapter ID.",
       "additionalProperties": { "$ref": "#/definitions/adapterVerdict" }
     }
   },
@@ -49,7 +49,7 @@
         "agent_supports": {
           "type": "string",
           "enum": ["yes", "no", "partial", "unknown"],
-          "description": "Mirrors the `agent_supports` axis of .specs/agent-scenarios-coverage.json so the row can be diffed against the committed matrix cell-for-cell."
+          "description": "Mirrors the `agent_supports` axis of .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json so the row can be diffed against the committed matrix cell-for-cell."
         },
         "confidence": {
           "type": "number",
