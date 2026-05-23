@@ -3894,7 +3894,8 @@
             "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before the first step",
             "Step 1 is a `/plan` slash that switches the session into Plan Mode. Unlike a prompt, `/plan` toggles a mode and does NOT start a turn (no task_complete), so it is followed by a fixed `sleep`, not `wait_turn` — wait_turn would over-count against the EXPECTED_TURNS bump every send/slash applies and time out.",
             "Plan Mode's developer prompt encourages a PHASE-1 exploration pass; running in an empty cwd plus an explicit 'emit the plan now' instruction keeps the plan turn to a single short reply that wraps a <proposed_plan> block.",
-            "The codex parser synthesizes a SYNTHETIC ExitPlanMode tool_use from the <proposed_plan> span (parser.go parseCodexMessage); that open call survives task_complete so the session sits in waiting (the plan-review gate) until the user approves. The interactive driver keeps the rollout session ALIVE across both turns; the REPL is torn down only at script end, so the daemon observes the full waiting→working→ready recovery on one live session."
+            "The codex parser synthesizes a SYNTHETIC ExitPlanMode tool_use from the <proposed_plan> span (parser.go parseCodexMessage); that open call survives task_complete so the session sits in waiting (the plan-review gate) until the user approves. The interactive driver keeps the rollout session ALIVE across both turns; the REPL is torn down only at script end, so the daemon observes the full waiting→working→ready recovery on one live session.",
+            "The approval turn (step 4) MUST do enough real work to span several wall-clock seconds with intermediate tool calls — it tells codex to create a.txt/b.txt/c.txt and run `ls` as distinct steps before its final summary. WHY: the daemon coalesces transcript activity per session in a 2s debounce window (session_detector_activity.go), and a turn-end (Terminal) event short-circuits the window. A trivial text-only recovery reply (the original 'confirm in one sentence' prompt) landed its user message and the agent's whole reply in a single sub-2s burst, so the FIRST activity event already saw a completed turn and the classifier went waiting→ready directly — the brief working blip was never emitted (debounce-coalesced). Spreading the recovery across several tool calls means the first post-approval activity event observes an IN-PROGRESS turn → working, and the terminal task_complete arrives seconds later → ready. That produces the OBSERVABLE waiting→working→ready arc the spec asserts. This is the same longer-interactive-turn fix that made basic-turn capture a distinct working→ready pair. codex runs in its default workspace-write sandbox with approval_policy=on-request, so creating files inside the fresh cwd and running `ls` there are autonomous workspace operations that do not raise a command-approval prompt (which would itself be a different waiting gate). If a future codex default DID gate one of these commands, the recovery arc would show an extra waiting episode — re-check the sandbox/approval config in that case."
           ],
           "script": [
             {
@@ -3915,11 +3916,11 @@
             },
             {
               "type": "send",
-              "text": "Approved — that plan looks good. In one short sentence, confirm you will implement it exactly as planned. Do NOT emit another <proposed_plan> block and do NOT ask any questions; end on a plain statement."
+              "text": "Approved — proceed with implementation now. Do NOT emit another <proposed_plan> block and do NOT ask any questions. Execute this multi-step task in order: (1) create a file a.txt containing the single line `alpha`, (2) create a file b.txt containing the single line `beta`, (3) create a file c.txt containing the single line `gamma`, (4) run `ls` in the working directory, then (5) reply with one short plain sentence summarizing which files now exist. Do the file creations and the `ls` as distinct steps so the work is visible."
             },
             {
               "type": "sleep",
-              "seconds": 45
+              "seconds": 75
             }
           ],
           "verify": [
@@ -3929,8 +3930,8 @@
             "events.jsonl contains a state_transition→working on the rollout session_id when the plan-request prompt is sent (the first turn after /plan)",
             "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the agent emits a <proposed_plan> block (synthetic ExitPlanMode keeps a tool call open across task_complete — the plan-review gate; classifier takes the open-user-blocking-tool path rather than →ready)",
             "the waiting episode is visible and persists ≥3s — no state_transition to ready appears before the user approves",
-            "events.jsonl contains a state_transition→working on the SAME rollout session_id when the user approves with a follow-up prompt (waiting→working recovery; the user message clears the open ExitPlanMode)",
-            "events.jsonl contains a state_transition→ready on the SAME rollout session_id when the second turn ends with a plain reply and no new proposed_plan (working→ready)",
+            "events.jsonl contains a state_transition→working on the SAME rollout session_id when the user approves and asks for implementation (waiting→working recovery; the user message clears the open ExitPlanMode). The recovery turn does real multi-step work (create a.txt/b.txt/c.txt + run ls) so the working span lasts >2s and survives the daemon's debounce window rather than being coalesced into a direct waiting→ready",
+            "events.jsonl contains a state_transition→ready on the SAME rollout session_id when the second turn finishes executing the approved task and gives its summary (working→ready)",
             "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session across both turns, not per-turn exits)"
           ],
           "settings": {},
