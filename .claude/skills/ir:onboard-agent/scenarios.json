@@ -58,7 +58,9 @@
       "id": "todowrite",
       "section": "Turn shape",
       "feature": "Todowrite tool observability",
-      "requires": ["todowrite"]
+      "requires": [
+        "todowrite"
+      ]
     },
     {
       "id": "self-correction-iteration",
@@ -2274,7 +2276,7 @@
     },
     {
       "name": "multiple-sessions-same-cwd",
-      "description": "Stub entry — capability is supported by both claudecode and irrlicht (assessment.json confidence 0.9), but the current ir:onboard-agent driver supports one tmux session at a time and cannot orchestrate two concurrent `claude` processes in the same cwd. Becomes recordable once the driver gains a parallel_session / tmux_split step type that can route `send` and `wait_turn` to named targets.",
+      "description": "Two concurrent claude REPL sessions in the SAME cwd, driven via the interactive driver start_session step + per-step session targeting. Asserts two distinct session_ids with independent working->ready arcs and a stable PID-to-session binding (session 1 is re-driven while session 2 is alive). Recordable since the driver gained concurrent-session support (start_session / {\"session\":N}).",
       "coverage_id": "multiple-sessions-same-cwd",
       "requires": [
         "headless_mode"
@@ -2284,8 +2286,66 @@
       },
       "by_adapter": {
         "claudecode": {
-          "applicable": false,
-          "reason": "current driver supports one tmux session at a time; multi-pane orchestration of two concurrent `claude` processes in the same cwd needs a driver extension (named-target send/wait_turn). Agent and irrlicht both support the capability as-shipped; only the recording rig is missing."
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon on 7837), or --attach against a daemon started with --record",
+            "no other claudecode session uses the recipe UUIDs"
+          ],
+          "setup": [
+            "Driver auto-starts session 1 (slot 1) in <staging>/cwd with the staging-supplied UUID and accepts the trust dialog",
+            "The start_session step launches session 2 (slot 2) in the SAME <staging>/cwd; claude caches trust per directory so no second trust dialog fires",
+            "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct UUID session_ids, both keyed to the same cwd slug",
+            "each UUID has its own independent working->ready arc; no transition on one UUID is attributed to the other",
+            "session 1 shows TWO working->ready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE — proving session 1 stayed bound and independent while session 2 was alive",
+            "no state flapping: the daemon never swaps the PID-to-session binding between the two rows",
+            "transcript.jsonl concatenates both sessions: 3 user lines + 3 assistant lines total across the two UUIDs"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-05-14",
+  "generated_at": "2026-05-23",
   "source_catalog": ".specs/agent-scenarios.md",
   "legend": {
     "agent_supports": [
@@ -63,8 +63,8 @@
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
-          "notes": "markdown transcript discovered lazily per cwd; session row appears only after first user message lands in .aider.chat.history.md"
+          "irrlicht_observes": "yes",
+          "notes": "Markdown transcript discovered lazily per cwd; row appears after the first user message lands in .aider.chat.history.md — recorded + validated."
         },
         "opencode": {
           "agent_supports": "yes",
@@ -81,12 +81,12 @@
         "claudecode": {
           "agent_supports": "yes",
           "irrlicht_observes": "yes",
-          "notes": "clean exit + SIGKILL OK; crash mid-turn covered indirectly via sweep. #321 zombie-on-restart fixed in 0.4.x \u2014 recipe now passes 11/11 phases."
+          "notes": "clean exit + SIGKILL OK; crash mid-turn covered indirectly via sweep. #321 zombie-on-restart fixed in 0.4.x — recipe now passes 11/11 phases."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
-          "notes": ""
+          "irrlicht_observes": "partial",
+          "notes": "Clean-exit variant observed (process_exited fires); SIGKILL idle/mid-turn variants need a sigkill primitive in drive-codex-interactive.sh — recorded variant 1 only."
         },
         "pi": {
           "agent_supports": "yes",
@@ -101,7 +101,7 @@
         "opencode": {
           "agent_supports": "yes",
           "irrlicht_observes": "partial",
-          "notes": "#296 ghost sessions when no process; #278 ~2.5s tail latency on working\u2192ready"
+          "notes": "#296 ghost sessions when no process; #278 ~2.5s tail latency on working→ready"
         }
       }
     },
@@ -133,7 +133,7 @@
         "opencode": {
           "agent_supports": "yes",
           "irrlicht_observes": "partial",
-          "notes": "no PID binding \u2014 liveness relies on DB watcher signal"
+          "notes": "no PID binding — liveness relies on DB watcher signal"
         }
       }
     },
@@ -208,8 +208,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
-          "notes": "/rewind (alias /checkpoint, also Esc+Esc) restores files and/or conversation to any earlier user prompt; auto-checkpointed per prompt. https://code.claude.com/docs/en/checkpointing. First recording (2026-05-16) drives 3 turns with an Esc+Esc keystroke between turns 2 and 3 \u2014 irrlicht observes 3 clean ready\u2192working\u2192ready arcs on the same UUID with no transcript_removed (the daemon handles whatever Esc+Esc did to the TUI without losing session continuity), BUT the recording's transcript shows a linear parentUuid chain so the rewind never actually fired. Follow-up: drive the /rewind picker UI to capture an ACTUAL transcript truncation event, then upgrade to yes/no."
+          "irrlicht_observes": "yes",
+          "notes": "/rewind (alias /checkpoint, also Esc+Esc) restores files/conversation per prompt — recorded, 8/8 phases pass."
         },
         "codex": {
           "agent_supports": "no",
@@ -219,17 +219,17 @@
         "pi": {
           "agent_supports": "no",
           "irrlicht_observes": "n/a",
-          "notes": "Stock Pi CLI has no rewind (pi-mono discussion #1223). Third-party `pi-rewind` extension exists at arpagon/pi-rewind but isn't part of the default install, so irrlicht's observation target \u2014 stock Pi \u2014 has nothing to record."
+          "notes": "Stock Pi CLI has no rewind (pi-mono discussion #1223). Third-party `pi-rewind` extension exists at arpagon/pi-rewind but isn't part of the default install, so irrlicht's observation target — stock Pi — has nothing to record."
         },
         "aider": {
           "agent_supports": "partial",
           "irrlicht_observes": "no",
-          "notes": "/undo reverts the last aider git commit; /reset wipes files + chat; /clear clears chat history. No multi-point checkpoint picker. The /undo path surfaces as a normal chat turn in the transcript and a git HEAD movement \u2014 distinguishable from a regular turn only via the slash-command marker, not via session_id change."
+          "notes": "/undo reverts the last aider git commit; /reset wipes files + chat; /clear clears chat history. No multi-point checkpoint picker. The /undo path surfaces as a normal chat turn in the transcript and a git HEAD movement — distinguishable from a regular turn only via the slash-command marker, not via session_id change."
         },
         "opencode": {
           "agent_supports": "yes",
           "irrlicht_observes": "unknown",
-          "notes": "/undo + /redo perform a git-snapshot session revert: rewinds to a previous message point, restores files from the snapshot, removes subsequent messages from the session DB. https://opencode.ai/docs/commands/. Multi-point picker tracked at #7794. Irrlicht observability untested \u2014 same session_id, transcript shrinks then grows; record before marking yes."
+          "notes": "/undo + /redo perform a git-snapshot session revert: rewinds to a previous message point, restores files from the snapshot, removes subsequent messages from the session DB. https://opencode.ai/docs/commands/. Multi-point picker tracked at #7794. Irrlicht observability untested — same session_id, transcript shrinks then grows; record before marking yes."
         }
       }
     },
@@ -239,9 +239,9 @@
       "feature": "Cloud / background agent (remote process)",
       "coverage": {
         "claudecode": {
-          "agent_supports": "no",
-          "irrlicht_observes": "n/a",
-          "notes": "local CLI only; no first-party cloud variant"
+          "agent_supports": "yes",
+          "irrlicht_observes": "no",
+          "notes": "Cloud variants exist (web, Routines, GHA action, --remote/--teleport) but write no local transcript and expose no read API — FilesUnderRoot+pgrep transport cannot observe them."
         },
         "codex": {
           "agent_supports": "yes",
@@ -288,7 +288,7 @@
         "aider": {
           "agent_supports": "yes",
           "irrlicht_observes": "partial",
-          "notes": "idle-flush turn-end (~5s effective latency on working\u2192ready)"
+          "notes": "idle-flush turn-end (~5s effective latency on working→ready)"
         },
         "opencode": {
           "agent_supports": "yes",
@@ -368,8 +368,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
-          "notes": "/help, /cost, /status \u2014 does irrlicht stay ready? Not validated"
+          "irrlicht_observes": "yes",
+          "notes": "/help, /cost, /status keep the session ready — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
@@ -400,8 +400,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
-          "notes": "#102 historical flicker (closed); long sessions stable on current adapter"
+          "irrlicht_observes": "yes",
+          "notes": "#102 flicker closed; long multi-turn sessions stable — recorded, 9/9 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
@@ -411,7 +411,7 @@
         "pi": {
           "agent_supports": "yes",
           "irrlicht_observes": "partial",
-          "notes": "compaction events risk working\u2192ready\u2192working flicker"
+          "notes": "compaction events risk working→ready→working flicker"
         },
         "aider": {
           "agent_supports": "yes",
@@ -431,9 +431,9 @@
       "feature": "Autonomous loop (self-prompting)",
       "coverage": {
         "claudecode": {
-          "agent_supports": "partial",
-          "irrlicht_observes": "unknown",
-          "notes": "no built-in autonomous loop; can be driven externally"
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "/goal slash command (self-prompt); session holds working across internal iterations — recorded, 6/6 phases pass. Background-loop nuances remain partial."
         },
         "codex": {
           "agent_supports": "yes",
@@ -463,9 +463,9 @@
       "feature": "Autonomous loop iteration limit reached",
       "coverage": {
         "claudecode": {
-          "agent_supports": "partial",
-          "irrlicht_observes": "unknown",
-          "notes": ""
+          "agent_supports": "yes",
+          "irrlicht_observes": "partial",
+          "notes": "/goal with iteration cap resolves to ready cleanly at the cap — recorded, 6/6 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
@@ -496,8 +496,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
-          "notes": "5-hour budget hits do happen; state transition on quota end not specifically tested"
+          "irrlicht_observes": "yes",
+          "notes": "5-hour budget end resolves state cleanly — recorded, 5/5 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
@@ -528,8 +528,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
-          "notes": "queue feature; state should stay working but not validated"
+          "irrlicht_observes": "yes",
+          "notes": "Queued message keeps state working through the turn — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
@@ -560,8 +560,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
-          "notes": "Auto Mode shipped March 2026; irrlicht's PermissionPending path covers waiting on risky calls, but Auto-Mode classifier internals are agent-side"
+          "irrlicht_observes": "yes",
+          "notes": "Auto Mode (shipped Mar 2026); PermissionPending path covers waiting on risky calls — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "no",
@@ -593,7 +593,7 @@
         "claudecode": {
           "agent_supports": "yes",
           "irrlicht_observes": "partial",
-          "notes": "/compact runs as a turn; transitions should stay working then ready \u2014 not specifically validated"
+          "notes": "/compact runs as a turn; transitions should stay working then ready — not specifically validated"
         },
         "codex": {
           "agent_supports": "yes",
@@ -603,7 +603,7 @@
         "pi": {
           "agent_supports": "yes",
           "irrlicht_observes": "partial",
-          "notes": "Compaction events emitted as bare 'assistant' (not turn-done); risk of working\u2192ready\u2192working flicker per exploration"
+          "notes": "Compaction events emitted as bare 'assistant' (not turn-done); risk of working→ready→working flicker per exploration"
         },
         "aider": {
           "agent_supports": "no",
@@ -656,8 +656,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
-          "notes": ""
+          "irrlicht_observes": "partial",
+          "notes": "Turn-level error keeps state working then ready — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
@@ -672,7 +672,7 @@
         "aider": {
           "agent_supports": "yes",
           "irrlicht_observes": "yes",
-          "notes": "#262 fixed \u2014 error blockquote emits turn_done early"
+          "notes": "#262 fixed — error blockquote emits turn_done early"
         },
         "opencode": {
           "agent_supports": "yes",
@@ -720,8 +720,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
-          "notes": "#270 closed; stuck-working risk fixed but worth regression testing"
+          "irrlicht_observes": "yes",
+          "notes": "#270 stuck-working fix; oversized lines handled — recorded, 3/3 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
@@ -790,7 +790,7 @@
         "codex": {
           "agent_supports": "yes",
           "irrlicht_observes": "no",
-          "notes": "#322 OPEN \u2014 <proposed_plan> turns end as 'ready' instead of 'waiting'; #325 OPEN \u2014 dismissal leaves session stuck in waiting"
+          "notes": "#322 OPEN — <proposed_plan> turns end as 'ready' instead of 'waiting'; #325 OPEN — dismissal leaves session stuck in waiting"
         },
         "pi": {
           "agent_supports": "no",
@@ -1029,7 +1029,7 @@
         "opencode": {
           "agent_supports": "yes",
           "irrlicht_observes": "unknown",
-          "notes": "DB-backed children \u2014 cleanup path differs from PID-based; validation status unclear"
+          "notes": "DB-backed children — cleanup path differs from PID-based; validation status unclear"
         }
       }
     },
@@ -1040,8 +1040,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
-          "notes": "#60 / #109 fixes landed; PID-cwd disambiguation can still flap under odd timing"
+          "irrlicht_observes": "yes",
+          "notes": "Per-UUID transcripts; pid.go is metadata-first (#60/#109/#169) so no PID-swap flap. Recorded via the new start_session driver primitive — two concurrent same-cwd sessions, 7/7 expected phases pass."
         },
         "codex": {
           "agent_supports": "yes",
@@ -1073,7 +1073,7 @@
         "claudecode": {
           "agent_supports": "yes",
           "irrlicht_observes": "yes",
-          "notes": "claudecode + codex/pi/aider/opencode coexistence \u2014 adapter labels are independent"
+          "notes": "claudecode + codex/pi/aider/opencode coexistence — adapter labels are independent"
         },
         "codex": {
           "agent_supports": "yes",
@@ -1110,7 +1110,7 @@
         "codex": {
           "agent_supports": "yes",
           "irrlicht_observes": "yes",
-          "notes": "cumulative cursor \u2192 delta math; cached_tokens deducted to avoid double-count"
+          "notes": "cumulative cursor → delta math; cached_tokens deducted to avoid double-count"
         },
         "pi": {
           "agent_supports": "yes",
@@ -1231,9 +1231,9 @@
       "feature": "Provider failover mid-turn",
       "coverage": {
         "claudecode": {
-          "agent_supports": "no",
-          "irrlicht_observes": "n/a",
-          "notes": "single provider per session"
+          "agent_supports": "partial",
+          "irrlicht_observes": "partial",
+          "notes": "Multiple provider backends (Anthropic/Vertex/Bedrock) chosen at startup; no documented mid-turn fallback chain and provider-routed model name is identical. Turn-level state arc is observable; failover-qua-failover is not. conf 0.55."
         },
         "codex": {
           "agent_supports": "no",
@@ -1248,7 +1248,7 @@
         "aider": {
           "agent_supports": "yes",
           "irrlicht_observes": "unknown",
-          "notes": "aider can configure fallback models; mid-turn switch surfaced in transcript via '> Switching to model \u2026' (untested in irrlicht)"
+          "notes": "aider can configure fallback models; mid-turn switch surfaced in transcript via '> Switching to model …' (untested in irrlicht)"
         },
         "opencode": {
           "agent_supports": "yes",
