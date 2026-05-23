@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "scenario_id": "long-idle-live-session",
+  "agent": "pi",
+  "assessed_at": "2026-05-23T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.9,
+  "body": "Pi's REPL (driven via tmux) is a persistent process; the daemon's PID-liveness check holds the UUID-keyed session across the 20s idle window. Recording shows ready→working→ready before idle and ready→working→ready after the second send.",
+  "caveats": ["Production daemon readyTTL is 30 min; this recording proves session continuity over 20s but does not exercise the TTL itself."],
+  "sources": [{"kind":"file","ref":"core/adapters/inbound/agents/pi/agent.go","note":"Pi adapter."}]
+}

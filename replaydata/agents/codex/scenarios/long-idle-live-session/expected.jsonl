@@ -1,0 +1,6 @@
+{"schema_version": 1, "scenario_id": "long-idle-live-session", "source": ".specs/agent-scenarios.md → Feature: Long-idle live session", "notes": "Codex's REPL keeps a persistent process across the recipe's two turns. Spec asserts: (1) session born in ready, (2) first turn settles back to ready, (3) idle window has no transition to working or waiting, (4) second turn resumes normally, (5) final ready. The production daemon readyTTL (30 min) is not reached by the 20 s idle window; IRRLICHT_READY_SESSION_TTL=15s would harden the assertion."}
+{"phase": "session_birth", "expected_state": "ready", "relative_to": "start", "max_delay_ms": 2000, "text": "Session appears in ready"}
+{"phase": "turn1_start", "expected_state": "working", "relative_to": "session_birth", "text": "First user prompt drives ready → working"}
+{"phase": "turn1_done", "expected_state": "ready", "relative_to": "turn1_start", "text": "First turn completes back to ready before the idle window"}
+{"phase": "turn2_start", "expected_state": "working", "relative_to": "turn1_done", "text": "Second user prompt (after 20s idle) drives ready → working"}
+{"phase": "turn2_done", "expected_state": "ready", "relative_to": "turn2_start", "text": "Second turn completes back to ready"}
