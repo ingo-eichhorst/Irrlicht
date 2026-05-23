@@ -923,8 +923,7 @@
               "seconds": 4
             },
             {
-              "type": "send",
-              "text": "/fork"
+              "type": "fork"
             },
             {
               "type": "sleep",
@@ -1074,8 +1073,7 @@
               "seconds": 4
             },
             {
-              "type": "send",
-              "text": "/clear"
+              "type": "reset_session"
             },
             {
               "type": "sleep",
