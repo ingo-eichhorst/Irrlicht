@@ -3299,6 +3299,43 @@
           ],
           "settings": {},
           "timeout_seconds": 60
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly this sentence and nothing else: The capital of France is Paris."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent (the single tool-less assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the terminal text turn completes — codex emits a task_complete event_msg, the parser maps it to turn_done, and rule 2b settles working→ready (unlike headless codex exec which exits before the settle is observable)",
+            "events.jsonl contains NO tool_use / tool-call events for the rollout session (deliberately tool-less prompt)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point (the declarative answer has no trailing question mark, so the classifier never reads a waiting cue)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },
