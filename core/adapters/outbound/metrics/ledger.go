@@ -20,6 +20,17 @@ const LedgerSuffix = ".ledger.json"
 
 var ledgerDirOnce sync.Once
 
+// ledgerDirOverride, when non-empty, replaces the default ledger directory.
+// Set once at daemon startup via SetLedgerDir so a dev/test instance with
+// IRRLICHT_HOME set keeps its per-session ledgers isolated from production
+// rather than reading/pruning ~/.local/share/irrlicht/sessions.
+var ledgerDirOverride string
+
+// SetLedgerDir overrides the per-session ledger directory. Must be called
+// before the first ledger operation (i.e. during startup, before ensureLedgerDir
+// runs). A no-op when dir is empty.
+func SetLedgerDir(dir string) { ledgerDirOverride = dir }
+
 // ensureLedgerDir creates the ledger directory on the first call; subsequent
 // calls are no-ops. Silent on error — a missing dir causes saveLedger to fail
 // silently, which is acceptable.
@@ -35,6 +46,9 @@ func ensureLedgerDir() {
 
 // ledgerDir returns the directory where per-session ledger files are stored.
 func ledgerDir() (string, error) {
+	if ledgerDirOverride != "" {
+		return ledgerDirOverride, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

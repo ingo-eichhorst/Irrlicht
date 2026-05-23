@@ -108,5 +108,13 @@ fswatcher roots, process scanners, parser-factory map, PID-discovery map
 
 Before marking a ticket done, run the full suite — all three layers must pass:
 
-- Unit + e2e: `go test ./core/... -race -count=1`
+- Unit + e2e: `go test ./core/... -race -count=1` (includes the headless
+  daemon startup smoke test — boots a real `irrlichd` on an ephemeral port
+  under `t.TempDir()`, so it never touches the production daemon).
 - Replay: `tools/replay-fixtures.sh`
+- Web (only when touching a `web/` tree): `npm test` in that tree. There are
+  two independent suites, each with its own `node_modules`:
+  - `platforms/web/` — the dashboard.
+  - `tools/agent-onboarding/internal/viewer/web/` — the onboarding viewer.
+
+  `npm test` runs `vitest run` (single CI-shaped pass, no watch).

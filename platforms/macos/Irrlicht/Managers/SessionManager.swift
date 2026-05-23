@@ -175,7 +175,7 @@ class SessionManager: ObservableObject {
         await hydrateAgents()
         await hydrateSessions()
 
-        guard let url = URL(string: "ws://localhost:7837/api/v1/sessions/stream") else { return }
+        guard let url = URL(string: "\(DaemonEndpoint.wsBase)/api/v1/sessions/stream") else { return }
         let task = URLSession.shared.webSocketTask(with: url)
         webSocketTask = task
         task.resume()
@@ -418,7 +418,7 @@ class SessionManager: ObservableObject {
     /// If a future change ships hot-loadable adapters, add a refresh hook
     /// (or push the registry over the WebSocket).
     private func hydrateAgents() async {
-        guard let url = URL(string: "http://localhost:7837/api/v1/agents") else { return }
+        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/agents") else { return }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
@@ -431,7 +431,7 @@ class SessionManager: ObservableObject {
     }
 
     private func hydrateSessions() async {
-        guard let url = URL(string: "http://localhost:7837/api/v1/sessions") else { return }
+        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions") else { return }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }

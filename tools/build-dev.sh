@@ -52,4 +52,7 @@ case "${1:-irrlichd}" in
     ;;
 esac
 
-echo "done. Run with: cd core && ./bin/irrlichd --record"
+echo "done."
+echo "Run isolated from the production daemon (separate state dir + port):"
+echo "  IRRLICHT_HOME=\"\$PWD/.build/irrlicht-home\" IRRLICHT_BIND_ADDR=127.0.0.1:7838 \\"
+echo "    core/bin/irrlichd --record"
