@@ -2417,9 +2417,11 @@
             "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
           ],
           "setup": [
-            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
-            "The first prompt keeps codex busy long enough to inject a follow-up while it is mid-turn — a slow count-to-20 that asks for a pause between numbers (codex satisfies the pause by running `sleep` shell calls, extending the turn to ~30s) is sufficient",
-            "The mid-turn follow-up is delivered as a raw `keys` step ending in Enter (NOT a `send`): probing codex 0.130.0 live, a message submitted mid-turn is QUEUED — the TUI shows 'Messages to be submitted after next tool call' and folds it into the SAME turn, emitting only ONE task_complete for the whole arc. A `send` would bump the driver's expected-turn counter to 2, so the following wait_turn would block forever on a second task_complete that never arrives; the raw `keys` Enter submits the buffered text without touching the turn counter"
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt (boot itself takes ~15-20s)",
+            "The first prompt keeps codex busy long enough to inject a follow-up while it is mid-turn — a slow count-to-20 that asks for a pause between numbers makes codex run a `sleep 0.5` shell call per number, extending the working turn to ~50-60s, giving a wide window to land the follow-up mid-turn",
+            "The mid-turn follow-up is delivered via raw `keys` steps, NOT a `send`: probing codex 0.130.0 live, a message submitted mid-turn is QUEUED — the TUI shows 'Messages to be submitted after next tool call' and folds it into the SAME turn, emitting only ONE task_complete for the whole arc. A `send` would bump the driver's expected-turn counter to 2, so the following wait_turn would block forever on a second task_complete that never arrives; raw `keys` submit the buffered text without touching the turn counter",
+            "The follow-up is split into TWO keys steps with a sleep between — first the literal text (no Enter), then a separate Enter — because codex's Ink input handler drops a batched text+Enter (the same render race step_send mitigates with a 0.3s pause): typing then pausing then pressing Enter lets the composer render the text before submit so the queue actually accepts it",
+            "The pre-injection sleep is 8s so the follow-up lands solidly inside the working turn (well after the ~50s+ count begins) rather than during boot, where it would be folded into the initial prompt and produce no observable queue"
           ],
           "script": [
             {
@@ -2428,11 +2430,19 @@
             },
             {
               "type": "sleep",
-              "seconds": 2
+              "seconds": 8
             },
             {
               "type": "keys",
-              "keys": "A f t e r Space y o u Space f i n i s h Space c o u n t i n g , Space a l s o Space r e p l y Space w i t h Space t h e Space w o r d : Space s e c o n d m e s s a g e Enter"
+              "keys": "A f t e r Space y o u Space f i n i s h Space c o u n t i n g Space a l s o Space r e p l y Space w i t h Space t h e Space w o r d Space s e c o n d m e s s a g e"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
             },
             {
               "type": "wait_turn"
