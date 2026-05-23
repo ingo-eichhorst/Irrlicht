@@ -243,19 +243,34 @@
             "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
           ],
           "setup": [
-            "Create an empty cwd under <staging>/cwd/ so the headless run has a clean working directory"
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
           ],
-          "prompt": "Output exactly the two characters: ok",
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
           "verify": [
             "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
             "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
             "events.jsonl contains a pid_discovered event bound to the rollout session_id",
-            "events.jsonl contains a state_transition to working on the rollout session (the assistant turn)",
-            "events.jsonl contains a process_exited on the rollout session marking the headless turn-end (codex exec is single-shot, so there is no working→ready flip)",
-            "no state_transition to waiting appears for the rollout session"
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent (the single assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the turn completes (the interactive REPL returns to ready, unlike headless codex exec which exits)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point"
           ],
           "settings": {},
-          "timeout_seconds": 120
+          "timeout_seconds": 180
         },
         "pi": {
           "prompt": "Reply with exactly the word: ok",
