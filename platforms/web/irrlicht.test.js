@@ -4,6 +4,7 @@ import {
   rowLabel,
   maybeNotifyOnUpdate,
   formatCost,
+  formatUsageCost,
   pressureClass,
   historyPriorityForState,
   lastNotifiedPressure,
@@ -120,5 +121,28 @@ describe('historyPriorityForState', () => {
     expect(historyPriorityForState('working')).toBe(1)
     expect(historyPriorityForState('ready')).toBe(0)
     expect(historyPriorityForState('unknown')).toBe(-1)
+  })
+})
+
+describe('formatUsageCost', () => {
+  // Windowed usage chip headline (#386). Zero renders "$0" (a windowed zero
+  // is honest) to match the macOS chip, not "$0.00".
+  test('zero and falsy render "$0"', () => {
+    expect(formatUsageCost(0)).toBe('$0')
+    expect(formatUsageCost(undefined)).toBe('$0')
+    expect(formatUsageCost(-5)).toBe('$0')
+  })
+
+  test('sub-cent renders "<$0.01"', () => {
+    expect(formatUsageCost(0.004)).toBe('<$0.01')
+  })
+
+  test('normal costs render with two decimals', () => {
+    expect(formatUsageCost(1.2)).toBe('$1.20')
+    expect(formatUsageCost(0.5)).toBe('$0.50')
+  })
+
+  test('>= $100 drops to integer dollars', () => {
+    expect(formatUsageCost(105.3)).toBe('$105')
   })
 })
