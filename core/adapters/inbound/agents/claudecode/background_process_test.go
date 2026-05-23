@@ -210,3 +210,75 @@ func TestTailer_BackgroundProcessCount_SpawnAndTerminate(t *testing.T) {
 		}
 	})
 }
+
+// --- Task-notification completion (orchestrated / SDK-harnessed claude) ---
+// A claude launched under the Agent SDK suppresses BashOutput/KillShell and
+// reports background completion via TaskOutput + a <task-notification> whose
+// <task-id> is the backgroundTaskId. Two on-disk shapes carry it. See #445.
+
+func taskNotifOriginEvent(taskID, status string) map[string]interface{} {
+	return map[string]interface{}{
+		"type":   "user",
+		"origin": map[string]interface{}{"kind": "task-notification"},
+		"message": map[string]interface{}{
+			"role":    "user",
+			"content": "<task-notification><task-id>" + taskID + "</task-id><tool-use-id>toolu_1</tool-use-id><status>" + status + "</status></task-notification>",
+		},
+	}
+}
+
+func taskNotifAttachmentEvent(taskID, status string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "attachment",
+		"attachment": map[string]interface{}{
+			"type":        "queued_command",
+			"commandMode": "task-notification",
+			"prompt":      "<task-notification><task-id>" + taskID + "</task-id><status>" + status + "</status></task-notification>",
+		},
+	}
+}
+
+func TestParser_TaskNotification_TerminatesBackgroundProcess(t *testing.T) {
+	p := &Parser{}
+	// origin.kind shape, terminal → emits the bg task-id
+	done := p.ParseLine(taskNotifOriginEvent("bc1h56v8v", "completed"))
+	if len(done.TerminatedBackgroundTaskIDs) != 1 || done.TerminatedBackgroundTaskIDs[0] != "bc1h56v8v" {
+		t.Errorf("origin shape: TerminatedBackgroundTaskIDs = %v, want [bc1h56v8v]", done.TerminatedBackgroundTaskIDs)
+	}
+	// running → not terminal
+	running := p.ParseLine(taskNotifOriginEvent("bc1h56v8v", "running"))
+	if len(running.TerminatedBackgroundTaskIDs) != 0 {
+		t.Errorf("running status must not terminate, got %v", running.TerminatedBackgroundTaskIDs)
+	}
+	// queued_command attachment shape, terminal → emits the bg task-id
+	att := p.ParseLine(taskNotifAttachmentEvent("bc1h56v8v", "completed"))
+	if len(att.TerminatedBackgroundTaskIDs) != 1 || att.TerminatedBackgroundTaskIDs[0] != "bc1h56v8v" {
+		t.Errorf("attachment shape: TerminatedBackgroundTaskIDs = %v, want [bc1h56v8v]", att.TerminatedBackgroundTaskIDs)
+	}
+}
+
+func TestTailer_BackgroundProcessCount_ClearedByTaskNotification(t *testing.T) {
+	spawnResult := "Command running in background with ID: bc1h56v8v. Output is being written to: /tmp/x/tasks/bc1h56v8v.output"
+	for _, tc := range []struct {
+		name      string
+		completed map[string]interface{}
+	}{
+		{"origin.kind shape", taskNotifOriginEvent("bc1h56v8v", "completed")},
+		{"queued_command attachment shape", taskNotifAttachmentEvent("bc1h56v8v", "completed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeBgTranscript(t, []map[string]interface{}{
+				bashToolUse("toolu_1", "Bash", map[string]interface{}{"command": "sleep 100", "run_in_background": true}),
+				bgSpawnResult("toolu_1", "bc1h56v8v", spawnResult),
+				tc.completed,
+			})
+			m, err := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code").TailAndProcess()
+			if err != nil {
+				t.Fatalf("TailAndProcess: %v", err)
+			}
+			if m.BackgroundProcessCount != 0 {
+				t.Fatalf("BackgroundProcessCount = %d, want 0 after task-notification completion", m.BackgroundProcessCount)
+			}
+		})
+	}
+}

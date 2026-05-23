@@ -1808,6 +1808,55 @@
       }
     },
     {
+      "name": "background-process",
+      "description": "Claude runs a Bash command with run_in_background:true (`sleep 8 && echo done`); the tool returns immediately carrying toolUseResult.backgroundTaskId, then the agent polls the process via the BashOutput tool until it reports a terminated status. WHAT it captures: the user-observable arc that PR #450 (issue #445) added — ready → working at the prompt, then the session STAYS working past the turn's own end_turn while the detached shell process is alive, then a single working → ready once the process exits. WHY this exact shape: #450 detects the spawn from the structured backgroundTaskId and gates IsAgentDone on a live `lsof` probe of the tasks/<id>.output file, so the only way to make the daemon observe completion (rather than just letting the turn end) is to drive a BashOutput poll that reports `completed` — there is no async exit hook the tailer can see. The single prompt asks claude to spawn AND poll-to-completion in one turn so the driver's one wait_turn brackets the whole arc. HOW it differs between runs: how many BashOutput polls the model issues, exact token counts, and the precise working dwell length vary with model pacing — the spec's dwell assertion is a ≥4s lower bound (well inside the 8s sleep) so jitter never trips it; the structural arc (one ready→working, one working→ready, single session) is fixed. WHERE to look if it breaks: if the session flips to ready while the process is still alive, the daemon's lsof probe or backgroundTaskId extraction regressed (core/application/services/background_probe.go, core/adapters/inbound/agents/claudecode/parser.go); if the session never returns to ready, the BashOutput-completed parse or the refreshStaleSessions re-probe regressed.",
+      "coverage_id": "background-process",
+      "requires": [
+        "tool_calls",
+        "background_process"
+      ],
+      "verify": {
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (v2.1.x ships the run_in_background Bash parameter plus the BashOutput and KillShell tools)",
+            "irrlichd is recording (--attach or isolated) and built from a tree that includes PR #450 — the daemon must have BackgroundProcessCount tracking and the lsof liveness probe, else it cannot observe the background process at all",
+            "lsof is on PATH (the daemon's authoritative background-process liveness check shells out to `lsof -t` on each tasks/<id>.output file)"
+          ],
+          "setup": [
+            "Driver launches claude in a fresh trusted cwd under <staging>/cwd as usual; no seed files needed — the background process is a self-contained `sleep && echo`."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do exactly this and nothing else. (1) Use the Bash tool to run the command `sleep 8 && echo BG_DONE` with run_in_background set to true, so it launches in the background and the tool returns immediately. (2) Then repeatedly use the BashOutput tool to poll that background shell, waiting about 2 seconds between polls, until BashOutput reports the process status as completed. (3) Only after BashOutput shows it completed, reply with exactly the word: done. Do not run any other commands."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + pid_discovered for the primary session UUID within ~2s of launch (session born in ready)",
+            "events.jsonl shows the primary session transition ready -> working when the prompt lands",
+            "the primary session stays working for at least ~4s after the turn-start working transition with NO state_transition to ready while the background process is alive — this is the #450 hold-past-end_turn behavior (without #450 the session would flip to ready as soon as the Bash tool_use returns)",
+            "transcript.jsonl contains a Bash tool_use whose input has run_in_background:true and a following tool_result whose toolUseResult carries a backgroundTaskId",
+            "transcript.jsonl contains one or more BashOutput tool_use blocks, and a BashOutput tool_result whose text reports a terminated status (e.g. <status>completed</status>)",
+            "events.jsonl shows exactly one working -> ready transition for the primary session, occurring AFTER the background process exits (not at the bare end_turn)",
+            "final session state for the primary session is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    {
       "name": "context-compaction",
       "description": "Claude session runs one normal turn to populate context, then the driver triggers /compact to compact the conversation history, then runs a second normal turn to prove the session continues working after compaction. Recording may be brittle: newer Claude Code (2.1.x+) writes a NEW transcript file at the compaction boundary, which can register as a fresh session row to irrlicht depending on session-stitching (see session-resume cell). Per assessment.json, irrlicht's CompactionState domain field is dead code — the dashboard cannot distinguish compaction from a normal long turn. The recipe therefore asserts only the visible state arc (ready→working→ready on each side of /compact).",
       "coverage_id": "context-compaction",
