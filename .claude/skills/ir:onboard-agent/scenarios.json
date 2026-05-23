@@ -2906,6 +2906,7 @@
             "Driver boots a codex TUI in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits out the Booting MCP phase",
             "Codex assigns its own rollout UUID; the driver discovers the rollout-*.jsonl on the first wait_turn"
           ],
+          "recipe_notes": "Each !cmd escape is typed as a keys step WITHOUT Enter, then a 1s sleep, then a separate keys:'Enter' step. The codex driver's keys handler (unlike step_send) does not pause before Enter, so a combined '! l s Enter' raced codex's Ink input render — Enter was silently dropped, the escapes accumulated in the input box, and the final send submitted ls/sleep/prompt as ONE shell command (collapsed into a single <user_shell_command>). Splitting typing from Enter with a render-settle sleep submits each escape on its own. The 9s sleep after !sleep 5 covers the command runtime plus the daemon settle.",
           "script": [
             {
               "type": "sleep",
@@ -2913,7 +2914,15 @@
             },
             {
               "type": "keys",
-              "keys": "! l s Enter"
+              "keys": "! l s"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
             },
             {
               "type": "sleep",
@@ -2921,7 +2930,15 @@
             },
             {
               "type": "keys",
-              "keys": "! s l e e p Space 5 Enter"
+              "keys": "! s l e e p Space 5"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
             },
             {
               "type": "sleep",
