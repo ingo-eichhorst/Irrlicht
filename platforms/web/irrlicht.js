@@ -966,16 +966,27 @@
       }
 
       // Active tool label — shown only when agent is working and inside a tool call.
+      // When no tool is open but the session is held working by a live Bash
+      // background process (run_in_background), surface that instead so the row
+      // explains why it's still working past the turn's end. See issue #445.
       const toolEl = el.querySelector('.row-tool');
       const tools = metrics.last_open_tool_names || [];
+      const bgCount = metrics.background_process_count || 0;
       if (metrics.has_open_tool_call && tools[0] && state === 'working') {
         const raw = tools[0];
         const isUser = raw === 'AskUserQuestion' || raw === 'ExitPlanMode';
         toolEl.style.display = '';
         toolEl.textContent = toolLabel[raw] || raw.slice(0, 12);
         toolEl.className = 'row-tool' + (isUser ? ' tool-user' : '');
+        toolEl.title = '';
+      } else if (bgCount > 0 && state === 'working') {
+        toolEl.style.display = '';
+        toolEl.textContent = '⚙ ' + bgCount + ' bg';
+        toolEl.className = 'row-tool';
+        toolEl.title = bgCount + ' background process' + (bgCount === 1 ? '' : 'es') + ' running';
       } else {
         toolEl.style.display = 'none';
+        toolEl.title = '';
       }
 
       // Per-row history canvas is repainted by repaintHistory() on the

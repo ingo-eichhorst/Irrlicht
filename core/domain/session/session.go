@@ -53,6 +53,31 @@ type SessionMetrics struct {
 	// domain model is agnostic to how each adapter represents subagents.
 	OpenSubagents int `json:"open_subagents,omitempty"`
 
+	// BackgroundProcessCount is the number of agent-spawned background
+	// processes the transcript shows as still open — for Claude Code, a
+	// `Bash` tool call with `run_in_background: true` that has not yet been
+	// observed terminating (via a `BashOutput` status or a `KillShell`).
+	// Deterministic from the transcript, so it is stable across replay. It
+	// is the agent's *claimed* open count; HasLiveBackgroundProcess is the
+	// daemon's authoritative liveness verdict. See issue #445.
+	BackgroundProcessCount int `json:"background_process_count,omitempty"`
+
+	// HasLiveBackgroundProcess is the daemon's authoritative answer to "does
+	// this session still have a running background process?", set by the
+	// liveness probe in processActivity (lsof on each background process's
+	// output file). It gates IsAgentDone so a session stays `working` past
+	// end_turn while a background process is alive. Transient — set by the
+	// detector, never derived from the transcript, so it is absent under
+	// replay (where there is no live process to probe). See issue #445.
+	HasLiveBackgroundProcess bool `json:"-"`
+
+	// BackgroundProcessOutputs holds the output-file paths of the currently
+	// open background processes (Claude Code writes each backgrounded
+	// command's stdout/stderr to `tasks/<bash_id>.output`). The liveness
+	// probe lsof's these to find a live writer. Transient — recomputed from
+	// the transcript each pass, not persisted in session JSON.
+	BackgroundProcessOutputs []string `json:"-"`
+
 	// LastEventType is the type of the most recent transcript event
 	// (e.g. "assistant", "user", "tool_use", "tool_result").
 	LastEventType string `json:"last_event_type,omitempty"`
@@ -447,6 +472,13 @@ func (m *SessionMetrics) IsAgentDone() bool {
 	if m.HasOpenToolCall {
 		return false
 	}
+	// A live background process (Bash run_in_background) outlives the turn
+	// that spawned it: Claude Code writes end_turn the instant the Bash tool
+	// returns, but the process keeps running. The daemon's liveness probe
+	// confirms it is still alive, so the session is NOT idle. See issue #445.
+	if m.HasLiveBackgroundProcess {
+		return false
+	}
 	// Primary: Claude Code writes a system/turn_duration event at end of turn.
 	if m.LastEventType == "turn_done" {
 		return true
@@ -580,32 +612,39 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 		return newM
 	}
 	merged := &SessionMetrics{
-		ElapsedSeconds:         newM.ElapsedSeconds,
-		TotalTokens:            newM.TotalTokens,
-		ModelName:              newM.ModelName,
-		ContextWindow:          newM.ContextWindow,
-		ContextUtilization:     newM.ContextUtilization,
-		PressureLevel:          newM.PressureLevel,
-		ContextWindowUnknown:   newM.ContextWindowUnknown,
-		HasOpenToolCall:        newM.HasOpenToolCall,
-		OpenToolCallCount:      newM.OpenToolCallCount,
-		OpenSubagents:          newM.OpenSubagents,
-		LastEventType:          newM.LastEventType,
-		LastOpenToolNames:      newM.LastOpenToolNames,
-		LastWasUserInterrupt:   newM.LastWasUserInterrupt,
-		LastWasToolDenial:      newM.LastWasToolDenial,
-		EstimatedCostUSD:       newM.EstimatedCostUSD,
-		LastAssistantText:      newM.LastAssistantText,
-		PermissionMode:         newM.PermissionMode,
-		SubagentCompletions:    newM.SubagentCompletions,
-		CumInputTokens:         newM.CumInputTokens,
-		CumOutputTokens:        newM.CumOutputTokens,
-		CumCacheReadTokens:     newM.CumCacheReadTokens,
-		CumCacheCreationTokens: newM.CumCacheCreationTokens,
-		Tasks:                  newM.Tasks,
-		NoSubstantiveActivity:  newM.NoSubstantiveActivity,
-		RateLimit:              newM.RateLimit,
-		RateLimitForecastEta:   newM.RateLimitForecastEta,
+		ElapsedSeconds:       newM.ElapsedSeconds,
+		TotalTokens:          newM.TotalTokens,
+		ModelName:            newM.ModelName,
+		ContextWindow:        newM.ContextWindow,
+		ContextUtilization:   newM.ContextUtilization,
+		PressureLevel:        newM.PressureLevel,
+		ContextWindowUnknown: newM.ContextWindowUnknown,
+		HasOpenToolCall:      newM.HasOpenToolCall,
+		OpenToolCallCount:    newM.OpenToolCallCount,
+		OpenSubagents:        newM.OpenSubagents,
+		// Background-process fields are recomputed from the transcript every
+		// pass (count + output paths) — copy the new values verbatim.
+		// HasLiveBackgroundProcess is set by the detector's probe *after* this
+		// merge, so newM always carries its zero value here.
+		BackgroundProcessCount:   newM.BackgroundProcessCount,
+		BackgroundProcessOutputs: newM.BackgroundProcessOutputs,
+		HasLiveBackgroundProcess: newM.HasLiveBackgroundProcess,
+		LastEventType:            newM.LastEventType,
+		LastOpenToolNames:        newM.LastOpenToolNames,
+		LastWasUserInterrupt:     newM.LastWasUserInterrupt,
+		LastWasToolDenial:        newM.LastWasToolDenial,
+		EstimatedCostUSD:         newM.EstimatedCostUSD,
+		LastAssistantText:        newM.LastAssistantText,
+		PermissionMode:           newM.PermissionMode,
+		SubagentCompletions:      newM.SubagentCompletions,
+		CumInputTokens:           newM.CumInputTokens,
+		CumOutputTokens:          newM.CumOutputTokens,
+		CumCacheReadTokens:       newM.CumCacheReadTokens,
+		CumCacheCreationTokens:   newM.CumCacheCreationTokens,
+		Tasks:                    newM.Tasks,
+		NoSubstantiveActivity:    newM.NoSubstantiveActivity,
+		RateLimit:                newM.RateLimit,
+		RateLimitForecastEta:     newM.RateLimitForecastEta,
 	}
 	if merged.ContextWindow == 0 && oldM.ContextWindow > 0 {
 		merged.ContextWindow = oldM.ContextWindow

@@ -27,6 +27,7 @@
     "linting_test_automation": "unknown",
     "edit_strategy_selection": "unknown",
     "context_curation": "unknown",
-    "cost_tracking": true
+    "cost_tracking": true,
+    "background_process": true
   }
 }
