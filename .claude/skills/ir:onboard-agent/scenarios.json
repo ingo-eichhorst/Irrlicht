@@ -781,7 +781,7 @@
     },
     {
       "name": "checkpoint-rewind",
-      "description": "User rewinds to an earlier auto-checkpoint, restoring files and/or conversation; subsequent turns start cleanly from the rewound point. claudecode binds Esc+Esc as a rewind shortcut and /rewind as the picker. This recipe drives two normal turns, then triggers Esc+Esc to roll back, then runs a third turn — the goal is to capture what irrlicht observes when claudecode mutates its transcript backwards (the daemon's transcript_tailer is append-oriented and may treat a truncation as session-removed-then-reborn).",
+      "description": "User rewinds to an earlier auto-checkpoint, restoring files and/or conversation; subsequent turns start cleanly from the rewound point. Each adapter exercises this differently: claudecode rewinds IN PLACE (Esc+Esc shortcut / /rewind picker) and mutates its transcript backwards, keeping the SAME session_id — the goal there is to capture what irrlicht observes when the append-oriented transcript_tailer sees a truncation (session-removed-then-reborn vs. activity). codex instead FORKS (/fork): it spawns a NEW rollout with a fresh session_id carrying the replayed pre-fork history (the original lingers frozen), so irrlicht observes a new linked session row rather than an in-place truncation. Every variant drives two normal turns, rewinds, then runs a third turn from the rewound point.",
       "coverage_id": "checkpoint-rewind",
       "requires": [
         "headless_mode"
@@ -885,8 +885,73 @@
           ]
         },
         "codex": {
-          "applicable": false,
-          "scope_note": "Coverage matrix declares codex supports=no for checkpoint-rewind as of v0.130: no native rewind feature. Open feature requests #11626 + #12558 track adding it. Reassess on the next major codex release."
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY) — verified codex 0.130.0",
+            "codex version with /fork support — verified in 0.130.0 (TUI prints 'Thread forked from <uuid>')",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "STALE-VERDICT OVERRIDE: the prior by_adapter.codex was applicable:false on the false belief codex 0.130 has no rewind. Codex DOES support rewind/fork: /fork clones the conversation into a NEW thread (fresh session id; original intact), and Esc-Esc on an empty composer walks the transcript back to edit a prior message. Feature requests #11626/#12558 ask codex to ALSO revert code edits — orthogonal to the conversation fork that already ships. See assessment.json.",
+            "PARTIAL observability (per assessment.json): codex forks rather than rewinding in place, so the observable is a NEW linked session_id (not the same session_id with a truncated transcript like claudecode). The codex parser skips session_meta lines, so the forked_from_id provenance is dropped and the daemon sees the fork as an independent fresh session, not a linked child. codex emits NO transcript_removed for the original at fork time (the old rollout lingers frozen until process_exited).",
+            "KNOWN CAPTURE GAP: drive-codex-interactive.sh caches the first rollout and writes a single session.uuid, so curate-lifecycle-fixture.sh filters the fixture to UUID-1 only. The v2_* (post-/fork) phases assert what the daemon observes LIVE; they may be absent from the single-session curated fixture, surfacing as validation drift until the codex driver tracks /fork-spawned sessions (a developer task). SAME gap as codex/session-reset."
+          ],
+          "setup": [
+            "Driver launches codex in a fresh per-run cwd under <staging>/cwd/ (isolates the trust dialog).",
+            "Codex assigns its own session UUID per rollout; there is no --session-id flag. The first prompt materializes rollout-<ts>-<uuid1>.jsonl; /fork EAGERLY materializes a second rollout-<ts>-<uuid2>.jsonl carrying a fresh session_id, a session_meta forked_from_id=uuid1, and the replayed pre-fork history. UNLIKE /clear (lazy: second rollout appears only on the first post-clear prompt), /fork is eager — the new rollout appears the instant the command runs.",
+            "/fork is sent as a plain send/slash step (text + Enter): the codex driver handles send/slash as text+Enter. NO keys/restart/resume step types are used — the codex driver does not implement them. Esc-Esc rewind is deliberately avoided because the driver's interrupt step decrements the turn counter, which would desync wait_turn."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "/fork"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the FIRST rollout-keyed session in ready",
+            "events.jsonl shows the FIRST rollout session running two working→ready turns (turn 1 'one', turn 2 'two') — the checkpoints to fork back from",
+            "after /fork, a DIFFERENT rollout session_id appears in ready (new linked session row, restored from the rewound point) — the 'a linked new session_id if the adapter forks' signal from scenario-meanings, observed live on the dashboard",
+            "the post-fork turn's working→ready cycle is on the NEW rollout session, not the original — a clean ready → working → ready arc from the rewound point",
+            "codex does NOT emit transcript_removed for the original session at /fork time (the old rollout lingers frozen) — the original row stays ready until process_exited; do not assert a removal event, and do not assert a same-session_id in-place rewind (codex forks)",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         },
         "pi": {
           "applicable": false,
