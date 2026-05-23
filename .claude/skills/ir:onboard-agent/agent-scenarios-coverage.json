@@ -944,8 +944,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
-          "notes": "SendMessage continuation; parent-not-held semantics rely on surviveTurnDone list; per-flow validation incomplete"
+          "irrlicht_observes": "yes",
+          "notes": "unified rule: session held working while bg child alive; child counted in SubagentCount; reevaluateParent/hasActiveChildren + ComputeSubagentSummary already satisfy the signal"
         },
         "codex": {
           "agent_supports": "no",
