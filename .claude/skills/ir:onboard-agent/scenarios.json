@@ -769,6 +769,10 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "driver_gap: codex's /model is an interactive TWO-STEP picker (model list, then reasoning-level list), not a one-shot `/model <name>` like aider. Driving it needs a raw-keystroke step type (digit + Enter to pick the model, Enter to confirm reasoning level) that the codex interactive driver lacks — its only step types are send/slash/wait_turn/interrupt/sleep/reset_session/fork/exit_clean/resume, and send/slash unconditionally bump EXPECTED_TURNS (corrupting wait_turn) and always append a trailing Enter, so they cannot navigate the picker. Extend drive-codex-interactive.sh with a `keys` primitive (raw tmux send-keys that does NOT touch the turn counter) to unblock. Capability is real and observable: codex 0.130.0 has /model (verified live: gpt-5.5→gpt-5.3-codex), the parser reads turn_context.payload.model, and summary.model_name in the .golden captures the switch — see assessment.json. multi_model_orchestration=yes."
         }
       }
     },
