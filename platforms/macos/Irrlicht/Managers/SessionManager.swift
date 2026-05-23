@@ -27,6 +27,7 @@ class SessionManager: ObservableObject {
     @Published var connectionState: ConnectionState = .disconnected
     @Published var lastError: String?
     @Published var apiGroups: [AgentGroup] = []  // recursive group structure from API
+    @Published var providerCosts: [String: [String: Double]] = [:]  // providerKey → timeframe → USD (windowed)
     @Published var stateHistory: [String: [String]] = [:]  // session_id → oldest→newest state strings (active granularity)
     @Published var historyBucketCount: Int = 60          // matches HistoryBucketCount on the daemon
 
@@ -210,6 +211,19 @@ class SessionManager: ObservableObject {
 
         reconnectDelay = min(reconnectDelay * 2, maxReconnectDelay)
         scheduleConnect(after: delay)
+    }
+
+    /// Top-level /api/v1/sessions payload: the dashboard hierarchy plus
+    /// per-provider trailing-window spend. `provider_costs` is keyed
+    /// providerKey → timeframe ("day"/"week"/"month"/"year") → USD.
+    struct SessionsResponse: Decodable {
+        let groups: [AgentGroup]
+        let providerCosts: [String: [String: Double]]?
+
+        enum CodingKeys: String, CodingKey {
+            case groups
+            case providerCosts = "provider_costs"
+        }
     }
 
     /// Recursive group structure from the sessions API.
@@ -422,7 +436,9 @@ class SessionManager: ObservableObject {
             let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             let decoder = JSONDecoder()
-            let topGroups = try decoder.decode([AgentGroup].self, from: data)
+            let payload = try decoder.decode(SessionsResponse.self, from: data)
+            let topGroups = payload.groups
+            providerCosts = payload.providerCosts ?? [:]
 
             apiGroups = orderedGroups(topGroups)
             groupedSessionIds = Set(topGroups.flatMap { collectSessionIds(from: $0) })
