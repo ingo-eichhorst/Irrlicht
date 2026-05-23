@@ -3620,6 +3620,10 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "Not recordable: the quota-exhausted signal cannot be elicited deterministically live. Codex DOES emit it (v3 rate_limit_reached_type → RateLimitSnapshot.ReachedType, observed by irrlicht), but (1) the real account quota cannot be burned on demand, (2) there is no codex/OpenAI-compatible 429 mock — tools/mock-anthropic-429.go is Anthropic-only and launches claude --bare, with no codex equivalent, and (3) the codex interactive driver has no quota-exhausted-response injection primitive. The in-window observability is already validated by the sibling codex/quota-burndown cell (monotonic UsedPercent below the cap); this cap-hit ReachedType variant only becomes recordable if a codex 429 mock or a driver fixture-injection primitive is added (a developer task). See assessment.json."
         }
       }
     },
