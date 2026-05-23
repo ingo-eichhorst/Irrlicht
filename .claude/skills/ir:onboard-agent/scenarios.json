@@ -2912,6 +2912,42 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so its shell/exec tool runs autonomously inside codex's sandbox — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate. Both the failing and the corrective command auto-execute, so neither triggers a waiting transition.",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'cat /nonexistent_file_xyz.txt' using your shell tool. If it fails, do NOT retry that command — instead run 'ls' in the same turn and report the file names it printed. Then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working transition for the rollout session_id when the prompt is sent",
+            "transcript.jsonl contains at least two function_call / function_call_output pairs inside the working span — the failing cat (its function_call_output carries a non-zero/error result) and the corrective ls",
+            "events.jsonl contains NO state_transition to ready between the failing function_call_output and the corrective function_call (a failing tool result still closes the open call; the session stays working)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (codex auto-executes both commands; no permission gate)",
+            "events.jsonl shows exactly one working→ready transition at task_complete (turn end)",
+            "final session state is ready",
+            "Do not assert the exec tool's error text — it is model/OS-dependent; assert only the state topology and the tool-call pairing"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
