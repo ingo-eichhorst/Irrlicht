@@ -259,6 +259,30 @@ func TestDataDir(t *testing.T) {
 	})
 }
 
+func TestStateStoreDir(t *testing.T) {
+	// Without IRRLICHT_HOME, returns "" so callers keep their production default.
+	t.Run("unset keeps default", func(t *testing.T) {
+		t.Setenv("IRRLICHT_HOME", "")
+		for _, sub := range []string{"instances", "cost", "sessions"} {
+			if got := stateStoreDir(sub); got != "" {
+				t.Errorf("stateStoreDir(%q) = %q, want \"\" when IRRLICHT_HOME unset", sub, got)
+			}
+		}
+	})
+
+	// With IRRLICHT_HOME, every store nests beneath it for full isolation.
+	t.Run("override nests stores", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("IRRLICHT_HOME", dir)
+		for _, sub := range []string{"instances", "cost", "sessions"} {
+			want := filepath.Join(dir, sub)
+			if got := stateStoreDir(sub); got != want {
+				t.Errorf("stateStoreDir(%q) = %q, want %q", sub, got, want)
+			}
+		}
+	})
+}
+
 // TestGate_GetState verifies that GET /state returns the compact debug-state format.
 func TestGate_GetState(t *testing.T) {
 	srv, repo := newTestStack(t)
