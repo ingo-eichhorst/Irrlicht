@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -75,6 +76,17 @@ type SessionMetrics struct {
 	// running. The tailer leaves this at zero; adapters populate it from
 	// LastOpenToolNames or whatever adapter-specific signal they use.
 	OpenSubagents int `json:"open_subagents,omitempty"`
+
+	// BackgroundProcessCount is the number of agent-spawned background
+	// processes the transcript shows as still open (Bash run_in_background
+	// launches not yet observed terminating). Derived from the
+	// openBackgroundProcs set. See issue #445.
+	BackgroundProcessCount int `json:"background_process_count,omitempty"`
+
+	// BackgroundProcessOutputs holds the output-file paths of those open
+	// background processes, sorted for determinism. The daemon's liveness
+	// probe lsof's them. Not serialized — recomputed each pass. See issue #445.
+	BackgroundProcessOutputs []string `json:"-"`
 
 	// SubagentCompletions surfaces parent-side "subagent done" signals
 	// discovered during the most recent TailAndProcess() pass. Cleared at
@@ -175,6 +187,15 @@ type TranscriptTailer struct {
 	// adapter name for model config fallback.
 	adapter string
 
+	// disableModelConfigFallback turns off the getDefaultModelFromConfig
+	// lookup. The daemon leaves it false so a live session with no in-band
+	// model still surfaces the operator's configured default. The replay
+	// path sets it true (DisableModelConfigFallback) so a committed fixture's
+	// output reflects only the transcript — never the operator's local
+	// ~/.claude/settings.json — keeping byte-identity goldens reproducible
+	// across machines and CI (issue #440).
+	disableModelConfigFallback bool
+
 	// Context window override from transcript or extended context model suffix.
 	contextWindowOverride int64
 
@@ -247,6 +268,17 @@ type TranscriptTailer struct {
 	// Invariant: taskSeq == len(tasks) always (tasks are never removed).
 	taskSeq int
 
+	// openBackgroundProcs is the set of agent-spawned background processes
+	// still believed running, keyed by background id with the output-file
+	// path as value. A BackgroundSpawn inserts; a matched terminated
+	// BashOutput poll or a KillShell removes. BackgroundProcessCount and
+	// BackgroundProcessOutputs are derived from it. See issue #445.
+	openBackgroundProcs map[string]string
+	// pendingBashPolls maps a BashOutput poll's tool_use id to the background
+	// id it targets, so a later tool_result reporting a terminated status can
+	// be attributed to the right background process. See issue #445.
+	pendingBashPolls map[string]string
+
 	// lastLineSeenAt is the wall-clock time at which the parser last consumed
 	// a transcript line. Used by idleFlusher-implementing parsers (aider) to
 	// synthesize turn_done when the file has been quiet long enough. Zero
@@ -272,19 +304,29 @@ const rateLimitHistoryCap = 5
 // config fallback.
 func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *TranscriptTailer {
 	return &TranscriptTailer{
-		path:          path,
-		lastOffset:    0,
-		capacityMgr:   capacity.DefaultCapacityManager(),
-		parser:        parser,
-		adapter:       adapter,
-		openToolCalls: make(map[string]string),
-		cumByModel:    make(map[string]*UsageBreakdown),
+		path:                path,
+		lastOffset:          0,
+		capacityMgr:         capacity.DefaultCapacityManager(),
+		parser:              parser,
+		adapter:             adapter,
+		openToolCalls:       make(map[string]string),
+		openBackgroundProcs: make(map[string]string),
+		pendingBashPolls:    make(map[string]string),
+		cumByModel:          make(map[string]*UsageBreakdown),
 		metrics: &SessionMetrics{
 			MessageHistory: make([]MessageEvent, 0),
 			SessionStartAt: time.Time{},
 		},
 		windowSize: 60 * time.Second,
 	}
+}
+
+// DisableModelConfigFallback stops the tailer from reading the operator's
+// per-agent config (~/.claude/settings.json and friends) to fill in a missing
+// model name. The replay tool calls this so committed fixtures replay
+// identically regardless of the machine's local config (issue #440).
+func (t *TranscriptTailer) DisableModelConfigFallback() {
+	t.disableModelConfigFallback = true
 }
 
 // GetLedgerState returns the durable accumulation state of the tailer so it
@@ -308,6 +350,16 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	}
 	if len(t.tasks) > 0 {
 		s.Tasks = append([]Task(nil), t.tasks...)
+	}
+	if len(t.openBackgroundProcs) > 0 {
+		bp := make(map[string]string, len(t.openBackgroundProcs))
+		maps.Copy(bp, t.openBackgroundProcs)
+		s.BackgroundProcs = bp
+	}
+	if len(t.pendingBashPolls) > 0 {
+		pp := make(map[string]string, len(t.pendingBashPolls))
+		maps.Copy(pp, t.pendingBashPolls)
+		s.PendingBashPolls = pp
 	}
 	return s
 }
@@ -342,6 +394,14 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	if len(s.Tasks) > 0 {
 		t.tasks = append([]Task(nil), s.Tasks...)
 		t.taskSeq = len(t.tasks)
+	}
+	if len(s.BackgroundProcs) > 0 {
+		t.openBackgroundProcs = make(map[string]string, len(s.BackgroundProcs))
+		maps.Copy(t.openBackgroundProcs, s.BackgroundProcs)
+	}
+	if len(s.PendingBashPolls) > 0 {
+		t.pendingBashPolls = make(map[string]string, len(s.PendingBashPolls))
+		maps.Copy(t.pendingBashPolls, s.PendingBashPolls)
 	}
 }
 
@@ -396,6 +456,11 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		t.cumProviderCostUSD = 0
 		t.tasks = nil
 		t.taskSeq = 0
+		// Background-process set belongs to the prior file; drop it so a
+		// rotated/truncated transcript doesn't keep a stale session `working`.
+		// See issue #445.
+		t.openBackgroundProcs = make(map[string]string)
+		t.pendingBashPolls = make(map[string]string)
 		// Drop the pre-rotation idle anchor so the post-scan idleFlusher
 		// hook doesn't synthesize a phantom turn_done against stale time.
 		t.lastLineSeenAt = time.Time{}
@@ -480,6 +545,17 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
 					substantiveThisPass = true
 				}
+				// Background-process completion arrives on a Skip=true
+				// task-notification (origin.kind or queued_command attachment) —
+				// drain it here so the count drops and the pass is substantive
+				// enough for the detector to re-classify and release the hold.
+				// See issue #445.
+				if len(parsed.TerminatedBackgroundTaskIDs) > 0 {
+					for _, id := range parsed.TerminatedBackgroundTaskIDs {
+						delete(t.openBackgroundProcs, id)
+					}
+					substantiveThisPass = true
+				}
 				if parsed.TaskSnapshot != nil {
 					substantiveThisPass = true
 				}
@@ -512,8 +588,9 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
 	t.metrics.NoSubstantiveActivity = linesParsedThisPass > 0 && !substantiveThisPass
 
-	// Model config fallback.
-	if t.metrics.ModelName == "" {
+	// Model config fallback. Skipped on the replay path (see
+	// disableModelConfigFallback) so fixture output stays hermetic.
+	if t.metrics.ModelName == "" && !t.disableModelConfigFallback {
 		if defaultModel := getDefaultModelFromConfig(t.adapter); defaultModel != "" {
 			t.metrics.ModelName = defaultModel
 		}
@@ -620,6 +697,10 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 	if sawUserBlockingClosed {
 		t.metrics.SawUserBlockingToolClosedThisPass = true
 	}
+	// Deliberately no getDefaultModelFromConfig fallback here (unlike
+	// TailAndProcess): the replay tool is the primary caller and must stay
+	// hermetic (issue #440). If a fallback is ever added, gate it on
+	// disableModelConfigFallback so replay doesn't read operator config.
 	t.computeContextUtilization()
 	return t.metrics, true
 }
@@ -727,6 +808,42 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 			}
 		}
 	}
+
+	// Background-process tracking (Bash run_in_background). A spawn adds the
+	// background id; a matched terminated BashOutput poll or a KillShell
+	// removes it. The set is the source of truth for BackgroundProcessCount.
+	// See issue #445.
+	for _, sp := range parsed.BackgroundSpawns {
+		if sp.BashID != "" {
+			t.openBackgroundProcs[sp.BashID] = sp.OutputPath
+		}
+	}
+	for _, poll := range parsed.BashOutputPolls {
+		if poll.ToolUseID != "" && poll.BashID != "" {
+			t.pendingBashPolls[poll.ToolUseID] = poll.BashID
+		}
+	}
+	for _, id := range parsed.TerminatedBashOutputIDs {
+		if bashID, ok := t.pendingBashPolls[id]; ok {
+			delete(t.openBackgroundProcs, bashID)
+		}
+	}
+	// A poll is resolved once its tool_result arrives (terminated OR still
+	// running) — drop the pairing either way so pendingBashPolls only ever
+	// holds in-flight polls (bounded by concurrent polls, not total polls).
+	for _, id := range parsed.ToolResultIDs {
+		delete(t.pendingBashPolls, id)
+	}
+	for _, bashID := range parsed.KilledShellIDs {
+		delete(t.openBackgroundProcs, bashID)
+	}
+	// Terminal task-notification completion (orchestrated/SDK path): the
+	// <task-id> is the backgroundTaskId. A non-matching id is a harmless no-op.
+	// See issue #445.
+	for _, id := range parsed.TerminatedBackgroundTaskIDs {
+		delete(t.openBackgroundProcs, id)
+	}
+
 	t.reconcileTaskSnapshot(parsed)
 
 	// turn_done is the authoritative end-of-turn signal. By definition most

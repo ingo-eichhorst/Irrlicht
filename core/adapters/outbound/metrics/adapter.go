@@ -136,6 +136,8 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		HasOpenToolCall:                   m.HasOpenToolCall,
 		OpenToolCallCount:                 m.OpenToolCallCount,
 		OpenSubagents:                     a.countOpenSubagents(adapter, m),
+		BackgroundProcessCount:            m.BackgroundProcessCount,
+		BackgroundProcessOutputs:          m.BackgroundProcessOutputs,
 		LastEventType:                     m.LastEventType,
 		LastOpenToolNames:                 m.LastOpenToolNames,
 		LastWasUserInterrupt:              m.LastWasUserInterrupt,

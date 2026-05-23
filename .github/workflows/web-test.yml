@@ -5,12 +5,18 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tree:
+          - platforms/web
+          - tools/agent-onboarding/internal/viewer/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
       - run: npm ci
-        working-directory: platforms/web
+        working-directory: ${{ matrix.tree }}
       - run: npm test
-        working-directory: platforms/web
+        working-directory: ${{ matrix.tree }}

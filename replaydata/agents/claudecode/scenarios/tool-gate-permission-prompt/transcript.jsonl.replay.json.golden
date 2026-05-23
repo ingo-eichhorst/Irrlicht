@@ -19,8 +19,7 @@
     },
     "flicker_count": 0,
     "flickers_by_category": {},
-    "flickers_by_reason": {},
-    "model_name": "claude-sonnet-4-6"
+    "flickers_by_reason": {}
   },
   "transitions": [
     {

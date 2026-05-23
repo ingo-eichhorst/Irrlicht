@@ -123,6 +123,21 @@ type SessionDetector struct {
 	// goroutine), read by processActivity (event-loop goroutine).
 	permMu            sync.Mutex
 	permissionPending map[string]bool // sessionID → true
+
+	// bgLiveProbe answers "does this session still have a live background
+	// process?" from its output-file paths. Defaults to anyLiveOutputWriter
+	// (lsof); tests override it. See issue #445.
+	bgLiveProbe backgroundProbe
+
+	// bgMu guards bgLive / bgProbing. The probe (lsof) runs off the event-loop
+	// goroutine so a slow filesystem can't stall every other session's
+	// processing; processActivity reads the last-known liveness from bgLive
+	// (optimistically alive on first sight) and a completed probe nudges the
+	// event loop to re-classify. bgProbing is the per-session in-flight guard.
+	// See issue #445.
+	bgMu      sync.Mutex
+	bgLive    map[string]bool
+	bgProbing map[string]bool
 }
 
 // NewSessionDetector creates a SessionDetector with all required
@@ -165,6 +180,9 @@ func NewSessionDetector(
 		debouncedEvents:   make(chan agent.Event, 64),
 		deletedCooldown:   10 * time.Second,
 		permissionPending: make(map[string]bool),
+		bgLiveProbe:       anyLiveOutputWriter,
+		bgLive:            make(map[string]bool),
+		bgProbing:         make(map[string]bool),
 	}
 	det.pidMgr = NewPIDManager(
 		pw, repo, log, broadcaster, readyTTL,
@@ -178,6 +196,13 @@ func NewSessionDetector(
 // Intended for tests that need immediate re-creation.
 func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 	d.deletedCooldown = dur
+}
+
+// SetBackgroundProbeForTest overrides the background-process liveness probe so
+// tests can simulate live / dead background processes without real lsof. See
+// issue #445.
+func (d *SessionDetector) SetBackgroundProbeForTest(p func(outputPaths []string) bool) {
+	d.bgLiveProbe = p
 }
 
 // RunPIDLivenessSweepForTest runs one iteration of the liveness sweep

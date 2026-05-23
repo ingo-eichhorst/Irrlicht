@@ -1,6 +1,7 @@
 package tailer
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -312,6 +313,25 @@ func (t *TranscriptTailer) computeMetrics() {
 		t.metrics.RateLimitHistory = append([]RateLimitSnapshot(nil), t.rateLimitHistory...)
 	} else {
 		t.metrics.RateLimitHistory = nil
+	}
+
+	// Background-process count + output paths share the rate-limit block's
+	// "must run even on an empty pass" property: the open set can be
+	// rehydrated from the ledger after a daemon restart and must surface
+	// before any new transcript line arrives, so a still-running background
+	// process keeps holding the session `working`. See issue #445.
+	t.metrics.BackgroundProcessCount = len(t.openBackgroundProcs)
+	if len(t.openBackgroundProcs) > 0 {
+		outs := make([]string, 0, len(t.openBackgroundProcs))
+		for _, p := range t.openBackgroundProcs {
+			if p != "" {
+				outs = append(outs, p)
+			}
+		}
+		slices.Sort(outs)
+		t.metrics.BackgroundProcessOutputs = outs
+	} else {
+		t.metrics.BackgroundProcessOutputs = nil
 	}
 
 	if len(t.metrics.MessageHistory) == 0 {

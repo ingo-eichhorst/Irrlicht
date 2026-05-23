@@ -1,5 +1,8 @@
     // --- State ---
     let dashboardGroups = [];
+    // Per-provider trailing-window spend (providerKey → timeframe → USD) from
+    // the /api/v1/sessions `provider_costs` field. Feeds the usage chips.
+    let dashboardProviderCosts = {};
     let orchestrator = null;   // OrchestratorSummary from initial load
     let orchFull = null;       // Full orchestrator.State (global_agents, codebases) from WS / secondary fetch
     // Adapter branding from /api/v1/agents — keyed by adapter `name`
@@ -193,6 +196,12 @@
     ];
     let currentTimeframe = localStorage.getItem('irrlicht_costTimeframe') || 'day';
     if (!COST_TIMEFRAMES.find(t => t.key === currentTimeframe)) currentTimeframe = 'day';
+
+    // Usage chips share one timeframe, cycled by clicking any of them and
+    // persisted independently of the project-cost timeframe above — mirrors
+    // macOS's separate usageCostTimeframe (#386).
+    let currentUsageTimeframe = localStorage.getItem('irrlicht_usageCostTimeframe') || 'day';
+    if (!COST_TIMEFRAMES.find(t => t.key === currentUsageTimeframe)) currentUsageTimeframe = 'day';
 
     // --- Timeline / history state (WebSocket-streamed, see history_snapshot/tick/upgrade) ---
     let timelineHistory = new Map(); // session_id -> {label, states: string[]} for the active granularity
@@ -707,6 +716,22 @@
       render();
     }
 
+    function cycleUsageTimeframe() {
+      const idx = COST_TIMEFRAMES.findIndex(t => t.key === currentUsageTimeframe);
+      currentUsageTimeframe = COST_TIMEFRAMES[(idx + 1) % COST_TIMEFRAMES.length].key;
+      localStorage.setItem('irrlicht_usageCostTimeframe', currentUsageTimeframe);
+      render();
+    }
+
+    // Windowed spend for a usage chip, keyed by providerKey (chip.key, e.g.
+    // "anthropic"/"openai") and the selected timeframe. 0 when the daemon has
+    // no provider_costs entry for that provider/window.
+    function usageSpendForChip(chip) {
+      const byTf = dashboardProviderCosts[chip.key];
+      const v = byTf && byTf[currentUsageTimeframe];
+      return typeof v === 'number' ? v : 0;
+    }
+
     function updateGroupHeader(el, group) {
       // Gas Town groups get a ⛽ glyph prefix on the title — matches macOS
       // group-title rendering at SessionListView.swift:945.
@@ -941,16 +966,27 @@
       }
 
       // Active tool label — shown only when agent is working and inside a tool call.
+      // When no tool is open but the session is held working by a live Bash
+      // background process (run_in_background), surface that instead so the row
+      // explains why it's still working past the turn's end. See issue #445.
       const toolEl = el.querySelector('.row-tool');
       const tools = metrics.last_open_tool_names || [];
+      const bgCount = metrics.background_process_count || 0;
       if (metrics.has_open_tool_call && tools[0] && state === 'working') {
         const raw = tools[0];
         const isUser = raw === 'AskUserQuestion' || raw === 'ExitPlanMode';
         toolEl.style.display = '';
         toolEl.textContent = toolLabel[raw] || raw.slice(0, 12);
         toolEl.className = 'row-tool' + (isUser ? ' tool-user' : '');
+        toolEl.title = '';
+      } else if (bgCount > 0 && state === 'working') {
+        toolEl.style.display = '';
+        toolEl.textContent = '⚙ ' + bgCount + ' bg';
+        toolEl.className = 'row-tool';
+        toolEl.title = bgCount + ' background process' + (bgCount === 1 ? '' : 'es') + ' running';
       } else {
         toolEl.style.display = 'none';
+        toolEl.title = '';
       }
 
       // Per-row history canvas is repainted by repaintHistory() on the
@@ -1254,6 +1290,7 @@
       }
       if (resp) {
         dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
+        dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
         rebuildIndex();
       }
       render();
@@ -1308,6 +1345,13 @@
               if (a.children) mergeRateLimit(a.children);
             }
           })(g.agents);
+        }
+        // Refresh per-provider windowed spend the same way as group costs —
+        // it rides this response, not the WebSocket deltas.
+        const freshProviderCosts = (!Array.isArray(resp) && resp.provider_costs) || {};
+        if (JSON.stringify(freshProviderCosts) !== JSON.stringify(dashboardProviderCosts)) {
+          dashboardProviderCosts = freshProviderCosts;
+          changed = true;
         }
         if (changed) render();
       });
@@ -1555,7 +1599,7 @@
     }
 
     function formatUsageCost(cost) {
-      if (!cost || cost <= 0) return '$0.00';
+      if (!cost || cost <= 0) return '$0';
       if (cost < 0.01) return '<$0.01';
       if (cost >= 100) return '$' + Math.round(cost);
       return '$' + cost.toFixed(2);
@@ -1765,15 +1809,22 @@
           body.appendChild(buildQuotaRowDOM(w, compact, nowMs));
         }
       } else {
-        const hasSpend = chip.totalCostUSD > 0;
+        // Windowed per-provider spend for the selected timeframe, click-to-
+        // cycle — mirrors the project-group cost text and the macOS usage
+        // chip (#386). $0/<frame> is honest for a windowed zero, so there's
+        // no separate em-dash zero-state.
+        const tf = COST_TIMEFRAMES.find(t => t.key === currentUsageTimeframe) || COST_TIMEFRAMES[0];
         const head = document.createElement('span');
         head.className = 'quota-usage-headline';
-        head.textContent = hasSpend ? formatUsageCost(chip.totalCostUSD) : '—';
+        head.textContent = formatUsageCost(usageSpendForChip(chip)) + tf.suffix;
         const sub = document.createElement('span');
         sub.className = 'quota-usage-sublabel';
-        sub.textContent = hasSpend ? 'spend' : 'no spend yet';
+        sub.textContent = 'spend';
         body.appendChild(head);
         body.appendChild(sub);
+        body.style.cursor = 'pointer';
+        body.title = 'Click to cycle time frame (day → week → month → year)';
+        body.addEventListener('click', (e) => { e.stopPropagation(); cycleUsageTimeframe(); });
       }
       root.appendChild(body);
       return root;
@@ -1783,6 +1834,7 @@
       const pill = document.createElement('span');
       pill.className = 'quota-overflow';
       pill.textContent = '+' + hidden.length + ' more';
+      const usageTf = COST_TIMEFRAMES.find(t => t.key === currentUsageTimeframe) || COST_TIMEFRAMES[0];
       pill.title = hidden.map(h => {
         const label = planTypeLabel(h.snapshot.plan_type)
                    || (h.key.charAt(0).toUpperCase() + h.key.slice(1));
@@ -1790,7 +1842,7 @@
           const imm = h.imminent;
           return imm ? (label + ': ' + Math.round(imm.used_percent || 0) + '%') : label;
         }
-        return label + ': ' + (h.totalCostUSD > 0 ? formatUsageCost(h.totalCostUSD) : '—');
+        return label + ': ' + formatUsageCost(usageSpendForChip(h)) + usageTf.suffix;
       }).join('\n');
       return pill;
     }
@@ -1996,6 +2048,6 @@
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
-  formatCost, pressureClass, historyPriorityForState,
+  formatCost, formatUsageCost, pressureClass, historyPriorityForState,
   lastNotifiedPressure,
 };

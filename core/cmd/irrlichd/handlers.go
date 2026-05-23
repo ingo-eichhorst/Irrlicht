@@ -13,28 +13,40 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// costAttachCache caches the last ProjectCostsInWindows result so successive
-// /api/v1/sessions hits within costAttachTTL reuse one scan. Shared across
-// requests; the zero value is an empty cache.
+// sessionsResponse is the /api/v1/sessions payload. Groups is the dashboard
+// hierarchy (per-project group costs live on each group's `costs` field);
+// ProviderCosts holds per-provider trailing-window spend
+// (providerKey → timeframe → USD) so clients can render windowed usage chips
+// without re-attributing project costs — a single project can mix providers.
+type sessionsResponse struct {
+	Groups        []*session.AgentGroup         `json:"groups"`
+	ProviderCosts map[string]map[string]float64 `json:"provider_costs,omitempty"`
+}
+
+// costAttachCache caches the last project + provider cost scans so successive
+// /api/v1/sessions hits within costAttachTTL reuse them. A single TTL governs
+// both maps. Shared across requests; the zero value is an empty cache.
 type costAttachCache struct {
 	mu          sync.RWMutex
 	generatedAt time.Time
-	byTimeframe map[string]map[string]float64
+	byProject   map[string]map[string]float64 // timeframe → project → USD
+	byProvider  map[string]map[string]float64 // timeframe → provider → USD
 }
 
-func (c *costAttachCache) get(now time.Time) (map[string]map[string]float64, bool) {
+func (c *costAttachCache) get(now time.Time) (byProject, byProvider map[string]map[string]float64, ok bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.byTimeframe == nil || now.Sub(c.generatedAt) > costAttachTTL {
-		return nil, false
+	if c.byProject == nil || now.Sub(c.generatedAt) > costAttachTTL {
+		return nil, nil, false
 	}
-	return c.byTimeframe, true
+	return c.byProject, c.byProvider, true
 }
 
-func (c *costAttachCache) put(now time.Time, v map[string]map[string]float64) {
+func (c *costAttachCache) put(now time.Time, byProject, byProvider map[string]map[string]float64) {
 	c.mu.Lock()
 	c.generatedAt = now
-	c.byTimeframe = v
+	c.byProject = byProject
+	c.byProvider = byProvider
 	c.mu.Unlock()
 }
 
@@ -53,30 +65,42 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		// builder then sees the inherited snapshots and the chip
 		// renders for the wrapper just like it does for the donor.
 		services.InheritRateLimits(sessions, "")
-		resp := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
+		groups := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
+		resp := sessionsResponse{Groups: groups}
 		if tracker != nil {
-			attachGroupCosts(resp, tracker, cache)
+			byProject, byProvider := costMaps(tracker, cache)
+			attachGroupCosts(groups, byProject)
+			resp.ProviderCosts = providerCostsByProvider(byProvider)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}
 }
 
+// costMaps returns the per-project and per-provider trailing-window cost maps,
+// recomputing both via a single tracker scan when the cache is cold or stale.
+// Either map is nil if the scan failed; callers must tolerate nil. The single
+// scan keeps I/O bounded under concurrent polling.
+func costMaps(tracker outbound.CostTracker, cache *costAttachCache) (byProject, byProvider map[string]map[string]float64) {
+	now := time.Now()
+	if p, pv, ok := cache.get(now); ok {
+		return p, pv
+	}
+	p, pv, err := tracker.CostsInWindows(costTimeframeSeconds)
+	if err != nil {
+		return nil, nil
+	}
+	cache.put(now, p, pv)
+	return p, pv
+}
+
 // attachGroupCosts populates each top-level group's Costs map with the
 // trailing-window cost for day/week/month/year. Orchestrator groups are
 // skipped — their agents span projects, so group-level aggregation is
-// ambiguous. Uses a single per-file scan (ProjectCostsInWindows) + a small
-// per-handler TTL cache to keep I/O bounded under concurrent polling.
-func attachGroupCosts(groups []*session.AgentGroup, tracker outbound.CostTracker, cache *costAttachCache) {
-	now := time.Now()
-	byTf, ok := cache.get(now)
-	if !ok {
-		m, err := tracker.ProjectCostsInWindows(costTimeframeSeconds)
-		if err != nil {
-			return
-		}
-		cache.put(now, m)
-		byTf = m
+// ambiguous.
+func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]float64) {
+	if byTf == nil {
+		return
 	}
 	for _, g := range groups {
 		if g == nil || g.Type == "gastown" {
@@ -92,6 +116,34 @@ func attachGroupCosts(groups []*session.AgentGroup, tracker outbound.CostTracker
 			g.Costs = costs
 		}
 	}
+}
+
+// providerCostsByProvider inverts the tracker's timeframe→provider→USD map
+// into the response shape providerKey→timeframe→USD (e.g.
+// {"anthropic": {"day": 0.5, ...}}). Empty-provider buckets are dropped.
+// Returns nil when there's nothing to report so the field is omitted.
+func providerCostsByProvider(byTf map[string]map[string]float64) map[string]map[string]float64 {
+	if byTf == nil {
+		return nil
+	}
+	out := make(map[string]map[string]float64)
+	for tf, perProvider := range byTf {
+		for provider, v := range perProvider {
+			if provider == "" {
+				continue
+			}
+			m := out[provider]
+			if m == nil {
+				m = make(map[string]float64, len(costTimeframeSeconds))
+				out[provider] = m
+			}
+			m[tf] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // handleGetVersion serves the daemon's build version. Frontends use it to

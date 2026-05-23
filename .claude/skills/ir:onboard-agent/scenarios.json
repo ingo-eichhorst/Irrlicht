@@ -2195,6 +2195,55 @@
       }
     },
     {
+      "name": "background-process",
+      "description": "Claude runs a Bash command with run_in_background:true (`sleep 8 && echo done`); the tool returns immediately carrying toolUseResult.backgroundTaskId, then the agent polls the process via the BashOutput tool until it reports a terminated status. WHAT it captures: the user-observable arc that PR #450 (issue #445) added — ready → working at the prompt, then the session STAYS working past the turn's own end_turn while the detached shell process is alive, then a single working → ready once the process exits. WHY this exact shape: #450 detects the spawn from the structured backgroundTaskId and gates IsAgentDone on a live `lsof` probe of the tasks/<id>.output file, so the only way to make the daemon observe completion (rather than just letting the turn end) is to drive a BashOutput poll that reports `completed` — there is no async exit hook the tailer can see. The single prompt asks claude to spawn AND poll-to-completion in one turn so the driver's one wait_turn brackets the whole arc. HOW it differs between runs: how many BashOutput polls the model issues, exact token counts, and the precise working dwell length vary with model pacing — the spec's dwell assertion is a ≥4s lower bound (well inside the 8s sleep) so jitter never trips it; the structural arc (one ready→working, one working→ready, single session) is fixed. WHERE to look if it breaks: if the session flips to ready while the process is still alive, the daemon's lsof probe or backgroundTaskId extraction regressed (core/application/services/background_probe.go, core/adapters/inbound/agents/claudecode/parser.go); if the session never returns to ready, the BashOutput-completed parse or the refreshStaleSessions re-probe regressed.",
+      "coverage_id": "background-process",
+      "requires": [
+        "tool_calls",
+        "background_process"
+      ],
+      "verify": {
+        "final_state": "ready"
+      },
+      "by_adapter": {
+        "claudecode": {
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (v2.1.x ships the run_in_background Bash parameter plus the BashOutput and KillShell tools)",
+            "irrlichd is recording (--attach or isolated) and built from a tree that includes PR #450 — the daemon must have BackgroundProcessCount tracking and the lsof liveness probe, else it cannot observe the background process at all",
+            "lsof is on PATH (the daemon's authoritative background-process liveness check shells out to `lsof -t` on each tasks/<id>.output file)"
+          ],
+          "setup": [
+            "Driver launches claude in a fresh trusted cwd under <staging>/cwd as usual; no seed files needed — the background process is a self-contained `sleep && echo`."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do exactly this and nothing else. (1) Use the Bash tool to run the command `sleep 8 && echo BG_DONE` with run_in_background set to true, so it launches in the background and the tool returns immediately. (2) Then repeatedly use the BashOutput tool to poll that background shell, waiting about 2 seconds between polls, until BashOutput reports the process status as completed. (3) Only after BashOutput shows it completed, reply with exactly the word: done. Do not run any other commands."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + pid_discovered for the primary session UUID within ~2s of launch (session born in ready)",
+            "events.jsonl shows the primary session transition ready -> working when the prompt lands",
+            "the primary session stays working for at least ~4s after the turn-start working transition with NO state_transition to ready while the background process is alive — this is the #450 hold-past-end_turn behavior (without #450 the session would flip to ready as soon as the Bash tool_use returns)",
+            "transcript.jsonl contains a Bash tool_use whose input has run_in_background:true and a following tool_result whose toolUseResult carries a backgroundTaskId",
+            "transcript.jsonl contains one or more BashOutput tool_use blocks, and a BashOutput tool_result whose text reports a terminated status (e.g. <status>completed</status>)",
+            "events.jsonl shows exactly one working -> ready transition for the primary session, occurring AFTER the background process exits (not at the bare end_turn)",
+            "final session state for the primary session is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        }
+      }
+    },
+    {
       "name": "context-compaction",
       "description": "Claude session runs one normal turn to populate context, then the driver triggers /compact to compact the conversation history, then runs a second normal turn to prove the session continues working after compaction. Recording may be brittle: newer Claude Code (2.1.x+) writes a NEW transcript file at the compaction boundary, which can register as a fresh session row to irrlicht depending on session-stitching (see session-resume cell). Per assessment.json, irrlicht's CompactionState domain field is dead code — the dashboard cannot distinguish compaction from a normal long turn. The recipe therefore asserts only the visible state arc (ready→working→ready on each side of /compact).",
       "coverage_id": "context-compaction",
@@ -2917,7 +2966,7 @@
     },
     {
       "name": "multiple-sessions-same-cwd",
-      "description": "Stub entry — capability is supported by both claudecode and irrlicht (assessment.json confidence 0.9), but the current ir:onboard-agent driver supports one tmux session at a time and cannot orchestrate two concurrent `claude` processes in the same cwd. Becomes recordable once the driver gains a parallel_session / tmux_split step type that can route `send` and `wait_turn` to named targets.",
+      "description": "Two concurrent claude REPL sessions in the SAME cwd, driven via the interactive driver start_session step + per-step session targeting. Asserts two distinct session_ids with independent working->ready arcs and a stable PID-to-session binding (session 1 is re-driven while session 2 is alive). Recordable since the driver gained concurrent-session support (start_session / {\"session\":N}).",
       "coverage_id": "multiple-sessions-same-cwd",
       "requires": [
         "headless_mode"
@@ -2927,8 +2976,66 @@
       },
       "by_adapter": {
         "claudecode": {
-          "applicable": false,
-          "reason": "current driver supports one tmux session at a time; multi-pane orchestration of two concurrent `claude` processes in the same cwd needs a driver extension (named-target send/wait_turn). Agent and irrlicht both support the capability as-shipped; only the recording rig is missing."
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key)",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon on 7837), or --attach against a daemon started with --record",
+            "no other claudecode session uses the recipe UUIDs"
+          ],
+          "setup": [
+            "Driver auto-starts session 1 (slot 1) in <staging>/cwd with the staging-supplied UUID and accepts the trust dialog",
+            "The start_session step launches session 2 (slot 2) in the SAME <staging>/cwd; claude caches trust per directory so no second trust dialog fires",
+            "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct UUID session_ids, both keyed to the same cwd slug",
+            "each UUID has its own independent working->ready arc; no transition on one UUID is attributed to the other",
+            "session 1 shows TWO working->ready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE — proving session 1 stayed bound and independent while session 2 was alive",
+            "no state flapping: the daemon never swaps the PID-to-session binding between the two rows",
+            "transcript.jsonl concatenates both sessions: 3 user lines + 3 assistant lines total across the two UUIDs"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         },
         "codex": {
           "applicable": false,

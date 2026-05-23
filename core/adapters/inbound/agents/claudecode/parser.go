@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"regexp"
 	"strings"
 
 	"irrlicht/core/pkg/tailer"
@@ -10,6 +11,17 @@ import (
 // eventTypeAssistantStreaming is emitted for intermediate Claude Code assistant
 // messages (thinking blocks, partial text) that should not trigger IsAgentDone().
 const eventTypeAssistantStreaming = "assistant_streaming"
+
+// backgroundSpawnRe matches the text Claude Code writes in a `Bash`
+// tool_result when the command was launched with `run_in_background: true`:
+//
+//	Command running in background with ID: bc1h56v8v. Output is being written to: /private/tmp/.../tasks/bc1h56v8v.output
+//
+// Group 1 is the background id; group 2 is the output-file path. The
+// background id and output path are read from the *result* because the Bash
+// tool_use input carries only the run_in_background flag — the id is assigned
+// at launch and reported back here. See issue #445.
+var backgroundSpawnRe = regexp.MustCompile(`running in background with ID: (\S+?)\.\s+Output is being written to:\s+(\S+)`)
 
 // Parser implements tailer.TranscriptParser for Claude Code transcripts.
 // Claude Code events use top-level "type" fields ("user", "assistant", "system")
@@ -112,7 +124,21 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	if !ok {
 		return
 	}
-	if kind, _ := att["type"].(string); kind != "task_reminder" {
+	kind, _ := att["type"].(string)
+	cmdMode, _ := att["commandMode"].(string)
+	// A queued_command "task-notification" attachment carries a
+	// <task-notification> XML blob — the headless-shape sibling of the
+	// origin.kind task-notification in handleTaskNotification. A terminal one
+	// ends a tracked Bash background process by its <task-id>. See issue #445.
+	if kind == "queued_command" || cmdMode == "task-notification" {
+		if prompt, _ := att["prompt"].(string); prompt != "" {
+			if id := extractXMLField(prompt, "task-id"); id != "" && backgroundStatusTerminated(prompt) {
+				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
+			}
+		}
+		return
+	}
+	if kind != "task_reminder" {
 		return
 	}
 	contentArr, ok := att["content"].([]interface{})
@@ -204,6 +230,14 @@ func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 				ToolUseID: extractXMLField(content, "tool-use-id"),
 				Status:    extractXMLField(content, "status"),
 			})
+			// A terminal task-notification also ends a Bash background process
+			// when its <task-id> matches a tracked backgroundTaskId — the
+			// completion path orchestrated/SDK claude uses instead of a
+			// BashOutput poll. Dropping a non-matching id (a subagent's) is a
+			// harmless no-op in the tailer. See issue #445.
+			if id := extractXMLField(content, "task-id"); id != "" && backgroundStatusTerminated(content) {
+				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
+			}
 		}
 	}
 	ev.Skip = true
@@ -314,6 +348,13 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 	if !ok {
 		return ""
 	}
+	// Claude Code's authoritative marker that this tool_result is a Bash
+	// run_in_background launch: a sibling `toolUseResult.backgroundTaskId`.
+	// Gating spawn detection on this (rather than regexing arbitrary result
+	// prose) prevents a foreground tool that merely echoes "running in
+	// background with ID: …" from creating a phantom background process.
+	// See issue #445.
+	bgTaskID := backgroundTaskIDOf(raw)
 	var askUserQuestion string
 	for _, item := range contentArr {
 		block, ok := item.(map[string]interface{})
@@ -326,7 +367,7 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 				askUserQuestion = q
 			}
 		case "tool_result":
-			collectToolResult(block, ev)
+			collectToolResult(block, ev, bgTaskID)
 		}
 	}
 	return askUserQuestion
@@ -372,18 +413,123 @@ func collectToolUse(block map[string]interface{}, ev *tailer.ParsedEvent) string
 				}
 			}
 		}
+	case "BashOutput":
+		// The agent is polling a background process by id; remember the
+		// pairing so a terminated status on the matching tool_result can be
+		// attributed to the right background process. See issue #445.
+		if bashID := backgroundID(input); bashID != "" && id != "" {
+			ev.BashOutputPolls = append(ev.BashOutputPolls, tailer.BashOutputPoll{
+				ToolUseID: id,
+				BashID:    bashID,
+			})
+		}
+	case "KillShell":
+		// Explicit, single-event termination of a background process.
+		if bashID := backgroundID(input); bashID != "" {
+			ev.KilledShellIDs = append(ev.KilledShellIDs, bashID)
+		}
 	}
 	return ""
 }
 
-// collectToolResult records a tool_result's matching id and the is_error flag.
-func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent) {
-	if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
+// backgroundID reads the background-process id from a BashOutput / KillShell
+// tool input. Claude Code names the field `bash_id` on BashOutput and
+// `shell_id` on KillShell; accept either so one helper covers both.
+func backgroundID(input map[string]interface{}) string {
+	if v, _ := input["bash_id"].(string); v != "" {
+		return v
+	}
+	if v, _ := input["shell_id"].(string); v != "" {
+		return v
+	}
+	return ""
+}
+
+// collectToolResult records a tool_result's matching id and the is_error flag,
+// and mines the result text for background-process signals: a Bash
+// run_in_background launch (spawn) and a BashOutput poll reporting a
+// terminated status. bgTaskID is the event's structured
+// `toolUseResult.backgroundTaskId` ("" when absent) — a spawn is recorded only
+// when it is present, so arbitrary tool output echoing the launch phrase can't
+// fabricate a background process. See issue #445.
+func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgTaskID string) {
+	toolUseID, _ := block["tool_use_id"].(string)
+	if toolUseID != "" {
 		ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
 	}
 	if isErr, ok := block["is_error"].(bool); ok && isErr {
 		ev.IsError = true
 	}
+
+	text := toolResultText(block)
+	if text == "" {
+		return
+	}
+	// A real Bash run_in_background launch (gated on the structured
+	// backgroundTaskId). The output path comes from the result text; we record
+	// the spawn only when both the id and a path are known, so the
+	// transcript-derived count never includes a process the daemon can't probe.
+	if bgTaskID != "" {
+		if m := backgroundSpawnRe.FindStringSubmatch(text); m != nil {
+			ev.BackgroundSpawns = append(ev.BackgroundSpawns, tailer.BackgroundSpawn{
+				BashID:     bgTaskID,
+				OutputPath: m[2],
+			})
+		}
+	}
+	// A BashOutput poll reports the process status. Any status other than
+	// "running" (e.g. completed / killed / failed) means the background
+	// process has terminated; the tailer attributes it to the polled id (and
+	// acts only when that id is a tracked poll, so a stray <status> elsewhere
+	// is a no-op).
+	if toolUseID != "" && backgroundStatusTerminated(text) {
+		ev.TerminatedBashOutputIDs = append(ev.TerminatedBashOutputIDs, toolUseID)
+	}
+}
+
+// backgroundTaskIDOf returns the structured `toolUseResult.backgroundTaskId`
+// from a Claude Code event, or "" when absent. This top-level field (sibling
+// to `message`) is Claude Code's authoritative marker that a Bash tool_result
+// was a run_in_background launch. See issue #445.
+func backgroundTaskIDOf(raw map[string]interface{}) string {
+	tur, ok := raw["toolUseResult"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	id, _ := tur["backgroundTaskId"].(string)
+	return id
+}
+
+// toolResultText flattens a tool_result's content into plain text. Claude Code
+// writes the content either as a bare string or as an array of
+// {type:"text", text:…} blocks.
+func toolResultText(block map[string]interface{}) string {
+	switch c := block["content"].(type) {
+	case string:
+		return c
+	case []interface{}:
+		var parts []string
+		for _, item := range c {
+			if b, ok := item.(map[string]interface{}); ok {
+				if t, _ := b["text"].(string); t != "" {
+					parts = append(parts, t)
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
+}
+
+// backgroundStatusTerminated reports whether a BashOutput tool_result's text
+// indicates the background process is no longer running. Claude Code surfaces
+// the process state in a `<status>…</status>` field; only "running" means
+// alive, so any other present value is treated as terminated. Matching on
+// "not running" rather than a specific terminal word keeps this robust to the
+// exact wording (completed / killed / failed). See issue #445.
+func backgroundStatusTerminated(text string) bool {
+	status := strings.ToLower(strings.TrimSpace(extractXMLField(text, "status")))
+	return status != "" && status != "running"
 }
 
 // applyAssistantText fills AssistantText for assistant/streaming events,

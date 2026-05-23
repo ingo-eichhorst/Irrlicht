@@ -368,3 +368,74 @@ func abs(f float64) float64 {
 	}
 	return f
 }
+
+func TestRecordSnapshot_StampsProvider(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Adapter:     "codex",
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10},
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Provider != "openai" {
+		t.Fatalf("want one row with provider openai, got %+v", rows)
+	}
+}
+
+func TestRecordSnapshot_UsesInjectedProviderResolver(t *testing.T) {
+	tr := newTestTracker(t)
+	// pi resolves to "" under the default resolver; the injected one
+	// attributes it (mirrors the daemon wiring for wrapper agents).
+	tr.SetProviderResolver(func(s *session.SessionState) string { return "anthropic" })
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Adapter:     "pi",
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10},
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Provider != "anthropic" {
+		t.Fatalf("want one row with injected provider anthropic, got %+v", rows)
+	}
+}
+
+// TestProviderCostsInWindows_BucketsByProvider verifies that a single project
+// file mixing providers attributes each session to its own provider (the
+// reason the rollup can't be derived from the per-project map), and that
+// sessions with no known provider are excluded.
+func TestProviderCostsInWindows_BucketsByProvider(t *testing.T) {
+	tr := newTestTracker(t)
+	now := time.Now().Unix()
+	// Each session: a pre-window baseline + an in-window max ⇒ contribution
+	// is max−baseline. All three live in one project file.
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 10*3600, Provider: "anthropic", Session: "a1", Cost: 1.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 1*3600, Provider: "anthropic", Session: "a1", Cost: 1.25})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 10*3600, Provider: "openai", Session: "o1", Cost: 2.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 1*3600, Provider: "openai", Session: "o1", Cost: 2.50})
+	// Unknown-provider session (pre-schema row / wrapper agent) — excluded.
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 10*3600, Session: "u1", Cost: 5.00})
+	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 1*3600, Session: "u1", Cost: 9.00})
+
+	got, err := tr.ProviderCostsInWindows(map[string]int64{"day": 24 * 3600, "week": 7 * 24 * 3600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tf := range []string{"day", "week"} {
+		if v := got[tf]["anthropic"]; abs(v-0.25) > 0.01 {
+			t.Errorf("%s anthropic: want ≈0.25, got %v", tf, v)
+		}
+		if v := got[tf]["openai"]; abs(v-0.50) > 0.01 {
+			t.Errorf("%s openai: want ≈0.50, got %v", tf, v)
+		}
+		if v, ok := got[tf][""]; ok {
+			t.Errorf("%s: empty-provider bucket must be excluded, got %v", tf, v)
+		}
+	}
+}

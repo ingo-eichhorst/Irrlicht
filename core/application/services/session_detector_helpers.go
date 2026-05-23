@@ -15,6 +15,14 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	delete(d.projectSessions, sessionID)
 	d.deletedSessions[sessionID] = time.Now().Unix()
 	d.mu.Unlock()
+	// Drop the background-process liveness cache for the gone session — a
+	// deleted session is never re-observed as non-working, so
+	// applyBackgroundLiveness would otherwise never reclaim these entries
+	// (issue #445).
+	d.bgMu.Lock()
+	delete(d.bgLive, sessionID)
+	delete(d.bgProbing, sessionID)
+	d.bgMu.Unlock()
 	if d.historyTracker != nil {
 		d.historyTracker.Remove(sessionID)
 	}

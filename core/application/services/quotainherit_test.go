@@ -423,3 +423,46 @@ func TestInheritRateLimits_CodexAPIKeyDoesNotDonate(t *testing.T) {
 		t.Fatal("api-key codex should not donate to pi")
 	}
 }
+
+func TestProviderForSession(t *testing.T) {
+	// First-party adapters map directly and never read home (the switch
+	// returns before the home lookup), so userHome "" is safe here.
+	if got := ProviderForSession(&session.SessionState{Adapter: "claude-code"}, ""); got != ProviderAnthropic {
+		t.Errorf("claude-code: got %q, want %q", got, ProviderAnthropic)
+	}
+	if got := ProviderForSession(&session.SessionState{Adapter: "codex"}, ""); got != ProviderOpenAI {
+		t.Errorf("codex: got %q, want %q", got, ProviderOpenAI)
+	}
+	if got := ProviderForSession(&session.SessionState{Adapter: "aider"}, ""); got != "" {
+		t.Errorf("aider (unmapped): got %q, want \"\"", got)
+	}
+	if got := ProviderForSession(nil, ""); got != "" {
+		t.Errorf("nil: got %q, want \"\"", got)
+	}
+
+	// Wrapper agents resolve via the same auth.json inspection as
+	// rate-limit inheritance, so cost attributes to the right subscription.
+	piHome := stageAuth(t, map[string]any{
+		".pi/agent/auth.json": map[string]any{
+			"anthropic": map[string]any{"type": "oauth"},
+		},
+	})
+	if got := ProviderForSession(emptyWrapper("pi", "pi-1"), piHome); got != ProviderAnthropic {
+		t.Errorf("pi (anthropic auth): got %q, want %q", got, ProviderAnthropic)
+	}
+
+	jwt := makeJWT(fmt.Sprintf(`{%q:%q}`, "https://api.openai.com/auth.chatgpt_account_id", "acct-jwt"))
+	ocHome := stageAuth(t, map[string]any{
+		".local/share/opencode/auth.json": map[string]any{
+			"openai-oauth": map[string]any{"type": "oauth", "access_token": jwt},
+		},
+	})
+	if got := ProviderForSession(emptyWrapper("opencode", "oc-1"), ocHome); got != ProviderOpenAI {
+		t.Errorf("opencode (openai auth): got %q, want %q", got, ProviderOpenAI)
+	}
+
+	// Wrapper with no resolvable auth falls back to "".
+	if got := ProviderForSession(emptyWrapper("pi", "pi-2"), t.TempDir()); got != "" {
+		t.Errorf("pi (no auth): got %q, want \"\"", got)
+	}
+}

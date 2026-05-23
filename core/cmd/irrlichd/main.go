@@ -4,14 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +34,7 @@ import (
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/config"
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/inbound"
@@ -275,11 +277,27 @@ func main() {
 	}
 
 	// TCP listener — default loopback; override with IRRLICHT_BIND_ADDR.
+	// IRRLICHT_BIND_ADDR=127.0.0.1:0 binds an ephemeral port (used by the
+	// startup smoke test so N daemons can run in parallel).
 	bindAddr := resolveBindAddr(os.Getenv("IRRLICHT_BIND_ADDR"))
 	tcpL, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to listen on TCP %s: %v", bindAddr, err))
 		os.Exit(1)
+	}
+	// resolvedAddr is the actual address (with the OS-assigned port when the
+	// request was :0). Publish it to <dataDir>/irrlichd.addr so tooling and
+	// the smoke test can find a daemon bound to an ephemeral port; the file
+	// also doubles as a "daemon is up" signal. Removed on shutdown.
+	resolvedAddr := tcpL.Addr().String()
+	addrPath := filepath.Join(filepath.Dir(sockPath), "irrlichd.addr")
+	// Write atomically (temp + rename) so a reader polling the file can never
+	// observe a half-written, truncated host:port.
+	tmpAddr := addrPath + ".tmp"
+	if err := os.WriteFile(tmpAddr, []byte(resolvedAddr+"\n"), 0600); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to write addr file %s: %v", tmpAddr, err))
+	} else if err := os.Rename(tmpAddr, addrPath); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to publish addr file %s: %v", addrPath, err))
 	}
 
 	go func() { _ = srv.Serve(unixL) }()
@@ -289,7 +307,16 @@ func main() {
 	// broadcasting the daemon on networks the user did not intend to share on.
 	var mdnsAdv *mdns.Advertiser
 	if os.Getenv("IRRLICHT_MDNS") == "1" {
-		mdnsAdv, err = mdns.New(tcpPort)
+		// Advertise the port we actually bound (resolvedAddr), not the compile-time
+		// default — otherwise a daemon on a custom/ephemeral port would point
+		// discovery clients at 7837 (a dead or production port).
+		advPort := tcpPort
+		if _, p, err := net.SplitHostPort(resolvedAddr); err == nil {
+			if n, err := strconv.Atoi(p); err == nil {
+				advPort = n
+			}
+		}
+		mdnsAdv, err = mdns.New(advPort)
 		if err != nil {
 			logger.LogError("startup", "", fmt.Sprintf("mDNS advertisement failed (non-fatal): %v", err))
 		} else {
@@ -397,9 +424,10 @@ func main() {
 		claudecode.NewStatuslineHandler(metricsCollector, logger))
 
 	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
-	// IRRLICHT_RECORDINGS_DIR overrides the default directory so test
-	// harnesses (e.g. the ir:onboard-agent skill) can isolate recordings
-	// from the user's real ~/.local/share/irrlicht/recordings/.
+	// Recordings default to <dataDir>/recordings, so IRRLICHT_HOME already
+	// isolates them. IRRLICHT_RECORDINGS_DIR is the narrower override that
+	// wins even when IRRLICHT_HOME is set, so test harnesses (e.g. the
+	// ir:onboard-agent skill) can pin recordings somewhere specific.
 	if recordEnabled {
 		recordingsDir := os.Getenv("IRRLICHT_RECORDINGS_DIR")
 		if recordingsDir == "" {
@@ -443,7 +471,7 @@ func main() {
 		}()
 	}
 
-	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, bindAddr))
+	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))
 
 	// Wait for SIGTERM or SIGINT.
 	sig := make(chan os.Signal, 1)
@@ -451,6 +479,10 @@ func main() {
 	<-sig
 
 	logger.LogInfo("shutdown", "", "signal received, shutting down")
+
+	// Remove the addr file so it can't outlive the daemon and mislead tooling
+	// into connecting to a dead port.
+	os.Remove(addrPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -508,19 +540,44 @@ func runCapacityRefreshLoop(ctx context.Context, logger outbound.Logger, initial
 // dataDir returns the irrlichd state directory (~/.local/share/irrlicht).
 // home should come from os.UserHomeDir(); pass "" only when the lookup
 // failed.
+//
+// IRRLICHT_HOME relocates this tree — socket, addr file, history rollups,
+// the on-disk web fallback, and recordings all live beneath it. The session
+// store, per-session ledgers, and cost store live under different roots
+// (Application Support); stateStoreDir routes those through IRRLICHT_HOME too,
+// so a dev/test daemon is fully isolated from the production install (and from
+// other worktrees) without touching ~/.local/share/irrlicht/ or
+// ~/Library/Application Support/Irrlicht/. Recordings still honor the narrower
+// IRRLICHT_RECORDINGS_DIR override when set.
 func dataDir(home string) string {
+	if v := os.Getenv("IRRLICHT_HOME"); v != "" {
+		return v
+	}
 	if home == "" {
 		return "/tmp/irrlicht"
 	}
 	return filepath.Join(home, ".local", "share", "irrlicht")
 }
 
-// socketPath returns the Unix socket path for irrlichd.
-func socketPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "/tmp/irrlichd.sock"
+// stateStoreDir returns the directory for a named state store (e.g. "instances",
+// "cost", "sessions") when IRRLICHT_HOME is set, so every store nests beneath it
+// for full isolation. Returns "" when IRRLICHT_HOME is unset, signaling the
+// caller to keep its production-default location unchanged. Needed because the
+// session repo and cost store root under ~/Library/Application Support/Irrlicht
+// and ledgers under ~/.local/share/irrlicht/sessions — none of which flow
+// through dataDir.
+func stateStoreDir(sub string) string {
+	if v := os.Getenv("IRRLICHT_HOME"); v != "" {
+		return filepath.Join(v, sub)
 	}
+	return ""
+}
+
+// socketPath returns the Unix socket path for irrlichd. It routes through
+// dataDir so the IRRLICHT_HOME override is honored even when os.UserHomeDir()
+// fails (dataDir maps an empty home to /tmp/irrlicht when no override is set).
+func socketPath() string {
+	home, _ := os.UserHomeDir()
 	return filepath.Join(dataDir(home), "irrlichd.sock")
 }
 
@@ -604,10 +661,22 @@ const costAttachTTL = 5 * time.Second
 // (returned as the outbound.SessionRepository interface since the concrete
 // cached type is unexported).
 func initSessionStorage(logger outbound.Logger, cfg config.Config) (*filesystem.SessionRepository, outbound.SessionRepository) {
-	fsRepo, err := filesystem.New()
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to init filesystem repo: %v", err))
-		os.Exit(1)
+	// Honor IRRLICHT_HOME for full isolation: a dev/test daemon must not prune
+	// or mutate the production session store. Ledgers route through the same
+	// override (set before the orphan-ledger sweep below reads LedgerDir).
+	if dir := stateStoreDir("sessions"); dir != "" {
+		metrics.SetLedgerDir(dir)
+	}
+	var fsRepo *filesystem.SessionRepository
+	if dir := stateStoreDir("instances"); dir != "" {
+		fsRepo = filesystem.NewWithDir(dir)
+	} else {
+		var err error
+		fsRepo, err = filesystem.New()
+		if err != nil {
+			logger.LogError("startup", "", fmt.Sprintf("failed to init filesystem repo: %v", err))
+			os.Exit(1)
+		}
 	}
 
 	pruned, err := fsRepo.PruneStale(cfg.MaxSessionAge)
@@ -698,11 +767,23 @@ func pruneDeadProcSessions(fsRepo *filesystem.SessionRepository, logger outbound
 // records a baseline row for every existing session so rates are
 // computable without waiting for new activity.
 func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepository) outbound.CostTracker {
-	costTracker, err := filesystem.NewCostTracker()
-	if err != nil {
-		logger.LogError("startup", "", fmt.Sprintf("failed to init cost tracker: %v", err))
-		return nil
+	var costTracker *filesystem.CostTracker
+	if dir := stateStoreDir("cost"); dir != "" {
+		costTracker = filesystem.NewCostTrackerWithDir(dir)
+	} else {
+		var err error
+		costTracker, err = filesystem.NewCostTracker()
+		if err != nil {
+			logger.LogError("startup", "", fmt.Sprintf("failed to init cost tracker: %v", err))
+			return nil
+		}
 	}
+	// Attribute wrapper agents (pi, opencode) to the subscription they
+	// inherit, so per-provider spend matches the dashboard's quota chip
+	// instead of going unattributed.
+	costTracker.SetProviderResolver(func(s *session.SessionState) string {
+		return services.ProviderForSession(s, "")
+	})
 	if err := costTracker.Prune(400); err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("cost tracker prune failed: %v", err))
 	}

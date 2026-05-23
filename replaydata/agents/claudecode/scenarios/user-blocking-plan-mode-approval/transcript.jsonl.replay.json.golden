@@ -8,30 +8,31 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 20,
-    "consumed_events": 20,
-    "total_transitions": 2,
-    "first_event_time": "2026-05-17T22:22:54.398Z",
-    "last_event_time": "2026-05-17T22:23:08.541Z",
-    "wall_clock_session_duration": 14143000000,
+    "total_events": 19,
+    "consumed_events": 19,
+    "total_transitions": 3,
+    "first_event_time": "2026-05-22T22:30:36.651Z",
+    "last_event_time": "2026-05-22T22:30:55.193Z",
+    "wall_clock_session_duration": 18542000000,
     "state_durations": {
-      "working": 14143000000
+      "ready": 1000000,
+      "working": 18541000000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "estimated_cost_usd": 0.35141,
-    "cum_input_tokens": 18,
-    "cum_output_tokens": 646,
-    "cum_cache_read_tokens": 68160,
-    "cum_cache_creation_tokens": 30109,
-    "model_name": "claude-opus-4-7"
+    "estimated_cost_usd": 0.0756537,
+    "cum_input_tokens": 7,
+    "cum_output_tokens": 1058,
+    "cum_cache_read_tokens": 58134,
+    "cum_cache_creation_tokens": 11286,
+    "model_name": "claude-sonnet-4-6"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T22:22:54.398Z",
+      "virtual_time": "2026-05-22T22:30:36.651Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -45,7 +46,7 @@
     {
       "index": 1,
       "event_index": 6,
-      "virtual_time": "2026-05-17T22:22:54.398Z",
+      "virtual_time": "2026-05-22T22:30:36.652Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -54,6 +55,23 @@
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 18,
+      "virtual_time": "2026-05-22T22:30:55.193Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "user-blocking tool open → waiting",
+      "last_event_type": "assistant",
+      "has_open_tool": true,
+      "open_tool_names": [
+        "ExitPlanMode"
+      ],
+      "is_agent_done": false,
+      "needs_user_attention": true,
       "waiting_for_user_input": false
     }
   ]

@@ -95,10 +95,11 @@ func TestGate_GetSessions(t *testing.T) {
 		t.Fatalf("GET status: got %d, want 200", resp.StatusCode)
 	}
 
-	var groups []*session.AgentGroup
-	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	groups := payload.Groups
 	if len(groups) == 0 {
 		t.Fatal("expected at least one group")
 	}
@@ -227,6 +228,61 @@ func TestResolveBindAddr(t *testing.T) {
 	}
 }
 
+func TestDataDir(t *testing.T) {
+	// Default: derived from the passed-in home dir.
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("IRRLICHT_HOME", "")
+		want := filepath.Join("/home/alice", ".local", "share", "irrlicht")
+		if got := dataDir("/home/alice"); got != want {
+			t.Errorf("dataDir(home) = %q, want %q", got, want)
+		}
+	})
+
+	// Default with empty home (lookup failed): /tmp fallback.
+	t.Run("empty home", func(t *testing.T) {
+		t.Setenv("IRRLICHT_HOME", "")
+		if got := dataDir(""); got != "/tmp/irrlicht" {
+			t.Errorf("dataDir(\"\") = %q, want /tmp/irrlicht", got)
+		}
+	})
+
+	// IRRLICHT_HOME overrides the whole tree and ignores the home arg.
+	t.Run("override", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("IRRLICHT_HOME", dir)
+		if got := dataDir("/home/alice"); got != dir {
+			t.Errorf("dataDir with IRRLICHT_HOME = %q, want %q", got, dir)
+		}
+		if got := dataDir(""); got != dir {
+			t.Errorf("dataDir(\"\") with IRRLICHT_HOME = %q, want %q", got, dir)
+		}
+	})
+}
+
+func TestStateStoreDir(t *testing.T) {
+	// Without IRRLICHT_HOME, returns "" so callers keep their production default.
+	t.Run("unset keeps default", func(t *testing.T) {
+		t.Setenv("IRRLICHT_HOME", "")
+		for _, sub := range []string{"instances", "cost", "sessions"} {
+			if got := stateStoreDir(sub); got != "" {
+				t.Errorf("stateStoreDir(%q) = %q, want \"\" when IRRLICHT_HOME unset", sub, got)
+			}
+		}
+	})
+
+	// With IRRLICHT_HOME, every store nests beneath it for full isolation.
+	t.Run("override nests stores", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("IRRLICHT_HOME", dir)
+		for _, sub := range []string{"instances", "cost", "sessions"} {
+			want := filepath.Join(dir, sub)
+			if got := stateStoreDir(sub); got != want {
+				t.Errorf("stateStoreDir(%q) = %q, want %q", sub, got, want)
+			}
+		}
+	})
+}
+
 // TestGate_GetState verifies that GET /state returns the compact debug-state format.
 func TestGate_GetState(t *testing.T) {
 	srv, repo := newTestStack(t)
@@ -326,20 +382,20 @@ func TestHandleGetSessions_AttachesGroupCosts(t *testing.T) {
 		t.Fatalf("status: got %d, want 200", resp.StatusCode)
 	}
 
-	var groups []*session.AgentGroup
-	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
 	var projA *session.AgentGroup
-	for _, g := range groups {
+	for _, g := range payload.Groups {
 		if g.Name == "proj-a" {
 			projA = g
 			break
 		}
 	}
 	if projA == nil {
-		t.Fatalf("proj-a group missing from response: %+v", groups)
+		t.Fatalf("proj-a group missing from response: %+v", payload.Groups)
 	}
 	if projA.Costs == nil {
 		t.Fatalf("proj-a.Costs must not be nil")
@@ -353,6 +409,65 @@ func TestHandleGetSessions_AttachesGroupCosts(t *testing.T) {
 	// window. Floating-point comparison tolerates tiny scanner artefacts.
 	if got := projA.Costs["day"]; got < 0.24 || got > 0.26 {
 		t.Errorf("proj-a.Costs[day]: want ≈0.25, got %v", got)
+	}
+}
+
+// TestHandleGetSessions_AttachesProviderCosts verifies that /api/v1/sessions
+// surfaces the top-level provider_costs map (providerKey → timeframe → USD),
+// keyed by the row's provider rather than its project.
+func TestHandleGetSessions_AttachesProviderCosts(t *testing.T) {
+	repoDir := t.TempDir()
+	costDir := filepath.Join(t.TempDir(), "cost")
+	if err := os.MkdirAll(costDir, 0o700); err != nil {
+		t.Fatalf("mkdir cost dir: %v", err)
+	}
+
+	// Anthropic-stamped rows: $1.00 baseline (10h ago) → $1.25 now ⇒ $0.25
+	// in every trailing window.
+	now := time.Now().Unix()
+	writeCostRowWithProvider(t, costDir, "proj-a", "anthropic", now-10*3600, "sess-1", 1.00)
+	writeCostRowWithProvider(t, costDir, "proj-a", "anthropic", now-1*3600, "sess-1", 1.25)
+
+	repo := filesystem.NewWithDir(repoDir)
+	tracker := filesystem.NewCostTrackerWithDir(costDir)
+	if err := repo.Save(&session.SessionState{
+		SessionID:   "sess-1",
+		State:       session.StateReady,
+		ProjectName: "proj-a",
+		FirstSeen:   now - 10*3600,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	push := services.NewPushService()
+	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, tracker))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/sessions")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	anthropic := payload.ProviderCosts["anthropic"]
+	if anthropic == nil {
+		t.Fatalf("provider_costs missing anthropic key: %+v", payload.ProviderCosts)
+	}
+	for _, tf := range []string{"day", "week", "month", "year"} {
+		if v, ok := anthropic[tf]; !ok || v < 0.24 || v > 0.26 {
+			t.Errorf("provider_costs[anthropic][%q]: want ≈0.25, got %v (ok=%v)", tf, v, ok)
+		}
 	}
 }
 
@@ -370,11 +485,14 @@ func TestHandleGetSessions_OmitsCostsWhenTrackerNil(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var groups []*session.AgentGroup
-	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, g := range groups {
+	if payload.ProviderCosts != nil {
+		t.Errorf("provider_costs must be nil when tracker is nil, got %+v", payload.ProviderCosts)
+	}
+	for _, g := range payload.Groups {
 		if g.Costs != nil {
 			t.Errorf("group %q: Costs must be nil when tracker is nil, got %+v", g.Name, g.Costs)
 		}
@@ -387,6 +505,22 @@ func TestHandleGetSessions_OmitsCostsWhenTrackerNil(t *testing.T) {
 func writeCostRow(t *testing.T, costDir, project string, ts int64, sessionID string, cost float64) {
 	t.Helper()
 	line := fmt.Sprintf(`{"ts":%d,"project":%q,"session":%q,"cost":%g}`+"\n", ts, project, sessionID, cost)
+	path := filepath.Join(costDir, project+".jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+// writeCostRowWithProvider is writeCostRow with the provider field set, for
+// exercising the per-provider rollup surfaced as provider_costs.
+func writeCostRowWithProvider(t *testing.T, costDir, project, provider string, ts int64, sessionID string, cost float64) {
+	t.Helper()
+	line := fmt.Sprintf(`{"ts":%d,"project":%q,"provider":%q,"session":%q,"cost":%g}`+"\n", ts, project, provider, sessionID, cost)
 	path := filepath.Join(costDir, project+".jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

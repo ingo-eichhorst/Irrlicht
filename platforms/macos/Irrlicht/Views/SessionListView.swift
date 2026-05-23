@@ -191,8 +191,13 @@ struct SessionListView: View {
     @State private var showSettings = false
     @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
+    // Shared timeframe for all provider usage chips; clicking any chip cycles
+    // it. Independent of the project-cost timeframe (`projectCostTimeframe`).
+    @AppStorage("usageCostTimeframe") private var usageCostTimeframeRaw: String = CostTimeframe.day.rawValue
 
     private var displayMode: DisplayMode { DisplayMode(rawValue: displayModeRaw) ?? .context }
+    private var usageCostTimeframe: CostTimeframe { .from(usageCostTimeframeRaw) }
+    private func cycleUsageTimeframe() { usageCostTimeframeRaw = usageCostTimeframe.next().rawValue }
 
     var body: some View {
         if showSettings {
@@ -521,11 +526,11 @@ struct SessionListView: View {
     /// account report identical numbers anyway; freshness only matters
     /// when one session has gone stale.
     ///
-    /// For usage chips, `totalCostUSD` sums cumulative
-    /// `estimatedCostUSD` across every matching session — close enough
-    /// to "what the user has spent on this provider lately" for the
-    /// typical session-lifetime. Proper daily rollup needs a
-    /// daemon-side per-provider cost tracker (issue #385).
+    /// `totalCostUSD` sums cumulative `estimatedCostUSD` across every
+    /// matching session; it now feeds only the tooltip / accessibility
+    /// label ("cumulative spend across active sessions"). The usage chip
+    /// itself renders the daemon's windowed per-provider rollup
+    /// (`SessionManager.providerCosts`), not this cumulative figure.
     private func mergeIntoBuckets(session: SessionState, into buckets: inout [String: ChipBucket]) {
         guard let snap = session.metrics?.rateLimit else { return }
         let now = Date()
@@ -595,7 +600,7 @@ struct SessionListView: View {
 
     /// The chip-style header widget. Dispatches on mode:
     ///   - subscription → provider icon + stacked 5h/7d bars (mockup 1/2)
-    ///   - usage        → provider icon + cumulative spend (mockup 2)
+    ///   - usage        → provider icon + windowed spend, click-to-cycle (mockup 2)
     @ViewBuilder
     private func quotaChipView(_ d: QuotaWidgetData, compact: Bool) -> some View {
         HStack(spacing: 6) {
@@ -621,9 +626,19 @@ struct SessionListView: View {
             }
             switch d.mode {
             case .subscription:
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
-                        quotaWindowRow(window, compact: compact)
+                if d.snapshot.windows.isEmpty {
+                    // Subscription forced (or auto-detected) but the snapshot
+                    // carries no rate-limit windows. Symmetric with the usage
+                    // zero-state: a short phrase rather than an empty chip.
+                    Text("no subscription data")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(minWidth: 88, alignment: .leading)
+                } else {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
+                            quotaWindowRow(window, compact: compact)
+                        }
                     }
                 }
             case .usage:
@@ -638,16 +653,20 @@ struct SessionListView: View {
         .tooltip(quotaTooltip(d))
     }
 
-    /// Usage-mode chip body — cumulative spend across all sessions on
-    /// this provider, with a "spend" subtitle. Always 2 lines so the
-    /// chip has the same height as the subscription variant (5h + 7d
-    /// rows) and the two render cleanly side-by-side in the header.
+    /// Usage-mode chip body — windowed spend on this provider for the
+    /// currently selected timeframe, with a "spend" subtitle. Click to
+    /// cycle the timeframe (day → week → month → year), mirroring the
+    /// project-group cost text; the choice is shared across all usage
+    /// chips via `usageCostTimeframe`. Always 2 lines so the chip has the
+    /// same height as the subscription variant (5h + 7d rows) and the two
+    /// render cleanly side-by-side in the header.
     ///
-    /// Zero-state: when no spend has accumulated, render an em-dash and
-    /// "no spend yet" rather than "$0.00 / spend". The data path is
-    /// wired up, just nothing to report — important when a user has
-    /// forced-usage mode on a subscription-only session, where
-    /// `totalCostUSD` legitimately stays at zero.
+    /// Sourced from the daemon's per-provider cost rollup (`provider_costs`),
+    /// keyed by the chip's providerKey (`d.id`). A project can mix providers,
+    /// so this can't be re-derived from group costs client-side. When a
+    /// provider has no spend in the window we render `$0 / <frame>` — a
+    /// windowed zero is honest (matches the project cost display), so there's
+    /// no separate em-dash zero-state.
     ///
     /// A `minWidth: 88` matches the subscription chip's row width
     /// (label + 40pt bar + percent) so a usage chip with a short
@@ -655,23 +674,29 @@ struct SessionListView: View {
     /// bars chip.
     @ViewBuilder
     private func quotaUsageBody(_ d: QuotaWidgetData, compact: Bool) -> some View {
-        let hasSpend = d.totalCostUSD > 0
-        VStack(alignment: .leading, spacing: 1) {
-            Text(hasSpend ? formatUsageCost(d.totalCostUSD) : "—")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundColor(.primary)
-            Text(hasSpend ? "spend" : "no spend yet")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(.secondary)
+        let spend = sessionManager.providerCosts[d.id]?[usageCostTimeframe.rawValue] ?? 0
+        Button(action: cycleUsageTimeframe) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(formatUsageCost(spend) + usageCostTimeframe.suffix)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.primary)
+                Text("spend")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            .frame(minWidth: 88, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .frame(minWidth: 88, alignment: .leading)
+        .buttonStyle(.plain)
+        .tooltip("Click to cycle time frame (day → week → month → year)")
     }
 
-    /// Format the cost headline: tiny costs render `<$0.01`, normal
-    /// costs render with two decimals, ≥ $100 drops to integer dollars
-    /// to keep the chip from growing.
+    /// Format the cost headline: zero renders `$0`, tiny costs render
+    /// `<$0.01`, normal costs render with two decimals, ≥ $100 drops to
+    /// integer dollars to keep the chip from growing. Matches GroupView's
+    /// project-cost formatting so the suffix (` / day`, …) reads the same.
     private func formatUsageCost(_ cost: Double) -> String {
-        if cost <= 0 { return "$0.00" }
+        if cost <= 0 { return "$0" }
         if cost < 0.01 { return "<$0.01" }
         if cost >= 100 { return String(format: "$%.0f", cost) }
         return String(format: "$%.2f", cost)

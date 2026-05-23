@@ -20,10 +20,8 @@
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "estimated_cost_usd": 0.060633,
     "cum_input_tokens": 20201,
-    "cum_output_tokens": 2,
-    "model_name": "claude-sonnet-4-6"
+    "cum_output_tokens": 2
   },
   "transitions": [
     {
