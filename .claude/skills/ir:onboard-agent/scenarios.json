@@ -2132,6 +2132,43 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so the shell tool runs autonomously inside codex's sandbox — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'pwd' using your shell tool, then tell me the directory it printed."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the tool-using prompt is sent, sustained across the auto-executed shell call",
+            "transcript.jsonl contains a function_call / function_call_output pair for the pwd command (the auto-executed, ungated tool call)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the tool resolves and the turn completes",
+            "events.jsonl contains NO state_transition to waiting for the rollout session at any point (codex has no permission gate; the call auto-executes)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
