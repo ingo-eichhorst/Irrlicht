@@ -3020,6 +3020,49 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (verified against codex-cli 0.130.0)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "/status must remain a local-only render in the running codex version — if codex ever routes it through the model the scenario premise breaks (verified live: /status appends zero lines to the rollout)"
+          ],
+          "setup": [
+            "Driver boots a fresh codex TUI in a per-run cwd under <staging>/cwd/ and accepts the trust dialog; codex assigns its own session UUID per rollout",
+            "Avoid /clear (reset_session — mints a fresh rollout/session_id, a different scenario) and /compact (real model call, a different scenario)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly: warm"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/status"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working→ready cycle for the entire run, driven by the warm-up turn only (codex's first-activity force drives working, task_complete drives ready)",
+            "events.jsonl contains NO state_transition to working after the warm-up turn returns to ready — /status drives none because codex writes no rollout line for it",
+            "events.jsonl contains NO state_transition to waiting at any point",
+            "the slash window (≥4s after the warm-up turn ends) shows the session continuously ready — no transcript_activity is recorded for /status",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "notes": "Codex difference vs claudecode: a synchronous slash command writes NOTHING to the rollout (verified live against codex-cli 0.130.0 — /status appended 0 lines, task_complete count unchanged), so there's no <local-command> wrapper for the parser to filter; the daemon simply sees no activity. The warm-up turn FIRST is mandatory: codex creates rollout-*.jsonl only after the first user message, so without it resolve_transcript hangs. Only /status is exercised (single slash) because it's the cleanest verified no-LLM render; /help and /mcp are equally synchronous but /status was the one probed. Between runs: warm-up assistant wording, token counts, session UUID, PID and timestamps differ; the state_transition set (ready, ready→working, working→ready) and its order are the structural baseline. If it broke, look at core/adapters/inbound/agents/codex/parser.go (task_complete→turn_done) and whether a codex update started logging slash invocations into the rollout."
         }
       }
     },
