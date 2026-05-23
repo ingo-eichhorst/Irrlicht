@@ -2894,6 +2894,61 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (codex 0.130.0; the !-prefix shell escape is a TUI affordance, confirmed in-binary: 'Prefix a command with ! to run it locally. Example: !ls')",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "codex is launched in interactive TUI mode (--no-alt-screen) so the ! shell-escape syntax is available — codex exec headless has no interactive ! shell mode"
+          ],
+          "setup": [
+            "Driver boots a codex TUI in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits out the Booting MCP phase",
+            "Codex assigns its own rollout UUID; the driver discovers the rollout-*.jsonl on the first wait_turn"
+          ],
+          "script": [
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "! l s Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "keys",
+              "keys": "! s l e e p Space 5 Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 9
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alive"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the codex rollout session entering ready after launch",
+            "each !cmd shell escape drives a ready→working→ready arc for the session (codex synthesizes a turn: task_started / user_message<user_shell_command> / task_complete) — UNLIKE claudecode, which skips the wrappers and stays ready",
+            "no state_transition gets stuck in working: every working transition is followed by a working→ready before the next escape or the final prompt",
+            "after the normal user prompt, events.jsonl shows ready→working→ready for the session, proving it is still alive",
+            "final session state is ready",
+            "NOTE (overlap + caveat): this is a USER !-escape, distinct from full-lifecycle-toolcall's model-driven exec tool (no function_call/function_call_output is written for a !-escape). The recorded working DWELL is debounce-bounded (~2 s), not command-bounded: codex's parser skips task_started and codex flushes the synthetic user_message only when the command exits, so the daemon cannot anchor working-start to command-start (see assessment.json — irrlicht_observes: partial). The spec therefore asserts the ready→working→ready topology and final ready, not a dwell length."
+          ],
+          "settings": {},
+          "timeout_seconds": 150
         }
       }
     },
