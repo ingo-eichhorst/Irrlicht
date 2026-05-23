@@ -276,11 +276,22 @@ func main() {
 	}
 
 	// TCP listener — default loopback; override with IRRLICHT_BIND_ADDR.
+	// IRRLICHT_BIND_ADDR=127.0.0.1:0 binds an ephemeral port (used by the
+	// startup smoke test so N daemons can run in parallel).
 	bindAddr := resolveBindAddr(os.Getenv("IRRLICHT_BIND_ADDR"))
 	tcpL, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to listen on TCP %s: %v", bindAddr, err))
 		os.Exit(1)
+	}
+	// resolvedAddr is the actual address (with the OS-assigned port when the
+	// request was :0). Publish it to <dataDir>/irrlichd.addr so tooling and
+	// the smoke test can find a daemon bound to an ephemeral port; the file
+	// also doubles as a "daemon is up" signal. Removed on shutdown.
+	resolvedAddr := tcpL.Addr().String()
+	addrPath := filepath.Join(filepath.Dir(sockPath), "irrlichd.addr")
+	if err := os.WriteFile(addrPath, []byte(resolvedAddr+"\n"), 0600); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("failed to write addr file %s: %v", addrPath, err))
 	}
 
 	go func() { _ = srv.Serve(unixL) }()
@@ -445,7 +456,7 @@ func main() {
 		}()
 	}
 
-	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, bindAddr))
+	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))
 
 	// Wait for SIGTERM or SIGINT.
 	sig := make(chan os.Signal, 1)
@@ -453,6 +464,10 @@ func main() {
 	<-sig
 
 	logger.LogInfo("shutdown", "", "signal received, shutting down")
+
+	// Remove the addr file so it can't outlive the daemon and mislead tooling
+	// into connecting to a dead port.
+	os.Remove(addrPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
