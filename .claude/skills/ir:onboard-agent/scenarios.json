@@ -2566,6 +2566,77 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI authed out-of-band (ChatGPT/API login already done; the driver does not handle a login prompt).",
+            "Both target models are reachable on the account: codex 0.130.0 boots on gpt-5.4 (model A, the boot default) and the /model picker offers gpt-5.3-codex (model B). If your codex build's picker entries/order differ, re-probe `/model` and adjust the `keys` navigation — the Down-count is positional, not a model name.",
+            "The dev daemon is running with --record (run-cell.sh --attach attaches to it)."
+          ],
+          "setup": [
+            "run-cell.sh boots codex --no-alt-screen in a fresh per-run cwd via drive-codex-interactive.sh, accepts the trust dialog, and waits out the Booting-MCP phase.",
+            "Codex assigns its own rollout UUID; the driver discovers the rollout-*.jsonl on the first wait_turn and records its daemon session_id for the curator. That ONE session_id stays live for the whole mid-session arc — the /model picker mints no new session."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: first"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/model"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Down Down Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: second"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session born ready within 1s of launch, then the rollout session reconciles to a new session_id (also born ready).",
+            "events.jsonl shows TWO working→ready arcs on the SAME rollout session_id — turn 1 (model A) and turn 2 (model B, after the mid-session /model switch) — proving session continuity across the switch.",
+            "events.jsonl shows NO state_transition to working or waiting during the /model picker window between turn 1 end and turn 2 start, and NO new session is minted (the switch happens mid-session, in place, with no flicker and no restart).",
+            "events.jsonl ends with a process_exited event on the SAME rollout session_id at REPL teardown (one session_id from birth to teardown).",
+            "transcript.jsonl carries per-turn turn_context events: payload.model = gpt-5.4 for the turn-1 context and gpt-5.3-codex for the turn-2 context (the mid-session /model switch landed). session_meta.model is null in this codex version — the model lives only on turn_context.",
+            "The replay summary's model_name reflects the LATEST turn's model (gpt-5.3-codex) and TotalTokens accumulates across both models — the .replay.json.golden is where the A→B switch + token accumulation is asserted; expected.jsonl only covers the mid-session lifecycle skeleton because the events.jsonl DSL has no model field."
+          ],
+          "notes": "Canonical agent-agnostic model-switch-midsession cell — the DISTINCTION from the codex-specific `model-switch` sibling is emphasis, not mechanism (both share coverage_id model-switch-midsession; the matrix wants both cells). This cell's spec leans on MID-SESSION CONTINUITY: every turn phase in expected.jsonl is pinned same_session_as the rollout session_birth, and a dedicated switch_window dwell phase asserts the session stays ready (no working/waiting flicker, no new session) while the /model picker is open — so the recording proves the switch happened DURING one live session, in place, not via a restart. Codex /model is an interactive TWO-STEP picker (model list, then reasoning-level list), NOT a one-shot `/model <name>` like aider — so the recipe drives it with `slash /model` to open it, then `keys` steps to navigate. Probed live on codex 0.130.0 (2026-05-23): the model list is 1=gpt-5.5(default) 2=gpt-5.4(current/boot-default, highlighted) 3=gpt-5.4-mini 4=gpt-5.3-codex 5=gpt-5.2, so `Down Down Enter` from the boot-highlighted entry 2 lands on gpt-5.3-codex (entry 4); the reasoning sub-screen then opens with Medium(default) highlighted, so a bare `Enter` confirms gpt-5.3-codex medium (footer flips to `gpt-5.3-codex medium`, rollout writes `• Model changed to gpt-5.3-codex medium`). The two `keys` steps are split with a 2s sleep because the model-confirm Enter and the reasoning-confirm Enter hit DIFFERENT screens that need a render gap; the `keys` step does NOT touch the turn counter, so wait_turn stays correct. Model A is gpt-5.4 (the boot default in this codex build). What differs between runs: assistant token counts/cost, exact rollout UUID/PID/timestamps, and the assistant's wording (we pin it with `Reply with exactly the word: first/second` to keep turns short and deterministic). What must NOT differ: ONE rollout session_id from birth to teardown, two working→ready arcs on it, no flicker during the picker window, the model_name landing on gpt-5.3-codex, and process_exited at teardown. If the picker navigation drifts (codex changes the model list order), the Down-count is wrong — re-probe `/model` and recount. multi_model_orchestration=yes.",
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
