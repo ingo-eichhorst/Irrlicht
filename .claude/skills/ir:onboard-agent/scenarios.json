@@ -306,7 +306,7 @@
     },
     {
       "name": "agent-question-pending",
-      "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a).",
+      "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a): at turn end the session transitions working→waiting instead of working→ready because the last assistant message ends in `?`. This is the text classifier path, not a structured AskUserQuestion tool. For codex it is observable only via the interactive TUI (the live REPL session stays alive past turn end); headless single-shot CLIs that exit at turn end lose the waiting episode to a process_exited race.",
       "coverage_id": "user-blocking-question",
       "requires": [
         "headless_mode"
@@ -322,9 +322,39 @@
           "timeout_seconds": 60
         },
         "codex": {
-          "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Unlike the headless `codex exec` path (single-shot, ends in process_exited at turn end — see the basic-turn recipe), the interactive driver keeps the rollout session ALIVE after the turn; the REPL is torn down only when the script ends, so the daemon can observe the post-turn waiting state"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "I want to add a feature to my project. Ask me exactly one short clarifying question to scope it, ending in a question mark, and then stop and wait for my answer. Output only that one question and nothing else."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent",
+            "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the turn ends (the reply ends in a question mark; classifier takes the trailing-? path rather than →ready)",
+            "the rollout session's final live state is waiting and it persists ≥4s — no state_transition to ready appears before the REPL is torn down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown while the session is still waiting (single live session, not per-turn exits)"
+          ],
           "settings": {},
-          "timeout_seconds": 120
+          "timeout_seconds": 240
         },
         "pi": {
           "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
