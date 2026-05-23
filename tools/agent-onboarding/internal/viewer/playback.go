@@ -301,16 +301,16 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 	ctx, cancel := context.WithCancel(context.Background())
 
 	pb := &Playback{
-		ID:          newPlaybackID(),
-		Agent:       agent,
-		Subtree:     subtree,
-		Scenario:    scenario,
-		Mode:        "viewer-internal",
-		Speed:       speed,
-		StartedAt:   time.Now().UTC(),
-		broadcaster: m.broadcaster,
-		machine:     machine,
-		cancel:      cancel,
+		ID:           newPlaybackID(),
+		Agent:        agent,
+		Subtree:      subtree,
+		Scenario:     scenario,
+		Mode:         "viewer-internal",
+		Speed:        speed,
+		StartedAt:    time.Now().UTC(),
+		broadcaster:  m.broadcaster,
+		machine:      machine,
+		cancel:       cancel,
 		DashboardURL: "/dashboard",
 		EventsDir:    eventsDir,
 		Recording:    recording,
@@ -637,10 +637,12 @@ func normalizeAdapter(a string) string {
 	return a
 }
 
-// handleSessions returns the current synthetic session list in the
-// EXACT shape the dashboard expects — which is whatever the daemon's
-// session.BuildDashboard produces. Reuse rather than reinvent so the
-// dashboard's render path Just Works against our synthetic state.
+// handleSessions returns the current synthetic session list in the EXACT
+// shape the daemon's GET /api/v1/sessions produces: an object with a `groups`
+// array (session.BuildDashboard output). The real daemon also carries
+// `provider_costs`; the replay viewer has no cost tracker, so that field is
+// omitted. Reuse rather than reinvent so the dashboard's render path Just
+// Works against our synthetic state.
 func (m *PlaybackManager) handleSessions(w http.ResponseWriter, r *http.Request) {
 	// Normalize adapter spellings BEFORE BuildDashboard runs so the
 	// dashboard's session→agent matching keys correctly. Historical
@@ -665,7 +667,7 @@ func (m *PlaybackManager) handleSessions(w http.ResponseWriter, r *http.Request)
 		// hydrate it from session_created messages.
 		groups = []*session.AgentGroup{}
 	}
-	writeJSON(w, groups)
+	writeJSON(w, map[string]any{"groups": groups})
 }
 
 // inferProjectName derives a fallback project name from the session's
@@ -759,4 +761,3 @@ const wsDiagScript = `<script>
 })();
 </script>
 `
-

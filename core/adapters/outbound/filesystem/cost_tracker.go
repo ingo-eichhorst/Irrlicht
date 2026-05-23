@@ -28,7 +28,8 @@ const (
 // per line (JSONL).
 type snapshotRow struct {
 	TS        int64   `json:"ts"`
-	Project   string  `json:"project,omitempty"` // raw SessionState.ProjectName (filename is sanitized)
+	Project   string  `json:"project,omitempty"`  // raw SessionState.ProjectName (filename is sanitized)
+	Provider  string  `json:"provider,omitempty"` // "anthropic", "openai", or "" (unknown); see providerForSession
 	Session   string  `json:"session"`
 	Cost      float64 `json:"cost"`
 	CumIn     int64   `json:"cum_in,omitempty"`
@@ -37,10 +38,34 @@ type snapshotRow struct {
 	CumCreate int64   `json:"cum_create,omitempty"`
 }
 
+// providerForSession maps a session's source adapter to the billing provider
+// whose subscription/usage its cost draws from. Only first-party CLIs are
+// mapped today: wrapper agents (pi, opencode) resolve their provider
+// dynamically via rate-limit inheritance at request time, which isn't
+// available here at write time, so they record "" (unknown). Rows written
+// before this field existed also read back as "". Such rows are excluded from
+// the per-provider rollup but still counted in the per-project totals.
+func providerForSession(state *session.SessionState) string {
+	switch state.Adapter {
+	case "claude-code":
+		return "anthropic"
+	case "codex":
+		return "openai"
+	default:
+		return ""
+	}
+}
+
 // CostTracker persists per-session cost snapshots in append-only JSONL files,
 // one file per project, under <appSupport>/cost/.
 type CostTracker struct {
 	dir string
+
+	// providerOf resolves a session's billing provider for the snapshot row.
+	// Defaults to providerForSession (first-party adapters only); the daemon
+	// injects a resolver that also attributes wrapper agents — see
+	// SetProviderResolver.
+	providerOf func(*session.SessionState) string
 
 	// mu guards fileMus and lastWrite.
 	mu        sync.Mutex
@@ -62,14 +87,26 @@ func NewCostTracker() (*CostTracker, error) {
 // (useful for tests).
 func NewCostTrackerWithDir(dir string) *CostTracker {
 	return &CostTracker{
-		dir:       dir,
-		fileMus:   make(map[string]*sync.Mutex),
-		lastWrite: make(map[string]snapshotRow),
+		dir:        dir,
+		providerOf: providerForSession,
+		fileMus:    make(map[string]*sync.Mutex),
+		lastWrite:  make(map[string]snapshotRow),
 	}
 }
 
 // Dir returns the directory where cost files live.
 func (t *CostTracker) Dir() string { return t.dir }
+
+// SetProviderResolver overrides how snapshot rows are attributed to a billing
+// provider. The daemon injects a resolver backed by services.ProviderForSession
+// so wrapper agents (pi, opencode) attribute to the subscription they inherit;
+// the built-in default handles only first-party adapters. Call once at wiring
+// time — not safe to call concurrently with RecordSnapshot.
+func (t *CostTracker) SetProviderResolver(fn func(*session.SessionState) string) {
+	if fn != nil {
+		t.providerOf = fn
+	}
+}
 
 // RecordSnapshot appends a row for the session if cost or any cumulative
 // token count has changed since the last stored row, and at least
@@ -88,6 +125,7 @@ func (t *CostTracker) RecordSnapshot(state *session.SessionState) error {
 	row := snapshotRow{
 		TS:        time.Now().Unix(),
 		Project:   state.ProjectName,
+		Provider:  t.providerOf(state),
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
 		CumIn:     m.CumInputTokens,
@@ -163,6 +201,7 @@ func (t *CostTracker) RecordBaseline(state *session.SessionState) error {
 	row := snapshotRow{
 		TS:        ts,
 		Project:   state.ProjectName,
+		Provider:  t.providerOf(state),
 		Session:   state.SessionID,
 		Cost:      m.EstimatedCostUSD,
 		CumIn:     m.CumInputTokens,
@@ -258,35 +297,83 @@ func (t *CostTracker) ProjectCostsInWindows(windowSeconds map[string]int64) (map
 	return out, nil
 }
 
-// sumProjectWindows streams a project file once and, per session, maintains
-// a window-agg tuple per timeframe. Each timeframe's contribution follows
-// the same rules as the single-window case:
+// ProviderCostsInWindows mirrors ProjectCostsInWindows but buckets each
+// session's contribution by its billing provider ("anthropic", "openai")
+// rather than its project. A single project can mix providers (e.g. Claude
+// Code + Codex in one repo), so providers cannot be re-derived from the
+// per-project map client-side without double-counting. Rows with an empty
+// provider (pre-schema rows, wrapper agents) are excluded from the result.
+func (t *CostTracker) ProviderCostsInWindows(windowSeconds map[string]int64) (map[string]map[string]float64, error) {
+	out := make(map[string]map[string]float64, len(windowSeconds))
+	for k := range windowSeconds {
+		out[k] = make(map[string]float64)
+	}
+	if len(windowSeconds) == 0 {
+		return out, nil
+	}
+	entries, err := os.ReadDir(t.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	now := time.Now().Unix()
+	cutoffs := make(map[string]int64, len(windowSeconds))
+	for k, secs := range windowSeconds {
+		cutoffs[k] = now - secs
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		if err := t.sumProviderWindows(filepath.Join(t.dir, e.Name()), cutoffs, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// windowAgg accumulates the baseline/max needed to compute one session's
+// contribution to one trailing window. Shared by the project and provider
+// rollups via scanWindows.
+type windowAgg struct {
+	baseline       float64
+	hasBaseline    bool
+	baselineInside bool
+	max            float64
+	hasMax         bool
+}
+
+// sessionWindows holds a single session's per-timeframe aggregators plus the
+// project and provider it belongs to (both constant across a session's rows).
+type sessionWindows struct {
+	project  string
+	provider string
+	windows  map[string]*windowAgg
+}
+
+// scanWindows streams one cost file once and returns per-session window
+// aggregators. The same scan feeds both the per-project and per-provider
+// rollups; callers pick which key to bucket by. Each timeframe's contribution
+// follows the same rules as the single-window case:
 //   - baseline = cost at the row just before cutoff if one exists, otherwise
 //     the minimum cost observed inside the window.
 //   - contribution = max(0, MAX(cost) − baseline).
-func (t *CostTracker) sumProjectWindows(path string, cutoffs map[string]int64, fallbackName string, out map[string]map[string]float64) error {
+func (t *CostTracker) scanWindows(path string, cutoffs map[string]int64) (map[string]*sessionWindows, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
-	type windowAgg struct {
-		baseline       float64
-		hasBaseline    bool
-		baselineInside bool
-		max            float64
-		hasMax         bool
-	}
-	type perSession struct {
-		project string
-		windows map[string]*windowAgg
-	}
-	agg := make(map[string]*perSession)
-
+	agg := make(map[string]*sessionWindows)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
@@ -300,7 +387,7 @@ func (t *CostTracker) sumProjectWindows(path string, cutoffs map[string]int64, f
 		}
 		s := agg[r.Session]
 		if s == nil {
-			s = &perSession{windows: make(map[string]*windowAgg, len(cutoffs))}
+			s = &sessionWindows{windows: make(map[string]*windowAgg, len(cutoffs))}
 			for k := range cutoffs {
 				s.windows[k] = &windowAgg{}
 			}
@@ -308,6 +395,9 @@ func (t *CostTracker) sumProjectWindows(path string, cutoffs map[string]int64, f
 		}
 		if r.Project != "" {
 			s.project = r.Project
+		}
+		if r.Provider != "" {
+			s.provider = r.Provider
 		}
 		for k, cutoff := range cutoffs {
 			w := s.windows[k]
@@ -331,24 +421,55 @@ func (t *CostTracker) sumProjectWindows(path string, cutoffs map[string]int64, f
 		}
 	}
 	if err := scanner.Err(); err != nil && err != io.EOF {
+		return nil, err
+	}
+	return agg, nil
+}
+
+// addContributions folds one session's per-window deltas into out under key.
+func addContributions(s *sessionWindows, key string, out map[string]map[string]float64) {
+	for tf, w := range s.windows {
+		if !w.hasMax {
+			continue
+		}
+		d := w.max - w.baseline
+		if d <= 0 {
+			continue
+		}
+		out[tf][key] += d
+	}
+}
+
+// sumProjectWindows scans a project file and buckets each session's
+// contribution under its project name (falling back to the filename when a
+// row carries no project).
+func (t *CostTracker) sumProjectWindows(path string, cutoffs map[string]int64, fallbackName string, out map[string]map[string]float64) error {
+	agg, err := t.scanWindows(path, cutoffs)
+	if err != nil {
 		return err
 	}
-
 	for _, s := range agg {
 		key := s.project
 		if key == "" {
 			key = fallbackName
 		}
-		for tf, w := range s.windows {
-			if !w.hasMax {
-				continue
-			}
-			d := w.max - w.baseline
-			if d <= 0 {
-				continue
-			}
-			out[tf][key] += d
+		addContributions(s, key, out)
+	}
+	return nil
+}
+
+// sumProviderWindows scans a cost file and buckets each session's
+// contribution under its provider, skipping sessions with no known provider.
+func (t *CostTracker) sumProviderWindows(path string, cutoffs map[string]int64, out map[string]map[string]float64) error {
+	agg, err := t.scanWindows(path, cutoffs)
+	if err != nil {
+		return err
+	}
+	for _, s := range agg {
+		if s.provider == "" {
+			continue
 		}
+		addContributions(s, s.provider, out)
 	}
 	return nil
 }

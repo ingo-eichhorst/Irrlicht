@@ -67,8 +67,8 @@ func TestPlayback_startEndToEnd(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("sessions: status=%d body=%s", rr.Code, rr.Body)
 	}
-	// The viewer now returns the daemon's BuildDashboard shape:
-	// [{"name": "<project>", "agents": [{"session_id": "...", ...}]}]
+	// The viewer returns the daemon's /api/v1/sessions envelope:
+	// {"groups": [{"name": "<project>", "agents": [{"session_id": "...", ...}]}]}
 	if !strings.Contains(rr.Body.String(), `"session_id":"s1"`) {
 		t.Errorf("expected session s1 in /api/v1/sessions: %s", rr.Body)
 	}

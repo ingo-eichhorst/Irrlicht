@@ -141,6 +141,11 @@ type CostTracker interface {
 	// → USD for that window.
 	ProjectCostsInWindows(windowSeconds map[string]int64) (map[string]map[string]float64, error)
 
+	// ProviderCostsInWindows mirrors ProjectCostsInWindows but keys each
+	// inner map by billing provider ("anthropic", "openai") instead of
+	// project. Rows with no known provider are excluded.
+	ProviderCostsInWindows(windowSeconds map[string]int64) (map[string]map[string]float64, error)
+
 	// Prune drops snapshot rows older than the given number of days.
 	// Safe to call periodically (e.g. daemon startup).
 	Prune(olderThanDays int) error

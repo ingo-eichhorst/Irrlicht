@@ -246,6 +246,38 @@ func recipientKey(s *session.SessionState, home string) (AccountKey, bool) {
 	return AccountKey{}, false
 }
 
+// ProviderForSession resolves the billing provider ("anthropic"/"openai", or
+// "" when unknown) a session's cost should be attributed to. First-party CLIs
+// map directly by adapter; wrapper agents (pi, opencode) resolve via the same
+// auth.json inspection used for rate-limit inheritance (recipientKey), so
+// their spend lands on the subscription they're actually billed against —
+// and on the same provider key the dashboard's quota chip uses for that
+// wrapper. `userHome` "" uses the real home (mirrors InheritRateLimits).
+func ProviderForSession(s *session.SessionState, userHome string) string {
+	if s == nil {
+		return ""
+	}
+	switch s.Adapter {
+	case "claude-code":
+		return ProviderAnthropic
+	case "codex":
+		return ProviderOpenAI
+	case "pi", "opencode":
+		home := userHome
+		if home == "" {
+			h, err := os.UserHomeDir()
+			if err != nil {
+				return ""
+			}
+			home = h
+		}
+		if key, ok := recipientKey(s, home); ok {
+			return key.Provider
+		}
+	}
+	return ""
+}
+
 // readCodexAccountID parses ~/.codex/auth.json and returns
 // tokens.account_id when the auth_mode is "chatgpt" (the OAuth/
 // subscription path). Returns "" for API-key users or any read/parse

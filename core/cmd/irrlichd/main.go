@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -33,6 +33,7 @@ import (
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/config"
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/inbound"
@@ -703,6 +704,12 @@ func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepositor
 		logger.LogError("startup", "", fmt.Sprintf("failed to init cost tracker: %v", err))
 		return nil
 	}
+	// Attribute wrapper agents (pi, opencode) to the subscription they
+	// inherit, so per-provider spend matches the dashboard's quota chip
+	// instead of going unattributed.
+	costTracker.SetProviderResolver(func(s *session.SessionState) string {
+		return services.ProviderForSession(s, "")
+	})
 	if err := costTracker.Prune(400); err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("cost tracker prune failed: %v", err))
 	}

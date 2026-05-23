@@ -95,10 +95,11 @@ func TestGate_GetSessions(t *testing.T) {
 		t.Fatalf("GET status: got %d, want 200", resp.StatusCode)
 	}
 
-	var groups []*session.AgentGroup
-	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	groups := payload.Groups
 	if len(groups) == 0 {
 		t.Fatal("expected at least one group")
 	}
@@ -326,20 +327,20 @@ func TestHandleGetSessions_AttachesGroupCosts(t *testing.T) {
 		t.Fatalf("status: got %d, want 200", resp.StatusCode)
 	}
 
-	var groups []*session.AgentGroup
-	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
 	var projA *session.AgentGroup
-	for _, g := range groups {
+	for _, g := range payload.Groups {
 		if g.Name == "proj-a" {
 			projA = g
 			break
 		}
 	}
 	if projA == nil {
-		t.Fatalf("proj-a group missing from response: %+v", groups)
+		t.Fatalf("proj-a group missing from response: %+v", payload.Groups)
 	}
 	if projA.Costs == nil {
 		t.Fatalf("proj-a.Costs must not be nil")
@@ -370,11 +371,14 @@ func TestHandleGetSessions_OmitsCostsWhenTrackerNil(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var groups []*session.AgentGroup
-	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, g := range groups {
+	if payload.ProviderCosts != nil {
+		t.Errorf("provider_costs must be nil when tracker is nil, got %+v", payload.ProviderCosts)
+	}
+	for _, g := range payload.Groups {
 		if g.Costs != nil {
 			t.Errorf("group %q: Costs must be nil when tracker is nil, got %+v", g.Name, g.Costs)
 		}
