@@ -5,6 +5,15 @@
 
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 
+// inferDriverLabel returns "Interactive (tmux REPL)" when the adapter
+// entry has a non-empty script array, "Headless one-shot" otherwise.
+// Pure function — exported for unit tests.
+export function inferDriverLabel(a) {
+  if (!a) return "Headless one-shot";
+  if (Array.isArray(a.script) && a.script.length > 0) return "Interactive (tmux REPL)";
+  return "Headless one-shot";
+}
+
 // Module-level handles populated during init() and reused by the
 // Overview button + scenario clicks to swap views in the main pane.
 let scenariosList = [];   // live recordings from /api/scenarios
@@ -785,10 +794,6 @@ function renderStepScript(steps) {
   return html;
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[c]);
-}
-
 // renderRecipePanel renders the by_adapter recipe entry for this
 // cell on the recording-detail page — same shape used by the
 // scenario-coverage page, just framed as a standalone panel so the
@@ -803,7 +808,7 @@ function renderRecipePanel(recipe) {
   }
   const intro = document.createElement("div");
   intro.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
-  const driver = recipe.driver || (recipe.interactive ? "Interactive (tmux REPL)" : "Headless one-shot");
+  const driver = inferDriverLabel(recipe);
   intro.innerHTML = `<b>Driver:</b> ${escapeHtml(driver)}` +
     (recipe.timeout_seconds ? ` · <b>Timeout:</b> ${recipe.timeout_seconds}s` : "");
   p.appendChild(intro);
