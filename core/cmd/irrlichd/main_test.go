@@ -228,6 +228,37 @@ func TestResolveBindAddr(t *testing.T) {
 	}
 }
 
+func TestDataDir(t *testing.T) {
+	// Default: derived from the passed-in home dir.
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("IRRLICHT_HOME", "")
+		want := filepath.Join("/home/alice", ".local", "share", "irrlicht")
+		if got := dataDir("/home/alice"); got != want {
+			t.Errorf("dataDir(home) = %q, want %q", got, want)
+		}
+	})
+
+	// Default with empty home (lookup failed): /tmp fallback.
+	t.Run("empty home", func(t *testing.T) {
+		t.Setenv("IRRLICHT_HOME", "")
+		if got := dataDir(""); got != "/tmp/irrlicht" {
+			t.Errorf("dataDir(\"\") = %q, want /tmp/irrlicht", got)
+		}
+	})
+
+	// IRRLICHT_HOME overrides the whole tree and ignores the home arg.
+	t.Run("override", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("IRRLICHT_HOME", dir)
+		if got := dataDir("/home/alice"); got != dir {
+			t.Errorf("dataDir with IRRLICHT_HOME = %q, want %q", got, dir)
+		}
+		if got := dataDir(""); got != dir {
+			t.Errorf("dataDir(\"\") with IRRLICHT_HOME = %q, want %q", got, dir)
+		}
+	})
+}
+
 // TestGate_GetState verifies that GET /state returns the compact debug-state format.
 func TestGate_GetState(t *testing.T) {
 	srv, repo := newTestStack(t)

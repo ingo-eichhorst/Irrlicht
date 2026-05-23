@@ -398,9 +398,10 @@ func main() {
 		claudecode.NewStatuslineHandler(metricsCollector, logger))
 
 	// Lifecycle recording: opt-in via --record flag or IRRLICHT_RECORD=1.
-	// IRRLICHT_RECORDINGS_DIR overrides the default directory so test
-	// harnesses (e.g. the ir:onboard-agent skill) can isolate recordings
-	// from the user's real ~/.local/share/irrlicht/recordings/.
+	// Recordings default to <dataDir>/recordings, so IRRLICHT_HOME already
+	// isolates them. IRRLICHT_RECORDINGS_DIR is the narrower override that
+	// wins even when IRRLICHT_HOME is set, so test harnesses (e.g. the
+	// ir:onboard-agent skill) can pin recordings somewhere specific.
 	if recordEnabled {
 		recordingsDir := os.Getenv("IRRLICHT_RECORDINGS_DIR")
 		if recordingsDir == "" {
@@ -509,7 +510,16 @@ func runCapacityRefreshLoop(ctx context.Context, logger outbound.Logger, initial
 // dataDir returns the irrlichd state directory (~/.local/share/irrlicht).
 // home should come from os.UserHomeDir(); pass "" only when the lookup
 // failed.
+//
+// IRRLICHT_HOME overrides the entire state tree — socket, history rollups,
+// the on-disk web fallback, and recordings all live beneath it. This lets a
+// dev/test daemon run fully isolated from the production install (and from
+// other worktrees) without touching ~/.local/share/irrlicht/. Recordings
+// still honor the narrower IRRLICHT_RECORDINGS_DIR override when set.
 func dataDir(home string) string {
+	if v := os.Getenv("IRRLICHT_HOME"); v != "" {
+		return v
+	}
 	if home == "" {
 		return "/tmp/irrlicht"
 	}
