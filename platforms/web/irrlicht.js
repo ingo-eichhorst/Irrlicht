@@ -269,6 +269,10 @@
           if (gran === 1 || gran === 10 || gran === 60) perGran[gran] = generations[granKey];
         }
         lastTickGen[sessionID] = perGran;
+      } else if (!lastTickGen[sessionID]) {
+        // No generation numbers in the snapshot — establish an empty entry so
+        // applyHistoryTick treats last=0 correctly (see `last &&` guard there).
+        lastTickGen[sessionID] = Object.create(null);
       }
       rebuildTimelineHistory();
     }
@@ -282,7 +286,7 @@
         if (bucketGenerations && bucketGenerations[sid] !== undefined) {
           const gen = bucketGenerations[sid];
           const last = (lastTickGen[sid] && lastTickGen[sid][granularitySec]) || 0;
-          if (gen <= last) continue;
+          if (last && gen <= last) continue;
           if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
           lastTickGen[sid][granularitySec] = gen;
         }
@@ -1597,6 +1601,9 @@
         const stale = Array.isArray(snap.windows) && snap.windows.some(w => w && w.resets_at * 1000 <= nowMs);
         const key = providerKeyFor(snap, s.adapter) || ('unknown:' + (s.adapter || ''));
         const mode = chipModeFor(snap, key);
+        // Subscription chips with no window data would render as an empty body
+        // (icon only, no bars) while hiding the app title. Skip them entirely.
+        if (mode === 'subscription' && !Array.isArray(snap.windows)) continue;
         const imm = imminentWindow(snap);
         const cost = (s.metrics && s.metrics.estimated_cost_usd) || 0;
         const existing = buckets.get(key);
@@ -1613,8 +1620,9 @@
           continue;
         }
         // Subscription wins over usage when both are seen (rare — one OAuth
-        // account on both paths). Bars are the richer signal.
-        if (existing.mode === 'usage' && mode === 'subscription') {
+        // account on both paths). Bars are the richer signal, but only when
+        // the subscription snap is at least as fresh as the usage snap.
+        if (existing.mode === 'usage' && mode === 'subscription' && (!stale || existing.isStale)) {
           existing.mode = 'subscription';
           existing.snapshot = snap;
           existing.session = s;
