@@ -160,6 +160,15 @@ func (d *SessionDetector) seedFromDisk() {
 		}
 		d.enricher.RefreshMetrics(state)
 
+		// Probe background-process liveness before re-classifying so a session
+		// persisted as `working` solely because a Bash run_in_background
+		// process is still alive (its open set rehydrated from the ledger) is
+		// not wrongly demoted to ready on startup. Without this, IsAgentDone
+		// would return true (count alone doesn't gate) and the session would
+		// flip to ready and never re-probe (refreshStaleSessions is
+		// working-only). See issue #445.
+		d.applyBackgroundLiveness(state)
+
 		newState, reason := ClassifyState(state.State, state.Metrics)
 		// Only apply transitions to waiting or ready (not working promotion)
 		// because seed is re-evaluating persisted state, not responding to

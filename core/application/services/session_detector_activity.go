@@ -309,6 +309,16 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 	// Refresh CWD/branch/project and metrics from transcript.
 	d.enricher.RefreshOnActivity(state, ev.TranscriptPath)
 
+	// Probe Bash background-process liveness (run_in_background). Must run
+	// after RefreshOnActivity (which recomputes metrics, clearing the flag)
+	// and before ClassifyState (whose IsAgentDone check reads it). Gated on
+	// the transcript-derived count, so only sessions that launched a
+	// background process ever shell out. The 5s refreshStaleSessions ticker
+	// re-runs this path for working sessions, so a process that exits with no
+	// further transcript activity still flips the session ready on re-probe.
+	// See issue #445.
+	d.applyBackgroundLiveness(state)
+
 	// Drain authoritative subagent-completion signals harvested from this
 	// parent's transcript (origin.kind="task-notification" lines parsed by
 	// the Claude Code adapter). This is the event-based path to ready for
@@ -455,6 +465,78 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 	if state.ParentSessionID != "" {
 		d.reevaluateParent(state.ParentSessionID)
 	}
+}
+
+// applyBackgroundLiveness sets HasLiveBackgroundProcess on the session's
+// metrics from the last-known liveness of its Bash background processes
+// (run_in_background), and kicks off an off-loop refresh of that knowledge.
+// When true, IsAgentDone returns false and the classifier holds the session
+// `working` past end_turn until the process exits.
+//
+// Two deliberate choices (issue #445 review):
+//   - Gated on state == working. The feature only ever needs to PREVENT a
+//     working→ready transition; it must never RESURRECT a session the user
+//     already cancelled (ESC → ready) just because a detached process is still
+//     alive. Non-working sessions clear their cache and the flag.
+//   - The lsof probe runs in a goroutine, not inline, so a slow filesystem
+//     can't stall the single event-loop goroutine (and thus every other
+//     session). processActivity uses the last-known value — optimistically
+//     "alive" on first sight so a not-yet-probed process is never prematurely
+//     declared dead — and a completed probe whose verdict changed nudges the
+//     event loop (via debouncedEvents) to re-classify promptly.
+func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
+	sid := state.SessionID
+	m := state.Metrics
+	if m == nil || state.State != session.StateWorking ||
+		m.BackgroundProcessCount == 0 || len(m.BackgroundProcessOutputs) == 0 || d.bgLiveProbe == nil {
+		d.bgMu.Lock()
+		delete(d.bgLive, sid)
+		delete(d.bgProbing, sid)
+		d.bgMu.Unlock()
+		if m != nil {
+			m.HasLiveBackgroundProcess = false
+		}
+		return
+	}
+
+	d.bgMu.Lock()
+	known, seen := d.bgLive[sid]
+	alive := true // optimistic on first sight — never flip to ready before probing
+	if seen {
+		alive = known
+	}
+	startProbe := !d.bgProbing[sid]
+	if startProbe {
+		d.bgProbing[sid] = true
+	}
+	d.bgMu.Unlock()
+
+	m.HasLiveBackgroundProcess = alive
+	if !startProbe {
+		return
+	}
+
+	outputs := append([]string(nil), m.BackgroundProcessOutputs...) // copy: goroutine must not alias state
+	transcriptPath := state.TranscriptPath
+	go func() {
+		live := d.bgLiveProbe(outputs)
+		d.bgMu.Lock()
+		prev, had := d.bgLive[sid]
+		d.bgLive[sid] = live
+		d.bgProbing[sid] = false
+		d.bgMu.Unlock()
+		// On a changed (or first) verdict, nudge the event loop to re-classify
+		// now rather than waiting for the next refresh tick. The send mirrors
+		// the debounce-timer path (single event-loop goroutine owns
+		// processActivity); drop if the buffer is full — the 5s refresh is the
+		// backstop.
+		if !had || prev != live {
+			select {
+			case d.debouncedEvents <- agent.Event{Type: agent.EventActivity, SessionID: sid, TranscriptPath: transcriptPath}:
+			default:
+			}
+		}
+	}()
 }
 
 // refreshStaleSessions re-reads transcripts for working sessions that haven't

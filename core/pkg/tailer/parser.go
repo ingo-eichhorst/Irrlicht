@@ -68,6 +68,27 @@ type TaskSnapshotEntry struct {
 	Status     string // "pending" | "in_progress" | "completed"
 }
 
+// BackgroundSpawn signals that a `Bash` tool call with `run_in_background:
+// true` reported its background id. Claude Code returns this in the Bash
+// tool_result text ("Command running in background with ID: <id>. Output is
+// being written to: <path>"), so the parser reads it off the result rather
+// than the tool_use input (which carries only the run_in_background flag).
+// The tailer folds these into its open-background-process set. See issue #445.
+type BackgroundSpawn struct {
+	BashID     string // the background shell id (e.g. "bc1h56v8v")
+	OutputPath string // tasks/<bash_id>.output — where stdout/stderr is written
+}
+
+// BashOutputPoll records a `BashOutput` tool_use: the agent polling a
+// background process by id. ToolUseID is the poll call's own id; BashID is
+// the background process it targets. The tailer remembers the pairing so a
+// later tool_result reporting a terminated status (TerminatedBashOutputIDs)
+// can be attributed to the right background process. See issue #445.
+type BashOutputPoll struct {
+	ToolUseID string
+	BashID    string
+}
+
 // ParsedEvent is the normalized output from a format-specific transcript parser.
 // Each parser maps its native event structure into these fields.
 type ParsedEvent struct {
@@ -107,6 +128,25 @@ type ParsedEvent struct {
 	// TaskDeltas are TaskCreate / TaskUpdate events from the Claude Code
 	// transcript. The tailer folds them into a running tasks slice.
 	TaskDeltas []TaskDelta
+
+	// BackgroundSpawns are Bash run_in_background launches observed in this
+	// event (read from the Bash tool_result text). The tailer adds each to
+	// its open-background-process set. See issue #445.
+	BackgroundSpawns []BackgroundSpawn
+
+	// BashOutputPolls are BashOutput tool_use calls in this event, pairing the
+	// poll's tool_use id with the background id it targets. See issue #445.
+	BashOutputPolls []BashOutputPoll
+
+	// TerminatedBashOutputIDs are tool_result ids whose content reports a
+	// terminated background-process status (anything other than "running").
+	// The tailer matches each against a remembered BashOutputPoll to drop the
+	// corresponding background process from its open set. See issue #445.
+	TerminatedBashOutputIDs []string
+
+	// KilledShellIDs are background ids named by a KillShell tool_use in this
+	// event — an explicit, single-event termination signal. See issue #445.
+	KilledShellIDs []string
 
 	// TaskSnapshot, when non-nil, is the authoritative list of tasks Claude
 	// Code is currently tracking, parsed from a task_reminder attachment.
@@ -272,6 +312,15 @@ type LedgerState struct {
 	CumProviderCostUSD float64                    `json:"cum_provider_cost_usd,omitempty"`
 	ParserState        *ParserLedger              `json:"parser_state,omitempty"`
 	Tasks              []Task                     `json:"tasks,omitempty"`
+	// BackgroundProcs persists the open-background-process set (background id
+	// → output path) so a daemon restart keeps holding the session `working`
+	// for processes still alive. See issue #445.
+	BackgroundProcs map[string]string `json:"background_procs,omitempty"`
+	// PendingBashPolls persists in-flight BashOutput polls (poll tool_use id →
+	// background id) so a restart between a poll's tool_use and its terminated
+	// tool_result can still attribute the termination and clear the process.
+	// See issue #445.
+	PendingBashPolls map[string]string `json:"pending_bash_polls,omitempty"`
 	// ModelName is the last observed model for the session. Persisted so that
 	// applyContribution's fallback (used when a contribution event carries no
 	// model — codex token_count) still routes to the right pricing bucket
