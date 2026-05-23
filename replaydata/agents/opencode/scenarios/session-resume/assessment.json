@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "scenario_id": "session-resume",
+  "agent": "opencode",
+  "assessed_at": "2026-05-23T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "partial",
+  "confidence": 0.85,
+  "body": "OpenCode's `opencode run --session <id>` chaining IS session resume — each invocation after the first joins the existing SQLite session row. The daemon observes the same ses_… id across PID lifetimes (process exits between turns, then a fresh process re-emits transcript activity for the same session). Recording validates 4/4 phases: session_birth, turn1 cycle, session_resumed (same id re-appears).",
+  "caveats": ["Session continuity is via SQLite, not a persistent PID. Irrlicht's PID-liveness check doesn't apply across invocations; continuity is implicit in the session table.", "Coverage matrix notes ParentSessionID isn't populated recursively for resume chains — that's a separate gap from this scenario's narrower 'same session id reappears' assertion."],
+  "sources": [{"kind":"file","ref":"core/adapters/inbound/agents/opencode/agent.go","note":"ProcessOwnedStore source variant."}]
+}

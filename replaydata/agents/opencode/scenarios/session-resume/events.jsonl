@@ -1,0 +1,20 @@
+{"seq":1432,"ts":"2026-05-23T13:11:09.480907+02:00","kind":"transcript_new","session_id":"proc-77091","adapter":"opencode","project_dir":"-Users-ingo-projects-irrlicht--build-refresh-opencode-session-resume-20260523T111108-cwd","cwd":"/Users/ingo/projects/irrlicht/.build/refresh/opencode/session-resume-20260523T111108/cwd"}
+{"seq":1433,"ts":"2026-05-23T13:11:09.543481+02:00","kind":"presession_created","session_id":"proc-77091","adapter":"opencode","project_dir":"-Users-ingo-projects-irrlicht--build-refresh-opencode-session-resume-20260523T111108-cwd","cwd":"/Users/ingo/projects/irrlicht/.build/refresh/opencode/session-resume-20260523T111108/cwd"}
+{"seq":1434,"ts":"2026-05-23T13:11:09.543542+02:00","kind":"state_transition","session_id":"proc-77091","new_state":"ready","reason":"new session created"}
+{"seq":1435,"ts":"2026-05-23T13:11:09.545352+02:00","kind":"pid_discovered","session_id":"proc-77091","pid":77091}
+{"seq":1436,"ts":"2026-05-23T13:11:10.834734+02:00","kind":"transcript_new","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_1ab77d54affeQzUIVbY502t4NC","project_dir":"cwd","cwd":"/Users/ingo/projects/irrlicht/.build/refresh/opencode/session-resume-20260523T111108/cwd"}
+{"seq":1437,"ts":"2026-05-23T13:11:10.898663+02:00","kind":"state_transition","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","new_state":"ready","reason":"new session created"}
+{"seq":1438,"ts":"2026-05-23T13:11:10.902223+02:00","kind":"presession_removed","session_id":"proc-77091","adapter":"opencode"}
+{"seq":1439,"ts":"2026-05-23T13:11:10.902323+02:00","kind":"transcript_activity","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_1ab77d54affeQzUIVbY502t4NC"}
+{"seq":1440,"ts":"2026-05-23T13:11:10.906393+02:00","kind":"state_transition","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","prev_state":"ready","new_state":"working","reason":"force ready→working on first activity"}
+{"seq":1441,"ts":"2026-05-23T13:11:11.031389+02:00","kind":"pid_discovered","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","pid":77091}
+{"seq":1442,"ts":"2026-05-23T13:11:11.035033+02:00","kind":"pid_discovered","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","pid":77091}
+{"seq":1443,"ts":"2026-05-23T13:11:11.564997+02:00","kind":"transcript_removed","session_id":"proc-77091","adapter":"opencode"}
+{"seq":1444,"ts":"2026-05-23T13:11:12.977903+02:00","kind":"transcript_activity","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_1ab77d54affeQzUIVbY502t4NC"}
+{"seq":1445,"ts":"2026-05-23T13:11:12.979581+02:00","kind":"state_transition","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","prev_state":"working","new_state":"ready","reason":"agent finished turn → ready"}
+{"seq":1446,"ts":"2026-05-23T13:11:13.082507+02:00","kind":"process_exited","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","pid":77091}
+{"seq":1447,"ts":"2026-05-23T13:11:13.50707+02:00","kind":"transcript_removed","session_id":"proc-77091","adapter":"opencode"}
+{"seq":1452,"ts":"2026-05-23T13:11:17.441141+02:00","kind":"transcript_activity","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_1ab77d54affeQzUIVbY502t4NC"}
+{"seq":1453,"ts":"2026-05-23T13:11:17.983482+02:00","kind":"transcript_activity","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_1ab77d54affeQzUIVbY502t4NC"}
+{"seq":1454,"ts":"2026-05-23T13:11:17.983547+02:00","kind":"debounce_coalesced","session_id":"ses_1ab77d54affeQzUIVbY502t4NC"}
+{"seq":1455,"ts":"2026-05-23T13:11:20.114604+02:00","kind":"transcript_activity","session_id":"ses_1ab77d54affeQzUIVbY502t4NC","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_1ab77d54affeQzUIVbY502t4NC"}
