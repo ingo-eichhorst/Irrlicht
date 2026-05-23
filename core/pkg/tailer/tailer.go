@@ -175,6 +175,15 @@ type TranscriptTailer struct {
 	// adapter name for model config fallback.
 	adapter string
 
+	// disableModelConfigFallback turns off the getDefaultModelFromConfig
+	// lookup. The daemon leaves it false so a live session with no in-band
+	// model still surfaces the operator's configured default. The replay
+	// path sets it true (DisableModelConfigFallback) so a committed fixture's
+	// output reflects only the transcript — never the operator's local
+	// ~/.claude/settings.json — keeping byte-identity goldens reproducible
+	// across machines and CI (issue #440).
+	disableModelConfigFallback bool
+
 	// Context window override from transcript or extended context model suffix.
 	contextWindowOverride int64
 
@@ -285,6 +294,14 @@ func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *
 		},
 		windowSize: 60 * time.Second,
 	}
+}
+
+// DisableModelConfigFallback stops the tailer from reading the operator's
+// per-agent config (~/.claude/settings.json and friends) to fill in a missing
+// model name. The replay tool calls this so committed fixtures replay
+// identically regardless of the machine's local config (issue #440).
+func (t *TranscriptTailer) DisableModelConfigFallback() {
+	t.disableModelConfigFallback = true
 }
 
 // GetLedgerState returns the durable accumulation state of the tailer so it
@@ -512,8 +529,9 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	t.metrics.SawUserBlockingToolClosedThisPass = sawUserBlockingClosedThisPass
 	t.metrics.NoSubstantiveActivity = linesParsedThisPass > 0 && !substantiveThisPass
 
-	// Model config fallback.
-	if t.metrics.ModelName == "" {
+	// Model config fallback. Skipped on the replay path (see
+	// disableModelConfigFallback) so fixture output stays hermetic.
+	if t.metrics.ModelName == "" && !t.disableModelConfigFallback {
 		if defaultModel := getDefaultModelFromConfig(t.adapter); defaultModel != "" {
 			t.metrics.ModelName = defaultModel
 		}
@@ -620,6 +638,10 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 	if sawUserBlockingClosed {
 		t.metrics.SawUserBlockingToolClosedThisPass = true
 	}
+	// Deliberately no getDefaultModelFromConfig fallback here (unlike
+	// TailAndProcess): the replay tool is the primary caller and must stay
+	// hermetic (issue #440). If a fallback is ever added, gate it on
+	// disableModelConfigFallback so replay doesn't read operator config.
 	t.computeContextUtilization()
 	return t.metrics, true
 }
