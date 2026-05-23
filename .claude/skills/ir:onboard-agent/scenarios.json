@@ -2265,6 +2265,51 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (ChatGPT login or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "codex version supports /compact (≥ 0.130.0 ships it as a slash command)"
+          ],
+          "setup": [
+            "Driver launches the codex TUI in tmux under a fresh per-run cwd (<staging>/cwd) and accepts the trust dialog; codex assigns its own rollout session UUID."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "/compact"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the rollout session reconciling into ready after launch (pre-session proc-PID, then the rollout session_id)",
+            "events.jsonl shows ready→working→ready for the priming turn",
+            "/compact runs as a turn: events.jsonl shows a single ready→working→ready arc on the SAME rollout session_id (codex appends compaction to the existing rollout — no new session)",
+            "no state_transition to waiting appears anywhere in the recording (no waiting/flicker around compaction)",
+            "final session state is ready; process_exited fires on the rollout session at REPL teardown",
+            "transcript.jsonl contains the priming turn (task_started/task_complete) and the compaction turn whose terminal task_complete is preceded by a context_compacted event_msg; the compaction-vs-normal-turn distinction is not surfaced by the daemon"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
