@@ -1,5 +1,6 @@
 // Minimum DOM required for irrlicht.js top-level wiring
 document.body.innerHTML = `
+  <header></header>
   <button id="theme-toggle"></button>
   <button id="view-mode-cycle">Context</button>
   <button id="settings-toggle"></button>

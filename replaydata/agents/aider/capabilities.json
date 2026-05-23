@@ -22,6 +22,7 @@
     "multi_model_orchestration": true,
     "repo_map": true,
     "voice_input": true,
-    "multimodal_input": true
+    "multimodal_input": true,
+    "cost_tracking": false
   }
 }

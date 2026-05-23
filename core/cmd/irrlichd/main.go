@@ -229,9 +229,11 @@ func main() {
 	mux.HandleFunc("GET /debug/pprof/symbol", localhostOnly(pprof.Symbol))
 	mux.HandleFunc("GET /debug/pprof/trace", localhostOnly(pprof.Trace))
 
-	// Ensure .js files are served as application/javascript regardless of the
-	// host OS mime.types database (absent on stripped Linux images).
+	// Ensure web assets are served with correct Content-Type regardless of the
+	// host OS mime.types database (absent on stripped Linux images). Go's
+	// content-sniffing fallback returns text/plain for CSS (no magic bytes).
 	_ = mime.AddExtensionType(".js", "application/javascript")
+	_ = mime.AddExtensionType(".css", "text/css")
 
 	// Static web UI: served from disk so the dashboard ships as three files
 	// (index.html, irrlicht.css, irrlicht.js) under platforms/web/. API routes
