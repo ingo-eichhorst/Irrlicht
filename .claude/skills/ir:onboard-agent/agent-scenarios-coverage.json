@@ -976,8 +976,8 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
-          "notes": "Bash run_in_background:true tool exists; irrlicht has no BackgroundProcessCount and does not track child PIDs from Bash"
+          "irrlicht_observes": "yes",
+          "notes": "#445/#450 + 265ebf22: parser snapshots the Bash run_in_background backgroundTaskId into BackgroundProcessCount and holds the session working past end_turn; a terminal <task-notification> (the SDK-harness completion shape) drops the process so it settles working→ready once the bg process exits. Recorded + validated 5/5."
         },
         "codex": {
           "agent_supports": "yes",
