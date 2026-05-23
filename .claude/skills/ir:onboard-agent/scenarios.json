@@ -782,18 +782,52 @@
             "Codex assigns its own rollout UUID; the driver discovers the rollout-*.jsonl on the first wait_turn and records its daemon session_id for the curator."
           ],
           "script": [
-            {"type": "send", "text": "Reply with exactly the word: first"},
-            {"type": "wait_turn"},
-            {"type": "sleep", "seconds": 4},
-            {"type": "slash", "text": "/model"},
-            {"type": "sleep", "seconds": 2},
-            {"type": "keys", "keys": "Down Down Enter"},
-            {"type": "sleep", "seconds": 2},
-            {"type": "keys", "keys": "Enter"},
-            {"type": "sleep", "seconds": 4},
-            {"type": "send", "text": "Reply with exactly the word: second"},
-            {"type": "wait_turn"},
-            {"type": "sleep", "seconds": 4}
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: first"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/model"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Down Down Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: second"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
           ],
           "verify": [
             "events.jsonl shows a proc-<PID> pre-session born ready within 1s of launch, then the rollout session reconciles to a new session_id (also born ready).",
@@ -3561,6 +3595,59 @@
             }
           },
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "codex 0.130.0+ — Plan Mode is the `/plan` collaboration mode (TUI only; no headless `codex exec` plan entry, no `-c collaboration_mode` config key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before the first step",
+            "Step 1 is a `/plan` slash that switches the session into Plan Mode. Unlike a prompt, `/plan` toggles a mode and does NOT start a turn (no task_complete), so it is followed by a fixed `sleep`, not `wait_turn` — wait_turn would over-count against the EXPECTED_TURNS bump every send/slash applies and time out.",
+            "Plan Mode's developer prompt encourages a PHASE-1 exploration pass; running in an empty cwd plus an explicit 'emit the plan now' instruction keeps the plan turn to a single short reply that wraps a <proposed_plan> block.",
+            "The codex parser synthesizes a SYNTHETIC ExitPlanMode tool_use from the <proposed_plan> span (parser.go parseCodexMessage); that open call survives task_complete so the session sits in waiting (the plan-review gate) until the user approves. The interactive driver keeps the rollout session ALIVE across both turns; the REPL is torn down only at script end, so the daemon observes the full waiting→working→ready recovery on one live session."
+          ],
+          "script": [
+            {
+              "type": "slash",
+              "text": "/plan"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "We are in Plan Mode. Do NOT explore the repo and do NOT ask any clarifying questions — there is nothing to explore here. Immediately produce your final plan for this trivial task: add a file hello.py containing a single line `print(\"hello world\")`. Output ONLY a single <proposed_plan> block (opening tag on its own line, closing tag on its own line) with a short Summary, Key Changes, and Test Plan. No other text."
+            },
+            {
+              "type": "sleep",
+              "seconds": 75
+            },
+            {
+              "type": "send",
+              "text": "Approved — that plan looks good. In one short sentence, confirm you will implement it exactly as planned. Do NOT emit another <proposed_plan> block and do NOT ask any questions; end on a plain statement."
+            },
+            {
+              "type": "sleep",
+              "seconds": 45
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the plan-request prompt is sent (the first turn after /plan)",
+            "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the agent emits a <proposed_plan> block (synthetic ExitPlanMode keeps a tool call open across task_complete — the plan-review gate; classifier takes the open-user-blocking-tool path rather than →ready)",
+            "the waiting episode is visible and persists ≥3s — no state_transition to ready appears before the user approves",
+            "events.jsonl contains a state_transition→working on the SAME rollout session_id when the user approves with a follow-up prompt (waiting→working recovery; the user message clears the open ExitPlanMode)",
+            "events.jsonl contains a state_transition→ready on the SAME rollout session_id when the second turn ends with a plain reply and no new proposed_plan (working→ready)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session across both turns, not per-turn exits)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
