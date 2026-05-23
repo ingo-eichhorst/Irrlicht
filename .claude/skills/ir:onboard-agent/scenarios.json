@@ -4102,6 +4102,50 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated",
+            "irrlichd is recording (--attach or isolated mode)",
+            "Codex has NO built-in autonomous self-prompting loop AND no native max-iteration cap; the loop is driven EXTERNALLY by the driver feeding successive prompts to the same live REPL session, and the 'iteration limit' is modeled by the driver simply NOT sending a further prompt after the last iteration"
+          ],
+          "setup": [
+            "Driver launches one interactive codex REPL; the rollout session reconciles to its own session_id once the first prompt lands. No trust dialog / settings file (codex has none)."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "We are running an iterative loop that stops at iteration 2 (its limit). This is iteration 1 of 2 — run `echo 1` and report that you are continuing to iteration 2. Do not do anything beyond echo 1."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Final loop iteration 2 of 2: run `echo 2`. This is the iteration limit — after this, stop. Confirm you have reached the limit and will not iterate further, then wait."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the proc-PID pre-session born ready, then the rollout session reconcile (new session_id) born ready, then a pid_discovered for the rollout session",
+            "events.jsonl contains 2 working->ready transitions on the SAME rollout session_id — one clean cycle per externally-fed loop iteration before the limit",
+            "after the final iteration's working->ready, the session DWELLS in ready for the entire 8s trailing idle window with NO further state_transition to working — the loop stopped at its limit and did not stick in working or spuriously re-prompt",
+            "final state of the session is ready (the loop terminated cleanly at its limit)",
+            "no state_transition to waiting (codex has no permission gates)"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
