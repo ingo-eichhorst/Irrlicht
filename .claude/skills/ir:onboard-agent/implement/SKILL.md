@@ -184,9 +184,31 @@ state_transition order, distinct session_id count, and `process_exited`
 count must match. UUIDs / PIDs / timestamps / token counts may differ.
 Note any structural change in the return.
 
+### 6b. Refresh the replay byte-identity golden (mandatory)
+
+`promote-recording.sh` writes the recording but NOT the
+`transcript.jsonl.replay.json.golden` that `TestFixtureReplayByteIdentity`
+(core/cmd/replay) pins — so without this step a fresh recording leaves
+`go test ./core/...` red. Regenerate this scenario's golden(s):
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+$SK/scripts/refresh-golden.sh <agent> <scenario>
+```
+
+This regenerates goldens, then discards every golden change that isn't
+under `replaydata/agents/<agent>/scenarios/<scenario>/` — so it covers the
+new top-level recording AND any archived `recordings/<ts>/` transcript,
+while leaving other adapters' pre-existing golden drift untouched (don't
+mask it; that's a separate maintainer task). It's idempotent — on a
+`--re-record` that reproduced byte-identical output it reports "no golden
+change". Do NOT hand-edit goldens or run a bare `UPDATE_REPLAY_GOLDENS=1`
+across the whole tree (that commits other adapters' drift).
+
 ### 7. Commit the recording (mandatory before returning)
 
 ```bash
+# The scenario dir now includes the recording AND its refreshed golden(s).
 git add replaydata/agents/<agent>/scenarios/<scenario>/
 git commit -m "feat(onboard): record <agent>/<scenario> (<pass_rate>)"
 git rev-parse --short HEAD   # → commit_sha for the return
@@ -246,3 +268,9 @@ Status meanings:
   cell in a batch.
 - **Don't write the coverage matrix.** `agent-scenarios-coverage.json` is
   the maintainer's editorial truth; surface drift in `notes`, don't edit it.
+- **Don't skip the golden refresh (step 6b), and don't blind-regenerate.**
+  Always run `scripts/refresh-golden.sh <agent> <scenario>` after promote —
+  a fresh recording without its golden leaves `go test ./core/...` red. But
+  never run a bare `UPDATE_REPLAY_GOLDENS=1` across the whole tree or
+  hand-edit goldens: that commits other adapters' pre-existing drift instead
+  of leaving it for its own maintainer task.
