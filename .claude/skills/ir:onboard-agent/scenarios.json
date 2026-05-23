@@ -2409,6 +2409,50 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "The first prompt keeps codex busy long enough to inject a follow-up while it is mid-turn — a slow count-to-20 that asks for a pause between numbers (codex satisfies the pause by running `sleep` shell calls, extending the turn to ~30s) is sufficient",
+            "The mid-turn follow-up is delivered as a raw `keys` step ending in Enter (NOT a `send`): probing codex 0.130.0 live, a message submitted mid-turn is QUEUED — the TUI shows 'Messages to be submitted after next tool call' and folds it into the SAME turn, emitting only ONE task_complete for the whole arc. A `send` would bump the driver's expected-turn counter to 2, so the following wait_turn would block forever on a second task_complete that never arrives; the raw `keys` Enter submits the buffered text without touching the turn counter"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Count slowly from 1 to 20, one number per line. Pause about half a second between each number. After 20, reply with exactly the word: done"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "A f t e r Space y o u Space f i n i s h Space c o u n t i n g , Space a l s o Space r e p l y Space w i t h Space t h e Space w o r d : Space s e c o n d m e s s a g e Enter"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready, and a pid_discovered bound to it",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the slow-count prompt is sent",
+            "events.jsonl contains NO state_transition to ready while the queued follow-up is buffered (the working span is contiguous through the queued arrival — codex folds it into the same turn, one task_complete)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span",
+            "events.jsonl eventually shows a single working→ready transition once the folded turn completes; final session state is ready, then process_exited at REPL teardown",
+            "transcript (rollout) shows ONE task_started/task_complete pair and TWO user_message lines (initial prompt + queued follow-up); the queued message does NOT introduce a second turn boundary"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
