@@ -3434,6 +3434,71 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "Cost may read $0 if the LiteLLM pricing cache lacks the running codex model (logged for some models, e.g. gpt-5.3-codex). This is a pricing-cache limitation, not a token-accounting gap — assert token COUNTS/deltas (which are real), not a nonzero cost."
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so prompts never race a still-running turn",
+            "No special model or context flags — the default model is fine; the assertion is about token accumulation, not which model produced the tokens"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown on each turn boundary; input_tokens + output_tokens > 0 across the turns (per-turn delta from codex total_token_usage cursor)",
+            "SessionMetrics.TotalTokens after turn 1 > 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic accumulation across 3 turns)",
+            "if codex reports cached_tokens (input_tokens_details.cached_tokens), they populate the cache bucket and are deducted from fresh input; if absent on these tiny turns, cache buckets stay 0 — do not assert a nonzero cache",
+            "cost (estimated_cost_usd) may be $0 when the LiteLLM pricing cache lacks the model — known pricing-cache limitation; do not assert a nonzero cost",
+            "the rollout session final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session, not three exits)",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
