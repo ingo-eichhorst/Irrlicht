@@ -985,8 +985,59 @@
           "timeout_seconds": 120
         },
         "codex": {
-          "applicable": false,
-          "scope_note": "Codex's TUI has no documented /clear analogue as of v0.130; closing and restarting the REPL creates a brand new rollout file with a new UUID, not a 'reset' within one process. drive-codex-interactive.sh also doesn't expose a `reset_session` step type — that's claudecode-only. Recording deferred until either codex ships a /clear command and the driver gains the primitive, or the scenario is assessed as supports=no for codex."
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY) — verified codex 0.130.0",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "PARTIAL observability (per assessment.json): codex /clear does NOT emit a transcript_removed for the old session — the old rollout lingers frozen until process_exited. The 'old session disappears' spec bullet has no codex-side removal event; only the 'new session appears' signal is asserted.",
+            "KNOWN CAPTURE GAP: drive-codex-interactive.sh caches the first rollout and writes a single session.uuid, so curate-lifecycle-fixture.sh filters the fixture to UUID-1 only. The v2_* (post-/clear) phases assert what the daemon observes LIVE; they may be absent from the single-session curated fixture, surfacing as validation drift until the codex driver tracks /clear-spawned sessions (a developer task)."
+          ],
+          "setup": [
+            "Driver launches codex in a fresh per-run cwd under <staging>/cwd/ (isolates the trust dialog).",
+            "Codex assigns its own session UUID per rollout; there is no --session-id flag. The first prompt materializes rollout-<ts>-<uuid1>.jsonl; the first prompt AFTER /clear materializes a second rollout-<ts>-<uuid2>.jsonl with a fresh session_id and no UUID-1 history."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "/clear"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the FIRST rollout-keyed session in ready",
+            "events.jsonl shows the FIRST rollout session running a working→ready turn (turn 1, 'ok')",
+            "after /clear, the first post-clear prompt spawns a DIFFERENT rollout session_id in ready (new session row, no UUID-1 history) — the 'old session disappears / new session appears' reset, observed live on the dashboard",
+            "the second turn's working→ready cycle is on the NEW rollout session, not the old one",
+            "codex does NOT emit transcript_removed for the old session at /clear time (the old rollout lingers frozen) — the old row stays ready until process_exited; do not assert a removal event",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         },
         "pi": {
           "applicable": false,
