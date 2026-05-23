@@ -12,7 +12,10 @@ import (
 )
 
 // TestFixtureReplayByteIdentity pins the JSON output of every
-// replaydata/agents/**/*.jsonl fixture to a committed golden. Refresh with:
+// replaydata/agents/**/*.jsonl fixture to a committed golden. Replay is
+// hermetic — it never reads the operator's ~/.claude/settings.json (see
+// TranscriptTailer.DisableModelConfigFallback, issue #440) — so regenerating
+// is reproducible across machines. Refresh with:
 //
 //	UPDATE_REPLAY_GOLDENS=1 go test ./core/cmd/replay/...
 func TestFixtureReplayByteIdentity(t *testing.T) {

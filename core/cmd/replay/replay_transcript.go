@@ -89,6 +89,9 @@ func newTranscriptReplayer(src string, cfg reportSettings, events []rawEvent) (*
 	}
 	parser := parserFor(adapterName)
 	t := tailer.NewTranscriptTailer(tmpPath, parser, adapterName)
+	// Replay must reflect only the transcript, never the operator's local
+	// config, so goldens stay reproducible across machines (issue #440).
+	t.DisableModelConfigFallback()
 
 	report := &replayReport{
 		SchemaVersion:    1,
