@@ -14,7 +14,6 @@ final class DaemonManager: ObservableObject {
     private var healthTask: Task<Void, Never>?
     private var restartCount = 0
     private let maxRestartDelay: TimeInterval = 30
-    private let daemonPort = 7837
 
     private let logger = Logger(subsystem: "io.irrlicht.app", category: "DaemonManager")
 
@@ -45,6 +44,13 @@ final class DaemonManager: ObservableObject {
     /// Kill any `irrlichd` processes left over from a previous app launch,
     /// LaunchAgent, or manual invocation so we start with a clean slate.
     private func killStaleDaemons() {
+        // On a custom port we're a dev instance coexisting with the production
+        // daemon (port 7837). pkill matches by process name and can't target a
+        // port, so a global kill here would take production down too — skip it.
+        if DaemonEndpoint.isCustomPort {
+            logger.info("Custom daemon port \(DaemonEndpoint.port) — skipping global pkill to leave production running")
+            return
+        }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
         task.arguments = ["-x", "irrlichd"]
@@ -64,7 +70,7 @@ final class DaemonManager: ObservableObject {
 
     /// Returns true if an irrlichd instance is already listening on the expected port.
     func isDaemonReachable() async -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:\(daemonPort)/state") else { return false }
+        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/state") else { return false }
         var request = URLRequest(url: url)
         request.timeoutInterval = 2
         do {
@@ -103,6 +109,11 @@ final class DaemonManager: ObservableObject {
         proc.executableURL = daemonURL
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
+        // Bind the same port the app connects to. Inherits the app's
+        // environment so IRRLICHT_HOME (if set for a dev instance) propagates.
+        var env = ProcessInfo.processInfo.environment
+        env["IRRLICHT_BIND_ADDR"] = "127.0.0.1:\(DaemonEndpoint.port)"
+        proc.environment = env
 
         proc.terminationHandler = { [weak self] terminated in
             Task { @MainActor [weak self] in
