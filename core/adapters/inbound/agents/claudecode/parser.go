@@ -124,7 +124,21 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	if !ok {
 		return
 	}
-	if kind, _ := att["type"].(string); kind != "task_reminder" {
+	kind, _ := att["type"].(string)
+	cmdMode, _ := att["commandMode"].(string)
+	// A queued_command "task-notification" attachment carries a
+	// <task-notification> XML blob — the headless-shape sibling of the
+	// origin.kind task-notification in handleTaskNotification. A terminal one
+	// ends a tracked Bash background process by its <task-id>. See issue #445.
+	if kind == "queued_command" || cmdMode == "task-notification" {
+		if prompt, _ := att["prompt"].(string); prompt != "" {
+			if id := extractXMLField(prompt, "task-id"); id != "" && backgroundStatusTerminated(prompt) {
+				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
+			}
+		}
+		return
+	}
+	if kind != "task_reminder" {
 		return
 	}
 	contentArr, ok := att["content"].([]interface{})
@@ -216,6 +230,14 @@ func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 				ToolUseID: extractXMLField(content, "tool-use-id"),
 				Status:    extractXMLField(content, "status"),
 			})
+			// A terminal task-notification also ends a Bash background process
+			// when its <task-id> matches a tracked backgroundTaskId — the
+			// completion path orchestrated/SDK claude uses instead of a
+			// BashOutput poll. Dropping a non-matching id (a subagent's) is a
+			// harmless no-op in the tailer. See issue #445.
+			if id := extractXMLField(content, "task-id"); id != "" && backgroundStatusTerminated(content) {
+				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
+			}
 		}
 	}
 	ev.Skip = true

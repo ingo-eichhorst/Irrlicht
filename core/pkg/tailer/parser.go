@@ -148,6 +148,14 @@ type ParsedEvent struct {
 	// event — an explicit, single-event termination signal. See issue #445.
 	KilledShellIDs []string
 
+	// TerminatedBackgroundTaskIDs are background ids (== backgroundTaskId)
+	// reported done by a terminal <task-notification> rather than a BashOutput
+	// poll. Orchestrated / SDK-harnessed claude sessions report background
+	// completion this way (TaskOutput + task-notification) instead of via
+	// BashOutput / KillShell. The tailer drops each from its open set; a
+	// non-background id (e.g. a subagent's) is a harmless no-op. See issue #445.
+	TerminatedBackgroundTaskIDs []string
+
 	// TaskSnapshot, when non-nil, is the authoritative list of tasks Claude
 	// Code is currently tracking, parsed from a task_reminder attachment.
 	// Pointer-to-slice so an empty list (legitimate "nothing active" signal)

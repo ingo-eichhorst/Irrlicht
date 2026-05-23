@@ -545,6 +545,17 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 					t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
 					substantiveThisPass = true
 				}
+				// Background-process completion arrives on a Skip=true
+				// task-notification (origin.kind or queued_command attachment) —
+				// drain it here so the count drops and the pass is substantive
+				// enough for the detector to re-classify and release the hold.
+				// See issue #445.
+				if len(parsed.TerminatedBackgroundTaskIDs) > 0 {
+					for _, id := range parsed.TerminatedBackgroundTaskIDs {
+						delete(t.openBackgroundProcs, id)
+					}
+					substantiveThisPass = true
+				}
 				if parsed.TaskSnapshot != nil {
 					substantiveThisPass = true
 				}
@@ -825,6 +836,12 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	}
 	for _, bashID := range parsed.KilledShellIDs {
 		delete(t.openBackgroundProcs, bashID)
+	}
+	// Terminal task-notification completion (orchestrated/SDK path): the
+	// <task-id> is the backgroundTaskId. A non-matching id is a harmless no-op.
+	// See issue #445.
+	for _, id := range parsed.TerminatedBackgroundTaskIDs {
+		delete(t.openBackgroundProcs, id)
 	}
 
 	t.reconcileTaskSnapshot(parsed)
