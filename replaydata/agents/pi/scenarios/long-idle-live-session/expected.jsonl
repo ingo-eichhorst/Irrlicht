@@ -1,0 +1,6 @@
+{"schema_version": 1, "scenario_id": "long-idle-live-session", "source": ".specs/agent-scenarios.md → Feature: Long-idle live session", "notes": "Pi's REPL is persistent across the recipe's two turns. Spec asserts: (1) session born in ready, (2) turn1 cycle ready→working→ready, (3) idle window with no transcript_removed, (4) turn2 cycle ready→working→ready. Production daemon readyTTL (30 min) > 20 s idle, so this proves continuity rather than TTL survival."}
+{"phase": "session_birth", "expected_state": "ready", "relative_to": "start", "max_delay_ms": 2000, "text": "Session appears in ready"}
+{"phase": "turn1_start", "expected_state": "working", "relative_to": "session_birth", "text": "First user prompt drives ready → working"}
+{"phase": "turn1_done", "expected_state": "ready", "relative_to": "turn1_start", "text": "First turn completes back to ready before the idle window"}
+{"phase": "turn2_start", "expected_state": "working", "relative_to": "turn1_done", "text": "Second user prompt (after 20s idle) drives ready → working"}
+{"phase": "turn2_done", "expected_state": "ready", "relative_to": "turn2_start", "text": "Second turn completes back to ready"}
