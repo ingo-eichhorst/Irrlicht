@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "scenario_id": "quota-burndown",
+  "agent": "codex",
+  "assessed_at": "2026-05-23T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "partial",
+  "confidence": 0.75,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: partial\n\n## Reasoning\n\nCodex emits an updated `rate_limits` map on every `token_count` event. Across turns, `rate_limits.primary.used` and the computed `UsedPercent` should increase monotonically as the session consumes its quota window. `extractCodexRateLimits()` in `core/adapters/inbound/agents/codex/parser.go` re-reads the snapshot fresh from each event, so no caching or coalescing masks the progression.\n\nThe irrlicht side stores the latest `RateLimitSnapshot` per session (the metrics adapter overwrites on each ingestion), so the dashboard always shows the most recent window state — no delta math, just the raw latest snapshot.\n\n**Why partial**: Codex plan-mode quota detection has known gaps (#322, #325). Plan-mode sessions may not emit token_count events consistently, so quota burndown may not be observable for plan-mode turns. Regular (non-plan) turns are covered. The fixture will exercise the non-plan path only; plan-mode is tracked separately.\n\nA multi-turn fixture that approaches but does not cross a quota boundary is the target: we want to see UsedPercent rising without triggering `token-quota-exhausted` state behavior (which is a separate scenario).\n\n## What irrlicht does NOT see (and why that's OK)\n\nirrlicht does not compute a 'remaining forecast' from the rate_limits data. It surfaces UsedPercent and ResetsAt as given by the agent. Forecasting remaining tokens would require knowing the session's total per-window budget, which is not in the Codex transcript. The assertion is therefore on non-decreasing UsedPercent, not on an absolute remaining estimate.",
+  "caveats": [
+    "The fixture requires a multi-turn Codex Plus session that stays within its quota window (does not exhaust it). A session of 3-5 moderate turns typically increments UsedPercent by a few percent, enough to assert the monotonic property.",
+    "Codex plan-mode sessions (#322, #325): plan-mode may suppress token_count events during the planning phase, making quota progression invisible mid-turn. Non-plan turns are sufficient for this fixture.",
+    "If the developer's session is early in a quota window, UsedPercent may be very low (< 1%) and numerically equal across turns due to rounding. Use at least 2 substantial turns to ensure a detectable delta."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/parser.go:378-413", "note": "extractCodexRateLimitWindow() reads primary/secondary window fields including used, limit, and resets_at. UsedPercent is derived from used/limit."},
+    {"kind": "issue", "ref": "#322", "note": "Codex plan-mode quota detection: partial coverage; plan-mode turns may not emit token_count events."},
+    {"kind": "issue", "ref": "#325", "note": "Related plan-mode rate-limit gap; partially addressed but not fully validated end-to-end."},
+    {"kind": "spec", "ref": ".specs/agent-scenarios.md → Feature: Quota burndown", "note": "UsedPercent after turn N ≥ after turn N-1; SampledAt updates on each turn (no stale snapshot replay)."}
+  ]
+}
