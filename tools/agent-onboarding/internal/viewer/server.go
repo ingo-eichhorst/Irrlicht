@@ -664,15 +664,17 @@ func resolveScenarioFolderFromMap(idx recipeIndex, coverageID string) string {
 // resolveScenarioFolderForAgent returns the replaydata folder name for
 // one (agent, coverage_id) pair, preferring the folder whose
 // replaydata/agents/<agent>/scenarios/<folder>/expected.jsonl exists.
-// Falls back to the canonical folder when the agent isn't declared by
-// any scenario entry under this coverage_id.
+// Returns "" when the agent is not declared by any scenarios.json entry
+// under this coverage_id — callers should then fall back to the
+// coverage_id directly rather than reading some unrelated agent's
+// canonical folder.
 func resolveScenarioFolderForAgent(idx recipeIndex, agent, coverageID string) string {
 	if perAgent, ok := idx.folderByAgent[coverageID]; ok {
 		if folder, ok := perAgent[agent]; ok {
 			return folder
 		}
 	}
-	return resolveScenarioFolderFromMap(idx, coverageID)
+	return ""
 }
 
 // pipelineForCell computes the recipe/spec/recordings status for one
@@ -1151,9 +1153,13 @@ func dedupeRecipesByCoverageID(raw []byte, repoRoot string) ([]byte, error) {
 		}
 		if merged, ok := mergedByAdapter[cid]; ok && len(merged) > 0 {
 			b, err := json.Marshal(merged)
-			if err == nil {
-				entry["by_adapter"] = b
+			if err != nil {
+				// Marshal failure would silently fall back to the primary's
+				// original by_adapter, hiding sibling agents the merge added.
+				// Fail loudly so the maintainer sees the regression.
+				return nil, fmt.Errorf("marshal merged by_adapter for coverage_id=%q: %w", cid, err)
 			}
+			entry["by_adapter"] = b
 		}
 		rewritten, err := json.Marshal(entry)
 		if err != nil {
