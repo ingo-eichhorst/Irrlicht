@@ -235,7 +235,23 @@
           "timeout_seconds": 60
         },
         "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/ so the headless run has a clean working directory"
+          ],
           "prompt": "Output exactly the two characters: ok",
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition to working on the rollout session (the assistant turn)",
+            "events.jsonl contains a process_exited on the rollout session marking the headless turn-end (codex exec is single-shot, so there is no working→ready flip)",
+            "no state_transition to waiting appears for the rollout session"
+          ],
           "settings": {},
           "timeout_seconds": 120
         },
