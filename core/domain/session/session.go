@@ -9,7 +9,7 @@ import (
 // State constants — three MECE states for session lifecycle.
 // See STATES.md for the formal state machine specification.
 const (
-	StateWorking = "working" // Agent actively processing (tools, text generation, hooks, compaction)
+	StateWorking = "working" // Agent actively processing (tools, text generation, hooks, compaction, or a live Bash background process)
 	StateWaiting = "waiting" // Agent finished turn, waiting for user input
 	StateReady   = "ready"   // Session inactive (process exited, transcript removed, cancelled)
 
