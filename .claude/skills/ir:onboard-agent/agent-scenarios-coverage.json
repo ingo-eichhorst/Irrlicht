@@ -1041,7 +1041,7 @@
         "claudecode": {
           "agent_supports": "yes",
           "irrlicht_observes": "yes",
-          "notes": "Per-UUID transcripts; pid.go is metadata-first (#60/#109/#169) so no PID-swap flap. Assessed yes/yes (0.9); recording is Stage 4."
+          "notes": "Per-UUID transcripts; pid.go is metadata-first (#60/#109/#169) so no PID-swap flap. Recorded via the new start_session driver primitive — two concurrent same-cwd sessions, 7/7 expected phases pass."
         },
         "codex": {
           "agent_supports": "yes",
