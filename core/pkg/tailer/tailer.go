@@ -638,6 +638,10 @@ func (t *TranscriptTailer) FlushIdle() (*SessionMetrics, bool) {
 	if sawUserBlockingClosed {
 		t.metrics.SawUserBlockingToolClosedThisPass = true
 	}
+	// Deliberately no getDefaultModelFromConfig fallback here (unlike
+	// TailAndProcess): the replay tool is the primary caller and must stay
+	// hermetic (issue #440). If a fallback is ever added, gate it on
+	// disableModelConfigFallback so replay doesn't read operator config.
 	t.computeContextUtilization()
 	return t.metrics, true
 }
