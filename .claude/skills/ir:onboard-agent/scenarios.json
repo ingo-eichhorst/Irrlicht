@@ -237,9 +237,40 @@
           "timeout_seconds": 60
         },
         "codex": {
-          "prompt": "Output exactly the two characters: ok",
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent (the single assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the turn completes (the interactive REPL returns to ready, unlike headless codex exec which exits)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
           "settings": {},
-          "timeout_seconds": 120
+          "timeout_seconds": 180
         },
         "pi": {
           "prompt": "Reply with exactly the word: ok",
@@ -272,7 +303,38 @@
           "timeout_seconds": 180
         },
         "codex": {
-          "prompt": "Run the shell command 'echo hello', then reply 'done'.",
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'echo hello' using your shell tool, then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the tool-using prompt is sent, sustained across the tool call",
+            "transcript.jsonl contains a function_call / function_call_output pair for the shell command (the auto-executed tool call)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the tool resolves and the turn completes",
+            "no state_transition to waiting appears for the rollout session at any point (codex has no permission gate)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+          ],
           "settings": {},
           "timeout_seconds": 240
         },
@@ -290,7 +352,7 @@
     },
     {
       "name": "agent-question-pending",
-      "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a).",
+      "description": "Agent's reply ends in a question mark, signalling it's waiting for user input. Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a): at turn end the session transitions working→waiting instead of working→ready because the last assistant message ends in `?`. This is the text classifier path, not a structured AskUserQuestion tool. For codex it is observable only via the interactive TUI (the live REPL session stays alive past turn end); headless single-shot CLIs that exit at turn end lose the waiting episode to a process_exited race.",
       "coverage_id": "user-blocking-question",
       "requires": [
         "headless_mode"
@@ -306,9 +368,39 @@
           "timeout_seconds": 60
         },
         "codex": {
-          "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Unlike the headless `codex exec` path (single-shot, ends in process_exited at turn end — see the basic-turn recipe), the interactive driver keeps the rollout session ALIVE after the turn; the REPL is torn down only when the script ends, so the daemon can observe the post-turn waiting state"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "I want to add a feature to my project. Ask me exactly one short clarifying question to scope it, ending in a question mark, and then stop and wait for my answer. Output only that one question and nothing else."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent",
+            "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the turn ends (the reply ends in a question mark; classifier takes the trailing-? path rather than →ready)",
+            "the rollout session's final live state is waiting and it persists ≥4s — no state_transition to ready appears before the REPL is torn down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown while the session is still waiting (single live session, not per-turn exits)"
+          ],
           "settings": {},
-          "timeout_seconds": 120
+          "timeout_seconds": 240
         },
         "pi": {
           "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
@@ -324,7 +416,7 @@
     },
     {
       "name": "multi-turn-conversation",
-      "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation.",
+      "description": "Three consecutive user prompts in one live codex REPL session, validating that state resets to ready between turns (ready→working→ready three times on one session_id) and per-turn Contribution accumulates. WHY interactive (not headless codex exec): exec is single-shot and ends in process_exited after one reply, so it can't show turn-to-turn state reset; the interactive driver keeps the rollout session alive across all three turns via send+wait_turn, then tears the tmux REPL down once. WHY the 3s sleeps between wait_turn and the next send: they sit past the classifier's debounce window so each turn's working→ready flip is observed cleanly before the next prompt re-enters working; without them the next send can land before the prior turn settles and the arcs blur. HOW runs differ: exact assistant wording, per-turn token counts, and sub-second timing vary (model-output variance) — only the structural three-turn arc, distinct-session count, and final ready state are stable. WHERE to look if it breaks: the rollout file under ~/.codex/sessions (the driver resolves it lazily after the first task_complete); a missing third arc usually means a wait_turn timed out or a sleep was too short for the debounce.",
       "coverage_id": "basic-turn",
       "requires": [
         "headless_mode"
@@ -413,6 +505,15 @@
           "timeout_seconds": 300
         },
         "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so prompts never race a still-running turn"
+          ],
           "script": [
             {
               "type": "send",
@@ -447,6 +548,15 @@
               "type": "sleep",
               "seconds": 4
             }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session, not three exits)",
+            "no state_transition to waiting appears for the rollout session at any point"
           ],
           "settings": {},
           "timeout_seconds": 300
@@ -490,7 +600,8 @@
           "settings": {},
           "timeout_seconds": 300
         }
-      }
+      },
+      "idle_only": false
     },
     {
       "name": "interrupted-turn",
@@ -620,7 +731,7 @@
     },
     {
       "name": "model-switch",
-      "description": "User invokes /model mid-session to swap the LLM. Validates that the parser's per-turn Contribution.Model follows the latest `> Model:` line in the transcript. Aider-only — claude/codex/pi don't expose runtime model switching this way.",
+      "description": "User invokes /model mid-session to swap the LLM, then runs a second turn on the new model. Validates that the parser's per-turn model metadata follows the latest model selection so the dashboard's ModelName updates to the new model. Aider exposes this as a one-shot `/model <name>` slash; codex exposes it as an interactive two-step picker (model list, then reasoning level) driven via `keys` steps.",
       "coverage_id": "model-switch-midsession",
       "requires": [
         "headless_mode",
@@ -658,6 +769,76 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI authed out-of-band (ChatGPT/API login already done; the driver does not handle a login prompt).",
+            "Both target models are reachable on the account: codex 0.130.0 boots on gpt-5.4 (model A) and the /model picker offers gpt-5.3-codex (model B). If your codex build's picker entries/order differ, re-probe and adjust the `keys` navigation — the Down-count is positional, not a model name.",
+            "The dev daemon is running with --record (run-cell.sh --attach attaches to it)."
+          ],
+          "setup": [
+            "run-cell.sh boots codex --no-alt-screen in a fresh per-run cwd via drive-codex-interactive.sh, accepts the trust dialog, and waits out the Booting-MCP phase.",
+            "Codex assigns its own rollout UUID; the driver discovers the rollout-*.jsonl on the first wait_turn and records its daemon session_id for the curator."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: first"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/model"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Down Down Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: second"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session born ready within 1s of launch, then the rollout session reconciles to a new session_id (also born ready).",
+            "events.jsonl shows TWO working→ready arcs on the SAME rollout session_id — turn 1 (model A) and turn 2 (model B) — with no state_transition to waiting between them.",
+            "events.jsonl ends with a process_exited event on the rollout session_id at REPL teardown.",
+            "transcript.jsonl carries per-turn turn_context events: payload.model = gpt-5.4 for the turn-1 context and gpt-5.3-codex for the turn-2 context (the /model switch landed). session_meta.model is null in this codex version — the model lives only on turn_context.",
+            "The replay summary's model_name reflects the LATEST turn's model (gpt-5.3-codex) — the .replay.json.golden is where the A→B switch is asserted; expected.jsonl only covers the lifecycle skeleton because the events.jsonl DSL has no model field."
+          ],
+          "notes": "Codex /model is an interactive TWO-STEP picker (model list, then reasoning-level list), NOT a one-shot `/model <name>` like aider — so the recipe drives it with `slash /model` to open it, then `keys` steps to navigate. Probed live on codex 0.130.0: the model list is 1=gpt-5.5(default) 2=gpt-5.4(current/boot-default, highlighted) 3=gpt-5.4-mini 4=gpt-5.3-codex 5=gpt-5.2, so `Down Down Enter` from the boot-highlighted entry 2 lands on gpt-5.3-codex (entry 4); the reasoning sub-screen then opens with Medium(default) highlighted, so a bare `Enter` confirms gpt-5.3-codex medium (footer flips to `gpt-5.3-codex medium`, rollout writes `• Model changed to gpt-5.3-codex`). The two `keys` steps are split with a 2s sleep because the model-confirm Enter and the reasoning-confirm Enter hit DIFFERENT screens that need a render gap; the `keys` step does NOT touch the turn counter, so wait_turn stays correct. Model A is gpt-5.4 (the boot default in this codex build — NOT gpt-5.5 as in the original assessment text). What differs between runs: assistant token counts/cost, exact rollout UUID/PID/timestamps, and the assistant's wording (we pin it with `Reply with exactly the word: first/second` to keep turns short and deterministic). What must NOT differ: two working→ready arcs on one session, the model_name landing on gpt-5.3-codex, and process_exited at teardown. If the picker navigation drifts (codex changes the model list order), the Down-count is wrong — re-probe `/model` and recount. multi_model_orchestration=yes.",
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
@@ -685,7 +866,7 @@
     },
     {
       "name": "checkpoint-rewind",
-      "description": "User rewinds to an earlier auto-checkpoint, restoring files and/or conversation; subsequent turns start cleanly from the rewound point. claudecode binds Esc+Esc as a rewind shortcut and /rewind as the picker. This recipe drives two normal turns, then triggers Esc+Esc to roll back, then runs a third turn — the goal is to capture what irrlicht observes when claudecode mutates its transcript backwards (the daemon's transcript_tailer is append-oriented and may treat a truncation as session-removed-then-reborn).",
+      "description": "User rewinds to an earlier auto-checkpoint, restoring files and/or conversation; subsequent turns start cleanly from the rewound point. Each adapter exercises this differently: claudecode rewinds IN PLACE (Esc+Esc shortcut / /rewind picker) and mutates its transcript backwards, keeping the SAME session_id — the goal there is to capture what irrlicht observes when the append-oriented transcript_tailer sees a truncation (session-removed-then-reborn vs. activity). codex instead FORKS (/fork): it spawns a NEW rollout with a fresh session_id carrying the replayed pre-fork history (the original lingers frozen), so irrlicht observes a new linked session row rather than an in-place truncation. Every variant drives two normal turns, rewinds, then runs a third turn from the rewound point.",
       "coverage_id": "checkpoint-rewind",
       "requires": [
         "headless_mode"
@@ -789,8 +970,72 @@
           ]
         },
         "codex": {
-          "applicable": false,
-          "scope_note": "Coverage matrix declares codex supports=no for checkpoint-rewind as of v0.130: no native rewind feature. Open feature requests #11626 + #12558 track adding it. Reassess on the next major codex release."
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY) — verified codex 0.130.0",
+            "codex version with /fork support — verified in 0.130.0 (TUI prints 'Thread forked from <uuid>')",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "STALE-VERDICT OVERRIDE: the prior by_adapter.codex was applicable:false on the false belief codex 0.130 has no rewind. Codex DOES support rewind/fork: /fork clones the conversation into a NEW thread (fresh session id; original intact), and Esc-Esc on an empty composer walks the transcript back to edit a prior message. Feature requests #11626/#12558 ask codex to ALSO revert code edits — orthogonal to the conversation fork that already ships. See assessment.json.",
+            "PARTIAL observability (per assessment.json): codex forks rather than rewinding in place, so the observable is a NEW linked session_id (not the same session_id with a truncated transcript like claudecode). The codex parser skips session_meta lines, so the forked_from_id provenance is dropped and the daemon sees the fork as an independent fresh session, not a linked child. codex emits NO transcript_removed for the original at fork time (the old rollout lingers frozen until process_exited).",
+            "KNOWN CAPTURE GAP: drive-codex-interactive.sh caches the first rollout and writes a single session.uuid, so curate-lifecycle-fixture.sh filters the fixture to UUID-1 only. The v2_* (post-/fork) phases assert what the daemon observes LIVE; they may be absent from the single-session curated fixture, surfacing as validation drift until the codex driver tracks /fork-spawned sessions (a developer task). SAME gap as codex/session-reset."
+          ],
+          "setup": [
+            "Driver launches codex in a fresh per-run cwd under <staging>/cwd/ (isolates the trust dialog).",
+            "Codex assigns its own session UUID per rollout; there is no --session-id flag. The first prompt materializes rollout-<ts>-<uuid1>.jsonl; /fork EAGERLY materializes a second rollout-<ts>-<uuid2>.jsonl carrying a fresh session_id, a session_meta forked_from_id=uuid1, and the replayed pre-fork history. UNLIKE /clear (lazy: second rollout appears only on the first post-clear prompt), /fork is eager — the new rollout appears the instant the command runs.",
+            "/fork is sent as a plain send/slash step (text + Enter): the codex driver handles send/slash as text+Enter. NO keys/restart/resume step types are used — the codex driver does not implement them. Esc-Esc rewind is deliberately avoided because the driver's interrupt step decrements the turn counter, which would desync wait_turn."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "fork"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the FIRST rollout-keyed session in ready",
+            "events.jsonl shows the FIRST rollout session running two working→ready turns (turn 1 'one', turn 2 'two') — the checkpoints to fork back from",
+            "after /fork, a DIFFERENT rollout session_id appears in ready (new linked session row, restored from the rewound point) — the 'a linked new session_id if the adapter forks' signal from scenario-meanings, observed live on the dashboard",
+            "the post-fork turn's working→ready cycle is on the NEW rollout session, not the original — a clean ready → working → ready arc from the rewound point",
+            "codex does NOT emit transcript_removed for the original session at /fork time (the old rollout lingers frozen) — the original row stays ready until process_exited; do not assert a removal event, and do not assert a same-session_id in-place rewind (codex forks)",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         },
         "pi": {
           "applicable": false,
@@ -889,8 +1134,58 @@
           "timeout_seconds": 120
         },
         "codex": {
-          "applicable": false,
-          "scope_note": "Codex's TUI has no documented /clear analogue as of v0.130; closing and restarting the REPL creates a brand new rollout file with a new UUID, not a 'reset' within one process. drive-codex-interactive.sh also doesn't expose a `reset_session` step type — that's claudecode-only. Recording deferred until either codex ships a /clear command and the driver gains the primitive, or the scenario is assessed as supports=no for codex."
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY) — verified codex 0.130.0",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "PARTIAL observability (per assessment.json): codex /clear does NOT emit a transcript_removed for the old session — the old rollout lingers frozen until process_exited. The 'old session disappears' spec bullet has no codex-side removal event; only the 'new session appears' signal is asserted.",
+            "KNOWN CAPTURE GAP: drive-codex-interactive.sh caches the first rollout and writes a single session.uuid, so curate-lifecycle-fixture.sh filters the fixture to UUID-1 only. The v2_* (post-/clear) phases assert what the daemon observes LIVE; they may be absent from the single-session curated fixture, surfacing as validation drift until the codex driver tracks /clear-spawned sessions (a developer task)."
+          ],
+          "setup": [
+            "Driver launches codex in a fresh per-run cwd under <staging>/cwd/ (isolates the trust dialog).",
+            "Codex assigns its own session UUID per rollout; there is no --session-id flag. The first prompt materializes rollout-<ts>-<uuid1>.jsonl; the first prompt AFTER /clear materializes a second rollout-<ts>-<uuid2>.jsonl with a fresh session_id and no UUID-1 history."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the FIRST rollout-keyed session in ready",
+            "events.jsonl shows the FIRST rollout session running a working→ready turn (turn 1, 'ok')",
+            "after /clear, the first post-clear prompt spawns a DIFFERENT rollout session_id in ready (new session row, no UUID-1 history) — the 'old session disappears / new session appears' reset, observed live on the dashboard",
+            "the second turn's working→ready cycle is on the NEW rollout session, not the old one",
+            "codex does NOT emit transcript_removed for the old session at /clear time (the old rollout lingers frozen) — the old row stays ready until process_exited; do not assert a removal event",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         },
         "pi": {
           "applicable": false,
@@ -983,8 +1278,59 @@
           "timeout_seconds": 180
         },
         "codex": {
-          "applicable": false,
-          "scope_note": "Codex's CLI does support session resume via `codex resume <session-id>` (and a /resume picker in the TUI as of 2026), but drive-codex-interactive.sh doesn't expose `exit_clean` / `resume` step types — those are claudecode-only. Adding them to the codex driver would let this cell record. Recording deferred until the driver gains the missing primitives."
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (codex 0.130.0+ — `codex resume <uuid>` and `codex resume --last` are required; older builds lack the resume subcommand)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "drive-codex-interactive.sh exposes the `exit_clean` and `resume` step types (added in commit 8296cd0)"
+          ],
+          "setup": [
+            "Codex assigns its OWN session UUID per rollout under ~/.codex/sessions/ — the driver does not pass a preferred UUID; it discovers the live rollout and resumes by that UUID.",
+            "The `resume` step Ctrl-D's the running codex (graceful shutdown flushes the rollout → process_exited), kills the tmux session, then relaunches `codex resume <uuid> --no-alt-screen`. Codex APPENDS to the SAME rollout file, so the daemon-side session_id is stable across both lifetimes.",
+            "The driver keeps UUID/TRANSCRIPT unchanged across the resume and does NOT append a second session entry — the single-session curator captures both lifetimes because they share one session_id."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "resume"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: again"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the first launch's session entering ready, then the working/ready cycle for turn 1",
+            "events.jsonl contains a process_exited event for the session after turn 1 (the Ctrl-D clean exit performed by the resume step)",
+            "the SAME session_id re-binds to a new PID after the resume — NOT a new session_id. This proves codex reopened the existing rollout across PID lifetimes (spec: 'Same session_id reappears')",
+            "second-lifetime working transition fires on the SAME session_id, then back to ready",
+            "final session state is ready",
+            "transcript.jsonl carries both turns appended to one rollout — codex resume reopens the same file rather than minting a new one"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "scope_note": "Re-assessed 2026-05-23: the prior applicable:false (driver lacked resume) is STALE. The codex interactive driver now exposes exit_clean + resume (commit 8296cd0), and codex 0.130.0's `codex resume <uuid>` reopens the SAME rollout file (verified empirically) — one session id across two process lifetimes. Same single-session-two-lifetimes shape as claudecode/session-resume, but codex resume is explicit (`codex resume <uuid>`) where claudecode re-passes `--session-id`. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (birth → turn1 working/ready → process_exited → same-id re-bind → turn2 working/ready → final ready) is fixed. If it breaks, check drive-codex-interactive.sh step_resume (UUID resolution + `codex resume <uuid>` relaunch) and confirm codex flushed the rollout on Ctrl-D before relaunch."
         },
         "pi": {
           "applicable": false,
@@ -1730,6 +2076,10 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "applicable: n/a (assessment 2026-05-23: agent_supports=partial, irrlicht_observes=no). This scenario's defining signal is a per-call safe-vs-risky classifier that selectively prompts (working→waiting) for risky calls only — primitive permission_hooks, which codex has set false. Codex has a coarse sandbox/approval_policy that auto-runs benign commands and escalates others, but the codex parser exposes no safe-vs-risky classification: its only waiting paths are <proposed_plan>→ExitPlanMode (plan-mode-approval) and a generic open function_call at task_complete (open-tool-call/gate). The daemon therefore cannot observe the selective-gating signal that distinguishes this cell from auto-executed-tool-call. The only codex-observable half (a benign command auto-running with no waiting, ready→working→ready) is already fully captured by the committed codex × auto-executed-tool-call cell; recording it here would be a redundant near-duplicate that proves the wrong thing. No recipe, no recording. See replaydata/agents/codex/scenarios/auto-classified-permission/assessment.json."
         }
       }
     },
@@ -1786,6 +2136,43 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so the shell tool runs autonomously inside codex's sandbox — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'pwd' using your shell tool, then tell me the directory it printed."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the tool-using prompt is sent, sustained across the auto-executed shell call",
+            "transcript.jsonl contains a function_call / function_call_output pair for the pwd command (the auto-executed, ungated tool call)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the tool resolves and the turn completes",
+            "events.jsonl contains NO state_transition to waiting for the rollout session at any point (codex has no permission gate; the call auto-executes)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -1924,6 +2311,51 @@
             "events.jsonl shows ready→working→ready for the post-compaction turn",
             "final session state is ready",
             "transcript.jsonl contains at least 2 user lines and at least 2 assistant lines (pre- and post-compaction turns); a compaction boundary marker may or may not be present depending on claude version"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (ChatGPT login or API key)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "codex version supports /compact (≥ 0.130.0 ships it as a slash command)"
+          ],
+          "setup": [
+            "Driver launches the codex TUI in tmux under a fresh per-run cwd (<staging>/cwd) and accepts the trust dialog; codex assigns its own rollout session UUID."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "/compact"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the rollout session reconciling into ready after launch (pre-session proc-PID, then the rollout session_id)",
+            "events.jsonl shows ready→working→ready for the priming turn",
+            "/compact runs as a turn: events.jsonl shows a single ready→working→ready arc on the SAME rollout session_id (codex appends compaction to the existing rollout — no new session)",
+            "no state_transition to waiting appears anywhere in the recording (no waiting/flicker around compaction)",
+            "final session state is ready; process_exited fires on the rollout session at REPL teardown",
+            "transcript.jsonl contains the priming turn (task_started/task_complete) and the compaction turn whose terminal task_complete is preceded by a context_compacted event_msg; the compaction-vs-normal-turn distinction is not surfaced by the daemon"
           ],
           "settings": {},
           "timeout_seconds": 240
@@ -2082,6 +2514,46 @@
           ],
           "settings": {},
           "timeout_seconds": 600
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so the shell tool runs every command autonomously inside codex's sandbox — this is exactly why codex can capture the REAL many-tool-call single-turn burst, whereas the claudecode recipe for this scenario must fall back to 4 plain prompts (modern claudecode refuses auto-mode for paid models and stalls tool-call turns at a permission gate)",
+            "The prompt is fully self-contained — it tells codex to CREATE its own files and then run many commands on them, so the per-run cwd starting empty doesn't shrink the burst (an early attempt that only said 'ls then wc the existing files' produced just 2 calls because the fresh cwd had nothing to wc)",
+            "wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn; the timeout is generous because this is a deliberately LONG turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do all of the following in THIS single turn, using your shell tool, running each as a SEPARATE command one at a time (do not combine them, do not write a script, do not ask me anything): 1) run `pwd`; 2) create three files with `printf 'line1\\nline2\\nline3\\n' > a.txt`, then `printf 'x\\ny\\n' > b.txt`, then `seq 1 20 > c.txt` (three separate commands); 3) run `ls -la`; 4) run `wc -l a.txt`, then `wc -l b.txt`, then `wc -l c.txt` (three separate commands); 5) run `cat a.txt`; 6) run `head -3 c.txt`; then finally summarize in one short paragraph how many lines each file had. Run every numbered command individually so I can see each one execute."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains exactly one state_transition→working on the rollout session_id when the prompt is sent (start of the agentic burst)",
+            "transcript.jsonl contains MANY function_call / function_call_output pairs in the single turn (at least 5: pwd, ls -la, and ≥3 wc -l calls) — the high-volume burst",
+            "across the entire turn, NO state_transition to ready fires between successive function_call/function_call_output pairs (one contiguous working span, no flicker mid-burst)",
+            "across the entire turn, NO state_transition to waiting fires (codex has no permission gate; every command auto-executes)",
+            "events.jsonl contains exactly one state_transition→ready on the rollout session_id once the final tool call resolves and task_complete fires (turn end)",
+            "final session state is ready (not stuck working)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -2146,6 +2618,60 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt (boot itself takes ~15-20s)",
+            "The first prompt keeps codex busy long enough to inject a follow-up while it is mid-turn — a slow count-to-20 that asks for a pause between numbers makes codex run a `sleep 0.5` shell call per number, extending the working turn to ~50-60s, giving a wide window to land the follow-up mid-turn",
+            "The mid-turn follow-up is delivered via raw `keys` steps, NOT a `send`: probing codex 0.130.0 live, a message submitted mid-turn is QUEUED — the TUI shows 'Messages to be submitted after next tool call' and folds it into the SAME turn, emitting only ONE task_complete for the whole arc. A `send` would bump the driver's expected-turn counter to 2, so the following wait_turn would block forever on a second task_complete that never arrives; raw `keys` submit the buffered text without touching the turn counter",
+            "The follow-up is split into TWO keys steps with a sleep between — first the literal text (no Enter), then a separate Enter — because codex's Ink input handler drops a batched text+Enter (the same render race step_send mitigates with a 0.3s pause): typing then pausing then pressing Enter lets the composer render the text before submit so the queue actually accepts it",
+            "The pre-injection sleep is 8s so the follow-up lands solidly inside the working turn (well after the ~50s+ count begins) rather than during boot, where it would be folded into the initial prompt and produce no observable queue"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Count slowly from 1 to 20, one number per line. Pause about half a second between each number. After 20, reply with exactly the word: done"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            },
+            {
+              "type": "keys",
+              "keys": "A f t e r Space y o u Space f i n i s h Space c o u n t i n g Space a l s o Space r e p l y Space w i t h Space t h e Space w o r d Space s e c o n d m e s s a g e"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready, and a pid_discovered bound to it",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the slow-count prompt is sent",
+            "events.jsonl contains NO state_transition to ready while the queued follow-up is buffered (the working span is contiguous through the queued arrival — codex folds it into the same turn, one task_complete)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span",
+            "events.jsonl eventually shows a single working→ready transition once the folded turn completes; final session state is ready, then process_exited at REPL teardown",
+            "transcript (rollout) shows ONE task_started/task_complete pair and TWO user_message lines (initial prompt + queued follow-up); the queued message does NOT introduce a second turn boundary"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -2203,6 +2729,46 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "The concrete model the account boots on is environment-dependent (gpt-5.5 in the maintainer's worktree). Per issue #440 the assertion is that a model_name is PRESENT (non-empty, not 'unknown'), not a specific hardcoded string — do not assert a particular model value."
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No special model flag — codex boots on its default model and writes that model into each turn's turn_context.payload.model from turn 1; the scenario is about the daemon extracting that name, not about which model produced the tokens",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn",
+            "ModelName is checked AFTER turn_end — ContextWindow may briefly read 0 between session detection and the first turn_context/task_started event (per assessment caveat)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows one working→ready arc on the rollout session_id (the single assistant turn); the interactive REPL returns to ready, unlike headless codex exec which exits",
+            "the .replay.json.golden carries a non-empty summary.model_name (NOT 'unknown') — extractCodexMetadata pulled it from turn_context.payload.model and the tailer applied it via applyModelMetadata even though turn_context is Skip=true. The concrete value is environment-dependent (issue #440); assert presence, not a hardcoded string",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "notes": "Thin/near-trivial cell: structurally identical to codex/basic-turn (one send + wait_turn + trailing sleep) — the only extra intent over basic-turn is that the daemon extracted a model_name. In codex 0.130.0 the model lives on per-turn turn_context.payload.model (NOT on token_count/usage events — that was the issue #361 regression, since fixed); extractCodexMetadata (parser.go:263-278) reads payload.model and model_context_window, and the tailer applies ModelName via applyModelMetadata even though turn_context is Skip=true. The model assertion is NOT expressible in the events.jsonl phase DSL (no model field in the validator Phase struct), so expected.jsonl covers only the basic-turn lifecycle skeleton and the model presence is asserted at summary.model_name in the .replay.json.golden, which replay-fixtures.sh diffs. What differs between runs: the concrete model_name (account boot default, env-dependent per #440), token counts/cost, rollout UUID/PID/timestamps, assistant wording (pinned with 'Reply with exactly the word: ok'). What must NOT differ: one working→ready arc on one rollout session, a non-empty model_name in the golden, and process_exited at teardown.",
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },
@@ -2303,6 +2869,77 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI authed out-of-band (ChatGPT/API login already done; the driver does not handle a login prompt).",
+            "Both target models are reachable on the account: codex 0.130.0 boots on gpt-5.4 (model A, the boot default) and the /model picker offers gpt-5.3-codex (model B). If your codex build's picker entries/order differ, re-probe `/model` and adjust the `keys` navigation — the Down-count is positional, not a model name.",
+            "The dev daemon is running with --record (run-cell.sh --attach attaches to it)."
+          ],
+          "setup": [
+            "run-cell.sh boots codex --no-alt-screen in a fresh per-run cwd via drive-codex-interactive.sh, accepts the trust dialog, and waits out the Booting-MCP phase.",
+            "Codex assigns its own rollout UUID; the driver discovers the rollout-*.jsonl on the first wait_turn and records its daemon session_id for the curator. That ONE session_id stays live for the whole mid-session arc — the /model picker mints no new session."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: first"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/model"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Down Down Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: second"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session born ready within 1s of launch, then the rollout session reconciles to a new session_id (also born ready).",
+            "events.jsonl shows TWO working→ready arcs on the SAME rollout session_id — turn 1 (model A) and turn 2 (model B, after the mid-session /model switch) — proving session continuity across the switch.",
+            "events.jsonl shows NO state_transition to working or waiting during the /model picker window between turn 1 end and turn 2 start, and NO new session is minted (the switch happens mid-session, in place, with no flicker and no restart).",
+            "events.jsonl ends with a process_exited event on the SAME rollout session_id at REPL teardown (one session_id from birth to teardown).",
+            "transcript.jsonl carries per-turn turn_context events: payload.model = gpt-5.4 for the turn-1 context and gpt-5.3-codex for the turn-2 context (the mid-session /model switch landed). session_meta.model is null in this codex version — the model lives only on turn_context.",
+            "The replay summary's model_name reflects the LATEST turn's model (gpt-5.3-codex) and TotalTokens accumulates across both models — the .replay.json.golden is where the A→B switch + token accumulation is asserted; expected.jsonl only covers the mid-session lifecycle skeleton because the events.jsonl DSL has no model field."
+          ],
+          "notes": "Canonical agent-agnostic model-switch-midsession cell — the DISTINCTION from the codex-specific `model-switch` sibling is emphasis, not mechanism (both share coverage_id model-switch-midsession; the matrix wants both cells). This cell's spec leans on MID-SESSION CONTINUITY: every turn phase in expected.jsonl is pinned same_session_as the rollout session_birth, and a dedicated switch_window dwell phase asserts the session stays ready (no working/waiting flicker, no new session) while the /model picker is open — so the recording proves the switch happened DURING one live session, in place, not via a restart. Codex /model is an interactive TWO-STEP picker (model list, then reasoning-level list), NOT a one-shot `/model <name>` like aider — so the recipe drives it with `slash /model` to open it, then `keys` steps to navigate. Probed live on codex 0.130.0 (2026-05-23): the model list is 1=gpt-5.5(default) 2=gpt-5.4(current/boot-default, highlighted) 3=gpt-5.4-mini 4=gpt-5.3-codex 5=gpt-5.2, so `Down Down Enter` from the boot-highlighted entry 2 lands on gpt-5.3-codex (entry 4); the reasoning sub-screen then opens with Medium(default) highlighted, so a bare `Enter` confirms gpt-5.3-codex medium (footer flips to `gpt-5.3-codex medium`, rollout writes `• Model changed to gpt-5.3-codex medium`). The two `keys` steps are split with a 2s sleep because the model-confirm Enter and the reasoning-confirm Enter hit DIFFERENT screens that need a render gap; the `keys` step does NOT touch the turn counter, so wait_turn stays correct. Model A is gpt-5.4 (the boot default in this codex build). What differs between runs: assistant token counts/cost, exact rollout UUID/PID/timestamps, and the assistant's wording (we pin it with `Reply with exactly the word: first/second` to keep turns short and deterministic). What must NOT differ: ONE rollout session_id from birth to teardown, two working→ready arcs on it, no flicker during the picker window, the model_name landing on gpt-5.3-codex, and process_exited at teardown. If the picker navigation drifts (codex changes the model list order), the Down-count is wrong — re-probe `/model` and recount. multi_model_orchestration=yes.",
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
@@ -2320,6 +2957,10 @@
         "claudecode": {
           "applicable": false,
           "reason": "requires a second agent CLI (codex/pi) running in parallel; current driver orchestrates one CLI at a time. The matrix pairs this cell to both claudecode and codex adapters — once the cross-adapter driver exists, a single recording satisfies both rows."
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "driver_gap (assessment 2026-05-23: agent_supports=yes, irrlicht_observes=yes, confidence 0.85 — capability fully supported, only the recording rig is missing). Requires concurrent multi-adapter driving: a codex session AND a second, different-adapter session (claudecode/pi/aider) live in the SAME cwd at once. run-cell.sh takes a single <adapter> argument and dispatches to exactly one drive-<adapter>.sh driver — there is no flag, step type, or parallel mode to launch + drive a foreign adapter alongside codex within one cell recording, and no cross-adapter harness exists. The daemon DOES label each adapter independently as-shipped: codex registers Process.Match=ExactName{Name:\"codex\"} and Source=FilesUnderRoot{Dir:\".codex/sessions\"} (agent.go/adapter.go), disjoint from claudecode's matcher and ~/.claude/projects/ root, so per-(adapter,session_id) state and metrics fall out of the maps.go projections with no cross-contamination. Only the multi-adapter recording rig is missing. expected.jsonl is preserved as the documented forward-compatible target. Same blocker as the claudecode cell — once the driver gains a paired-adapter step type, a single recording satisfies both rows. See replaydata/agents/codex/scenarios/multiple-agents-same-workspace/assessment.json."
         }
       }
     },
@@ -2395,6 +3036,10 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "driver_gap (assessment 2026-05-23: agent_supports=yes, irrlicht_observes=yes, confidence 0.9 — capability fully supported, only the recording rig is missing). The codex interactive driver (scripts/drive-codex-interactive.sh) launches a single tmux/codex process per run; every step type (send/wait_turn/interrupt/keys/sleep/reset_session/fork/exit_clean/resume) operates on one $SESSION. There is no concurrent-second-session primitive (parallel_session / tmux_split) to spawn a SECOND codex in the same cwd while the first stays alive and route send/wait_turn to a named target. The driver's session.uuids/transcript.paths lists capture SERIAL /clear+/fork session swaps within one process, NOT two concurrently-live processes — so the PID-cwd disambiguation this scenario exercises (two simultaneous rollouts the daemon splits via codex DiscoverPIDByTranscriptWriter, binding each session to the PID holding ITS rollout open) cannot be elicited as-shipped. Codex (FilesUnderRoot, fresh Parser{} per rollout, mints its own UUID) and irrlicht both support the capability; only the multi-process recording rig is missing. expected.jsonl is preserved as the documented forward-compatible target. Same blocker as the claudecode cell. See replaydata/agents/codex/scenarios/multiple-sessions-same-cwd/assessment.json."
         }
       }
     },
@@ -2447,6 +3092,10 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "applicable:false — a live codex session cannot be deterministically driven to emit a >64 MB (or even >2 MB) single JSONL line; this is a shared-tailer robustness property, not a codex behavior. No special agent capability is exercised. The authoritative coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go (TestTailAndProcess_LargeToolResultLine + TestReadLineCapped_OversizedLineSkipped), which pins the 64 MB cap (issue #270) on the shared tailer that codex (FilesUnderRoot{JSONLineParser}) runs on. A 5000-word live recipe would only be a ~30 KB sanity-check, not true cap-stress, and we do NOT fabricate a 64 MB line into a fixture. expected.jsonl is retained as the documented state-arc target."
         }
       }
     },
@@ -2503,6 +3152,42 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so its shell/exec tool runs autonomously inside codex's sandbox — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate. Both the failing and the corrective command auto-execute, so neither triggers a waiting transition.",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'cat /nonexistent_file_xyz.txt' using your shell tool. If it fails, do NOT retry that command — instead run 'ls' in the same turn and report the file names it printed. Then reply 'done'."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working transition for the rollout session_id when the prompt is sent",
+            "transcript.jsonl contains at least two function_call / function_call_output pairs inside the working span — the failing cat (its function_call_output carries a non-zero/error result) and the corrective ls",
+            "events.jsonl contains NO state_transition to ready between the failing function_call_output and the corrective function_call (a failing tool result still closes the open call; the session stays working)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (codex auto-executes both commands; no permission gate)",
+            "events.jsonl shows exactly one working→ready transition at task_complete (turn end)",
+            "final session state is ready",
+            "Do not assert the exec tool's error text — it is model/OS-dependent; assert only the state topology and the tool-call pairing"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -2564,6 +3249,78 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (codex 0.130.0; the !-prefix shell escape is a TUI affordance, confirmed in-binary: 'Prefix a command with ! to run it locally. Example: !ls')",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "codex is launched in interactive TUI mode (--no-alt-screen) so the ! shell-escape syntax is available — codex exec headless has no interactive ! shell mode"
+          ],
+          "setup": [
+            "Driver boots a codex TUI in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits out the Booting MCP phase",
+            "Codex assigns its own rollout UUID; the driver discovers the rollout-*.jsonl on the first wait_turn"
+          ],
+          "recipe_notes": "Each !cmd escape is typed as a keys step WITHOUT Enter, then a 1s sleep, then a separate keys:'Enter' step. The codex driver's keys handler (unlike step_send) does not pause before Enter, so a combined '! l s Enter' raced codex's Ink input render — Enter was silently dropped, the escapes accumulated in the input box, and the final send submitted ls/sleep/prompt as ONE shell command (collapsed into a single <user_shell_command>). Splitting typing from Enter with a render-settle sleep submits each escape on its own. The 9s sleep after !sleep 5 covers the command runtime plus the daemon settle.",
+          "script": [
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "! l s"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "keys",
+              "keys": "! s l e e p Space 5"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 9
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alive"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the codex rollout session entering ready after launch",
+            "each !cmd shell escape drives a ready→working→ready arc for the session (codex synthesizes a turn: task_started / user_message<user_shell_command> / task_complete) — UNLIKE claudecode, which skips the wrappers and stays ready",
+            "no state_transition gets stuck in working: every working transition is followed by a working→ready before the next escape or the final prompt",
+            "after the normal user prompt, events.jsonl shows ready→working→ready for the session, proving it is still alive",
+            "final session state is ready",
+            "NOTE (overlap + caveat): this is a USER !-escape, distinct from full-lifecycle-toolcall's model-driven exec tool (no function_call/function_call_output is written for a !-escape). The recorded working DWELL is debounce-bounded (~2 s), not command-bounded: codex's parser skips task_started and codex flushes the synthetic user_message only when the command exits, so the daemon cannot anchor working-start to command-start (see assessment.json — irrlicht_observes: partial). The spec therefore asserts the ready→working→ready topology and final ready, not a dwell length."
+          ],
+          "settings": {},
+          "timeout_seconds": 150
         }
       }
     },
@@ -2744,6 +3501,49 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (verified against codex-cli 0.130.0)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "/status must remain a local-only render in the running codex version — if codex ever routes it through the model the scenario premise breaks (verified live: /status appends zero lines to the rollout)"
+          ],
+          "setup": [
+            "Driver boots a fresh codex TUI in a per-run cwd under <staging>/cwd/ and accepts the trust dialog; codex assigns its own session UUID per rollout",
+            "Avoid /clear (reset_session — mints a fresh rollout/session_id, a different scenario) and /compact (real model call, a different scenario)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly: warm"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/status"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working→ready cycle for the entire run, driven by the warm-up turn only (codex's first-activity force drives working, task_complete drives ready)",
+            "events.jsonl contains NO state_transition to working after the warm-up turn returns to ready — /status drives none because codex writes no rollout line for it",
+            "events.jsonl contains NO state_transition to waiting at any point",
+            "the slash window (≥4s after the warm-up turn ends) shows the session continuously ready — no transcript_activity is recorded for /status",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "notes": "Codex difference vs claudecode: a synchronous slash command writes NOTHING to the rollout (verified live against codex-cli 0.130.0 — /status appended 0 lines, task_complete count unchanged), so there's no <local-command> wrapper for the parser to filter; the daemon simply sees no activity. The warm-up turn FIRST is mandatory: codex creates rollout-*.jsonl only after the first user message, so without it resolve_transcript hangs. Only /status is exercised (single slash) because it's the cleanest verified no-LLM render; /help and /mcp are equally synchronous but /status was the one probed. Between runs: warm-up assistant wording, token counts, session UUID, PID and timestamps differ; the state_transition set (ready, ready→working, working→ready) and its order are the structural baseline. If it broke, look at core/adapters/inbound/agents/codex/parser.go (task_complete→turn_done) and whether a codex update started logging slash invocations into the rollout."
         }
       }
     },
@@ -2826,6 +3626,71 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "Cost may read $0 if the LiteLLM pricing cache lacks the running codex model (logged for some models, e.g. gpt-5.3-codex). This is a pricing-cache limitation, not a token-accounting gap — assert token COUNTS/deltas (which are real), not a nonzero cost."
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so prompts never race a still-running turn",
+            "No special model or context flags — the default model is fine; the assertion is about token accumulation, not which model produced the tokens"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown on each turn boundary; input_tokens + output_tokens > 0 across the turns (per-turn delta from codex total_token_usage cursor)",
+            "SessionMetrics.TotalTokens after turn 1 > 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic accumulation across 3 turns)",
+            "if codex reports cached_tokens (input_tokens_details.cached_tokens), they populate the cache bucket and are deducted from fresh input; if absent on these tiny turns, cache buckets stay 0 — do not assert a nonzero cache",
+            "cost (estimated_cost_usd) may be $0 when the LiteLLM pricing cache lacks the model — known pricing-cache limitation; do not assert a nonzero cost",
+            "the rollout session final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session, not three exits)",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
@@ -2862,6 +3727,10 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "Not recordable: the quota-exhausted signal cannot be elicited deterministically live. Codex DOES emit it (v3 rate_limit_reached_type → RateLimitSnapshot.ReachedType, observed by irrlicht), but (1) the real account quota cannot be burned on demand, (2) there is no codex/OpenAI-compatible 429 mock — tools/mock-anthropic-429.go is Anthropic-only and launches claude --bare, with no codex equivalent, and (3) the codex interactive driver has no quota-exhausted-response injection primitive. The in-window observability is already validated by the sibling codex/quota-burndown cell (monotonic UsedPercent below the cap); this cap-hit ReachedType variant only becomes recordable if a codex 429 mock or a driver fixture-injection primitive is added (a developer task). See assessment.json."
         }
       }
     },
@@ -2968,6 +3837,10 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "No deterministic way to elicit a mid-turn provider error against codex with any recipe primitive. The claudecode cell injects a 5xx via tools/mock-anthropic-5xx.go behind an Anthropic base-URL override (tools/record-turn-aborted-by-error.sh); codex has no equivalent — the mock tooling is Anthropic-API-specific, and neither drive-codex.sh (headless `codex exec`) nor drive-codex-interactive.sh wires an OPENAI_BASE_URL override or any error-injection step. The only primitive that emits codex's turn_aborted marker is `interrupt` (Escape), which is the user-cancel path (the distinct user-esc-interrupt scenario), not a provider error. A real network/5xx error is non-deterministic and can't be a committed fixture. Independently, even a hand-induced abort would be UNOBSERVABLE today: the codex parser maps only task_complete→turn_done and skips turn_aborted (empty `grep turn_aborted core/`), and there is no working-state idle sweep (pid_manager TTL-cleans only ready/PID-dead sessions), so an aborted turn sticks in working until process_exited — identical to the committed codex/interrupted-turn cell (known_failing, 2/5) and the frozen codex/user-esc-interrupt cell. Unblocks when both (a) a codex/OpenAI error-injection driver path exists and (b) the codex parser maps turn_aborted→turn_done. See assessment.json."
         }
       }
     },
@@ -3023,6 +3896,43 @@
           ],
           "settings": {},
           "timeout_seconds": 60
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly this sentence and nothing else: The capital of France is Paris."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent (the single tool-less assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the terminal text turn completes — codex emits a task_complete event_msg, the parser maps it to turn_done, and rule 2b settles working→ready (unlike headless codex exec which exits before the settle is observable)",
+            "events.jsonl contains NO tool_use / tool-call events for the rollout session (deliberately tool-less prompt)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point (the declarative answer has no trailing question mark, so the classifier never reads a waiting cue)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },
@@ -3079,6 +3989,60 @@
             }
           },
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "codex 0.130.0+ — Plan Mode is the `/plan` collaboration mode (TUI only; no headless `codex exec` plan entry, no `-c collaboration_mode` config key)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before the first step",
+            "Step 1 is a `/plan` slash that switches the session into Plan Mode. Unlike a prompt, `/plan` toggles a mode and does NOT start a turn (no task_complete), so it is followed by a fixed `sleep`, not `wait_turn` — wait_turn would over-count against the EXPECTED_TURNS bump every send/slash applies and time out.",
+            "Plan Mode's developer prompt encourages a PHASE-1 exploration pass; running in an empty cwd plus an explicit 'emit the plan now' instruction keeps the plan turn to a single short reply that wraps a <proposed_plan> block.",
+            "The codex parser synthesizes a SYNTHETIC ExitPlanMode tool_use from the <proposed_plan> span (parser.go parseCodexMessage); that open call survives task_complete so the session sits in waiting (the plan-review gate) until the user approves. The interactive driver keeps the rollout session ALIVE across both turns; the REPL is torn down only at script end, so the daemon observes the full waiting→working→ready recovery on one live session.",
+            "The approval turn (step 4) MUST do enough real work to span several wall-clock seconds with intermediate tool calls — it tells codex to create a.txt/b.txt/c.txt and run `ls` as distinct steps before its final summary. WHY: the daemon coalesces transcript activity per session in a 2s debounce window (session_detector_activity.go), and a turn-end (Terminal) event short-circuits the window. A trivial text-only recovery reply (the original 'confirm in one sentence' prompt) landed its user message and the agent's whole reply in a single sub-2s burst, so the FIRST activity event already saw a completed turn and the classifier went waiting→ready directly — the brief working blip was never emitted (debounce-coalesced). Spreading the recovery across several tool calls means the first post-approval activity event observes an IN-PROGRESS turn → working, and the terminal task_complete arrives seconds later → ready. That produces the OBSERVABLE waiting→working→ready arc the spec asserts. This is the same longer-interactive-turn fix that made basic-turn capture a distinct working→ready pair. codex runs in its default workspace-write sandbox with approval_policy=on-request, so creating files inside the fresh cwd and running `ls` there are autonomous workspace operations that do not raise a command-approval prompt (which would itself be a different waiting gate). If a future codex default DID gate one of these commands, the recovery arc would show an extra waiting episode — re-check the sandbox/approval config in that case."
+          ],
+          "script": [
+            {
+              "type": "slash",
+              "text": "/plan"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "We are in Plan Mode. Do NOT explore the repo and do NOT ask any clarifying questions — there is nothing to explore here. Immediately produce your final plan for this trivial task: add a file hello.py containing a single line `print(\"hello world\")`. Output ONLY a single <proposed_plan> block (opening tag on its own line, closing tag on its own line) with a short Summary, Key Changes, and Test Plan. No other text."
+            },
+            {
+              "type": "sleep",
+              "seconds": 75
+            },
+            {
+              "type": "send",
+              "text": "Approved — proceed with implementation now. Do NOT emit another <proposed_plan> block and do NOT ask any questions. Execute this multi-step task in order: (1) create a file a.txt containing the single line `alpha`, (2) create a file b.txt containing the single line `beta`, (3) create a file c.txt containing the single line `gamma`, (4) run `ls` in the working directory, then (5) reply with one short plain sentence summarizing which files now exist. Do the file creations and the `ls` as distinct steps so the work is visible."
+            },
+            {
+              "type": "sleep",
+              "seconds": 75
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the plan-request prompt is sent (the first turn after /plan)",
+            "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the agent emits a <proposed_plan> block (synthetic ExitPlanMode keeps a tool call open across task_complete — the plan-review gate; classifier takes the open-user-blocking-tool path rather than →ready)",
+            "the waiting episode is visible and persists ≥3s — no state_transition to ready appears before the user approves",
+            "events.jsonl contains a state_transition→working on the SAME rollout session_id when the user approves and asks for implementation (waiting→working recovery; the user message clears the open ExitPlanMode). The recovery turn does real multi-step work (create a.txt/b.txt/c.txt + run ls) so the working span lasts >2s and survives the daemon's debounce window rather than being coalesced into a direct waiting→ready",
+            "events.jsonl contains a state_transition→ready on the SAME rollout session_id when the second turn finishes executing the approved task and gives its summary (working→ready)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session across both turns, not per-turn exits)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
@@ -3129,6 +4093,54 @@
           ],
           "settings": {},
           "timeout_seconds": 90
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Unlike the headless `codex exec` path (single-shot, ends in process_exited at turn end — see the basic-turn recipe), the interactive driver keeps the rollout session ALIVE across BOTH turns; the REPL is torn down only when the script ends, so the daemon can observe the full waiting→working→ready recovery on one live session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "I want to rename a function in my project, but I haven't told you which one. Before doing anything, ask me exactly one short clarifying question — which file and which function — ending in a question mark. Output ONLY that one question and nothing else; do not start editing."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Rename the function `oldName` to `newName` in src/util.js. Just describe in one or two sentences what you would change — do NOT ask any further questions and end on a plain statement, not a question."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the first prompt is sent",
+            "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the first turn ends (the reply ends in a question mark; classifier takes the trailing-? path rather than →ready)",
+            "the waiting episode is visible and persists ≥3s — no state_transition to ready appears before the user answers",
+            "events.jsonl contains a state_transition→working on the SAME rollout session_id when the user sends the answer (waiting→working recovery)",
+            "events.jsonl contains a state_transition→ready on the SAME rollout session_id when the second turn ends with a plain non-question reply (working→ready)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session across both turns, not per-turn exits)"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -3244,6 +4256,61 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated",
+            "irrlichd is recording (--attach or isolated mode)",
+            "Codex has NO built-in autonomous self-prompting loop (no /goal, no full-auto); the loop is driven EXTERNALLY by the driver feeding successive prompts to the same live REPL session"
+          ],
+          "setup": [
+            "Driver launches one interactive codex REPL; the rollout session reconciles to its own session_id once the first prompt lands. No trust dialog / settings file (codex has none)."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "We are running an iterative loop toward one goal: print the numbers 1, 2, 3 one per iteration, never repeating a number. This is iteration 1 — run `echo 1` and report the next number you will print. Do not print the others yet."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Continue the loop: iteration 2. Run `echo 2` and report the next number. Do not print the final one yet."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Final loop iteration 3: run `echo 3`. The goal (1, 2, 3) is now complete — confirm and stop."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the proc-PID pre-session born ready, then the rollout session reconcile (new session_id) born ready, then a pid_discovered for the rollout session",
+            "events.jsonl contains at least 2 working→ready transitions on the SAME rollout session_id — one clean cycle per externally-fed loop iteration",
+            "each iteration cycles ready→working→ready without the session sticking in working between iterations",
+            "final state of the session is ready after the last iteration, then process_exited on REPL teardown",
+            "no state_transition to waiting (codex has no permission gates)"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -3297,6 +4364,50 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated",
+            "irrlichd is recording (--attach or isolated mode)",
+            "Codex has NO built-in autonomous self-prompting loop AND no native max-iteration cap; the loop is driven EXTERNALLY by the driver feeding successive prompts to the same live REPL session, and the 'iteration limit' is modeled by the driver simply NOT sending a further prompt after the last iteration"
+          ],
+          "setup": [
+            "Driver launches one interactive codex REPL; the rollout session reconciles to its own session_id once the first prompt lands. No trust dialog / settings file (codex has none)."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "We are running an iterative loop that stops at iteration 2 (its limit). This is iteration 1 of 2 — run `echo 1` and report that you are continuing to iteration 2. Do not do anything beyond echo 1."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Final loop iteration 2 of 2: run `echo 2`. This is the iteration limit — after this, stop. Confirm you have reached the limit and will not iterate further, then wait."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the proc-PID pre-session born ready, then the rollout session reconcile (new session_id) born ready, then a pid_discovered for the rollout session",
+            "events.jsonl contains 2 working->ready transitions on the SAME rollout session_id — one clean cycle per externally-fed loop iteration before the limit",
+            "after the final iteration's working->ready, the session DWELLS in ready for the entire 8s trailing idle window with NO further state_transition to working — the loop stopped at its limit and did not stick in working or spuriously re-prompt",
+            "final state of the session is ready (the loop terminated cleanly at its limit)",
+            "no state_transition to waiting (codex has no permission gates)"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },

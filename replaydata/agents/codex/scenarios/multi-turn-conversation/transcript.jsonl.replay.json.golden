@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "codex",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 32,
+    "consumed_events": 32,
+    "total_transitions": 7,
+    "first_event_time": "2026-05-23T16:59:05.056Z",
+    "last_event_time": "2026-05-23T16:59:18.234Z",
+    "wall_clock_session_duration": 13178000000,
+    "state_durations": {
+      "ready": 13178000000
+    },
+    "flicker_count": 2,
+    "flickers_by_category": {
+      "ready_between_working": 2
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 2
+    },
+    "estimated_cost_usd": 0.455385,
+    "cum_input_tokens": 90837,
+    "cum_output_tokens": 40,
+    "model_name": "gpt-5.5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-05-23T16:59:05.056Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 12,
+      "virtual_time": "2026-05-23T16:59:06.971Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-one"
+    },
+    {
+      "index": 2,
+      "event_index": 12,
+      "virtual_time": "2026-05-23T16:59:06.971Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-one"
+    },
+    {
+      "index": 3,
+      "event_index": 22,
+      "virtual_time": "2026-05-23T16:59:12.74Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-two"
+    },
+    {
+      "index": 4,
+      "event_index": 22,
+      "virtual_time": "2026-05-23T16:59:12.74Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-two"
+    },
+    {
+      "index": 5,
+      "event_index": 31,
+      "virtual_time": "2026-05-23T16:59:18.234Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-three"
+    },
+    {
+      "index": 6,
+      "event_index": 31,
+      "virtual_time": "2026-05-23T16:59:18.234Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-three"
+    }
+  ]
+}
