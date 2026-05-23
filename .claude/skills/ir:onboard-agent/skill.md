@@ -1,538 +1,187 @@
 ---
 name: ir:onboard-agent
 description: >
-  Produce the canonical scenario × adapter fixture matrix for irrlicht. Drives
-  the real `claude` CLI (and future codex/pi drivers) through a shared scenario
-  catalogue, records lifecycle events, stages curated fixtures under
-  `.build/refresh/`, and summarizes material changes vs. committed fixtures.
-  Unifies three operations: refresh, bootstrap, and new-agent onboarding.
-  Use when user says "/ir:onboard-agent", "refresh fixtures", "onboard agent",
-  "regenerate recordings", or "update replay fixtures".
+  Maintain the canonical scenario × adapter fixture matrix for irrlicht.
+  A slim dispatcher that routes intent to three focused subagents —
+  `scenario-create` (add a matrix row), `assess` (judge one cell), and
+  `implement` (recipe→spec→record→validate→commit one cell) — plus
+  `--new <slug>` discovery (add a matrix column) and a no-arg matrix
+  status report. Each subagent returns a ≤5-line summary, so the parent
+  keeps its context for strategic decisions instead of drowning in
+  per-cell tool output. Use when the user says "/ir:onboard-agent",
+  "refresh fixtures", "onboard agent", "regenerate recordings", "add a
+  scenario", or "update replay fixtures".
 ---
 
-# Irrlicht Agent Onboarding
+# Irrlicht Agent Onboarding — dispatcher
 
-Produce or refresh the canonical scenario × adapter fixture matrix. There
-are two parallel axes:
+This skill maintains the scenario × adapter fixture matrix across two
+axes:
 
-1. **Agent scenarios** in `scenarios.json -> scenarios[]`. Agent-agnostic
-   declarations with `requires: [capability]`; per-adapter prompt under
-   `by_adapter`. Adapters declare `Capabilities` in
-   `core/adapters/inbound/agents/<adapter>/config.go`. Valid cells run a
-   real CLI under an isolated daemon and capture transcripts.
-2. **Orchestrator scenarios** in `scenarios.json -> orchestrator_scenarios[]`.
-   Per-orchestrator inputs under `by_orchestrator`. Each scenario
-   references a `fixture_dir` under `replaydata/orchestrators/<adapter>/`
-   containing seeded `gt`-style responses, sidecar files, and golden
-   `orchestrator.State` snapshots. Verification is a Go test against the
-   committed goldens.
+1. **Agent scenarios** (`scenarios.json -> scenarios[]`) — agent-agnostic
+   declarations with `requires: [capability]`; per-adapter recipes under
+   `by_adapter`. A cell is applicable when the adapter's
+   `capabilities.json` satisfies the scenario's `requires`. Valid cells
+   run a real CLI under a recording daemon and capture transcripts.
+2. **Orchestrator scenarios** (`scenarios.json -> orchestrator_scenarios[]`)
+   — per-orchestrator inputs under `by_orchestrator`, verified by a Go
+   test against committed goldens. Hermetic; no live CLI, no auth.
 
-The matrix of valid cells falls out automatically; running this skill
-populates or refreshes them.
+**Why a dispatcher of subagents:** a single onboarding sweep used to run
+hundreds of shell invocations and dump every `events.jsonl` /
+`transcript.jsonl` into one transcript, exhausting the parent's context
+long before the work was done. Now each mechanical operation is one
+`Agent` call that exhausts its OWN context and returns a short summary.
+The parent decides *which* cells to touch; the subagents do the work.
 
-Auth is the user's responsibility — `claude` subscription login, `codex`
-auth, etc. are set up out-of-band. If a CLI isn't authenticated it will say
-so on stderr and the run will fail cleanly. Orchestrator scenarios are
-hermetic and don't need auth.
+See [`README.md`](README.md) for the user-facing decision tree and a
+worked example, and [`cell-lifecycle.md`](cell-lifecycle.md) for the
+five-stage pipeline the subagents implement.
 
-## Invocations
+## Routing — pick the operation
 
-- **`/ir:onboard-agent`** — no args: compute and print the matrix status (see
-  Step 2). No cost spent.
-- **`/ir:onboard-agent <adapter>`** — run every cell that applies to
-  `<adapter>`. E.g. `/ir:onboard-agent claudecode` or
-  `/ir:onboard-agent gastown`.
-- **`/ir:onboard-agent <adapter> <scenario>`** — run one specific cell. E.g.
-  `/ir:onboard-agent claudecode basic-turn` or
-  `/ir:onboard-agent gastown agent-discovery`.
-- **`/ir:onboard-agent --attach <adapter> [<scenario>]`** — attached
-  mode. Uses the user's already-running `irrlichd --record` instead of
-  spawning an isolated daemon on port 7837. The dashboard stays
-  connected for the whole recording — the scenario's session shows up
-  live alongside the user's other work. Requirements:
-  - `pgrep -x irrlichd` returns a PID (else the precheck refuses).
-  - The daemon was started with `--record` (else its recordings dir is
-    empty and the precheck refuses).
-  - Optional: `IRRLICHT_RECORDINGS_DIR=<path>` if the daemon's recording
-    dir isn't the default `~/.local/share/irrlicht/recordings/`.
-  
-  After the driver returns, run-cell sleeps 6 seconds for the
-  recorder's 5s periodic flush + 1s slack, then curates the staged
-  fixture from the daemon's recording file. The daemon is never
-  signalled; it keeps observing whatever sessions the user has open.
-- **`/ir:onboard-agent --diff`** — re-summarize the latest staged runs
-  (under `.build/refresh/<adapter>/<scenario>-*/`) without re-running.
-- **`/ir:onboard-agent --new <slug>`** — discover mode. Researches a
-  previously unknown agent on the web via subagents and proposes a
-  `capabilities.json`. See `discovery-instructions.md` for the dispatch
-  recipe. No live agent CLI is invoked.
-### Per-stage subcommands (one per UI pipeline segment)
+| The user wants to… | Command | You dispatch |
+|---|---|---|
+| see matrix status (no cost) | `/ir:onboard-agent` (no args) | nothing — compute inline (below) |
+| track a NEW behavior the matrix lacks | `scenario-create <slug>` | `scenario-create` subagent |
+| judge whether `<agent>` supports `<scenario>` | `assess <agent> <scenario>` | `assess` subagent |
+| capture how `<agent>` does `<scenario>` | `implement <agent> <scenario>` | `implement` subagent |
+| re-record after a daemon change | `implement <agent> <scenario> --re-record` | `implement` subagent |
+| onboard a brand-NEW agent CLI | `--new <slug>` | discovery (see below) |
+| verify nothing regressed | `tools/replay-fixtures.sh` | nothing — pure script |
+| run an orchestrator scenario | `<orch> [<scenario>]` | inline (see Orchestrators) |
 
-The five `cell-lifecycle.md` stages each have a dedicated subcommand
-that maps 1:1 to the viewer's pipeline strip (⚙ ◉ ✎ § N ✓). Run
-them in order; later stages refuse to proceed if earlier stages
-haven't landed their artifact.
+The legacy per-stage verbs (`assess`/`recipe`/`spec`/`record`/`validate`)
+still exist as building blocks under their own `SKILL.md` files;
+`implement` bundles recipe→spec→record→validate behind one contract, so
+you rarely invoke the middle three directly.
 
-- **`/ir:onboard-agent assess`** — **Stage 1**. Three scopes share
-  the same verb:
-  - `assess <agent> <scenario>` — single cell. Writes a rich
-    `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json`
-    (verdict + body + caveats + sources).
-  - `assess --column <agent>` — one agent, all scenarios. Writes a
-    candidate column at `.specs/agent-assess-<agent>.json` for the
-    maintainer to transcribe into the rollup matrix. (Replaces the
-    former `survey` skill.)
-  - `assess --row <scenario>` — one scenario, all adapters. Writes
-    a candidate row at `.specs/scenario-assess-<scenario>.json`.
-  See `assess/SKILL.md`.
-- **`/ir:onboard-agent recipe <agent> <scenario>`** — **Stage 2**.
-  Authors the deterministic driver script (preconditions, `script`
-  steps, verify items) into `scenarios.json -> scenarios[].by_adapter[<agent>]`.
-  See `recipe/SKILL.md`. (Renamed from `translate`.)
-- **`/ir:onboard-agent spec <agent> <scenario>`** — **Stage 3**.
-  Authors `replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl`
-  — the phase DSL that every recording is validated against. See
-  `spec/SKILL.md`. Author this BEFORE the recipe so the recipe's
-  `verify` items line up with concrete spec phases.
-- **`/ir:onboard-agent record <agent> <scenario>`** — **Stage 4**.
-  Drives the recipe against a live agent CLI + `irrlichd --record`,
-  archives the previous capture, promotes the new one. `--attach`
-  flag uses the user's running daemon. See `record/SKILL.md`.
-  (Alias for the bare `/ir:onboard-agent <agent> <scenario>` form
-  below.)
-- **`/ir:onboard-agent validate <agent> <scenario>`** — **Stage 5**.
-  Runs `expected-validate` against the latest recording (or a
-  specific archive) and reports per-phase pass/fail. Auto-invoked
-  by `record`; re-runnable by hand for drift detection. See
-  `validate/SKILL.md`.
+## Dispatching a subagent
 
-The adapter argument disambiguates which axis is being run: agent adapters
-(`claudecode`, `codex`, `pi`) match `scenarios[].by_adapter`; orchestrator
-adapters (`gastown`) match `orchestrator_scenarios[].by_orchestrator`.
-
-## Cell lifecycle — end-to-end workflow for ONE (agent × scenario)
-
-Every cell moves through a 5-stage pipeline. The viewer renders these
-stages as a strip per cell (`●● ✎ § N ✓`); the doc below is the
-canonical walkthrough.
+For `scenario-create`, `assess`, and `implement`, spawn ONE
+`general-purpose` Agent and let it run the corresponding self-contained
+`SKILL.md`. Brief it minimally — the SKILL.md carries the full contract:
 
 ```
-1. Assessment  →  2. Recipe       →  3. Spec          →  4. Recording      →  5. Validation
-   matrix verdict   scenarios.json     expected.jsonl      events.jsonl +       pass/fail per
-                    by_adapter[a]      phase DSL           transcript.jsonl     phase
-        │                │                  │                    │                    │
-        ▼                ▼                  ▼                    ▼                    ▼
-    /assess          /recipe            /spec               /record              /validate
+Agent(
+  subagent_type: "general-purpose",
+  description: "<verb> <agent>/<scenario>",
+  prompt: "Read and execute .claude/skills/ir:onboard-agent/<verb>/SKILL.md.
+           Inputs: agent=<agent> scenario=<scenario> [--re-record].
+           Follow it exactly and return ONLY the summary it specifies."
+)
 ```
 
-See [`cell-lifecycle.md`](cell-lifecycle.md) for:
+When the user asks for a column/row sweep (e.g. "assess every scenario
+for codex", "implement all never-recorded claudecode cells"), compute
+the cell list from the matrix status below, then dispatch **one Agent
+per cell**. Collect each subagent's ≤5-line summary into a table for the
+user. Don't run the per-cell mechanics yourself — that's what blows the
+context budget.
 
-- the canonical artifact + tool + success criterion per stage
-- the phase DSL field reference (`expected_state`, `same_session_as`,
-  `new_session`, etc.)
-- iteration loops (recording loop, daemon-fix loop, drift-detection)
-- a worked example (`claudecode/session-reset`)
-- explicit out-of-scope items
+After dispatching `implement`, the recording is already committed (that
+is part of its contract). Don't re-stage, re-diff, or re-commit; just
+relay its summary.
 
-When in doubt about a stage, jump to that section in
-`cell-lifecycle.md`. The subskills (`assess/`, `recipe/`, `spec/`,
-`record/`, `validate/`) implement individual stages. The lifecycle
-doc is how they fit together.
+## Matrix status (`list` — the no-arg path)
 
-## Step 1: Understand the task
-
-Parse the invocation into one of:
-- `list` — no args
-- `run_all` — one adapter
-- `run_one` — one adapter + one scenario
-- `diff_only` — `--diff` flag
-- `discover` — `--new <slug>`; load `discovery-instructions.md` and follow that recipe instead of Steps 2–5 below
-- `assess` — `assess <agent> <scenario>` (single) | `assess --column <agent>` | `assess --row <scenario>`; load `assess/SKILL.md` (Stage 1)
-- `recipe` — `recipe <agent> <scenario>`; load `recipe/SKILL.md` (Stage 2)
-- `spec` — `spec <agent> <scenario>`; load `spec/SKILL.md` (Stage 3)
-- `record` — `record <agent> <scenario>`; load `record/SKILL.md` (Stage 4)
-- `validate` — `validate <agent> <scenario>`; load `validate/SKILL.md` (Stage 5)
-- `pipeline` — `pipeline <agent> [<scenario>]`; load `pipeline/SKILL.md` and follow that recipe instead of Steps 2–5 below
-
-If the invocation is ambiguous, ask the user which mode to run.
-
-## Step 2: Compute matrix status
-
-Before any run (or as the sole output of `list`), compute the current state
-of **both** matrices.
+Compute and print the state of both matrices. No cost.
 
 ### Cross-reference check (run first)
 
-Every feature ID referenced by `scenarios.json -> scenarios[].requires` must
-exist in `replaydata/agents/features.json`; same for
-`orchestrator_scenarios[].requires` against
-`replaydata/orchestrators/features.json`. Unknown IDs are a hard error:
-report them as `scenario <name> requires <id> which is not in the canonical
-features list — add the feature or fix the typo`. Do not proceed with
-matrix computation until every reference resolves.
+Every `requires` id must exist in the canonical features list, else the
+matrix is undefined:
 
 ```bash
+SK=.claude/skills/ir:onboard-agent
 comm -23 \
-  <(jq -r '.scenarios[].requires[]' .claude/skills/ir:onboard-agent/scenarios.json | sort -u) \
+  <(jq -r '.scenarios[].requires[]' $SK/scenarios.json | sort -u) \
   <(jq -r '.features[].id' replaydata/agents/features.json | sort -u)
-# any output = unknown IDs — block.
+# any output = a scenario requires an unknown capability — block and report it.
 ```
 
 ### Agent matrix (`scenarios[]` × agent adapters)
 
-Each cell's state is one of:
+A scenario is applicable to an adapter iff every id in `requires` maps to
+`true` in that adapter's `capabilities.json -> features` (`false` and
+`"unknown"` both block). Per-cell state:
 
-- **OK** — fixture committed at `replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl`, and this session has not refreshed it.
-- **stale** — fixture committed, this session refreshed it, and the summarize step found material change.
-- **never-recorded** — capabilities match, `by_adapter.<adapter>` entry exists in `scenarios.json`, but no committed fixture.
-- **missing-prompt** — capabilities match but `by_adapter.<adapter>` is absent from `scenarios.json`. Actionable: add the entry.
-- **N/A (no <capability>)** — adapter's `capabilities.json` does not declare every required feature as `true`. Document which feature is missing or `unknown`.
+- **OK** — fixture committed at
+  `replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl`.
+- **never-recorded** — applicable + `by_adapter.<adapter>` recipe exists,
+  but no committed fixture. → `implement <adapter> <scenario>`.
+- **missing-recipe** — applicable but no `by_adapter.<adapter>` entry. →
+  `implement` (which authors it) once `assess` says `applicable: yes`.
+- **unassessed** — no `assessment.json` yet. → `assess` first.
+- **N/A (no <capability>)** — adapter's capabilities don't satisfy
+  `requires`.
 
 ```bash
-SCENARIOS_JSON=.claude/skills/ir:onboard-agent/scenarios.json
-
-# Per-adapter capabilities (one file per adapter):
-for a in claudecode codex pi; do
+SK=.claude/skills/ir:onboard-agent
+for a in claudecode codex pi aider opencode; do
   echo "== $a =="
-  jq -r '.features | to_entries[] | "\(.key)=\(.value)"' \
-    replaydata/agents/$a/capabilities.json
+  jq -r '.features | to_entries[] | "\(.key)=\(.value)"' replaydata/agents/$a/capabilities.json
 done
-
-# Committed scenario fixtures:
-ls replaydata/agents/{claudecode,codex,pi}/scenarios/ 2>/dev/null
+ls replaydata/agents/*/scenarios/ 2>/dev/null
 ```
 
-Cell applicability rule: a scenario is applicable to an adapter iff every
-ID in `scenarios[].requires` maps to `true` in the adapter's
-`capabilities.json -> features`. `false` and `"unknown"` both block.
+Print a table (rows = adapters, columns = scenarios) with a one-line hint
+on every non-OK cell.
 
-Print a table: rows = agent adapters, columns = scenario names. For any
-**missing-prompt** or **never-recorded** cell, append a one-line hint.
-
-### Orchestrator matrix (`orchestrator_scenarios[]` × orchestrator adapters)
-
-Each cell's state is one of:
-
-- **OK** — committed `golden/state-NNN.json` files cover all `poll_ticks` declared in `by_orchestrator.<adapter>`.
-- **stale** — this session ran `drive-gastown.sh` and the summarize step reported `verdict: CHANGED`.
-- **never-recorded** — `by_orchestrator.<adapter>` entry exists but the scenario's `golden/` directory is empty or missing.
-- **missing-fixture** — `by_orchestrator.<adapter>` entry exists but `replaydata/orchestrators/<adapter>/<scenario>/input/` is missing. Actionable: add the input fixtures.
+### Orchestrator matrix (`orchestrator_scenarios[]` × orchestrators)
 
 ```bash
-# Orchestrator scenarios + their fixture dirs:
 jq -r '.orchestrator_scenarios[] | "\(.name)\t\(.by_orchestrator.gastown.fixture_dir)\t\(.by_orchestrator.gastown.poll_ticks)"' \
-  $SCENARIOS_JSON
-
-# Existing goldens:
+  .claude/skills/ir:onboard-agent/scenarios.json
 find replaydata/orchestrators/gastown/scenarios -name 'state-*.json' 2>/dev/null | sort
 ```
 
-Print a second table: rows = orchestrator adapters (currently just `gastown`),
-columns = orchestrator scenario names.
+States: **OK** (goldens cover all `poll_ticks`), **never-recorded** (no
+`golden/`), **missing-fixture** (no `input/`).
 
-## Step 3: Execute cells
+## Orchestrators (inline — no subagent)
 
-Dispatch by adapter type:
+Orchestrator scenarios are hermetic, so the parent runs them directly
+(they're cheap and produce no live-agent token cost):
 
-### Agent cells
-
-For each (agent-adapter, scenario) cell, invoke
-`scripts/run-cell.sh <adapter> <scenario>`. The script handles:
-- `scripts/precheck.sh` (pgrep, git-clean, CLI version, build daemon)
-- isolated daemon launch with `IRRLICHT_RECORDINGS_DIR`
-- driver invocation via `scripts/drive-<adapter>.sh`
-- graceful shutdown (SIGINT → 6s → SIGTERM → SIGKILL)
-- transcript resolution via session UUID
-- `tools/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents …`
-- replay report generation (staged + committed, if any)
-- `run-manifest.json` writeback
-
-**Pre-cell gate** (only relevant for agents new to irrlicht): if the
-adapter has a `replaydata/agents/<name>/capabilities.json` but no entry
-in `core/cmd/irrlichd/main.go:agentCfgs` yet, the daemon literally
-cannot see it. Before running cells for a new adapter, complete the
-post-discovery live recording smoke described in
-`discovery-instructions.md → Post-discovery gate`. That step adds the
-minimum stub adapter, drives the agent in tmux, and produces a recording
-that classifies the daemon's detection as PASS / PARTIAL / FAIL.
-
-**Post-cell UI gate** (also new-adapter only): once cells pass, walk
-the macOS UI checklist in
-`discovery-instructions.md → Post-onboarding macOS UI checklist` to
-add the adapter's icon, display name, and verify the session row
-renders icon + name + short model + context + cost correctly. Skipping
-this leaves the row showing the Claude Code mascot and the literal
-provider/route prefix on the model — confusing for users.
-
-**On cell failure**: when `run-cell.sh` exits nonzero or the manifest's
-`error` field is set, run `scripts/lib/classify-failure.sh <staging>`. The
-output is `{"code": "<code>", "summary": "...", "evidence": "..."}`. Look
-up `<code>` in `install-instructions.md` for the matching action recipe.
-Use `AskUserQuestion` to present three options: "show install/auth
-instructions", "I'll fix manually — wait", "skip this adapter". On
-"show", paste the relevant install-instructions.md section verbatim and
-pause. On "wait", continue paused until the user says "retry". On "skip",
-mark the cell `BLOCKED` in the Step 4 summary and move on.
-
-### Orchestrator cells
-
-For each (orchestrator-adapter, orchestrator-scenario) cell, invoke
-`scripts/drive-<adapter>.sh <scenario>` directly (no run-cell.sh wrapper —
-orchestrator scenarios are hermetic and don't need a live daemon). For
-gastown, the script:
-
-- Stages a writable copy of `replaydata/orchestrators/gastown/scenarios/<scenario>/` under `.build/refresh/gastown/<scenario>-<UTC-ts>/fixtures/<scenario>/`.
-- Runs `go test -run TestGastownReplay/<scenario> -update-goldens` against the staged copy via `GASTOWN_FIXTURES_DIR`.
-- Diffs the regenerated staged goldens against the committed `replaydata/` goldens.
-- Writes `run-manifest.json` with `verdict` (`OK` / `CHANGED` / `ERROR`) and the list of differing golden files.
-
-Stream the script's output as it runs. On nonzero exit, read
-`<staging>/run-manifest.json` and report the failing step specifically. Stop
-the batch on first failure.
-
-## Step 4: Summarize (the important step — read carefully)
-
-### Agent cells
-
-For each staged cell, read `<staging>/reports/staged.json` and (if present)
-`<staging>/reports/committed.json`. Produce a structured diff and a verdict.
-
-### Normalization rules
-
-Replay reports contain values that vary between runs even when behavior is
-identical. **Normalize both sides identically before comparing**, otherwise
-every refresh will look broken:
-
-1. **`generated_at`** — strip entirely. It's the replay wall clock.
-2. **UUIDs** — rewrite each distinct UUID seen (anywhere — `session_id`,
-   `session_uuid`, ids embedded in reasons) to `UUID_1`, `UUID_2`, … in
-   order of first appearance. Do this **per side independently**, not across
-   sides — the goal is to collapse UUID identity to "first UUID seen in
-   transitions," "second UUID seen," etc. If the two sides produce the
-   same normalized sequence, UUIDs don't count as a change.
-3. **Absolute timestamps** — replace with offsets (ms) from the first event's
-   timestamp in that report.
-4. **Durations** — quantize into 100ms buckets (`round(d/100)*100`). Small
-   timing jitter shouldn't register as change.
-5. **`virtual_time`** — likewise relative-to-first.
-6. **File paths** — strip the `.build/refresh/<adapter>/<scenario>-<ts>/`
-   prefix down to the scenario-relative path.
-
-Do the normalization in your reasoning step — don't write a normalizer
-script. The reports are JSON and usually under 2 KB per scenario; normalize
-by reading the JSON and mentally rewriting the fields.
-
-### Diff dimensions to report
-
-After normalizing, compare the two reports on these dimensions only:
-
-- **State transition sequence** — the list of `(prev_state, new_state)` pairs.
-  This is the load-bearing one.
-- **Flicker count** — `summary.flicker_count`.
-- **Tool call presence** — did any tool fire? Which category (Bash / Write /
-  Read / WebFetch / mcp__* / other)?
-- **Hook firings** — which hook `kind`s appear in `extended_check`?
-- **Final state** — last entry in transitions.
-- **Session count** — number of sessions in `sessions[]`.
-- **Estimated cost USD** — raw delta, not normalized.
-
-Do NOT diff exact transition-reason strings, per-event latencies, or model
-output text. Those are nondeterministic.
-
-### Evaluating `verify` matchers
-
-The scenario's `verify` block lists structural assertions you check against
-the staged report (and, for new fixtures, against the transcript). Most are
-self-explanatory — `final_state`, `has_waiting_state`, `tool_calls_max`,
-`contains_tool_call`, `contains_hook`, `transitions_topology`,
-`tool_call_failed`, `parent_linked_min`, `subagent_transcripts_min`. Three
-matchers introduced for the aider scenarios in #217 are less obvious because
-they require reading the staged transcript directly:
-
-- **`min_turns: N`** — count `> Tokens:` lines in the staged transcript (or
-  count transitions whose `last_event_type == "turn_done"` in the report).
-  Pass if ≥ N.
-- **`contains_interrupt: true`** — pass if the transcript shows more `####`
-  user-prompt markers than `> Tokens:` turn-close markers (the missing
-  Tokens line is the interrupt signature). Equivalent: at least one
-  `####` block has no `> Tokens:` before the next `####`.
-- **`model_changed: true`** — pass if the transcript contains two or more
-  distinct `> Model:` lines, OR if the report's transitions show two
-  different `model_name` values across turns.
-
-### Verdict for each cell
-
-Pick one:
-
-- **OK: no material change** — staged matches committed on every dimension
-  above.
-- **CHANGED (review)** — at least one dimension differs. List specifically
-  which dimension(s) and on which transition index. Example: "transitions[4]:
-  prev_state changed from `working` to `waiting` — investigate the tailer
-  change in PR #nnn."
-- **FIRST-RECORD (new fixture)** — no committed fixture existed; verify the
-  scenario's `verify` assertions against the staged report and report which
-  passed.
-- **VERIFY-FAIL** — staged report violates the scenario's `verify`
-  assertions. Block the commit suggestion.
-- **ERROR: <reason>** — `run-manifest.json` contains an error (transcript
-  not found, daemon shutdown SIGKILL, etc.).
-
-### Per-cell output format (agent)
-
-```
-[claudecode / basic-turn]  verdict: OK
-  transitions: 6 → 6 (sequence unchanged)
-  flicker_count: 0 → 0
-  tool_calls: (none) → (none)
-  final_state: ready → ready
+```bash
+.claude/skills/ir:onboard-agent/scripts/drive-gastown.sh <scenario>
 ```
 
-### Orchestrator cells
+The script stages a writable copy, runs
+`go test -run TestGastownReplay/<scenario> -update-goldens` against it,
+and writes `run-manifest.json` with `verdict` (`OK`/`CHANGED`/`ERROR`)
++ the differing golden files. Read the manifest, diff staged vs
+committed goldens for any `CHANGED` cell, and cross-check the scenario's
+`verify` block. Unlike agent cells, the maintainer reviews and commits
+orchestrator goldens by hand:
 
-The driver already produced the verdict. Read `<staging>/run-manifest.json`:
-
-- `verdict: OK` → no material change. The poller produced byte-identical
-  goldens against committed.
-- `verdict: CHANGED` → list `manifest.diffs` (the differing
-  `state-NNN.json` filenames). For each, also produce a structural diff
-  against the same dimensions used for agents where applicable: codebase
-  count/names, worker counts by role, global-agent presence, top-level
-  `running` flag. Diff the staged JSON against the committed JSON in
-  `<scenario>/golden/` to surface specifically which fields moved.
-- `verdict: ERROR` → read `<staging>/test.log` for the Go test failure and
-  surface the relevant test output (panic, missing fixture, parse error,
-  etc.).
-
-Cross-check the scenario's `verify` block in `scenarios.json` against the
-staged goldens:
-
-- `codebases_count`, `codebases_names`, `global_agents_roles` — direct field comparison on `state-001.json`.
-- `running`, `codebase_statuses` — direct field comparison.
-- `polecat_count_per_tick`, `boot_present_per_tick`, `codebases_count_per_tick` — read each tick's `state-NNN.json`, derive the array, compare.
-- `workers_with_session_min`, `expected_session_ids` — sum across worktrees and report.
-
-A `verify` failure with `verdict: OK` should be flagged as a
-**VERIFY-FAIL** verdict that blocks commit (the goldens reproduce, but
-they no longer match the scenario's intent — fixture inputs likely need
-adjusting).
-
-### Per-cell output format (orchestrator)
-
-```
-[gastown / agent-discovery]  verdict: OK
-  ticks: 1
-  codebases: 2 [gastown, irrlicht]
-  global_agents: 3 [mayor, deacon, boot]
-  verify: PASS
-
-[gastown / polling-lifecycle]  verdict: CHANGED
-  ticks: 3
-  diffs: state-002.json
-  delta: tick 2 — boot_present went true→false (regression: gt-fail
-         fallback path no longer drops the boot agent)
-  verify: PASS  (the verify block accepts the change, so this is a real
-                 regression in the poller, not a verify drift)
-```
-
-## Step 5: Next steps
-
-After summarizing, print the concrete commands the maintainer runs to
-commit accepted cells.
-
-### Agent cells
-
-```
-# Review each staged fixture vs current committed one:
-diff replaydata/agents/claudecode/basic-turn.jsonl \
-     .build/refresh/claudecode/basic-turn-20260424-152301/replaydata/agents/claudecode/basic-turn.jsonl
-
-# If satisfied, copy into replaydata/:
-cp .build/refresh/claudecode/basic-turn-*/replaydata/agents/claudecode/basic-turn.* \
-   replaydata/agents/claudecode/
-
-# Verify replay tests still pass:
-go test ./core/cmd/replay/... -run TestReplayWithSidecar
-
-# Commit:
-git add replaydata/agents/claudecode/basic-turn.* && git commit -m "..."
-```
-
-### Orchestrator cells
-
-```
-# Review the regenerated goldens vs committed:
-diff -r replaydata/orchestrators/gastown/scenarios/agent-discovery/golden \
-        .build/refresh/gastown/agent-discovery-20260425-101500/fixtures/agent-discovery/golden
-
-# If accepted, regenerate goldens in place (touches replaydata/ only):
+```bash
 go test ./core/adapters/inbound/orchestrators/gastown/ \
-        -run TestGastownReplay/agent-discovery -update-goldens
-
-# Verify the test now passes against committed:
-go test ./core/adapters/inbound/orchestrators/gastown/ -run TestGastownReplay
-
-# Commit:
-git add replaydata/orchestrators/gastown/scenarios/agent-discovery/ && git commit -m "..."
+        -run TestGastownReplay/<scenario> -update-goldens
+git add replaydata/orchestrators/gastown/scenarios/<scenario>/ && git commit -m "..."
 ```
 
-Do NOT run the `cp`, `-update-goldens`, or `git commit` yourself. The
-maintainer reviews and commits by hand — this skill never touches
-`replaydata/` directly.
+## Discovery mode (`--new <slug>`)
 
-## Authoring scenarios
-
-When adding a new entry to `scenarios.json` or fixing an existing one,
-keep these step-script rules in mind. The four interactive drivers
-(`drive-claudecode-interactive.sh`, `drive-aider-interactive.sh`,
-`drive-codex-interactive.sh`, `drive-pi-interactive.sh`) all share the
-same step grammar:
-
-- `{"type": "send", "text": "…"}` — type text + press Enter.
-- `{"type": "wait_turn"}` — block until the agent finishes the current
-  turn (criteria differs per adapter; e.g. claudecode waits for
-  `stop_reason: "end_turn"` in the transcript).
-- `{"type": "sleep", "seconds": N}` — pause N seconds. Two mandatory
-  uses in multi-turn scenarios:
-  1. **Between every `wait_turn` and the next `send`** (≥ 3s). Without
-     it, drivers fire the next prompt within 100–800ms of the assistant
-     finishing, which is below the state classifier's transcript-activity
-     debounce window — the recorder coalesces all turns into one
-     `working` → `ready` span and the replayed state band can't show
-     per-turn cycles.
-  2. **After the LAST `wait_turn`** (≥ 4s). `run-cell.sh` kills the
-     daemon as soon as the driver returns. If the final
-     `working`→`ready` transition hasn't fired yet (still within the
-     classifier's dwell window) the recording ends mid-turn. Trailing
-     sleep lets the classifier emit the final `ready` before SIGINT.
-- `{"type": "slash", "text": "/cmd"}` — same as `send`, semantically a
-  slash command.
-- `{"type": "interrupt"}` — Escape mid-turn (claudecode only).
-
-Single-turn scenarios (`basic-turn`, `permission-hook-denial`, etc.)
-use the simpler `"prompt": "…"` field — no script needed.
+Adds a matrix COLUMN (a whole new agent), as opposed to
+`scenario-create` which adds a ROW. Load
+[`discovery-instructions.md`](discovery-instructions.md) and follow that
+recipe — it researches the agent on the web, proposes a
+`capabilities.json`, and walks the stub-adapter + smoke-recording gate.
+No live agent CLI runs during discovery itself.
 
 ## Anti-patterns
 
-- **Don't** skip normalization in Step 4. UUID/timestamp drift will make
-  every refresh look like a break. This is the single most important
-  instruction.
-- **Don't** write fixtures directly to `replaydata/agents/`. All writes go to
-  `.build/refresh/`; maintainer copies manually.
-- **Don't** run with an existing `irrlichd` up. Both daemons would race on
-  port 7837 and hooks would route to the wrong one. `precheck.sh` refuses;
-  don't override.
-- **Don't** invent prompts for adapters that don't have `by_adapter`
-  entries. Report "missing-prompt" as actionable state — the user adds the
-  prompt by editing `scenarios.json` and runs again.
-- **Don't** author a multi-turn script with back-to-back `wait_turn` →
-  `send` steps. The classifier won't register the intermediate `ready`
-  state and the recording loses per-turn fidelity. Insert
-  `{"type":"sleep","seconds":3}` after every `wait_turn` that is
-  followed by another `send`.
-- **Don't** diff exact text from transition reasons, assistant output, or
-  tool-call arguments. Only structural invariants are stable across runs.
-- **Don't** run `go test -update-goldens` against `replaydata/orchestrators/`
-  yourself. Always go through `drive-gastown.sh`, which writes to
-  `.build/refresh/`. The maintainer chooses when (and whether) to
-  regenerate the committed goldens.
+- **Don't run per-cell mechanics in the parent.** Authoring recipes,
+  driving CLIs, curating fixtures, diffing reports — all of that belongs
+  inside an `implement` subagent. The parent routes and summarizes.
+- **Don't re-commit after `implement`.** It commits as part of its
+  contract; a clean tree is the handoff signal.
+- **Don't dispatch `implement` for an `applicable: no`/`n/a` cell.** It
+  refuses anyway — check the assessment first and save the round-trip.
+- **Don't run with an isolated daemon while a production `irrlichd` is
+  up.** Use `--attach` (the subagents do). `precheck.sh` enforces this.
+- **Don't edit `agent-scenarios-coverage.json` from the parent.** It's
+  the maintainer's editorial rollup; subagents surface drift in their
+  summaries.
