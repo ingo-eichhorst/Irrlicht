@@ -3994,6 +3994,61 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated",
+            "irrlichd is recording (--attach or isolated mode)",
+            "Codex has NO built-in autonomous self-prompting loop (no /goal, no full-auto); the loop is driven EXTERNALLY by the driver feeding successive prompts to the same live REPL session"
+          ],
+          "setup": [
+            "Driver launches one interactive codex REPL; the rollout session reconciles to its own session_id once the first prompt lands. No trust dialog / settings file (codex has none)."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "We are running an iterative loop toward one goal: print the numbers 1, 2, 3 one per iteration, never repeating a number. This is iteration 1 — run `echo 1` and report the next number you will print. Do not print the others yet."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Continue the loop: iteration 2. Run `echo 2` and report the next number. Do not print the final one yet."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Final loop iteration 3: run `echo 3`. The goal (1, 2, 3) is now complete — confirm and stop."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the proc-PID pre-session born ready, then the rollout session reconcile (new session_id) born ready, then a pid_discovered for the rollout session",
+            "events.jsonl contains at least 2 working→ready transitions on the SAME rollout session_id — one clean cycle per externally-fed loop iteration",
+            "each iteration cycles ready→working→ready without the session sticking in working between iterations",
+            "final state of the session is ready after the last iteration, then process_exited on REPL teardown",
+            "no state_transition to waiting (codex has no permission gates)"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
