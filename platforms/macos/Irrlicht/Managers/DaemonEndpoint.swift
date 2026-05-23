@@ -13,13 +13,22 @@ enum DaemonEndpoint {
     static let defaultPort = 7837
 
     /// The resolved daemon port: `IRRLICHT_DAEMON_PORT` if set to a positive
-    /// integer, otherwise the default.
+    /// integer, otherwise the default. Whitespace is trimmed first — Swift's
+    /// `Int("7838\n")` returns nil, and silently falling back to 7837 would
+    /// flip `isCustomPort` to false and re-enable `DaemonManager`'s global
+    /// `pkill`, which could take the production daemon down.
     static let port: Int = {
-        if let v = ProcessInfo.processInfo.environment["IRRLICHT_DAEMON_PORT"],
-           let p = Int(v), p > 0 {
-            return p
+        guard let raw = ProcessInfo.processInfo.environment["IRRLICHT_DAEMON_PORT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty
+        else {
+            return defaultPort
         }
-        return defaultPort
+        guard let p = Int(raw), p > 0 else {
+            FileHandle.standardError.write(Data(
+                "irrlicht: IRRLICHT_DAEMON_PORT=\"\(raw)\" is not a valid port; using default \(defaultPort)\n".utf8))
+            return defaultPort
+        }
+        return p
     }()
 
     /// True when an explicit non-default port was requested — i.e. we're a dev
