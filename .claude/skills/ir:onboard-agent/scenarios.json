@@ -779,6 +779,22 @@
             "Final session state is ready",
             "transcript.jsonl shows turns 1/2 then a structural break (truncation or marker) then turn 3"
           ]
+        },
+        "codex": {
+          "applicable": false,
+          "scope_note": "Coverage matrix declares codex supports=no for checkpoint-rewind as of v0.130: no native rewind feature. Open feature requests #11626 + #12558 track adding it. Reassess on the next major codex release."
+        },
+        "pi": {
+          "applicable": false,
+          "scope_note": "Coverage matrix declares pi supports=no: stock Pi CLI has no rewind (pi-mono discussion #1223). A third-party `pi-rewind` extension exists but isn't part of the default install, so irrlicht's observation target (stock pi) has nothing to record."
+        },
+        "aider": {
+          "applicable": false,
+          "scope_note": "Coverage matrix marks aider supports=partial, observes=no. /undo reverts the last aider git commit and surfaces as a normal chat turn in the transcript; there is no multi-point checkpoint picker. Capturing it requires aider to first make a file edit and commit, then /undo — a recipe shape that needs file-tool granularity the current driver doesn't deterministically produce. Recording deferred."
+        },
+        "opencode": {
+          "applicable": false,
+          "scope_note": "OpenCode does have /undo + /redo with git-snapshot semantics (rewinds to a previous message, restores files, removes subsequent messages from the SQLite session). drive-opencode-interactive.sh would need a way to inject /undo as a slash-command step type; today it only supports prompt-as-text via `opencode run`, which is a full new turn rather than an in-session slash command. Recording deferred until the driver gains a slash-command primitive."
         }
       }
     },
@@ -863,6 +879,22 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "codex": {
+          "applicable": false,
+          "scope_note": "Codex's TUI has no documented /clear analogue as of v0.130; closing and restarting the REPL creates a brand new rollout file with a new UUID, not a 'reset' within one process. drive-codex-interactive.sh also doesn't expose a `reset_session` step type — that's claudecode-only. Recording deferred until either codex ships a /clear command and the driver gains the primitive, or the scenario is assessed as supports=no for codex."
+        },
+        "pi": {
+          "applicable": false,
+          "scope_note": "Pi's TUI does not document a /clear or /new command that resets the in-process session while keeping the process alive. drive-pi-interactive.sh doesn't expose a `reset_session` step type. Recording deferred until the semantics are clarified upstream."
+        },
+        "aider": {
+          "applicable": false,
+          "scope_note": "Coverage matrix declares aider supports=no for session-reset: aider has /clear (clears chat history) but it does NOT mint a new session id — there is no aider session-id concept. Closing aider creates a fresh `.aider.chat.history.md` on next launch but that's session-end + session-start, not session-reset."
+        },
+        "opencode": {
+          "applicable": false,
+          "scope_note": "OpenCode's session row is SQLite-backed; there is no in-process /clear that mints a new ses_… while the same process keeps running. Spawning a new `opencode run` without --session creates a brand new session row — that's session-end + session-start, not session-reset. Coverage assessment is supports=unknown; recording deferred."
         }
       }
     },
@@ -941,6 +973,63 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "codex": {
+          "applicable": false,
+          "scope_note": "Codex's CLI does support session resume via `codex resume <session-id>` (and a /resume picker in the TUI as of 2026), but drive-codex-interactive.sh doesn't expose `exit_clean` / `resume` step types — those are claudecode-only. Adding them to the codex driver would let this cell record. Recording deferred until the driver gains the missing primitives."
+        },
+        "pi": {
+          "applicable": false,
+          "scope_note": "Pi accepts `--session <UUID>` to resume an existing session, but drive-pi-interactive.sh doesn't expose `exit_clean` / `resume` step types. Headless drive-pi.sh launches one-shot only. Recording deferred until a driver-level resume primitive is added."
+        },
+        "aider": {
+          "applicable": false,
+          "scope_note": "Aider has no formal session-id concept — relaunching in the same cwd auto-loads `.aider.chat.history.md`, which is closer to 'append to existing log' than true session resume. The coverage matrix marks aider supports=partial, observes=unknown for this scenario; the recipe is intentionally not authored until the semantics are nailed down."
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated",
+            "irrlichd is recording with the opencode SQLite watcher enabled"
+          ],
+          "setup": [
+            "Create an empty cwd under <staging>/cwd/",
+            "drive-opencode-interactive.sh's `--session <id>` plumbing already chains turns across separate `opencode run` invocations; the second `send` IS the resume case (different process, same session row)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: again"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the opencode ses_… session born in ready",
+            "ready→working→ready cycle for turn 1",
+            "the SAME ses_… id appears again after the first process exits — the second `opencode run --session` joins the existing SQLite session",
+            "ready→working→ready cycle for turn 2 on the same ses_… id",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "scope_note": "OpenCode's per-turn process model means every `opencode run --session` after the first IS session resume. The recording validates that the SQLite-backed session row survives across PID lifetimes — same shape as claudecode's session-resume, just without an in-process REPL."
         }
       }
     },
