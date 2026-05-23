@@ -51,7 +51,15 @@ type cachedCapacity struct {
 }
 
 // cachePath returns the path for the cached remote capacity data.
+//
+// IRRLICHT_MODEL_CAPACITY_CACHE overrides it with an explicit file. This is an
+// escape hatch (like IRRLICHT_UI_DIR) used by the replay byte-identity tests to
+// pin pricing to a committed snapshot, so model-name/cost resolution can't drift
+// with whatever LiteLLM data happens to be cached on a dev machine or CI runner.
 func cachePath() (string, error) {
+	if p := os.Getenv("IRRLICHT_MODEL_CAPACITY_CACHE"); p != "" {
+		return p, nil
+	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
