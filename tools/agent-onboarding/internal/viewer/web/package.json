@@ -1,0 +1,11 @@
+{
+  "name": "irrlicht-viewer",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0",
+    "jsdom": "^25.0.0"
+  }
+}
