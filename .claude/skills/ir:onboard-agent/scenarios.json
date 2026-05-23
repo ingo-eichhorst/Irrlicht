@@ -58,7 +58,9 @@
       "id": "todowrite",
       "section": "Turn shape",
       "feature": "Todowrite tool observability",
-      "requires": ["todowrite"]
+      "requires": [
+        "todowrite"
+      ]
     },
     {
       "id": "self-correction-iteration",
@@ -338,7 +340,7 @@
     },
     {
       "name": "multi-turn-conversation",
-      "description": "Three consecutive user prompts in one session. Validates state reset between turns and per-turn Contribution accumulation.",
+      "description": "Three consecutive user prompts in one live codex REPL session, validating that state resets to ready between turns (ready→working→ready three times on one session_id) and per-turn Contribution accumulates. WHY interactive (not headless codex exec): exec is single-shot and ends in process_exited after one reply, so it can't show turn-to-turn state reset; the interactive driver keeps the rollout session alive across all three turns via send+wait_turn, then tears the tmux REPL down once. WHY the 3s sleeps between wait_turn and the next send: they sit past the classifier's debounce window so each turn's working→ready flip is observed cleanly before the next prompt re-enters working; without them the next send can land before the prior turn settles and the arcs blur. HOW runs differ: exact assistant wording, per-turn token counts, and sub-second timing vary (model-output variance) — only the structural three-turn arc, distinct-session count, and final ready state are stable. WHERE to look if it breaks: the rollout file under ~/.codex/sessions (the driver resolves it lazily after the first task_complete); a missing third arc usually means a wait_turn timed out or a sleep was too short for the debounce.",
       "coverage_id": "basic-turn",
       "requires": [
         "headless_mode"
@@ -427,6 +429,15 @@
           "timeout_seconds": 300
         },
         "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so prompts never race a still-running turn"
+          ],
           "script": [
             {
               "type": "send",
@@ -461,6 +472,15 @@
               "type": "sleep",
               "seconds": 4
             }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session, not three exits)",
+            "no state_transition to waiting appears for the rollout session at any point"
           ],
           "settings": {},
           "timeout_seconds": 300
@@ -504,7 +524,8 @@
           "settings": {},
           "timeout_seconds": 300
         }
-      }
+      },
+      "idle_only": false
     },
     {
       "name": "interrupted-turn",

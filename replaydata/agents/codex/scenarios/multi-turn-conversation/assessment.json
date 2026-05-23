@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scenario_id": "multi-turn-conversation",
+  "agent": "codex",
+  "assessed_at": "2026-05-23T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.88,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\n`multi-turn-conversation` chains three consecutive user prompts in one session, validating that the parser resets state between turns (`ready -> working -> ready` per turn) and accumulates per-turn Contribution. It shares the `basic-turn` primitive (transcript turn-end detection, requires `headless_mode`) but exercises it three times in one live session, so the load-bearing question is whether codex sustains a multi-turn REPL and whether the daemon flips back to `ready` between turns rather than only seeing a single-shot exit.\n\n**agent_supports: yes.** Unlike the single-shot `codex exec` path used for `basic-turn`, codex ships an interactive REPL (`tui: true` in capabilities.json). The committed `drive-codex-interactive.sh` driver runs that REPL under tmux and walks send/wait_turn steps, blocking on each `event_msg/task_complete` line before sending the next prompt. Three send+wait_turn pairs are therefore expressible as one live session — the REPL persists across turns instead of exiting after the first reply.\n\n**irrlicht_observes: yes.** The codex adapter watches rollout transcripts via `FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser{...}}` (agent.go). The parser classifies each `task_complete` event_msg as `turn_done`, so `IsAgentDone()` fires once per turn and drives a `working -> ready` flip back at each turn boundary — exactly the state reset the spec asserts. Per-turn token accumulation is covered by `TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot`, which proves the parser reads each turn's `token_count` snapshot rather than double-counting, yielding the rising cumulative `TotalTokens` across the three turns. `TestParser_TurnCompleteEmitsTurnDone` covers the turn-boundary classification. Because this is a live REPL session (not a headless single-shot exit), the daemon observes three full `working -> ready` arcs on the same rollout session_id, then `process_exited` only when the driver tears the REPL down.\n\nNo carve-outs apply. The matrix already records codex/basic-turn (the shared `basic-turn` coverage row) as yes/yes; this assessment ratifies that the same verdict holds when the turn is repeated three times in one interactive session.",
+  "caveats": [
+    "Exact assistant wording and per-turn token counts vary run-to-run (model-output variance); the spec asserts only the structural three-turn ready→working→ready arc, not specific text or token totals."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/agent.go", "note": "FilesUnderRoot + JSONLineParser transport; ExactName process match"},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/parser.go", "note": "task_complete -> turn_done so IsAgentDone fires once per turn, driving working->ready between turns"},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/parser_test.go", "note": "TestParser_MultiTurnTokenCount_UsesPerTurnSnapshot (per-turn accumulation), TestParser_TurnCompleteEmitsTurnDone (turn boundary)"},
+    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh", "note": "interactive REPL driver supports send/wait_turn/sleep/interrupt — sustains a multi-turn session under tmux"},
+    {"kind": "file", "ref": "replaydata/agents/codex/capabilities.json", "note": "headless_mode: true, tui: true, structured_output_jsonl: true, cost_tracking: true"}
+  ]
+}
