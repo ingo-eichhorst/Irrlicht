@@ -14,7 +14,14 @@ description: >
   every adapter. Re-runs overwrite silently — git preserves history.
 ---
 
-# Assessment (Stage 1)
+# assess (Agent #2 / Stage 1)
+
+> **You are running as a focused subagent with no parent context.**
+> Everything you need is in this file and the repo. Do the research
+> YOURSELF (you have web search + file access) — don't bounce the work
+> back to the dispatcher. The single-cell form spends no API tokens on
+> agent CLIs and runs no recording. When done, return only the summary
+> in the "Return contract" section.
 
 Produces the artifact for **Stage 1 of the cell lifecycle**: a
 structured, dated, sourced record of "does this agent support this
@@ -136,25 +143,35 @@ The steps below cover the **single-cell** form. For
 
 ### Step 1 — Read the prose spec
 
+Canonical source (committed, always present):
+
 ```
-.specs/agent-scenarios.md
+.claude/skills/ir:onboard-agent/scenario-meanings.md   →   ### <scenario-id>
 ```
 
-Find the `### Feature:` heading whose kebab slug matches
-`<scenario-id>`. Capture every `Scenario:` paragraph and every
-`Expected:` bullet. These are the canonical assertions the verdict
-must judge against.
+Read the `### <scenario-id>` block and capture all five fields
+(Essence, User-observable signal, Primitive exercised, Not to be
+confused with, Conceptual flow). The **User-observable signal** lines
+are the candidate assertions you judge `irrlicht_observes` against; the
+**Primitive exercised** field is the canonical capability-key anchor
+(use it in Step 4 to pick the right `capabilities.json` key).
 
-If `.specs/` isn't in this checkout (it's gitignored), the maintainer
-must copy it in or you fall back to `/api/catalog` (the viewer's
-rollup of the same data). Don't fabricate a scenario.
+If the scenario ID is missing from `scenario-meanings.md` — STOP. The
+row hasn't been created. Surface "run `scenario-create <slug>` first" in
+your summary and return.
+
+If a richer `.specs/agent-scenarios.md` happens to be present (it's
+gitignored, so usually absent), also read its `### Feature:` block whose
+kebab slug matches — capture every `Scenario:` paragraph and `Expected:`
+bullet for extra precision. Don't fabricate a scenario if it's absent;
+`scenario-meanings.md` is sufficient.
 
 ► **Verify before moving on:**
-- [ ] Found the Feature: heading. If not, the `<scenario-id>` is
-  wrong or the spec is missing — stop and surface the gap.
-- [ ] Located the `### <scenario-id>` section in `.claude/skills/ir:onboard-agent/scenario-meanings.md` and captured the **Primitive exercised** field verbatim. This field is the canonical capability key anchor — use it in Step 4 to drive `capabilities.json` assignment. If the scenario ID is missing from `scenario-meanings.md` — STOP and ask the maintainer to add it.
-- [ ] Captured every Expected: bullet. Each one is a candidate
-  assertion you'll judge `irrlicht_observes` against.
+- [ ] Found the `### <scenario-id>` block in `scenario-meanings.md` and
+  captured the **Primitive exercised** field verbatim.
+- [ ] Captured every User-observable signal (and any `.specs/` Expected:
+  bullet, if present). Each is a candidate assertion for
+  `irrlicht_observes`.
 
 ### Step 2 — Read the current matrix verdict
 
@@ -256,53 +273,50 @@ FilesUnderRoot watch can see the session).
 - [ ] For each Expected: bullet, you can name the event(s) the daemon
   would emit (or honestly say "no event would prove this").
 
-### Step 4 — Dispatch a focused research subagent
+### Step 4 — Research the verdict (you do this directly)
 
-Spawn ONE general-purpose subagent (`Agent` tool with
-`subagent_type: general-purpose`) and brief it with:
-
-1. The scenario's full spec text (from Step 1).
-2. The current matrix verdict (from Step 2).
-3. A pointer to the adapter source you read (from Step 3).
-4. The output schema from "Output" above.
-5. The two caveat patterns from `cell-lifecycle.md`:
-   feature-invisible-but-spec-compliant, metric-drift-downstream.
-6. The two worked examples (`checkpoint-rewind`,
-   `cloud-background-agent`) as anchors for prose style.
-
-Ask it to:
+You are the research agent. Using the spec text (Step 1), the matrix
+verdict (Step 2), and the adapter transport read (Step 3):
 
 - Read the agent's official docs site, changelog/release notes, and
-  source files relevant to the feature.
-- Decide `agent_supports` honestly.
-- Derive `irrlicht_observes` from the transport read (Step 3) and
-  whatever it learns about the agent's emission shape.
-- Map the **Primitive exercised** field from Step 1 to the matching
-  key in `replaydata/agents/<agent>/capabilities.json`. Use the
-  primitive text to identify the correct feature flag — do NOT infer
-  a capability key from general knowledge; derive it directly from
-  the primitive text and the existing keys in `capabilities.json`.
-  Update or confirm that key in the output.
-- Identify caveats — name each one explicitly with the pattern it
-  fits.
+  source files relevant to the feature. Use web search + fetch.
+- Decide `agent_supports` honestly (see the three rules above and the
+  Step 2.5 strings-scan guard before any `no`).
+- Derive `irrlicht_observes` from the transport read (Step 3) and what
+  you learn about the agent's emission shape. The agent emitting an
+  event ≠ the daemon parsing it — ground this claim in `config.go` +
+  the parser source, not docs alone.
+- Map the **Primitive exercised** field from Step 1 to the matching key
+  in `replaydata/agents/<agent>/capabilities.json`. Derive the key
+  directly from the primitive text and the existing keys — do NOT infer
+  it from general knowledge. Confirm (or correct) that key.
+- Identify caveats, naming each with the pattern it fits
+  (feature-invisible-but-spec-compliant; metric-drift-downstream — both
+  defined in `cell-lifecycle.md`).
 - Calibrate `confidence` (`0.9+` only when behavior is documented
-  explicitly).
-- Cite at least one source per claim. URL for docs/changelog; `file`
-  with a path for source.
-- Output the full JSON document conforming to the schema. No
-  surrounding markdown, no commentary.
+  explicitly; `0.7–0.85` is the honest band for a thorough multi-source
+  read).
+- Cite at least one source per claim — URL for docs/changelog, `file`
+  with a path for source. The two committed worked examples
+  (`checkpoint-rewind`, `cloud-background-agent`) are anchors for prose
+  style.
 
-The subagent's prompt should explicitly forbid:
+Forbidden:
 
 - Made-up sources.
-- Downgrading verdicts to "be safe" — the matrix authoring rule is
-  honest verdicts + caveats, not defensive `partial`s.
+- Downgrading verdicts to "be safe" — the authoring rule is honest
+  verdicts + caveats, not defensive `partial`s.
 - Reasoning purely from general LLM knowledge — every claim needs a
   primary source.
 
+If the research is broad enough to threaten your own context window,
+you MAY fan a single `general-purpose` Agent out for the docs/source
+sweep and synthesize its findings — but the verdict and the written
+artifact are yours.
+
 ### Step 5 — Synthesize + write
 
-Read the subagent's JSON. Sanity-check:
+Assemble the JSON document conforming to the "Output" schema. Sanity-check:
 
 - `schema_version: 1`.
 - `scenario_id`, `agent`, `assessed_at` correct.
@@ -314,35 +328,41 @@ Read the subagent's JSON. Sanity-check:
 - `sources` is an array with at least one entry; each entry has
   `kind`, `ref`, `note`.
 
-If any check fails, push back on the subagent (one re-roll max) or
-hand-edit before writing.
+If any check fails, fix the document before writing (re-run the
+research for the specific gap if needed).
 
 Write the final JSON to
 `replaydata/agents/<agent>/scenarios/<scenario>/assessment.json`,
 overwriting silently if a file exists. Use 2-space indent for
 readability — the viewer parses any valid JSON shape.
 
-### Step 6 — Report
+### Step 6 — Return contract
 
-Print to stdout:
+Compute `applicable` from the two verdicts — this is the signal
+`implement` keys on to decide whether to proceed:
+
+| agent_supports | irrlicht_observes | `applicable` | meaning |
+|---|---|---|---|
+| `yes` / `partial` | `yes` / `partial` | `yes`  | proceed to `implement` |
+| `no`              | (any)             | `no`   | agent lacks the feature — pipeline frozen |
+| `yes` / `partial` | `n/a` / `no`      | `n/a`  | agent has it, irrlicht can't observe it — no recording |
+| `unknown`         | (any)             | `n/a`  | inconclusive — re-assess after the gap named in `body` closes |
+
+Return ONLY this (≤5 lines), no transcripts:
 
 ```
-✓ wrote replaydata/agents/<agent>/scenarios/<scenario>/assessment.json
-  verdict: <agent_supports> / <irrlicht_observes> (confidence <n>)
-  caveats: <count>
-  sources: <count>
+verdict: <agent_supports> / <irrlicht_observes> (confidence <n>)
+applicable: yes | no | n/a
+summary: <one sentence — the load-bearing reason for the verdict>
+wrote: replaydata/agents/<agent>/scenarios/<scenario>/assessment.json
+matrix_drift: none | matrix says <old>/<old>, coverage row should update
 ```
 
-Then a transcription hint IF the new verdict differs from the matrix
-(from Step 2):
-
-```
-ⓘ matrix says <old_supports>/<old_observes>; consider updating
-  .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json -> .scenarios[<id>].coverage.<agent>
-```
-
-The matrix update is the maintainer's call — this skill never writes
-`.specs/`.
+**If `applicable` is `no` or `n/a`, stop here.** There is no recipe or
+recording follow-up — the assessment.json documents *why* the cell is
+frozen and what would unblock it. The maintainer transcribes the
+verdict into the coverage matrix; this stage never writes
+`agent-scenarios-coverage.json`.
 
 ## Column and row batch modes
 
