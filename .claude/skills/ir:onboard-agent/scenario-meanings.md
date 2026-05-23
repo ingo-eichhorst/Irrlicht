@@ -451,16 +451,16 @@ Five fields per scenario:
 
 ### background-subagent
 
-- **Essence:** Parent delegates to a background child via SendMessage and returns to `ready`; the child continues running independently without holding the parent.
-- **User-observable signal:** Parent transitions `working → ready` at turn end; child state is unchanged by parent's transition; `SubagentCount(parent)` excludes the background child.
-- **Primitive exercised:** `subagents` + background dispatch (SendMessage or equivalent) — agent can spawn a child that runs without holding the parent session open.
-- **Not to be confused with:** `foreground-subagent` — parent waits for the child before going `ready`; `background-process` — a shell process, not an agent session.
+- **Essence:** Parent dispatches a child via a fire-and-forget background primitive (SendMessage / `run_in_background`); the dispatch returns immediately and the parent finishes its own reply, but the child keeps running detached. The session stays `working` while the background child is alive and only returns to `ready` once it drains.
+- **User-observable signal:** The parent finishes its own reply but the session stays `working` as long as the background child is alive; `SubagentCount(parent)` includes the live child; the session transitions `→ ready` only after the last background child completes.
+- **Primitive exercised:** `subagents` + background dispatch (SendMessage or equivalent) — agent can spawn a child whose dispatch returns immediately without blocking the parent's reply, while the daemon holds the parent `working` on the child's liveness.
+- **Not to be confused with:** `foreground-subagent` — the parent's own reply never completes until the child returns its result inline; here the parent's reply completes but the session is still held `working` by the detached child. `background-process` — a shell process with no `session_id`, surfaced via `BackgroundProcessCount` rather than `SubagentCount`.
 - **Conceptual flow:**
   1. Parent is `working`.
-  2. Parent sends a message to a background child and ends its own turn.
-  3. Parent transitions `working → ready` at turn end.
-  4. Background child continues running independently.
-  5. Background child eventually completes; its session disappears within `readyTTL`.
+  2. Parent dispatches a background child; the dispatch returns immediately and the parent finishes its own reply.
+  3. Session stays `working` because the background child is still alive; `SubagentCount(parent)` reflects it.
+  4. Background child completes; its session disappears within `readyTTL`.
+  5. Once no background child (or process) remains, the session transitions `working → ready`.
 
 ---
 
