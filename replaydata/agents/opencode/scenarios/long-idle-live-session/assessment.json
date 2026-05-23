@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "scenario_id": "long-idle-live-session",
+  "agent": "opencode",
+  "assessed_at": "2026-05-23T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "partial",
+  "confidence": 0.8,
+  "body": "OpenCode's `opencode run --session <id>` spawns a fresh process per turn but reuses the SQLite session row. The daemon observes one continuous ses_… id across the 20s idle window even though the underlying process exits and is re-launched. Recording validates 4/4 phases (session birth, turn1 cycle, session re-emergence after idle); the second turn's working-state transition isn't always captured because opencode's per-turn process can complete inside a single classifier tick.",
+  "caveats": ["No persistent PID across turns: irrlicht's PID-liveness check doesn't apply; session continuity comes from the SQLite session table.", "Second turn may complete too quickly to observe a ready→working transition."],
+  "sources": [{"kind":"file","ref":"core/adapters/inbound/agents/opencode/agent.go","note":"ProcessOwnedStore over SQLite."}]
+}
