@@ -3539,6 +3539,54 @@
           ],
           "settings": {},
           "timeout_seconds": 90
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Unlike the headless `codex exec` path (single-shot, ends in process_exited at turn end — see the basic-turn recipe), the interactive driver keeps the rollout session ALIVE across BOTH turns; the REPL is torn down only when the script ends, so the daemon can observe the full waiting→working→ready recovery on one live session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "I want to rename a function in my project, but I haven't told you which one. Before doing anything, ask me exactly one short clarifying question — which file and which function — ending in a question mark. Output ONLY that one question and nothing else; do not start editing."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Rename the function `oldName` to `newName` in src/util.js. Just describe in one or two sentences what you would change — do NOT ask any further questions and end on a plain statement, not a question."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the first prompt is sent",
+            "events.jsonl contains a state_transition→waiting on the SAME rollout session_id when the first turn ends (the reply ends in a question mark; classifier takes the trailing-? path rather than →ready)",
+            "the waiting episode is visible and persists ≥3s — no state_transition to ready appears before the user answers",
+            "events.jsonl contains a state_transition→working on the SAME rollout session_id when the user sends the answer (waiting→working recovery)",
+            "events.jsonl contains a state_transition→ready on the SAME rollout session_id when the second turn ends with a plain non-question reply (working→ready)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session across both turns, not per-turn exits)"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
