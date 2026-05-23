@@ -357,6 +357,65 @@ func TestHandleGetSessions_AttachesGroupCosts(t *testing.T) {
 	}
 }
 
+// TestHandleGetSessions_AttachesProviderCosts verifies that /api/v1/sessions
+// surfaces the top-level provider_costs map (providerKey → timeframe → USD),
+// keyed by the row's provider rather than its project.
+func TestHandleGetSessions_AttachesProviderCosts(t *testing.T) {
+	repoDir := t.TempDir()
+	costDir := filepath.Join(t.TempDir(), "cost")
+	if err := os.MkdirAll(costDir, 0o700); err != nil {
+		t.Fatalf("mkdir cost dir: %v", err)
+	}
+
+	// Anthropic-stamped rows: $1.00 baseline (10h ago) → $1.25 now ⇒ $0.25
+	// in every trailing window.
+	now := time.Now().Unix()
+	writeCostRowWithProvider(t, costDir, "proj-a", "anthropic", now-10*3600, "sess-1", 1.00)
+	writeCostRowWithProvider(t, costDir, "proj-a", "anthropic", now-1*3600, "sess-1", 1.25)
+
+	repo := filesystem.NewWithDir(repoDir)
+	tracker := filesystem.NewCostTrackerWithDir(costDir)
+	if err := repo.Save(&session.SessionState{
+		SessionID:   "sess-1",
+		State:       session.StateReady,
+		ProjectName: "proj-a",
+		FirstSeen:   now - 10*3600,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	push := services.NewPushService()
+	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, tracker))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/sessions")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	anthropic := payload.ProviderCosts["anthropic"]
+	if anthropic == nil {
+		t.Fatalf("provider_costs missing anthropic key: %+v", payload.ProviderCosts)
+	}
+	for _, tf := range []string{"day", "week", "month", "year"} {
+		if v, ok := anthropic[tf]; !ok || v < 0.24 || v > 0.26 {
+			t.Errorf("provider_costs[anthropic][%q]: want ≈0.25, got %v (ok=%v)", tf, v, ok)
+		}
+	}
+}
+
 // TestHandleGetSessions_OmitsCostsWhenTrackerNil keeps the no-tracker path
 // honest: the response must parse cleanly and groups must not carry a
 // costs field.
@@ -391,6 +450,22 @@ func TestHandleGetSessions_OmitsCostsWhenTrackerNil(t *testing.T) {
 func writeCostRow(t *testing.T, costDir, project string, ts int64, sessionID string, cost float64) {
 	t.Helper()
 	line := fmt.Sprintf(`{"ts":%d,"project":%q,"session":%q,"cost":%g}`+"\n", ts, project, sessionID, cost)
+	path := filepath.Join(costDir, project+".jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+// writeCostRowWithProvider is writeCostRow with the provider field set, for
+// exercising the per-provider rollup surfaced as provider_costs.
+func writeCostRowWithProvider(t *testing.T, costDir, project, provider string, ts int64, sessionID string, cost float64) {
+	t.Helper()
+	line := fmt.Sprintf(`{"ts":%d,"project":%q,"provider":%q,"session":%q,"cost":%g}`+"\n", ts, project, provider, sessionID, cost)
 	path := filepath.Join(costDir, project+".jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

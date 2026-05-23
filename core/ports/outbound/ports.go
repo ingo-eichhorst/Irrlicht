@@ -135,16 +135,12 @@ type CostTracker interface {
 	// metrics or a project name.
 	RecordSnapshot(state *session.SessionState) error
 
-	// ProjectCostsInWindows returns per-timeframe cost maps in a single
-	// pass over each project file. The returned map keys mirror the
-	// caller-supplied windowSeconds keys; each inner map is projectName
-	// → USD for that window.
-	ProjectCostsInWindows(windowSeconds map[string]int64) (map[string]map[string]float64, error)
-
-	// ProviderCostsInWindows mirrors ProjectCostsInWindows but keys each
-	// inner map by billing provider ("anthropic", "openai") instead of
-	// project. Rows with no known provider are excluded.
-	ProviderCostsInWindows(windowSeconds map[string]int64) (map[string]map[string]float64, error)
+	// CostsInWindows returns per-timeframe cost maps in a single pass over
+	// each cost file. The returned map keys mirror the caller-supplied
+	// windowSeconds keys. byProject keys each inner map by projectName;
+	// byProvider keys by billing provider ("anthropic"/"openai"), excluding
+	// rows with no known provider. Both axes come from one scan.
+	CostsInWindows(windowSeconds map[string]int64) (byProject, byProvider map[string]map[string]float64, err error)
 
 	// Prune drops snapshot rows older than the given number of days.
 	// Safe to call periodically (e.g. daemon startup).

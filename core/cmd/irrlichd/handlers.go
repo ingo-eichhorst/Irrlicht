@@ -78,25 +78,17 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 }
 
 // costMaps returns the per-project and per-provider trailing-window cost maps,
-// recomputing both via the tracker when the cache is cold or stale. Either map
-// may be nil if its scan failed; callers must tolerate nil. A single per-file
-// scan of each kind keeps I/O bounded under concurrent polling.
+// recomputing both via a single tracker scan when the cache is cold or stale.
+// Either map is nil if the scan failed; callers must tolerate nil. The single
+// scan keeps I/O bounded under concurrent polling.
 func costMaps(tracker outbound.CostTracker, cache *costAttachCache) (byProject, byProvider map[string]map[string]float64) {
 	now := time.Now()
 	if p, pv, ok := cache.get(now); ok {
 		return p, pv
 	}
-	p, err := tracker.ProjectCostsInWindows(costTimeframeSeconds)
+	p, pv, err := tracker.CostsInWindows(costTimeframeSeconds)
 	if err != nil {
 		return nil, nil
-	}
-	pv, err := tracker.ProviderCostsInWindows(costTimeframeSeconds)
-	if err != nil {
-		// Don't cache a failed provider scan as authoritative — serve the
-		// project costs for this request but leave the cache cold so the
-		// next request retries the provider scan, instead of suppressing
-		// provider_costs for the whole TTL after one transient error.
-		return p, nil
 	}
 	cache.put(now, p, pv)
 	return p, pv
