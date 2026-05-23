@@ -52,12 +52,17 @@ func TestDaemonStartupSmoke(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start daemon: %v", err)
 	}
-	// Backstop: kill the child if anything below fails before SIGTERM.
-	killed := false
+	// A single reaper goroutine owns cmd.Wait(); the backstop and the SIGTERM
+	// path coordinate through `exited` rather than calling Wait themselves, so
+	// Wait is never invoked twice (which `go test -race` flags as "Wait was
+	// already called").
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	stopped := false
+	stop := func() { _ = cmd.Process.Kill(); <-exited }
 	defer func() {
-		if !killed {
-			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+		if !stopped {
+			stop()
 		}
 	}()
 	dumpLogsOnFail(t, homeDir)
@@ -78,12 +83,25 @@ func TestDaemonStartupSmoke(t *testing.T) {
 	}}
 	assertAgentsEndpoint(t, unixClient, "http://unix/api/v1/agents")
 
-	// 3. Clean shutdown on SIGTERM.
+	// Drop client-side keep-alive conns so the daemon's graceful shutdown isn't
+	// waiting on them, then SIGTERM and confirm a clean exit.
+	http.DefaultClient.CloseIdleConnections()
+	unixClient.CloseIdleConnections()
+
+	// 3. Clean shutdown on SIGTERM. The timeout exceeds the daemon's own 5s
+	// graceful-shutdown budget so a clean (but not instant) shutdown isn't
+	// mistaken for a hang.
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)
 	}
-	waitExit(t, cmd, 3*time.Second)
-	killed = true
+	select {
+	case <-exited:
+	case <-time.After(6 * time.Second):
+		stop()
+		stopped = true
+		t.Fatalf("daemon did not exit within 6s of SIGTERM")
+	}
+	stopped = true
 	if _, err := os.Stat(addrPath); !os.IsNotExist(err) {
 		t.Errorf("addr file %s should be removed after shutdown, stat err = %v", addrPath, err)
 	}
@@ -146,20 +164,6 @@ func assertAgentsEndpoint(t *testing.T, client *http.Client, url string) {
 		if got[i] != want[i] {
 			t.Fatalf("GET %s agent names = %v, want %v", url, got, want)
 		}
-	}
-}
-
-// waitExit fails the test if the daemon doesn't exit within timeout.
-func waitExit(t *testing.T, cmd *exec.Cmd, timeout time.Duration) {
-	t.Helper()
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case <-done:
-		// Exited (a non-nil error from the signal-terminated process is fine).
-	case <-time.After(timeout):
-		_ = cmd.Process.Kill()
-		t.Fatalf("daemon did not exit within %s of SIGTERM", timeout)
 	}
 }
 
