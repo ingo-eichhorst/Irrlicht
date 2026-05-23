@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "scenario_id": "session-end",
+  "agent": "codex",
+  "assessed_at": "2026-05-23T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "partial",
+  "confidence": 0.85,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: partial\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. For the codex adapter, irrlicht observes variant 1 cleanly — the rollout-keyed session is born in ready, the turn completes, and process_exited fires after the working window closes. Variants 2 and 3 are NOT currently observable end-to-end because codex's headless `codex exec` is single-shot (every invocation IS variant 1) and the codex interactive driver does not currently expose `sigkill` / `restart` / `exit_clean` step types — claudecode's interactive driver is the only one that does.\n\nBoth invariants asserted by variant 1 hold in the recording: process_exited fires within ~4.4 s of session birth, and no transition to waiting appears anywhere in the window.",
+  "caveats": [
+    "Variants 2 and 3 unobservable: would need a driver-level sigkill primitive added to drive-codex-interactive.sh (similar to drive-claudecode-interactive.sh's step_sigkill).",
+    "The recording does not show explicit working→ready transitions for the rollout session because codex's reply was extremely short (one token) and may have completed inside a single classifier tick. The session_birth phase still passes because the proc-<PID> pre-session row covers session birth, and the v1_exit phase still passes because process_exited fires cleanly."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/agent.go",
+      "note": "Codex adapter declaration."
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+      "note": "Confirmed only send/wait_turn/sleep/interrupt step types are handled."
+    }
+  ]
+}

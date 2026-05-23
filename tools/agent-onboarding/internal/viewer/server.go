@@ -15,6 +15,7 @@ package viewer
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -411,7 +412,11 @@ func annotateMeasurements(b []byte, repoRoot string) []byte {
 			if !ok {
 				continue
 			}
-			cell["measurement"] = measureScenario(repoRoot, agentSlug, sid, recipes)
+			folder := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+			if folder == "" {
+				folder = sid
+			}
+			cell["measurement"] = measureScenario(repoRoot, agentSlug, folder)
 		}
 	}
 	out, err := json.Marshal(top)
@@ -429,11 +434,7 @@ func annotateMeasurements(b []byte, repoRoot string) []byte {
 // while replaydata folders use the recipe `name` (e.g. "interrupted-turn").
 // scenarios.json carries the mapping; we resolve it here so the matrix's
 // scenario id is the only thing the caller needs to know.
-func measureScenario(repoRoot, agent, scenarioID string, recipes map[string]recipeEntry) map[string]any {
-	folder := resolveScenarioFolderFromMap(recipes, scenarioID)
-	if folder == "" {
-		folder = scenarioID // try the coverage id directly as a last resort
-	}
+func measureScenario(repoRoot, agent, folder string) map[string]any {
 	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
 	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err != nil {
 		return map[string]any{"status": "no_recording"}
@@ -500,17 +501,18 @@ func annotatePipelineState(b []byte, repoRoot string) []byte {
 		if !ok {
 			continue
 		}
-		// Resolve the scenario folder name once (coverage_id may diverge
-		// from the scenarios.json `name`, e.g. user-esc-interrupt vs
-		// interrupted-turn).
-		folder := resolveScenarioFolderFromMap(recipes, sid)
-		if folder == "" {
-			folder = sid
-		}
 		for agentSlug, cellRaw := range coverage {
 			cell, ok := cellRaw.(map[string]any)
 			if !ok {
 				continue
+			}
+			// Resolve the scenario folder name PER AGENT — coverage_id
+			// collisions (e.g. user-esc-interrupt mapped by both
+			// interrupted-turn and user-esc-interrupt) need the agent's
+			// own canonical folder, not a global one.
+			folder := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+			if folder == "" {
+				folder = sid
 			}
 			cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, folder, recipes)
 		}
@@ -533,11 +535,30 @@ type recipeEntry struct {
 	}
 }
 
+// recipeIndex is the result of one scenarios.json read. Holds both the
+// canonical recipe-per-coverage-id map (used for recipe step counts /
+// adapter applicability) and a per-(agent, coverage_id) folder lookup.
+// Two scenarios.json entries may share a coverage_id while covering
+// disjoint sets of agents (e.g. "interrupted-turn" → codex/pi/aider and
+// "user-esc-interrupt" → claudecode both have coverage_id
+// user-esc-interrupt). The canonical entry alone can't pick the right
+// replaydata folder for each agent — folderByAgent does.
+type recipeIndex struct {
+	canonical     map[string]recipeEntry       // coverageID → canonical recipe
+	folderByAgent map[string]map[string]string // [coverageID][agent] → folder name
+	byName        map[string]recipeEntry       // scenario name → recipe (for per-agent recipe lookups)
+}
+
 // loadRecipeMap reads .claude/skills/ir:onboard-agent/scenarios.json
-// once per request and returns a coverageID-keyed lookup. Missing or
-// malformed file → empty map; callers tolerate "no recipe authored."
-func loadRecipeMap(repoRoot string) map[string]recipeEntry {
-	out := map[string]recipeEntry{}
+// once per request and returns a coverageID-keyed lookup plus a
+// per-(agent, coverage_id) folder map. Missing or malformed file →
+// empty index; callers tolerate "no recipe authored."
+func loadRecipeMap(repoRoot string) recipeIndex {
+	out := recipeIndex{
+		canonical:     map[string]recipeEntry{},
+		folderByAgent: map[string]map[string]string{},
+		byName:        map[string]recipeEntry{},
+	}
 	path := filepath.Join(repoRoot, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -561,6 +582,21 @@ func loadRecipeMap(repoRoot string) map[string]recipeEntry {
 		if cid == "" {
 			cid = sc.Name
 		}
+		// Per-agent folder: for each agent this entry declares, prefer
+		// the entry whose own folder has expected.jsonl FOR THAT AGENT.
+		// If none does, the first entry wins.
+		if _, ok := out.folderByAgent[cid]; !ok {
+			out.folderByAgent[cid] = map[string]string{}
+		}
+		for agent := range sc.ByAdapter {
+			hasSpec := agentHasExpectedJSONL(repoRoot, agent, sc.Name)
+			cur, set := out.folderByAgent[cid][agent]
+			if !set {
+				out.folderByAgent[cid][agent] = sc.Name
+			} else if hasSpec && !agentHasExpectedJSONL(repoRoot, agent, cur) {
+				out.folderByAgent[cid][agent] = sc.Name
+			}
+		}
 		// Multiple scenarios may share a coverage_id (e.g. basic-turn is
 		// targeted by both basic-turn and multi-turn-conversation).
 		// Prefer the entry whose folder has on-disk artifacts
@@ -568,7 +604,8 @@ func loadRecipeMap(repoRoot string) map[string]recipeEntry {
 		// canonical recording rather than whichever happened to be
 		// listed last in the file.
 		incoming := recipeEntry{Name: sc.Name, CoverageID: cid, ByAdapter: sc.ByAdapter}
-		if existing, dup := out[cid]; dup {
+		out.byName[sc.Name] = incoming
+		if existing, dup := out.canonical[cid]; dup {
 			incomingHasSpec := hasExpectedJSONL(repoRoot, sc.Name)
 			existingHasSpec := hasExpectedJSONL(repoRoot, existing.Name)
 			// Keep existing unless the incoming candidate is strictly
@@ -577,9 +614,18 @@ func loadRecipeMap(repoRoot string) map[string]recipeEntry {
 				continue
 			}
 		}
-		out[cid] = incoming
+		out.canonical[cid] = incoming
 	}
 	return out
+}
+
+// agentHasExpectedJSONL reports whether
+// replaydata/agents/<agent>/scenarios/<scenarioName>/expected.jsonl
+// exists for one specific agent. Tighter than hasExpectedJSONL, which
+// checks across all agents.
+func agentHasExpectedJSONL(repoRoot, agent, scenarioName string) bool {
+	_, err := os.Stat(filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", scenarioName, "expected.jsonl"))
+	return err == nil
 }
 
 // hasExpectedJSONL reports whether any agent's scenario folder for the
@@ -605,23 +651,47 @@ func hasExpectedJSONL(repoRoot, scenarioName string) bool {
 
 // resolveScenarioFolderFromMap is the in-memory equivalent of
 // resolveScenarioFolder: avoids re-reading scenarios.json N×M times in
-// the catalog walker.
-func resolveScenarioFolderFromMap(m map[string]recipeEntry, coverageID string) string {
-	if e, ok := m[coverageID]; ok {
+// the catalog walker. Returns the canonical folder; for per-agent
+// resolution (preferred when two scenarios share a coverage_id but
+// cover different agents) use resolveScenarioFolderForAgent.
+func resolveScenarioFolderFromMap(idx recipeIndex, coverageID string) string {
+	if e, ok := idx.canonical[coverageID]; ok {
 		return e.Name
+	}
+	return ""
+}
+
+// resolveScenarioFolderForAgent returns the replaydata folder name for
+// one (agent, coverage_id) pair, preferring the folder whose
+// replaydata/agents/<agent>/scenarios/<folder>/expected.jsonl exists.
+// Returns "" when the agent is not declared by any scenarios.json entry
+// under this coverage_id — callers should then fall back to the
+// coverage_id directly rather than reading some unrelated agent's
+// canonical folder.
+func resolveScenarioFolderForAgent(idx recipeIndex, agent, coverageID string) string {
+	if perAgent, ok := idx.folderByAgent[coverageID]; ok {
+		if folder, ok := perAgent[agent]; ok {
+			return folder
+		}
 	}
 	return ""
 }
 
 // pipelineForCell computes the recipe/spec/recordings status for one
 // (agent, scenario) cell.
-func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes map[string]recipeEntry) map[string]any {
+func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes recipeIndex) map[string]any {
 	out := map[string]any{}
 
 	// Recipe — present if scenarios.json has a per-adapter entry AND
 	// (applicable is nil OR true). applicable=false explicitly marks
-	// the cell N/A even when an entry exists.
-	rec := recipes[coverageID]
+	// the cell N/A even when an entry exists. Prefer the recipe entry
+	// whose name matches the per-agent canonical folder, so multi-entry
+	// coverage_ids (e.g. interrupted-turn vs user-esc-interrupt) report
+	// the recipe that actually produced the agent's recording.
+	rec, ok := recipes.byName[folder]
+	if !ok {
+		rec = recipes.canonical[coverageID]
+	}
 	recipeAuthored := false
 	stepCount := 0
 	if rec.ByAdapter != nil {
@@ -930,13 +1000,22 @@ func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 	w.Write(deduped)
 }
 
-// dedupeRecipesByCoverageID parses scenarios.json's `scenarios` array,
-// drops shadowed entries that share a coverage_id, and returns the
-// re-serialized document. Preference order on collision: the entry
-// whose scenario name has an expected.jsonl on disk wins. Ties
-// resolved by first-occurrence order in the file. Non-`scenarios`
-// fields (like `orchestrator_scenarios`) are passed through
-// untouched.
+// dedupeRecipesByCoverageID parses scenarios.json's `scenarios` array
+// and collapses entries sharing a coverage_id into one merged entry,
+// then returns the re-serialized document. Non-`scenarios` fields
+// (like `orchestrator_scenarios`) are passed through untouched.
+//
+// Merge rules for a (coverage_id) collision:
+//   - The "primary" entry — whose top-level fields (name, description,
+//     verify, requires, …) the merged entry inherits — is the one with
+//     an on-disk expected.jsonl, tiebreaking on first-occurrence order.
+//   - by_adapter is merged per-agent: for each agent declared by any
+//     entry, the agent's block comes from the scenario whose folder
+//     has expected.jsonl FOR THAT AGENT. This makes coverage_id
+//     collisions where two entries cover different agents (e.g.
+//     interrupted-turn for codex/pi/aider + user-esc-interrupt for
+//     claudecode) carry both agents' canonical recipes through to the
+//     client.
 func dedupeRecipesByCoverageID(raw []byte, repoRoot string) ([]byte, error) {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -950,52 +1029,110 @@ func dedupeRecipesByCoverageID(raw []byte, repoRoot string) ([]byte, error) {
 	if err := json.Unmarshal(scenariosRaw, &scenarios); err != nil {
 		return nil, err
 	}
-	// Identify shadowed indices.
+	// First pass: identify the primary entry index for each coverage_id
+	// (the one whose top-level fields the merged entry will inherit).
 	type slot struct {
 		index int
 		name  string
 	}
-	winners := map[string]slot{} // coverage_id -> chosen slot
-	type entryHeader struct {
-		Name       string `json:"name"`
-		CoverageID string `json:"coverage_id"`
-	}
-	keepIdx := make([]bool, len(scenarios))
-	for i := range scenarios {
-		keepIdx[i] = true
-	}
+	primary := map[string]slot{}
+	headers := make([]entryHeader, len(scenarios))
+	cids := make([]string, len(scenarios))
 	for i, sc := range scenarios {
 		var h entryHeader
 		if err := json.Unmarshal(sc, &h); err != nil {
 			continue
 		}
+		headers[i] = h
 		cid := h.CoverageID
 		if cid == "" {
 			cid = h.Name
 		}
+		cids[i] = cid
 		if cid == "" {
 			continue
 		}
-		if existing, dup := winners[cid]; dup {
+		if existing, dup := primary[cid]; dup {
 			incomingHas := hasExpectedJSONL(repoRoot, h.Name)
 			existingHas := hasExpectedJSONL(repoRoot, existing.name)
 			if incomingHas && !existingHas {
-				// Incoming is strictly better — drop the existing one.
-				keepIdx[existing.index] = false
-				winners[cid] = slot{index: i, name: h.Name}
-			} else {
-				// Keep the existing; drop incoming.
-				keepIdx[i] = false
+				primary[cid] = slot{index: i, name: h.Name}
 			}
 			continue
 		}
-		winners[cid] = slot{index: i, name: h.Name}
+		primary[cid] = slot{index: i, name: h.Name}
 	}
-	filtered := make([]json.RawMessage, 0, len(scenarios))
-	for i, sc := range scenarios {
-		if keepIdx[i] {
-			filtered = append(filtered, sc)
+	// Second pass: for each coverage_id, build the merged by_adapter
+	// from all sibling entries, picking per-agent the entry whose
+	// folder has expected.jsonl for that agent.
+	mergedByAdapter := map[string]map[string]json.RawMessage{}
+	for i, cid := range cids {
+		if cid == "" {
+			continue
 		}
+		var sc struct {
+			ByAdapter map[string]json.RawMessage `json:"by_adapter"`
+		}
+		if err := json.Unmarshal(scenarios[i], &sc); err != nil {
+			continue
+		}
+		if _, ok := mergedByAdapter[cid]; !ok {
+			mergedByAdapter[cid] = map[string]json.RawMessage{}
+		}
+		for agent, block := range sc.ByAdapter {
+			cur, set := mergedByAdapter[cid][agent]
+			if !set {
+				mergedByAdapter[cid][agent] = block
+				continue
+			}
+			// Find current source — replace only when incoming wins.
+			incomingFolder := headers[i].Name
+			currentFolder := folderForByAdapter(scenarios, headers, cid, agent, cur)
+			if agentHasExpectedJSONL(repoRoot, agent, incomingFolder) &&
+				!agentHasExpectedJSONL(repoRoot, agent, currentFolder) {
+				mergedByAdapter[cid][agent] = block
+			}
+		}
+	}
+	// Third pass: emit one entry per coverage_id (the primary), with
+	// by_adapter rewritten to the merged map. Non-primary indices are
+	// dropped.
+	emitted := map[string]bool{}
+	filtered := make([]json.RawMessage, 0, len(primary))
+	for i, sc := range scenarios {
+		cid := cids[i]
+		if cid == "" {
+			// Pass through entries without a coverage_id.
+			filtered = append(filtered, sc)
+			continue
+		}
+		p, ok := primary[cid]
+		if !ok || p.index != i || emitted[cid] {
+			continue
+		}
+		emitted[cid] = true
+		// Rewrite by_adapter with the merged map.
+		var entry map[string]json.RawMessage
+		if err := json.Unmarshal(sc, &entry); err != nil {
+			filtered = append(filtered, sc)
+			continue
+		}
+		if merged, ok := mergedByAdapter[cid]; ok && len(merged) > 0 {
+			b, err := json.Marshal(merged)
+			if err != nil {
+				// Marshal failure would silently fall back to the primary's
+				// original by_adapter, hiding sibling agents the merge added.
+				// Fail loudly so the maintainer sees the regression.
+				return nil, fmt.Errorf("marshal merged by_adapter for coverage_id=%q: %w", cid, err)
+			}
+			entry["by_adapter"] = b
+		}
+		rewritten, err := json.Marshal(entry)
+		if err != nil {
+			filtered = append(filtered, sc)
+			continue
+		}
+		filtered = append(filtered, rewritten)
 	}
 	newScenarios, err := json.Marshal(filtered)
 	if err != nil {
@@ -1003,6 +1140,40 @@ func dedupeRecipesByCoverageID(raw []byte, repoRoot string) ([]byte, error) {
 	}
 	doc["scenarios"] = newScenarios
 	return json.Marshal(doc)
+}
+
+// folderForByAdapter finds which scenario name (folder) supplied the
+// given by_adapter block for one (coverage_id, agent) cell during
+// merging. Used to compare current vs. incoming sources by their
+// per-agent expected.jsonl presence.
+func folderForByAdapter(scenarios []json.RawMessage, headers []entryHeader, cid, agent string, block json.RawMessage) string {
+	for i, h := range headers {
+		hcid := h.CoverageID
+		if hcid == "" {
+			hcid = h.Name
+		}
+		if hcid != cid {
+			continue
+		}
+		var sc struct {
+			ByAdapter map[string]json.RawMessage `json:"by_adapter"`
+		}
+		if err := json.Unmarshal(scenarios[i], &sc); err != nil {
+			continue
+		}
+		if b, ok := sc.ByAdapter[agent]; ok && bytes.Equal(b, block) {
+			return h.Name
+		}
+	}
+	return ""
+}
+
+// entryHeader is the slim header fields parsed from each scenarios.json
+// entry. Re-declared at package scope so folderForByAdapter can take a
+// slice of them.
+type entryHeader struct {
+	Name       string `json:"name"`
+	CoverageID string `json:"coverage_id"`
 }
 
 // resolveCoveragePath finds the maintainer's
