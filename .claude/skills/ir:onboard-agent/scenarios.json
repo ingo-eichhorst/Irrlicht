@@ -288,7 +288,38 @@
           "timeout_seconds": 180
         },
         "codex": {
-          "prompt": "Run the shell command 'echo hello', then reply 'done'.",
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'echo hello' using your shell tool, then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the tool-using prompt is sent, sustained across the tool call",
+            "transcript.jsonl contains a function_call / function_call_output pair for the shell command (the auto-executed tool call)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the tool resolves and the turn completes",
+            "no state_transition to waiting appears for the rollout session at any point (codex has no permission gate)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+          ],
           "settings": {},
           "timeout_seconds": 240
         },
