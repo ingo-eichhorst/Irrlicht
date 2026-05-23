@@ -2840,6 +2840,10 @@
         "claudecode": {
           "applicable": false,
           "reason": "current driver supports one tmux session at a time; multi-pane orchestration of two concurrent `claude` processes in the same cwd needs a driver extension (named-target send/wait_turn). Agent and irrlicht both support the capability as-shipped; only the recording rig is missing."
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "driver_gap (assessment 2026-05-23: agent_supports=yes, irrlicht_observes=yes, confidence 0.9 — capability fully supported, only the recording rig is missing). The codex interactive driver (scripts/drive-codex-interactive.sh) launches a single tmux/codex process per run; every step type (send/wait_turn/interrupt/keys/sleep/reset_session/fork/exit_clean/resume) operates on one $SESSION. There is no concurrent-second-session primitive (parallel_session / tmux_split) to spawn a SECOND codex in the same cwd while the first stays alive and route send/wait_turn to a named target. The driver's session.uuids/transcript.paths lists capture SERIAL /clear+/fork session swaps within one process, NOT two concurrently-live processes — so the PID-cwd disambiguation this scenario exercises (two simultaneous rollouts the daemon splits via codex DiscoverPIDByTranscriptWriter, binding each session to the PID holding ITS rollout open) cannot be elicited as-shipped. Codex (FilesUnderRoot, fresh Parser{} per rollout, mints its own UUID) and irrlicht both support the capability; only the multi-process recording rig is missing. expected.jsonl is preserved as the documented forward-compatible target. Same blocker as the claudecode cell. See replaydata/agents/codex/scenarios/multiple-sessions-same-cwd/assessment.json."
         }
       }
     },
