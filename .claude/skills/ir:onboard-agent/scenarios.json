@@ -2420,6 +2420,46 @@
           ],
           "settings": {},
           "timeout_seconds": 600
+        },
+        "codex": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "No auto-mode step is needed: codex has no permission gate (capabilities.json permission_hooks:false), so the shell tool runs every command autonomously inside codex's sandbox — this is exactly why codex can capture the REAL many-tool-call single-turn burst, whereas the claudecode recipe for this scenario must fall back to 4 plain prompts (modern claudecode refuses auto-mode for paid models and stalls tool-call turns at a permission gate)",
+            "The prompt is fully self-contained — it tells codex to CREATE its own files and then run many commands on them, so the per-run cwd starting empty doesn't shrink the burst (an early attempt that only said 'ls then wc the existing files' produced just 2 calls because the fresh cwd had nothing to wc)",
+            "wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn; the timeout is generous because this is a deliberately LONG turn"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do all of the following in THIS single turn, using your shell tool, running each as a SEPARATE command one at a time (do not combine them, do not write a script, do not ask me anything): 1) run `pwd`; 2) create three files with `printf 'line1\\nline2\\nline3\\n' > a.txt`, then `printf 'x\\ny\\n' > b.txt`, then `seq 1 20 > c.txt` (three separate commands); 3) run `ls -la`; 4) run `wc -l a.txt`, then `wc -l b.txt`, then `wc -l c.txt` (three separate commands); 5) run `cat a.txt`; 6) run `head -3 c.txt`; then finally summarize in one short paragraph how many lines each file had. Run every numbered command individually so I can see each one execute."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains exactly one state_transition→working on the rollout session_id when the prompt is sent (start of the agentic burst)",
+            "transcript.jsonl contains MANY function_call / function_call_output pairs in the single turn (at least 5: pwd, ls -la, and ≥3 wc -l calls) — the high-volume burst",
+            "across the entire turn, NO state_transition to ready fires between successive function_call/function_call_output pairs (one contiguous working span, no flicker mid-burst)",
+            "across the entire turn, NO state_transition to waiting fires (codex has no permission gate; every command auto-executes)",
+            "events.jsonl contains exactly one state_transition→ready on the rollout session_id once the final tool call resolves and task_complete fires (turn end)",
+            "final session state is ready (not stuck working)",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
