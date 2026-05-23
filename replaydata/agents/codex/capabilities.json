@@ -16,7 +16,7 @@
     "streaming_output": "unknown",
     "structured_output_jsonl": true,
     "slash_commands": true,
-    "plan_mode": "unknown",
+    "plan_mode": true,
     "git_integration": "unknown",
     "multi_model_orchestration": true,
     "repo_map": "unknown",
