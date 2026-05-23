@@ -2823,6 +2823,10 @@
         "claudecode": {
           "applicable": false,
           "reason": "requires a second agent CLI (codex/pi) running in parallel; current driver orchestrates one CLI at a time. The matrix pairs this cell to both claudecode and codex adapters — once the cross-adapter driver exists, a single recording satisfies both rows."
+        },
+        "codex": {
+          "applicable": false,
+          "notes": "driver_gap (assessment 2026-05-23: agent_supports=yes, irrlicht_observes=yes, confidence 0.85 — capability fully supported, only the recording rig is missing). Requires concurrent multi-adapter driving: a codex session AND a second, different-adapter session (claudecode/pi/aider) live in the SAME cwd at once. run-cell.sh takes a single <adapter> argument and dispatches to exactly one drive-<adapter>.sh driver — there is no flag, step type, or parallel mode to launch + drive a foreign adapter alongside codex within one cell recording, and no cross-adapter harness exists. The daemon DOES label each adapter independently as-shipped: codex registers Process.Match=ExactName{Name:\"codex\"} and Source=FilesUnderRoot{Dir:\".codex/sessions\"} (agent.go/adapter.go), disjoint from claudecode's matcher and ~/.claude/projects/ root, so per-(adapter,session_id) state and metrics fall out of the maps.go projections with no cross-contamination. Only the multi-adapter recording rig is missing. expected.jsonl is preserved as the documented forward-compatible target. Same blocker as the claudecode cell — once the driver gains a paired-adapter step type, a single recording satisfies both rows. See replaydata/agents/codex/scenarios/multiple-agents-same-workspace/assessment.json."
         }
       }
     },
