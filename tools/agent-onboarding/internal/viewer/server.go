@@ -25,6 +25,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -78,7 +79,17 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// staticHandler serves the embedded web/ tree at /.
+// staticHandler serves the viewer SPA from the embedded web/ tree at /,
+// falling back to the on-disk dashboard tree (platforms/web/) for any
+// path the embedded tree doesn't carry.
+//
+// The /dashboard iframe loads platforms/web/index.html, whose assets are
+// referenced relatively (irrlicht.css/js, split out in #418), so the
+// browser requests them at the server root — e.g. GET /irrlicht.css.
+// Serving platforms/web/ as a fallback resolves the whole sibling set
+// without hardcoding asset names, mirroring how the production daemon
+// serves that directory. Embedded wins on overlap (e.g. index.html) so
+// the viewer's own SPA is never shadowed.
 func (s *Server) staticHandler() http.Handler {
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -87,7 +98,29 @@ func (s *Server) staticHandler() http.Handler {
 			http.Error(w, "embedded UI unavailable", http.StatusInternalServerError)
 		})
 	}
-	return http.FileServerFS(sub)
+	embedded := http.FileServerFS(sub)
+	disk := http.FileServer(http.Dir(filepath.Join(s.RepoRoot, "platforms", "web")))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if embeddedHas(sub, r.URL.Path) {
+			embedded.ServeHTTP(w, r)
+			return
+		}
+		disk.ServeHTTP(w, r)
+	})
+}
+
+// embeddedHas reports whether the embedded viewer FS carries a regular
+// file for urlPath (root maps to index.html). Used to give the embedded
+// SPA priority over the on-disk platforms/web/ fallback. http.Dir in the
+// disk handler guards traversal independently, so this only decides which
+// tree wins, not access control.
+func embeddedHas(fsys fs.FS, urlPath string) bool {
+	name := strings.TrimPrefix(path.Clean(urlPath), "/")
+	if name == "" || name == "." {
+		name = "index.html"
+	}
+	info, err := fs.Stat(fsys, name)
+	return err == nil && !info.IsDir()
 }
 
 // handleCatalog serves the maintainer-curated scenario coverage

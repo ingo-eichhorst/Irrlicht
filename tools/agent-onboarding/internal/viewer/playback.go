@@ -465,14 +465,10 @@ func (m *PlaybackManager) registerPlaybackRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/stream", m.hub.ServeWS)
 
 	mux.HandleFunc("GET /dashboard", m.handleDashboard)
-
-	// Dashboard sibling assets. index.html references irrlicht.css/js
-	// relatively (split out of the former inline <style>/<script> in
-	// #418), so the iframe requests them at the server root. Serve them
-	// from <repoRoot>/platforms/web/ — mirroring handleDashboard's
-	// read-from-disk approach — or the preview renders unstyled.
-	mux.HandleFunc("GET /irrlicht.css", m.handleWebAsset)
-	mux.HandleFunc("GET /irrlicht.js", m.handleWebAsset)
+	// The dashboard's sibling assets (irrlicht.css/js, referenced
+	// relatively from index.html since #418) are served by the "/"
+	// catch-all's platforms/web/ fallback in Server.staticHandler — no
+	// per-asset route needed here.
 }
 
 type startReq struct {
@@ -715,17 +711,6 @@ func (m *PlaybackManager) handleDashboard(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))
-}
-
-// handleWebAsset serves a sibling of the dashboard's index.html (e.g.
-// irrlicht.css, irrlicht.js) from <repoRoot>/platforms/web/. Reads from
-// disk at request time like handleDashboard so a `git pull` Just Works.
-// filepath.Base pins the request to a single file under platforms/web/,
-// so the fixed-path routes can never traverse out of that directory;
-// http.ServeFile sets Content-Type from the extension and 404s a miss.
-func (m *PlaybackManager) handleWebAsset(w http.ResponseWriter, r *http.Request) {
-	name := filepath.Base(r.URL.Path)
-	http.ServeFile(w, r, filepath.Join(m.repoRoot, "platforms", "web", name))
 }
 
 // handleDiag returns the recent broadcast log captured by the

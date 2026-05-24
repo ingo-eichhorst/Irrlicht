@@ -49,6 +49,9 @@ test dashboard
 	os.WriteFile(filepath.Join(dashboardDir, "index.html"), []byte(indexHTML), 0o644)
 	os.WriteFile(filepath.Join(dashboardDir, "irrlicht.css"), []byte(":root{--marker:css}"), 0o644)
 	os.WriteFile(filepath.Join(dashboardDir, "irrlicht.js"), []byte("export const marker = 'js';"), 0o644)
+	// An arbitrarily-named sibling: the viewer serves platforms/web/ as a
+	// fallback, so any dashboard asset resolves — not just irrlicht.css/js.
+	os.WriteFile(filepath.Join(dashboardDir, "vendor.css"), []byte(".vendor{--marker:vendor}"), 0o644)
 	return root
 }
 
@@ -112,9 +115,10 @@ func TestPlayback_startEndToEnd(t *testing.T) {
 }
 
 // TestPlayback_servesDashboardAssets guards #459: the dashboard's
-// index.html references irrlicht.css/js relatively, so the viewer must
-// serve those siblings from platforms/web/ or the recording preview
-// renders unstyled (the iframe 404s the assets).
+// index.html references its assets relatively, so the viewer must serve
+// the platforms/web/ siblings or the recording preview renders unstyled
+// (the iframe 404s the assets). The vendor.css case proves the fallback
+// resolves any sibling, not just the irrlicht.css/js pair.
 func TestPlayback_servesDashboardAssets(t *testing.T) {
 	root := fixtureRoot(t)
 	s := &Server{RepoRoot: root}
@@ -127,6 +131,7 @@ func TestPlayback_servesDashboardAssets(t *testing.T) {
 	}{
 		{"/irrlicht.css", "--marker:css", "text/css"},
 		{"/irrlicht.js", "marker = 'js'", "javascript"},
+		{"/vendor.css", "--marker:vendor", "text/css"},
 	}
 	for _, tc := range cases {
 		rr := httptest.NewRecorder()
@@ -141,6 +146,18 @@ func TestPlayback_servesDashboardAssets(t *testing.T) {
 		if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, tc.wantCTParts) {
 			t.Errorf("%s: Content-Type=%q want substring %q", tc.path, ct, tc.wantCTParts)
 		}
+	}
+
+	// The platforms/web/ fallback must not shadow the embedded viewer SPA:
+	// GET / serves the embedded index.html (the Recording Viewer), never
+	// the fixture's platforms/web/index.html "test dashboard" marker.
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /: status=%d", rr.Code)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "Recording Viewer") || strings.Contains(body, "test dashboard") {
+		t.Errorf("GET / should serve the embedded viewer SPA, not the dashboard fixture: %.120q", body)
 	}
 }
 
