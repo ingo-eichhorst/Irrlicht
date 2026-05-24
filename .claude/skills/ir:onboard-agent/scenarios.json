@@ -1734,19 +1734,79 @@
             "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
           ],
           "setup": [
-            "Create an empty cwd under <staging>/cwd/"
+            "Driver creates 3 fresh cwds under <staging>/cwd, cwd-2, cwd-3 (one per variant); codex caches trust per directory, so each restart's fresh cwd shows its own trust dialog the driver auto-accepts",
+            "Codex assigns its own session_id per rollout — there is no preferred-UUID handoff like claudecode"
           ],
-          "prompt": "Reply with exactly the word: ok",
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "exit_clean"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "restart"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "restart"
+            },
+            {
+              "type": "send",
+              "text": "Write a 200 word essay about the history of coffee."
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
           "verify": [
-            "events.jsonl contains a presession_created and a transcript_new for the rollout session",
-            "events.jsonl contains a state_transition to ready, then working (during the turn), then ready (turn complete)",
-            "events.jsonl contains a process_exited fired AFTER the final ready (clean exit at end of headless invocation)",
-            "no state_transition to working or waiting between the final ready and process_exited",
-            "final session state is ready (before exit)"
+            "events.jsonl contains exactly 3 distinct rollout session_ids (one per variant) plus their proc-<PID> pre-session rows",
+            "events.jsonl contains exactly 3 process_exited events, one per session_id",
+            "variant 1: the first session has a state_transition to ready right after its turn completes, immediately preceding its process_exited (clean Ctrl-D exit)",
+            "variant 2: the second session ends in ready (idle) when sigkill fires; no state_transition to working appears after its final ready",
+            "variant 3: the third session is in working when sigkill fires; irrlichd's sweep-promotes-to-ready behavior may or may not produce a working→ready transition before process_exited, depending on the 8 s tail window — accept either shape",
+            "the state band in the viewer shows three colored arcs separated by grey gaps where no session is alive between variants"
           ],
           "settings": {},
-          "timeout_seconds": 120,
-          "scope_note": "Codex's headless `codex exec` is single-shot, so only variant 1 (clean exit) is recorded. Variants 2 (SIGKILL idle) and 3 (SIGKILL mid-turn) require driver-level primitives the codex interactive driver does not currently expose."
+          "timeout_seconds": 300,
+          "scope_note": "All three variants are recorded back-to-back via drive-codex-interactive.sh: (1) clean Ctrl-D exit after a no-op turn, (2) SIGKILL while idle in ready, (3) SIGKILL mid-turn while still working. restart starts a fresh codex (new rollout, fresh cwd) between variants; sigkill targets the daemon's PID directly (the rollout's lsof write-FD holder, per codex/pid.go) since codex's uniform argv has no per-session marker to pgrep. Variant 3 sleeps 5 s before the kill (vs claudecode's 2 s): codex's ready→working promotion lags ~2.7 s behind first activity, so a 2 s window kills BEFORE working is observed and the variant collapses to ready→process_exited. 5 s clears the promotion latency while staying mid-essay."
         },
         "pi": {
           "applicable": true,

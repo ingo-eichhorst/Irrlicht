@@ -40,6 +40,14 @@
 #                two process lifetimes (verified empirically), so the
 #                session identity is kept unchanged — no new slot is
 #                allocated for the resumed half.
+#   sigkill    — kill -9 the active session's codex PID (abrupt teardown,
+#                no rollout flush). Codex argv is uniform, so we can't
+#                pgrep by session like claudecode does with --session-id;
+#                instead we target the daemon's PID directly — the process
+#                holding the rollout open for writing (see codex/pid.go).
+#   restart    — end the active session, start a FRESH one (new rollout,
+#                new session_id, fresh cwd). Mirrors the claudecode
+#                driver's restart; used to separate session-end variants.
 #
 # Concurrency (multiple live sessions at once):
 #   start_session — launch a NEW codex session WITHOUT tearing down the
@@ -468,6 +476,70 @@ step_resume() {
   fi
 }
 
+step_sigkill() {
+  # kill -9 the active slot's codex process — abrupt teardown with no
+  # rollout flush (the SIGKILL counterpart to exit_clean's graceful
+  # Ctrl-D). Unlike drive-claudecode-interactive.sh, which pgreps
+  # `--session-id <uuid>` out of argv, codex's argv is uniform (every
+  # session is just `codex --no-alt-screen`), so there is no per-session
+  # argv marker to match. Instead target exactly the process the daemon
+  # tracks: codex holds its rollout .jsonl open for writing for the whole
+  # session lifetime, and the daemon discovers the PID as that write-FD
+  # holder (codex/pid.go → DiscoverPIDByTranscriptWriter, via lsof).
+  # Mirroring that lookup here guarantees the SIGKILL lands on the daemon's
+  # PID, so process_exited fires.
+  resolve_transcript || true
+  local pid=""
+  if [[ -n "$TRANSCRIPT" ]]; then
+    # Same lsof write-FD match as the daemon: COMMAND PID USER FD …; the
+    # FD column ends in 'w' for a writer.
+    pid=$(lsof "$TRANSCRIPT" 2>/dev/null | awk 'NR>1 && $4 ~ /w$/ {print $2; exit}')
+  fi
+  # Fallback: the codex process in this slot's tmux pane. Resolve the codex
+  # descendant of the pane (in case tmux wrapped the command in a shell) so
+  # the SIGKILL can't merely orphan codex — an orphaned codex keeps writing
+  # and the daemon would never observe process_exited.
+  if [[ -z "$pid" ]]; then
+    local pane_pid
+    pane_pid=$(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null | head -1)
+    if [[ -n "$pane_pid" ]]; then
+      pid=$(pgrep -x codex -P "$pane_pid" 2>/dev/null | head -1)
+      [[ -z "$pid" ]] && pid="$pane_pid"
+    fi
+  fi
+  if [[ -n "$pid" ]]; then
+    kill -9 "$pid" 2>/dev/null || true
+    echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
+  else
+    echo "[driver] sigkill[s$ACTIVE]: no codex PID found (transcript=${TRANSCRIPT:-none}, session=$SESSION)" >&2
+  fi
+  SES_ALIVE[$ACTIVE]=0
+  # Leave the dead tmux pane for teardown — the kill alone produces
+  # process_exited.
+  sleep 1
+}
+
+step_restart() {
+  # End the active session and start a FRESH codex (new rollout, new
+  # session_id, fresh cwd). Mirrors drive-claudecode-interactive.sh's
+  # restart: used between session-end variants so each lands as its own
+  # session row, separated by a grey gap where no session is alive. By the
+  # time restart runs the active process is usually already gone (an
+  # exit_clean or sigkill preceded it); retire the slot regardless but keep
+  # it in the list so the epilogue flushes its session_id. A fresh cwd
+  # keeps each variant's rollout cleanly separated and gives it its own
+  # trust state (codex caches trust per directory).
+  resolve_transcript || true
+  save_active
+  SES_ALIVE[$ACTIVE]=0
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  sleep 1
+  local idx=$(( N_SLOTS + 1 ))
+  alloc_slot "codex-onboard-$(date +%s)-$$-${idx}" "${RUN_CWD}-${idx}"
+  echo "[driver] restart: new session slot #${ACTIVE} (cwd=${RUN_CWD}-${idx})" >&2
+  boot_session codex --no-alt-screen
+}
+
 step_start_session() {
   # Launch a NEW concurrent codex session WITHOUT tearing down the active
   # one. The previous session keeps running (its tmux survives), so the
@@ -552,6 +624,12 @@ while read -r step; do
       ;;
     exit_clean)
       step_exit_clean
+      ;;
+    sigkill)
+      step_sigkill
+      ;;
+    restart)
+      step_restart
       ;;
     resume)
       step_resume
