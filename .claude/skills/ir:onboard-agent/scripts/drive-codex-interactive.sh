@@ -2,7 +2,7 @@
 # drive-codex-interactive.sh — drive codex's REPL via tmux, executing a
 # step-script (send / wait_turn / interrupt / slash / …). For scenarios
 # that can't be expressed as a single `codex exec ...` invocation:
-# multi-turn conversations, mid-turn interrupts, /clear and /fork
+# multi-turn conversations, mid-turn interrupts, /new and /fork
 # session swaps, resume relaunches, and multiple concurrent sessions.
 #
 # Sister script to drive-codex.sh (headless `codex exec` mode). Same
@@ -25,10 +25,11 @@
 #   keys       — raw tmux key sequence (Up/Down/Enter/Escape …) for
 #                navigating picker UIs such as /model
 #   sleep      — pause N seconds (field: "seconds")
-#   reset_session — send /clear; codex abandons the current conversation
+#   reset_session — send /new; codex abandons the current conversation
 #                and writes the NEXT prompt's turns to a brand-new rollout
-#                (new session_id). The driver records the old session and
-#                re-discovers the new rollout on the next wait_turn.
+#                (new session_id) — the fresh session supersedes the old.
+#                The driver records the old session and re-discovers the
+#                new rollout on the next wait_turn.
 #   fork       — send /fork; codex clones the conversation into a new
 #                thread with a fresh session_id. Same new-rollout
 #                discovery as reset_session.
@@ -302,7 +303,7 @@ transcript_claimed() {
 # Codex creates its rollout file under CODEX_SESSIONS_DIR only after the
 # first user message is processed — there's nothing to read at boot.
 # Discovery finds the newest rollout-*.jsonl NEWER than this slot's
-# $MARKER that isn't already bound to another slot; after a /clear or
+# $MARKER that isn't already bound to another slot; after a /new or
 # /fork (which bump the marker) the prior rollout is excluded so the new
 # one is picked up. With concurrent sessions each slot resolves on its
 # first wait_turn — before the next session is booted — and caches the
@@ -392,12 +393,12 @@ step_interrupt() {
   sleep 1
 }
 
-# swap_after_slash <slash-text> — shared handler for /clear (reset_session)
+# swap_after_slash <slash-text> — shared handler for /new (reset_session)
 # and /fork (fork). Both abandon the current rollout and cause codex to
 # write subsequent turns to a NEW rollout with a fresh session_id, in the
 # SAME process:
-#   /clear is LAZY  — the new rollout materializes only on the first
-#                     post-clear user message.
+#   /new   is LAZY  — the new rollout materializes only on the first
+#                     post-reset user message.
 #   /fork  is EAGER — the new rollout materializes the instant the
 #                     command runs (carrying replayed pre-fork history).
 # Either way: resolve the current rollout (so its session_id is recorded
@@ -617,7 +618,7 @@ while read -r step; do
       sleep "$secs"
       ;;
     reset_session)
-      swap_after_slash "/clear"
+      swap_after_slash "/new"
       ;;
     fork)
       swap_after_slash "/fork"

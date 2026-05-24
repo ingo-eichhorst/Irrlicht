@@ -180,9 +180,9 @@
           "notes": "/clear rotates UUID; daemon emits transcript_removed for old UUID via PIDManager's same-PID cleanup (commit 56c4667 / issue #169). ~50ms overlap between new session's transcript_new and old session's transcript_removed is bounded by spec at 1s. Eliminating overlap entirely conflicts with multi-session-same-cwd support."
         },
         "codex": {
-          "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
-          "notes": ""
+          "agent_supports": "yes",
+          "irrlicht_observes": "yes",
+          "notes": "/new starts a fresh session that supersedes the old one. Daemon (Source=FilesUnderRoot ~/.codex/sessions) detects the new rollout as a brand-new session_id in ready — the complete reset signal. Codex deliberately emits NO synchronized transcript_removed at reset; the old rollout lingers and is cleaned up by the normal idle/exit path. That supersession is expected codex behavior, NOT an observability gap, so (unlike claudecode) there is no old_session_ended phase. Recorded via the reset_session step (both rollout session_ids captured); expected.jsonl 8/8."
         },
         "pi": {
           "agent_supports": "unknown",
