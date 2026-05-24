@@ -60,7 +60,6 @@ func BuildFullSessionState() *session.SessionState {
 		SessionID:       "00000000-0000-0000-0000-000000000001",
 		State:           session.StateWorking,
 		Adapter:         "claude-code",
-		CompactionState: session.CompactionStateNotCompacting,
 		Model:           "claude-sonnet-4-6",
 		CWD:             "/tmp/test-cwd",
 		TranscriptPath:  "/tmp/test-transcript.jsonl",

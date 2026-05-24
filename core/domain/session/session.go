@@ -12,10 +12,6 @@ const (
 	StateWorking = "working" // Agent actively processing (tools, text generation, hooks, compaction, or a live Bash background process)
 	StateWaiting = "waiting" // Agent finished turn, waiting for user input
 	StateReady   = "ready"   // Session inactive (process exited, transcript removed, cancelled)
-
-	CompactionStateNotCompacting = "not_compacting"
-	CompactionStateCompacting    = "compacting"
-	CompactionStatePostCompact   = "post_compact"
 )
 
 // IsCanonicalState reports whether s is one of the three valid lifecycle
@@ -547,7 +543,6 @@ type SessionState struct {
 	// Adapter identifies the source agent (e.g. "claude-code", "codex").
 	// Empty means Claude Code (for backwards compatibility).
 	Adapter         string          `json:"adapter,omitempty"`
-	CompactionState string          `json:"compaction_state,omitempty"`
 	Model           string          `json:"model,omitempty"`
 	CWD             string          `json:"cwd,omitempty"`
 	TranscriptPath  string          `json:"transcript_path,omitempty"`
@@ -593,14 +588,6 @@ func (s *SessionState) IsStale(maxAge time.Duration) bool {
 		return false
 	}
 	return time.Since(time.Unix(s.UpdatedAt, 0)) > maxAge
-}
-
-// StringState returns a display-friendly state string including compaction state.
-func (s *SessionState) StringState() string {
-	if s.CompactionState != "" && s.CompactionState != CompactionStateNotCompacting {
-		return s.State + "(" + s.CompactionState + ")"
-	}
-	return s.State
 }
 
 // MergeMetrics merges new metrics with old, preserving old values when new are zero/empty.
