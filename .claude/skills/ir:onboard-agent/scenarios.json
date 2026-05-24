@@ -334,7 +334,25 @@
           "timeout_seconds": 240
         },
         "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi --api-key or provider env vars)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The headless driver runs `pi --print -p <prompt>` once under timeout, then resolves the freshly-created ~/.pi/agent/sessions/<cwd-slug>/<ts>_<UUID>.jsonl and extracts the UUID from line 1 (pi assigns its own UUID; it can't be pre-set)",
+            "Pi writes its JSONL session file on launch (FilesUnderRoot, non-lazy), so no transcript nudge is needed; the daemon's first scanner tick keys the real UUID transcript directly — the curated fixture is a single rollout session with no separately-matchable proc-<PID> pre-session phase"
+          ],
           "prompt": "Use the bash tool to run 'echo hello', then reply 'done'.",
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session, born ready within 1000 ms of launch",
+            "events.jsonl contains a state_transition→working on the rollout session_id on the first transcript activity (the tool-using prompt), sustained across the tool call",
+            "transcript.jsonl contains a toolCall / toolResult pair for the bash command (the auto-executed tool call)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the tool resolves and the turn completes (pi's stopReason=stop maps to turn_done)",
+            "no state_transition to waiting appears for the rollout session at any point (pi has no permission gate — unlike claudecode's PostToolUse-hooked variant)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a process_exited on the rollout session when headless pi exits after the single turn"
+          ],
           "settings": {},
           "timeout_seconds": 240
         },
