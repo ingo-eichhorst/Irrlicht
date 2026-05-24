@@ -4443,7 +4443,7 @@
           "script": [
             {
               "type": "send",
-              "text": "Use your todo list (the todowrite tool) to track exactly three items, in this order: 'read README', 'summarize README', 'reply done'. Mark each item in_progress and then completed as you go. Do NOT spawn any subagent. When all three items are completed, reply with exactly the word: done"
+              "text": "Use your todo list (the todowrite tool) to track three short work items, updating each item's status (pending → in_progress → completed) as you make progress. Do NOT spawn any subagent. Then reply with exactly the word: done"
             },
             {
               "type": "wait_turn"
@@ -4457,7 +4457,7 @@
             "events.jsonl shows the session entering ready, then a single ready->working transition",
             "the session's transcript (SQLite parts) contains at least one tool part with tool=todowrite carrying the three-item snapshot",
             "no child session rows appear in ~/.local/share/opencode/opencode.db with parent_id = this session id (SubagentCount stays 0)",
-            "the session API's tasks field lists the three items with matching subjects, all ending completed",
+            "the session API's tasks field lists the three tracked items with their statuses surfacing (the committed recording ends with one completed, one in_progress, one pending — exercising all three statuses)",
             "events.jsonl shows a working->ready transition at turn end; final session state is ready"
           ],
           "settings": {},
