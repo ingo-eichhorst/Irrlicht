@@ -3691,7 +3691,7 @@
     },
     {
       "name": "token-quota-exhausted",
-      "description": "Mocked 429 recording: a local Anthropic-compatible stub (tools/mock-anthropic-429.go) returns 200 + end_turn on the first /v1/messages request and HTTP 429 on the second. claude runs under --bare so it reads ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (OAuth/keychain are bypassed). The bespoke recorder at tools/record-token-quota-exhausted.sh handles launch, driving, and fixture staging — the standard driver-claudecode-interactive.sh does not pass --bare.",
+      "description": "Mocked 429 recording: a local Anthropic-compatible stub (tools/agent-onboarding/recording/mock-anthropic-429/main.go) returns 200 + end_turn on the first /v1/messages request and HTTP 429 on the second. claude runs under --bare so it reads ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (OAuth/keychain are bypassed). The bespoke recorder at tools/agent-onboarding/recording/record-token-quota-exhausted.sh handles launch, driving, and fixture staging — the standard driver-claudecode-interactive.sh does not pass --bare.",
       "coverage_id": "token-quota-exhausted",
       "requires": [
         "headless_mode"
@@ -3711,9 +3711,9 @@
             "port 18765 available on localhost"
           ],
           "setup": [
-            "tools/record-token-quota-exhausted.sh builds the mock, launches it, drives claude under --bare, and stages the fixture under .build/refresh/claudecode/token-quota-exhausted-<TS>/."
+            "tools/agent-onboarding/recording/record-token-quota-exhausted.sh builds the mock, launches it, drives claude under --bare, and stages the fixture under .build/refresh/claudecode/token-quota-exhausted-<TS>/."
           ],
-          "driver": "tools/record-token-quota-exhausted.sh",
+          "driver": "tools/agent-onboarding/recording/record-token-quota-exhausted.sh",
           "verify": [
             "events.jsonl shows session_birth → prompt1 working/ready arc → prompt2 working/ready arc",
             "final state of the session is ready",
@@ -3725,7 +3725,7 @@
         },
         "codex": {
           "applicable": false,
-          "notes": "Not recordable: the quota-exhausted signal cannot be elicited deterministically live. Codex DOES emit it (v3 rate_limit_reached_type → RateLimitSnapshot.ReachedType, observed by irrlicht), but (1) the real account quota cannot be burned on demand, (2) there is no codex/OpenAI-compatible 429 mock — tools/mock-anthropic-429.go is Anthropic-only and launches claude --bare, with no codex equivalent, and (3) the codex interactive driver has no quota-exhausted-response injection primitive. The in-window observability is already validated by the sibling codex/quota-burndown cell (monotonic UsedPercent below the cap); this cap-hit ReachedType variant only becomes recordable if a codex 429 mock or a driver fixture-injection primitive is added (a developer task). See assessment.json."
+          "notes": "Not recordable: the quota-exhausted signal cannot be elicited deterministically live. Codex DOES emit it (v3 rate_limit_reached_type → RateLimitSnapshot.ReachedType, observed by irrlicht), but (1) the real account quota cannot be burned on demand, (2) there is no codex/OpenAI-compatible 429 mock — tools/agent-onboarding/recording/mock-anthropic-429/main.go is Anthropic-only and launches claude --bare, with no codex equivalent, and (3) the codex interactive driver has no quota-exhausted-response injection primitive. The in-window observability is already validated by the sibling codex/quota-burndown cell (monotonic UsedPercent below the cap); this cap-hit ReachedType variant only becomes recordable if a codex 429 mock or a driver fixture-injection primitive is added (a developer task). See assessment.json."
         }
       }
     },
@@ -3796,7 +3796,7 @@
     },
     {
       "name": "turn-aborted-by-error",
-      "description": "Agent's model call fails mid-turn (network error, provider 5xx, timeout). No normal turn-end signal is emitted. Expected arc per spec: ready → working, then → ready within the sweep interval after the agent gives up. Failures split into three buckets: Bucket A (transcript epilogue with synthesized error text → observable via classifier rule 2b — CAPTURED via tools/mock-anthropic-5xx.go), Bucket B (pure mid-stream network failure with NO transcript write → currently UNOBSERVABLE because there is no inactivity sweep on the working state since PR #106 removed the stale-tool timer), Bucket C (system/turn_duration on abnormal exit → observable via turn_done — not yet captured separately).",
+      "description": "Agent's model call fails mid-turn (network error, provider 5xx, timeout). No normal turn-end signal is emitted. Expected arc per spec: ready → working, then → ready within the sweep interval after the agent gives up. Failures split into three buckets: Bucket A (transcript epilogue with synthesized error text → observable via classifier rule 2b — CAPTURED via tools/agent-onboarding/recording/mock-anthropic-5xx/main.go), Bucket B (pure mid-stream network failure with NO transcript write → currently UNOBSERVABLE because there is no inactivity sweep on the working state since PR #106 removed the stale-tool timer), Bucket C (system/turn_duration on abnormal exit → observable via turn_done — not yet captured separately).",
       "coverage_id": "turn-aborted-by-error",
       "requires": [
         "headless_mode"
@@ -3819,9 +3819,9 @@
             "port 18766 available on localhost"
           ],
           "setup": [
-            "tools/record-turn-aborted-by-error.sh builds tools/mock-anthropic-5xx.go, launches it, drives claude under --bare against the mock, and stages the fixture under .build/refresh/claudecode/turn-aborted-by-error-<TS>/. The mock streams message_start + a partial content_block_delta then emits SSE `event: error` (overloaded_error); claudecode appends a synthesized 'API Error' assistant message with a terminal stop_reason and IsAgentDone() fires."
+            "tools/agent-onboarding/recording/record-turn-aborted-by-error.sh builds tools/agent-onboarding/recording/mock-anthropic-5xx/main.go, launches it, drives claude under --bare against the mock, and stages the fixture under .build/refresh/claudecode/turn-aborted-by-error-<TS>/. The mock streams message_start + a partial content_block_delta then emits SSE `event: error` (overloaded_error); claudecode appends a synthesized 'API Error' assistant message with a terminal stop_reason and IsAgentDone() fires."
           ],
-          "driver": "tools/record-turn-aborted-by-error.sh",
+          "driver": "tools/agent-onboarding/recording/record-turn-aborted-by-error.sh",
           "verify": [
             "events.jsonl shows session_birth → ready",
             "events.jsonl shows pid_discovered within 1000 ms of birth",
@@ -3835,7 +3835,7 @@
         },
         "codex": {
           "applicable": false,
-          "notes": "No deterministic way to elicit a mid-turn provider error against codex with any recipe primitive. The claudecode cell injects a 5xx via tools/mock-anthropic-5xx.go behind an Anthropic base-URL override (tools/record-turn-aborted-by-error.sh); codex has no equivalent — the mock tooling is Anthropic-API-specific, and neither drive-codex.sh (headless `codex exec`) nor drive-codex-interactive.sh wires an OPENAI_BASE_URL override or any error-injection step. The only primitive that emits codex's turn_aborted marker is `interrupt` (Escape), which is the user-cancel path (the distinct user-esc-interrupt scenario), not a provider error. A real network/5xx error is non-deterministic and can't be a committed fixture. Independently, even a hand-induced abort would be UNOBSERVABLE today: the codex parser maps only task_complete→turn_done and skips turn_aborted (empty `grep turn_aborted core/`), and there is no working-state idle sweep (pid_manager TTL-cleans only ready/PID-dead sessions), so an aborted turn sticks in working until process_exited — identical to the committed codex/interrupted-turn cell (known_failing, 2/5) and the frozen codex/user-esc-interrupt cell. Unblocks when both (a) a codex/OpenAI error-injection driver path exists and (b) the codex parser maps turn_aborted→turn_done. See assessment.json."
+          "notes": "No deterministic way to elicit a mid-turn provider error against codex with any recipe primitive. The claudecode cell injects a 5xx via tools/agent-onboarding/recording/mock-anthropic-5xx/main.go behind an Anthropic base-URL override (tools/agent-onboarding/recording/record-turn-aborted-by-error.sh); codex has no equivalent — the mock tooling is Anthropic-API-specific, and neither drive-codex.sh (headless `codex exec`) nor drive-codex-interactive.sh wires an OPENAI_BASE_URL override or any error-injection step. The only primitive that emits codex's turn_aborted marker is `interrupt` (Escape), which is the user-cancel path (the distinct user-esc-interrupt scenario), not a provider error. A real network/5xx error is non-deterministic and can't be a committed fixture. Independently, even a hand-induced abort would be UNOBSERVABLE today: the codex parser maps only task_complete→turn_done and skips turn_aborted (empty `grep turn_aborted core/`), and there is no working-state idle sweep (pid_manager TTL-cleans only ready/PID-dead sessions), so an aborted turn sticks in working until process_exited — identical to the committed codex/interrupted-turn cell (known_failing, 2/5) and the frozen codex/user-esc-interrupt cell. Unblocks when both (a) a codex/OpenAI error-injection driver path exists and (b) the codex parser maps turn_aborted→turn_done. See assessment.json."
         }
       }
     },

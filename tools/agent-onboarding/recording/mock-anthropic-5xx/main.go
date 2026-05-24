@@ -1,4 +1,4 @@
-// mock-anthropic-5xx.go — minimal Anthropic-compatible API stub for the
+// mock-anthropic-5xx — minimal Anthropic-compatible API stub for the
 // claudecode/turn-aborted-by-error scenario (Bucket A: provider 5xx
 // AFTER partial stream, runtime appends synthesized error text to the
 // transcript with a terminal stop_reason → IsAgentDone() fires normally).
@@ -16,7 +16,7 @@
 // scripted responses.
 //
 // Usage:
-//   go run ./tools/mock-anthropic-5xx.go --addr 127.0.0.1:18766
+//   go run ./tools/agent-onboarding/recording/mock-anthropic-5xx/main.go --addr 127.0.0.1:18766
 //
 // The server listens until SIGINT/SIGTERM.
 
