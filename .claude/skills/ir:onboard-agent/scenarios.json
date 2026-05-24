@@ -575,6 +575,18 @@
           "timeout_seconds": 300
         },
         "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so it can send three prompts to one long-lived session",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the first prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "Each send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so prompts never race a still-running turn",
+            "After the third wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+          ],
           "script": [
             {
               "type": "send",
@@ -609,6 +621,14 @@
               "type": "sleep",
               "seconds": 4
             }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turns and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session, not three exits)",
+            "no state_transition to waiting appears for the rollout session at any point"
           ],
           "settings": {},
           "timeout_seconds": 300
