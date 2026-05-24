@@ -65,6 +65,13 @@ type Playback struct {
 	// the actual pause via its command channel.
 	Paused bool
 
+	// Degraded is true when this playback's timeline was synthesized from
+	// the transcript (no daemon-recorded events.jsonl sidecar). The arc is
+	// reconstructed via the shared classifier engine, but without a sidecar
+	// it can't be byte-faithful — the UI badges it so a reconstructed
+	// timeline isn't mistaken for a recorded one.
+	Degraded bool
+
 	// enricher is the broadcaster decorator that populates
 	// SessionState.Metrics on session events. Held on the Playback so
 	// the Snapshot path (GET /api/v1/sessions) can apply the same
@@ -86,6 +93,13 @@ type wsHandler interface {
 type PlaybackManager struct {
 	repoRoot string
 
+	// mu guards `current` AND the mutable fields of the Playback it points
+	// to (Paused, Speed). Those fields are only ever read/written while
+	// holding mu — accessors and HTTP handlers acquire it, even though the
+	// blocking machine calls (Pause/Resume/SetSpeed/Done) run outside it.
+	// The Playback's `machine` and other fields are set once at
+	// construction before the Playback is published to `current`, so they
+	// are effectively immutable and read without mu.
 	mu      sync.Mutex
 	current *Playback
 
@@ -271,7 +285,7 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 			return nil, fmt.Errorf("archive %q has no events.jsonl", recording)
 		}
 	}
-	events, err := replay.LoadEventsOrSynthesize(eventsDir)
+	events, degraded, err := replay.LoadEventsOrSynthesize(eventsDir, agent)
 	if err != nil {
 		return nil, fmt.Errorf("load events: %w", err)
 	}
@@ -314,6 +328,7 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		DashboardURL: "/dashboard",
 		EventsDir:    eventsDir,
 		Recording:    recording,
+		Degraded:     degraded,
 		enricher:     enricher,
 	}
 
@@ -334,7 +349,9 @@ func (m *PlaybackManager) Pause() {
 	m.mu.Unlock()
 	if pb != nil && pb.machine != nil {
 		pb.machine.Pause()
+		m.mu.Lock()
 		pb.Paused = true
+		m.mu.Unlock()
 	}
 }
 
@@ -345,7 +362,9 @@ func (m *PlaybackManager) Resume() {
 	m.mu.Unlock()
 	if pb != nil && pb.machine != nil {
 		pb.machine.Resume()
+		m.mu.Lock()
 		pb.Paused = false
+		m.mu.Unlock()
 	}
 }
 
@@ -373,7 +392,9 @@ func (m *PlaybackManager) SetSpeed(speed float64) {
 	m.mu.Unlock()
 	if pb != nil && pb.machine != nil {
 		pb.machine.SetSpeed(speed)
+		m.mu.Lock()
 		pb.Speed = speed
+		m.mu.Unlock()
 	}
 }
 
@@ -418,24 +439,20 @@ func (m *PlaybackManager) stopCurrent() {
 	if pb.cancel != nil {
 		pb.cancel()
 	}
-	if pb.machine != nil {
-		<-pb.machine.Done()
+	if pb.machine == nil {
+		return
 	}
-	// Tell the dashboard that everything is gone.
-	for _, s := range pb.Snapshot() {
+	// Wait for the machine goroutine to exit. After Done() the machine has
+	// no concurrent writer, so reading its final snapshot here needs no
+	// lock (and pb is already unreachable via m.current). Tell the
+	// dashboard everything is gone.
+	<-pb.machine.Done()
+	for _, s := range pb.machine.Snapshot() {
 		m.broadcaster.Broadcast(outbound.PushMessage{
 			Type:    outbound.PushTypeDeleted,
 			Session: s,
 		})
 	}
-}
-
-// Snapshot helper on Playback for the stopCurrent close-down loop.
-func (p *Playback) Snapshot() []*session.SessionState {
-	if p.machine == nil {
-		return nil
-	}
-	return p.machine.Snapshot()
 }
 
 func newPlaybackID() string {
@@ -568,8 +585,16 @@ func (m *PlaybackManager) handleSpeed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *PlaybackManager) handleStatus(w http.ResponseWriter, r *http.Request) {
+	// Read current + its mutable fields (Paused, Speed) under mu, into
+	// locals, so the response build doesn't race Pause/Resume/SetSpeed.
 	m.mu.Lock()
 	pb := m.current
+	var paused bool
+	var speed float64
+	if pb != nil {
+		paused = pb.Paused
+		speed = pb.Speed
+	}
 	m.mu.Unlock()
 	if pb == nil {
 		writeJSON(w, map[string]any{"active": false})
@@ -582,8 +607,9 @@ func (m *PlaybackManager) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"subtree":     pb.Subtree,
 		"scenario":    pb.Scenario,
 		"mode":        pb.Mode,
-		"speed":       pb.Speed,
-		"paused":      pb.Paused,
+		"speed":       speed,
+		"paused":      paused,
+		"degraded":    pb.Degraded,
 	}
 	if pb.machine != nil {
 		// offset_ms is the live wall-clock-driven scrubber position so
@@ -687,17 +713,20 @@ func inferProjectName(s *session.SessionState) string {
 	return "replay"
 }
 
-// handleDashboard serves the embedded irrlicht dashboard. Reads
-// platforms/web/index.html from the repo root at request time so a
-// `git pull` of dashboard changes Just Works without restarting the
-// viewer.
+// handleDashboard serves the live session dashboard. There are two
+// frontends in this repo and exactly one is authoritative for the live
+// session view: platforms/web/index.html — the SAME dashboard the daemon
+// ships. The viewer reads it from the repo root at request time so a
+// `git pull` of dashboard changes Just Works without rebuilding the
+// viewer. (The viewer's OWN embedded internal/viewer/web/ SPA is a
+// separate, deliberate surface — the catalog / scenario browser — and is
+// never the live session UI; see the package doc in server.go.)
 //
-// We inject a tiny "ws-diag" script that wraps window.WebSocket so
-// every received message is mirrored to the console with prefix
-// "[ws-diag]". This makes it possible to compare what the server
-// broadcasts (recorded in /api/replay/diag) against what the dashboard
-// inside the iframe actually receives, without modifying the
-// production index.html.
+// We inject a tiny non-invasive "ws-diag" script that wraps
+// window.WebSocket so every received message is mirrored to the console
+// with prefix "[ws-diag]", letting us compare server broadcasts
+// (/api/replay/diag) against what the iframe actually receives — without
+// editing the authoritative production index.html.
 func (m *PlaybackManager) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(m.repoRoot, "platforms", "web", "index.html")
 	b, err := os.ReadFile(path)
@@ -705,12 +734,25 @@ func (m *PlaybackManager) handleDashboard(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("could not read %s: %v", path, err), http.StatusInternalServerError)
 		return
 	}
-	html := string(b)
-	if i := strings.Index(html, "</head>"); i >= 0 {
-		html = html[:i] + wsDiagScript + html[i:]
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+	w.Write([]byte(injectBeforeClosingTag(string(b), wsDiagScript)))
+}
+
+// injectBeforeClosingTag inserts script just before the first closing
+// </head> (falling back to </body>), matched case-insensitively. This
+// replaces a brittle exact-string `strings.Index(html, "</head>")` splice:
+// if the dashboard markup ever changes the tag's casing or drops the
+// <head>, the diagnostic script is appended at the end and the divergence
+// is logged, instead of being silently dropped.
+func injectBeforeClosingTag(html, script string) string {
+	lower := strings.ToLower(html)
+	for _, tag := range []string{"</head>", "</body>"} {
+		if i := strings.Index(lower, tag); i >= 0 {
+			return html[:i] + script + html[i:]
+		}
+	}
+	logViewerError("handleDashboard: dashboard HTML has no </head> or </body>; appending ws-diag script at end")
+	return html + script
 }
 
 // handleDiag returns the recent broadcast log captured by the

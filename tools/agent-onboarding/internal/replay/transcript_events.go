@@ -8,24 +8,33 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/adapters/inbound/agents/agentwiring"
+	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/application/replayengine"
 	"irrlicht/core/domain/lifecycle"
+	"irrlicht/core/pkg/tailer"
 )
 
-// SynthesizeEventsFromTranscript builds a plausible lifecycle event
-// stream from a recording's transcript file (transcript.jsonl or
-// transcript.md). Used by LoadEventsFallback when the recording
-// predates Phase 1's events.jsonl recorder — most regression captures
-// fall into that bucket.
+// SynthesizeEventsFromTranscript builds a lifecycle event stream from a
+// recording's transcript file (transcript.jsonl or transcript.md). Used
+// by LoadEventsOrSynthesize when the recording predates the events.jsonl
+// recorder — i.e. there is no daemon-produced sidecar to replay.
 //
-// The synthesized stream is NOT a faithful reproduction of what
-// irrlichd would have emitted; it's a "the session existed for this
-// long, with N user / assistant turns" approximation that's good
-// enough to drive the dashboard's session-row animation. Each user
-// message becomes a `working` transition and each assistant message
-// becomes a `ready` transition.
+// This is the explicitly-degraded "no sidecar" path. For JSONL
+// transcripts it drives core/application/replayengine — the SAME
+// transcript→state-transition engine that produces the replay goldens —
+// so the synthesized arc carries real waiting/permission semantics and
+// can never diverge from what the daemon's classifier would assert.
+// (The legacy path here fabricated a naive user→working / assistant→ready
+// arc with no waiting state; issue #461 finding #1.)
+//
+// adapter is the canonical adapter name (e.g. "claude-code"); it selects
+// the transcript parser. The aider markdown path keeps a coarse mtime
+// approximation because aider transcripts carry no per-line timestamps.
 //
 // Returns nil if no transcript is present at any expected name.
-func SynthesizeEventsFromTranscript(scenarioDir string) []lifecycle.Event {
+func SynthesizeEventsFromTranscript(scenarioDir, adapter string) []lifecycle.Event {
 	// Try common transcript filenames in order.
 	candidates := []string{"transcript.jsonl", "transcript.md"}
 	for _, name := range candidates {
@@ -34,34 +43,83 @@ func SynthesizeEventsFromTranscript(scenarioDir string) []lifecycle.Event {
 			continue
 		}
 		if strings.HasSuffix(name, ".jsonl") {
-			return synthesizeFromJSONL(path)
+			return synthesizeViaEngine(path, adapter)
 		}
 		return synthesizeFromMarkdown(path)
 	}
 	return nil
 }
 
-// synthesizeFromJSONL handles claudecode / codex / pi / opencode style
-// transcripts where each line is a JSON object describing one message
-// or event. Adapter shapes diverge — claudecode uses `timestamp` +
-// `sessionId` + top-level `type`; opencode uses `_ts` (unix ms) +
-// `_role`; codex/pi vary further. extractLineTime + extractLineRole +
-// extractLineSession normalize them.
-func synthesizeFromJSONL(path string) []lifecycle.Event {
-	f, err := os.Open(path)
-	if err != nil {
+// synthesizeViaEngine replays a JSONL transcript through the shared
+// classifier engine and maps its transitions to lifecycle events. The
+// engine writes the transcript to a scratch file and tails it exactly as
+// the daemon would, so claudecode / codex / pi / opencode all work via
+// their real parser. Returns nil when the transcript yields no events.
+func synthesizeViaEngine(path, adapter string) []lifecycle.Event {
+	canonical, parser := resolveParser(adapter)
+	res, err := replayengine.ReplayTranscript(path, replayengine.Options{
+		Adapter:                    canonical,
+		Parser:                     parser,
+		DisableModelConfigFallback: true,
+	})
+	if err != nil || res == nil || len(res.Transitions) == 0 {
 		return nil
 	}
-	defer f.Close()
+
+	sessionID := firstSessionID(path)
+	if sessionID == "" {
+		sessionID = "synthetic-" + filepath.Base(filepath.Dir(path))
+	}
 
 	var (
-		sessionID string
-		firstTs   time.Time
-		lastTs    time.Time
-		userTs    []time.Time
-		asstTs    []time.Time
-		anyTsSeen bool
+		out    []lifecycle.Event
+		seq    int64 = 1
+		prevTs       = res.FirstEventTime
 	)
+	emit := func(ts time.Time, kind lifecycle.Kind, prev, next, reason string) {
+		clamped := clampMonotonic(ts, prevTs)
+		out = append(out, lifecycle.Event{
+			Seq: seq, Timestamp: clamped, Kind: kind,
+			SessionID: sessionID, Adapter: canonical,
+			PrevState: prev, NewState: next, Reason: reason,
+			TranscriptPath: path,
+		})
+		seq++
+		prevTs = clamped
+	}
+
+	emit(res.FirstEventTime, lifecycle.KindTranscriptNew, "", "", "")
+	for _, t := range res.Transitions {
+		emit(t.VirtualTime, lifecycle.KindStateTransition, t.PrevState, t.NewState, t.Reason)
+	}
+	emit(res.LastEventTime.Add(50*time.Millisecond), lifecycle.KindTranscriptRemoved, "", "", "")
+	return out
+}
+
+// resolveParser maps a scenario's agent dir-slug to the canonical adapter
+// name and its transcript parser, using the same shared parser map the
+// daemon and viewer metrics collector use. Unknown/empty slugs fall back
+// to Claude Code, matching the replay CLI's parserFor.
+func resolveParser(adapter string) (string, tailer.TranscriptParser) {
+	canonical := adapter
+	switch adapter {
+	case "", "claudecode":
+		canonical = claudecode.AdapterName
+	}
+	if f, ok := agentwiring.ParserFactories(agents.All())[canonical]; ok {
+		return canonical, f()
+	}
+	return claudecode.AdapterName, &claudecode.Parser{}
+}
+
+// firstSessionID scans a JSONL transcript for the first session id it can
+// find across the adapter-specific field names. Returns "" if none.
+func firstSessionID(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
@@ -69,34 +127,11 @@ func synthesizeFromJSONL(path string) []lifecycle.Event {
 		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
 			continue
 		}
-		if sessionID == "" {
-			if sid := extractLineSession(raw); sid != "" {
-				sessionID = sid
-			}
-		}
-		ts, ok := extractLineTime(raw)
-		if !ok {
-			continue
-		}
-		if !anyTsSeen {
-			firstTs = ts
-			anyTsSeen = true
-		}
-		lastTs = ts
-		switch extractLineRole(raw) {
-		case "user":
-			userTs = append(userTs, ts)
-		case "assistant":
-			asstTs = append(asstTs, ts)
+		if sid := extractLineSession(raw); sid != "" {
+			return sid
 		}
 	}
-	if !anyTsSeen {
-		return nil
-	}
-	if sessionID == "" {
-		sessionID = "synthetic-" + filepath.Base(filepath.Dir(path))
-	}
-	return buildArc(sessionID, firstTs, lastTs, userTs, asstTs)
+	return ""
 }
 
 // extractLineTime tries the two timestamp conventions we've seen:
@@ -231,84 +266,10 @@ func synthesizeFromMarkdown(path string) []lifecycle.Event {
 	}
 }
 
-// buildArc converts a (firstTs, lastTs, userTs, asstTs) summary into a
-// lifecycle.Event slice. Always emits at least transcript_new + an
-// initial ready transition + transcript_removed at end.
-//
-// Critical invariant: every emitted event's timestamp must be >= the
-// previous event's timestamp. The state machine computes inter-event
-// deltas and races through any event whose delta is non-positive (it
-// treats negative as "no wait"). The clampMonotonic helper enforces
-// this — when a transcript line's timestamp would be earlier than the
-// previous synthesized event (e.g. the first user line shares firstTs
-// with the synthesized opener), nudge it forward by 1ms.
-func buildArc(sessionID string, firstTs, lastTs time.Time, userTs, asstTs []time.Time) []lifecycle.Event {
-	var (
-		out     []lifecycle.Event
-		seq     int64 = 1
-		prevTs        = firstTs
-	)
-	emit := func(ts time.Time, kind lifecycle.Kind, prev, next, reason string) {
-		clamped := clampMonotonic(ts, prevTs)
-		out = append(out, lifecycle.Event{
-			Seq: seq, Timestamp: clamped, Kind: kind,
-			SessionID: sessionID, PrevState: prev, NewState: next, Reason: reason,
-			Adapter: "claude-code",
-		})
-		seq++
-		prevTs = clamped
-	}
-	emit(firstTs, lifecycle.KindTranscriptNew, "", "", "")
-	emit(firstTs.Add(50*time.Millisecond), lifecycle.KindStateTransition, "", "ready", "synthetic: session start")
-
-	state := "ready"
-	idxU, idxA := 0, 0
-	for idxU < len(userTs) || idxA < len(asstTs) {
-		var nextTs time.Time
-		var nextKind string
-		switch {
-		case idxU < len(userTs) && idxA < len(asstTs):
-			if userTs[idxU].Before(asstTs[idxA]) {
-				nextTs = userTs[idxU]
-				nextKind = "user"
-				idxU++
-			} else {
-				nextTs = asstTs[idxA]
-				nextKind = "assistant"
-				idxA++
-			}
-		case idxU < len(userTs):
-			nextTs = userTs[idxU]
-			nextKind = "user"
-			idxU++
-		default:
-			nextTs = asstTs[idxA]
-			nextKind = "assistant"
-			idxA++
-		}
-		want := state
-		switch nextKind {
-		case "user":
-			want = "working"
-		case "assistant":
-			want = "ready"
-		}
-		if want != state {
-			emit(nextTs, lifecycle.KindStateTransition, state, want, "synthetic: transcript "+nextKind)
-			state = want
-		}
-	}
-	if state != "ready" {
-		emit(lastTs, lifecycle.KindStateTransition, state, "ready", "synthetic: end of transcript")
-	}
-	emit(lastTs.Add(50*time.Millisecond), lifecycle.KindTranscriptRemoved, "", "", "")
-	return out
-}
-
 // clampMonotonic returns ts if ts > floor, else floor+1ms. Used inside
-// buildArc to guarantee every event's timestamp strictly exceeds the
-// last one — otherwise the state machine treats negative deltas as
-// zero-wait and races through synthesized events.
+// synthesizeViaEngine to guarantee every event's timestamp strictly
+// exceeds the last one — otherwise the state machine treats negative
+// deltas as zero-wait and races through synthesized events.
 func clampMonotonic(ts, floor time.Time) time.Time {
 	if ts.After(floor) {
 		return ts
@@ -401,17 +362,25 @@ func truncateForTooltip(s string, max int) string {
 	return s
 }
 
-// LoadEventsOrSynthesize returns events.jsonl contents if they exist,
-// otherwise synthesizes a stream from the scenario's transcript file.
+// LoadEventsOrSynthesize returns the daemon-recorded events.jsonl when it
+// exists, otherwise synthesizes a degraded stream from the transcript.
+//
+// The returned degraded flag is true only for the synthesized case: there
+// was no daemon-produced sidecar, so the timeline was reconstructed by
+// replaying the transcript through the shared classifier engine. The UI
+// surfaces this so a reconstructed arc is never mistaken for a recorded
+// one. adapter is the scenario's agent dir-slug (selects the parser).
+//
 // scenarioDir is the directory containing events.jsonl / transcript.jsonl
-// / transcript.md. Returns nil if neither exists.
-func LoadEventsOrSynthesize(scenarioDir string) ([]lifecycle.Event, error) {
+// / transcript.md. Returns (nil, false, nil) if none exists.
+func LoadEventsOrSynthesize(scenarioDir, adapter string) (events []lifecycle.Event, degraded bool, err error) {
 	eventsPath := filepath.Join(scenarioDir, "events.jsonl")
-	if _, err := os.Stat(eventsPath); err == nil {
-		return LoadEvents(eventsPath)
+	if _, statErr := os.Stat(eventsPath); statErr == nil {
+		ev, loadErr := LoadEvents(eventsPath)
+		return ev, false, loadErr
 	}
-	if events := SynthesizeEventsFromTranscript(scenarioDir); events != nil {
-		return events, nil
+	if ev := SynthesizeEventsFromTranscript(scenarioDir, adapter); ev != nil {
+		return ev, true, nil
 	}
-	return nil, nil
+	return nil, false, nil
 }

@@ -1227,6 +1227,13 @@ async function loadScenario(s, initialArchive, focus) {
   ]);
   detail.innerHTML = "";
 
+  // No daemon-recorded events.jsonl sidecar: the timeline shown here is
+  // reconstructed from the transcript via the shared classifier engine,
+  // not recorded. Badge it so a synthesized arc isn't read as ground truth.
+  if (data.degraded) {
+    detail.appendChild(degradedBanner());
+  }
+
   // Page hierarchy (iteration 13):
   //   1. Recording history selector — TOP, decisive control. Owns
   //      the container of recording-derived panels below it.
@@ -1286,6 +1293,26 @@ async function loadScenario(s, initialArchive, focus) {
   detail.appendChild(renderRecipePanel(recipeEntry));
   detail.appendChild(renderRecordingHistory(s, data, archives, initialArchive || "", recipeEntry, coverageEntry));
   scrollFocusInto(focus || "");
+}
+
+// degradedBanner is shown on scenario detail pages that have no
+// events.jsonl sidecar. The timeline for such scenarios is synthesized by
+// replaying the transcript through core/application/replayengine (the same
+// classifier that produces the goldens) — faithful in semantics but not a
+// byte-exact recording, so we say so up front.
+function degradedBanner() {
+  const b = document.createElement("div");
+  b.className = "degraded-banner";
+  b.setAttribute("data-testid", "degraded-banner");
+  b.style.cssText =
+    "margin:8px 0;padding:8px 12px;border-left:3px solid #c90;" +
+    "background:#332b00;color:#e8c84d;border-radius:4px;font-size:13px;";
+  b.textContent =
+    "No sidecar recorded — playback will synthesize the timeline from the " +
+    "transcript via the shared classifier engine (degraded), so the " +
+    "transitions below are empty until you press Play. Record with " +
+    "`irrlichd --record` for a faithful events.jsonl.";
+  return b;
 }
 
 function renderMeta(data) {

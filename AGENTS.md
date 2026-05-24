@@ -50,6 +50,22 @@ in `core/cmd/irrlichd/main.go` searches in order:
 `irrlichd-darwin-universal.tar.gz` artifact. `site/install.sh --daemon-only`
 extracts the tarball into `~/.local/share/irrlicht/web/`.
 
+### Two frontends, one authoritative
+
+There are two web trees, and they are NOT competing copies:
+
+- **`platforms/web/`** — the authoritative **live session dashboard**, for
+  both the daemon and the onboarding viewer. The viewer's `/dashboard`
+  route reads it from disk at request time (so dashboard edits need no
+  viewer rebuild) and injects a tiny non-invasive `ws-diag` console-logging
+  script before `</head>` via `injectBeforeClosingTag` — it never edits the
+  production markup.
+- **`tools/agent-onboarding/internal/viewer/web/`** — the viewer's OWN
+  embedded SPA: the **catalog / scenario browser** (coverage matrix,
+  per-cell detail, recording archives). It is never the live session view.
+
+When changing the live dashboard, edit `platforms/web/` only.
+
 ## Key Conventions
 
 - Go code follows hexagonal architecture: `domain/` → `ports/` → `adapters/` → `application/services/`

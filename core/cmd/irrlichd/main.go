@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
-	"irrlicht/core/adapters/inbound/agents/aider"
+	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
@@ -36,7 +36,6 @@ import (
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
-	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
@@ -157,25 +156,12 @@ func main() {
 	// during replay without duplicating the construction.
 	allAgents := agents.All()
 
-	// Build the per-adapter parser map and patch in the FilesUnderCWD
-	// (aider) and ProcessOwnedStore (opencode) entries that agents.Parsers
-	// omits. The new RawLineParser/ProcessOwnedStore source variants don't
-	// carry a parser factory compatible with agents.ParserFactory, so the
-	// two adapters are wired explicitly via their adapter-package imports.
-	parserFactories := agents.Parsers(allAgents)
-	parserFactories[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
-	parserFactories[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
-
 	// Shared adapters for SessionDetector.
 	gitResolver := git.New()
-	// Claude Code's parser is the documented fallback for unknown adapter
-	// names.
-	metricsCollector := metrics.New(metrics.Registry{
-		Parsers:          parserFactories,
-		SubagentCounters: agents.SubagentCounters(allAgents),
-		MetricsProviders: agents.MetricsProviders(allAgents),
-		FallbackName:     claudecode.AdapterName,
-	})
+	// The metrics collector (parser map + aider/opencode overrides +
+	// Claude Code fallback) is wired by agentwiring.BuildMetricsCollector,
+	// the single source of truth shared with the agent-onboarding viewer.
+	metricsCollector := agentwiring.BuildMetricsCollector(allAgents)
 
 	// --- File-based SessionDetector (primary detection path) ---
 	// Forward-reference: detector is assigned before any callbacks can fire,

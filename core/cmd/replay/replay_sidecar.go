@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/application/replayengine"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
@@ -368,7 +369,7 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, virtTime time.Time, eventId
 		return err
 	}
 	r.lastMetrics = metrics
-	domainMetrics := tailerToDomain(metrics)
+	domainMetrics := replayengine.TailerToDomain(metrics)
 	r.overlayPermissionPending(domainMetrics)
 	r.runClassifier(domainMetrics, virtTime, eventIdx, cause)
 	return nil
@@ -390,7 +391,7 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 	if r.lastMetrics == nil {
 		return
 	}
-	domainMetrics := tailerToDomain(r.lastMetrics)
+	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
 	r.overlayPermissionPending(domainMetrics)
 	r.runClassifier(domainMetrics, hookEv.Timestamp, -1, causeHook)
 }
@@ -591,7 +592,7 @@ func (r *sidecarReplayer) applyChildOrphan(orphan orphanTrigger, d *debounceStat
 	if r.state == session.StateReady {
 		return nil
 	}
-	domainMetrics := tailerToDomain(r.lastMetrics)
+	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
 	r.overlayPermissionPending(domainMetrics)
 	r.runClassifier(domainMetrics, orphan.at, -1, causeEvent)
 	return nil

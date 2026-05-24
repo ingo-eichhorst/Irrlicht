@@ -6,33 +6,21 @@ import (
 	"sync"
 
 	"irrlicht/core/adapters/inbound/agents"
-	"irrlicht/core/adapters/inbound/agents/aider"
-	"irrlicht/core/adapters/inbound/agents/claudecode"
-	"irrlicht/core/adapters/inbound/agents/opencode"
+	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/outbound/metrics"
 	"irrlicht/core/domain/session"
-	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
 )
 
 // buildMetricsCollector constructs the production metrics.Adapter the
 // daemon uses, so replay broadcasts can carry the same SessionMetrics
 // shape the live UI expects (model, total_tokens, context_window,
-// estimated_cost_usd, …). Mirrors the wiring in
-// core/cmd/irrlichd/main.go: parserFactories are derived from
-// agents.All() plus the FilesUnderCWD (aider) / ProcessOwnedStore
-// (opencode) overrides that agents.Parsers omits.
+// estimated_cost_usd, …). It delegates to
+// agentwiring.BuildMetricsCollector — the single source of truth shared
+// with core/cmd/irrlichd, so the viewer can never drift from the daemon's
+// parser map or fall behind when a new adapter is added.
 func buildMetricsCollector() outbound.MetricsCollector {
-	all := agents.All()
-	parserFactories := agents.Parsers(all)
-	parserFactories[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
-	parserFactories[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
-	return metrics.New(metrics.Registry{
-		Parsers:          parserFactories,
-		SubagentCounters: agents.SubagentCounters(all),
-		MetricsProviders: agents.MetricsProviders(all),
-		FallbackName:     claudecode.AdapterName,
-	})
+	return agentwiring.BuildMetricsCollector(agents.All())
 }
 
 // metricsEnricher decorates a PushBroadcaster so each session broadcast
