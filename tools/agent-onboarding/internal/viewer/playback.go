@@ -93,6 +93,13 @@ type wsHandler interface {
 type PlaybackManager struct {
 	repoRoot string
 
+	// mu guards `current` AND the mutable fields of the Playback it points
+	// to (Paused, Speed). Those fields are only ever read/written while
+	// holding mu — accessors and HTTP handlers acquire it, even though the
+	// blocking machine calls (Pause/Resume/SetSpeed/Done) run outside it.
+	// The Playback's `machine` and other fields are set once at
+	// construction before the Playback is published to `current`, so they
+	// are effectively immutable and read without mu.
 	mu      sync.Mutex
 	current *Playback
 
@@ -342,7 +349,9 @@ func (m *PlaybackManager) Pause() {
 	m.mu.Unlock()
 	if pb != nil && pb.machine != nil {
 		pb.machine.Pause()
+		m.mu.Lock()
 		pb.Paused = true
+		m.mu.Unlock()
 	}
 }
 
@@ -353,7 +362,9 @@ func (m *PlaybackManager) Resume() {
 	m.mu.Unlock()
 	if pb != nil && pb.machine != nil {
 		pb.machine.Resume()
+		m.mu.Lock()
 		pb.Paused = false
+		m.mu.Unlock()
 	}
 }
 
@@ -381,7 +392,9 @@ func (m *PlaybackManager) SetSpeed(speed float64) {
 	m.mu.Unlock()
 	if pb != nil && pb.machine != nil {
 		pb.machine.SetSpeed(speed)
+		m.mu.Lock()
 		pb.Speed = speed
+		m.mu.Unlock()
 	}
 }
 
@@ -426,24 +439,20 @@ func (m *PlaybackManager) stopCurrent() {
 	if pb.cancel != nil {
 		pb.cancel()
 	}
-	if pb.machine != nil {
-		<-pb.machine.Done()
+	if pb.machine == nil {
+		return
 	}
-	// Tell the dashboard that everything is gone.
-	for _, s := range pb.Snapshot() {
+	// Wait for the machine goroutine to exit. After Done() the machine has
+	// no concurrent writer, so reading its final snapshot here needs no
+	// lock (and pb is already unreachable via m.current). Tell the
+	// dashboard everything is gone.
+	<-pb.machine.Done()
+	for _, s := range pb.machine.Snapshot() {
 		m.broadcaster.Broadcast(outbound.PushMessage{
 			Type:    outbound.PushTypeDeleted,
 			Session: s,
 		})
 	}
-}
-
-// Snapshot helper on Playback for the stopCurrent close-down loop.
-func (p *Playback) Snapshot() []*session.SessionState {
-	if p.machine == nil {
-		return nil
-	}
-	return p.machine.Snapshot()
 }
 
 func newPlaybackID() string {
@@ -572,8 +581,16 @@ func (m *PlaybackManager) handleSpeed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *PlaybackManager) handleStatus(w http.ResponseWriter, r *http.Request) {
+	// Read current + its mutable fields (Paused, Speed) under mu, into
+	// locals, so the response build doesn't race Pause/Resume/SetSpeed.
 	m.mu.Lock()
 	pb := m.current
+	var paused bool
+	var speed float64
+	if pb != nil {
+		paused = pb.Paused
+		speed = pb.Speed
+	}
 	m.mu.Unlock()
 	if pb == nil {
 		writeJSON(w, map[string]any{"active": false})
@@ -586,8 +603,8 @@ func (m *PlaybackManager) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"subtree":     pb.Subtree,
 		"scenario":    pb.Scenario,
 		"mode":        pb.Mode,
-		"speed":       pb.Speed,
-		"paused":      pb.Paused,
+		"speed":       speed,
+		"paused":      paused,
 		"degraded":    pb.Degraded,
 	}
 	if pb.machine != nil {

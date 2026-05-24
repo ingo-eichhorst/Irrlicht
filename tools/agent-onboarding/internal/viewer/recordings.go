@@ -19,7 +19,9 @@ func (s *Server) handleRecordingsList(w http.ResponseWriter, scenarioDir string)
 	for _, name := range names {
 		archive := RecordingArchive{Name: name}
 		if b, ok := s.store().readFile(filepath.Join(scenarioDir, "recordings", name, "manifest.json")); ok {
-			_ = json.Unmarshal(b, &archive)
+			if err := json.Unmarshal(b, &archive); err != nil {
+				logViewerError("handleRecordingsList: malformed manifest.json in archive %q: %v", name, err)
+			}
 			archive.Name = name // defensive: manifest may not echo name
 		}
 		out = append(out, archive)
@@ -55,7 +57,9 @@ func (s *Server) handleArchivedRecording(w http.ResponseWriter, scenarioDir, nam
 	}
 	d := ArchivedRecordingDetail{Name: name}
 	if b, ok := store.readFile(filepath.Join(archiveDir, "manifest.json")); ok {
-		_ = json.Unmarshal(b, &d.Manifest)
+		if err := json.Unmarshal(b, &d.Manifest); err != nil {
+			logViewerError("handleArchivedRecording: malformed manifest.json in archive %q: %v", name, err)
+		}
 		d.Manifest.Name = name
 	}
 	d.Transitions = readTransitionsRaw(filepath.Join(archiveDir, "events.jsonl"))

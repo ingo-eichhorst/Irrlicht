@@ -111,7 +111,9 @@ func buildLatestManifest(scenarioDir, agent string, d *ScenarioDetail, repoRoot 
 	}
 	m := &RecordingArchive{Name: "latest", DaemonVersion: "dev"}
 	if b, err := os.ReadFile(filepath.Join(scenarioDir, "manifest.json")); err == nil {
-		_ = json.Unmarshal(b, m)
+		if err := json.Unmarshal(b, m); err != nil {
+			logViewerError("buildLatestManifest: malformed manifest.json in %s: %v", scenarioDir, err)
+		}
 		m.Name = "latest" // `name` is internal-only — force regardless of file content
 		return m
 	}
