@@ -1,32 +1,59 @@
 ---
 name: ir:test-mac
 description: >
-  Build and run a dev irrlicht daemon + macOS Swift app for local testing,
-  alongside the production Irrlicht.app (which keeps running). The dev instance
-  uses an isolated state dir (IRRLICHT_HOME) and a separate port (7838), so it
-  never disturbs production on port 7837. Use when the user says "test mac",
+  Build and run a dev irrlicht daemon + macOS Swift app for local testing.
+  Asks whether to run a SEPARATE instance alongside production (isolated state,
+  port 7838 — production keeps running) or to REPLACE the running production
+  versions (production port 7837 + production state, so the statusline quota
+  feed and existing sessions show up). Use when the user says "test mac",
   "restart mac", "rebuild mac", or "/ir:test-mac".
 ---
 
-# Build & Run macOS Dev Stack (alongside production)
+# Build & Run macOS Dev Stack (separate or replace)
 
-Build the irrlicht daemon and Swift app and run them as a **dev instance that
-coexists with production**. Production stays up the whole time: the dev daemon
-binds port **7838** (vs production's 7837) and stores its state under a
-worktree-local `IRRLICHT_HOME`, and the dev app is told to connect to 7838 via
-`IRRLICHT_DAEMON_PORT`. Only prior *dev* instances are replaced on rerun.
+Build the irrlicht daemon and Swift app, then run them in one of two modes the
+user chooses up front:
+
+- **separate** (default, recommended) — a dev instance that **coexists with
+  production**. The dev daemon binds port **7838** and stores its state under a
+  worktree-local `IRRLICHT_HOME`; the dev app connects to 7838 via
+  `IRRLICHT_DAEMON_PORT`. Production stays up untouched on 7837. Only prior
+  *dev* instances are replaced on rerun. Note: the Claude Code statusline hook
+  is hardcoded to POST quota data to 7837, so a separate dev instance shows the
+  **subscription empty-state** (no rate-limit data) — that's expected.
+- **replace** — take over from production. Kill the running production app +
+  daemon (and any dev instance), then run the freshly built dev binaries on the
+  **production port 7837** with the **production state dir** (no `IRRLICHT_HOME`
+  override). Because it's on 7837 it receives the statusline quota feed and sees
+  the same on-disk sessions/cost data — i.e. it behaves like production but runs
+  your dev code. There is only one instance afterward.
 
 ## Steps
 
-0. **Detect repo root and set the dev instance config** — use the worktree root if running in a worktree, otherwise the main repo
+0. **Ask the user which mode, then set the run config.** Use `AskUserQuestion`
+   with two options — "Separate (alongside production)" (recommended, first) and
+   "Replace production" — unless the user already said which one they want in
+   their message. Then set the config below from the answer. All later steps
+   read `$MODE`, `$REPO_ROOT`, `$PORT`, `$DEV_HOME`, `$SOCK`, `$DEV_APP`, and
+   `$IRRLICHTD_BIN`.
    ```bash
-   REPO_ROOT="$(git rev-parse --show-toplevel)"
-   DEV_PORT=7838
-   DEV_HOME="$REPO_ROOT/.build/irrlicht-home"   # isolated state dir (IRRLICHT_HOME)
-   IRRLICHTD_BIN="/Users/ingo/projects/irrlicht/core/bin/irrlichd"  # one path: build target == launch target
-   mkdir -p "$DEV_HOME"
+   REPO_ROOT="$(git rev-parse --show-toplevel)"        # worktree root if in a worktree, else main repo
+   IRRLICHTD_BIN="/Users/ingo/projects/irrlicht/core/bin/irrlichd"  # stable path: build target == launch target
+   DEV_APP="/tmp/IrrlichtDev.app"
+   MODE="separate"        # <-- set to "separate" or "replace" from the user's answer
+
+   if [ "$MODE" = "replace" ]; then
+     PORT=7837                                          # production port (statusline quota hook targets this)
+     DEV_HOME=""                                        # no IRRLICHT_HOME override → production state dir
+     SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"   # production socket
+   else
+     PORT=7838                                          # isolated dev port
+     DEV_HOME="$REPO_ROOT/.build/irrlicht-home"         # isolated state dir (IRRLICHT_HOME)
+     SOCK="$DEV_HOME/irrlichd.sock"
+     mkdir -p "$DEV_HOME"
+   fi
+   echo "MODE=$MODE PORT=$PORT DEV_HOME=${DEV_HOME:-<production>}"
    ```
-   All subsequent steps use `$REPO_ROOT`, `$DEV_PORT`, `$DEV_HOME`, and `$IRRLICHTD_BIN`.
    `$IRRLICHTD_BIN` is the main repo's bin (a stable absolute path) so the build
    and launch steps always agree even when `$REPO_ROOT` is a worktree — the
    source compiled is still the worktree's (`go build` runs in `$REPO_ROOT/core`).
@@ -37,19 +64,27 @@ worktree-local `IRRLICHT_HOME`, and the dev app is told to connect to 7838 via
    ```
    Note: the binary is built from the worktree's source but placed at the stable `$IRRLICHTD_BIN` path that step 5 launches.
 
-2. **Build the Swift app and assemble .app bundle**
+2. **Build the Swift app and assemble .app bundle** (identical in both modes)
    ```bash
    cd "$REPO_ROOT/platforms/macos" && swift build 2>&1 | tail -5
    ```
    Then assemble a proper `.app` bundle so that `UNUserNotificationCenter` (desktop notifications) works:
    ```bash
-   DEV_APP="/tmp/IrrlichtDev.app"
    rm -rf "$DEV_APP"
    mkdir -p "$DEV_APP/Contents/MacOS" "$DEV_APP/Contents/Resources"
    cp "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht" "$DEV_APP/Contents/MacOS/Irrlicht"
    cp "$REPO_ROOT/platforms/macos/Irrlicht/Resources/AppIcon.icns" "$DEV_APP/Contents/Resources/AppIcon.icns"
    # Copy the SwiftPM resource bundle so Bundle.module works at runtime
    cp -R "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht_Irrlicht.bundle" "$DEV_APP/Contents/Resources/Irrlicht_Irrlicht.bundle" 2>/dev/null || true
+   # Embed Sparkle.framework (required since v0.4.7 auto-update integration)
+   mkdir -p "$DEV_APP/Contents/Frameworks"
+   cp -R "$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug/Sparkle.framework" "$DEV_APP/Contents/Frameworks/"
+   # The SwiftPM debug binary links Sparkle as @rpath/Sparkle.framework but only
+   # carries an @loader_path rpath (= Contents/MacOS) — it lacks the bundle-layout
+   # rpath a release .app build adds. Without this, dyld can't find the embedded
+   # framework and the app crashes at launch. (Must run BEFORE the codesign step
+   # below, since it mutates the binary and invalidates the signature.)
+   install_name_tool -add_rpath @executable_path/../Frameworks "$DEV_APP/Contents/MacOS/Irrlicht"
    cat > "$DEV_APP/Contents/Info.plist" << 'PLIST'
    <?xml version="1.0" encoding="UTF-8"?>
    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -95,45 +130,82 @@ worktree-local `IRRLICHT_HOME`, and the dev app is told to connect to 7838 via
    fi
    ```
 
-3. **Kill only the prior DEV instances** — leave production (Irrlicht.app + its daemon on 7837) untouched. The dev daemon runs from `$IRRLICHTD_BIN` (`…/core/bin/irrlichd`); production runs from inside the `.app` bundle, so matching that path reaps the dev daemon in ANY state (even if it isn't currently bound to the dev port) without touching production.
+3. **Kill the instances this mode replaces.**
+   - **separate**: only prior *dev* instances; production (on 7837) stays up.
+   - **replace**: the production app + ALL daemons (prod is named `irrlichd`,
+     exactly like dev) + any prior dev app, so only the fresh build remains.
    ```bash
-   pkill -f "IrrlichtDev" 2>/dev/null            # prior dev app
-   pkill -f "core/bin/irrlichd" 2>/dev/null      # prior dev daemon (NOT production, which runs from the .app bundle)
-   DEV_PIDS="$(lsof -ti tcp:$DEV_PORT 2>/dev/null)"   # belt-and-suspenders: anything still on the dev port
-   [ -n "$DEV_PIDS" ] && kill $DEV_PIDS 2>/dev/null
+   if [ "$MODE" = "replace" ]; then
+     pkill -f "Irrlicht.app/Contents/MacOS/Irrlicht" 2>/dev/null   # production app (NOT IrrlichtDev.app — different folder)
+     pkill -f "IrrlichtDev"                          2>/dev/null   # any prior dev app
+     pkill -x "irrlichd"                             2>/dev/null   # ALL daemons by exact name (prod bundle + dev)
+   else
+     pkill -f "IrrlichtDev"                          2>/dev/null   # prior dev app only
+     pkill -f "core/bin/irrlichd"                    2>/dev/null   # prior dev daemon (NOT production, which runs from the .app bundle)
+   fi
+   PORT_PIDS="$(lsof -ti tcp:$PORT 2>/dev/null)"   # belt-and-suspenders: anything still on the target port
+   [ -n "$PORT_PIDS" ] && kill $PORT_PIDS 2>/dev/null
    sleep 2
    ```
 
-4. **Clean up the stale DEV socket** (under the isolated state dir, never production's)
+4. **Clean up the stale socket** for the target instance.
    ```bash
-   rm -f "$DEV_HOME/irrlichd.sock"
+   rm -f "$SOCK"
    ```
 
-5. **Start the dev daemon** — isolated state (`IRRLICHT_HOME`) on the dev port, with `--record` for lifecycle event capture
+5. **Start the daemon** with `--record` for lifecycle event capture. In
+   **separate** mode it gets `IRRLICHT_HOME` (isolated state); in **replace**
+   mode `IRRLICHT_HOME` is omitted so it reads/writes the production state dir.
    ```bash
-   IRRLICHT_HOME="$DEV_HOME" IRRLICHT_BIND_ADDR=127.0.0.1:$DEV_PORT \
-     nohup "$IRRLICHTD_BIN" --record > /tmp/irrlichd-dev.log 2>&1 & disown
+   if [ "$MODE" = "replace" ]; then
+     IRRLICHT_BIND_ADDR=127.0.0.1:$PORT \
+       nohup "$IRRLICHTD_BIN" --record > /tmp/irrlichd-dev.log 2>&1 & disown
+   else
+     IRRLICHT_HOME="$DEV_HOME" IRRLICHT_BIND_ADDR=127.0.0.1:$PORT \
+       nohup "$IRRLICHTD_BIN" --record > /tmp/irrlichd-dev.log 2>&1 & disown
+   fi
    ```
 
-6. **Wait for daemon to be ready** — confirm the dev port is listening before launching the app
+6. **Wait for the daemon to be reachable** before launching the app. In replace
+   mode this matters extra: the app adopts an already-reachable daemon on 7837
+   and skips its own spawn/pkill, so the manually started `--record` daemon must
+   be up first (otherwise the app would `pkill -x irrlichd` it and respawn one
+   without `--record`).
    ```bash
-   sleep 2 && lsof -iTCP:$DEV_PORT -sTCP:LISTEN -P -n 2>/dev/null
+   for i in 1 2 3 4 5; do
+     curl -fsS --max-time 1 "http://127.0.0.1:$PORT/state" >/dev/null 2>&1 && break
+     sleep 1
+   done
+   lsof -iTCP:$PORT -sTCP:LISTEN -P -n 2>/dev/null
    ```
 
-7. **Start the dev Swift app** — launched via LaunchServices so `Bundle.main` resolves correctly. `IRRLICHT_DAEMON_PORT` points it at the dev daemon (not production's 7837); `IRRLICHT_HOME` is also passed so that if the app ever spawns its OWN daemon (when the step-5 daemon isn't reachable), that daemon stays isolated instead of writing to the production state dir.
+7. **Start the dev Swift app** — launched via LaunchServices so `Bundle.main`
+   resolves correctly. In **separate** mode, `IRRLICHT_DAEMON_PORT`/`IRRLICHT_HOME`
+   point it at the isolated dev daemon. In **replace** mode, no env overrides are
+   passed: the app uses the default port 7837 + production state and, finding the
+   daemon from step 5 already reachable, adopts it instead of spawning its own.
    ```bash
-   open --env IRRLICHT_DAEMON_PORT=$DEV_PORT --env IRRLICHT_HOME="$DEV_HOME" \
-     --stdout /tmp/irrlicht-app-dev.log --stderr /tmp/irrlicht-app-dev.log /tmp/IrrlichtDev.app
+   if [ "$MODE" = "replace" ]; then
+     open --stdout /tmp/irrlicht-app-dev.log --stderr /tmp/irrlicht-app-dev.log "$DEV_APP"
+   else
+     open --env IRRLICHT_DAEMON_PORT=$PORT --env IRRLICHT_HOME="$DEV_HOME" \
+       --stdout /tmp/irrlicht-app-dev.log --stderr /tmp/irrlicht-app-dev.log "$DEV_APP"
+   fi
    ```
 
-8. **Verify** — confirm the dev processes are running and the dev daemon is serving sessions (production on 7837 is unaffected)
+8. **Verify** — dev daemon + app are running and the daemon is serving sessions.
+   In replace mode, also confirm quota data is present (the whole point of 7837).
    ```bash
-   pgrep -f "bin/irrlichd" && pgrep -f "IrrlichtDev" && curl -s http://127.0.0.1:$DEV_PORT/api/v1/sessions | head -1
+   pgrep -f "bin/irrlichd" && pgrep -f "IrrlichtDev" && curl -s http://127.0.0.1:$PORT/api/v1/sessions | head -c 200
+   if [ "$MODE" = "replace" ]; then
+     echo; echo "rate-limit mentions (expect >0 once a statusline tick lands):" \
+       "$(curl -s http://127.0.0.1:$PORT/api/v1/sessions | grep -o 'rate_limit\|used_percent' | wc -l | tr -d ' ')"
+   fi
    ```
 
 ## Notes
-- **Production keeps running.** The production Irrlicht.app (from DMG) and its bundled daemon stay on port 7837 with state under `~/.local/share/irrlicht/` + `~/Library/Application Support/Irrlicht/`. The dev instance binds port `$DEV_PORT` (7838) and routes its WRITTEN state — socket, recordings, history, session store, ledgers, and cost store — beneath `IRRLICHT_HOME=$DEV_HOME`, so it never prunes or mutates production's session/cost data. The dev app reaches the dev daemon because `IRRLICHT_DAEMON_PORT` (via `open --env`) overrides the hardcoded default; `DaemonManager` also skips its global `pkill` when a custom port is set, so it can't take production down.
-- **What the dev instance still shares with production:** it reads the same `~/.claude` transcripts (so the dev UI shows the same live sessions — intended for "see the UI render" testing) and appends to the same `~/Library/Application Support/Irrlicht/logs/events.log`. It does NOT share the on-disk session/ledger/cost stores.
-- Daemon logs: `/tmp/irrlichd-dev.log`
-- Swift app logs: `/tmp/irrlicht-app-dev.log`
+- **separate mode — production keeps running.** The production Irrlicht.app (from DMG) and its bundled daemon stay on port 7837 with state under `~/.local/share/irrlicht/` + `~/Library/Application Support/Irrlicht/`. The dev instance binds port 7838 and routes its WRITTEN state — socket, recordings, history, session store, ledgers, and cost store — beneath `IRRLICHT_HOME=$DEV_HOME`, so it never prunes or mutates production's session/cost data. The dev app reaches the dev daemon because `IRRLICHT_DAEMON_PORT` (via `open --env`) overrides the hardcoded default; `DaemonManager` also skips its global `pkill` when a custom port is set, so it can't take production down.
+- **separate mode shares with production:** it reads the same `~/.claude` transcripts (so the dev UI shows the same live sessions) and appends to the same `~/Library/Application Support/Irrlicht/logs/events.log`. It does NOT share the on-disk session/ledger/cost stores — and it does NOT receive the statusline quota feed (that hook posts only to 7837), so the subscription panel shows its empty-state.
+- **replace mode — single instance on production's footprint.** Runs the dev binaries on port 7837 with the production state dir (no `IRRLICHT_HOME`), so the statusline quota feed and the production session/cost/ledger stores all apply. Because the dev daemon runs with `--record`, recordings land in the production recordings dir (`~/.local/share/irrlicht/recordings/`) for the duration. To return to the real production build, relaunch `/Applications/Irrlicht.app` (it will reclaim 7837 after this dev instance is stopped).
+- Daemon logs: `/tmp/irrlichd-dev.log` · Swift app logs: `/tmp/irrlicht-app-dev.log`
 - **TCC stability**: run `tools/dev-sign-setup.sh` once to install the `"Irrlicht Dev"` self-signed code signing identity. The skill automatically signs with it when present, giving the app a stable designated requirement so Accessibility/Automation grants persist across rebuilds. Without it, every rebuild invalidates TCC and requires re-granting in System Settings.
