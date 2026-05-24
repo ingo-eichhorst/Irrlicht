@@ -129,11 +129,29 @@ UUID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
 REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
 
+# Isolation knobs (default = production layout). Set IRRLICHT_ONBOARD_HOME
+# to a scratch dir to spawn the recording daemon with its OWN
+# IRRLICHT_HOME (socket / addr file / state under there) on an alternate
+# bind port, so it coexists with a running production irrlichd instead of
+# clashing on 7837. Filesystem-observed adapters (codex/pi/aider/opencode)
+# record fine this way because they watch the real $HOME (e.g.
+# ~/.codex/sessions) regardless of IRRLICHT_HOME. claudecode is the one
+# exception — its hooks POST to a hardcoded :7837 — so precheck refuses
+# claudecode in coexist mode.
+ONBOARD_HOME="${IRRLICHT_ONBOARD_HOME:-}"
+ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7837}"
+if [[ -n "$ONBOARD_HOME" ]]; then
+  ONBOARD_SOCK="$ONBOARD_HOME/irrlichd.sock"
+else
+  ONBOARD_SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"
+fi
+
 # --- Daemon source ------------------------------------------------------
 # Two modes:
-#  - isolated (default): spawn a dedicated `irrlichd --record` on port
-#    7837 with $STAGING/recordings as its recordings dir. Killed after
-#    the driver returns so the recorder flushes cleanly.
+#  - isolated (default): spawn a dedicated `irrlichd --record` on
+#    $ONBOARD_BIND (7837 unless overridden) with $STAGING/recordings as
+#    its recordings dir. Killed after the driver returns so the recorder
+#    flushes cleanly.
 #  - attached ($ATTACH=1): use the user's already-running irrlichd.
 #    Dashboard stays connected for the whole recording. We don't spawn
 #    or kill anything; instead we capture the start timestamp now, sleep
@@ -163,11 +181,16 @@ if [[ "$ATTACH" == "1" ]]; then
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else
   DAEMON_LOG="$STAGING/daemon.log"
-  IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
-    IRRLICHT_BIND_ADDR="127.0.0.1:7837" \
+  # `env` (not a bare assignment prefix) so the conditional
+  # ${ONBOARD_HOME:+IRRLICHT_HOME=…} word is parsed as an assignment when
+  # present and vanishes when ONBOARD_HOME is empty — a $-expanded
+  # VAR=value is NOT recognized as an assignment prefix by the shell.
+  env IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
+    IRRLICHT_BIND_ADDR="$ONBOARD_BIND" \
+    ${ONBOARD_HOME:+IRRLICHT_HOME="$ONBOARD_HOME"} \
     "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
   DAEMON_PID=$!
-  echo "daemon started (pid $DAEMON_PID)"
+  echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND${ONBOARD_HOME:+, home=$ONBOARD_HOME})"
 
   # Cleanup: graceful shutdown. Runs once: either via explicit call
   # before transcript resolution (we must drain before continuing), or
@@ -198,7 +221,7 @@ else
 
   # Wait up to 10s for the unix socket to appear — signals the daemon is
   # ready to accept connections.
-  SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"
+  SOCK="$ONBOARD_SOCK"
   for _ in $(seq 1 40); do
     [[ -S "$SOCK" ]] && break
     sleep 0.25

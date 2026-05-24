@@ -3,7 +3,7 @@
 # step-script (send / wait_turn / interrupt / slash / …). For scenarios
 # that can't be expressed as a single `codex exec ...` invocation:
 # multi-turn conversations, mid-turn interrupts, /clear and /fork
-# session swaps, and resume relaunches.
+# session swaps, resume relaunches, and multiple concurrent sessions.
 #
 # Sister script to drive-codex.sh (headless `codex exec` mode). Same
 # staging contract: writes driver.log[.stdout], driver.exit-reason,
@@ -22,6 +22,8 @@
 #   interrupt  — Escape the in-flight turn; codex emits
 #                event_msg/turn_aborted instead of task_complete, so the
 #                task_complete-only turn-counter naturally skips it
+#   keys       — raw tmux key sequence (Up/Down/Enter/Escape …) for
+#                navigating picker UIs such as /model
 #   sleep      — pause N seconds (field: "seconds")
 #   reset_session — send /clear; codex abandons the current conversation
 #                and writes the NEXT prompt's turns to a brand-new rollout
@@ -36,12 +38,34 @@
 #                relaunch `codex resume <UUID> --no-alt-screen`. Codex
 #                APPENDS to the SAME rollout (same session_id) across the
 #                two process lifetimes (verified empirically), so the
-#                session identity is kept unchanged — no second array
-#                entry is appended for the resumed half.
+#                session identity is kept unchanged — no new slot is
+#                allocated for the resumed half.
+#
+# Concurrency (multiple live sessions at once):
+#   start_session — launch a NEW codex session WITHOUT tearing down the
+#                   active one. Defaults to the same cwd as session 1
+#                   (the multiple-sessions-same-cwd case); codex caches
+#                   trust per directory so no second trust dialog fires.
+#                   Override with {"type":"start_session","cwd":"…"}.
+#   any step may carry {"session": N} to switch the active context to
+#   session slot N (1-based) before executing — e.g. send a turn to
+#   session 1 after start_session moved focus to session 2. A bare
+#   {"type":"session","session":N} just switches focus.
+#
+# Session model: every session lifetime is a 1-based "slot". The initial
+# session is slot 1. reset_session/fork/start_session each allocate the
+# next slot; reset_session/fork reuse the active codex process (rotate
+# its rollout) and retire the old slot, start_session launches a fresh
+# process and leaves the previous slot alive. resume relaunches in place
+# (same slot, same rollout). At the end, ALL slots' session_ids +
+# transcripts are written to session.uuids / transcript.paths so
+# run-cell.sh's multi-session curation unions them.
 #
 # Codex assigns its OWN session UUID per rollout and has no --session-id
 # flag; both args are accepted for ABI parity with the other interactive
-# drivers.
+# drivers. A shared workspace can be forced via $IRRLICHT_ONBOARD_CWD
+# (used by run-cell.sh's cross-adapter mode); otherwise each run uses an
+# isolated per-run cwd under the staging dir.
 #
 # Usage:
 #   drive-codex-interactive.sh <staging-dir> <preferred-uuid-ignored> \
@@ -66,45 +90,45 @@ DRIVER_LOG="$STAGING/driver.log"
 CODEX_SESSIONS_DIR="$HOME/.codex/sessions"
 mkdir -p "$CODEX_SESSIONS_DIR"
 
-# MARKER gates rollout discovery: resolve_transcript only considers
-# rollout files NEWER than the marker. reset_session / fork bump it so
-# the NEXT discovery skips the prior (now-frozen) rollout and finds the
-# fresh one. resume does NOT bump it — the resumed process appends to
-# the same (already-discovered) rollout.
-MARKER="$STAGING/.codex-start-marker"
-touch "$MARKER"
-
-# Per-run CWD so codex creates a session under a fresh path. Also keeps
-# the trust dialog isolated to this run's path (codex prompts for trust
-# on first encounter with any directory).
-RUN_CWD="$STAGING/cwd"
+# Per-run CWD so codex creates sessions under a fresh path, isolating the
+# trust dialog to this run. run-cell.sh's cross-adapter mode overrides
+# this via $IRRLICHT_ONBOARD_CWD so a second, different adapter can share
+# the SAME workspace (multiple-agents-same-workspace).
+RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
 
-# Current-session state. TRANSCRIPT/UUID are the codex-side identifiers
-# for the live rollout: UUID is `.payload.id` (the bare conversation
-# UUID, used as the `codex resume <UUID>` argument); TRANSCRIPT is the
-# absolute rollout-*.jsonl path. SESSION is the tmux session name; it
-# rotates across resume relaunches.
-SESSION="codex-onboard-$(date +%s)-$$"
+# Active-session view — the step functions read/write these. They are a
+# cache of the active slot's state, kept in sync via save_active /
+# load_slot. TRANSCRIPT is the absolute rollout-*.jsonl path; UUID is the
+# bare conversation UUID (.payload.id, the `codex resume <UUID>` arg);
+# SESSION is the tmux session name; MARKER gates rollout discovery for
+# this slot (resolve_transcript only considers rollouts NEWER than it).
+SESSION=""
 TRANSCRIPT=""
 UUID=""
 EXPECTED_TURNS=0
+MARKER=""
 
-# Cumulative per-session records — written to staging at end so
-# run-cell.sh / curate can union them into the fixture. Each entry is
-# the DAEMON-side session_id (the rollout filename minus ".jsonl", i.e.
-# `rollout-<ts>-<uuid>`) — NOT the bare `.payload.id`. The daemon keys
-# sessions on that filename stem (see fswatcher extractSessionID), and
-# curate-lifecycle-fixture.sh filters events by `.session_id`, so the
-# array MUST hold the filename-stem form for the fixture filter to match.
-SESSION_IDS=()
-SESSION_TRANSCRIPTS=()
+# Per-slot state (1-based; index 0 unused). Each slot is one session
+# lifetime. SES_ALIVE[i]=1 while its tmux session is still running.
+SES_SESSION=()
+SES_TRANSCRIPT=()
+SES_UUID=()
+SES_EXPECTED=()
+SES_MARKER=()
+SES_CWD=()
+SES_ALIVE=()
+N_SLOTS=0
+ACTIVE=0
 
 # daemon_sid maps an absolute rollout path to the daemon's session_id
-# (basename minus ".jsonl").
+# (basename minus ".jsonl"). The daemon keys sessions on that filename
+# stem (see fswatcher extractSessionID), and curate-lifecycle-fixture.sh
+# filters events by `.session_id`, so the fixture lists MUST hold the
+# filename-stem form — NOT the bare `.payload.id`.
 daemon_sid() {
   local p="$1"
   [[ -z "$p" ]] && { echo ""; return; }
@@ -112,23 +136,80 @@ daemon_sid() {
   echo "${b%.jsonl}"
 }
 
-tmux kill-session -t "$SESSION" 2>/dev/null || true
+# Persist the active-view variables back into the active slot.
+save_active() {
+  [[ $ACTIVE -ge 1 ]] || return 0
+  SES_SESSION[$ACTIVE]="$SESSION"
+  SES_TRANSCRIPT[$ACTIVE]="$TRANSCRIPT"
+  SES_UUID[$ACTIVE]="$UUID"
+  SES_EXPECTED[$ACTIVE]="$EXPECTED_TURNS"
+  SES_MARKER[$ACTIVE]="$MARKER"
+}
 
-# boot_session brings up a codex TUI in $SESSION running the given argv,
-# accepts the trust dialog, waits for the "OpenAI Codex" banner, and
-# waits out the "Booting MCP" phase. Caller sets $SESSION first.
+# Make slot $1 the active session and load its state into the view vars.
+load_slot() {
+  ACTIVE="$1"
+  SESSION="${SES_SESSION[$ACTIVE]}"
+  TRANSCRIPT="${SES_TRANSCRIPT[$ACTIVE]}"
+  UUID="${SES_UUID[$ACTIVE]}"
+  EXPECTED_TURNS="${SES_EXPECTED[$ACTIVE]}"
+  MARKER="${SES_MARKER[$ACTIVE]}"
+}
+
+# Allocate a fresh slot (tmux session name, cwd) and make it active.
+# Mints a per-slot discovery marker and clears the view's
+# TRANSCRIPT/UUID/EXPECTED_TURNS so the new session starts known.
+alloc_slot() {
+  local sess="$1" cwd="$2"
+  N_SLOTS=$((N_SLOTS + 1))
+  local marker="$STAGING/.codex-start-marker.$N_SLOTS"
+  touch "$marker"
+  SES_SESSION[$N_SLOTS]="$sess"
+  SES_TRANSCRIPT[$N_SLOTS]=""
+  SES_UUID[$N_SLOTS]=""
+  SES_EXPECTED[$N_SLOTS]=0
+  SES_MARKER[$N_SLOTS]="$marker"
+  SES_CWD[$N_SLOTS]="$cwd"
+  SES_ALIVE[$N_SLOTS]=1
+  ACTIVE=$N_SLOTS
+  SESSION="$sess"
+  TRANSCRIPT=""
+  UUID=""
+  EXPECTED_TURNS=0
+  MARKER="$marker"
+}
+
+# Has CURRENT cwd already been used (and therefore trusted) by an earlier
+# slot in THIS run? If so, the second codex in that dir won't get a
+# "trust this folder" prompt and the trust wait must be skipped.
+cwd_already_trusted() {
+  local i
+  for (( i = 1; i < ACTIVE; i++ )); do
+    [[ "${SES_CWD[$i]}" == "${SES_CWD[$ACTIVE]}" ]] && return 0
+  done
+  return 1
+}
+
+# boot_session brings up a codex TUI in the active slot's tmux session
+# running the given argv, accepts the trust dialog (unless this slot's
+# cwd was already trusted by an earlier slot this run), waits for the
+# "OpenAI Codex" banner, and waits out the "Booting MCP" phase. Caller
+# allocates the slot (alloc_slot) before invoking.
 #
 # Launch/boot notes:
 #   --no-alt-screen keeps codex in inline mode so its output is
 #   capturable via tmux pipe-pane (alt-screen would clear the screen on
 #   every redraw and yield mostly noise).
 #
+#   Per-slot stdout: each slot pipes to $DRIVER_LOG.stdout.$ACTIVE. A
+#   single shared file would interleave two concurrent panes' TUI
+#   refreshes and confuse banner / trust detection.
+#
 #   Trust dialog: codex shows "Do you trust the contents of this
 #   directory?" on first encounter with a directory. The pipe-pane LOG
 #   splits that string across cursor-positioning escapes, so a literal
 #   grep on the LOG misses it — poll the LIVE pane via capture-pane
-#   instead, which renders the text contiguously. Each run uses a fresh
-#   cwd so the dialog always appears.
+#   instead, which renders the text contiguously.
 #
 #   Banner: "OpenAI Codex (vN.N.N)" renders contiguously in the LOG.
 #   Generous cap (90s) because codex may auto-install npm updates on
@@ -138,27 +219,38 @@ tmux kill-session -t "$SESSION" 2>/dev/null || true
 #   typed during this phase have their Enter silently swallowed. Poll the
 #   LIVE pane until "Booting MCP" is gone.
 boot_session() {
-  local sess="$1"; shift
-  tmux new-session -d -s "$sess" -c "$RUN_CWD" "$@"
-  tmux pipe-pane -t "$sess" -o "cat >> '$DRIVER_LOG.stdout'"
-  echo "[driver] tmux started: $sess (cwd=$RUN_CWD, argv: $*)" >&2
+  local sess="$SESSION" cwd="${SES_CWD[$ACTIVE]}"
+  local slot_stdout="$DRIVER_LOG.stdout.$ACTIVE"
+  : > "$slot_stdout"
+  mkdir -p "$cwd"
+  tmux kill-session -t "$sess" 2>/dev/null || true
+  tmux new-session -d -s "$sess" -c "$cwd" "$@"
+  tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
+  echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd, argv: $*)" >&2
+
+  # codex caches trust per-directory, so a concurrent session sharing an
+  # already-trusted cwd never sees the prompt — skip the wait so we don't
+  # stall for a dialog that will never appear.
+  if cwd_already_trusted; then
+    echo "[driver] trust: cwd already trusted by an earlier session — skipping prompt" >&2
+  else
+    local WAITED=0
+    while [[ $WAITED -lt 30 ]]; do
+      if tmux capture-pane -t "$sess" -p -S -40 2>/dev/null | grep -q 'Do you trust'; then
+        tmux send-keys -t "$sess" "1"
+        sleep 0.3
+        tmux send-keys -t "$sess" Enter
+        echo "[driver] accepted trust dialog" >&2
+        break
+      fi
+      sleep 0.5
+      WAITED=$((WAITED + 1))
+    done
+  fi
 
   local WAITED=0
-  while [[ $WAITED -lt 30 ]]; do
-    if tmux capture-pane -t "$sess" -p -S -40 2>/dev/null | grep -q 'Do you trust'; then
-      tmux send-keys -t "$sess" "1"
-      sleep 0.3
-      tmux send-keys -t "$sess" Enter
-      echo "[driver] accepted trust dialog" >&2
-      break
-    fi
-    sleep 0.5
-    WAITED=$((WAITED + 1))
-  done
-
-  WAITED=0
   while [[ $WAITED -lt 180 ]]; do
-    if [[ -f "$DRIVER_LOG.stdout" ]] && grep -aq 'OpenAI Codex' "$DRIVER_LOG.stdout" 2>/dev/null; then
+    if [[ -f "$slot_stdout" ]] && grep -aq 'OpenAI Codex' "$slot_stdout" 2>/dev/null; then
       break
     fi
     sleep 0.5
@@ -176,27 +268,42 @@ boot_session() {
   sleep 2  # extra grace for the input prompt to settle
 }
 
-# Bring up the first session.
-boot_session "$SESSION" codex --no-alt-screen
+# transcript_claimed reports whether an absolute rollout path is already
+# bound to a DIFFERENT slot, so concurrent discovery never double-binds
+# the same rollout when per-slot markers collide at 1s mtime granularity.
+transcript_claimed() {
+  local p="$1" i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ $i -eq $ACTIVE ]] && continue
+    [[ "${SES_TRANSCRIPT[$i]}" == "$p" ]] && return 0
+  done
+  return 1
+}
 
 # Codex creates its rollout file under CODEX_SESSIONS_DIR only after the
 # first user message is processed — there's nothing to read at boot.
-# Defer transcript/UUID resolution until step_wait_turn (or end of
-# script if there are no wait_turns). Discovery finds the newest
-# rollout-*.jsonl NEWER than $MARKER; after a /clear or /fork (which bump
-# $MARKER) the prior rollout is excluded so the new one is picked up.
+# Discovery finds the newest rollout-*.jsonl NEWER than this slot's
+# $MARKER that isn't already bound to another slot; after a /clear or
+# /fork (which bump the marker) the prior rollout is excluded so the new
+# one is picked up. With concurrent sessions each slot resolves on its
+# first wait_turn — before the next session is booted — and caches the
+# result, so later focus switches reuse the bound path.
 resolve_transcript() {
   if [[ -n "$TRANSCRIPT" ]]; then return 0; fi
   for _ in $(seq 1 60); do
-    local candidate
-    candidate="$(find "$CODEX_SESSIONS_DIR" -maxdepth 5 -type f \
-                  -name 'rollout-*.jsonl' -newer "$MARKER" 2>/dev/null \
-                | sort | tail -n1)"
+    local candidate=""
+    local f
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      transcript_claimed "$f" && continue
+      candidate="$f"
+    done < <(find "$CODEX_SESSIONS_DIR" -maxdepth 5 -type f \
+                  -name 'rollout-*.jsonl' -newer "$MARKER" 2>/dev/null | sort)
     if [[ -n "$candidate" && -s "$candidate" ]]; then
       TRANSCRIPT="$candidate"
       UUID="$(head -n1 "$TRANSCRIPT" | jq -r '.payload.id // empty' 2>/dev/null || true)"
       [[ -n "$UUID" ]] || { TRANSCRIPT=""; sleep 0.5; continue; }
-      echo "[driver] resolve_transcript: $TRANSCRIPT (uuid=$UUID, sid=$(daemon_sid "$TRANSCRIPT"))" >&2
+      echo "[driver] resolve_transcript[s$ACTIVE]: $TRANSCRIPT (uuid=$UUID, sid=$(daemon_sid "$TRANSCRIPT"))" >&2
       return 0
     fi
     sleep 0.5
@@ -230,12 +337,12 @@ step_send() {
   sleep 0.3
   tmux send-keys -t "$SESSION" Enter
   EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
-  echo "[driver] send: ${text:0:60} (expecting turn $EXPECTED_TURNS)" >&2
+  echo "[driver] send[s$ACTIVE]: ${text:0:60} (expecting turn $EXPECTED_TURNS)" >&2
 }
 
 step_wait_turn() {
   resolve_transcript || {
-    echo "[driver] wait_turn: codex never created a rollout under $CODEX_SESSIONS_DIR" >&2
+    echo "[driver] wait_turn[s$ACTIVE]: codex never created a rollout under $CODEX_SESSIONS_DIR" >&2
     EXIT_REASON="readiness_timeout"
     return 1
   }
@@ -243,12 +350,12 @@ step_wait_turn() {
   while [[ $(date +%s) -lt $DEADLINE ]]; do
     now=$(turn_count)
     if [[ $now -ge $EXPECTED_TURNS ]]; then
-      echo "[driver] wait_turn: count=$now (expected ≥ $EXPECTED_TURNS)" >&2
+      echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected ≥ $EXPECTED_TURNS)" >&2
       return 0
     fi
     sleep 1
   done
-  echo "[driver] wait_turn: timeout (count=$now, expected ≥ $EXPECTED_TURNS)" >&2
+  echo "[driver] wait_turn[s$ACTIVE]: timeout (count=$now, expected ≥ $EXPECTED_TURNS)" >&2
   EXIT_REASON="timeout"
   return 1
 }
@@ -262,45 +369,46 @@ step_interrupt() {
   if [[ $EXPECTED_TURNS -gt 0 ]]; then
     EXPECTED_TURNS=$((EXPECTED_TURNS - 1))
   fi
-  echo "[driver] interrupt (Escape, expecting turn $EXPECTED_TURNS)" >&2
+  echo "[driver] interrupt[s$ACTIVE] (Escape, expecting turn $EXPECTED_TURNS)" >&2
   sleep 1
 }
 
 # swap_after_slash <slash-text> — shared handler for /clear (reset_session)
 # and /fork (fork). Both abandon the current rollout and cause codex to
-# write subsequent turns to a NEW rollout with a fresh session_id:
+# write subsequent turns to a NEW rollout with a fresh session_id, in the
+# SAME process:
 #   /clear is LAZY  — the new rollout materializes only on the first
 #                     post-clear user message.
 #   /fork  is EAGER — the new rollout materializes the instant the
 #                     command runs (carrying replayed pre-fork history).
-# Either way the discovery is identical: record the current session,
-# send the slash, bump $MARKER, and clear the cached TRANSCRIPT/UUID +
-# reset EXPECTED_TURNS so the NEXT wait_turn's resolve_transcript finds
-# the new rollout (newer than the bumped marker).
+# Either way: resolve the current rollout (so its session_id is recorded
+# in the slot list), send the slash, then allocate a NEW slot that reuses
+# the same tmux/process. The new slot's fresh marker makes the next
+# wait_turn's resolve_transcript find the new rollout.
 swap_after_slash() {
   local slash="$1"
-  # Make sure we've discovered the CURRENT rollout before swapping — its
-  # session_id needs to land in the array so the fixture includes it.
   resolve_transcript || true
-  local old_transcript="$TRANSCRIPT"
-  local old_sid; old_sid="$(daemon_sid "$old_transcript")"
-  SESSION_IDS+=("$old_sid")
-  SESSION_TRANSCRIPTS+=("$old_transcript")
-  echo "[driver] swap ($slash): recorded old session sid=$old_sid ($old_transcript)" >&2
+  local old_tmux="$SESSION"
+  local old_cwd="${SES_CWD[$ACTIVE]}"
+  save_active
+  # The old rollout is frozen; retire the slot but keep it in the list so
+  # the epilogue flushes its session_id. The process keeps running (the
+  # new slot reuses its tmux), so it is killed exactly once at teardown.
+  SES_ALIVE[$ACTIVE]=0
+  echo "[driver] swap ($slash): recorded old session sid=$(daemon_sid "$TRANSCRIPT")" >&2
 
-  tmux send-keys -t "$SESSION" -l -- "$slash"
+  tmux send-keys -t "$old_tmux" -l -- "$slash"
   sleep 0.3
-  tmux send-keys -t "$SESSION" Enter
+  tmux send-keys -t "$old_tmux" Enter
 
-  # Bump the marker PAST the old rollout's mtime so discovery skips it.
-  # A second granularity collision is possible if the old rollout was
-  # just written, so sleep first, then re-touch.
+  # Allocate the new slot reusing the same tmux/process. alloc_slot mints
+  # a fresh marker; sleep first so it sorts strictly after the old
+  # rollout's mtime (1s granularity), then re-touch to be safe.
   sleep 1
+  alloc_slot "$old_tmux" "$old_cwd"
+  SES_ALIVE[$ACTIVE]=1
   touch "$MARKER"
-  TRANSCRIPT=""
-  UUID=""
-  EXPECTED_TURNS=0
-  echo "[driver] swap ($slash): marker bumped, awaiting new rollout on next prompt/turn" >&2
+  echo "[driver] swap ($slash): new slot #${ACTIVE}, marker bumped, awaiting new rollout" >&2
   sleep 1
 }
 
@@ -310,22 +418,20 @@ step_exit_clean() {
   # process_exited. Sleep gives codex time to terminate.
   tmux send-keys -t "$SESSION" C-d
   sleep 2
+  SES_ALIVE[$ACTIVE]=0
   echo "[driver] exit_clean: sent Ctrl-D to $SESSION" >&2
 }
 
 step_resume() {
-  # Resume the current codex conversation in a new process lifetime.
+  # Resume the active codex conversation in a new process lifetime.
   # Exit the running codex cleanly (Ctrl-D), kill its tmux session, then
   # relaunch `codex resume <UUID> --no-alt-screen`. Codex APPENDS to the
   # SAME rollout file (same session_id) across both lifetimes — verified
-  # empirically — so this is ONE session with two process lifetimes:
-  # CURRENT_UUID / TRANSCRIPT stay unchanged and we do NOT append a
-  # second array entry for the resumed half (which would double-list the
-  # same rollout path and double-concat the transcript at curate time).
-  #
-  # Make sure the live rollout is resolved so we have a UUID to resume
-  # by. Fall back to `codex resume --last` when the UUID is unknown
-  # (e.g. resume with no prior wait_turn).
+  # empirically — so this is ONE session (one slot) with two process
+  # lifetimes: TRANSCRIPT/UUID/MARKER stay unchanged and we do NOT
+  # allocate a new slot (which would double-list the rollout and
+  # double-concat the transcript at curate time). Only the tmux session
+  # name rotates.
   resolve_transcript || true
   local resume_uuid="$UUID"
   local saved_transcript="$TRANSCRIPT"
@@ -335,29 +441,65 @@ step_resume() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
 
-  local idx=$(( ${#SESSION_IDS[@]} + 1 ))
-  SESSION="codex-onboard-$(date +%s)-$$-${idx}"
+  SESSION="codex-onboard-$(date +%s)-$$-r${ACTIVE}"
+  SES_SESSION[$ACTIVE]="$SESSION"
 
   # Keep the SAME rollout cached across the relaunch: codex appends to it
   # rather than minting a new one, so resolve_transcript must NOT run
-  # again (it would just re-find the same file, but clearing+re-finding
-  # risks racing the new process before it reopens the rollout). Keep
-  # TRANSCRIPT/UUID/EXPECTED_TURNS as-is.
+  # again (clearing+re-finding risks racing the new process before it
+  # reopens the rollout). Keep TRANSCRIPT/UUID/EXPECTED_TURNS as-is.
   if [[ -n "$resume_uuid" ]]; then
-    echo "[driver] resume: relaunch codex resume $resume_uuid (same rollout=$saved_transcript)" >&2
-    boot_session "$SESSION" codex resume "$resume_uuid" --no-alt-screen
+    echo "[driver] resume[s$ACTIVE]: relaunch codex resume $resume_uuid (same rollout=$saved_transcript)" >&2
+    boot_session codex resume "$resume_uuid" --no-alt-screen
   else
-    echo "[driver] resume: UUID unknown — relaunch codex resume --last" >&2
-    boot_session "$SESSION" codex resume --last --no-alt-screen
+    echo "[driver] resume[s$ACTIVE]: UUID unknown — relaunch codex resume --last" >&2
+    boot_session codex resume --last --no-alt-screen
   fi
 }
 
-# Iterate steps. EXIT_REASON updates persist via the parent shell
-# (process substitution feeds the loop).
+step_start_session() {
+  # Launch a NEW concurrent codex session WITHOUT tearing down the active
+  # one. The previous session keeps running (its tmux survives), so the
+  # daemon observes both as independent session rows. Defaults to session
+  # 1's cwd (the same-cwd scenario); pass a directory to launch elsewhere.
+  local req_cwd="$1"
+  save_active
+  local idx=$(( N_SLOTS + 1 ))
+  local new_cwd="${req_cwd:-$RUN_CWD}"
+  alloc_slot "codex-onboard-$(date +%s)-$$-${idx}" "$new_cwd"
+  echo "[driver] start_session: concurrent session slot #${ACTIVE} (cwd=$new_cwd)" >&2
+  boot_session codex --no-alt-screen
+}
+
+# Bring up the first session as slot 1. SCRIPT_JSON's reset_session/fork/
+# start_session steps allocate further slots; resume relaunches in place.
+alloc_slot "codex-onboard-$(date +%s)-$$" "$RUN_CWD"
+boot_session codex --no-alt-screen
+
+# Iterate steps. EXIT_REASON / array updates persist via the parent shell
+# (process substitution feeds the loop — the body is NOT subshelled).
 STEP_OK=true
 while read -r step; do
   if ! $STEP_OK; then break; fi
   type=$(jq -r '.type' <<<"$step")
+
+  # Optional inline session target: switch the active context to slot N
+  # before executing the step. start_session is exempt (it allocates its
+  # own slot). A target slot must already exist.
+  tgt=$(jq -r '.session // empty' <<<"$step")
+  if [[ -n "$tgt" && "$type" != "start_session" && "$tgt" != "$ACTIVE" ]]; then
+    if [[ "$tgt" =~ ^[0-9]+$ && "$tgt" -ge 1 && "$tgt" -le "$N_SLOTS" ]]; then
+      save_active
+      load_slot "$tgt"
+      echo "[driver] switch -> session slot $tgt (uuid=$UUID)" >&2
+    else
+      echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
+      EXIT_REASON="nonzero(2)"
+      STEP_OK=false
+      continue
+    fi
+  fi
+
   case "$type" in
     send|slash)
       step_send "$(jq -r '.text' <<<"$step")"
@@ -375,7 +517,7 @@ while read -r step; do
       ks=$(jq -r '.keys' <<<"$step")
       # shellcheck disable=SC2086 — intentional word-splitting of the key list
       tmux send-keys -t "$SESSION" $ks
-      echo "[driver] keys: $ks" >&2
+      echo "[driver] keys[s$ACTIVE]: $ks" >&2
       sleep 0.5
       ;;
     sleep)
@@ -395,6 +537,13 @@ while read -r step; do
     resume)
       step_resume
       ;;
+    start_session)
+      step_start_session "$(jq -r '.cwd // empty' <<<"$step")"
+      ;;
+    session)
+      # Pure focus switch — already handled by the inline target block.
+      :
+      ;;
     *)
       echo "[driver] unknown step type: $type" >&2
       EXIT_REASON="nonzero(2)"
@@ -403,44 +552,63 @@ while read -r step; do
   esac
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 
-# If we never resolved the transcript via wait_turn (e.g. a script
-# without any wait_turn step), try once more before tearing down.
-if [[ -z "$TRANSCRIPT" ]]; then
-  resolve_transcript || true
-fi
+# Persist the final active state.
+save_active
 
-# Final session metadata — swap_after_slash only records sessions when it
-# tears them down, so the last live session needs an explicit entry here.
-SESSION_IDS+=("$(daemon_sid "$TRANSCRIPT")")
-SESSION_TRANSCRIPTS+=("$TRANSCRIPT")
+# Best-effort: any slot that never resolved a transcript (e.g. a script
+# with no wait_turn for that session) gets one last resolution attempt.
+for (( i = 1; i <= N_SLOTS; i++ )); do
+  if [[ -z "${SES_TRANSCRIPT[$i]}" ]]; then
+    load_slot "$i"
+    resolve_transcript || true
+    save_active
+  fi
+done
 
 sleep 0.5
-tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+# Tear down every still-alive session.
+for (( i = 1; i <= N_SLOTS; i++ )); do
+  if [[ "${SES_ALIVE[$i]}" == "1" ]]; then
+    tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  fi
+done
 
 {
   echo "=== stdout ==="
-  cat "$DRIVER_LOG.stdout" 2>/dev/null || true
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    if [[ -f "$DRIVER_LOG.stdout.$i" ]]; then
+      echo "--- session slot $i (sid=$(daemon_sid "${SES_TRANSCRIPT[$i]}")) ---"
+      cat "$DRIVER_LOG.stdout.$i" 2>/dev/null || true
+      echo
+    fi
+  done
   echo
   echo "=== exit reason: $EXIT_REASON ==="
 } > "$DRIVER_LOG"
+# Keep a combined .stdout for backward-compat with any tooling that reads it.
+cat "$DRIVER_LOG".stdout.* > "$DRIVER_LOG.stdout" 2>/dev/null || true
 
 echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 
-# Primary session = first one (kept for backward-compat with the
+# Primary session = slot 1 (kept for backward-compat with the existing
 # single-session run-cell + curate code paths). Write the daemon-side
-# session_id form so run-cell's primary-skip comparison and curate's
-# `.session_id` filter both match without depending on the RECORDED_SID
-# rewrite.
-echo "${SESSION_IDS[0]}" > "$STAGING/session.uuid"
-echo "${SESSION_TRANSCRIPTS[0]}" > "$STAGING/transcript.path"
+# session_id form (rollout filename stem) so run-cell's primary-skip
+# comparison and curate's `.session_id` filter both match.
+echo "$(daemon_sid "${SES_TRANSCRIPT[1]}")" > "$STAGING/session.uuid"
+echo "${SES_TRANSCRIPT[1]}" > "$STAGING/transcript.path"
 
 # Multi-session metadata. A single-session run leaves these with one
 # entry each — same shape, but run-cell.sh's multi-session branch is a
 # no-op when there's only one line.
-printf '%s\n' "${SESSION_IDS[@]}" > "$STAGING/session.uuids"
-printf '%s\n' "${SESSION_TRANSCRIPTS[@]}" > "$STAGING/transcript.paths"
+: > "$STAGING/session.uuids"
+: > "$STAGING/transcript.paths"
+for (( i = 1; i <= N_SLOTS; i++ )); do
+  echo "$(daemon_sid "${SES_TRANSCRIPT[$i]}")" >> "$STAGING/session.uuids"
+  echo "${SES_TRANSCRIPT[$i]}" >> "$STAGING/transcript.paths"
+done
 
-echo "drive-codex-interactive: $EXIT_REASON (sessions=${#SESSION_IDS[@]}, primary=${SESSION_IDS[0]}, transcript=${SESSION_TRANSCRIPTS[0]})"
+echo "drive-codex-interactive: $EXIT_REASON (slots=${N_SLOTS}, primary=$(daemon_sid "${SES_TRANSCRIPT[1]}"), transcript=${SES_TRANSCRIPT[1]})"
 
 case "$EXIT_REASON" in
   ok)            exit 0 ;;
