@@ -52,8 +52,11 @@ elif [[ -n "${IRRLICHT_ONBOARD_HOME:-}" ]]; then
   # + state) and an alternate bind port, so a running production irrlichd
   # is fine — they don't share a socket or port. We only require that OUR
   # target port is free and that the adapter is filesystem-observed.
-  ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7837}"
+  ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
   ONBOARD_PORT="${ONBOARD_BIND##*:}"
+  if [[ ! "$ONBOARD_PORT" =~ ^[0-9]+$ ]]; then
+    fail "IRRLICHT_ONBOARD_BIND_ADDR must be host:port with a numeric port (got '$ONBOARD_BIND')"
+  fi
   if [[ "$ONBOARD_PORT" == "7837" ]]; then
     fail "coexist mode (IRRLICHT_ONBOARD_HOME set) needs a non-7837 IRRLICHT_ONBOARD_BIND_ADDR so it doesn't clash with production"
   fi

@@ -180,48 +180,71 @@ DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo unknown)"
 RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
 [[ -n "$RECORDING" ]] || { echo "no recording produced under $STAGING/recordings" >&2; exit 1; }
 
-# --- Collect each adapter's daemon session_id + transcript --------------
-# The interactive drivers write session.uuid (already the DAEMON-side
-# session_id: rollout-stem for codex, UUID for claudecode) and
-# transcript.path. Gather them so each per-adapter curate can union the
-# OTHER adapters' sessions into its workspace events.jsonl. (bash 3.2 —
-# no associative arrays; SID[i]/TRANSCRIPT[i] are parallel to ADAPTERS[i].)
-SID=()
-TRANSCRIPT=()
-ALL_SIDS=()
+# --- Collect each adapter's daemon session_id(s) + transcript(s) --------
+# Drivers write session.uuid/transcript.path (the slot-1 PRIMARY, already
+# the DAEMON-side session_id: rollout-stem for codex, UUID for claudecode)
+# AND session.uuids/transcript.paths (ALL slots, in order) when a script
+# chains start_session/reset_session/fork. We curate each adapter's fixture
+# from its PRIMARY transcript but union EVERY session (all adapters, all
+# slots) into the workspace events.jsonl. (bash 3.2 — parallel indexed
+# arrays keyed by ADAPTERS position.)
+PRIMARY_SID=()
+PRIMARY_TRANSCRIPT=()
+OWN_TRANSCRIPTS=()   # this adapter's own slot transcripts, newline-joined
+ALL_SIDS=()          # flat union of every adapter's every slot sid
 for idx in "${!ADAPTERS[@]}"; do
   a="${ADAPTERS[$idx]}"
   sub="$STAGING/$a"
-  SID[$idx]="$(cat "$sub/session.uuid" 2>/dev/null || true)"
-  TRANSCRIPT[$idx]="$(cat "$sub/transcript.path" 2>/dev/null || true)"
-  if [[ -z "${SID[$idx]}" || -z "${TRANSCRIPT[$idx]}" || ! -f "${TRANSCRIPT[$idx]}" ]]; then
-    echo "ERROR: $a driver did not resolve a session (sid=${SID[$idx]:-missing}, transcript=${TRANSCRIPT[$idx]:-missing})" >&2
+  PRIMARY_SID[$idx]="$(head -n1 "$sub/session.uuid" 2>/dev/null || true)"
+  PRIMARY_TRANSCRIPT[$idx]="$(head -n1 "$sub/transcript.path" 2>/dev/null || true)"
+  if [[ -z "${PRIMARY_SID[$idx]}" || -z "${PRIMARY_TRANSCRIPT[$idx]}" || ! -f "${PRIMARY_TRANSCRIPT[$idx]}" ]]; then
+    echo "ERROR: $a driver did not resolve a session (sid=${PRIMARY_SID[$idx]:-missing}, transcript=${PRIMARY_TRANSCRIPT[$idx]:-missing})" >&2
     DRV_FAIL=1
     continue
   fi
-  ALL_SIDS+=("${SID[$idx]}")
-  echo "$a: sid=${SID[$idx]} transcript=${TRANSCRIPT[$idx]}"
+  # Full per-slot lists (fall back to the single-file primaries).
+  uuids_file="$sub/session.uuids"; [[ -f "$uuids_file" ]] || uuids_file="$sub/session.uuid"
+  paths_file="$sub/transcript.paths"; [[ -f "$paths_file" ]] || paths_file="$sub/transcript.path"
+  csv=""
+  while IFS= read -r s; do
+    [[ -z "$s" ]] && continue
+    csv+="${csv:+,}$s"
+    ALL_SIDS+=("$s")
+  done < "$uuids_file"
+  OWN_TRANSCRIPTS[$idx]="$(cat "$paths_file" 2>/dev/null || true)"
+  echo "$a: primary=${PRIMARY_SID[$idx]} sids=[$csv]"
 done
 [[ "$DRV_FAIL" -eq 0 ]] || { echo "one or more drivers failed; not curating" >&2; exit 1; }
 
 # --- Curate one per-adapter fixture each --------------------------------
-# events.jsonl spans the whole workspace (all adapters' sessions, via
-# IRRLICHT_EXTRA_SESSION_IDS); transcript.jsonl stays this adapter's own
-# (IRRLICHT_EXTRA_TRANSCRIPTS deliberately UNSET so curate copies the
-# single transcript instead of concatenating across formats).
+# events.jsonl spans the WHOLE workspace: every session of every adapter
+# (ALL_SIDS) is unioned in via IRRLICHT_EXTRA_SESSION_IDS. transcript.jsonl
+# stays THIS adapter's own — IRRLICHT_EXTRA_TRANSCRIPTS carries only this
+# adapter's slot transcripts (concatenated if it chained sessions), never
+# another adapter's (different format); for a single-slot adapter it's left
+# empty so curate does a plain copy.
 for idx in "${!ADAPTERS[@]}"; do
   a="${ADAPTERS[$idx]}"
+  # extras = every sid except this adapter's primary (curate adds the
+  # primary itself; its sort -u dedups any overlap with this adapter's
+  # own extra slots).
   extra=""
-  for j in "${!ADAPTERS[@]}"; do
-    [[ "$j" == "$idx" ]] && continue
-    extra+="${extra:+,}${SID[$j]}"
+  for s in ${ALL_SIDS[@]+"${ALL_SIDS[@]}"}; do
+    [[ "$s" == "${PRIMARY_SID[$idx]}" ]] && continue
+    extra+="${extra:+,}$s"
   done
-  echo "curating $a (workspace extras: $extra)"
+  # Only concatenate this adapter's transcripts when it has more than one
+  # slot; otherwise leave empty so curate copies the single primary.
+  own_t=""
+  if [[ "$(printf '%s\n' "${OWN_TRANSCRIPTS[$idx]}" | grep -c .)" -gt 1 ]]; then
+    own_t="${OWN_TRANSCRIPTS[$idx]}"
+  fi
+  echo "curating $a (primary=${PRIMARY_SID[$idx]}, workspace extras: $extra)"
   IRRLICHT_EXTRA_SESSION_IDS="$extra" \
-  IRRLICHT_EXTRA_TRANSCRIPTS="" \
+  IRRLICHT_EXTRA_TRANSCRIPTS="$own_t" \
     "$REPO_ROOT/tools/curate-lifecycle-fixture.sh" \
       -d "$STAGING/replaydata/agents" \
-      "$RECORDING" "${SID[$idx]}" "${TRANSCRIPT[$idx]}" "$a" "$SCENARIO"
+      "$RECORDING" "${PRIMARY_SID[$idx]}" "${PRIMARY_TRANSCRIPT[$idx]}" "$a" "$SCENARIO"
 
   ext="$(jq -r '.transcript_extension // "jsonl"' "$REPO_ROOT/replaydata/agents/$a/capabilities.json")"
   staged_t="$STAGING/replaydata/agents/$a/scenarios/$SCENARIO/transcript.$ext"

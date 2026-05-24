@@ -124,6 +124,13 @@ SES_ALIVE=()
 N_SLOTS=0
 ACTIVE=0
 
+# Directories codex has already shown (and we accepted) the trust dialog
+# for, this run. A second boot in any of these — a concurrent slot in the
+# same cwd OR a resume relaunch of the same slot — won't re-prompt, so the
+# trust-wait poll must be skipped or it stalls ~15s for a dialog that never
+# appears.
+TRUSTED_CWDS=()
+
 # daemon_sid maps an absolute rollout path to the daemon's session_id
 # (basename minus ".jsonl"). The daemon keys sessions on that filename
 # stem (see fswatcher extractSessionID), and curate-lifecycle-fixture.sh
@@ -179,13 +186,14 @@ alloc_slot() {
   MARKER="$marker"
 }
 
-# Has CURRENT cwd already been used (and therefore trusted) by an earlier
-# slot in THIS run? If so, the second codex in that dir won't get a
-# "trust this folder" prompt and the trust wait must be skipped.
+# Has the active slot's cwd already had its trust dialog accepted this
+# run? Covers BOTH a concurrent second slot in the same cwd AND a resume
+# relaunch of the same slot (codex won't re-prompt for a dir it already
+# trusts), so the boot trust-wait can be skipped.
 cwd_already_trusted() {
-  local i
-  for (( i = 1; i < ACTIVE; i++ )); do
-    [[ "${SES_CWD[$i]}" == "${SES_CWD[$ACTIVE]}" ]] && return 0
+  local c="${SES_CWD[$ACTIVE]}" t
+  for t in ${TRUSTED_CWDS[@]+"${TRUSTED_CWDS[@]}"}; do
+    [[ "$t" == "$c" ]] && return 0
   done
   return 1
 }
@@ -228,11 +236,12 @@ boot_session() {
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
   echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd, argv: $*)" >&2
 
-  # codex caches trust per-directory, so a concurrent session sharing an
-  # already-trusted cwd never sees the prompt — skip the wait so we don't
-  # stall for a dialog that will never appear.
+  # codex caches trust per-directory, so a second boot in an
+  # already-trusted cwd (concurrent slot OR resume relaunch) never sees the
+  # prompt — skip the wait so we don't stall ~15s for a dialog that will
+  # never appear.
   if cwd_already_trusted; then
-    echo "[driver] trust: cwd already trusted by an earlier session — skipping prompt" >&2
+    echo "[driver] trust: cwd already trusted this run — skipping prompt" >&2
   else
     local WAITED=0
     while [[ $WAITED -lt 30 ]]; do
@@ -246,6 +255,8 @@ boot_session() {
       sleep 0.5
       WAITED=$((WAITED + 1))
     done
+    # Remember this cwd so a later resume/concurrent boot here skips the poll.
+    TRUSTED_CWDS+=("$cwd")
   fi
 
   local WAITED=0
@@ -463,6 +474,14 @@ step_start_session() {
   # daemon observes both as independent session rows. Defaults to session
   # 1's cwd (the same-cwd scenario); pass a directory to launch elsewhere.
   local req_cwd="$1"
+  # Claim the current slot's rollout BEFORE spawning a concurrent one. If
+  # the prior slot hasn't been resolved (e.g. start_session issued before
+  # its wait_turn) its rollout is unclaimed, and a turn still streaming
+  # there keeps advancing its mtime past the new slot's just-touched
+  # marker — the new slot's resolve_transcript could then bind to the OLD
+  # rollout. Resolving here marks it claimed so transcript_claimed excludes
+  # it from the new slot's discovery.
+  resolve_transcript || true
   save_active
   local idx=$(( N_SLOTS + 1 ))
   local new_cwd="${req_cwd:-$RUN_CWD}"

@@ -150,10 +150,15 @@ REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
 # exception — its hooks POST to a hardcoded :7837 — so precheck refuses
 # claudecode in coexist mode.
 ONBOARD_HOME="${IRRLICHT_ONBOARD_HOME:-}"
-ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7837}"
 if [[ -n "$ONBOARD_HOME" ]]; then
+  # Coexist mode: default to an alternate port so we don't clash with a
+  # production daemon on 7837 (precheck refuses 7837 in coexist mode). A
+  # 7837 default here would make the one-knob `IRRLICHT_ONBOARD_HOME=…`
+  # path abort at precheck.
+  ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
   ONBOARD_SOCK="$ONBOARD_HOME/irrlichd.sock"
 else
+  ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7837}"
   ONBOARD_SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"
 fi
 
@@ -192,14 +197,14 @@ if [[ "$ATTACH" == "1" ]]; then
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else
   DAEMON_LOG="$STAGING/daemon.log"
-  # `env` (not a bare assignment prefix) so the conditional
-  # ${ONBOARD_HOME:+IRRLICHT_HOME=…} word is parsed as an assignment when
-  # present and vanishes when ONBOARD_HOME is empty — a $-expanded
-  # VAR=value is NOT recognized as an assignment prefix by the shell.
-  env IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
-    IRRLICHT_BIND_ADDR="$ONBOARD_BIND" \
-    ${ONBOARD_HOME:+IRRLICHT_HOME="$ONBOARD_HOME"} \
-    "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
+  # Build the env assignments as an array so a value containing spaces
+  # (e.g. an IRRLICHT_HOME path with a space) stays one word — an
+  # unquoted ${ONBOARD_HOME:+VAR="$ONBOARD_HOME"} would word-split on it.
+  # IRRLICHT_HOME is only added when ONBOARD_HOME is non-empty.
+  DAEMON_ENV=(IRRLICHT_RECORDINGS_DIR="$STAGING/recordings"
+              IRRLICHT_BIND_ADDR="$ONBOARD_BIND")
+  [[ -n "$ONBOARD_HOME" ]] && DAEMON_ENV+=(IRRLICHT_HOME="$ONBOARD_HOME")
+  env "${DAEMON_ENV[@]}" "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
   DAEMON_PID=$!
   echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND${ONBOARD_HOME:+, home=$ONBOARD_HOME})"
 

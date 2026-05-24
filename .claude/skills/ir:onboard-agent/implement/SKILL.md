@@ -134,6 +134,23 @@ $SK/scripts/run-cell.sh --attach <agent> <scenario>
 #   STAGING = dirname of that manifest path
 ```
 
+**Cross-adapter cells** — if `by_adapter.<agent>` declares a
+`partner_adapter` (e.g. `multiple-agents-same-workspace`), the cell needs a
+SECOND, different agent live in the same cwd; `run-cell.sh` refuses it with
+**exit 2** ("record it with run-cell-multi.sh"). Record both rows in ONE
+shot instead:
+
+```bash
+IRRLICHT_ONBOARD_HOME=/tmp/irrlicht-onboard-dev \
+  $SK/scripts/run-cell-multi.sh <scenario>
+```
+
+It reads the scenario's `cross_adapter[]` list, drives every listed adapter
+concurrently in one shared cwd under a single isolated `--record` daemon
+(coexisting with production), and stages one per-adapter fixture each.
+Promote each adapter separately (step 6) — the single recording satisfies
+all the cross-adapter rows.
+
 Read `<STAGING>/run-manifest.json`. Classify the outcome — when in
 doubt run `$SK/scripts/lib/classify-failure.sh <STAGING>` (codes:
 `cli_not_found`, `cli_too_old`, `auth_failed`, `daemon_dirty`,
@@ -142,6 +159,7 @@ doubt run `$SK/scripts/lib/classify-failure.sh <STAGING>` (codes:
 | Outcome | Action |
 |---|---|
 | manifest `verdict: STAGED` (success) | proceed to step 6 |
+| `run-cell.sh` **exit 2** with "cross-adapter" / "record it with run-cell-multi.sh" | re-record via `run-cell-multi.sh <scenario>` (see above) — NOT a cell failure |
 | `timeout` / `transcript_missing`, **first** time | **retry once** — re-run the same `run-cell.sh --attach`. Often a lazy-transcript nudge or trailing-sleep timing issue. |
 | `timeout` / `transcript_missing`, **second** time | degrade → **`applicable_false`** (see below) |
 | `cli_not_found` / `cli_too_old` / `auth_failed` / daemon-not-running | **`infra_fail`** — environment problem, not a cell verdict. Don't retry, don't mark applicable_false. Tree is already clean (spec+recipe committed). Return. |
