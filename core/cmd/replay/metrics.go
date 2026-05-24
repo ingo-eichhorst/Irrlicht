@@ -48,6 +48,18 @@ func finalizeSummary(report *replayReport, consumed int, stateDurations map[stri
 		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
 		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
 		report.Summary.ModelName = lastMetrics.ModelName
+		if len(lastMetrics.Tasks) > 0 {
+			report.Summary.Tasks = make([]session.Task, len(lastMetrics.Tasks))
+			for i, t := range lastMetrics.Tasks {
+				report.Summary.Tasks[i] = session.Task{
+					ID:          t.ID,
+					Subject:     t.Subject,
+					Description: t.Description,
+					ActiveForm:  t.ActiveForm,
+					Status:      t.Status,
+				}
+			}
+		}
 	}
 }
 

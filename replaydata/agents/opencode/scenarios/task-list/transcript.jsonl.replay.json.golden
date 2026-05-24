@@ -3,35 +3,48 @@
   "source_transcript": "",
   "generated_at": "0001-01-01T00:00:00Z",
   "settings": {
-    "adapter": "claude-code",
+    "adapter": "opencode",
     "debounce_window": 2000000000,
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 26,
-    "consumed_events": 26,
+    "total_events": 12,
+    "consumed_events": 12,
     "total_transitions": 3,
-    "first_event_time": "2026-05-18T21:33:16.427Z",
-    "last_event_time": "2026-05-18T21:33:53.394Z",
-    "wall_clock_session_duration": 36967000000,
+    "first_event_time": "2025-04-26T20:40:00Z",
+    "last_event_time": "2025-04-26T20:40:02.3Z",
+    "wall_clock_session_duration": 2300000000,
     "state_durations": {
-      "working": 36967000000
+      "ready": 2300000000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "estimated_cost_usd": 0.06675465,
-    "cum_input_tokens": 7,
-    "cum_output_tokens": 795,
-    "cum_cache_read_tokens": 55708,
-    "cum_cache_creation_tokens": 10159,
-    "model_name": "claude-sonnet-4-6"
+    "estimated_cost_usd": 0.0002,
+    "model_name": "claude-sonnet-4-5",
+    "tasks": [
+      {
+        "id": "1",
+        "subject": "Sleep 1s (task A)",
+        "status": "completed"
+      },
+      {
+        "id": "2",
+        "subject": "Sleep 1s (task B)",
+        "status": "in_progress"
+      },
+      {
+        "id": "3",
+        "subject": "Sleep 1s (task C)",
+        "status": "pending"
+      }
+    ]
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-18T21:33:16.427Z",
+      "virtual_time": "2025-04-26T20:40:00Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -44,22 +57,23 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "2026-05-18T21:33:16.427Z",
+      "event_index": 11,
+      "virtual_time": "2025-04-26T20:40:02.3Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "user",
+      "last_event_type": "turn_done",
       "has_open_tool": false,
-      "is_agent_done": false,
+      "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "All tasks tracked; finishing up."
     },
     {
       "index": 2,
-      "event_index": 25,
-      "virtual_time": "2026-05-18T21:33:53.394Z",
+      "event_index": 11,
+      "virtual_time": "2025-04-26T20:40:02.3Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -69,7 +83,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "done"
+      "last_assistant_text_head": "All tasks tracked; finishing up."
     }
   ]
 }
