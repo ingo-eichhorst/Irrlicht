@@ -29,7 +29,7 @@ if lsof -iTCP:"$PORT" -sTCP:LISTEN -n -P >/dev/null 2>&1; then
 fi
 
 mkdir -p .build/refresh/bin
-go build -o "$MOCK_BIN" ./tools/mock-anthropic-5xx.go
+go build -o "$MOCK_BIN" ./tools/agent-onboarding/recording/mock-anthropic-5xx/main.go
 
 "$MOCK_BIN" --addr "127.0.0.1:$PORT" >"$STAGING/mock.log" 2>&1 &
 MOCK_PID=$!

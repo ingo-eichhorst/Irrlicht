@@ -1,4 +1,4 @@
-// mock-anthropic-429.go — minimal Anthropic-compatible API stub for the
+// mock-anthropic-429 — minimal Anthropic-compatible API stub for the
 // claudecode/token-quota-exhausted scenario.
 //
 // First /v1/messages request: streams a normal end_turn response so the
@@ -7,7 +7,7 @@
 // path fires (state working→ready without sticking).
 //
 // Usage:
-//   go run ./tools/mock-anthropic-429.go --addr 127.0.0.1:18765
+//   go run ./tools/agent-onboarding/recording/mock-anthropic-429/main.go --addr 127.0.0.1:18765
 //
 // The server listens until SIGINT/SIGTERM.
 
