@@ -79,6 +79,7 @@ CELL_JSON="$(jq --arg s "$SCENARIO" --arg a "$ADAPTER" '
       verify,
       applicable: .by_adapter[$a].applicable,
       scope_note: .by_adapter[$a].scope_note,
+      partner_adapter: .by_adapter[$a].partner_adapter,
       prompt: .by_adapter[$a].prompt,
       script: .by_adapter[$a].script,
       settings: .by_adapter[$a].settings,
@@ -99,6 +100,16 @@ if [[ "$APPLICABLE" == "false" ]]; then
   SCOPE_NOTE="$(jq -r '.scope_note // "no scope_note provided"' <<<"$CELL_JSON")"
   echo "cell is not applicable for this adapter: scenario=$SCENARIO adapter=$ADAPTER" >&2
   echo "scope_note: $SCOPE_NOTE" >&2
+  exit 2
+fi
+
+# Cross-adapter cells (a `partner_adapter` is declared) need a SECOND,
+# different adapter live in the same cwd — the single-cell pipeline can't
+# elicit that. Refuse here and point at the orchestrator.
+PARTNER_ADAPTER="$(jq -r '.partner_adapter // empty' <<<"$CELL_JSON")"
+if [[ -n "$PARTNER_ADAPTER" ]]; then
+  echo "cell is cross-adapter (partner_adapter=$PARTNER_ADAPTER): scenario=$SCENARIO adapter=$ADAPTER" >&2
+  echo "record it with: scripts/run-cell-multi.sh $SCENARIO" >&2
   exit 2
 fi
 

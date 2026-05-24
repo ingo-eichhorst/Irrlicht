@@ -74,7 +74,10 @@ DRIVER_LOG="$STAGING/driver.log"
 # Per-run CWD so claude writes its transcript under a unique
 # ~/.claude/projects/<slug>/ dir; also keeps the trust dialog isolated to
 # this run's path (claude prompts for trust on first encounter).
-RUN_CWD="$STAGING/cwd"
+# run-cell-multi.sh's cross-adapter mode overrides this via
+# $IRRLICHT_ONBOARD_CWD so a second, different adapter shares the SAME
+# workspace (multiple-agents-same-workspace).
+RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))

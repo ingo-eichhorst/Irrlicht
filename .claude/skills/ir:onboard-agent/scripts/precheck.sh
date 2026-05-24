@@ -60,8 +60,8 @@ elif [[ -n "${IRRLICHT_ONBOARD_HOME:-}" ]]; then
   if lsof -nP -iTCP:"$ONBOARD_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     fail "coexist port $ONBOARD_PORT is already in use; pick another IRRLICHT_ONBOARD_BIND_ADDR"
   fi
-  if [[ "$ADAPTER" == "claudecode" ]]; then
-    fail "claudecode cannot record in coexist mode: its hooks POST to a hardcoded :7837, so they'd reach the production daemon, not the isolated one. Stop production and record claudecode in default mode instead."
+  if [[ "$ADAPTER" == "claudecode" && "${IRRLICHT_ONBOARD_MULTI:-0}" != "1" ]]; then
+    fail "claudecode cannot record in coexist mode: its hooks POST to a hardcoded :7837, so they'd reach the production daemon, not the isolated one. Stop production and record claudecode in default mode instead. (run-cell-multi.sh sets IRRLICHT_ONBOARD_MULTI=1 — its cross-adapter recording observes claudecode via the transcript fswatcher, not hooks.)"
   fi
 else
   if pgrep -x irrlichd >/dev/null 2>&1; then
