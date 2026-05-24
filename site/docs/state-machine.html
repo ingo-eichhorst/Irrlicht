@@ -315,31 +315,6 @@
       <h2>Orthogonal Axes</h2>
       <p>Beyond the three core states, the state machine tracks several orthogonal dimensions that do not affect the primary state transition logic but provide additional context.</p>
 
-      <h3>CompactionState</h3>
-      <p>Tracks whether the agent is compacting its context window:</p>
-      <table>
-        <thead>
-          <tr>
-            <th>Value</th>
-            <th>Meaning</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>not_compacting</code></td>
-            <td>Normal operation. No compaction in progress.</td>
-          </tr>
-          <tr>
-            <td><code>compacting</code></td>
-            <td>Agent is actively summarizing context to fit within the window.</td>
-          </tr>
-          <tr>
-            <td><code>post_compact</code></td>
-            <td>Compaction just completed. Transient state before reverting to <code>not_compacting</code>.</td>
-          </tr>
-        </tbody>
-      </table>
-
       <h3>Adapter</h3>
       <p>Identifies which AI coding agent is running:</p>
       <ul>
