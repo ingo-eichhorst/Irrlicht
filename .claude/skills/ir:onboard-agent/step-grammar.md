@@ -4,8 +4,9 @@ The `script` array in a `by_adapter.<agent>` recipe is a list of step
 objects, each `{"type": "...", ...}`. The interactive drivers
 (`scripts/drive-<agent>-interactive.sh`) all dispatch on `type`. This is
 the shared vocabulary — author recipes against it instead of reverse-
-engineering the ~600-line driver. Stay inside it; an unknown `type` is
-logged and skipped.
+engineering the ~600-line driver. Stay inside it: an unknown `type`
+**aborts the recording** — every driver logs it and exits non-zero
+(`nonzero(2)`), so a typo'd step won't silently no-op.
 
 | type            | extra fields            | semantics                                                                 | drivers                          |
 |---              |---                      |---                                                                        |---                                |
