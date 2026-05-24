@@ -5,7 +5,6 @@
     "session_id": "00000000-0000-0000-0000-000000000001",
     "state": "working",
     "adapter": "claude-code",
-    "compaction_state": "not_compacting",
     "model": "claude-sonnet-4-6",
     "cwd": "/tmp/test-cwd",
     "transcript_path": "/tmp/test-transcript.jsonl",

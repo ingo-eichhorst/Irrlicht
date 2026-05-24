@@ -66,6 +66,6 @@ func printSessions(sessions []*session.SessionState) {
 		}
 
 		fmt.Printf("%-8s %-20s %s%s%s  (%s ago)\n",
-			s.StringState(), project, s.SessionID[:8], model, ctx, age)
+			s.State, project, s.SessionID[:8], model, ctx, age)
 	}
 }
