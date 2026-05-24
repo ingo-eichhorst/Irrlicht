@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "scenario_id": "session-end",
+  "agent": "pi",
+  "assessed_at": "2026-05-25T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.85,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nThe scenario's User-observable signal is: the session row disappears within the expected TTL, and the state immediately before disappearing is `ready`. Pi supports the clean-exit teardown path natively. Headless `pi --print -p <prompt>` runs a single assistant turn and then exits the process at turn completion — there is no scripted clean-exit keystroke to issue; the natural end of the headless invocation IS the session end. The daemon's process scanner observes the pi PID exit and emits a `process_exited` event for the owning session, and the idle-TTL sweep removes the row afterward. Because pi writes one JSONL session file per invocation under `~/.pi/agent/sessions/<cwd-slug>/<ts>_<UUID>.jsonl` (FilesUnderRoot, non-lazy), irrlicht observes the full arc: session born ready, working flip on the turn, working→ready settle when the turn completes (`stopReason=stop` → turn_done), then `pid_discovered` and `process_exited` at headless exit — with the session in `ready` before exit.\n\nOnly variant 1 (clean exit) is recordable for pi: the pi interactive driver supports send/slash/wait_turn/interrupt/sleep only and exposes NO exit_clean/sigkill primitives, so variants 2 (SIGKILL while idle) and 3 (SIGKILL mid-turn) cannot be driven and are out of scope for this cell. The clean-exit variant is the canonical session-end path and is fully observable.\n\nConfidence 0.85 reflects a known timing risk: headless `pi --print` exits very quickly at turn completion, so the post-exit settle window the spec asserts may be truncated by the fast process exit. If validation drifts because of that, the recording is committed and the drift flagged rather than the spec rebased.",
+  "caveats": [
+    "Pi cannot accept a pre-assigned UUID — it generates one itself. The headless driver discovers the UUID from the session header on line 1 of the freshly-created transcript.",
+    "Headless `pi --print` exits at turn completion, so the rollout session's terminal working→ready settle and the process_exited can land very close together; the spec anchors teardown to pid_bind/turn_end (not to session_birth) so the matcher picks the post-turn ready, not the earlier birth ready.",
+    "Variants 2 (SIGKILL idle) and 3 (SIGKILL mid-turn) require interactive-driver primitives the pi driver does not expose (send/slash/wait_turn/interrupt/sleep only); session-end is recorded as variant 1 (natural clean exit) alone."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/agent.go",
+      "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher; process-exit detection drives session removal."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/parser.go",
+      "note": "stopReason=stop on the final assistant event maps to turn_done (working→ready) before exit."
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi.sh",
+      "note": "Headless `pi --print -p <prompt>` single-shot driver; the process exits naturally at turn completion (no exit_clean keystroke), which is the session-end signal."
+    }
+  ]
+}
