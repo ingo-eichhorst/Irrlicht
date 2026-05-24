@@ -188,3 +188,7 @@ mv "$LATEST_ARCHIVE"/{events,transcript,manifest}.json[l]* "$SCENARIO_DIR"/
   manifest with `expected_pass_rate: "no spec"`.
 - It does not modify `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json`. The
   matrix rollup is the maintainer's editorial truth.
+- It does not read the catalogs into model context — so there is no
+  `slice-cell.sh` step here (unlike `recipe`/`assess`/`spec`).
+  `run-cell.sh` extracts just this cell's recipe from `scenarios.json`
+  with `jq` at the script level; no whole-catalog read happens.
