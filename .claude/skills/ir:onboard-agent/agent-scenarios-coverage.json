@@ -85,8 +85,8 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
-          "notes": "Clean-exit variant observed (process_exited fires); SIGKILL idle/mid-turn variants need a sigkill primitive in drive-codex-interactive.sh — recorded variant 1 only."
+          "irrlicht_observes": "yes",
+          "notes": "All 3 variants recorded via drive-codex-interactive.sh's sigkill + restart primitives (clean Ctrl-D exit / SIGKILL idle / SIGKILL mid-turn); expected.jsonl validates 14/14 phases. sigkill targets the daemon's PID directly (rollout's lsof write-FD holder, per codex/pid.go) since codex's uniform argv has no per-session marker. Variant 3 sleeps 5 s before the kill to clear codex's ~2.7 s ready→working promotion lag so the mid-turn working state is captured."
         },
         "pi": {
           "agent_supports": "yes",
