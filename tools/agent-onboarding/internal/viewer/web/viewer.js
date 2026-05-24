@@ -1308,9 +1308,10 @@ function degradedBanner() {
     "margin:8px 0;padding:8px 12px;border-left:3px solid #c90;" +
     "background:#332b00;color:#e8c84d;border-radius:4px;font-size:13px;";
   b.textContent =
-    "No sidecar — timeline synthesized from the transcript via the shared " +
-    "classifier engine (degraded). Record with `irrlichd --record` for a " +
-    "faithful events.jsonl.";
+    "No sidecar recorded — playback will synthesize the timeline from the " +
+    "transcript via the shared classifier engine (degraded), so the " +
+    "transitions below are empty until you press Play. Record with " +
+    "`irrlichd --record` for a faithful events.jsonl.";
   return b;
 }
 

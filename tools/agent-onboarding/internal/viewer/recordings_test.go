@@ -83,4 +83,16 @@ func TestHandleArchivedRecording(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("missing archive: status=%d; want 404", rr.Code)
 	}
+
+	// Path traversal in the archive name → 400. Call the handler directly:
+	// http.ServeMux path-cleans `..` out of the URL before routing, so the
+	// guard can only be exercised below the mux.
+	scenarioDir := s.store().scenarioDir("claudecode", "scenarios", "test")
+	for _, bad := range []string{"..", "../../etc/passwd", "sub/dir"} {
+		rr = httptest.NewRecorder()
+		s.handleArchivedRecording(rr, scenarioDir, bad)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("archive name %q not rejected: status=%d body=%s", bad, rr.Code, rr.Body)
+		}
+	}
 }

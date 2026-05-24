@@ -23,6 +23,13 @@ func TestRun_usageErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("help exits 0", func(t *testing.T) {
+		// -h/--help is a successful user request, not a usage error.
+		if got := run([]string{"-h"}); got != exitOK {
+			t.Errorf("run(-h) = %d; want %d", got, exitOK)
+		}
+	})
+
 	t.Run("present replaydata passes the config gate", func(t *testing.T) {
 		// Create replaydata/agents so the config check passes, then bind to
 		// an impossible port so ListenAndServe fails fast → exitRuntimeErr.

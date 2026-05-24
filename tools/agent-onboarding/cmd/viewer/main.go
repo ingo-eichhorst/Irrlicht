@@ -14,6 +14,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -39,6 +40,12 @@ func run(args []string) int {
 	repoRoot := fs.String("repo-root", ".", "repository root containing replaydata/")
 	addr := fs.String("addr", "127.0.0.1:8765", "bind address")
 	if err := fs.Parse(args); err != nil {
+		// -h/-help is a successful, user-requested action: ContinueOnError
+		// already printed usage to stderr, so exit 0 (not the usage-error
+		// code) to match the conventional `--help` contract.
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK
+		}
 		return exitUsageErr
 	}
 
