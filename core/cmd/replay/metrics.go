@@ -51,54 +51,6 @@ func finalizeSummary(report *replayReport, consumed int, stateDurations map[stri
 	}
 }
 
-// tailerToDomain converts the tailer's metrics struct into the domain type
-// consumed by ClassifyState.
-func tailerToDomain(m *tailer.SessionMetrics) *session.SessionMetrics {
-	if m == nil {
-		return nil
-	}
-	result := &session.SessionMetrics{
-		ElapsedSeconds:                    m.ElapsedSeconds,
-		TotalTokens:                       m.TotalTokens,
-		ModelName:                         m.ModelName,
-		ContextWindow:                     m.ContextWindow,
-		ContextUtilization:                m.ContextUtilization,
-		PressureLevel:                     m.PressureLevel,
-		ContextWindowUnknown:              m.ContextWindowUnknown,
-		HasOpenToolCall:                   m.HasOpenToolCall,
-		OpenToolCallCount:                 m.OpenToolCallCount,
-		LastEventType:                     m.LastEventType,
-		LastOpenToolNames:                 copyStrings(m.LastOpenToolNames),
-		LastWasUserInterrupt:              m.LastWasUserInterrupt,
-		LastWasToolDenial:                 m.LastWasToolDenial,
-		EstimatedCostUSD:                  m.EstimatedCostUSD,
-		CumInputTokens:                    m.CumInputTokens,
-		CumOutputTokens:                   m.CumOutputTokens,
-		CumCacheReadTokens:                m.CumCacheReadTokens,
-		CumCacheCreationTokens:            m.CumCacheCreationTokens,
-		LastAssistantText:                 m.LastAssistantText,
-		PermissionMode:                    m.PermissionMode,
-		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
-		NoSubstantiveActivity:             m.NoSubstantiveActivity,
-	}
-	if len(m.Tasks) > 0 {
-		result.Tasks = make([]session.Task, len(m.Tasks))
-		for i, t := range m.Tasks {
-			result.Tasks[i] = session.Task{
-				ID:          t.ID,
-				Subject:     t.Subject,
-				Description: t.Description,
-				ActiveForm:  t.ActiveForm,
-				Status:      t.Status,
-			}
-		}
-	}
-	if snippet := session.ExtractQuestionSnippet(result.LastAssistantText); snippet != "" {
-		result.LastAssistantText = snippet
-	}
-	return result
-}
-
 // computeFlickers counts short-lived X→Y→X sandwich patterns.
 func computeFlickers(trs []transition, maxDur time.Duration) (map[string]int, map[string]int, int) {
 	byCategory := map[string]int{}

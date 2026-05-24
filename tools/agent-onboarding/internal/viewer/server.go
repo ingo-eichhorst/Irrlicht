@@ -1262,6 +1262,7 @@ type ScenarioDetail struct {
 	Subtree        string                   `json:"subtree"`
 	ID             string                   `json:"id"`
 	Meta           json.RawMessage          `json:"meta,omitempty"`            // recording-meta.json or null
+	Degraded       bool                     `json:"degraded"`                  // true when there is no events.jsonl sidecar — the timeline is synthesized from the transcript via the shared classifier engine, not daemon-recorded
 	Expected       *validate.ExpectedReport `json:"expected,omitempty"`        // expected.jsonl validated against events.jsonl (if file present)
 	Transitions    []json.RawMessage        `json:"transitions"`               // state_transition rows from events.jsonl
 	Tools          []ToolCall               `json:"tools,omitempty"`           // tool_use blocks extracted from transcript.jsonl
@@ -1354,6 +1355,12 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	d := ScenarioDetail{Agent: agent, Subtree: subtree, ID: id}
 	if b, err := os.ReadFile(filepath.Join(scenarioDir, "recording-meta.json")); err == nil {
 		d.Meta = b
+	}
+	// No events.jsonl sidecar → the viewer will synthesize the timeline
+	// from the transcript via the shared classifier engine. Flag it so the
+	// UI badges a reconstructed arc rather than passing it off as recorded.
+	if _, err := os.Stat(filepath.Join(scenarioDir, "events.jsonl")); err != nil {
+		d.Degraded = true
 	}
 	d.Transitions = readTransitionsRaw(filepath.Join(scenarioDir, "events.jsonl"))
 	// Synthesize meta from events.jsonl when no recording-meta.json

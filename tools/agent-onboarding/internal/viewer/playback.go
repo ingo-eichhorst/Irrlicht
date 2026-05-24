@@ -65,6 +65,13 @@ type Playback struct {
 	// the actual pause via its command channel.
 	Paused bool
 
+	// Degraded is true when this playback's timeline was synthesized from
+	// the transcript (no daemon-recorded events.jsonl sidecar). The arc is
+	// reconstructed via the shared classifier engine, but without a sidecar
+	// it can't be byte-faithful — the UI badges it so a reconstructed
+	// timeline isn't mistaken for a recorded one.
+	Degraded bool
+
 	// enricher is the broadcaster decorator that populates
 	// SessionState.Metrics on session events. Held on the Playback so
 	// the Snapshot path (GET /api/v1/sessions) can apply the same
@@ -271,7 +278,7 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 			return nil, fmt.Errorf("archive %q has no events.jsonl", recording)
 		}
 	}
-	events, err := replay.LoadEventsOrSynthesize(eventsDir)
+	events, degraded, err := replay.LoadEventsOrSynthesize(eventsDir, agent)
 	if err != nil {
 		return nil, fmt.Errorf("load events: %w", err)
 	}
@@ -314,6 +321,7 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		DashboardURL: "/dashboard",
 		EventsDir:    eventsDir,
 		Recording:    recording,
+		Degraded:     degraded,
 		enricher:     enricher,
 	}
 
@@ -580,6 +588,7 @@ func (m *PlaybackManager) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"mode":        pb.Mode,
 		"speed":       pb.Speed,
 		"paused":      pb.Paused,
+		"degraded":    pb.Degraded,
 	}
 	if pb.machine != nil {
 		// offset_ms is the live wall-clock-driven scrubber position so
