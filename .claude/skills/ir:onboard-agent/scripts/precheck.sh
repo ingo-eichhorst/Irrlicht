@@ -47,9 +47,28 @@ if [[ "${ATTACH:-0}" == "1" ]]; then
   if ! pgrep -x irrlichd >/dev/null 2>&1; then
     fail "ATTACH=1 but no irrlichd is running; start one with --record"
   fi
+elif [[ -n "${IRRLICHT_ONBOARD_HOME:-}" ]]; then
+  # Coexist mode: the recording daemon gets its OWN IRRLICHT_HOME (socket
+  # + state) and an alternate bind port, so a running production irrlichd
+  # is fine — they don't share a socket or port. We only require that OUR
+  # target port is free and that the adapter is filesystem-observed.
+  ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
+  ONBOARD_PORT="${ONBOARD_BIND##*:}"
+  if [[ ! "$ONBOARD_PORT" =~ ^[0-9]+$ ]]; then
+    fail "IRRLICHT_ONBOARD_BIND_ADDR must be host:port with a numeric port (got '$ONBOARD_BIND')"
+  fi
+  if [[ "$ONBOARD_PORT" == "7837" ]]; then
+    fail "coexist mode (IRRLICHT_ONBOARD_HOME set) needs a non-7837 IRRLICHT_ONBOARD_BIND_ADDR so it doesn't clash with production"
+  fi
+  if lsof -nP -iTCP:"$ONBOARD_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    fail "coexist port $ONBOARD_PORT is already in use; pick another IRRLICHT_ONBOARD_BIND_ADDR"
+  fi
+  if [[ "$ADAPTER" == "claudecode" && "${IRRLICHT_ONBOARD_MULTI:-0}" != "1" ]]; then
+    fail "claudecode cannot record in coexist mode: its hooks POST to a hardcoded :7837, so they'd reach the production daemon, not the isolated one. Stop production and record claudecode in default mode instead. (run-cell-multi.sh sets IRRLICHT_ONBOARD_MULTI=1 — its cross-adapter recording observes claudecode via the transcript fswatcher, not hooks.)"
+  fi
 else
   if pgrep -x irrlichd >/dev/null 2>&1; then
-    fail "another irrlichd is running (pgrep -x irrlichd); stop it first, or rerun with --attach"
+    fail "another irrlichd is running (pgrep -x irrlichd); stop it first, rerun with --attach, or set IRRLICHT_ONBOARD_HOME + IRRLICHT_ONBOARD_BIND_ADDR to record on an isolated port"
   fi
 fi
 

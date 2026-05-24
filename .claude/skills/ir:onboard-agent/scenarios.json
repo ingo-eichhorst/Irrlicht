@@ -2940,8 +2940,12 @@
     },
     {
       "name": "multiple-agents-same-workspace",
-      "description": "Stub entry — capability is supported by all adapters and irrlicht (per-adapter ProcessMatcher, disjoint transcript roots, per-session metrics keyed by (adapter, session_id)). Recording is blocked on the driver: current ir:onboard-agent orchestrates one CLI at a time and has no cross-adapter parallel mode. Becomes recordable once the driver gains a paired-adapter step type that can drive `claude` and `codex` (or `claude` + `pi`) concurrently in the same cwd.",
+      "description": "Two DIFFERENT coding agents (claudecode + codex) live in the SAME cwd at once. The daemon labels each adapter independently (disjoint ProcessMatchers + transcript roots; per-(adapter, session_id) state and metrics from the maps.go projections), so the single recording shows two distinct sessions each with its own working->ready arc and no cross-contamination. Recorded by run-cell-multi.sh, which launches both adapters' interactive drivers concurrently against one shared cwd under a single --record daemon, then curates one per-adapter fixture each (same workspace events.jsonl, that adapter's own transcript). The two by_adapter cells are driven by the SAME recording — each stores its adapter's transcript for the replay golden and shares the workspace events.jsonl + expected.jsonl.",
       "coverage_id": "multiple-agents-same-workspace",
+      "cross_adapter": [
+        "claudecode",
+        "codex"
+      ],
       "requires": [
         "headless_mode"
       ],
@@ -2950,12 +2954,72 @@
       },
       "by_adapter": {
         "claudecode": {
-          "applicable": false,
-          "reason": "requires a second agent CLI (codex/pi) running in parallel; current driver orchestrates one CLI at a time. The matrix pairs this cell to both claudecode and codex adapters — once the cross-adapter driver exists, a single recording satisfies both rows."
+          "applicable": true,
+          "partner_adapter": "codex",
+          "preconditions": [
+            "claude AND codex CLIs on PATH and authenticated",
+            "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+            "no other claudecode/codex session is live in the run cwd"
+          ],
+          "setup": [
+            "run-cell-multi.sh creates ONE shared cwd and launches the claudecode and codex interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD",
+            "the isolated daemon observes claudecode via its transcript fswatcher (~/.claude/projects) and codex via ~/.codex/sessions — both keyed off the real $HOME — so it labels each adapter independently",
+            "this cell stores the claudecode transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 15
+            }
+          ],
+          "verify": [
+            "events.jsonl contains TWO distinct session_ids from two different adapters, both keyed to the same cwd slug",
+            "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+            "no cross-contamination: the daemon never merges or flaps the two adapters' rows"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         },
         "codex": {
-          "applicable": false,
-          "notes": "driver_gap (assessment 2026-05-23: agent_supports=yes, irrlicht_observes=yes, confidence 0.85 — capability fully supported, only the recording rig is missing). Requires concurrent multi-adapter driving: a codex session AND a second, different-adapter session (claudecode/pi/aider) live in the SAME cwd at once. run-cell.sh takes a single <adapter> argument and dispatches to exactly one drive-<adapter>.sh driver — there is no flag, step type, or parallel mode to launch + drive a foreign adapter alongside codex within one cell recording, and no cross-adapter harness exists. The daemon DOES label each adapter independently as-shipped: codex registers Process.Match=ExactName{Name:\"codex\"} and Source=FilesUnderRoot{Dir:\".codex/sessions\"} (agent.go/adapter.go), disjoint from claudecode's matcher and ~/.claude/projects/ root, so per-(adapter,session_id) state and metrics fall out of the maps.go projections with no cross-contamination. Only the multi-adapter recording rig is missing. expected.jsonl is preserved as the documented forward-compatible target. Same blocker as the claudecode cell — once the driver gains a paired-adapter step type, a single recording satisfies both rows. See replaydata/agents/codex/scenarios/multiple-agents-same-workspace/assessment.json."
+          "applicable": true,
+          "partner_adapter": "claudecode",
+          "preconditions": [
+            "claude AND codex CLIs on PATH and authenticated",
+            "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+            "no other claudecode/codex session is live in the run cwd"
+          ],
+          "setup": [
+            "run-cell-multi.sh creates ONE shared cwd and launches the claudecode and codex interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD",
+            "codex registers Process.Match=ExactName{Name:codex} + Source=FilesUnderRoot{Dir:.codex/sessions}, disjoint from claudecode's matcher and ~/.claude/projects root, so the daemon keys the two sessions independently",
+            "this cell stores the codex rollout for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl contains TWO distinct session_ids from two different adapters, both keyed to the same cwd slug",
+            "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+            "no cross-contamination: the daemon never merges or flaps the two adapters' rows"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -3033,8 +3097,66 @@
           "timeout_seconds": 180
         },
         "codex": {
-          "applicable": false,
-          "notes": "driver_gap (assessment 2026-05-23: agent_supports=yes, irrlicht_observes=yes, confidence 0.9 — capability fully supported, only the recording rig is missing). The codex interactive driver (scripts/drive-codex-interactive.sh) launches a single tmux/codex process per run; every step type (send/wait_turn/interrupt/keys/sleep/reset_session/fork/exit_clean/resume) operates on one $SESSION. There is no concurrent-second-session primitive (parallel_session / tmux_split) to spawn a SECOND codex in the same cwd while the first stays alive and route send/wait_turn to a named target. The driver's session.uuids/transcript.paths lists capture SERIAL /clear+/fork session swaps within one process, NOT two concurrently-live processes — so the PID-cwd disambiguation this scenario exercises (two simultaneous rollouts the daemon splits via codex DiscoverPIDByTranscriptWriter, binding each session to the PID holding ITS rollout open) cannot be elicited as-shipped. Codex (FilesUnderRoot, fresh Parser{} per rollout, mints its own UUID) and irrlicht both support the capability; only the multi-process recording rig is missing. expected.jsonl is preserved as the documented forward-compatible target. Same blocker as the claudecode cell. See replaydata/agents/codex/scenarios/multiple-sessions-same-cwd/assessment.json."
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon on 7837), or --attach against a daemon started with --record",
+            "no other codex session is live in the run cwd"
+          ],
+          "setup": [
+            "Driver auto-starts session 1 (slot 1) as a codex TUI in <staging>/cwd and accepts the trust dialog",
+            "The start_session step launches session 2 (slot 2) in the SAME <staging>/cwd; codex caches trust per directory so no second trust dialog fires, and each slot discovers its OWN rollout via a per-slot marker",
+            "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs the daemon disambiguates by which PID holds each rollout open"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct codex session_ids, both keyed to the same cwd slug",
+            "each session_id has its own independent working->ready arc; no transition on one session is attributed to the other",
+            "session 1 shows TWO working->ready arcs (turn1 + the post-start_session re-drive); session 2 shows ONE — proving session 1 stayed bound and independent while session 2 was alive",
+            "no state flapping: the daemon never swaps the PID-to-session binding between the two rows",
+            "transcript.jsonl concatenates both sessions: 3 user prompts + 3 completed turns total across the two session_ids"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },

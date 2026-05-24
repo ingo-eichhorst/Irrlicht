@@ -79,6 +79,7 @@ CELL_JSON="$(jq --arg s "$SCENARIO" --arg a "$ADAPTER" '
       verify,
       applicable: .by_adapter[$a].applicable,
       scope_note: .by_adapter[$a].scope_note,
+      partner_adapter: .by_adapter[$a].partner_adapter,
       prompt: .by_adapter[$a].prompt,
       script: .by_adapter[$a].script,
       settings: .by_adapter[$a].settings,
@@ -99,6 +100,16 @@ if [[ "$APPLICABLE" == "false" ]]; then
   SCOPE_NOTE="$(jq -r '.scope_note // "no scope_note provided"' <<<"$CELL_JSON")"
   echo "cell is not applicable for this adapter: scenario=$SCENARIO adapter=$ADAPTER" >&2
   echo "scope_note: $SCOPE_NOTE" >&2
+  exit 2
+fi
+
+# Cross-adapter cells (a `partner_adapter` is declared) need a SECOND,
+# different adapter live in the same cwd — the single-cell pipeline can't
+# elicit that. Refuse here and point at the orchestrator.
+PARTNER_ADAPTER="$(jq -r '.partner_adapter // empty' <<<"$CELL_JSON")"
+if [[ -n "$PARTNER_ADAPTER" ]]; then
+  echo "cell is cross-adapter (partner_adapter=$PARTNER_ADAPTER): scenario=$SCENARIO adapter=$ADAPTER" >&2
+  echo "record it with: scripts/run-cell-multi.sh $SCENARIO" >&2
   exit 2
 fi
 
@@ -129,11 +140,34 @@ UUID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
 REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
 
+# Isolation knobs (default = production layout). Set IRRLICHT_ONBOARD_HOME
+# to a scratch dir to spawn the recording daemon with its OWN
+# IRRLICHT_HOME (socket / addr file / state under there) on an alternate
+# bind port, so it coexists with a running production irrlichd instead of
+# clashing on 7837. Filesystem-observed adapters (codex/pi/aider/opencode)
+# record fine this way because they watch the real $HOME (e.g.
+# ~/.codex/sessions) regardless of IRRLICHT_HOME. claudecode is the one
+# exception — its hooks POST to a hardcoded :7837 — so precheck refuses
+# claudecode in coexist mode.
+ONBOARD_HOME="${IRRLICHT_ONBOARD_HOME:-}"
+if [[ -n "$ONBOARD_HOME" ]]; then
+  # Coexist mode: default to an alternate port so we don't clash with a
+  # production daemon on 7837 (precheck refuses 7837 in coexist mode). A
+  # 7837 default here would make the one-knob `IRRLICHT_ONBOARD_HOME=…`
+  # path abort at precheck.
+  ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
+  ONBOARD_SOCK="$ONBOARD_HOME/irrlichd.sock"
+else
+  ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7837}"
+  ONBOARD_SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"
+fi
+
 # --- Daemon source ------------------------------------------------------
 # Two modes:
-#  - isolated (default): spawn a dedicated `irrlichd --record` on port
-#    7837 with $STAGING/recordings as its recordings dir. Killed after
-#    the driver returns so the recorder flushes cleanly.
+#  - isolated (default): spawn a dedicated `irrlichd --record` on
+#    $ONBOARD_BIND (7837 unless overridden) with $STAGING/recordings as
+#    its recordings dir. Killed after the driver returns so the recorder
+#    flushes cleanly.
 #  - attached ($ATTACH=1): use the user's already-running irrlichd.
 #    Dashboard stays connected for the whole recording. We don't spawn
 #    or kill anything; instead we capture the start timestamp now, sleep
@@ -163,11 +197,16 @@ if [[ "$ATTACH" == "1" ]]; then
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else
   DAEMON_LOG="$STAGING/daemon.log"
-  IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
-    IRRLICHT_BIND_ADDR="127.0.0.1:7837" \
-    "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
+  # Build the env assignments as an array so a value containing spaces
+  # (e.g. an IRRLICHT_HOME path with a space) stays one word — an
+  # unquoted ${ONBOARD_HOME:+VAR="$ONBOARD_HOME"} would word-split on it.
+  # IRRLICHT_HOME is only added when ONBOARD_HOME is non-empty.
+  DAEMON_ENV=(IRRLICHT_RECORDINGS_DIR="$STAGING/recordings"
+              IRRLICHT_BIND_ADDR="$ONBOARD_BIND")
+  [[ -n "$ONBOARD_HOME" ]] && DAEMON_ENV+=(IRRLICHT_HOME="$ONBOARD_HOME")
+  env "${DAEMON_ENV[@]}" "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
   DAEMON_PID=$!
-  echo "daemon started (pid $DAEMON_PID)"
+  echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND${ONBOARD_HOME:+, home=$ONBOARD_HOME})"
 
   # Cleanup: graceful shutdown. Runs once: either via explicit call
   # before transcript resolution (we must drain before continuing), or
@@ -198,7 +237,7 @@ else
 
   # Wait up to 10s for the unix socket to appear — signals the daemon is
   # ready to accept connections.
-  SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"
+  SOCK="$ONBOARD_SOCK"
   for _ in $(seq 1 40); do
     [[ -S "$SOCK" ]] && break
     sleep 0.25
