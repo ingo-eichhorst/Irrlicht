@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 40,
+    "consumed_events": 40,
+    "total_transitions": 3,
+    "first_event_time": "2026-05-24T15:09:16.744Z",
+    "last_event_time": "2026-05-24T15:09:54.914Z",
+    "wall_clock_session_duration": 38170000000,
+    "state_durations": {
+      "ready": 884000000,
+      "working": 37286000000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "estimated_cost_usd": 0.7218125000000001,
+    "cum_input_tokens": 5876,
+    "cum_output_tokens": 1986,
+    "cum_cache_read_tokens": 274485,
+    "cum_cache_creation_tokens": 50554,
+    "model_name": "claude-opus-4-7",
+    "tasks": [
+      {
+        "id": "1",
+        "subject": "read README",
+        "description": "Read the README file",
+        "active_form": "Reading README",
+        "status": "completed"
+      },
+      {
+        "id": "2",
+        "subject": "summarize README",
+        "description": "Summarize the README contents",
+        "active_form": "Summarizing README",
+        "status": "completed"
+      },
+      {
+        "id": "3",
+        "subject": "reply done",
+        "description": "Reply with the word done",
+        "active_form": "Replying done",
+        "status": "completed"
+      }
+    ]
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-05-24T15:09:16.744Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 4,
+      "virtual_time": "2026-05-24T15:09:17.628Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 39,
+      "virtual_time": "2026-05-24T15:09:54.914Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "done"
+    }
+  ]
+}
