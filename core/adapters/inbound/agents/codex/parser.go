@@ -154,16 +154,21 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	case "event_msg":
 		// Most event_msg payloads are metadata (token_count, task_started,
-		// exec_command_*) that we skip. The one exception is `task_complete`:
-		// this is Codex's canonical "turn finished" signal and must be emitted
-		// as `turn_done` so IsAgentDone() fires via the primary path.
+		// exec_command_*) that we skip. Two payloads signal a turn boundary
+		// and must be emitted as `turn_done` so IsAgentDone() fires via the
+		// primary path: `task_complete` (the canonical "turn finished" signal)
+		// and `turn_aborted` (the turn was cancelled via ESC or errored
+		// mid-flight — Codex emits it *instead of* task_complete, so without
+		// it an interrupted turn never settles and the session sticks in
+		// `working` until the process exits or an idle sweep fires).
 		//
-		// Without this, codex falls into the assistant_message fallback and
+		// Treating task_complete as terminal also prevents flicker: codex
+		// falls into the assistant_message fallback otherwise and
 		// flickers working→ready→working every time the agent writes an
 		// intermediate assistant message before calling a tool (typical at
 		// the start of a turn).
 		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if pt, _ := payload["type"].(string); pt == "task_complete" {
+			if pt, _ := payload["type"].(string); pt == "task_complete" || pt == "turn_aborted" {
 				ev.EventType = "turn_done"
 				return ev
 			}
