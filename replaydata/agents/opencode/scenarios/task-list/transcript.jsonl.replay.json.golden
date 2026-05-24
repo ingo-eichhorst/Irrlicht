@@ -21,7 +21,24 @@
     "flickers_by_category": {},
     "flickers_by_reason": {},
     "estimated_cost_usd": 0.0002,
-    "model_name": "claude-sonnet-4-5"
+    "model_name": "claude-sonnet-4-5",
+    "tasks": [
+      {
+        "id": "1",
+        "subject": "Sleep 1s (task A)",
+        "status": "completed"
+      },
+      {
+        "id": "2",
+        "subject": "Sleep 1s (task B)",
+        "status": "in_progress"
+      },
+      {
+        "id": "3",
+        "subject": "Sleep 1s (task C)",
+        "status": "pending"
+      }
+    ]
   },
   "transitions": [
     {

@@ -573,6 +573,104 @@ func TestParser_TurnCompleteEmitsTurnDone(t *testing.T) {
 	}
 }
 
+// TestParser_TurnAbortedEmitsTurnDone is a regression test for #453: codex
+// emits `event_msg/turn_aborted` (no task_complete) when a turn is cancelled
+// (user ESC) or errors mid-flight. The parser must treat it as a turn-end
+// signal — map it to LastEventType == "turn_done" — so the interrupted turn
+// settles instead of sticking in `working` until the process exits.
+func TestParser_TurnAbortedEmitsTurnDone(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"timestamp": ts(0),
+		"type":      "event_msg",
+		"payload": map[string]interface{}{
+			"type":         "turn_aborted",
+			"turn_id":      "019e3291-4d64-7e80-b513-d0a57d8169c1",
+			"reason":       "interrupted",
+			"completed_at": float64(1778964847),
+			"duration_ms":  float64(4011),
+		},
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.Skip {
+		t.Fatal("turn_aborted must not be skipped; it is a turn-end signal")
+	}
+	if ev.EventType != "turn_done" {
+		t.Errorf("EventType = %q, want turn_done", ev.EventType)
+	}
+}
+
+// TestParser_InterruptedTurnSettles drives the full interrupted-turn shape as
+// recorded from a real codex session: a turn opens (assistant message + a
+// function call with no matching output because the user hit ESC), then codex
+// writes the synthetic <turn_aborted> user message and the
+// event_msg/turn_aborted boundary. End-to-end through the tailer this must
+// leave LastEventType == "turn_done" so the session settles to ready rather
+// than freezing in working (#453).
+func TestParser_InterruptedTurnSettles(t *testing.T) {
+	path := writeLines(t, []map[string]interface{}{
+		{
+			"timestamp": ts(0),
+			"type":      "turn_context",
+			"payload":   map[string]interface{}{"model": "gpt-5.2-codex"},
+		},
+		{
+			"timestamp": ts(1),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message",
+				"role": "assistant",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "running a long command"},
+				},
+			},
+		},
+		// Tool call opens but is never answered — the user interrupted it.
+		{
+			"timestamp": ts(2),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type":    "function_call",
+				"name":    "shell",
+				"call_id": "call_interrupted",
+			},
+		},
+		// Synthetic user message codex injects after an interrupt.
+		{
+			"timestamp": ts(3),
+			"type":      "response_item",
+			"payload": map[string]interface{}{
+				"type": "message",
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{"type": "input_text", "text": "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"},
+				},
+			},
+		},
+		// The turn boundary: no task_complete, only turn_aborted.
+		{
+			"timestamp": ts(4),
+			"type":      "event_msg",
+			"payload": map[string]interface{}{
+				"type":    "turn_aborted",
+				"turn_id": "019e3291-4d64-7e80-b513-d0a57d8169c1",
+				"reason":  "interrupted",
+			},
+		},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "codex")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done (interrupted turn must settle)", m.LastEventType)
+	}
+}
+
 func TestParser_ProposedPlan_SynthesizesExitPlanMode(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{

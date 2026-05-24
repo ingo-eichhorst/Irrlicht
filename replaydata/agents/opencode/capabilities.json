@@ -7,6 +7,7 @@
     "headless_mode": false,
     "tui": true,
     "tool_calls": true,
+    "task_list": true,
     "permission_hooks": true,
     "subagents": true,
     "session_id_assignment": false,

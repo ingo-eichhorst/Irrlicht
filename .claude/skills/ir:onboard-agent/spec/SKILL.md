@@ -91,15 +91,18 @@ Schema: one meta line + N phase lines.
 
 ## Steps
 
-### Step 1 — Read the prose spec
+### Step 1 — Slice the cell
 
 ```
-.specs/agent-scenarios.md
+.claude/skills/ir:onboard-agent/scripts/slice-cell.sh <scenario-id> <agent>
 ```
 
-Find the `### Feature:` heading whose kebab slug matches
-`<scenario-id>`. Capture every `Scenario:` paragraph and every
-`Expected:` bullet. The bullets are what each phase will assert.
+Read the `### <scenario-id>` scenario-meanings block from the output —
+its **User-observable signal** lines are what each phase will assert (one
+phase per signal). The slice also prints the recipe and coverage cell for
+context. If a richer `.specs/agent-scenarios.md` happens to be present
+(gitignored, usually absent), use its `Scenario:`/`Expected:` bullets for
+extra precision; the scenario-meanings signals are sufficient without it.
 
 ### Step 2 — One phase per Expected bullet
 

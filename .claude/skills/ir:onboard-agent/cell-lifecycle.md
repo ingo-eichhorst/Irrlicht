@@ -173,22 +173,11 @@ for this specific agent CLI?
 }
 ```
 
-**Step types** (from `scripts/drive-claudecode-interactive.sh` and
-peers):
-
-- `send` — types text + Enter, increments turn counter
-- `wait_turn` — blocks until expected turn count reached
-- `sleep` — wall-clock pause (use ≥4s after last interaction for
-  classifier debounce)
-- `interrupt` — sends Escape (claudecode binds Esc to cancel turn)
-- `keys` — raw tmux key sequence ("Escape Escape", "Up Up Enter")
-  for driving picker UIs
-- `restart` — tears down + relaunches the agent (used in session-end /
-  session-resume chains)
-- `resume` — relaunch with `--resume <uuid>` (claudecode-specific)
-- `sigkill` — SIGKILL the agent (crash-mid-turn scenarios)
-- `exit_clean` — C-d to exit cleanly
-- `reset_session` — `/clear` (claudecode-specific)
+**Step types:** see [`step-grammar.md`](step-grammar.md) for the full
+step vocabulary (each step's fields + which drivers support it) — that is
+the single source of truth; don't reverse-engineer the driver. Authoring
+tip: use a `sleep` of ≥4s after the last interaction so the classifier
+debounce settles before the recording ends.
 
 **Why this is per-adapter:** same scenario shape (e.g. "session-start")
 needs different driver scripts per agent. claudecode needs a 1-token

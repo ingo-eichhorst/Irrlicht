@@ -149,15 +149,24 @@ facing documentation.
 
 ## Process
 
-### Step 1 — Read the prose spec
+### Step 1 — Slice the cell
 
 ```
-.specs/agent-scenarios.md
+.claude/skills/ir:onboard-agent/scripts/slice-cell.sh <scenario-id> <agent>
 ```
 
-Find the `### Feature:` heading whose kebab slug matches
-`<scenario-id>`. Capture every `Scenario:` paragraph and every
-`Expected:` bullet under it.
+One call prints exactly three things and nothing else — the
+`scenarios.json` entry + this agent's existing recipe (if any), the
+`### <scenario-id>` block from `scenario-meanings.md`, and the
+`agent-scenarios-coverage.json` cell. Use it instead of reading the
+whole catalogs; Step 2 reads the coverage cell from this same output.
+
+From the scenario-meanings block capture all five fields (Essence,
+User-observable signal, Primitive exercised, Not to be confused with,
+Conceptual flow) — the **User-observable signal** lines are what your
+recipe's `verify` bullets must make observable. (A gitignored
+`.specs/agent-scenarios.md`, if present, adds `Scenario:`/`Expected:`
+precision — usually absent, and the slice is sufficient.)
 
 A heading can have **multiple** Scenario/Expected sub-blocks (e.g.
 `session-end` has three: clean exit, SIGKILL mid-idle, crash
@@ -169,8 +178,8 @@ prerequisites, different agent CLIs) that can't share one
 recording.
 
 ► **Verify before moving on:**
-- [ ] Located the `### <scenario-id>` section in `.claude/skills/ir:onboard-agent/scenario-meanings.md` and read all five fields (Essence, User-observable signal, Primitive exercised, Not to be confused with, Conceptual flow).
-- [ ] If the scenario ID is missing from `scenario-meanings.md` — STOP. Ask the maintainer to add the entry before proceeding.
+- [ ] Ran `slice-cell.sh` and read all five scenario-meanings fields from its output.
+- [ ] `slice-cell.sh` exited non-zero (scenario missing from `scenarios.json` or `scenario-meanings.md`) — STOP and ask the maintainer to run `scenario-create` first.
 - [ ] Captured every word of the Scenario: paragraph(s) and every
   Expected: bullet — paraphrasing loses precision.
 - [ ] Counted the number of variants. If >1, decide chain-in-one vs
@@ -183,9 +192,9 @@ recording.
 
 ### Step 2 — Read the verdict
 
-```
-.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json   →   .scenarios[].coverage[<agent>]
-```
+Use the coverage cell already printed by `slice-cell.sh` in Step 1
+(`agent-scenarios-coverage.json → .scenarios[].coverage[<agent>]`) — no
+second read.
 
 - `agent_supports == "yes"` → produce the recipe normally.
 - `agent_supports == "partial"` → produce the recipe; mirror the
@@ -200,8 +209,8 @@ recording.
   merges the resulting assessment into the matrix.
 
 ► **Verify before moving on:**
-- [ ] The verdict cell exists for `<agent>` in
-  `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` — no fabricating a column.
+- [ ] The verdict cell exists for `<agent>` in the slice output — no
+  fabricating a column.
 - [ ] If `agent_supports == "partial"`, the coverage `notes` field
   is non-empty AND you understand the caveat well enough to mirror
   it into `preconditions`. If the notes are vague (e.g. "needs
@@ -216,28 +225,22 @@ For the chosen agent, read in order:
 1. `core/adapters/inbound/agents/<agent>/config.go` — `ProcessName`,
    `TranscriptFilename`, `Capabilities`, and any `DiscoverPID`
    wiring. Defines what irrlicht sees.
-2. `.claude/skills/ir:onboard-agent/scripts/drive-<agent>-interactive.sh`
-   — the supported step grammar and CLI flags the driver passes.
-   Your `script` must stay inside this grammar. Currently supported
-   step types (claudecode is the reference; other drivers implement
-   a subset):
-
-   | type           | semantics                                                      | drivers           |
-   |---             |---                                                              |---                 |
-   | `send`         | type text + Enter; bumps expected-turn count                    | all interactive    |
-   | `slash`        | same as `send`, used for `/cmd`-style slash commands            | all interactive    |
-   | `wait_turn`    | block until the agent finishes the current LLM round            | all interactive    |
-   | `sleep`        | pause N seconds (field: `seconds`)                              | all interactive    |
-   | `interrupt`    | send Escape (claudecode/codex/pi) or Ctrl-C (aider) mid-turn    | all interactive    |
-   | `restart`      | kill current tmux, mint new UUID + fresh cwd, re-init session   | claudecode         |
-   | `sigkill`      | `kill -9` the current agent process (forced termination)        | claudecode         |
-   | `exit_clean`   | Ctrl-D to the TUI for a graceful shutdown                       | claudecode         |
+2. `.claude/skills/ir:onboard-agent/step-grammar.md` — the shared step
+   vocabulary (`send`, `slash`, `wait_turn`, `sleep`, `interrupt`,
+   `keys`, `restart`, `resume`, `reset_session`, `fork`, `sigkill`,
+   `exit_clean`, `start_session`, `session`) with each step's fields and
+   which drivers support it. Your `script` must stay inside this grammar.
+   Read this one-page reference instead of the ~600-line driver; only
+   open `drive-<agent>-interactive.sh` for a per-agent quirk the grammar
+   doesn't cover.
 3. `.claude/skills/ir:onboard-agent/install-instructions.md` — any
    per-agent gates (LM Studio for aider, API auth for codex/claudecode,
    etc.). These become `preconditions` entries.
-4. Existing recipes under `scenarios.json -> scenarios[].by_adapter`
-   for the same agent — they encode hard-won quirks (CLI flags,
-   trust dialogs, timing) you should reuse rather than re-discover.
+4. This cell's prior recipe (if any) is already in the Step 1 slice. To
+   reuse hard-won quirks (CLI flags, trust dialogs, timing) from one of
+   the agent's OTHER scenarios, run `slice-cell.sh <other-scenario>
+   <agent>` for that specific scenario rather than reading all of
+   `scenarios.json`.
 
 For the headless variant (`drive-<agent>.sh`, single-shot
 `--print`-style invocation), the recipe uses `prompt: "..."` instead
@@ -582,7 +585,7 @@ the driver controls completion timing instead of inferring it from
   dashboard surfaces (subagent count chip, in-progress iteration
   counter, etc.), give each entity a deterministic stagger so the
   decrement is observable as a sequence of events, not a single
-  jump. **Worked example — `claudecode/task-tool` iteration 1:** the
+  jump. **Worked example — `claudecode/foreground-subagent` iteration 1:** the
   v1 recipe asked the parent to launch TWO subagents that each
   *read a file*. Both subagents finished within ~1s of each other,
   so the dashboard's subagent count went `2 → 0` in one tick — the

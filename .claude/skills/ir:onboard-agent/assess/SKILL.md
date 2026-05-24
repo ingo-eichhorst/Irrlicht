@@ -141,46 +141,44 @@ The steps below cover the **single-cell** form. For
 [`--column`](#column-and-row-batch-modes) and `--row`, jump to
 "Batch modes" further down.
 
-### Step 1 — Read the prose spec
-
-Canonical source (committed, always present):
+### Step 1 — Slice the cell
 
 ```
-.claude/skills/ir:onboard-agent/scenario-meanings.md   →   ### <scenario-id>
+.claude/skills/ir:onboard-agent/scripts/slice-cell.sh <scenario-id> <agent>
 ```
 
-Read the `### <scenario-id>` block and capture all five fields
-(Essence, User-observable signal, Primitive exercised, Not to be
-confused with, Conceptual flow). The **User-observable signal** lines
-are the candidate assertions you judge `irrlicht_observes` against; the
-**Primitive exercised** field is the canonical capability-key anchor
-(use it in Step 4 to pick the right `capabilities.json` key).
+One call prints exactly three things and nothing else — the
+`scenarios.json` entry, the `### <scenario-id>` scenario-meanings block,
+and the `agent-scenarios-coverage.json` cell — so you slice instead of
+reading the whole catalogs. Step 2 reads the coverage cell from this same
+output.
 
-If the scenario ID is missing from `scenario-meanings.md` — STOP. The
-row hasn't been created. Surface "run `scenario-create <slug>` first" in
-your summary and return.
+From the scenario-meanings block capture all five fields (Essence,
+User-observable signal, Primitive exercised, Not to be confused with,
+Conceptual flow). The **User-observable signal** lines are the candidate
+assertions you judge `irrlicht_observes` against; **Primitive exercised**
+is the canonical capability-key anchor (use it in Step 4 to pick the
+right `capabilities.json` key).
 
-If a richer `.specs/agent-scenarios.md` happens to be present (it's
-gitignored, so usually absent), also read its `### Feature:` block whose
-kebab slug matches — capture every `Scenario:` paragraph and `Expected:`
-bullet for extra precision. Don't fabricate a scenario if it's absent;
-`scenario-meanings.md` is sufficient.
+`slice-cell.sh` exits non-zero if the scenario is missing from
+`scenarios.json`/`scenario-meanings.md` — the row hasn't been created, so
+STOP and surface "run `scenario-create <slug>` first". If a richer
+`.specs/agent-scenarios.md` happens to be present (gitignored, usually
+absent), read its matching `### Feature:` block for extra precision; the
+slice is sufficient without it.
 
 ► **Verify before moving on:**
-- [ ] Found the `### <scenario-id>` block in `scenario-meanings.md` and
-  captured the **Primitive exercised** field verbatim.
+- [ ] Ran `slice-cell.sh` and captured the **Primitive exercised** field
+  verbatim from the scenario-meanings block.
 - [ ] Captured every User-observable signal (and any `.specs/` Expected:
   bullet, if present). Each is a candidate assertion for
   `irrlicht_observes`.
 
 ### Step 2 — Read the current matrix verdict
 
-```
-.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json   →   .scenarios[].coverage[<agent>]
-```
-
-Or `curl http://127.0.0.1:8765/api/catalog | jq` when `.specs/` is
-absent.
+Use the coverage cell already printed by `slice-cell.sh` in Step 1
+(`agent-scenarios-coverage.json → .scenarios[].coverage[<agent>]`). Or
+`curl http://127.0.0.1:8765/api/catalog | jq` against a running daemon.
 
 You're not bound by the existing verdict — the whole point of
 re-assessing is to confirm or refine. But knowing the prior verdict

@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"time"
+
+	"irrlicht/core/domain/session"
+)
 
 // transitionCause distinguishes why a state evaluation happened.
 type transitionCause string
@@ -121,4 +125,12 @@ type reportSummary struct {
 	CumCacheReadTokens     int64   `json:"cum_cache_read_tokens,omitempty"`
 	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens,omitempty"`
 	ModelName              string  `json:"model_name,omitempty"`
+
+	// Tasks is the primary session's final todo/task list, accumulated from
+	// the agent's task-list tool calls (claudecode TaskCreate/TaskUpdate,
+	// opencode todowrite). Surfaced so the task-list scenario golden can
+	// assert that todo items reach the session API. This is the aggregate
+	// (single-session) view sourced from lastMetrics; a future multi-session
+	// task-list fixture would surface per-session tasks on sessionTimeline.
+	Tasks []session.Task `json:"tasks,omitempty"`
 }

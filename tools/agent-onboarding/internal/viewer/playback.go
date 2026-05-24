@@ -482,6 +482,10 @@ func (m *PlaybackManager) registerPlaybackRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/stream", m.hub.ServeWS)
 
 	mux.HandleFunc("GET /dashboard", m.handleDashboard)
+	// The dashboard's sibling assets (irrlicht.css/js, referenced
+	// relatively from index.html since #418) are served by the "/"
+	// catch-all's platforms/web/ fallback in Server.staticHandler — no
+	// per-asset route needed here.
 }
 
 type startReq struct {
