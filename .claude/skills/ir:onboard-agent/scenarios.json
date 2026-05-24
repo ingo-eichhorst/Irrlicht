@@ -55,11 +55,11 @@
       "feature": "Auto-executed tool call"
     },
     {
-      "id": "todowrite",
+      "id": "task-list",
       "section": "Turn shape",
-      "feature": "Todowrite tool observability",
+      "feature": "Task list observability",
       "requires": [
-        "todowrite"
+        "task_list"
       ]
     },
     {
@@ -156,11 +156,6 @@
       "id": "foreground-subagent",
       "section": "Subagents",
       "feature": "Foreground subagent"
-    },
-    {
-      "id": "task-tool",
-      "section": "Subagents",
-      "feature": "Task tool (parallel spawn)"
     },
     {
       "id": "background-subagent",
@@ -4412,90 +4407,61 @@
       }
     },
     {
-      "name": "task-tool",
-      "description": "Staggered Task-tool fan-out: parent kicks off three concurrent subagents in one turn, each running bash sleep N (5/10/15s). The recording shows the dashboard subagent count decrement 3 → 2 → 1 → 0 over ~15s, then the parent transitions working → ready after the last child reports. Generalizes foreground-subagent (1 child) and the prior task-tool recipe (2 children) to the three-stagger shape that exercises the dashboard count chip end-to-end.",
-      "coverage_id": "task-tool",
+      "name": "task-list",
+      "description": "Agent maintains a todo/task list within its own session — no subagents involved. The driver asks the agent to create three task items and walk each one pending → in_progress → completed. The point of the scenario: the items surface in the session API's `tasks` field with matching subjects and status, while SubagentCount stays 0 and state follows a normal ready → working → ready arc. Claude Code drives this via the Task tool (TaskCreate/TaskUpdate); OpenCode via todowrite (full-list replace). Distinct from foreground-subagent / background-subagent, which spawn real child sessions via the Agent tool.",
+      "coverage_id": "task-list",
       "requires": [
-        "headless_mode",
-        "subagents"
+        "task_list"
       ],
       "verify": {
-        "parent_linked_min": 3,
-        "subagent_transcripts_min": 3,
-        "final_state": "ready",
-        "contains_tool_call": "Agent"
+        "final_state": "ready"
       },
       "by_adapter": {
         "claudecode": {
           "applicable": true,
-          "preconditions": [
-            "claude CLI on PATH and authenticated",
-            "irrlichd is recording (--attach or isolated)",
-            "claude session can spawn at least 2 subagents in parallel (default model has Task/Agent tool exposed)"
-          ],
-          "setup": [
-            "Driver seeds two files in <staging>/cwd: README.md (one H1 heading) and CHANGELOG.md (one release date). Subagents have deterministic content to read."
-          ],
-          "script": [
-            {
-              "type": "send",
-              "text": "In a SINGLE turn, use the Task tool THREE times in parallel. Each subagent receives the general-purpose type. Subagent A: run bash 'sleep 5 && echo A done'. Subagent B: run bash 'sleep 10 && echo B done'. Subagent C: run bash 'sleep 15 && echo C done'. After all three subagents report back, reply 'done'."
-            },
-            {
-              "type": "wait_turn"
-            },
-            {
-              "type": "sleep",
-              "seconds": 8
-            }
-          ],
+          "prompt": "Use your task-list tool to create exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. Then work them one at a time: mark each item in_progress and then completed via the task-list tool before moving to the next. Do NOT use the Task/Agent tool to spawn any subagent — keep everything in this one session. When all three items are completed, reply with exactly the word: done",
           "verify": [
-            "events.jsonl shows the parent UUID entering ready, then a single ready->working transition",
-            "events.jsonl contains AT LEAST 2 parent_linked events pointing at the parent UUID",
-            "transcript.jsonl contains AT LEAST 2 tool_use blocks with name=Agent (the two Task invocations)",
-            "two subagent transcripts appear under ~/.claude/projects/<slug>/<parent>/subagents/agent-<uuid>.jsonl",
-            "no state_transition to ready or waiting fires on the parent UUID between child2_parent_linked and the final working->ready (parent stays working until the LAST child reports back)",
-            "events.jsonl shows exactly one working->ready transition for the parent UUID at turn end",
-            "final session state for the parent is ready"
+            "transcript.jsonl contains three TaskCreate tool_use blocks (the three todo items) plus the TaskUpdate blocks that drive each to completed",
+            "transcript.jsonl contains NO tool_use block with name=Agent (no subagent spawned)",
+            "no parent_linked events appear and no subagent transcripts are written (SubagentCount stays 0)",
+            "the session API's tasks field lists the three items with matching subjects, all ending completed",
+            "state follows ready -> working -> ready; final session state is ready"
           ],
           "settings": {},
-          "timeout_seconds": 420
+          "timeout_seconds": 180
         },
         "opencode": {
           "applicable": true,
           "preconditions": [
             "opencode CLI on PATH and authenticated (run a single message in opencode TUI to confirm)",
             "irrlichd is recording (--attach or isolated) with the opencode SQLite watcher enabled",
-            "the default opencode model exposes the `task` tool (most chat models do; lightweight 'codex' models may not)"
+            "the default opencode model exposes the `todowrite` tool (most chat models do; lightweight 'codex' models may not)"
           ],
           "setup": [
-            "Driver seeds two files in <staging>/cwd: README.md (one H1 heading) and CHANGELOG.md (one release date). Subagents have deterministic content to read.",
             "Driver runs `opencode` in tmux against <staging>/cwd so each scenario gets a fresh project directory. OpenCode appends to the global ~/.local/share/opencode/opencode.db; sessions are isolated by their session id, not by cwd."
           ],
           "script": [
             {
               "type": "send",
-              "text": "In a SINGLE turn, use the `task` tool THREE times in parallel. Subagent A: run bash 'sleep 5 && echo A done'. Subagent B: run bash 'sleep 10 && echo B done'. Subagent C: run bash 'sleep 15 && echo C done'. After all three subagents report back, reply 'done'."
+              "text": "Use your todo list (the todowrite tool) to track three short work items, updating each item's status (pending → in_progress → completed) as you make progress. Do NOT spawn any subagent. Then reply with exactly the word: done"
             },
             {
               "type": "wait_turn"
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 4
             }
           ],
           "verify": [
-            "events.jsonl shows the parent session entering ready, then a single ready->working transition",
-            "events.jsonl contains AT LEAST 2 parent_linked events pointing at the parent session id",
-            "the parent session's transcript (SQLite parts) contains AT LEAST 2 tool parts with tool=task",
-            "two or more child session rows appear in ~/.local/share/opencode/opencode.db with parent_id = parent session id",
-            "no state_transition to ready or waiting fires on the parent between child2_parent_linked and the final working->ready (parent stays working until the LAST child reports back)",
-            "events.jsonl shows exactly one working->ready transition for the parent at turn end",
-            "final session state for the parent is ready"
+            "events.jsonl shows the session entering ready, then a single ready->working transition",
+            "the session's transcript (SQLite parts) contains at least one tool part with tool=todowrite carrying the three-item snapshot",
+            "no child session rows appear in ~/.local/share/opencode/opencode.db with parent_id = this session id (SubagentCount stays 0)",
+            "the session API's tasks field lists the three tracked items with their statuses surfacing (the committed recording ends with one completed, one in_progress, one pending — exercising all three statuses)",
+            "events.jsonl shows a working->ready transition at turn end; final session state is ready"
           ],
           "settings": {},
-          "timeout_seconds": 420
+          "timeout_seconds": 240
         }
       }
     }

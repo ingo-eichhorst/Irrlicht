@@ -1,0 +1,6 @@
+{"schema_version":1,"scenario_id":"task-list","source":".claude/skills/ir:onboard-agent/scenarios.json → task-list","notes":"Agent creates three todo items via TaskCreate and walks each to completed via TaskUpdate within a single session — no subagents. The phase DSL covers the ready → working → ready arc; the task-list assertion (the items surface in the session API's tasks field with matching subjects and status) isn't expressible in the phase DSL and is pinned by the replay byte-identity golden's summary.tasks instead. SubagentCount stays 0; no child sessions appear."}
+{"phase":"session_birth","expected_state":"ready","relative_to":"start","max_delay_ms":1000,"text":"Session appears in ready"}
+{"phase":"pid_bind","kind":"pid_discovered","relative_to":"start","max_delay_ms":1000,"text":"PID bound shortly after launch"}
+{"phase":"turn_start","expected_state":"working","relative_to":"session_birth","text":"User prompt → working"}
+{"phase":"tool_loop_working","expected_state":"working","relative_to":"turn_start","invariants":["no state_transition to waiting for session"],"text":"Session stays working across the TaskCreate/TaskUpdate calls — task-list tools are auto-executed, so no permission gate fires"}
+{"phase":"turn_end","expected_state":"ready","relative_to":"tool_loop_working","text":"Turn completes back to ready; no child sessions were spawned"}

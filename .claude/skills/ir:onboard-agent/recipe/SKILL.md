@@ -582,7 +582,7 @@ the driver controls completion timing instead of inferring it from
   dashboard surfaces (subagent count chip, in-progress iteration
   counter, etc.), give each entity a deterministic stagger so the
   decrement is observable as a sequence of events, not a single
-  jump. **Worked example — `claudecode/task-tool` iteration 1:** the
+  jump. **Worked example — `claudecode/foreground-subagent` iteration 1:** the
   v1 recipe asked the parent to launch TWO subagents that each
   *read a file*. Both subagents finished within ~1s of each other,
   so the dashboard's subagent count went `2 → 0` in one tick — the

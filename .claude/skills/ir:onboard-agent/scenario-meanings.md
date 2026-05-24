@@ -146,6 +146,22 @@ Five fields per scenario:
 
 ---
 
+### task-list
+
+- **Essence:** Agent maintains a todo/task list within its own session — creating items and walking each through `pending → in_progress → completed` — without spawning any child session.
+- **User-observable signal:** The list surfaces in the session API's `tasks` field: each reported item appears with a matching subject and its current status (`pending` → `in_progress` → `completed`). `SubagentCount` stays 0, no child sessions appear, and state follows a normal `ready → working → ready` arc.
+- **Primitive exercised:** Task-list management internal to the agent's own session — Claude Code's `TaskCreate` / `TaskUpdate` tools, OpenCode's `todowrite` (which replaces the whole list on every call). Despite the "Task tool" name in Claude Code, this is unrelated to the Agent tool that spawns child sessions.
+- **Not to be confused with:** `foreground-subagent` / `background-subagent` — the Agent tool spawns real child sessions with their own `session_id` and bumps `SubagentCount`; a task list does neither.
+- **Conceptual flow:**
+  1. Agent is in `ready`.
+  2. User asks the agent to plan and track work as a list.
+  3. State transitions `ready → working`.
+  4. Agent creates several items, then marks each `in_progress` and `completed` via its task-list tool — no child sessions appear.
+  5. The `tasks` field reflects the items and their final status; `SubagentCount` remains 0.
+  6. State transitions `working → ready`.
+
+---
+
 ### self-correction-iteration
 
 - **Essence:** Agent fails a tool call, interprets the failure, and retries with corrected input — multiple cycles within one turn — with no state flicker between retries.
@@ -423,7 +439,7 @@ Five fields per scenario:
 - **Essence:** Parent agent spawns one or more child agents in the foreground; parent stays `working` until all children complete; children are linked by `ParentSessionID` and counted in `SubagentCount`.
 - **User-observable signal:** Child sessions appear with `ParentSessionID = parent.session_id`; `SubagentCount(parent) = N` while N children are alive; `SubagentCount` decreases as each child finishes; parent transitions `working → ready` only after the last child ends.
 - **Primitive exercised:** `subagents` — agent can spawn child sessions (Agent/Task tool) that run in a forked context, are linked to the parent by `session_id`, and hold the parent in `working` until they complete.
-- **Not to be confused with:** `background-subagent` — parent returns to `ready` while child continues independently; `background-process` — a shell process, not an agent session; `task-tool` — the todo-list variant of task management, not subagent spawning.
+- **Not to be confused with:** `background-subagent` — parent returns to `ready` while child continues independently; `background-process` — a shell process, not an agent session; `task-list` — the todo-list variant of task management, not subagent spawning.
 - **Conceptual flow:**
   1. Parent is `working`.
   2. Parent spawns one or more foreground children via Agent/Task tool.
@@ -431,21 +447,6 @@ Five fields per scenario:
   4. `SubagentCount(parent)` reflects the live child count.
   5. Each child completes; `SubagentCount` decreases.
   6. Parent transitions `working → ready` once the last child ends.
-
----
-
-### task-tool
-
-- **Essence:** Agent uses the Task tool to create and manage a todo list within its own session, without spawning separate child sessions.
-- **User-observable signal:** State follows a normal `ready → working → ready` arc; `SubagentCount` stays at 0 — no child sessions appear.
-- **Primitive exercised:** Task/todo-list management via the Task tool (internal to the agent's own session). Distinct from the Agent tool which actually spawns child sessions.
-- **Not to be confused with:** `foreground-subagent` — the Agent tool spawns real child sessions with their own `session_id`; `background-subagent` — a detached child session.
-- **Conceptual flow:**
-  1. Agent is in `ready`.
-  2. User asks the agent to plan and track work.
-  3. State transitions `ready → working`.
-  4. Agent creates/reads/updates todo items via the Task tool — no child sessions appear.
-  5. State transitions `working → ready`; `SubagentCount` remains 0.
 
 ---
 
