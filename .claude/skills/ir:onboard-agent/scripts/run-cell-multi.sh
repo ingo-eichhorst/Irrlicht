@@ -101,6 +101,37 @@ STAGING="$REPO_ROOT/.build/refresh/_multi/$SCENARIO-$TS"
 SHARED_CWD="$STAGING/cwd"
 mkdir -p "$STAGING/recordings" "$STAGING/reports" "$SHARED_CWD"
 
+MANIFEST="$STAGING/run-manifest.json"
+DAEMON_SHUTDOWN="unknown"
+
+# write_error_manifest <error-code> [<extras-json>] — emit an ERROR-verdict
+# run-manifest.json on a failure path so the implement skill's "read
+# run-manifest.json → classify" step gets a verdict instead of finding no
+# manifest (mirrors run-cell.sh's write_error_manifest contract). Includes
+# each adapter driver's exit-reason (from its per-adapter staging subdir).
+write_error_manifest() {
+  local error_code="$1" a r
+  local extras_json="${2:-}"
+  [[ -n "$extras_json" ]] || extras_json="{}"
+  local reasons="{}"
+  for a in "${ADAPTERS[@]}"; do
+    r="$(cat "$STAGING/$a/driver.exit-reason" 2>/dev/null || echo missing)"
+    reasons="$(jq -n --argjson o "$reasons" --arg k "$a" --arg v "$r" '$o + {($k): $v}')"
+  done
+  jq -n \
+    --arg scenario "$SCENARIO" \
+    --argjson adapters "$(printf '%s\n' "${ADAPTERS[@]}" | jq -R . | jq -s .)" \
+    --arg error "$error_code" \
+    --arg staging "$STAGING" \
+    --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
+    --argjson driver_exit_reasons "$reasons" \
+    --argjson extras "$extras_json" \
+    '{scenario: $scenario, verdict: "ERROR", cross_adapter: $adapters,
+      error: $error, staging: $staging, daemon_shutdown: $daemon_shutdown,
+      driver_exit_reasons: $driver_exit_reasons} + $extras' \
+    > "$MANIFEST"
+}
+
 # --- Spawn ONE isolated --record daemon ---------------------------------
 DAEMON_LOG="$STAGING/daemon.log"
 env IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
@@ -136,7 +167,7 @@ for _ in $(seq 1 40); do
   [[ -S "$ONBOARD_SOCK" ]] && break
   sleep 0.25
 done
-[[ -S "$ONBOARD_SOCK" ]] || { echo "daemon socket never appeared: $ONBOARD_SOCK" >&2; exit 1; }
+[[ -S "$ONBOARD_SOCK" ]] || { echo "daemon socket never appeared: $ONBOARD_SOCK" >&2; write_error_manifest "daemon_socket_missing"; exit 1; }
 
 # --- Launch every adapter's interactive driver CONCURRENTLY -------------
 # All share $SHARED_CWD (the same workspace). Each gets its own staging
@@ -178,7 +209,7 @@ DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo unknown)"
 
 # --- Locate the single recording ----------------------------------------
 RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
-[[ -n "$RECORDING" ]] || { echo "no recording produced under $STAGING/recordings" >&2; exit 1; }
+[[ -n "$RECORDING" ]] || { echo "no recording produced under $STAGING/recordings" >&2; write_error_manifest "no_recording"; exit 1; }
 
 # --- Collect each adapter's daemon session_id(s) + transcript(s) --------
 # Drivers write session.uuid/transcript.path (the slot-1 PRIMARY, already
@@ -214,7 +245,7 @@ for idx in "${!ADAPTERS[@]}"; do
   OWN_TRANSCRIPTS[$idx]="$(cat "$paths_file" 2>/dev/null || true)"
   echo "$a: primary=${PRIMARY_SID[$idx]} sids=[$csv]"
 done
-[[ "$DRV_FAIL" -eq 0 ]] || { echo "one or more drivers failed; not curating" >&2; exit 1; }
+[[ "$DRV_FAIL" -eq 0 ]] || { echo "one or more drivers failed; not curating" >&2; write_error_manifest "driver_failed"; exit 1; }
 
 # --- Curate one per-adapter fixture each --------------------------------
 # events.jsonl spans the WHOLE workspace: every session of every adapter
@@ -249,11 +280,10 @@ for idx in "${!ADAPTERS[@]}"; do
   ext="$(jq -r '.transcript_extension // "jsonl"' "$REPO_ROOT/replaydata/agents/$a/capabilities.json")"
   staged_t="$STAGING/replaydata/agents/$a/scenarios/$SCENARIO/transcript.$ext"
   (cd "$REPO_ROOT" && "$REPLAY_BIN" --quiet --out "$STAGING/reports/$a.staged.json" "$staged_t") || true
-  [[ -s "$STAGING/reports/$a.staged.json" ]] || { echo "replay failed for $a ($staged_t)" >&2; exit 1; }
+  [[ -s "$STAGING/reports/$a.staged.json" ]] || { echo "replay failed for $a ($staged_t)" >&2; write_error_manifest "replay_failed" "$(jq -nc --arg a "$a" '{failed_adapter:$a}')"; exit 1; }
 done
 
 # --- Manifest -----------------------------------------------------------
-MANIFEST="$STAGING/run-manifest.json"
 jq -n \
   --arg scenario "$SCENARIO" \
   --argjson adapters "$(printf '%s\n' "${ADAPTERS[@]}" | jq -R . | jq -s .)" \

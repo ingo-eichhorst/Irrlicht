@@ -147,9 +147,12 @@ IRRLICHT_ONBOARD_HOME=/tmp/irrlicht-onboard-dev \
 
 It reads the scenario's `cross_adapter[]` list, drives every listed adapter
 concurrently in one shared cwd under a single isolated `--record` daemon
-(coexisting with production), and stages one per-adapter fixture each.
-Promote each adapter separately (step 6) — the single recording satisfies
-all the cross-adapter rows.
+(coexisting with production), and stages one per-adapter fixture each. It
+writes the same `run-manifest.json` contract as `run-cell.sh` —
+`verdict: STAGED` on success, `verdict: ERROR` with an `error` code +
+per-adapter `driver_exit_reasons` on failure — so the same read-manifest
+classification applies. Promote each adapter separately (step 6); the single
+recording satisfies all the cross-adapter rows.
 
 Read `<STAGING>/run-manifest.json`. Classify the outcome — when in
 doubt run `$SK/scripts/lib/classify-failure.sh <STAGING>` (codes:
