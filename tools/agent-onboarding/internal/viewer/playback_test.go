@@ -29,10 +29,26 @@ func fixtureRoot(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(scenarioDir, "events.jsonl"), []byte(events), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// platforms/web/index.html — minimal so dashboard handler can serve.
+	// platforms/web/{index.html,irrlicht.css,irrlicht.js} — a realistic
+	// dashboard tree: index.html references its siblings relatively (as
+	// the real one does since #418), so the viewer must serve the assets
+	// too or the iframe renders unstyled (#459). The "test dashboard"
+	// marker is kept for TestPlayback_startEndToEnd's body assertion.
 	dashboardDir := filepath.Join(root, "platforms", "web")
 	os.MkdirAll(dashboardDir, 0o755)
-	os.WriteFile(filepath.Join(dashboardDir, "index.html"), []byte("<html>test dashboard</html>"), 0o644)
+	indexHTML := `<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" href="irrlicht.css">
+</head>
+<body>
+test dashboard
+<script type="module" src="irrlicht.js"></script>
+</body>
+</html>`
+	os.WriteFile(filepath.Join(dashboardDir, "index.html"), []byte(indexHTML), 0o644)
+	os.WriteFile(filepath.Join(dashboardDir, "irrlicht.css"), []byte(":root{--marker:css}"), 0o644)
+	os.WriteFile(filepath.Join(dashboardDir, "irrlicht.js"), []byte("export const marker = 'js';"), 0o644)
 	return root
 }
 
@@ -92,6 +108,39 @@ func TestPlayback_startEndToEnd(t *testing.T) {
 	h.ServeHTTP(rr, httptest.NewRequest("POST", "/api/replay/stop", nil))
 	if rr.Code != http.StatusNoContent {
 		t.Errorf("stop status: %d", rr.Code)
+	}
+}
+
+// TestPlayback_servesDashboardAssets guards #459: the dashboard's
+// index.html references irrlicht.css/js relatively, so the viewer must
+// serve those siblings from platforms/web/ or the recording preview
+// renders unstyled (the iframe 404s the assets).
+func TestPlayback_servesDashboardAssets(t *testing.T) {
+	root := fixtureRoot(t)
+	s := &Server{RepoRoot: root}
+	h := s.Handler()
+
+	cases := []struct {
+		path        string
+		wantBody    string
+		wantCTParts string
+	}{
+		{"/irrlicht.css", "--marker:css", "text/css"},
+		{"/irrlicht.js", "marker = 'js'", "javascript"},
+	}
+	for _, tc := range cases {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", tc.path, nil))
+		if rr.Code != http.StatusOK {
+			t.Errorf("%s: status=%d body=%s", tc.path, rr.Code, rr.Body)
+			continue
+		}
+		if !strings.Contains(rr.Body.String(), tc.wantBody) {
+			t.Errorf("%s: body %q missing %q", tc.path, rr.Body, tc.wantBody)
+		}
+		if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, tc.wantCTParts) {
+			t.Errorf("%s: Content-Type=%q want substring %q", tc.path, ct, tc.wantCTParts)
+		}
 	}
 }
 
