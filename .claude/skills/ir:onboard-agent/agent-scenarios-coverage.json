@@ -214,7 +214,7 @@
         "codex": {
           "agent_supports": "no",
           "irrlicht_observes": "n/a",
-          "notes": "No native rewind as of v0.130 (May 2026). Open feature requests #11626 + #12558 explicitly model after Claude Code; community discussion #9618 confirms status. Reassess on next major Codex release."
+          "notes": "No native checkpoint-rewind as of v0.130 (May 2026): no /rewind command, no file-edit checkpoint restore; the experimental /undo was removed (#9618). codex HAS /fork (conversation fork → new linked session_id, original intact) and TUI Esc-Esc backtrack, but that is branching, not file+conversation rollback — do NOT re-mark this `yes` on the strength of /fork. Open feature requests #11626 + #12558 model after Claude Code. Reassess on next major Codex release."
         },
         "pi": {
           "agent_supports": "no",
