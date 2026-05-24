@@ -35,14 +35,21 @@ jobs:
           set -euo pipefail
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
-          echo "Comparing base $base ..head $head"
+          echo "Comparing merge-base($base, $head) ...head $head"
 
+          # Three-dot (base...head) diffs from the MERGE BASE of the two commits
+          # to head, i.e. only what this PR branch actually changed since it
+          # forked. A two-dot diff (base head) would also surface files added to
+          # the base branch AFTER the fork point as phantom "deletions" whenever
+          # the PR branch is behind base — a false positive that fails the guard
+          # on stale branches that never touched replaydata at all.
+          #
           # --diff-filter=D selects deletions only.
           # `git diff` treats a rename as a (D, A) pair only if -M is below the
           # threshold; with -M (the default for `git diff`) renames stay as
           # renames and do NOT count as deletions. We pass --find-renames=50%
           # explicitly so the threshold is documented and stable.
-          deletions=$(git diff --name-only --diff-filter=D --find-renames=50% "$base" "$head" -- \
+          deletions=$(git diff --name-only --diff-filter=D --find-renames=50% "$base...$head" -- \
             'replaydata/agents/*/scenarios/*' \
             'replaydata/agents/*/regression/*' \
             'replaydata/orchestrators/*/scenarios/*' \
