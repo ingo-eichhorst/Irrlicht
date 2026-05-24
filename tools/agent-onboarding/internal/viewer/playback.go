@@ -692,17 +692,20 @@ func inferProjectName(s *session.SessionState) string {
 	return "replay"
 }
 
-// handleDashboard serves the embedded irrlicht dashboard. Reads
-// platforms/web/index.html from the repo root at request time so a
-// `git pull` of dashboard changes Just Works without restarting the
-// viewer.
+// handleDashboard serves the live session dashboard. There are two
+// frontends in this repo and exactly one is authoritative for the live
+// session view: platforms/web/index.html — the SAME dashboard the daemon
+// ships. The viewer reads it from the repo root at request time so a
+// `git pull` of dashboard changes Just Works without rebuilding the
+// viewer. (The viewer's OWN embedded internal/viewer/web/ SPA is a
+// separate, deliberate surface — the catalog / scenario browser — and is
+// never the live session UI; see the package doc in server.go.)
 //
-// We inject a tiny "ws-diag" script that wraps window.WebSocket so
-// every received message is mirrored to the console with prefix
-// "[ws-diag]". This makes it possible to compare what the server
-// broadcasts (recorded in /api/replay/diag) against what the dashboard
-// inside the iframe actually receives, without modifying the
-// production index.html.
+// We inject a tiny non-invasive "ws-diag" script that wraps
+// window.WebSocket so every received message is mirrored to the console
+// with prefix "[ws-diag]", letting us compare server broadcasts
+// (/api/replay/diag) against what the iframe actually receives — without
+// editing the authoritative production index.html.
 func (m *PlaybackManager) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(m.repoRoot, "platforms", "web", "index.html")
 	b, err := os.ReadFile(path)
@@ -710,12 +713,25 @@ func (m *PlaybackManager) handleDashboard(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("could not read %s: %v", path, err), http.StatusInternalServerError)
 		return
 	}
-	html := string(b)
-	if i := strings.Index(html, "</head>"); i >= 0 {
-		html = html[:i] + wsDiagScript + html[i:]
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+	w.Write([]byte(injectBeforeClosingTag(string(b), wsDiagScript)))
+}
+
+// injectBeforeClosingTag inserts script just before the first closing
+// </head> (falling back to </body>), matched case-insensitively. This
+// replaces a brittle exact-string `strings.Index(html, "</head>")` splice:
+// if the dashboard markup ever changes the tag's casing or drops the
+// <head>, the diagnostic script is appended at the end and the divergence
+// is logged, instead of being silently dropped.
+func injectBeforeClosingTag(html, script string) string {
+	lower := strings.ToLower(html)
+	for _, tag := range []string{"</head>", "</body>"} {
+		if i := strings.Index(lower, tag); i >= 0 {
+			return html[:i] + script + html[i:]
+		}
+	}
+	logViewerError("handleDashboard: dashboard HTML has no </head> or </body>; appending ws-diag script at end")
+	return html + script
 }
 
 // handleDiag returns the recent broadcast log captured by the
