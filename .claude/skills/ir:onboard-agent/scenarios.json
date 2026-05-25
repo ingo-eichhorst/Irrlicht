@@ -4533,6 +4533,53 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated/configured (the default model is set in ~/.config/opencode/opencode.json; auth is out-of-band)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model must be capable of function calling so it auto-executes the bash + read tool calls — if the model emits no tool call the large part is never produced (a MODEL reason, opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"<prompt>\"` in a fresh per-run cwd under <staging>/cwd/ with NO --model flag, so it uses the config default (a small/slow local LM Studio model). The first send mints the ses_… session; subsequent sends chain it via --session, so both turns land on the same UUID-keyed session.",
+            "WHY a tool produces the oversized part, not the model: the small local default model will not reliably emit hundreds of KB of text on its own, so turn1 asks opencode to CREATE a large file (≥256 KB of a single repeated character, no newlines) in the run cwd via its bash tool, and turn2 asks it to READ that file back with its read tool. The read-tool-result part then carries the whole >256 KB file content as a single part.data row in opencode's SQLite store — and the driver exports parts one-JSONL-line-per-part, so it also becomes a single >256 KB line in the committed transcript.jsonl. This is the oversized-transcript-line input.",
+            "WHY this exercises the resilience path: opencode is the lone ProcessOwnedStore adapter — the live watcher reads part.data straight from SQLite via rows.Scan (watcher.go scanParts) and ComputeMetrics likewise, with no bufio line-buffer cap, so the single huge read-tool-result part is read whole. A ~256 KB part is a sanity-check that the arc completes on a large single part, NOT a true >64 MB cap-stress (the genuine 64 MB cap, issue #270, gates the SHARED tailer that the JSONL adapters use and is pinned agent-agnostically by core/pkg/tailer/large_line_test.go; it never gates opencode store reads).",
+            "No auto-mode / permission step is needed: in headless default `opencode run` auto-executes tools inside opencode's own sandbox with no interactive gate, so the bash + read calls run autonomously and the session never enters waiting.",
+            "wait_turn is a no-op because `opencode run` already blocks until each turn ends; the ≥6s trailing sleep gives the daemon's poller one full tick to observe the final working→ready settle before the run process exits.",
+            "Each send is a crisp single-tool-forcing prompt so the small/slow local default model reliably emits exactly the intended tool call inside the working span, then replies done. The file-size target (≥256 KB) is well above bufio.Scanner's old 2 MB-class concern while staying small enough that the local model and opencode's sandbox handle the bash+read without timing out."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Use your bash tool to run exactly this command and nothing else: head -c 300000 /dev/zero | tr \"\\0\" \"x\" > big.txt . Then reply with exactly: created"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "send",
+              "text": "Use your read tool to read the entire file big.txt in the current directory. After reading it, reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl shows the ses_… session enter working then settle back to ready for turn1 (the file-creating bash call auto-executes inside the working span, no gate)",
+            "events.jsonl shows the ses_… session enter working then settle back to ready for turn2 (the oversized read-tool-result part) on the SAME ses_… session_id — completion of this arc is the parser-resilience proof: if the oversized part had wedged the store-read path this working→ready would never fire",
+            "the opencode SQLite store / transcript.jsonl contains a single oversized part (≥256 KB) for the read-tool-result of big.txt — verify out-of-band that one part.data row / one transcript.jsonl line genuinely exceeds the threshold BEFORE trusting the recording",
+            "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (both calls auto-execute; no permission window)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
