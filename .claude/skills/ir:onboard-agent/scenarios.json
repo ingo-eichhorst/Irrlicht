@@ -990,14 +990,14 @@
             "aider CLI on PATH and authenticated against a provider out-of-band; the driver does not handle a login/OAuth prompt.",
             "tmux available — the interactive driver runs aider in a tmux REPL so it can send two prompts to one long-lived session, switch the model between them with `/model`, and tear it down cleanly.",
             "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record.",
-            "BOTH models reachable on the account: turn 1 runs on aider's boot/default main model (model A) and the `/model openai/gemma-4-e2b-it-uncensored` switch target (model B) must resolve. The concrete model values are environment-dependent (issue #440): the durable assertion is that the model CHANGES between turns and a non-empty model_name (model B) is present at session end, NOT a hardcoded pair.",
+            "BOTH models reachable on the account: turn 1 runs on aider's boot/default main model (model A, set deterministically via IRRLICHT_AIDER_MODEL=gpt-5-nano so it does not depend on ~/.aider.conf.yml) and the `/model gpt-4o-mini` switch target (model B) must resolve on the same OpenAI key. The concrete model values are environment-dependent (issue #440): the durable assertion is that the model CHANGES between turns and a non-empty model_name (model B) is present at session end, NOT a hardcoded pair. This recording used gpt-5-nano → gpt-4o-mini on an OpenAI key.",
             "feature-invisible caveat: aider's `> Weak model:` line is intentionally NOT matched by the parser's modelRE (only `Model:`/`Main model:` drive ModelName), so a switch that changed only the weak/summary model would be invisible; this recipe switches the MAIN model, which is observable."
           ],
           "setup": [
             "SHARES coverage cell with aider/model-switch-midsession (same coverage_id model-switch-midsession, same primitive); this row exists so the `model-switch`-named matrix entry is populated for aider.",
             "The interactive driver (drive-aider-interactive.sh) launches aider in a fresh per-run cwd inside a tmux session and waits for the REPL prompt.",
             ".aider.chat.history.md (FilesUnderCWD) materializes lazily once the first user input lands; before that the live REPL is observable as a transient proc-<PID> pre-session born ready (the process scanner). The daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session.",
-            "The `/model openai/gemma-4-e2b-it-uncensored` slash uses aider's one-shot inline `/model <name>` form: cmd_model raises SwitchCoder(main_model=…), the new coder emits a `> Main model: <name> …` blockquote (parser modelRE → latest-wins ModelName), and NO assistant turn is produced — so no `keys` picker and no `wait_turn` after the slash.",
+            "The `/model gpt-4o-mini` slash uses aider's one-shot inline `/model <name>` form: cmd_model raises SwitchCoder(main_model=…), the new coder emits a `> Main model: <name> …` blockquote (parser modelRE → latest-wins ModelName), and NO assistant turn is produced — so no `keys` picker and no `wait_turn` after the slash.",
             "Turn 1 runs on model A; the /model slash switches to model B; turn 2 runs on model B. message-level ModelName follows latest-non-unknown-wins so SessionMetrics.ModelName promotes to B by t2_done, and token snapshots accumulate across the switch.",
             "After both turns + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a SINGLE process_exited for the proc-<PID> session (a model switch does NOT mint a new session)."
           ],
@@ -1011,15 +1011,15 @@
             },
             {
               "type": "sleep",
-              "seconds": 7
+              "seconds": 12
             },
             {
               "type": "slash",
-              "text": "/model openai/gemma-4-e2b-it-uncensored"
+              "text": "/model gpt-4o-mini"
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 12
             },
             {
               "type": "send",
@@ -1030,7 +1030,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 12
             }
           ],
           "verify": [
@@ -1039,7 +1039,7 @@
             "the /model slash produces NO additional working/waiting transition between t1_done and t2_start — it writes only a `> Main model:` blockquote with no `> Tokens:` close (no assistant turn).",
             "events.jsonl contains a pid_discovered bound to the proc-<PID> session, and exactly one process_exited on it at REPL teardown (a model switch does NOT create a second session).",
             "no state_transition to waiting appears for the session at any point; final live state is ready before teardown.",
-            "the .replay.json.golden carries summary.model_name == model B (openai/gemma-4-e2b-it-uncensored, latest-wins) — NOT model A and NOT 'unknown'; this is where the model A→B switch is asserted, since the events.jsonl phase DSL has no model field. The concrete value is environment-dependent (issue #440); assert change + presence, not a hardcoded string."
+            "the .replay.json.golden carries summary.model_name == model B (gpt-4o-mini, latest-wins) — NOT model A (gpt-5-nano) and NOT 'unknown'; this is where the model A→B switch is asserted, since the events.jsonl phase DSL has no model field. The concrete value is environment-dependent (issue #440); assert change + presence, not a hardcoded string."
           ],
           "notes": "SHARES coverage_id model-switch-midsession with aider/model-switch-midsession (same Metrics → Model switch mid-session primitive); this row populates the `model-switch`-named matrix entry for aider. RECORDABILITY (no driver_gap): aider's `/model <name>` accepts an INLINE ARGUMENT — cmd_model (aider/commands.py:87, \"Switch the Main Model to a new LLM\") raises SwitchCoder(main_model=…) and switches DIRECTLY, no arrow-key picker — so the switch is sendable via the existing `slash` step (NOT a `keys` gap, unlike the codex two-step picker recipe for this same scenario). The aider interactive driver implements send/slash/wait_turn/sleep (case `send|slash)` types text + Enter), so every step type this recipe needs is supported. WHY interactive (not headless `aider --message`): the /model slash only exists inside the REPL and the scenario needs two turns; the interactive driver keeps the REPL alive across both turns and kills the tmux session once → a SINGLE process_exited (headless aider is single-shot and would exit after one reply, missing the per-turn reset and the terminal working→ready settle). WHY NO wait_turn after the /model slash: the driver's `slash` step bumps the expected-turn counter exactly like `send`, but a /model switch writes a `> Main model:` blockquote with NO `> Tokens:` close (no assistant turn), so a wait_turn after it would hang on the unchanged turn count; the recipe covers the switch with a fixed 8s sleep instead. AIDER TURN-END IS SYNTHESIZED, NOT MARKED: the markdown transcript has no turn-end marker — `> Tokens:` closes one model CALL, not the turn; end-of-turn is synthesized by IdleFlush after ~1.5s quiet, clamped to the SessionDetector's ~5s working-refresh poll, so the EFFECTIVE working→ready latency is ~5s. The 7s inter-turn sleep (after turn 1) and 8s sleeps (after the slash, and trailing) let each turn's working→ready flip fire AND be observed before the next prompt re-enters working; with shorter sleeps the next `####` prompt lands before IdleFlush and the parser opens the new turn WITHOUT an intervening turn_done, losing the per-turn reset (TestParser_NewUserPromptAfterMultiCall_StaysWorking). The model A→B assertion is NOT expressible in the events.jsonl phase DSL (no model field), so expected.jsonl asserts only the two-turn lifecycle skeleton and the switch is asserted at summary.model_name in the .replay.json.golden plus the aider parser unit test TestParser_MainModel_AfterSlashCommand (parser_test.go:214), which drives this recipe's exact `> Main model: openai/gemma-4-e2b-it-uncensored …` line. SESSION IDENTITY: aider stores its transcript in the cwd (FilesUnderCWD), so the daemon keys the whole session by proc-<PID> — no separate UUID rollout session and no handoff phase; the turn arcs, pid_bind, and teardown all pin to session_birth via same_session_as. What differs between runs: token counts, PID/timestamps, assistant wording (pinned with `Reply with exactly the word: first/second` to keep turns short and deterministic), and the working→ready edge lands with ~5s idle-flush latency. What must NOT differ: two working→ready arcs on ONE proc-<PID> session, summary.model_name == model B in the golden, and a single process_exited at teardown. multi_model_orchestration=yes. RECORDING DEFERRED: validated when aider auth is available in-env — at authoring time there is no provider key present and headless aider hangs on OpenRouter OAuth, so this recipe + spec are the DOCUMENTED TARGET pending a recording.",
           "settings": {},
