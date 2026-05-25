@@ -872,6 +872,71 @@
           "notes": "Codex /model is an interactive TWO-STEP picker (model list, then reasoning-level list), NOT a one-shot `/model <name>` like aider — so the recipe drives it with `slash /model` to open it, then `keys` steps to navigate. Probed live on codex 0.130.0: the model list is 1=gpt-5.5(default) 2=gpt-5.4(current/boot-default, highlighted) 3=gpt-5.4-mini 4=gpt-5.3-codex 5=gpt-5.2, so `Down Down Enter` from the boot-highlighted entry 2 lands on gpt-5.3-codex (entry 4); the reasoning sub-screen then opens with Medium(default) highlighted, so a bare `Enter` confirms gpt-5.3-codex medium (footer flips to `gpt-5.3-codex medium`, rollout writes `• Model changed to gpt-5.3-codex`). The two `keys` steps are split with a 2s sleep because the model-confirm Enter and the reasoning-confirm Enter hit DIFFERENT screens that need a render gap; the `keys` step does NOT touch the turn counter, so wait_turn stays correct. Model A is gpt-5.4 (the boot default in this codex build — NOT gpt-5.5 as in the original assessment text). What differs between runs: assistant token counts/cost, exact rollout UUID/PID/timestamps, and the assistant's wording (we pin it with `Reply with exactly the word: first/second` to keep turns short and deterministic). What must NOT differ: two working→ready arcs on one session, the model_name landing on gpt-5.3-codex, and process_exited at teardown. If the picker navigation drifts (codex changes the model list order), the Down-count is wrong — re-probe `/model` and recount. multi_model_orchestration=yes.",
           "settings": {},
           "timeout_seconds": 300
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured models out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so it can send two prompts to one long-lived session, switch models between them, and tear it down cleanly",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "TWO models authenticated on the account: model A is pinned via a leading slash (openai-codex/gpt-5.5) and model B is a distinct switch target (openai-codex/gpt-5.4-mini). Both must resolve to a UNIQUE exact match for the canonical provider/id form — if either model is unavailable, the /model switch silently falls back to the interactive picker and the script-driven switch fails.",
+            "The concrete model values are environment-dependent (issue #440): the durable assertion is that the model CHANGES between turns and a non-empty model_name (model B) is present at session end, NOT a hardcoded pair. The recipe pins both for determinism."
+          ],
+          "setup": [
+            "EQUIVALENT FIXTURE to pi/model-switch-midsession (same coverage cell, same primitive) — `model-switch` is the duplicate scenarios.json entry sharing coverage_id model-switch-midsession; this row exists for matrix completeness.",
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session and waits for the REPL prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver's end-of-script resolve_transcript fallback binds the UUID from line 1 (no wait_turn is used — see notes)",
+            "FIRST slash `/model openai-codex/gpt-5.5` PINS model A deterministically: pi persists the last-used model as ~/.pi/agent/settings.json defaultModel, so the boot model varies run-to-run; pinning A up front makes turn 1 reliably attributed to A regardless of what the previous session left as the default. This is the load-bearing determinism fix.",
+            "Each `/model <provider>/<id>` uses the CANONICAL provider/id form so pi's handleModelCommand resolves an exact single-model match and calls session.setModel() DIRECTLY — no arrow-key picker, no `keys` step. pi writes a model_change(modelId) line to the rollout (parsed for ModelName, no turn produced)",
+            "Turn 1 runs on model A (gpt-5.5); the SECOND slash `/model openai-codex/gpt-5.4-mini` switches to model B; turn 2 runs on model B. message.model = A then B, so MergeMetrics' latest-non-unknown-wins promotes SessionMetrics.ModelName to B by t2_end and TotalTokens accumulates across both models",
+            "Both turns are driven by a fixed trailing sleep rather than wait_turn (the leading /model pin would desync the wait_turn counter — see notes); a one-word reply completes well within the 18s window (verified live)",
+            "After both turns + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a SINGLE process_exited for the rollout session (a model switch does NOT mint a new session)"
+          ],
+          "script": [
+            {
+              "type": "slash",
+              "text": "/model openai-codex/gpt-5.5"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: turn-one"
+            },
+            {
+              "type": "sleep",
+              "seconds": 18
+            },
+            {
+              "type": "slash",
+              "text": "/model openai-codex/gpt-5.4-mini"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: turn-two"
+            },
+            {
+              "type": "sleep",
+              "seconds": 18
+            }
+          ],
+          "verify": [
+            "events.jsonl shows two ready→working→ready arcs on the SAME rollout session_id (turn 1 on model A, turn 2 on model B); the interactive REPL returns to ready after each, unlike headless pi --print which exits",
+            "events.jsonl contains a pid_discovered bound to the rollout session_id (a transient proc-<PID> pre-session may also appear born ready at launch; the turns and pid_discovered land on the UUID-keyed rollout session)",
+            "the /model slash produces NO additional working/waiting transition between t1_end and t2_start — it is a direct setModel() with no LLM round-trip and writes only a model_change line",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (a model switch does NOT create a second session)",
+            "no state_transition to waiting appears for the rollout session at any point; final live state is ready before teardown",
+            "the .replay.json.golden carries summary.model_name == model B (gpt-5.4-mini, latest-wins) — NOT model A and NOT 'unknown'; this is where the model A→B switch is asserted, since the events.jsonl phase DSL has no model field. The concrete value is environment-dependent (issue #440); assert change + presence, not a hardcoded string"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "notes": "EQUIVALENT to pi/model-switch-midsession (both share coverage_id model-switch-midsession; same Metrics → Model switch mid-session primitive). This row exists so the `model-switch`-named matrix entry is populated for pi; it is not a distinct user-observable behavior. CRITICAL FIRST CHECK RESULT (recordability): pi 0.70.0's `/model <provider>/<id>` accepts an INLINE ARGUMENT — handleModelCommand → findExactModelMatch → session.setModel() switches DIRECTLY with no arrow-key picker when the reference resolves to exactly ONE model (dist/modes/interactive/interactive-mode.js ~L3216, dist/core/model-resolver.js findExactModelReferenceMatch ~L53). Only an empty/ambiguous term opens the selector UI. So the switch is sendable via the existing `slash` step in SCRIPT mode — NO driver_gap (no `keys` primitive needed, unlike the claudecode/codex picker recipes for this same scenario). MUST use the full canonical provider/id form; a bare fuzzy term like `mini` may match multiple models and fall back to the picker. WHY a LEADING /model pin (gpt-5.5) before turn 1: pi PERSISTS the last-used model as ~/.pi/agent/settings.json defaultModel, so a bare `pi` launch boots on whatever the previous session left behind — NON-deterministic. Pinning model A explicitly at the top makes the A→B switch a real change every run regardless of the persisted default. This is the load-bearing determinism fix. WHY NO wait_turn anywhere (both turns driven by trailing sleeps): the driver's `slash` step bumps the expected-turn counter exactly like `send`, but a /model switch produces a model_change line with NO assistant turn (turn_count only counts stopReason==stop). With a leading /model pin, EXPECTED is already 1 before turn 1, so a turn-1 wait_turn would block waiting for count≥2 while only 1 turn exists → driver timeout. The grammar has no 'slash that doesn't bump' primitive, so the recipe drops wait_turn entirely and lets a fixed 18s trailing sleep cover each one-word reply; the driver's end-of-script resolve_transcript fallback still binds the UUID. Same family of compromise as the pi synchronous-slash-command recipe. WHY the 2s/3s sleeps after each slash: they let the model_change line land and the classifier settle before the next prompt. The model lives on each assistant message.model (parser.go L103-105) and on the model_change line at modelId (L39-44), both normalized into ev.ModelName → SessionMetrics.ModelName (latest-non-unknown-wins). The model A→B assertion is NOT expressible in the events.jsonl phase DSL, so expected.jsonl asserts only the two-turn lifecycle skeleton and the model switch is asserted at summary.model_name in the .replay.json.golden plus the pi parser unit tests. C7/SESSION-IDENTITY: the live REPL emits a transient proc-<PID> pre-session born ready at launch; session_birth legitimately matches it. t1_start anchors to recording start with NO session pin so the matcher picks the FIRST working (necessarily the rollout); t1_end/t2_start/t2_end, pid_bind, and teardown then pin to t1_start's session via same_session_as. What differs between runs: token counts/cost, rollout UUID/PID/timestamps, assistant wording, and pi may flush a single turn as more than one working→ready burst (spec asserts ≥2 arcs, not an exact count). What must NOT differ: model A (gpt-5.5) on turn 1 and model B (gpt-5.4-mini) on turn 2 (pinned), two working→ready arcs on ONE rollout session, summary.model_name == model B in the golden, and a single process_exited at teardown."
         }
       }
     },

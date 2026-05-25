@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "scenario_id": "model-switch",
+  "agent": "pi",
+  "assessed_at": "2026-05-25T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.8,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Relationship to model-switch-midsession\n\n`model-switch` and `model-switch-midsession` are two scenarios.json entries that share the SAME coverage cell (coverage_id `model-switch-midsession`, section Metrics, feature \"Model switch mid-session\") and describe the IDENTICAL primitive: the user invokes `/model` mid-session to swap the active LLM, then runs a second turn on the new model, and the dashboard's ModelName follows the latest selection while TotalTokens keeps accumulating. There is no distinct user-observable signal that separates the two — `model-switch`'s scenarios.json description is the agent-agnostic phrasing of the same behavior (it even notes aider/codex variants of the same /model swap). This assessment is therefore the same yes/yes verdict as the proven `model-switch-midsession` cell, re-anchored under the `model-switch` id for matrix completeness. The recipe + spec are an equivalent (not byte-identical) fixture: same lifecycle skeleton, same /model swap mechanics.\n\n## Primitive\n\nPer-turn model selection: the user changes pi's active model between turns (REPL `/model` command), and each subsequent assistant turn's usage metadata reflects the new model. The dashboard's ModelName updates to the latest model; TotalTokens keeps accumulating across the switch.\n\n## agent_supports — yes\n\npi 0.70.0's REPL `/model <ref>` command switches the active model in-session WITHOUT starting a new session — verified live: one rollout file, two assistant turns, the second attributed to the switch target. Crucially `/model <provider>/<id>` (canonical form) resolves an EXACT single-model match and calls session.setModel() DIRECTLY — no arrow-key picker, no interactive selector (dist/modes/interactive/interactive-mode.js handleModelCommand → findExactModelMatch; dist/core/model-resolver.js findExactModelReferenceMatch). So the switch is driveable from a non-interactive script via the existing `slash` step; no `keys` primitive is required → NO driver_gap.\n\n## irrlicht_observes — yes\n\npi writes the model in two parser-observable places (core/adapters/inbound/agents/pi/parser.go): every assistant message carries it at message.model (L103-105 → ev.ModelName), and an explicit model_change event carries it at modelId (L39-44 → ev.ModelName, ev.Skip=true). The tailer applies the model metadata even on the Skip'd model_change line. ev.ModelName flows into SessionMetrics.ModelName under MergeMetrics' latest-non-unknown-wins rule, so by the end of turn 2 ModelName == model B. extractPiContribution (L148) tags each per-turn contribution with that turn's model, so TotalTokens accumulates across both.\n\n## Observability caveat — where the model assertion lives\n\nThe expected.jsonl validator DSL (tools/agent-onboarding/internal/validate Phase struct: phase / expected_state / kind / max_delay_ms / duration_at_least_ms / same_session_as / new_session / invariants) operates over the lifecycle events.jsonl stream, which carries NO model_name field. So expected.jsonl cannot directly assert model A→B. It asserts the two-turn lifecycle skeleton on ONE UUID rollout (born ready → t1 working→ready → t2 working→ready, no waiting, one process_exited at teardown). The model-switch proof (model_name == model B at end, distinct from model A) is the metrics-level summary.model_name in the .replay.json.golden (diffed by replay-fixtures) plus the pi parser unit tests on message.model / model_change extraction.\n\n## Conclusion\n\napplicable: yes. SCRIPT mode is recordable via the inline-arg `/model <provider>/<id>` form (no picker). The cell captures two no-op turns separated by a direct model switch; the model A→B change is documented in spec notes and asserted at the golden + parser-test level, since the events.jsonl DSL has no model field. Identical in substance to model-switch-midsession.",
+  "caveats": [
+    "DUPLICATE-CELL: `model-switch` shares coverage_id `model-switch-midsession`. Both are the same Metrics → Model switch mid-session primitive; this is an equivalent fixture for matrix completeness, not a distinct user-observable behavior. A maintainer may choose to collapse the two scenarios.json entries.",
+    "The concrete model values are environment-dependent (issue #440): the durable assertion is that model_name is present and CHANGES between turns, not a hardcoded pair. To keep the recording deterministic the recipe pins both: a leading `/model openai-codex/gpt-5.5` pin (model A) then a `/model openai-codex/gpt-5.4-mini` switch (model B), both via the canonical provider/id form.",
+    "`/model <provider>/<id>` switches DIRECTLY only when the reference resolves to exactly one model. A fuzzy/partial term (e.g. `/model mini`) falls back to the interactive picker — so the recipe MUST use the full canonical provider/id form to stay script-driveable.",
+    "The model switch lives at metrics level (SessionMetrics.ModelName), not in the events.jsonl lifecycle stream the expected.jsonl DSL operates over — so the DSL spec asserts only the two-turn lifecycle arc; the A→B model claim is covered by the replay golden's summary.model_name plus parser unit tests.",
+    "Driver counter quirk: the driver's `slash` step bumps the expected-turn counter like `send`, but a `/model` switch produces a model_change line with NO assistant turn. So a `wait_turn` placed AFTER the slash would hang. The recipe drives both turns with trailing sleeps instead of post-slash wait_turn (same compromise as pi synchronous-slash-command + model-switch-midsession)."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/parser.go L39-44 / L103-105 / L148",
+      "note": "model_change.modelId and assistant message.model → ev.ModelName via tailer.NormalizeModelName; extractPiContribution tags per-turn model"
+    },
+    {
+      "kind": "file",
+      "ref": "dist/modes/interactive/interactive-mode.js handleModelCommand (~L3216) + dist/core/model-resolver.js findExactModelReferenceMatch (~L53)",
+      "note": "pi 0.70.0: /model <provider>/<id> exact match → session.setModel() directly, no picker; only an ambiguous/empty term opens the selector UI"
+    },
+    {
+      "kind": "experiment",
+      "ref": "live tmux drive of pi 0.70.0 in a temp cwd (model-switch-midsession recording, commit eb3c2eae, 7/7)",
+      "note": "one rollout file, two turns; rollout: model_change(gpt-5.5) → assistant(gpt-5.5,stop) → model_change(gpt-5.4-mini) → assistant(gpt-5.4-mini,stop). No new session on switch."
+    },
+    {
+      "kind": "issue",
+      "ref": "ingo-eichhorst/Irrlicht#440",
+      "note": "replay-summary model_name is environment-dependent — assert presence/change, not a hardcoded value"
+    }
+  ]
+}
