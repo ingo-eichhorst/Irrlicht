@@ -4334,6 +4334,47 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user). NOTE: aider had NO auth in the environment this recipe was authored in (no provider key; headless aider hangs on the model-auth prompt), so the recording is DEFERRED — this is the documented target; record once a live model is reachable.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the large-reply turn and the daemon can observe the working→ready settle before teardown",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` in a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider is FilesUnderCWD{.aider.chat.history.md, RawLineParser} — there is no transcript-UUID rollout session; the daemon keys the whole session by proc-<PID> (the process scanner), so the turn arc, pid_discovered and teardown all land on that one proc-<PID> row (cf. the full-lifecycle-toolcall recipe)",
+            "WHY this exercises the oversized-line path: the prompt asks aider for ONE very long single-line sentence (≥5000 words, no embedded newlines), so aider appends one large `> …`/prose line to .aider.chat.history.md. The shared tailer reads it via readLineCapped(64MB cap, issue #270) BEFORE the isRawLine branch hands the trimmed line to aider's ParseLineRaw — i.e. aider's RawLineParser path is gated by the SAME oversized-line cap as the JSONL adapters. A ~30 KB line is far under the 64 MB cap, so it is buffered whole into assistantBuffer and the turn resolves via the usual `> Tokens:`/IdleFlush close. This is a sanity-check that the arc completes on a large single line, NOT a true >64 MB cap-stress (a live aider CLI cannot be coerced into a multi-megabyte single line — markdown prose wraps and tool output is multi-line `>` blockquotes); the genuine >64 MB cap behavior is pinned agent-agnostically by core/pkg/tailer/large_line_test.go",
+            "WHY interactive, not headless `aider --message`: aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1500ms quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle, and the single tmux kill-session teardown then yields one clean process_exited",
+            "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the ≥6s trailing sleep is one full idle-flush cycle plus slack so the working→ready settle is observed before teardown"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a single very long sentence on one line. Make it at least 5000 words. Do not use newlines anywhere in the sentence."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + presession_created for the proc-<PID> session born ready within ~2s of REPL launch",
+            "events.jsonl contains a pid_discovered event bound to the same proc-<PID> session_id",
+            "events.jsonl shows exactly one ready→working transition for the proc-<PID> session as the large-reply turn begins",
+            "events.jsonl shows exactly one working→ready transition at turn end — completion of the arc is the parser-resilience proof: if the tailer had wedged on the oversized single line this transition would never fire (the genuine >64 MB cap behavior is pinned by core/pkg/tailer/large_line_test.go, issue #270; this live recording is a sanity-check on a large single line)",
+            "irrlichd logs do NOT contain a 'skipping oversized line' warning for the cwd transcript (a 5000-word line is well under the 64 MB cap)",
+            "events.jsonl contains NO state_transition to waiting for the session at any point (a one-sentence reply has no trailing question mark, so the classifier takes the →ready path)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the proc-<PID> session at REPL teardown",
+            "transcript.jsonl contains 1 user line and at least 1 assistant line; the large assistant reply is appended as a single long line with no embedded newlines"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
