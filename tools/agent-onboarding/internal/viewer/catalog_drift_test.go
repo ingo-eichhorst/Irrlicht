@@ -1,0 +1,102 @@
+package viewer
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+)
+
+// TestScenarioCatalogNoDrift guards the three sources of truth that the
+// overview matrix depends on staying in sync. The matrix is projected ONLY
+// from scenarios.json's catalog[] (buildCatalogJSON), and annotateCatalogCodes
+// derives each row's section.index from that same list — so a scenario with
+// no catalog row is invisible AND gets no index number. The three sources:
+//
+//   - catalog[]   — the only thing the overview renders; drives row + index.
+//   - scenarios[] — the recipe registry; each entry's coverage_id must name a
+//     real catalog row, else the recipe folds into a nonexistent cell.
+//   - replaydata/agents/<agent>/scenarios/<folder> — recorded fixtures; each
+//     must resolve to a catalog row either directly (folder == catalog id) or
+//     via a registry entry whose name == folder and whose coverage_id is a
+//     catalog id (the deliberate-alias case, e.g. multi-turn-conversation →
+//     basic-turn).
+//
+// A folder resolving to neither is the drift this test catches — exactly how
+// quota-burndown / subscription-detection sat invisible after being committed
+// as raw folders with no catalog or registry entry. Retired fixtures live
+// under <agent>/regression/, a SIBLING of scenarios/, so the glob below leaves
+// them out of scope by construction.
+func TestScenarioCatalogNoDrift(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	scenariosPath := filepath.Join(root, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+	b, err := os.ReadFile(scenariosPath)
+	if err != nil {
+		t.Skipf("scenarios.json not reachable from test cwd (hermetic build?): %v", err)
+	}
+	var doc struct {
+		Catalog []struct {
+			ID string `json:"id"`
+		} `json:"catalog"`
+		Scenarios []struct {
+			Name       string `json:"name"`
+			CoverageID string `json:"coverage_id"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("parse scenarios.json: %v", err)
+	}
+
+	catalogIDs := make(map[string]bool, len(doc.Catalog))
+	for _, c := range doc.Catalog {
+		catalogIDs[c.ID] = true
+	}
+	coverageByName := make(map[string]string, len(doc.Scenarios)) // registry folder name → coverage_id
+	for _, s := range doc.Scenarios {
+		coverageByName[s.Name] = s.CoverageID
+	}
+
+	// Guard 1: every registry coverage_id names a real catalog row. A dangling
+	// coverage_id silently routes a recipe to a matrix cell that never renders.
+	for _, s := range doc.Scenarios {
+		switch {
+		case s.CoverageID == "":
+			t.Errorf("registry scenario %q has empty coverage_id", s.Name)
+		case !catalogIDs[s.CoverageID]:
+			t.Errorf("registry scenario %q -> coverage_id %q has no catalog[] row", s.Name, s.CoverageID)
+		}
+	}
+
+	// Guard 2: every recorded scenario folder resolves to a catalog row.
+	folders, _ := filepath.Glob(filepath.Join(root, "replaydata", "agents", "*", "scenarios", "*"))
+	if len(folders) == 0 {
+		t.Skip("no replaydata scenario folders reachable; skipping on-disk drift check")
+	}
+	var orphans []string
+	for _, dir := range folders {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		folder := filepath.Base(dir)
+		resolves := catalogIDs[folder]
+		if !resolves {
+			if cov, ok := coverageByName[folder]; ok && catalogIDs[cov] {
+				resolves = true
+			}
+		}
+		if !resolves {
+			// path shape: …/<agent>/scenarios/<folder>
+			agent := filepath.Base(filepath.Dir(filepath.Dir(dir)))
+			orphans = append(orphans, agent+"/"+folder)
+		}
+	}
+	if len(orphans) > 0 {
+		sort.Strings(orphans)
+		t.Errorf("orphan scenario folders with no catalog[] row and no registry alias to one — "+
+			"invisible in the overview matrix, no index number. Fix by adding a catalog[] entry, "+
+			"or a scenarios[] recipe whose coverage_id names a catalog row, or retiring the folder "+
+			"to <agent>/regression/:\n  %v", orphans)
+	}
+}
