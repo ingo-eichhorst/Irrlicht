@@ -1670,7 +1670,7 @@
         },
         "opencode": {
           "applicable": false,
-          "scope_note": "OpenCode's session row is SQLite-backed; there is no in-process /clear that mints a new ses_… while the same process keeps running. Spawning a new `opencode run` without --session creates a brand new session row — that's session-end + session-start, not session-reset. Coverage assessment is supports=unknown; recording deferred."
+          "notes": "driver_gap (gap:slash-command, equivalently gap:reset_session). agent_supports:yes — opencode's TUI ships a /new reset (binary carries `session.new` / `New session`), and the daemon (ProcessOwnedStore/SQLite) observes a fresh ses_… in ready exactly as the session-resume cell proves. NOT recordable: drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (handles only send|wait_turn|sleep) and (1) headless `opencode run` IGNORES in-TUI slash commands — PROBED 2026-05-26: `opencode run \"/new\"` stored the literal `/new` as a normal user message in ONE ses_… row, no reset — and (2) the driver has no reset_session step to detect a /new-spawned second ses_… and re-point subsequent turns at it (no session.uuids PLURAL list). session-reset needs a live-REPL opencode driver (reset_session primitive); recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full target supersession arc; assessment.json carries the yes / full / gap:slash-command verdict + the probe evidence."
         }
       }
     },
