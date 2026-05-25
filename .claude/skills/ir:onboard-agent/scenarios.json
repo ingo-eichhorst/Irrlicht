@@ -1536,6 +1536,10 @@
         "claudecode": {
           "applicable": false,
           "notes": "agent_supports=no per coverage matrix — claudecode is local-only. Translator stops here; no recipe."
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "agent_supports=no per fresh reassessment — opencode has no cloud/hosted background-agent concept; sessions are a LOCAL ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) keyed to a local opencode process + cwd, so there is nothing PID-less/remote for irrlicht to observe. No recipe; pipeline frozen at Stage 1."
         }
       }
     },
