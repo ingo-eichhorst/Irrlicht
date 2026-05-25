@@ -4805,6 +4805,32 @@
         "codex": {
           "applicable": false,
           "notes": "No deterministic way to elicit a mid-turn provider error against codex with any recipe primitive. The claudecode cell injects a 5xx via tools/agent-onboarding/recording/mock-anthropic-5xx/main.go behind an Anthropic base-URL override (tools/agent-onboarding/recording/record-turn-aborted-by-error.sh); codex has no equivalent — the mock tooling is Anthropic-API-specific, and neither drive-codex.sh (headless `codex exec`) nor drive-codex-interactive.sh wires an OPENAI_BASE_URL override or any error-injection step. The only primitive that emits codex's turn_aborted marker is `interrupt` (Escape), which is the user-cancel path (the distinct user-esc-interrupt scenario), not a provider error. A real network/5xx error is non-deterministic and can't be a committed fixture. Independently, even a hand-induced abort would be UNOBSERVABLE today: the codex parser maps only task_complete→turn_done and skips turn_aborted (empty `grep turn_aborted core/`), and there is no working-state idle sweep (pid_manager TTL-cleans only ready/PID-dead sessions), so an aborted turn sticks in working until process_exited — identical to the committed codex/interrupted-turn cell (known_failing, 2/5) and the frozen codex/user-esc-interrupt cell. Unblocks when both (a) a codex/OpenAI error-injection driver path exists and (b) the codex parser maps turn_aborted→turn_done. See assessment.json."
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated for the user's default provider (the cell uses that provider with an UNSUPPORTED model id, so auth must already work for normal pi recordings)",
+            "irrlichd recording — run-cell.sh in isolated mode or --attach against a running daemon started with --record",
+            "PI-SPECIFIC: the abort is elicited DETERMINISTICALLY and WITHOUT a mock/proxy/faked transcript line. The headless driver launches `pi --print -p <prompt> --model <bogus-model>`; the provider returns an 'unsupported model' error whose message does NOT match pi's retry regex (_isRetryableError in dist/core/agent-session.js, which retries only overloaded/5xx/rate-limit/network/timeout-class messages up to retry.maxRetries). pi therefore does NOT retry, persists a single assistant message with stopReason='error' (appendMessage fires on message_end, BEFORE the agent_end retry gate), and exits non-zero. Do NOT use a 5xx/rate-limit class trigger — pi would silently retry it and the abort would be non-deterministic."
+          ],
+          "setup": [
+            "Model override flows through the cell's settings.model: run-cell.sh writes the settings blob to a path, and drive-pi.sh reads `.model` from it and passes `--model <bogus>` to pi (mirrors drive-aider.sh's IRRLICHT_AIDER_MODEL convention; IRRLICHT_PI_MODEL is the env escape hatch). Fully reproducible from this committed recipe — no out-of-band env needed.",
+            "pi writes one JSONL rollout file per invocation on launch (FilesUnderRoot, non-lazy), so the daemon's first scanner tick keys the real UUID transcript — a SINGLE rollout session, no separately-matchable proc-<PID> pre-session phase (same shape as pi/basic-turn)."
+          ],
+          "prompt": "Reply with exactly the word: ok",
+          "verify": [
+            "events.jsonl shows a session appear in ready within 1s of launch (transcript_new on the rollout session)",
+            "events.jsonl shows a state_transition to working on the rollout session when the user prompt lands",
+            "events.jsonl shows a pid_discovered for the rollout session",
+            "events.jsonl shows a state_transition to ready on the rollout session carried by the ERROR epilogue: pi's parser maps stopReason='error' to EventType='assistant', and IsAgentDone()'s assistant-fallback (no open tool call) flips working→ready via classifier rule 2b — state does NOT stick in working (there is no working-state sweep; recovery is event-driven, same as the claudecode row)",
+            "events.jsonl never contains a state_transition to waiting",
+            "events.jsonl contains exactly one process_exited on the rollout session (pi exits non-zero after the aborted turn); the live state immediately before teardown is ready",
+            "final session state is ready"
+          ],
+          "settings": {
+            "model": "openai-codex/irrlicht-turn-abort-unsupported-model"
+          },
+          "timeout_seconds": 90
         }
       }
     },
