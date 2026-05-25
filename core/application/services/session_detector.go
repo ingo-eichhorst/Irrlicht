@@ -124,6 +124,14 @@ type SessionDetector struct {
 	permMu            sync.Mutex
 	permissionPending map[string]bool // sessionID → true
 
+	// editToolOpenSince tracks, per session, the Unix time a permission-gated
+	// file-edit tool first appeared open. Guarded by permMu. Drives the
+	// OpenToolStalled transcript fallback (#488): an edit tool open past
+	// staleWorkingRefreshInterval means the agent is blocked on a permission
+	// prompt, not executing. Cleared when the tool closes or the session is
+	// removed.
+	editToolOpenSince map[string]int64 // sessionID → unix seconds
+
 	// bgLiveProbe answers "does this session still have a live background
 	// process?" from its output-file paths. Defaults to anyLiveOutputWriter
 	// (lsof); tests override it. See issue #445.
@@ -180,6 +188,7 @@ func NewSessionDetector(
 		debouncedEvents:   make(chan agent.Event, 64),
 		deletedCooldown:   10 * time.Second,
 		permissionPending: make(map[string]bool),
+		editToolOpenSince: make(map[string]int64),
 		bgLiveProbe:       anyLiveOutputWriter,
 		bgLive:            make(map[string]bool),
 		bgProbing:         make(map[string]bool),

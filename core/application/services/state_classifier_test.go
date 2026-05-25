@@ -68,6 +68,41 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 
+		// Rule 1b: OpenToolStalled → waiting (transcript fallback, #488).
+		{
+			name:    "working → waiting (stalled edit tool)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				HasOpenToolCall:   true,
+				LastOpenToolNames: []string{"Edit"},
+				OpenToolStalled:   true,
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			name:    "waiting stays waiting (stalled edit tool, already waiting)",
+			current: session.StateWaiting,
+			metrics: &session.SessionMetrics{
+				HasOpenToolCall:   true,
+				LastOpenToolNames: []string{"Write"},
+				OpenToolStalled:   true,
+			},
+			wantState: session.StateWaiting,
+		},
+		{
+			// Regression guard: an open edit tool the detector has NOT yet
+			// flagged stalled must stay working (no premature waiting flicker).
+			name:    "working stays working (edit open, not stalled)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				HasOpenToolCall:   true,
+				LastOpenToolNames: []string{"Edit"},
+				OpenToolStalled:   false,
+			},
+			wantState: session.StateWorking,
+		},
+
 		// Rule 1: NeedsUserAttention → waiting.
 		{
 			name:    "working → waiting (AskUserQuestion)",

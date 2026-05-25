@@ -56,15 +56,21 @@ docker compose -f examples/roundtrip/docker-compose.yml exec -it agent claude
 **Expected on the Mac, live:**
 
 - a new session appears under daemon **`linux-dev`**, project **`work`**;
-- it transitions **`working → ready`** as the turn runs and settles, with live
-  **cost/tokens** (a one-edit turn ran ~$0.14 / 25.8k tokens, model
-  `claude-opus-4-7`);
+- it transitions **`working → waiting → working → ready`** as the turn runs:
+  it dips to **`waiting`** while a tool-use **permission prompt** is held open
+  ("Do you want to proceed?"), returns to `working` on approval, and settles
+  `ready` when the turn ends — with live **cost/tokens** (a one-edit turn ran
+  ~$0.14 / 25.8k tokens, model `claude-opus-4-7`);
 - hovering the connection-status indicator shows **`linux-dev — connected`**.
 
-> **Note:** claude 2.x's tool-use **permission prompts stay `working`**, not
-> `waiting` — so you'll see `working → ready`, not a `waiting` dip. (Surfacing
-> the permission prompt as `waiting` is a separate daemon-side gap, not a fault
-> of this testbed.)
+> **Permission prompts and `curl`.** The `waiting` dip on a permission prompt
+> is driven by Claude Code's `PermissionRequest` hook, which the daemon
+> auto-installs as a `curl … || true` POST to itself. The agent image
+> therefore **must** ship `curl` — without it the hook silently no-ops and
+> prompts stay `working` (this was #488). On any host where the daemon
+> observes `claude` but `curl` is absent, the daemon logs a startup warning
+> and falls back to a transcript heuristic that still flags a held file-edit
+> prompt (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) as `waiting`.
 
 ```bash
 # Relay restart: the daemon reconnects (backoff) and the Mac re-hydrates,

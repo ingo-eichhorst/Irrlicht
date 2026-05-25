@@ -7,6 +7,7 @@ package claudecode
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -51,6 +52,17 @@ func matcherForEvent(event string) string {
 		return hookMatcherPreToolUse
 	}
 	return hookMatcher
+}
+
+// HookDeliveryAvailable reports whether the tool the installed hook command
+// relies on to reach the daemon is on PATH. installedHookCommand POSTs via
+// `curl`, so a missing curl means every hook silently no-ops (the trailing
+// `|| true` swallows "command not found") and permission prompts never
+// surface as `waiting`. main.go calls this at startup to turn that otherwise
+// invisible failure into a logged warning (#488).
+func HookDeliveryAvailable() bool {
+	_, err := exec.LookPath("curl")
+	return err == nil
 }
 
 // EnsureHooksInstalled adds irrlicht hook entries to ~/.claude/settings.json

@@ -182,6 +182,37 @@ func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
 	}
 }
 
+func TestHasOpenEditPermissionTool(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics *SessionMetrics
+		want    bool
+	}{
+		{"nil metrics", nil, false},
+		{"no open tools", &SessionMetrics{HasOpenToolCall: false, LastOpenToolNames: []string{"Edit"}}, false},
+		{"open Edit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Edit"}}, true},
+		{"open Write", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Write"}}, true},
+		{"open MultiEdit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"MultiEdit"}}, true},
+		{"open NotebookEdit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"NotebookEdit"}}, true},
+		// Tools that can legitimately run long must NOT qualify — duration
+		// can't distinguish "blocked on prompt" from "executing" for them.
+		{"open Bash", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, false},
+		{"open WebFetch", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"WebFetch"}}, false},
+		{"open Read", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Read"}}, false},
+		{"open mcp tool", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"mcp__server__do"}}, false},
+		{"open AskUserQuestion", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"AskUserQuestion"}}, false},
+		{"mixed: Bash + Edit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash", "Edit"}}, true},
+		{"open tool, no names", &SessionMetrics{HasOpenToolCall: true}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.metrics.HasOpenEditPermissionTool(); got != tt.want {
+				t.Errorf("HasOpenEditPermissionTool() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsStale(t *testing.T) {
 	now := time.Now().Unix()
 

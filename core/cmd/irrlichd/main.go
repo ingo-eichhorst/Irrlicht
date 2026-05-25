@@ -107,6 +107,14 @@ func main() {
 		logger.LogInfo("startup", "", "installed Claude Code hooks for permission tracking")
 	}
 
+	// The installed hooks POST via curl; without it they silently no-op and
+	// tool-use permission prompts never surface as `waiting`. Warn loudly so
+	// this isn't an invisible failure (the transcript heuristic still covers
+	// held file-edit prompts). See #488.
+	if !claudecode.HookDeliveryAvailable() {
+		logger.LogError("startup", "", "curl not found on PATH — Claude Code permission-prompt detection is degraded: hooks POST via curl, so without it permission prompts may not surface as 'waiting'. Install curl to restore full detection (#488).")
+	}
+
 	// Auto-install Claude Code statusLine.command for rate-limit ingestion
 	// (issue #309). Chains any user-configured statusline so we don't clobber
 	// it.

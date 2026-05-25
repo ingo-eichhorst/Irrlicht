@@ -369,6 +369,9 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		}
 		d.permMu.Unlock()
 
+		// Overlay the transcript-based stalled-edit-tool fallback (#488).
+		d.markStalledEditTool(ev.SessionID, state.Metrics, time.Now().Unix())
+
 		// Content-based state detection.
 		now := time.Now().Unix()
 		newState, reason := ClassifyState(state.State, state.Metrics)
@@ -537,6 +540,38 @@ func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 			}
 		}
 	}()
+}
+
+// markStalledEditTool maintains the per-session editToolOpenSince window and
+// sets metrics.OpenToolStalled when a permission-gated edit tool
+// (Edit/Write/MultiEdit/NotebookEdit) has been open past the stale-refresh
+// interval — the transcript-based fallback for a held permission prompt when
+// the curl-delivered PermissionRequest hook can't reach the daemon (#488).
+//
+// Those tools run in-process and complete near-instantly, so one still open
+// after the window means the agent is blocked on the prompt, not executing.
+// The window is tracked from first observation (not state.UpdatedAt), so a
+// fresh tool_use write is never flagged on the spot — only the 5s
+// refreshStaleSessions re-evaluation of a lingering open tool is, which also
+// lets a held prompt flip without any new transcript write. The flag is
+// redundant once PermissionPending fired (the classifier prefers the hook),
+// so it is skipped then. now is injected for testability.
+func (d *SessionDetector) markStalledEditTool(sessionID string, m *session.SessionMetrics, now int64) {
+	d.permMu.Lock()
+	defer d.permMu.Unlock()
+
+	if m == nil || !m.HasOpenEditPermissionTool() {
+		delete(d.editToolOpenSince, sessionID)
+		return
+	}
+	since, ok := d.editToolOpenSince[sessionID]
+	if !ok {
+		since = now
+		d.editToolOpenSince[sessionID] = since
+	}
+	if !m.PermissionPending && now-since >= int64(staleWorkingRefreshInterval.Seconds()) {
+		m.OpenToolStalled = true
+	}
 }
 
 // refreshStaleSessions re-reads transcripts for working sessions that haven't
