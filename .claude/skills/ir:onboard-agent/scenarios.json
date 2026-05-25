@@ -3391,6 +3391,44 @@
         "codex": {
           "applicable": false,
           "notes": "applicable:false — a live codex session cannot be deterministically driven to emit a >64 MB (or even >2 MB) single JSONL line; this is a shared-tailer robustness property, not a codex behavior. No special agent capability is exercised. The authoritative coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go (TestTailAndProcess_LargeToolResultLine + TestReadLineCapped_OversizedLineSkipped), which pins the 64 MB cap (issue #270) on the shared tailer that codex (FilesUnderRoot{JSONLineParser}) runs on. A 5000-word live recipe would only be a ~30 KB sanity-check, not true cap-stress, and we do NOT fabricate a 64 MB line into a fixture. expected.jsonl is retained as the documented state-arc target."
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so the rollout stays alive long enough for the daemon to observe the working→ready settle before teardown",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+            "pi writes its rollout JSONL ONCE per message at turn completion (no partial flushes; concern C8), so a single prompt eliciting a large reply produces ONE oversized assistant JSONL line under ~/.pi/agent/sessions/<cwd-slug>/ — exactly the oversized-line input the shared tailer + pi parser must ingest without stalling",
+            "The driver resolves that rollout file and extracts the UUID from line 1; wait_turn blocks until the rollout shows the completed assistant turn (stopReason=stop), then a trailing sleep + a single tmux teardown lets pi exit and the daemon emit one process_exited for the rollout session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Print the numbers from 1 to 400, each on its own line, with nothing else. Just the numbers."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear at launch; the turn arc and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains exactly one ready→working transition for the rollout session_id as the large-reply turn begins",
+            "events.jsonl contains exactly one working→ready transition at turn end — completion of the arc is the parser-resilience proof: if the tailer had wedged on the oversized single line this transition would never fire (the genuine >64 MB cap behavior is pinned by core/pkg/tailer/large_line_test.go, issue #270; this live recording is a sanity-check on a large single line)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown",
+            "no state_transition to waiting appears for the rollout session at any point",
+            "transcript.jsonl contains 1 user line and at least 1 assistant message line; the large assistant reply is flushed as a single JSONL row (pi flushes once per message at turn completion)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
