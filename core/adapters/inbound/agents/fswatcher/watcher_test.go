@@ -92,8 +92,13 @@ func TestWatch_EmitsNewSession(t *testing.T) {
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Watch(ctx) }()
 
-	// Give watcher time to start.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the watch to attach before mutating files — closes the
+	// attach race without a guessed sleep.
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not signal Ready")
+	}
 
 	// Create a new transcript file.
 	transcriptPath := filepath.Join(root, "-Users-test-myproject", "abc-123.jsonl")
@@ -101,23 +106,40 @@ func TestWatch_EmitsNewSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	select {
-	case ev := <-ch:
-		if ev.Type != agent.EventNewSession {
-			t.Errorf("event type = %q, want %q", ev.Type, agent.EventNewSession)
+	// The first event must be the EventNewSession for the file we created.
+	// Its Size, however, is best-effort: fsnotify delivers the create event
+	// (inotify IN_CREATE) when the file is opened, which can race ahead of
+	// the content write, so the create-time stat may read 0. Production
+	// treats it as a lifecycle marker and reads the real size from the
+	// following activity (Write) event — KindTranscriptNew carries no size
+	// filter while KindTranscriptActivity requires FileSize > 0. Mirror that:
+	// assert the new-session identity on the first event, then drain until a
+	// non-zero size for this file surfaces.
+	gotNew := false
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-ch:
+			if !gotNew {
+				if ev.Type != agent.EventNewSession {
+					t.Errorf("first event type = %q, want %q", ev.Type, agent.EventNewSession)
+				}
+				if ev.SessionID != "abc-123" {
+					t.Errorf("session ID = %q, want %q", ev.SessionID, "abc-123")
+				}
+				if ev.ProjectDir != "-Users-test-myproject" {
+					t.Errorf("project dir = %q, want %q", ev.ProjectDir, "-Users-test-myproject")
+				}
+				gotNew = true
+			}
+			if ev.SessionID == "abc-123" && ev.Size != 0 {
+				goto done
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for new session event with non-zero size")
 		}
-		if ev.SessionID != "abc-123" {
-			t.Errorf("session ID = %q, want %q", ev.SessionID, "abc-123")
-		}
-		if ev.ProjectDir != "-Users-test-myproject" {
-			t.Errorf("project dir = %q, want %q", ev.ProjectDir, "-Users-test-myproject")
-		}
-		if ev.Size == 0 {
-			t.Error("expected non-zero size for new file")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for new session event")
 	}
+done:
 
 	cancel()
 	if err := <-watchErr; err != nil && err != context.Canceled {
