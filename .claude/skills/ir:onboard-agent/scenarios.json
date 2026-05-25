@@ -320,6 +320,42 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the default is a local LM Studio model so no remote key is needed)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run -- \"<prompt>\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns (opencode does not expose CLI-assignable session IDs)",
+            "The send is a no-tool single turn — opencode is asked to reply with exactly one word, so the working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate fires)",
+            "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleep and timeout are generous: a slow turn must not trip a false timeout, and the trailing sleep must outlast the turn_done settle so working→ready is observed"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the prompt is sent (the single assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the turn completes (step-finish reason=stop → turn_done closes the turn)",
+            "no state_transition to waiting appears for the session at any point (no tool call, no permission gate)",
+            "the session's final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },
