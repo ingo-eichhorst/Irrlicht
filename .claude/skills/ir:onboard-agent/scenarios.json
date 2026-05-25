@@ -5813,12 +5813,13 @@
             "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the prompt",
             "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
             "The single send bumps the turn counter; wait_turn blocks until a new `> Tokens:` line appears (signals aider finished the model call). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after ~1.5s quiet, surfaced as working→ready behind the daemon's 5s poll",
+            "The prompt explicitly forbids file edits / SEARCH-REPLACE output: under `--yes-always`, aider auto-accepts any edit the model proposes, and small models (gpt-5-nano) reflexively answer even a plain question by writing a file in diff edit format. A file write lands as a SECOND transcript-activity burst AFTER the turn already settled to ready, producing a spurious extra ready→working transition that breaks the 'exactly one working / exactly one ready' assertion (the edit is invisible as a tool_use — aider's RawLineParser emits none — but the re-activation is observable). The forbid-edits framing keeps the turn a single tool-less round-trip",
             "The trailing sleep is 11s — one full IdleFlush cycle (~1.5s) plus the 5s staleWorking refresh poll plus generous slack — so BOTH the synthesized working→ready settle AND the subsequent teardown process_exited are captured before the driver kills the tmux session"
           ],
           "script": [
             {
               "type": "send",
-              "text": "In one short sentence, what is the capital of France?"
+              "text": "Answer in chat only as plain prose — do NOT create, edit, or modify any file, and do NOT output a SEARCH/REPLACE block. In one short sentence: what is the capital of France?"
             },
             {
               "type": "wait_turn"
