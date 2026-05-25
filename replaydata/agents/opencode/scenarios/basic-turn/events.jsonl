@@ -1,0 +1,14 @@
+{"seq":688,"ts":"2026-05-25T23:23:19.347901+02:00","kind":"transcript_new","session_id":"proc-31986","adapter":"opencode","project_dir":"-Users-ingo-projects-irrlicht--claude-worktrees-opencode-onboarding--build-refresh-opencode-basic-turn-20260525T212316-cwd","cwd":"/Users/ingo/projects/irrlicht/.claude/worktrees/opencode-onboarding/.build/refresh/opencode/basic-turn-20260525T212316/cwd"}
+{"seq":689,"ts":"2026-05-25T23:23:19.404565+02:00","kind":"presession_created","session_id":"proc-31986","adapter":"opencode","project_dir":"-Users-ingo-projects-irrlicht--claude-worktrees-opencode-onboarding--build-refresh-opencode-basic-turn-20260525T212316-cwd","cwd":"/Users/ingo/projects/irrlicht/.claude/worktrees/opencode-onboarding/.build/refresh/opencode/basic-turn-20260525T212316/cwd"}
+{"seq":690,"ts":"2026-05-25T23:23:19.404625+02:00","kind":"state_transition","session_id":"proc-31986","new_state":"ready","reason":"new session created"}
+{"seq":691,"ts":"2026-05-25T23:23:19.405916+02:00","kind":"pid_discovered","session_id":"proc-31986","pid":31986}
+{"seq":692,"ts":"2026-05-25T23:23:21.203338+02:00","kind":"transcript_new","session_id":"ses_19efab68effeU0o4oOHJz4xh1L","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_19efab68effeU0o4oOHJz4xh1L","project_dir":"cwd","cwd":"/Users/ingo/projects/irrlicht/.claude/worktrees/opencode-onboarding/.build/refresh/opencode/basic-turn-20260525T212316/cwd"}
+{"seq":693,"ts":"2026-05-25T23:23:21.232965+02:00","kind":"state_transition","session_id":"ses_19efab68effeU0o4oOHJz4xh1L","new_state":"ready","reason":"new session created"}
+{"seq":694,"ts":"2026-05-25T23:23:21.234184+02:00","kind":"presession_removed","session_id":"proc-31986","adapter":"opencode"}
+{"seq":695,"ts":"2026-05-25T23:23:21.383125+02:00","kind":"pid_discovered","session_id":"ses_19efab68effeU0o4oOHJz4xh1L","pid":31986}
+{"seq":696,"ts":"2026-05-25T23:23:21.491543+02:00","kind":"transcript_removed","session_id":"proc-31986","adapter":"opencode"}
+{"seq":699,"ts":"2026-05-25T23:24:12.855959+02:00","kind":"transcript_activity","session_id":"ses_19efab68effeU0o4oOHJz4xh1L","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_19efab68effeU0o4oOHJz4xh1L"}
+{"seq":700,"ts":"2026-05-25T23:24:12.856532+02:00","kind":"state_transition","session_id":"ses_19efab68effeU0o4oOHJz4xh1L","prev_state":"ready","new_state":"working","reason":"force ready→working on first activity"}
+{"seq":701,"ts":"2026-05-25T23:24:12.856834+02:00","kind":"state_transition","session_id":"ses_19efab68effeU0o4oOHJz4xh1L","prev_state":"working","new_state":"ready","reason":"agent finished turn → ready"}
+{"seq":702,"ts":"2026-05-25T23:24:12.895702+02:00","kind":"process_exited","session_id":"ses_19efab68effeU0o4oOHJz4xh1L","pid":31986}
+{"seq":703,"ts":"2026-05-25T23:24:14.60929+02:00","kind":"transcript_removed","session_id":"proc-31986","adapter":"opencode"}
