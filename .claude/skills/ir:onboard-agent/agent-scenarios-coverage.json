@@ -116,13 +116,13 @@
         },
         "aider": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "idle-flush turn-end adds ~5s before ready settles; markdown file persists after exit"
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "#296 ghost sessions when no process; #278 ~2.5s tail latency on working→ready"
         }
@@ -159,7 +159,7 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "no PID binding — liveness relies on DB watcher signal"
         }
@@ -184,7 +184,7 @@
         },
         "pi": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -196,7 +196,7 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "capabilities.json declares yes; ParentSessionID not populated recursively for resume chains"
         }
@@ -221,7 +221,7 @@
         },
         "pi": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -258,8 +258,8 @@
         },
         "pi": {
           "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
+          "daemon_capability": "full",
+          "driver_capability": "gap:keys",
           "notes": "Stock Pi CLI has no rewind (pi-mono discussion #1223). Third-party `pi-rewind` extension exists at arpagon/pi-rewind but isn't part of the default install, so irrlicht's observation target — stock Pi — has nothing to record."
         },
         "aider": {
@@ -406,7 +406,7 @@
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -437,13 +437,13 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -474,13 +474,13 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "#105 stale-tool timer flicker (closed); task_complete dependence creates fallback risk"
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "compaction events risk working→ready→working flicker"
         },
@@ -505,13 +505,13 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "/goal slash command (self-prompt); session holds working across internal iterations — recorded, 6/6 phases pass. Background-loop nuances remain partial."
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "Codex /goal command (Ralph loop)"
         },
@@ -542,13 +542,13 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "/goal with iteration cap resolves to ready cleanly at the cap — recorded, 6/6 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "/goal has caps"
         },
@@ -585,13 +585,13 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
+          "daemon_capability": "full",
+          "driver_capability": "gap:429-mock",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -622,13 +622,13 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -659,8 +659,8 @@
         },
         "codex": {
           "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
@@ -690,19 +690,19 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "/compact runs as a turn; transitions should stay working then ready — not specifically validated"
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "Compaction events emitted as bare 'assistant' (not turn-done); risk of working→ready→working flicker per exploration"
         },
@@ -764,19 +764,19 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "Turn-level error keeps state working then ready — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -807,13 +807,13 @@
         },
         "codex": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -844,13 +844,13 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -881,8 +881,8 @@
         },
         "codex": {
           "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "no question tool in schema"
         },
         "pi": {
@@ -918,7 +918,7 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "incapable",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "#322 OPEN — <proposed_plan> turns end as 'ready' instead of 'waiting'; #325 OPEN — dismissal leaves session stuck in waiting"
         },
@@ -992,13 +992,13 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
@@ -1029,13 +1029,13 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": "task_complete fallback to assistant_message risks mid-stream flicker"
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "compaction event interspersing risks flicker"
         },
@@ -1146,8 +1146,8 @@
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "incapable",
-          "driver_capability": "ready",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
@@ -1214,14 +1214,14 @@
         },
         "codex": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
+          "daemon_capability": "full",
+          "driver_capability": "gap:start_session",
           "notes": ""
         },
         "aider": {
@@ -1368,7 +1368,7 @@
         },
         "pi": {
           "agent_supports": "yes",
-          "daemon_capability": "incapable",
+          "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "no model change detection between turns per parser exploration"
         },
@@ -1430,7 +1430,7 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "partial",
-          "daemon_capability": "unknown",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": "Multiple provider backends (Anthropic/Vertex/Bedrock) chosen at startup; no documented mid-turn fallback chain and provider-routed model name is identical. Turn-level state arc is observable; failover-qua-failover is not. conf 0.55."
         },

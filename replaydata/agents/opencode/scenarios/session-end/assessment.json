@@ -2,12 +2,12 @@
   "schema_version": 1,
   "scenario_id": "session-end",
   "agent": "opencode",
-  "assessed_at": "2026-05-23T00:00:00Z",
+  "assessed_at": "2026-05-25T00:00:00Z",
   "agent_supports": "yes",
-  "daemon_capability": "unknown",
+  "daemon_capability": "full",
   "driver_capability": "ready",
   "confidence": 0.85,
-  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: unknown; driver_capability: ready\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. For the opencode adapter, irrlicht observes variant 1 cleanly — proc-<PID> presession born in ready, opencode's SQLite-backed `ses_…` session reconciles, working→ready transitions appear during the turn, and process_exited fires after the final ready. Variants 2 and 3 are NOT currently observable because `opencode run` is single-shot and the opencode interactive driver does not currently expose sigkill / restart.\n\nThe spec's invariants hold: process_exited fires after the working window closes with no transition to waiting in the tail.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. For the opencode adapter, irrlicht observes variant 1 cleanly — proc-<PID> presession born in ready, opencode's SQLite-backed `ses_…` session reconciles, working→ready transitions appear during the turn, and process_exited fires after the final ready. Variants 2 and 3 are NOT currently observable because `opencode run` is single-shot and the opencode interactive driver does not currently expose sigkill / restart.\n\nThe spec's invariants hold: process_exited fires after the working window closes with no transition to waiting in the tail.",
   "caveats": [
     "Variants 2 and 3 unobservable: would need driver-level sigkill added to drive-opencode-interactive.sh.",
     "OpenCode's session lives across `opencode run --session` invocations via SQLite; chaining variants in one recording is possible in principle but requires recipe primitives the driver doesn't expose today (kill + restart while keeping the daemon attached)."
