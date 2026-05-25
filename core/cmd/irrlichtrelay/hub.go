@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -82,7 +83,13 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var hello relay.Hello
-	_ = json.Unmarshal(data, &hello)
+	if err := json.Unmarshal(data, &hello); err != nil {
+		// Lenient: a peer with an unparseable opening frame is still served as
+		// a client (a daemon always sends a well-formed hello), but log it so a
+		// daemon misconfiguration isn't silently indistinguishable from a stock
+		// dashboard.
+		log.Printf("relay: opening frame is not a valid hello (%v); treating peer as a client", err)
+	}
 	if hello.Type == relay.MsgHello && hello.Role == relay.RoleDaemon {
 		h.serveDaemon(conn, hello)
 		return
@@ -94,6 +101,7 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello) {
 	if hello.DaemonID == "" {
+		log.Printf("relay: refusing daemon hello with empty daemon_id")
 		return // untracked, undedupable — refuse
 	}
 	id, label := hello.DaemonID, hello.DaemonLabel
@@ -256,7 +264,15 @@ func (h *hub) serveClient(conn *websocket.Conn) {
 	defer h.removeClient(cc)
 
 	if data, err := json.Marshal(h.clientSnapshot()); err == nil {
-		cc.send <- data // buffered; never blocks on the first frame
+		// Non-blocking, like every other send: the write pump that drains
+		// cc.send only starts below, so a blocking send to a buffer already
+		// filled by concurrent fan-out (between registration and here) would
+		// hang the connection forever. Worst case the tooltip seeds from the
+		// next daemon_status instead of this snapshot.
+		select {
+		case cc.send <- data:
+		default:
+		}
 	}
 	// Replay cached session state so a client that connected after a daemon
 	// hydrates its list over the WebSocket alone — no cross-origin HTTP needed

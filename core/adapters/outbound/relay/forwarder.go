@@ -129,6 +129,14 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 		return err
 	}
 
+	// Subscribe BEFORE capturing the snapshot. Otherwise a broadcast that
+	// fires between snapshotState() and Subscribe() is in neither the snapshot
+	// (captured earlier) nor the delta stream (subscribed later) and is lost
+	// until that session's next change. With this order a change reflected in
+	// both the snapshot and the stream is just an idempotent upsert on the relay.
+	ch := f.push.Subscribe()
+	defer f.push.Unsubscribe(ch)
+
 	sessions, agentInfos := f.snapshotState()
 	if err := conn.WriteJSON(DaemonSnapshot{
 		Type:     MsgDaemonSnapshot,
@@ -138,9 +146,6 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 		return err
 	}
 	f.logInfo(fmt.Sprintf("connected to relay %s as %q (%s)", f.url, f.identity.DaemonLabel, f.identity.DaemonID))
-
-	ch := f.push.Subscribe()
-	defer f.push.Unsubscribe(ch)
 
 	// Read pump: surface the relay closing the socket (and drain any
 	// hello_ack / control frames, which v0 does not act on).

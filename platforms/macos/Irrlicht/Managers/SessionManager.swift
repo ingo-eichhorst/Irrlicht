@@ -103,7 +103,13 @@ class SessionManager: ObservableObject {
     /// Relay-sourced sessions, keyed by session id.
     private var relaySessionMap: [String: SessionState] = [:]
     /// Daemons the relay reports connected: daemon_id → label, for the tooltip.
-    private var relayDaemons: [String: String] = [:]
+    /// Drives `connectionTooltip` (a computed property read by the view) but
+    /// isn't @Published, so nudge SwiftUI on every change — otherwise a
+    /// daemon_status update with no accompanying session change leaves the
+    /// tooltip stale.
+    private var relayDaemons: [String: String] = [:] {
+        willSet { objectWillChange.send() }
+    }
     /// The relay URL currently connected, so a URL change forces a reconnect.
     private var activeRelayURL: String = ""
     /// Local groups before relay groups are appended. `apiGroups` (published)
@@ -219,6 +225,10 @@ class SessionManager: ObservableObject {
         connectTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
+        // Cancel a pending debounced rehydration too, so disabling the Local
+        // source can't be undone ~0.5s later by an in-flight hydrateSessions().
+        rehydrationTask?.cancel()
+        rehydrationTask = nil
         connectionState = .disconnected
     }
 
@@ -354,7 +364,6 @@ class SessionManager: ObservableObject {
         let task = URLSession.shared.webSocketTask(with: url)
         relayWebSocketTask = task
         task.resume()
-        relayReconnectDelay = 1.0
         relayConnectionState = .connected
         print("🔌 Relay connected to \(activeRelayURL)")
 
@@ -363,8 +372,17 @@ class SessionManager: ObservableObject {
         try? await task.send(.string(#"{"type":"hello","protocol_version":1,"role":"client"}"#))
 
         do {
+            var confirmed = false
             while !Task.isCancelled {
                 let message = try await task.receive()
+                // Reset the backoff only once the relay actually delivers a
+                // frame. resume() returns before the connection is known good,
+                // so resetting there would defeat the backoff and spin a ~1/s
+                // reconnect loop against an unreachable relay.
+                if !confirmed {
+                    confirmed = true
+                    relayReconnectDelay = 1.0
+                }
                 switch message {
                 case .string(let text):
                     handleRelayMessage(text)
@@ -379,7 +397,18 @@ class SessionManager: ObservableObject {
         }
 
         guard relayConnectionState != .disconnected && !Task.isCancelled else { return }
+        // While the link is down we no longer know the remote state, so drop
+        // the relay's daemons and sessions — otherwise a remote session that
+        // ended during the outage lingers as a ghost row (the relay's replay
+        // can only re-add survivors, never signal the deletions we missed).
+        // The relay's replay rebuilds the live set on reconnect; sessions also
+        // present locally stay (they live in sessionMap, which local wins).
         relayDaemons.removeAll()
+        if !relaySessionMap.isEmpty {
+            relaySessionMap.removeAll()
+            rebuildSessionsFromMap()
+            recomposeApiGroups()
+        }
         let jitter = Double.random(in: 0...(relayReconnectDelay * 0.2))
         let delay = relayReconnectDelay + jitter
         relayConnectionState = .reconnecting
@@ -468,6 +497,12 @@ class SessionManager: ObservableObject {
         switch env.type {
         case "session_created", "session_updated":
             if let s = env.session {
+                // Notify on a state transition for a relay-only session. One
+                // also present locally is handled by the local path, so
+                // notifying here too would double-fire.
+                if sessionMap[s.id] == nil, let old = relaySessionMap[s.id]?.state, old != s.state {
+                    checkStateTransitionNotification(session: s, previousState: old)
+                }
                 relaySessionMap[s.id] = s
                 rebuildSessionsFromMap()
                 recomposeApiGroups()
@@ -500,10 +535,14 @@ class SessionManager: ObservableObject {
         guard !relaySessionMap.isEmpty else { return [] }
         let localIDs = Set(sessionMap.keys)
         let relayOnly = relaySessionMap.values.filter { !localIDs.contains($0.id) }
-        let relayIDs = Set(relayOnly.map { $0.id })
+        // A relay session is top-level only if its parent is unknown in BOTH
+        // maps — matching rebuildSessionsFromMap, which excludes any session
+        // whose parent it can see. Keeps a relay child of a local parent from
+        // surfacing as a stray top-level row that the flat list omits.
+        let knownIDs = localIDs.union(relaySessionMap.keys)
         let topLevel = relayOnly.filter { s in
             guard let pid = s.parentSessionId else { return true }
-            return !relayIDs.contains(pid)
+            return !knownIDs.contains(pid)
         }
         guard !topLevel.isEmpty else { return [] }
         var byProject: [String: [SessionState]] = [:]
@@ -768,6 +807,11 @@ class SessionManager: ObservableObject {
     }
 
     private func hydrateSessions() async {
+        // The Local source feeds sessionMap/localApiGroups from the local
+        // daemon's REST API. When Local is disabled this must not run, or the
+        // 30s cost-poll timer (and any pending rehydration) would silently
+        // re-add the local sessions that disabling the source just cleared.
+        guard useLocalDaemon else { return }
         guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions") else { return }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
