@@ -5538,6 +5538,70 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (the default is a local LM Studio model, so no remote key is needed; run a single message in the opencode TUI to confirm it answers)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "For a local/zero-cost model the estimated cost may read $0 — this is a model-pricing artifact, not a token-accounting gap. The assertion is about token COUNTS/deltas (which step-finish emits regardless), not a nonzero dollar cost."
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run -- \"<prompt>\"` for the first send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op. After the first run returns the driver discovers the ses_… session id from SQLite (opencode exposes no CLI-assignable session IDs) and chains `--session` for turns 2 and 3 so all three turns land on one session",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd",
+            "Each send is a no-tool single turn — opencode is asked to reply with exactly one word, so each working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate fires)",
+            "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleeps and timeout are generous: a slow turn must not trip a false timeout, and each inter-turn / trailing sleep must outlast the turn_done settle so every working→ready is observed before the next prompt re-enters working"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-<PID> pre-session may also appear; the turn arcs and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME ses_… session_id, one per prompt (state resets to ready between turns; the driver chains --session so all three land on one session)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown on each turn boundary; the opencode parser pulls step-finish.tokens.input/output and the nested cache.read/cache.write into UsageBreakdown{Input,Output,CacheRead,CacheCreation5m}, so input + output tokens > 0 across the turns",
+            "SessionMetrics.TotalTokens after turn 1 > 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic accumulation across 3 turns)",
+            "if opencode reports cache.read/cache.write on a cached turn they populate the CacheRead / CacheCreation5m buckets; on these tiny no-tool turns the buckets may stay 0 — do not assert a nonzero cache",
+            "no state_transition to waiting appears for the session at any point (no tool call, no permission gate)",
+            "the session's final live state is ready",
+            "NOTE: the token-accumulation claim (TotalTokens > 0 / non-decreasing / cache buckets) is not expressible in the expected.jsonl phase DSL (no metric form); it is covered by the opencode parser path + unit tests and the replay .golden summary. expected.jsonl asserts only the three-turn lifecycle arc the accounting rides on."
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },

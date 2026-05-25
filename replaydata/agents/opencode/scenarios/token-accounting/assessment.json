@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "scenario_id": "token-accounting",
+  "agent": "opencode",
+  "assessed_at": "2026-05-25T00:00:00Z",
+  "agent_supports": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
+  "confidence": 0.85,
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\ntoken-accounting asserts that token counts accumulate correctly across multiple turns: TotalTokens > 0 after turn 1, TotalTokens non-decreasing turn-over-turn, and (when a turn runs fully cached) CacheReadTokens > 0 with fresh input tokens = 0. Single-turn token/cost extraction is already covered by basic-turn; this cell stresses the multi-turn accumulator across requestId/step boundaries.\n\nWHERE THE TOKEN CLAIM LIVES: OpenCode records per-step token/cost data on its `step-finish` parts in the SQLite store. The opencode parser (parser.go: parseStepFinish) reads tokens[\"input\"], tokens[\"output\"], tokens[\"total\"], and a NESTED cache object tokens[\"cache\"][\"read\"] / tokens[\"cache\"][\"write\"], mapping them onto UsageBreakdown{Input, Output, CacheRead, CacheCreation5m} (cache.write → ephemeral 5m cache creation). OpenCode reports per-step (not cumulative) tokens, so each non-mid-turn step-finish builds a PerTurnContribution directly; the daemon accumulates these into SessionMetrics.TotalTokens monotonically. So daemon_capability: full — input/output and the nested cache buckets are all extracted (5m + 1h cache creation tracked separately).\n\nSession state lives in OpenCode's SQLite store (~/.local/share/opencode/opencode.db), observed by the daemon's ProcessOwnedStore source as the UUID-keyed ses_… session for the cwd. The state arc is the unremarkable three-turn arc (ready → working → ready × 3); the assertion rides in the events.jsonl token payload, not in any extra state.\n\nNOTE ON DSL EXPRESSIBILITY: the token-accumulation claim (TotalTokens > 0 / non-decreasing / cache buckets) is NOT expressible in the expected.jsonl phase DSL (the Phase struct carries no metric form). expected.jsonl therefore asserts only the three-turn lifecycle arc the accounting rides on; the token evidence is asserted via the parser's PerTurnContribution path, the opencode parser unit tests, and summary fields in the replay .golden that replay-fixtures.sh diffs.\n\nThe interactive driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"<prompt>\"` per send and chains --session for continuity; wait_turn is a no-op because the run already blocks. token-accounting is three plain-text no-tool turns (three send + wait_turn + sleep cycles) — well within this grammar, so driver_capability: ready.\n\nMODEL note: this worktree's opencode default is the local LM Studio model whose modelID normalizes to 'gemma-4-e2b-it-uncensored' (set in ~/.config/opencode/opencode.json). The driver passes NO --model flag, so opencode boots on that configured default. For a local model the cost may be $0, but token COUNTS (input/output) are still emitted in step-finish.tokens — the cell asserts COUNTS/deltas, not dollar cost. The model is small and slow (~30–45s/turn), so the recipe budgets a generous 240s timeout and ≥4s trailing sleeps so a slow turn does not trip a false timeout or miss the working→ready settle.",
+  "caveats": [
+    "OpenCode does not expose CLI-assignable session IDs; the driver discovers the session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns, then chains --session for turns 2 and 3.",
+    "The local gemma model is slow (~30–45s per turn); the recipe uses a 240s timeout and generous trailing sleeps so a slow turn does not trip a false timeout or miss the per-turn working→ready settle.",
+    "For a local/zero-cost model the estimated cost may read $0 — this is a model-pricing artifact, not a token-accounting gap. Assert token COUNTS/deltas (which are real), not a nonzero cost.",
+    "The cache-bucket distinction (CacheReadTokens > 0; fresh input = 0 on a fully-cached turn) is fully extractable by the parser from step-finish.tokens.cache, but on three tiny no-tool turns the model may report zero cache read/write — do not assert a nonzero cache bucket; assert only that the buckets are populated when present."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/parser.go",
+      "note": "parseStepFinish: tokens[\"input\"]/[\"output\"]/[\"total\"] and nested cache[\"read\"]/[\"write\"] → UsageBreakdown{Input, Output, CacheRead, CacheCreation5m}; OpenCode reports per-step (not cumulative) tokens, so each non-mid-turn step-finish builds a PerTurnContribution the daemon accumulates into TotalTokens."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/agent.go",
+      "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name: \"opencode\"} process matcher; daemon polls the session table for the ses_… session and emits pid_discovered."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/opencode/scenarios/basic-turn/events.jsonl",
+      "note": "Sibling recording: a single `opencode run` emits state_transition new_state ready→working→ready on one ses_… session — the same arc this cell repeats three times, with the spec framing the multi-turn accumulation intent."
+    },
+    {
+      "kind": "docs",
+      "ref": "https://opencode.ai/docs/cli/",
+      "note": "`opencode run` accepts a prompt directly and runs non-interactively (headless), blocking until the turn completes; `--session` resumes an existing session for turn continuity."
+    }
+  ]
+}
