@@ -3410,11 +3410,12 @@
     },
     {
       "name": "multiple-agents-same-workspace",
-      "description": "Two DIFFERENT coding agents (claudecode + codex) live in the SAME cwd at once. The daemon labels each adapter independently (disjoint ProcessMatchers + transcript roots; per-(adapter, session_id) state and metrics from the maps.go projections), so the single recording shows two distinct sessions each with its own working->ready arc and no cross-contamination. Recorded by run-cell-multi.sh, which launches both adapters' interactive drivers concurrently against one shared cwd under a single --record daemon, then curates one per-adapter fixture each (same workspace events.jsonl, that adapter's own transcript). The two by_adapter cells are driven by the SAME recording — each stores its adapter's transcript for the replay golden and shares the workspace events.jsonl + expected.jsonl.",
+      "description": "DIFFERENT coding agents (claudecode + codex + pi) live in the SAME cwd at once. The daemon labels each adapter independently (disjoint ProcessMatchers + transcript roots; per-(adapter, session_id) state and metrics from the maps.go projections), so the single recording shows distinct sessions each with its own working->ready arc and no cross-contamination. Recorded by run-cell-multi.sh, which launches each listed adapter's interactive driver concurrently against one shared cwd under a single --record daemon, then curates one per-adapter fixture each (same workspace events.jsonl, that adapter's own transcript). Each by_adapter cell is driven by the SAME recording — each stores its adapter's transcript for the replay golden and shares the workspace events.jsonl. The spec is adapter-agnostic (agentA = first to enter working, agentB = the other), so any two of the coexisting sessions validate the two-distinct-independent-arcs assertion; a third coexisting adapter is tolerated (working anchors + new_session skip placeholders and already-matched sessions).",
       "coverage_id": "multiple-agents-same-workspace",
       "cross_adapter": [
         "claudecode",
-        "codex"
+        "codex",
+        "pi"
       ],
       "requires": [
         "headless_mode"
@@ -3487,6 +3488,40 @@
             "events.jsonl contains TWO distinct session_ids from two different adapters, both keyed to the same cwd slug",
             "each session has its own independent working->ready arc; no transition on one is attributed to the other",
             "no cross-contamination: the daemon never merges or flaps the two adapters' rows"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        },
+        "pi": {
+          "applicable": true,
+          "partner_adapter": "claudecode",
+          "preconditions": [
+            "pi AND claude (and codex, the third concurrent adapter) CLIs on PATH and authenticated",
+            "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+            "no other pi/claudecode/codex session is live in the run cwd"
+          ],
+          "setup": [
+            "run-cell-multi.sh creates ONE shared cwd and launches each cross_adapter[] driver concurrently, all pointed at it via IRRLICHT_ONBOARD_CWD (the pi interactive driver honors $IRRLICHT_ONBOARD_CWD so it shares the workspace with the other adapters)",
+            "pi registers Process.Match=ExactName{Name:pi} + Source=FilesUnderRoot{Dir:.pi/agent/sessions} with a fresh stateful Parser per transcript, disjoint from claudecode's ~/.claude/projects and codex's ~/.codex/sessions roots, so the daemon keys the pi session independently — its single-session driver (send/wait_turn/sleep) is sufficient because pi runs ONE session next to a DIFFERENT adapter (distinct from multiple-sessions-same-cwd, which needs two SAME-adapter pi sessions and is a driver_gap)",
+            "this cell stores the pi transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (every coexisting adapter)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: gamma"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the pi session and at least one different-adapter session, each keyed to the same cwd slug",
+            "each session has its own independent working->ready arc; no transition on one is attributed to the other (pi's fresh per-transcript parser guarantees no shared state)",
+            "no cross-contamination: the daemon never merges or flaps the pi row into another adapter's"
           ],
           "settings": {},
           "timeout_seconds": 240
