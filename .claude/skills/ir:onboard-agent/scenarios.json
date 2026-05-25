@@ -3226,6 +3226,80 @@
           ],
           "settings": {},
           "timeout_seconds": 360
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs ~5min on the OpenRouter OAuth prompt; the live REPL needs a model that actually answers each prompt and applies each edit. THIS CELL'S RECORDING IS DEFERRED: no provider key was present at authoring time, so the spec is committed as the documented target and the recording is captured once aider auth exists in-env.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it can send four prompts to one long-lived session",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "aider runs under --yes-always (capabilities.json permission_hooks:false), so every file-add / shell confirmation auto-answers and no tool-call turn stalls at a permission gate — without this, state would legitimately enter waiting and the no-waiting invariant would break"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the first prompt",
+            "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
+            "Each send asks aider to make one small file edit; under --yes-always the edit auto-applies and the parser emits a collapsed tool_result from the `> Applied edit to <file>` marker. wait_turn blocks until a new `> Tokens:` line appears (signals aider finished one model call). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet, surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency)",
+            "After the fourth wait_turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Create a file notes.txt containing exactly the line: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 7
+            },
+            {
+              "type": "send",
+              "text": "Append a line to notes.txt containing exactly: beta"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 7
+            },
+            {
+              "type": "send",
+              "text": "Append a line to notes.txt containing exactly: gamma"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 7
+            },
+            {
+              "type": "send",
+              "text": "Append a line to notes.txt containing exactly: delta"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+            "events.jsonl contains a pid_discovered event bound to the live aider session_id",
+            "events.jsonl contains FOUR state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleeps are ≥7s, covering the ~5s effective latency; with shorter sleeps the next #### prompt opens a new turn with no intervening turn_done and the per-turn reset is lost — and the risk COMPOUNDS over four turns, the matrix's observes:partial caveat)",
+            "WITHIN each turn, state stays continuously working across the interleaved assistant fragments and the edit tool_result — NO state_transition to ready fires mid-turn (no flicker between the model fragments and the `> Applied edit` marker and the turn's end)",
+            "transcript.jsonl contains four user lines and at least four collapsed tool_result events (one `> Applied edit to notes.txt` per turn) — the contains_tool_call signal; the phase DSL has no tool-event form, so the tool call is asserted only via the working span it sustains",
+            "across the entire session, NO state_transition to waiting appears (aider runs under --yes-always, so every edit auto-applies and never gates)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session, not four exits)",
+            "per-turn token contribution (TotalTokens) accumulates monotonically from each `> Tokens:` snapshot — observable in the parser's assistant_message events but NOT expressible in the expected.jsonl phase DSL (no metric form); aider's cost_tracking is false so no provider dollar cost is carried"
+          ],
+          "settings": {},
+          "timeout_seconds": 360
         }
       }
     },
