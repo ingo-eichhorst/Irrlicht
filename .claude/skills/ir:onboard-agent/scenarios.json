@@ -5813,25 +5813,25 @@
             "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the prompt",
             "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
             "The single send bumps the turn counter; wait_turn blocks until a new `> Tokens:` line appears (signals aider finished the model call). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after ~1.5s quiet, surfaced as working→ready behind the daemon's 5s poll",
-            "The trailing sleep is 8s — one full IdleFlush cycle (~1.5s) plus the 5s staleWorking refresh poll plus slack — so the synthesized working→ready settle is captured before the driver kills the tmux session; aider then exits and the daemon emits a single process_exited"
+            "The trailing sleep is 11s — one full IdleFlush cycle (~1.5s) plus the 5s staleWorking refresh poll plus generous slack — so BOTH the synthesized working→ready settle AND the subsequent teardown process_exited are captured before the driver kills the tmux session"
           ],
           "script": [
             {
               "type": "send",
-              "text": "Reply with exactly the word: ok"
+              "text": "In one short sentence, what is the capital of France?"
             },
             {
               "type": "wait_turn"
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 11
             }
           ],
           "verify": [
             "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
             "events.jsonl contains a pid_discovered event bound to the live aider session_id",
-            "events.jsonl contains exactly one state_transition to working and exactly one state_transition to ready on the SAME session_id — the working→ready flip is synthesized by IdleFlush (no in-band terminal token) and lands ~5s after the last transcript line; the trailing 8s sleep covers that latency",
+            "events.jsonl contains exactly one state_transition to working and exactly one state_transition to ready on the SAME session_id — the working→ready flip is synthesized by IdleFlush (no in-band terminal token) and lands ~5s after the last transcript line; the trailing 11s sleep covers that latency",
             "events.jsonl contains NO tool_use events for the session (tool-less round-trip)",
             "no state_transition to waiting appears for the session at any point",
             "the session's final live state is ready before the driver tears the REPL down",
