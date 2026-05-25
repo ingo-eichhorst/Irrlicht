@@ -3483,6 +3483,48 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so it stays alive across the whole self-correction turn",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "No auto-mode/permission step is needed: pi has no permission gate (toolCall/toolResult parse straight through), so its shell tool runs autonomously — both the failing command and the corrective command auto-execute, so neither triggers a waiting transition",
+            "WHY interactive, not headless: headless `pi --print` exits the instant it emits the final reply, so the daemon can miss the terminal working→ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the settle cleanly, and the single tmux teardown then yields one clean process_exited",
+            "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running retry round-trip"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'cat /nonexistent_file_xyz.txt' using your bash tool. If it fails, do NOT retry that command — instead run 'ls' in the same turn and report the file names it printed. Then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn arc, pid_discovered and teardown land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows exactly one ready→working transition for the rollout session_id when the prompt is sent",
+            "transcript.jsonl contains at least two toolCall / toolResult pairs inside the single working span — the failing cat (its toolResult carries an error result) and the corrective ls (the auto-executed, ungated retry — pi has no permission hook)",
+            "events.jsonl contains NO state_transition to ready between the failing toolResult and the corrective toolCall — the session stays continuously working across the retry (the parser's terminal-stop_reason gate: intermediate tool pairs do not close the turn)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (both commands auto-execute; pi never gates)",
+            "events.jsonl shows exactly one working→ready transition at the single turn end (pi's stopReason=stop maps to turn_done)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown",
+            "Do not assert the bash tool's error text — it is model/OS-dependent; assert only the state topology and the tool-call pairing"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
