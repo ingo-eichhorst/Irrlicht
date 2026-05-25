@@ -2803,6 +2803,55 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so a follow-up can be typed while the first turn is still in flight",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "PARTIAL caveat (mirrored from the coverage assessment): pi does NOT fold the queued follow-up into the in-flight turn the way claudecode/codex do — it consumes the queued message as the NEXT turn, so the observable is TWO working→ready arcs on one rollout session, not one contiguous span. The spec asserts the in-flight turn's working span is contiguous (no mid-turn ready/waiting flicker on the queued arrival) and the queued message then yields a clean follow-on arc — not a single uninterrupted span."
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session and waits for the REPL prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on first user input (FilesUnderRoot); the driver resolves that file and extracts the UUID from line 1",
+            "QUEUE MECHANICS via the driver's existing primitives (no new step type): the first send bumps the expected-turn counter to 1 and starts a slow count-to-10 that keeps pi busy for several seconds; a short sleep (NOT wait_turn) keeps the turn in flight; a SECOND send then types the follow-up while pi is still mid-turn — pi's REPL queues the buffered line (Enter steers/queues) and the second send bumps the expected-turn counter to 2; a single final wait_turn then blocks until the rollout shows ≥2 completed assistant turns (the in-flight turn THEN the queued message's turn)",
+            "WHY two sends rather than a `keys` injection: pi's interactive driver implements send/slash/wait_turn/interrupt/sleep but not `keys`; pi consumes a queued message as a full extra turn (unlike codex which folds it into one task_complete), so two sends with one final wait_turn is the natural, bookkeeping-correct expression — the EXPECTED_TURNS counter resolves at count≥2",
+            "After the final wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Count slowly from 1 to 10, one number per line, with a brief pause between each. After 10, reply with exactly the word: done"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Also, after you finish counting, reply with exactly the word: followup"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turns and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows the in-flight turn as a CONTIGUOUS working span: NO state_transition to ready between the first ready→working and that turn's own completion, even though the follow-up was typed (queued) mid-turn",
+            "events.jsonl contains NO state_transition to waiting at any point on the rollout session",
+            "events.jsonl shows a SECOND working→ready arc on the same rollout session for the queued follow-up (pi consumes it as the next turn, not folded into the first)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session)",
+            "transcript.jsonl contains at least two user lines (initial prompt + queued follow-up); the queued user line introduces no turn boundary itself — only stopReason==stop flips state to ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
