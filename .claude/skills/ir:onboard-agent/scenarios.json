@@ -4509,6 +4509,52 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user). The live REPL needs a model that actually answers so the failing shell call and its corrective retry really run inside one turn; headless aider with no reachable provider hangs on the model-auth prompt.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the whole self-correction turn (the working→ready settle is idle-flush-bound and must be observed before teardown)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "observes:partial caveat (mirror of the coverage matrix): aider's reflection loop is genuinely WITHIN one turn (one `#### ` header, run_one's `while message:` loop, max_reflections=3), so the topology is one contiguous working span. The only thing that can break the no-flicker target is the 1500ms IdleFlush: if any single inter-reflection model call leaves the transcript silent for >~1.5s, IdleFlush synthesizes a premature turn_done (working→ready) and the next `> Tokens:` line reopens it (ready→working). A fast local model avoids this; a slow remote model can trip it. The root cause is timing, not topology."
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD, RawLineParser), so the daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session and no handoff/reconcile; the turn arc, pid_discovered and teardown all land on that one proc-<PID> row. The transcript is LAZY (materializes on first input), but the proc-<PID> pre-session is observable from launch (that is where the spec's session_birth ‘ready within 1s’ is grounded)",
+            "WHY the retry is one turn: io.user_input() writes the `#### ` history header exactly once per top-level prompt, before Coder.run_one; run_one's reflection loop sets reflected_message and calls send_message directly, never re-emitting a `#### ` header (base_coder.py:860/879/924-944). The parser treats every `> Tokens:` line as assistant_message (NOT turn_done) so the turn stays open across the multiple model calls (parser.go:18-23,146-188), and `> Running <cmd>`→tool_result(Bash) markers never change state away from working — so the fail→retry→recover arc is one contiguous ready→working→ready span",
+            "No auto-mode / permission step is needed and there is no gate to enable: aider runs under --yes-always and has NO permission hook (capabilities.json permission_hooks:false), so the shell-command confirmation auto-answers and both the failing command and the corrective command auto-execute — unlike the claudecode recipe for this cell, which must enable auto mode to keep a Bash call from tripping a gate. The session therefore never enters waiting",
+            "WHY interactive, not headless `aider --message` (drift fix, same shape as the pi/codex siblings): aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
+            "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker — fires on EACH model call inside the reflection loop, so it returns on the first one; the ≥6s trailing sleep then absorbs the full reflection chain plus one idle-flush cycle so the terminal working→ready settle is observed before teardown)",
+            "The send self-contains the fixture: aider is asked to run a failing shell command, then on failure run a corrective shell command in the same turn, then reply done — forcing at least two shell tool calls (one failing) inside the single working span"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command 'cat /nonexistent_file_xyz.txt' using your shell tool. It will fail. When it fails, do not ask me anything — run the shell command 'echo recovered' in the same turn and report what it printed. Then on the next line reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + presession_created for the proc-<PID> session born ready within ~1s of REPL launch",
+            "events.jsonl contains a pid_discovered event bound to the same proc-<PID> session_id",
+            "events.jsonl shows exactly one state_transition→working on the proc-<PID> session_id when the prompt is sent, sustained across the failing shell call and its corrective retry",
+            "transcript.jsonl contains at least two Bash tool_result markers inside the single working span — the failing `cat` (its result carries the shell error) and the corrective `echo recovered` (the auto-executed, ungated retry — aider has no permission hook) (coarse-grained: one marker per tool, no args/result payload)",
+            "events.jsonl contains NO state_transition to ready between the failing tool_result and the corrective tool call — the session stays continuously working across the retry (the parser holds working across `> Tokens:`/tool_result runs within one `#### ` turn)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (both commands auto-execute under --yes-always; aider never gates)",
+            "events.jsonl shows exactly one working→ready transition at the single turn end (synthesized by IdleFlush ~1.5s after the last `> Tokens:`)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the proc-<PID> session at REPL teardown",
+            "KNOWN TIMING RISK (observes:partial): if any single inter-reflection model call is silent >~1.5s, IdleFlush can fire a premature working→ready then the next `> Tokens:` reopens working→working flicker — flag it as a known timing limitation, do NOT widen the spec to accept it",
+            "Do not assert the shell tool's error text — it is model/OS-dependent; assert only the state topology and the tool-call pairing"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
