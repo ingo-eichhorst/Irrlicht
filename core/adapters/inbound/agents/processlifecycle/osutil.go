@@ -1,14 +1,16 @@
 // Package processlifecycle owns the full process lifecycle for agent sessions:
-// birth detection (polling) and death detection (kqueue). It unifies the
-// previously separate processscanner and process/watcher packages, deduplicating
-// shared OS utilities (pgrep, lsof, CWD resolution).
+// birth detection (polling) and death detection (exit watching). It unifies the
+// previously separate processscanner and process/watcher packages. All OS
+// coupling for process *discovery* (find-by-name/cmdline, cwd, file ownership,
+// env) lives behind the outbound.ProcessObserver seam (process_darwin.go,
+// process_linux.go, process_other.go), selected at compile time; this file
+// holds the OS-agnostic launcher-identity assembly plus the darwin-specific
+// KERN_PROCARGS2 parser used by the darwin observer.
 package processlifecycle
 
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -16,79 +18,6 @@ import (
 
 	"irrlicht/core/domain/session"
 )
-
-// findProcesses returns PIDs of processes whose name exactly matches name
-// (uses pgrep -x for exact binary name match).
-func findProcesses(name string) ([]int, error) {
-	return runPgrep("-x", name)
-}
-
-// findProcessesByCmdLine returns PIDs of processes whose full command line
-// matches the regex pattern (uses pgrep -f). Used for agents whose process
-// name on disk doesn't match their CLI name — e.g. Python tools launched
-// via a wrapper, where the OS process is `python` and the agent script is
-// in argv[1]. The pattern is interpreted by pgrep, which uses extended
-// regex on macOS / basic regex on Linux.
-func findProcessesByCmdLine(pattern string) ([]int, error) {
-	// Exclude our own pgrep call from matching itself when the pattern
-	// happens to be a substring of pgrep's argv. Filter the result.
-	ownPID := strconv.Itoa(os.Getpid())
-	pids, err := runPgrep("-f", pattern)
-	if err != nil {
-		return nil, err
-	}
-	out := pids[:0]
-	for _, p := range pids {
-		if strconv.Itoa(p) == ownPID {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-// runPgrep invokes pgrep with the given flag and pattern, parses the PIDs
-// from stdout, and returns nil for the no-match (exit 1) case.
-func runPgrep(flag, pattern string) ([]int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "pgrep", flag, pattern).Output()
-	if err != nil {
-		// pgrep exits 1 when there are no matches — not an error.
-		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var pids []int
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		pid, err := strconv.Atoi(line)
-		if err == nil && pid > 0 {
-			pids = append(pids, pid)
-		}
-	}
-	return pids, nil
-}
-
-// processCWD returns the working directory of pid using lsof.
-func processCWD(pid int) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
-	if err != nil {
-		return "", fmt.Errorf("lsof cwd pid %d: %w", pid, err)
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "n") {
-			return strings.TrimPrefix(line, "n"), nil
-		}
-	}
-	return "", fmt.Errorf("cwd not found for pid %d", pid)
-}
 
 // CWDToProjectDir converts a working directory path to the directory name used
 // by Claude Code under ~/.claude/projects/. Claude Code replaces both "/" and
@@ -128,7 +57,7 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// Env may be empty — hardened-runtime processes hide it from sysctl.
 	// Don't bail here: the ancestry fallback below is the only signal we
 	// have in that case.
-	env, _ := readProcessEnv(pid)
+	env, _ := osProc.EnvOf(pid)
 
 	l := &session.Launcher{
 		TermProgram:    env["TERM_PROGRAM"],
