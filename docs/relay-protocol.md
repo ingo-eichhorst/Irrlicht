@@ -131,14 +131,16 @@ dashboard served from a different port is cross-origin). Tighten alongside auth.
 
 ```sh
 irrlichd                                    # daemon on :7837 (its default)
-IRRLICHT_RELAY_URL=ws://localhost:7838 irrlichd   # …also forwards to the relay
-irrlichtrelay serve --addr :7838            # the relay
+IRRLICHT_RELAY_URL=ws://localhost:7839 irrlichd   # …also forwards to the relay
+irrlichtrelay serve --addr :7839            # the relay
 ```
 
-> **Port note:** `--addr :7838` is the relay's default, but `7838` is also the
-> conventional **dev daemon** coexist port (`IRRLICHT_DAEMON_PORT`/`BIND_ADDR`).
-> Don't run a coexisting dev daemon and the relay on the same port — give one of
-> them a different port.
+> **Port choice:** irrlicht uses three contiguous ports — `7837` (production
+> daemon), `7838` (dev-daemon coexist via `IRRLICHT_DAEMON_PORT`/`BIND_ADDR`),
+> and `7839` (relay default). All three sit in the `7836–7850` band, which has
+> no IANA-notable service and is effectively never seen open in the wild (per
+> nmap-services frequency data), so collisions are unlikely. Override any of
+> them — `--addr` for the relay — if your environment already uses one.
 
 Then in **Settings → Sources** (macOS or web) enable **Local** and/or enter the
 **Relay server URL**; both clients show the union of sessions, live, and the

@@ -190,16 +190,16 @@ describe('relayWsUrl', () => {
   })
 
   test('bare host gets ws:// scheme and the stream path', () => {
-    expect(relayWsUrl('localhost:7838')).toBe('ws://localhost:7838/api/v1/sessions/stream')
+    expect(relayWsUrl('localhost:7839')).toBe('ws://localhost:7839/api/v1/sessions/stream')
   })
 
   test('http(s) is rewritten to ws(s)', () => {
-    expect(relayWsUrl('http://relay.example:7838')).toBe('ws://relay.example:7838/api/v1/sessions/stream')
+    expect(relayWsUrl('http://relay.example:7839')).toBe('ws://relay.example:7839/api/v1/sessions/stream')
     expect(relayWsUrl('https://relay.example')).toBe('wss://relay.example/api/v1/sessions/stream')
   })
 
   test('an explicit stream path is preserved (not doubled)', () => {
-    expect(relayWsUrl('ws://localhost:7838/api/v1/sessions/stream'))
-      .toBe('ws://localhost:7838/api/v1/sessions/stream')
+    expect(relayWsUrl('ws://localhost:7839/api/v1/sessions/stream'))
+      .toBe('ws://localhost:7839/api/v1/sessions/stream')
   })
 })

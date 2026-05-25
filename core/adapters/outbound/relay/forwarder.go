@@ -21,7 +21,7 @@ const streamPath = "/api/v1/sessions/stream"
 
 // normalizeRelayURL turns IRRLICHT_RELAY_URL into a dialable WebSocket URL:
 // it supplies a ws:// scheme (rewriting http(s)://) and appends the stream
-// path when absent, so the env var can be a bare base like ws://host:7838.
+// path when absent, so the env var can be a bare base like ws://host:7839.
 func normalizeRelayURL(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {

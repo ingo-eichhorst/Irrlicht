@@ -41,7 +41,7 @@ func main() {
 		args = args[1:]
 	}
 	fs := flag.NewFlagSet("irrlichtrelay", flag.ExitOnError)
-	addr := fs.String("addr", ":7838", "TCP address to listen on (e.g. :7838)")
+	addr := fs.String("addr", ":7839", "TCP address to listen on (e.g. :7839)")
 	_ = fs.Parse(args)
 
 	// Serve web assets with correct Content-Type regardless of the host OS

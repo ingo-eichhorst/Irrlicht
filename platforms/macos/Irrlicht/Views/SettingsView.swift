@@ -96,7 +96,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 if useRelayServer {
-                    TextField("ws://localhost:7838", text: $relayURLDraft)
+                    TextField("ws://localhost:7839", text: $relayURLDraft)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.caption, design: .monospaced))
                         .autocorrectionDisabled(true)

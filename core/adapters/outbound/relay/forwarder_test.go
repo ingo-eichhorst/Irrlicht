@@ -188,11 +188,11 @@ func TestFrameType(t *testing.T) {
 
 func TestNormalizeRelayURL(t *testing.T) {
 	cases := map[string]string{
-		"ws://localhost:7838":                        "ws://localhost:7838/api/v1/sessions/stream",
-		"localhost:7838":                             "ws://localhost:7838/api/v1/sessions/stream",
-		"http://relay.example:7838":                  "ws://relay.example:7838/api/v1/sessions/stream",
+		"ws://localhost:7839":                        "ws://localhost:7839/api/v1/sessions/stream",
+		"localhost:7839":                             "ws://localhost:7839/api/v1/sessions/stream",
+		"http://relay.example:7839":                  "ws://relay.example:7839/api/v1/sessions/stream",
 		"https://relay.example/":                     "wss://relay.example/api/v1/sessions/stream",
-		"ws://localhost:7838/api/v1/sessions/stream": "ws://localhost:7838/api/v1/sessions/stream",
+		"ws://localhost:7839/api/v1/sessions/stream": "ws://localhost:7839/api/v1/sessions/stream",
 		"": "",
 	}
 	for in, want := range cases {
