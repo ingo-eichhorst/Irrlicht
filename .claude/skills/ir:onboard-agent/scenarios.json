@@ -4186,6 +4186,45 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so the single turn's working→ready settle is observed before teardown",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the single prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running turn",
+            "After wait_turn + trailing sleep the driver kills the tmux session once — pi exits and the daemon emits a single process_exited for the rollout session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly this sentence and nothing else: The capital of France is Paris."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent (the single tool-less assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same rollout session_id once the terminal-text turn completes — pi emits stopReason=stop on the final plain-text assistant message, the parser maps it to turn_done, and the classifier settles working→ready (unlike headless `pi --print` which exits before the settle is cleanly observable, concern C6)",
+            "events.jsonl contains NO tool_use / tool-call events for the rollout session (deliberately tool-less prompt)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session, not a per-turn exit)",
+            "no state_transition to waiting appears for the rollout session at any point (the declarative answer has no trailing question mark, so the classifier never reads a waiting cue)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },
