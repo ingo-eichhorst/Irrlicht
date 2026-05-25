@@ -336,25 +336,40 @@
         "pi": {
           "applicable": true,
           "preconditions": [
-            "pi CLI on PATH and authenticated (pi --api-key or provider env vars)",
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available \u2014 the interactive driver runs pi in a tmux REPL so it stays alive across the turn",
             "irrlichd is recording \u2014 either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
           ],
           "setup": [
-            "The headless driver runs `pi --print -p <prompt>` once under timeout, then resolves the freshly-created ~/.pi/agent/sessions/<cwd-slug>/<ts>_<UUID>.jsonl and extracts the UUID from line 1 (pi assigns its own UUID; it can't be pre-set)",
-            "Pi writes its JSONL session file on launch (FilesUnderRoot, non-lazy), so no transcript nudge is needed; the daemon's first scanner tick keys the real UUID transcript directly \u2014 the curated fixture is a single rollout session with no separately-matchable proc-<PID> pre-session phase"
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends the prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "WHY interactive, not headless (drift fix): this cell was originally recorded HEADLESS (`pi --print`) and only validated 2/5 because `pi --print` exits the instant it emits the final reply, so the daemon misses the terminal working\u2192ready settle before process_exited (concern C6). Keeping pi alive in the REPL across one send + wait_turn lets the daemon observe the full ready\u2192working\u2192ready settle cleanly, and the single tmux teardown then yields one clean process_exited \u2014 the same proven shape as the sibling auto-executed-tool-call cell (5/5)",
+            "The send self-contains the fixture: pi is asked to write a small file then read it back, forcing exactly one auto-executed read tool call inside the working span (the driver has no separate setup-file step, so the file is created within the same turn). The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn, so the trailing sleep never races a still-running tool round-trip"
           ],
-          "prompt": "Use the bash tool to run 'echo hello', then reply 'done'.",
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a file named fact.txt whose only contents are the line 'the sky is blue', then read fact.txt back and reply with exactly its first line."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
           "verify": [
-            "events.jsonl contains a transcript_new for the rollout session, born ready within 1000 ms of launch",
-            "events.jsonl contains a state_transition\u2192working on the rollout session_id on the first transcript activity (the tool-using prompt), sustained across the tool call",
-            "transcript.jsonl contains a toolCall / toolResult pair for the bash command (the auto-executed tool call)",
-            "events.jsonl contains a state_transition\u2192ready on the same rollout session_id once the tool resolves and the turn completes (pi's stopReason=stop maps to turn_done)",
-            "no state_transition to waiting appears for the rollout session at any point (pi has no permission gate \u2014 unlike claudecode's PostToolUse-hooked variant)",
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn arc, pid_discovered and teardown land on the UUID-keyed rollout session)",
             "events.jsonl contains a pid_discovered event bound to the rollout session_id",
-            "events.jsonl contains a process_exited on the rollout session when headless pi exits after the single turn"
+            "events.jsonl contains a state_transition\u2192working / \u2192ready arc on the rollout session_id, sustained across the auto-executed read tool call",
+            "transcript.jsonl contains a toolCall / toolResult pair for the file read (the auto-executed, ungated tool call \u2014 pi has no permission hook)",
+            "events.jsonl contains NO state_transition to waiting for the rollout session at any point (the call auto-executes; pi never gates)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown"
           ],
           "settings": {},
-          "timeout_seconds": 240
+          "timeout_seconds": 300
         },
         "aider": {
           "prompt": "Create a new file named hello.txt with exactly the contents: hello\n\nThen on the next line reply with exactly: done",
