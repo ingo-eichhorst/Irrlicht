@@ -838,18 +838,19 @@
           "setup": [
             "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line before sending the first prompt",
             "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
+            "TIMING (model is fast — gpt-5-nano): the first prompt MUST elicit a genuinely long/slow generation (an exhaustive multi-thousand-word essay) and the pre-interrupt sleep MUST be SHORT (~2s) so the Ctrl-C lands while the model is still streaming. A long sleep before the interrupt would let a fast model finish the turn first (writing a `> Tokens:` line), so the Ctrl-C would interrupt nothing — no real mid-turn abort.",
             "The interrupt step sends tmux Ctrl-C. A Ctrl-C-cancelled turn writes NO `> Tokens:` line, so the parser emits no turn-closing assistant_message and the interrupt is NOT followed by wait_turn (it would hang). The driver decrements nothing here — the cancelled turn simply never completes a model call.",
-            "End-of-turn has no transcript marker in aider; the interrupted turn is closed by IdleFlush, which synthesizes a bare turn_done after 1.5s of transcript quiet, surfaced as working→ready behind the daemon's 5s SessionDetector staleWorking poll (~max(1.5s, 5s) effective latency) — this is why the sleep AFTER the interrupt is ≥3s and the trailing sleep after the recovery wait_turn is ≥6s",
+            "End-of-turn has no transcript marker in aider; the interrupted turn is closed by IdleFlush, which synthesizes a bare turn_done after 1.5s of transcript quiet, surfaced as working→ready behind the daemon's 5s SessionDetector staleWorking poll (~max(1.5s, 5s) effective latency) — this is why the sleep AFTER the interrupt is ≥6s (covers IdleFlush + the staleWorking poll so the post-interrupt working→ready settles before the recovery prompt) and the trailing sleep after the recovery wait_turn is ≥8s",
             "After the recovery wait_turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session"
           ],
           "script": [
             {
               "type": "send",
-              "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+              "text": "Write an extremely long, exhaustive, multi-chapter essay (at least 3000 words) covering the complete history of computing from the abacus through quantum computers, with a detailed dedicated paragraph for every single decade. Do not summarize or stop early — keep writing continuously until you have covered everything in full depth."
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 2
             },
             {
               "type": "interrupt"
