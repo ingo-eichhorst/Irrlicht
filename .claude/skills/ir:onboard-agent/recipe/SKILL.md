@@ -250,9 +250,23 @@ of `script`. Pick interactive when:
 - The scenario sends an interrupt or slash command mid-turn.
 - The scenario is idle-observation (no prompts at all — interactive
   with a sleep-only script is the canonical pattern).
+- **The scenario asserts the full lifecycle arc** (`turn_end` /
+  `pid_bind` / `teardown`) **and the agent's headless mode exits at
+  turn completion.** The agent PROCESS must outlive the daemon's
+  observation/scan window: a one-shot `--print` run exits before the
+  daemon classifies the working→ready settle (and, on a very short
+  run, before the PID scanner ticks — acute for PID-keyed transports
+  like opencode's `ProcessOwnedStore`, where a dead process is
+  unreadable). Interactive keeps the process alive across the turn,
+  then a clean teardown supplies `process_exited`. *Symptom of getting
+  this wrong:* a headless cell that records but validates ~1–3/5, the
+  tail phases failing while their events are visibly present — a
+  fast-exit truncation, not a daemon bug.
 
 Pick headless for single-turn deterministic prompts where the model's
-output doesn't matter.
+output doesn't matter and the spec doesn't depend on observing the
+post-turn settle or teardown (e.g. session-start: birth + pid_bind in
+the first scanner tick).
 
 #### Adapter quirks that change the recipe shape
 
@@ -282,6 +296,18 @@ finalizing the script:
   after a ~5 s idle window. Recipes for any aider scenario need a
   trailing sleep ≥6 s (one full idle-flush cycle plus slack) before
   daemon shutdown, otherwise the final ready transition is missed.
+
+- **Slash command vs picker navigation** — before declaring a
+  slash-driven cell a `driver_gap` for want of a `keys` step, check
+  whether the command takes an INLINE ARGUMENT. A command like
+  `/model <provider>/<id>` or `/compact` is sendable with a single
+  `slash` step and needs no `keys`; only a command that opens an
+  interactive picker navigated by arrow keys actually requires `keys`
+  (which most drivers lack). Verify via the agent's `--help` /
+  `strings` / slash catalog. *Worked example:* pi's `/model <id>` is
+  inline → recordable via `slash`; pi's `/tree` checkpoint picker
+  needs arrow-key nav → genuine `driver_gap`. Applies only to agents
+  with a slash/REPL surface.
 
 If you discover a new quirk while authoring a recipe, add it here
 so the next recipe author doesn't have to re-discover it.

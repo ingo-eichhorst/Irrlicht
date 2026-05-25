@@ -54,8 +54,11 @@ touch "$MARKER"
 # Per-run CWD so pi creates a session under a unique project dir
 # (~/.pi/agent/sessions/<projectdir>/<ts>_<uuid>.jsonl). The dir lives
 # inside the staging tree, and the slugified projectdir keeps reruns
-# from colliding.
-RUN_CWD="$STAGING/cwd"
+# from colliding. run-cell-multi.sh overrides this via $IRRLICHT_ONBOARD_CWD
+# so a second, different adapter can share the SAME workspace (the
+# cross-adapter multiple-agents-same-workspace rig); matches the
+# claudecode/codex interactive drivers.
+RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
 
 SESSION="pi-onboard-$(date +%s)-$$"

@@ -50,6 +50,11 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 SCENARIOS_JSON="$SKILL_DIR/scenarios.json"
 
+# Session-id reconciliation helpers (daemon_sid_for_transcript,
+# sid_in_recording, reconcile_slot_csv) — shared + unit-tested in lib/.
+# shellcheck source=lib/reconcile.sh
+source "$SCRIPT_DIR/lib/reconcile.sh"
+
 [[ $# -eq 1 ]] || { echo "usage: run-cell-multi.sh <scenario-name>" >&2; exit 2; }
 SCENARIO="$1"
 
@@ -219,6 +224,11 @@ RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/d
 # from its PRIMARY transcript but union EVERY session (all adapters, all
 # slots) into the workspace events.jsonl. (bash 3.2 — parallel indexed
 # arrays keyed by ADAPTERS position.)
+# Reconciliation helpers (daemon_sid_for_transcript, sid_in_recording,
+# reconcile_slot_csv) live in lib/reconcile.sh, sourced above and unit-tested
+# by lib/reconcile_test.sh. They map each driver-written id to the
+# daemon-recorded session_id and verify it actually appears in the recording.
+
 PRIMARY_SID=()
 PRIMARY_TRANSCRIPT=()
 OWN_TRANSCRIPTS=()   # this adapter's own slot transcripts, newline-joined
@@ -226,22 +236,39 @@ ALL_SIDS=()          # flat union of every adapter's every slot sid
 for idx in "${!ADAPTERS[@]}"; do
   a="${ADAPTERS[$idx]}"
   sub="$STAGING/$a"
-  PRIMARY_SID[$idx]="$(head -n1 "$sub/session.uuid" 2>/dev/null || true)"
   PRIMARY_TRANSCRIPT[$idx]="$(head -n1 "$sub/transcript.path" 2>/dev/null || true)"
+  raw_primary_sid="$(head -n1 "$sub/session.uuid" 2>/dev/null || true)"
+  # Reconcile the driver's preferred id to the daemon's recorded session_id.
+  PRIMARY_SID[$idx]="$(daemon_sid_for_transcript "${PRIMARY_TRANSCRIPT[$idx]}" "$a" "$raw_primary_sid")"
   if [[ -z "${PRIMARY_SID[$idx]}" || -z "${PRIMARY_TRANSCRIPT[$idx]}" || ! -f "${PRIMARY_TRANSCRIPT[$idx]}" ]]; then
     echo "ERROR: $a driver did not resolve a session (sid=${PRIMARY_SID[$idx]:-missing}, transcript=${PRIMARY_TRANSCRIPT[$idx]:-missing})" >&2
     DRV_FAIL=1
     continue
   fi
-  # Full per-slot lists (fall back to the single-file primaries).
+  # The reconciled primary MUST be an id the daemon actually recorded. If
+  # reconcile fell back to the driver-written id (transcript_path mismatch /
+  # transcript unobserved) and that id never appears in the recording,
+  # curating against it yields a silently-empty per-adapter arc — fail loudly
+  # instead of staging a fixture that doesn't support its own assertions.
+  if ! sid_in_recording "${PRIMARY_SID[$idx]}"; then
+    echo "ERROR: $a primary session '${PRIMARY_SID[$idx]}' does not appear in the recording — reconcile fell back to a driver id the daemon never recorded; the per-adapter arc would be empty. Not staging." >&2
+    DRV_FAIL=1
+    continue
+  fi
+  # Full per-slot lists (fall back to the single-file primaries). Reconcile
+  # each slot's id against its matching transcript path so every chained
+  # session is filtered by its daemon-recorded id, not its preferred id.
   uuids_file="$sub/session.uuids"; [[ -f "$uuids_file" ]] || uuids_file="$sub/session.uuid"
   paths_file="$sub/transcript.paths"; [[ -f "$paths_file" ]] || paths_file="$sub/transcript.path"
+  # Reconcile every slot's id against its matching transcript path (kept in
+  # lockstep by reconcile_slot_csv) so each chained session is filtered by its
+  # daemon-recorded id, not its driver-preferred id. The while loop runs in
+  # the current shell (process substitution, not a pipe) so ALL_SIDS persists.
   csv=""
-  while IFS= read -r s; do
-    [[ -z "$s" ]] && continue
-    csv+="${csv:+,}$s"
-    ALL_SIDS+=("$s")
-  done < "$uuids_file"
+  while IFS= read -r sid; do
+    csv+="${csv:+,}$sid"
+    ALL_SIDS+=("$sid")
+  done < <(reconcile_slot_csv "$uuids_file" "$paths_file" "$a")
   OWN_TRANSCRIPTS[$idx]="$(cat "$paths_file" 2>/dev/null || true)"
   echo "$a: primary=${PRIMARY_SID[$idx]} sids=[$csv]"
 done

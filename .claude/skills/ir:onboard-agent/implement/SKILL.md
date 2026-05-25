@@ -75,6 +75,9 @@ Follow [`../spec/SKILL.md`](../spec/SKILL.md) to write
 `replaydata/agents/<agent>/scenarios/<scenario>/expected.jsonl`.
 Spec-before-recipe is deliberate: the recipe's plain-English `verify`
 items map onto concrete spec phases, so the spec must exist first.
+Heed `spec/SKILL.md`'s "Common pitfalls": anchor the first phase to
+`"start"` UNPINNED so a transient `proc-<PID>` presession row doesn't
+steal `session_birth` and cascade `same_session_as` failures.
 
 ### 2. Author the recipe (Stage 2)
 
@@ -84,6 +87,10 @@ Follow [`../recipe/SKILL.md`](../recipe/SKILL.md) to write
 claudecode's recipe for the same scenario** when one exists — copy its
 shape and adapt the step grammar / quirks to `<agent>`. Validate JSON:
 `jq '.' .claude/skills/ir:onboard-agent/scenarios.json > /dev/null`.
+Per `recipe/SKILL.md`: for a cell asserting the full lifecycle arc,
+prefer an INTERACTIVE recipe when the agent's headless `--print` exits
+at turn completion (the process must outlive the daemon's observation
+window, or `turn_end`/`pid_bind`/`teardown` validate as missing).
 
 ### 3. Driver-gap pre-flight (before any recording)
 
@@ -102,7 +109,10 @@ grep -oE '^\s*(send|slash|wait_turn|sleep|interrupt|keys|restart|resume|sigkill|
 
 If any needed step type is **not** in the driver's set →
 **`driver_gap`**: this is a developer task (extend the driver), out of
-scope here. Set `by_adapter.<agent> = {"applicable": false, "notes":
+scope here. (First rule out a false gap: a slash command that takes an
+INLINE argument — `/model <id>`, `/compact` — is sendable via `slash`
+and is NOT a `keys` gap; only an arrow-key picker truly needs `keys`.
+See `recipe/SKILL.md` "Slash command vs picker navigation".) Set `by_adapter.<agent> = {"applicable": false, "notes":
 "<scope_note naming the missing step type, e.g. 'aider driver lacks
 exit_clean'>"}`, commit recipe(applicable:false) + spec + assessment,
 and return `driver_gap`. **Do NOT record, and do NOT retry against a
@@ -197,7 +207,11 @@ manifest's `expected_pass_rate` — that is the authoritative
   DRIFT — N/M phases; needs editorial review (do not assume green)."**
   Do NOT rebase `expected.jsonl` to make it pass — that's the trap the
   whole pipeline avoids; resolving real drift is a separate maintainer
-  task.
+  task. EXCEPTION — if the failing phases are an *inherent* observability
+  gap (load-bearing phases pass; no spec/daemon/recipe fix is available),
+  mark the cell `known_failing` per `validate/SKILL.md` "how and when"
+  rather than leaving a bare drift flag, so the suite reports it as
+  expected. That is annotation, not a rebase — the phase lines stay put.
 
 For `--re-record`, also sanity-check structural determinism vs the
 archived previous recording (per [`../record/SKILL.md`](../record/SKILL.md)):
@@ -247,7 +261,7 @@ dangling.
 
 ## Return contract
 
-Return ONLY this (≤6 lines), no transcripts:
+Return ONLY this (≤7 lines), no transcripts:
 
 ```
 status: pass | applicable_false | driver_gap | infra_fail
@@ -255,7 +269,16 @@ commit_sha: <short sha>            # the recording commit (or the recipe/spec/ap
 pass_rate: <N/M phases>            # "n/a" for non-pass statuses
 agent: <agent>   scenario: <scenario>   mode: full | re-record
 notes: <one or two sentences — drift flag, scope_note, retry count, or infra reason>
+observability_correction: <none | the live recording overrode the assess verdict — e.g. assessed observes:yes but the transcript/store proved the signal isn't emitted>
 ```
+
+`observability_correction` is the maintainer's cue to update
+`agent-scenarios-coverage.json` when the LIVE recording disagrees with
+the doc-based `assess` verdict (e.g. pi/streaming-partial-writes assessed
+`observes: yes` but the recording proved pi writes the transcript
+atomically → `observes: no`). Most common on structured-store transports
+(opencode's `ProcessOwnedStore`), where observability is hard to predict
+from docs. Write `none` when the recording matched the assessment.
 
 Status meanings:
 

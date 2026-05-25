@@ -32,10 +32,12 @@ if [[ $# -ne 5 ]]; then
 fi
 
 STAGING="$1"
-# $2 (preferred-uuid) and $4 (settings-path) are accepted for ABI parity
-# with drive-claudecode.sh; pi assigns its own UUID and has no
-# --settings flag, so both are unused here.
+# $2 (preferred-uuid) is accepted for ABI parity with drive-claudecode.sh;
+# pi assigns its own UUID. pi has no --settings flag, so $4 is read only
+# for an optional `model` override (see IRRLICHT_PI_MODEL below), not
+# passed to pi wholesale.
 TIMEOUT_S="$3"
+SETTINGS_PATH="$4"
 PROMPT="$5"
 
 mkdir -p "$STAGING"
@@ -48,10 +50,30 @@ mkdir -p "$PI_SESSIONS_DIR"
 MARKER="$STAGING/.pi-start-marker"
 touch "$MARKER"
 
+# Optional model override (mirrors drive-aider.sh's IRRLICHT_AIDER_MODEL
+# convention). Resolution order: the cell's settings blob `.model` (written
+# by run-cell.sh to SETTINGS_PATH — fully reproducible from the committed
+# recipe), then the IRRLICHT_PI_MODEL env var as an escape hatch. Used by
+# the turn-aborted-by-error cell to inject a bogus, provider-unsupported
+# model id so pi gets a deterministic NON-retryable error (its retry regex
+# only matches transient/5xx/rate-limit/timeout messages), persists one
+# assistant message with stopReason="error", and exits non-zero. A normal
+# cell leaves it unset and pi uses its default model.
+PI_MODEL=""
+if [[ -n "$SETTINGS_PATH" && -f "$SETTINGS_PATH" ]]; then
+  PI_MODEL="$(jq -r '.model // empty' "$SETTINGS_PATH" 2>/dev/null || true)"
+fi
+PI_MODEL="${PI_MODEL:-${IRRLICHT_PI_MODEL:-}}"
+
+PI_ARGS=( --print -p "$PROMPT" )
+if [[ -n "$PI_MODEL" ]]; then
+  PI_ARGS+=( --model "$PI_MODEL" )
+fi
+
 # Auth is the user's responsibility (`pi --api-key` or provider env vars).
 set +e
 timeout --signal=SIGINT --kill-after=10 "$TIMEOUT_S" \
-  pi --print -p "$PROMPT" \
+  pi "${PI_ARGS[@]}" \
   >"$DRIVER_LOG.stdout" 2>"$DRIVER_LOG.stderr"
 EXIT_CODE=$?
 set -e

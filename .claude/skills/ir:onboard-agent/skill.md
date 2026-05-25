@@ -48,7 +48,8 @@ five-stage pipeline the subagents implement.
 | capture how `<agent>` does `<scenario>` | `implement <agent> <scenario>` | `implement` subagent |
 | re-record after a daemon change | `implement <agent> <scenario> --re-record` | `implement` subagent |
 | onboard a brand-NEW agent CLI | `--new <slug>` | discovery (see below) |
-| verify nothing regressed | `tools/replay-fixtures.sh` | nothing — pure script |
+| verify nothing regressed (fixtures) | `tools/replay-fixtures.sh` | nothing — pure script |
+| verify the rig scripts themselves | `scripts/smoke-test.sh` | nothing — pure script (bash -n + lib/reconcile_test.sh; the rig isn't covered by replay-fixtures/go test) |
 | run an orchestrator scenario | `<orch> [<scenario>]` | inline (see Orchestrators) |
 
 The legacy per-stage verbs (`assess`/`recipe`/`spec`/`record`/`validate`)
@@ -79,6 +80,14 @@ per cell**. Collect each subagent's ≤5-line summary into a table for the
 user. Don't run the per-cell mechanics yourself — that's what blows the
 context budget.
 
+**Parallelism rule for sweeps.** `assess` cells are read-only (no daemon)
+and may be fanned out in parallel waves to save wall-clock. `implement` /
+record cells drive a live CLI under the single `--attach` daemon and MUST
+be serialized — concurrent recordings on one daemon interleave. And a batch
+of standalone `assess` runs writes `assessment.json` files under
+`replaydata/`, dirtying the tree, so commit those assessments BEFORE the
+first `implement` — `precheck.sh` refuses to record on a dirty `replaydata/`.
+
 After dispatching `implement`, the recording is already committed (that
 is part of its contract). Don't re-stage, re-diff, or re-commit; just
 relay its summary.
@@ -99,6 +108,26 @@ comm -23 \
   <(jq -r '.features[].id' replaydata/agents/features.json | sort -u)
 # any output = a scenario requires an unknown capability — block and report it.
 ```
+
+Also confirm the two catalogs agree — `scenarios.json` vs the coverage
+rollup — so no cell is orphaned or unmapped:
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+# coverage_ids referenced by scenarios.json but ABSENT from the rollup matrix:
+comm -23 \
+  <(jq -r '.scenarios[].coverage_id' $SK/scenarios.json | sort -u) \
+  <(jq -r '.scenarios[].id'          $SK/agent-scenarios-coverage.json | sort -u)
+# rollup ids with NO recipe row in scenarios.json (orphan coverage cells):
+comm -13 \
+  <(jq -r '.scenarios[].coverage_id' $SK/scenarios.json | sort -u) \
+  <(jq -r '.scenarios[].id'          $SK/agent-scenarios-coverage.json | sort -u)
+# either output = catalog drift: a name maps to a missing coverage cell, or a
+# coverage cell has no recipe. Surface it; don't silently sweep around it.
+```
+
+Several `name`s legitimately share one `coverage_id` (recipe variants of the
+same canonical cell) — the matrix axis is the coverage id, not the name.
 
 ### Agent matrix (`scenarios[]` × agent adapters)
 
@@ -127,6 +156,29 @@ ls replaydata/agents/*/scenarios/ 2>/dev/null
 
 Print a table (rows = adapters, columns = scenarios) with a one-line hint
 on every non-OK cell.
+
+### Driver-capability pre-flight (before an `implement` sweep)
+
+A cell can be applicable yet un-recordable because the agent's interactive
+driver lacks a step type its recipe needs (`keys`, `resume`, `restart`,
+`reset_session`, `exit_clean`, `sigkill`). Surface these UPFRONT so the
+sweep routes them to a driver-extension task instead of spending an
+`implement` round-trip per cell to rediscover the gap:
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+# step types the agent's interactive driver implements (its case labels):
+grep -oE '^\s*(send|slash|wait_turn|sleep|interrupt|keys|restart|resume|sigkill|exit_clean|reset_session)\)' \
+  $SK/scripts/drive-<agent>-interactive.sh | tr -d ' )' | sort -u
+```
+
+Cross-check that set against the step types each cell's recipe needs (or,
+for unwritten recipes, the steps the behaviour implies — multi-session ⇒
+`reset_session`/`resume`/`restart`; in-REPL picker navigation ⇒ `keys`).
+Cells needing an absent step are `driver_gap` — a developer task to extend
+the driver, not a recording. New agents start with the sparsest drivers
+(e.g. opencode: `send`/`sleep`/`wait_turn` only), so this report matters
+most at onboarding time.
 
 ### Orchestrator matrix (`orchestrator_scenarios[]` × orchestrators)
 
