@@ -1,0 +1,39 @@
+name: Tests
+
+# Pass/fail gate for Go tests on every PR and on pushes to main. This is the
+# enforcement the coverage workflow never provided: coverage.yml runs only on
+# push-to-main, covers the `core` module alone, and swallows test failures
+# (it parses coverage out of a discarded run). Without this, module tests —
+# including the catalog-drift gate in tools/agent-onboarding — were verified
+# locally only and could not block a PR.
+#
+# Both Go modules are exercised. They share a go.work, so the runner resolves
+# cross-module packages without per-module `go mod download`.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      # core carries the headless daemon smoke test + concurrency paths, so it
+      # runs under -race (matches the documented local command in AGENTS.md).
+      - name: Test core module
+        run: go test ./core/... -race -count=1
+
+      # tools/agent-onboarding holds the viewer + replay/validate packages and
+      # the TestScenarioCatalogNoDrift gate that keeps the overview matrix in
+      # sync with scenarios.json's catalog[] and the on-disk recordings.
+      - name: Test agent-onboarding module
+        run: go test ./tools/agent-onboarding/... -count=1

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "scenario_id": "quota-burndown",
+  "agent": "aider",
+  "assessed_at": "2026-05-25T00:00:00Z",
+  "agent_supports": "no",
+  "irrlicht_observes": "n/a",
+  "confidence": 0.9,
+  "body": "## Verdict\n\nagent_supports: no\nirrlicht_observes: n/a\n\n## Reasoning\n\nQuota burndown asks whether the agent surfaces a rate-limit usage window that rises monotonically as the session consumes its quota. Codex supports it: each `token_count` event carries a `rate_limits` map whose `used` / `UsedPercent` climb across turns (extractCodexRateLimits in core/adapters/inbound/agents/codex/parser.go), and irrlicht stores the latest RateLimitSnapshot per session.\n\nAider has no provider-managed quota window in its output. It runs against the user's own API key (or a local model), so any rate limiting happens at the provider boundary and is never reflected as a burndown signal in Aider's transcript. The aider adapter has zero rate-limit / quota extraction — `grep -ri 'rate_limit|quota|credits' core/adapters/inbound/agents/aider/` returns nothing.\n\nBecause agent_supports = no, irrlicht_observes is `n/a` per the matrix convention: there is no usage window in the transcript and no parser code path that could observe one.\n\n## What irrlicht does NOT see (and why that's OK)\n\nAny quota / rate-limit progression. Aider does not emit a usage window, so there is nothing to burn down and nothing to miss — the absence of observation is correct, not a gap.",
+  "caveats": [
+    "agent_supports=no, so this cell is authored as an assessment only — no recording, expected.jsonl, or transcript.jsonl.",
+    "Distinct from token-accounting (per-turn token counts, which Aider does emit) — quota-burndown is specifically a provider rate-limit window, which Aider does not surface."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/aider/", "note": "No rate-limit / quota / credits extraction exists in the aider adapter — no usage window to track burndown against."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/parser.go", "note": "Contrast: Codex re-reads the rate_limits snapshot from each token_count event, the signal quota-burndown asserts, absent in Aider."}
+  ]
+}
