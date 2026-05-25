@@ -87,15 +87,47 @@ shape `{phases: [{phase, status, reason, matched_event_idx}, ...]}`.
    the assertion to match what `.specs/agent-scenarios.md` actually
    says.
 
-### `known_failing: true` in meta
+### `known_failing: true` in meta — how and when
 
-Set this in `expected.jsonl`'s meta line when the spec describes
-behavior the daemon doesn't yet deliver. The validator still runs
-the spec; `replay-fixtures.sh` logs the failure rather than
-erroring out. Required signal for documented daemon gaps. Drop the
-flag the moment the gap closes — the test will then error to remind
-you (an all-pass run while `known_failing: true` is itself a
-failure signal).
+**How.** Add the flag and a reason to the FIRST (meta) line of
+`expected.jsonl`, alongside the existing `notes` — do NOT touch the
+phase lines:
+
+```jsonl
+{"schema_version":1,"scenario_id":"<id>","source":"…","known_failing":true,"notes":"KNOWN FAILING — <which phases fail + the load-bearing reason>. <what would clear it>. <original rationale follows…>"}
+```
+
+`replay-fixtures.sh` then reports the cell as `known_failing
+(validation FAIL is expected; see meta.notes)` instead of an
+unexpected `FAIL`, so the suite stays green while the gap is on
+record. The phase lines stay as the documented target.
+
+**When (and when NOT).** Legitimate ONLY when the load-bearing
+phases pass and the FAILING phases are an *inherent* observability
+gap — the behaviour genuinely can't be observed with the daemon and
+drivers as they exist, and no spec edit or available recording path
+would fix it. It is NOT a substitute for the three honest fail
+reasons above: an overspecified spec gets loosened (reason 3), a
+fixable daemon bug gets filed/fixed (reason 2), a thin recipe gets
+re-recorded (reason 1). `known_failing` is the residue after those
+are ruled out — and it is NOT a quieter form of rebasing: you
+annotate the cell, you do not bend the asserted phases to match the
+recording.
+
+**Examples in the tree** (read before setting the flag):
+- `codex/interrupted-turn` — daemon doesn't detect `<turn_aborted>`
+  markers, so the post-ESC working→ready never fires (daemon-side
+  parser gap; clears when codex learns `turn_aborted`).
+- `pi/turn-aborted-by-error` — `pid_bind`/`teardown` unobservable
+  because the headless error-abort exits in ~37 ms, before the PID
+  scanner ticks; the load-bearing `turn_aborted` phase passes, and a
+  live-REPL re-record is impossible (the bogus-model path is
+  CLI-`--model`-only). Clears if the daemon gains sub-100 ms PID
+  binding.
+
+Drop the flag the moment the gap closes — an all-pass run while
+`known_failing: true` is itself a failure signal (the validator
+errors to remind you).
 
 ## Drift-detection loop
 
