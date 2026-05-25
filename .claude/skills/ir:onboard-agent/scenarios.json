@@ -2050,23 +2050,40 @@
         "pi": {
           "applicable": true,
           "preconditions": [
-            "pi CLI on PATH and authenticated (PI_API_KEY or configured provider)",
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available \u2014 the interactive driver runs pi in a tmux REPL so the session is a real long-lived process that exits via a natural teardown at script end",
             "irrlichd is recording \u2014 either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
           ],
           "setup": [
-            "Create an empty cwd under <staging>/cwd/"
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session, waits for the REPL prompt, then sends one prompt",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1",
+            "The send bumps the expected-turn counter; wait_turn blocks until the rollout shows a completed assistant turn so teardown never races a still-running turn",
+            "After the trailing sleep the driver kills the tmux session once \u2014 pi exits naturally and the daemon emits a single process_exited for the rollout session: THAT process exit IS the session-end signal"
           ],
-          "prompt": "Reply with exactly the word: ok",
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
           "verify": [
-            "events.jsonl contains a presession_created and a transcript_new for the pi session",
-            "events.jsonl contains a state_transition to ready, then working (during the turn), then ready (turn complete)",
-            "events.jsonl contains a process_exited fired AFTER the final ready (clean exit at end of headless invocation)",
-            "no state_transition to working or waiting between the final ready and process_exited",
-            "final session state is ready (before exit)"
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turn and pid_discovered land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl contains one state_transition\u2192working / \u2192ready arc on the rollout session_id (the turn settles back to ready)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown, fired AFTER the final ready \u2014 the session row disappears and its state immediately before disappearing is ready",
+            "no state_transition to working or waiting appears between the final ready and process_exited"
           ],
           "settings": {},
-          "timeout_seconds": 90,
-          "scope_note": "Pi's headless `pi --print` is single-shot, so only variant 1 (clean exit) is recorded. Variants 2 (SIGKILL idle) and 3 (SIGKILL mid-turn) require driver-level primitives the pi interactive driver does not currently expose."
+          "timeout_seconds": 180,
+          "scope_note": "Pi session-end is recorded in SCRIPT mode (interactive tmux REPL): one normal turn, then the driver kills the tmux session so pi exits naturally \u2014 that natural process exit after the final ready IS the modeled clean-exit teardown. Re-recorded from PROMPT mode because headless `pi --print` exits before the post-turn settle and a transient proc-<PID> pre-session row stole session_birth, breaking the same_session_as chain (the C7 anchor-to-start workaround that fixed multi-turn-conversation). SIGKILL-idle / SIGKILL-mid-turn variants stay out of scope \u2014 the pi interactive driver exposes send/slash/wait_turn/interrupt/sleep only (no sigkill/exit_clean), and natural teardown is the single correctly-modeled variant."
         },
         "aider": {
           "applicable": true,
