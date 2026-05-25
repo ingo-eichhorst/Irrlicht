@@ -81,6 +81,15 @@ type PIDManager struct {
 	pendingMu   sync.Mutex
 	pendingPIDs map[string]int
 
+	// assignMu serializes the PID-assignment critical sections that read and
+	// write the repo's shared *SessionState pointers — HandlePIDAssigned's
+	// load-modify-save + same-PID cleanup scan, and claimedPIDs' scan. Without
+	// it, two concurrent discoveries (two same-named agents starting together)
+	// race on state.PID: one writes its session's PID while the other reads it
+	// in a ListAll scan. Never held across detector callbacks (see
+	// HandlePIDAssigned) so it can't invert with the SessionDetector lock.
+	assignMu sync.Mutex
+
 	// recorder captures lifecycle events for offline replay (optional).
 	// Set by SessionDetector.SetRecorder.
 	recorder    outbound.EventRecorder
@@ -345,16 +354,13 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	pm.pendingPIDs[sessionID] = pid
 	pm.pendingMu.Unlock()
 
-	// Load latest state and save PID directly for immediate persistence.
-	state, _ := pm.repo.Load(sessionID)
-	if state == nil || state.PID == pid {
+	// Assign the PID and collect stale same-PID sessions under assignMu so
+	// concurrent assignments don't race on the shared SessionState pointers.
+	// Callbacks (Watch, delete) run after the lock is released.
+	state, stale := pm.assignPIDLocked(pid, sessionID)
+	if state == nil {
 		return
 	}
-
-	state.PID = pid
-	pm.captureLauncher(state, pid)
-	state.UpdatedAt = time.Now().Unix()
-	_ = pm.repo.Save(state)
 
 	// Register with ProcessWatcher for exit monitoring.
 	if pm.pw != nil {
@@ -364,28 +370,10 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 		}
 	}
 
-	// Subagent sessions share the parent's PID, so skip cleanup when
-	// either side is a subagent.
-	if state.ParentSessionID != "" {
-		return
-	}
-
-	// Clean up old sessions that had the same PID (e.g. /clear).
-	// A non-subagent PID can only belong to one session at a time —
-	// if a new session claims a PID, the old one is stale.
-	states, err := pm.repo.ListAll()
-	if err != nil {
-		return
-	}
-
-	for _, old := range states {
-		if old.SessionID == sessionID || old.PID != pid {
-			continue
-		}
-		if old.ParentSessionID != "" {
-			continue
-		}
-
+	// Clean up old sessions that had the same PID (e.g. /clear). A non-subagent
+	// PID can only belong to one session at a time, so a session claiming a PID
+	// makes any other non-subagent holder of that PID stale.
+	for _, old := range stale {
 		pm.log.LogInfo("session-detector", old.SessionID,
 			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
 
@@ -411,6 +399,45 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	}
 }
 
+// assignPIDLocked persists pid onto sessionID's state and returns it along with
+// the other non-subagent sessions currently holding the same PID (the stale
+// ones the caller should delete). It holds assignMu across the load-modify-save
+// and the same-PID scan so concurrent assignments can't race on the repo's
+// shared SessionState pointers. Returns (nil, nil) when there is nothing to do
+// (session gone, or PID already assigned). Subagent sessions share the parent's
+// PID, so no cleanup is reported for them.
+func (pm *PIDManager) assignPIDLocked(pid int, sessionID string) (*session.SessionState, []*session.SessionState) {
+	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
+
+	state, _ := pm.repo.Load(sessionID)
+	if state == nil || state.PID == pid {
+		return nil, nil
+	}
+
+	state.PID = pid
+	pm.captureLauncher(state, pid)
+	state.UpdatedAt = time.Now().Unix()
+	_ = pm.repo.Save(state)
+
+	if state.ParentSessionID != "" {
+		return state, nil
+	}
+
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return state, nil
+	}
+	var stale []*session.SessionState
+	for _, old := range states {
+		if old.SessionID == sessionID || old.PID != pid || old.ParentSessionID != "" {
+			continue
+		}
+		stale = append(stale, old)
+	}
+	return state, stale
+}
+
 // ConsumePendingPID returns and removes a pending PID for the given session.
 // Called by processActivity to atomically apply PID assignment during the
 // normal state-update flow, avoiding the race with direct Save.
@@ -427,6 +454,10 @@ func (pm *PIDManager) ConsumePendingPID(sessionID string) (int, bool) {
 // claimedPIDs returns the set of PIDs already assigned to sessions other than
 // excludeSessionID.
 func (pm *PIDManager) claimedPIDs(excludeSessionID string) map[int]bool {
+	// Guarded by assignMu: this scan reads state.PID across all sessions and
+	// would otherwise race a concurrent assignPIDLocked write.
+	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
 	states, err := pm.repo.ListAll()
 	if err != nil {
 		return nil

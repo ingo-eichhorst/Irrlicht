@@ -191,8 +191,12 @@ func (w *mockAgentWatcher) Unsubscribe(ch <-chan agent.Event) {
 
 // --- ProcessWatcher mock -----------------------------------------------------
 
-// mockProcessWatcher implements outbound.ProcessWatcher for tests.
+// mockProcessWatcher implements outbound.ProcessWatcher for tests. The real
+// pidMonitor.Watch/Unwatch are mutex-guarded and called concurrently (one
+// goroutine per discovered session), so the mock must be thread-safe too — a
+// bare map write here races under -race when two sessions are assigned at once.
 type mockProcessWatcher struct {
+	mu      sync.Mutex
 	watched map[int]string
 }
 
@@ -201,11 +205,15 @@ func newMockProcessWatcher() *mockProcessWatcher {
 }
 
 func (w *mockProcessWatcher) Watch(pid int, sessionID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.watched[pid] = sessionID
 	return nil
 }
 
 func (w *mockProcessWatcher) Unwatch(pid int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	delete(w.watched, pid)
 }
 
