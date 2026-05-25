@@ -508,9 +508,47 @@
           }
         },
         "aider": {
-          "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against a configured model (aider runs against its provider out-of-band; this cell needs a live model to elicit a real clarifying-question turn)",
+            "tmux available — the interactive driver runs aider in a tmux REPL so the session stays alive past turn end and the working→waiting episode is observable",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd, launches `aider --no-auto-commits --yes-always --no-gitignore` in a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider is FilesUnderCWD{.aider.chat.history.md, RawLineParser} — there is no transcript-UUID rollout session; the whole arc lives on the one proc-<PID> session the daemon's process scanner keys (cf. basic-turn). The transcript materialises lazily on first input, but the proc-<PID> pre-session is observable from launch",
+            "Unlike the headless `aider --message` path (single-shot, the process exits at turn end so the working→waiting episode is lost to a process_exited race — see the basic-turn recipe), the interactive driver keeps the REPL ALIVE after the turn; it is torn down only at script end via `tmux kill-session` (no Ctrl-D / /exit), so the daemon can observe the post-turn waiting dwell",
+            "No reply is sent to the question — after wait_turn + a trailing sleep the session dwells in waiting, then the driver kills the tmux session once, so aider exits and the daemon emits a single process_exited while the session is still waiting"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "I want to add a feature to my project but I'm not sure which file it should go in. Ask me exactly ONE short clarifying question to scope it, ending in a question mark, and then stop and wait for my answer. Output only that one question and nothing else."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a state_transition to ready for the proc-<PID> session within ~2s of REPL launch (a transient pre-session may also appear; the turn arc lands on the bindable session)",
+            "events.jsonl contains a pid_discovered event bound to the session",
+            "events.jsonl contains a state_transition→working on the session when the prompt is sent",
+            "events.jsonl contains a state_transition→waiting on the SAME session when the turn ends (the reply ends in a question mark; the classifier takes the trailing-? text path rather than →ready)",
+            "the session's final live state is waiting and it persists ≥4s — no state_transition to ready appears before the REPL is torn down (the working→waiting settle lands a few seconds late via the ~1500ms IdleFlush clamped to the ~5s working-refresh tick; the 8s trailing sleep covers that latency)",
+            "events.jsonl contains exactly one process_exited on the session at REPL teardown while it is still waiting (one long-lived session, not a per-turn exit)"
+          ],
           "settings": {},
-          "timeout_seconds": 120
+          "timeout_seconds": 120,
+          "_prior_prompt_mode": {
+            "note": "Superseded by the script-mode recipe above. The prior headless prompt-mode recipe (`aider --message`) could not observe the waiting episode: in headless mode aider answers the question and the process exits immediately at turn end, so a process_exited race overwrites the working→waiting transition before it can dwell. Script mode keeps the REPL alive (torn down only at script end) so the waiting state is observable and dwells.",
+            "prompt": "Reply with exactly one short clarifying question, ending in a question mark. No other text.",
+            "settings": {},
+            "timeout_seconds": 120
+          }
         }
       }
     },
