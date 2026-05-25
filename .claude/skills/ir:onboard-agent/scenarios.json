@@ -1935,11 +1935,13 @@
           "applicable": true,
           "preconditions": [
             "aider CLI on PATH and authenticated (ANTHROPIC_API_KEY or OPENAI_API_KEY)",
+            "irrlichd is running with IRRLICHT_READY_SESSION_TTL=15s in its environment (the daemon's default 30 min would force a 32+ min recording); the shortened TTL only affects the recording, not production",
             "irrlichd is recording (--attach against a --record daemon)"
           ],
           "setup": [
             "Create an empty cwd under <staging>/cwd/ (drive-aider-interactive.sh git-inits it)",
-            "Aider's TUI launched via drive-aider-interactive.sh stays alive across the recipe's two sends"
+            "Aider's TUI launched via drive-aider-interactive.sh stays ONE live process across both sends and the idle sleep \u2014 the tmux session is killed only at the end, so the aider PID is genuinely alive throughout the idle window (that liveness is what keeps the session out of the readyTTL sweep)",
+            "Daemon's effective readyTTL is 15 s; the idle sleep (25 s) is calibrated to clearly exceed it even after aider's ~5 s idle-flush settle eats into the front of the window \u2014 so the clean ready dwell is ~20 s, well past the 15 s TTL"
           ],
           "script": [
             {
@@ -1951,7 +1953,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 20
+              "seconds": 25
             },
             {
               "type": "send",
@@ -1962,18 +1964,19 @@
             },
             {
               "type": "sleep",
-              "seconds": 5
+              "seconds": 7
             }
           ],
           "verify": [
-            "events.jsonl shows aider entering ready after turn 1 (idle-flush window may delay this by up to 5 s)",
-            "no transcript_removed event fires for the .aider.chat.history.md during the 20 s idle window",
-            "after the second send, events.jsonl shows working \u2192 ready for the second turn",
+            "events.jsonl shows aider entering ready after turn 1 completes (IdleFlush synthesizes the working\u2192ready settle; effective latency ~5 s)",
+            "no transcript_removed event fires for the live aider session during the idle window (the session must NOT be swept past readyTTL while the aider process is alive)",
+            "no state_transition to working or waiting fires during the idle window (state stays ready while idle)",
+            "after the second send, events.jsonl shows ready \u2192 working \u2192 ready for the same live session (the long-idle session resumes normally)",
             "final session state is ready"
           ],
           "settings": {},
           "timeout_seconds": 180,
-          "scope_note": "Aider's idle-flush window (~5 s) means the post-turn ready transition lags actual LLM completion; the recipe budgets enough sleep around each turn to settle the classifier."
+          "scope_note": "Proves aider's PID-liveness keeps a ready session alive PAST readyTTL: aider's PID is discoverable via the /aider command-line match, so the daemon's sweep skips deletion while kill(pid,0)==nil \u2014 exactly as for claudecode. Recording uses IRRLICHT_READY_SESSION_TTL=15s so the 'past TTL' assertion is testable in ~45 s. Aider's idle-flush window (~5 s) means the post-turn ready transition lags actual LLM completion; the recipe budgets a 25 s idle sleep (and a 7 s trailing sleep) so each turn settles and the dwell clearly exceeds the TTL."
         },
         "opencode": {
           "applicable": true,
