@@ -5345,6 +5345,61 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs ~5min on the model-auth/OAuth prompt; the live REPL needs a model that actually answers each prompt.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it can send two prompts to one long-lived session",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "OBSERVES:PARTIAL scope_note — this cell proves only the OBSERVABLE half of token-accounting: the multi-turn TotalTokens accumulator (TotalTokens > 0 after turn 1, non-decreasing after turn 2). The cache-bucket distinction (CacheReadTokens > 0; fresh input = 0 on a fully-cached turn) is UNOBSERVABLE for aider and is deliberately NOT asserted: aider's `Tokens: … cache write … cache hit …` report goes to the terminal via io.tool_output, never to .aider.chat.history.md, and the parser's tokensRE captures only sent/received — so CacheRead/CacheCreation stay 0. See replaydata/agents/aider/scenarios/token-accounting/assessment.json."
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the first prompt",
+            "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
+            "Each send bumps the turn counter; wait_turn blocks until a new `> Tokens:` line appears (signals aider finished one model call and wrote the per-turn token snapshot). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet, surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency), which is why the inter-turn / trailing sleeps are ≥7s",
+            "Two turns give exactly one accumulation boundary (T1→T2) to witness the non-decreasing TotalTokens invariant — the minimum that exercises cross-turn accumulation. After the second wait_turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session",
+            "No special model or context flags beyond IRRLICHT_AIDER_MODEL — the assertion is about token accumulation, not which model produced the tokens"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 7
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+            "events.jsonl contains a pid_discovered event bound to the live aider session_id",
+            "events.jsonl contains two state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleep is ≥7s, covering the ~5s effective latency)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown for each turn from its `> Tokens: N sent, M received.` snapshot; input + output tokens > 0 on each turn (the aider parser routes each `> Tokens:` line through closeModelCall → assistant_message with TokenSnapshot{Input:sent,Output:received})",
+            "SessionMetrics.TotalTokens after turn 1 > 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic accumulation across the one T1→T2 boundary)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session, not two exits)",
+            "no state_transition to waiting appears for the session at any point",
+            "NO cache-bucket assertion — CacheReadTokens stays 0 for aider (the cache report is terminal-only, never in .aider.chat.history.md, and tokensRE captures only sent/received). The cache-distinction signal is the observes:partial carve-out and is NOT verified here.",
+            "the token-accumulation claim (TotalTokens > 0 / non-decreasing) is observable in the parser's assistant_message events but NOT expressible in the expected.jsonl phase DSL (no metric form); it is covered out-of-band by parser unit tests (parser_test.go: TestParser_MultipleTokensLines, TestParser_MultiTurn_EmitsAssistantMessagePerTurn). expected.jsonl asserts only the two-turn lifecycle arc the accounting rides on."
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
