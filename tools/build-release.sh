@@ -66,6 +66,31 @@ tar -czf "$BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz" -C "$TARBALL_STAGIN
 rm -rf "$TARBALL_STAGING"
 echo "  Created $BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz"
 
+# ── 1c. Linux daemon tarballs (daemon-only — no tray UI on Linux) ─────
+# Pure cross-compile from macOS: the daemon is pure Go (Linux process
+# observation is /proc + pidfd based, no cgo). One tarball per arch, same
+# layout as the darwin tarball (daemon + web/), extracted to
+# ~/.local/share/irrlicht by the curl installer. The web dashboard at
+# 127.0.0.1:7837 is the Linux UI — there is no tray app on Linux yet.
+echo ""
+echo "Creating Linux daemon tarballs..."
+build_linux_tarball() {
+    local arch="$1"
+    echo "  Building ${DAEMON_NAME}-linux-${arch}..."
+    ( cd core && GOOS=linux GOARCH="$arch" go build -ldflags "-X main.Version=$VERSION" \
+        -o "../$BUILD_DIR/${DAEMON_NAME}-linux-${arch}" ./cmd/irrlichd/ )
+    local staging="$BUILD_DIR/tarball-staging-linux-${arch}"
+    rm -rf "$staging"
+    mkdir -p "$staging/web"
+    cp "$BUILD_DIR/${DAEMON_NAME}-linux-${arch}" "$staging/${DAEMON_NAME}"
+    cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$staging/web/"
+    tar -czf "$BUILD_DIR/${DAEMON_NAME}-linux-${arch}.tar.gz" -C "$staging" .
+    rm -rf "$staging"
+    echo "  Created $BUILD_DIR/${DAEMON_NAME}-linux-${arch}.tar.gz"
+}
+build_linux_tarball amd64
+build_linux_tarball arm64
+
 # ── 3. Build Swift macOS app (.app bundle) ─────────────────────────────
 echo ""
 echo "Building macOS app..."
@@ -400,7 +425,10 @@ echo "  Created $BUILD_DIR/$PKG_NAME"
 echo ""
 echo "Calculating checksums..."
 cd "$BUILD_DIR"
-shasum -a 256 "$DMG_NAME" "$PKG_NAME" ${DAEMON_NAME}-darwin-universal.tar.gz > checksums.sha256
+shasum -a 256 "$DMG_NAME" "$PKG_NAME" \
+    ${DAEMON_NAME}-darwin-universal.tar.gz \
+    ${DAEMON_NAME}-linux-amd64.tar.gz \
+    ${DAEMON_NAME}-linux-arm64.tar.gz > checksums.sha256
 cd ..
 
 # ── 8. Summary ─────────────────────────────────────────────────────────
@@ -414,6 +442,10 @@ echo "  Installer:  $BUILD_DIR/$PKG_NAME  (double-click to install)"
 echo ""
 echo "App bundle:   $BUILD_DIR/${APP_NAME}.app"
 echo "  Contains:   ${APP_NAME} (menu bar UI) + ${DAEMON_NAME} (embedded daemon)"
+echo ""
+echo "Linux daemon (daemon-only, web UI at 127.0.0.1:7837):"
+echo "  amd64:      $BUILD_DIR/${DAEMON_NAME}-linux-amd64.tar.gz"
+echo "  arm64:      $BUILD_DIR/${DAEMON_NAME}-linux-arm64.tar.gz"
 echo ""
 echo "Optional:"
 echo "  LaunchAgent: $BUILD_DIR/${BUNDLE_ID}.daemon.plist"
