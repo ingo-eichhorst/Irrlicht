@@ -1,0 +1,16 @@
+# Standalone irrlichtrelay in Docker.
+#
+#   docker compose -f examples/relay/docker-compose.yml up -d --build
+#   open http://localhost:7839          # the relay-served dashboard
+#
+# Point a daemon at it with IRRLICHT_RELAY_URL=ws://<host>:7839, or add
+# ws://localhost:7839 as a Source in the macOS app.
+services:
+  relay:
+    build:
+      context: ../..                       # repo root: compiles from ./core
+      dockerfile: examples/relay/Dockerfile
+    image: irrlicht-relay
+    ports:
+      - "7839:7839"                        # v0 relay is no-auth; keep it on a trusted loopback
+    restart: unless-stopped

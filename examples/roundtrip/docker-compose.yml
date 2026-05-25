@@ -1,0 +1,38 @@
+# Live cross-host round-trip: a Linux irrlichd + real `claude` in one container,
+# forwarding out to a standalone irrlichtrelay, surfaced on the host Mac app.
+# See README.md for the full demo.
+#
+#   docker compose -f examples/roundtrip/docker-compose.yml up -d --build
+services:
+  # The hub. Reuses the standalone relay image (DRY) — see ../relay/.
+  relay:
+    build:
+      context: ../..
+      dockerfile: examples/relay/Dockerfile
+    image: irrlicht-relay
+    ports:
+      - "7839:7839"                        # the ONLY port published to the host
+
+  # Linux daemon + Claude Code, co-located. Drive `claude` via:
+  #   docker compose -f examples/roundtrip/docker-compose.yml exec -it agent claude
+  agent:
+    build:
+      context: ../..
+      dockerfile: examples/roundtrip/agent.Dockerfile
+    image: irrlicht-roundtrip-agent
+    hostname: linux-dev                    # → daemon_label in the Mac connection tooltip
+    depends_on:
+      - relay                              # start ordering only; daemon's backoff handles readiness
+    environment:
+      IRRLICHT_RELAY_URL: ws://relay:7839  # daemon dials out to the relay
+    volumes:
+      # Login + transcripts persist across down/up (NOT `down -v`).
+      - claude-home:/home/agent/.claude
+      # relay-identity.json lives here → stable daemon_id across container recreate
+      # (#479's cross-path dedup keys on daemon_id).
+      - irrlicht-state:/home/agent/.local/share/irrlicht
+    # No ports published — the daemon's 127.0.0.1:7837 stays internal.
+
+volumes:
+  claude-home:
+  irrlicht-state:
