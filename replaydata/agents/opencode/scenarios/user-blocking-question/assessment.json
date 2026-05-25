@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "scenario_id": "user-blocking-question",
+  "agent": "opencode",
+  "assessed_at": "2026-05-26T00:00:00Z",
+  "agent_supports": "no",
+  "daemon_capability": "n/a",
+  "driver_capability": "n/a",
+  "confidence": 0.85,
+  "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Scenario\n\nThe canonical primitive is an AskUserQuestion-style **structured blocking-question tool**: the agent pauses mid-turn by invoking a dedicated question primitive that puts the session into a distinct, daemon-observable `waiting-for-user` gate, and stays there until the user replies. The scenario locks down the entry into `waiting` via that structured primitive (not via free-text prose).\n\n## agent_supports: no\n\nopencode has **no AskUserQuestion-equivalent structured blocking-question primitive that surfaces a daemon-observable waiting state via the headless path**. The opencode adapter parses opencode's local SQLite `part` rows, and the only part types it recognises are `step-start`, `step-finish`, `text`, and `tool` (`core/adapters/inbound/agents/opencode/parser.go`, `ParseLine` switch). The `step-finish` finish reasons it maps are `stop`, `tool-calls`, `interrupted`, `length`, `error`, and `content-filter` — none of which represents a structured ask-the-user gate. There is no `question` / `ask_user` / `elicit` part type, and no finish reason that means \"blocked on a user answer.\" opencode's TUI may prompt the user interactively (e.g. permission hooks), but that is not a model-invoked structured question tool that the headless/store path exposes as a distinct waiting primitive.\n\nThis is the structured-tool reading of the scenario, and it is why the fresh column reassessment rated `agent_supports: no` (no AskUserQuestion equivalent matched): the dedicated blocking-question primitive the scenario describes does not exist in opencode. Because the primitive itself is absent at the agent layer, `daemon_capability` and `driver_capability` are `n/a` — there is nothing to observe or drive, not merely something irrlicht can't see yet.\n\n## Why this is a STOP / applicable_false cell\n\nWith `agent_supports: no` the cell is definitionally inapplicable for opencode: there is no structured blocking-question turn to elicit, so no spec and no recording. Per the implement-stage #476 routing (`agent_supports ∈ {no}` → STOP), the cell is frozen at `by_adapter.opencode.applicable: false` with a scope note, and the assessment + recipe are committed without a recording.\n\n## Carve-out (the trailing-? text path is a DIFFERENT cell)\n\nDo not confuse this STRUCTURED-tool verdict with the adapter-agnostic trailing-`?` TEXT-classifier path. The opencode metrics reader DOES populate `metrics.LastAssistantText` from `text` parts (`core/adapters/inbound/agents/opencode/metrics.go` lines ~227-246), and irrlicht's agent-agnostic `session.IsWaitingForUserInput()` (decision 2a in `state_classifier.go`) would fire on a trailing `?` there — exactly the path the aider × user-blocking-question cell records (`partial`/`yes`). But that text path is NOT the AskUserQuestion-style structured blocking primitive this scenario's `agent_supports` axis is judging; the primitive is absent regardless. This assessment scopes only the structured-tool primitive, per the dispatcher's frozen column reassessment.\n\n## What would flip this\n\n`agent_supports` would move off `no` only if upstream opencode shipped a dedicated structured ask-the-user / elicit tool that the SQLite `part` schema records as its own part type or finish reason, which the adapter could then map to a distinct waiting gate. No such primitive exists in opencode today.",
+  "caveats": [
+    "scope: this verdict is for the AskUserQuestion-style STRUCTURED blocking-question primitive only. The adapter-agnostic trailing-? TEXT-classifier waiting path (session.IsWaitingForUserInput on LastAssistantText) is a separate concern and is NOT what this cell's agent_supports axis judges — opencode's metrics reader does populate LastAssistantText, but that path does not constitute a structured ask-user tool.",
+    "opencode's TUI permission hooks / interactive prompts are user-facing UI gates, not a model-invoked structured question tool surfaced through the headless/store path; they do not make agent_supports anything other than no for this primitive.",
+    "This is the structured-tool reading frozen by the dispatcher's column reassessment; a future opencode release adding a dedicated ask/elicit part type or finish reason would warrant re-assessment."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/parser.go",
+      "note": "ParseLine switch handles only step-start / step-finish / text / tool part types; step-finish reasons are stop/tool-calls/interrupted/length/error/content-filter — no question/ask-user/elicit part type or blocking finish reason."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+      "note": "ComputeMetrics sets metrics.LastAssistantText from text parts (lines ~227-246) — feeds the agent-agnostic trailing-? text path, which is a DIFFERENT cell, not a structured AskUserQuestion primitive."
+    },
+    {
+      "kind": "file",
+      "ref": "core/domain/session/session.go",
+      "note": "IsWaitingForUserInput / ExtractQuestionSnippet — agent-agnostic waiting detection on LastAssistantText (trailing ?), not a structured question tool; cited to delimit the carve-out, not to support a yes verdict."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/opencode/capabilities.json",
+      "note": "Feature set is local TUI + tool_calls + permission_hooks + subagents etc.; no dedicated structured ask-user / question-tool primitive key."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/aider/scenarios/user-blocking-question/assessment.json",
+      "note": "Contrast: aider records the trailing-? TEXT path as partial/yes. That is the text-classifier cell, distinct from this STRUCTURED-tool agent_supports:no verdict for opencode."
+    }
+  ]
+}

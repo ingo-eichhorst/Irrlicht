@@ -6524,6 +6524,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "opencode has no AskUserQuestion-equivalent structured blocking-question primitive that surfaces a daemon-observable waiting state via the headless path; the SQLite part schema records only step-start/step-finish/text/tool parts (no question/ask-user/elicit part type or blocking finish reason). agent_supports:no, daemon_capability:n/a. The adapter-agnostic trailing-? TEXT-classifier waiting path is a separate cell, not this structured-tool primitive."
         }
       }
     },
