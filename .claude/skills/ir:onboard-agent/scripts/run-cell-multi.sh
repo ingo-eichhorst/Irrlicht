@@ -219,6 +219,27 @@ RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/d
 # from its PRIMARY transcript but union EVERY session (all adapters, all
 # slots) into the workspace events.jsonl. (bash 3.2 — parallel indexed
 # arrays keyed by ADAPTERS position.)
+# daemon_sid_for_transcript <transcript-path> <fallback-sid> — return the
+# session_id the DAEMON recorded for this transcript, found by matching the
+# transcript_new event's transcript_path. Drivers write the agent's preferred
+# id to session.uuid for naming parity, but the daemon keys some adapters by
+# the transcript-file stem (codex rollout, pi <ts>_<uuid>), NOT the bare
+# transcript .id. run-cell.sh reconciles this same way; run-cell-multi needs
+# it too or the curator filters the workspace events.jsonl against an id that
+# never appears (the per-adapter arc silently drops out). Keying on the path
+# alone is safe — it's unique per session — and is a no-op for claudecode
+# (its bare UUID already equals the daemon session_id). Falls back to the
+# driver-written id when no match (e.g. transcript not yet observed).
+daemon_sid_for_transcript() {
+  local path="$1" fallback="$2" sid
+  [[ -n "$path" ]] || { echo "$fallback"; return; }
+  sid="$(jq -r --arg path "$path" '
+    select(.kind=="transcript_new" and .transcript_path==$path)
+    | [.seq, .session_id] | @tsv' "$RECORDING" 2>/dev/null \
+    | sort -n | head -n1 | cut -f2)"
+  [[ -n "$sid" ]] && echo "$sid" || echo "$fallback"
+}
+
 PRIMARY_SID=()
 PRIMARY_TRANSCRIPT=()
 OWN_TRANSCRIPTS=()   # this adapter's own slot transcripts, newline-joined
@@ -226,21 +247,32 @@ ALL_SIDS=()          # flat union of every adapter's every slot sid
 for idx in "${!ADAPTERS[@]}"; do
   a="${ADAPTERS[$idx]}"
   sub="$STAGING/$a"
-  PRIMARY_SID[$idx]="$(head -n1 "$sub/session.uuid" 2>/dev/null || true)"
   PRIMARY_TRANSCRIPT[$idx]="$(head -n1 "$sub/transcript.path" 2>/dev/null || true)"
+  raw_primary_sid="$(head -n1 "$sub/session.uuid" 2>/dev/null || true)"
+  # Reconcile the driver's preferred id to the daemon's recorded session_id.
+  PRIMARY_SID[$idx]="$(daemon_sid_for_transcript "${PRIMARY_TRANSCRIPT[$idx]}" "$raw_primary_sid")"
   if [[ -z "${PRIMARY_SID[$idx]}" || -z "${PRIMARY_TRANSCRIPT[$idx]}" || ! -f "${PRIMARY_TRANSCRIPT[$idx]}" ]]; then
     echo "ERROR: $a driver did not resolve a session (sid=${PRIMARY_SID[$idx]:-missing}, transcript=${PRIMARY_TRANSCRIPT[$idx]:-missing})" >&2
     DRV_FAIL=1
     continue
   fi
-  # Full per-slot lists (fall back to the single-file primaries).
+  # Full per-slot lists (fall back to the single-file primaries). Reconcile
+  # each slot's id against its matching transcript path so every chained
+  # session is filtered by its daemon-recorded id, not its preferred id.
   uuids_file="$sub/session.uuids"; [[ -f "$uuids_file" ]] || uuids_file="$sub/session.uuid"
   paths_file="$sub/transcript.paths"; [[ -f "$paths_file" ]] || paths_file="$sub/transcript.path"
+  # Parallel-read uuids + paths line by line (bash 3.2 — no readarray).
+  slot_paths=()
+  while IFS= read -r p; do [[ -n "$p" ]] && slot_paths+=("$p"); done < "$paths_file"
   csv=""
+  slot=0
   while IFS= read -r s; do
     [[ -z "$s" ]] && continue
+    sp="${slot_paths[$slot]:-}"
+    s="$(daemon_sid_for_transcript "$sp" "$s")"
     csv+="${csv:+,}$s"
     ALL_SIDS+=("$s")
+    slot=$((slot + 1))
   done < "$uuids_file"
   OWN_TRANSCRIPTS[$idx]="$(cat "$paths_file" 2>/dev/null || true)"
   echo "$a: primary=${PRIMARY_SID[$idx]} sids=[$csv]"
