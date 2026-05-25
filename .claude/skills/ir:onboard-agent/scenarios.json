@@ -4722,6 +4722,47 @@
             ]
           },
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated/configured (the default model is set in ~/.config/opencode/opencode.json; auth is out-of-band)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model must be capable of emitting MULTIPLE tool calls in one turn — if the model will not iterate (write then read then edit) this cell is unrecordable for a MODEL reason (opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"<prompt>\"` in a fresh per-run cwd under <staging>/cwd/ with NO --model flag, so it uses the config default; the whole multi-tool self-correction turn rides ONE `opencode run` subprocess that exits when the turn completes",
+            "No auto-mode / permission step is needed: in headless default `opencode run` auto-executes tools inside opencode's own sandbox with no interactive gate, so every tool call in the iteration runs autonomously and the session never enters waiting — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db, ProcessOwnedStore), keyed on the UUID ses_… session; the daemon's ProcessOwnedStore source polls the session table. Each tool call lands in the part table as a `tool` part (status pending→running→completed/error) that the parser maps to function_call / function_call_output (parser.go parseToolPart). A tool-calls step-finish reason keeps the session working; only step-finish reason=stop → turn_done settles working→ready — so the write→read→edit sequence is one contiguous working span (parser.go parseStepFinish)",
+            "wait_turn is a no-op because `opencode run` already blocks until the turn ends; the ≥4s trailing sleep gives the daemon's poller one full tick to observe the working→ready settle before the run process exits",
+            "The send is a crisp create-a-deliberate-bug-then-read-it-back-and-fix prompt so the small/slow local default model reliably emits MULTIPLE auto-executed tool calls (write → read → corrective edit/write) inside ONE sustained working span before replying done — this is the iteration the cell captures",
+            "WHY one send, not multiple: the whole self-correction is a SINGLE turn (try → observe problem → fix), so it must ride one `opencode run` to be one contiguous working span; splitting it into back-to-back sends would create separate working→ready arcs (and the known opencode poller nuance coalesces rapid same-session arcs anyway). Verify ≥2 tool parts landed before turn_done in the SQLite store at record time"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do this all in ONE turn, using your tools, and do not ask me anything: (1) use your write tool to create a file calc.py containing exactly `def add(a, b):\\n    return a - b` — note the body deliberately SUBTRACTS, which is a bug; (2) use your read tool to read calc.py back; (3) notice add() should ADD, and use your edit/write tool to fix the body to `return a + b`. After all three steps reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the iteration prompt is sent, sustained across the write → read → corrective-edit tool calls (one contiguous working span)",
+            "the opencode SQLite store / transcript.jsonl contains at least TWO tool parts (function_call / function_call_output) inside the working span — the buggy write, the read-back, and the corrective edit (the auto-executed, ungated tool calls; opencode has no interactive gate in headless default)",
+            "events.jsonl contains NO state_transition to ready between the buggy write and the corrective edit — the session stays continuously working across the retry cycle (a tool-calls step-finish reason does not close the turn)",
+            "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (every tool call auto-executes; no permission window)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the corrective edit resolves and the turn completes (step-finish reason=stop → turn_done)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
