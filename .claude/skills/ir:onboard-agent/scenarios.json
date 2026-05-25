@@ -4770,6 +4770,53 @@
           ],
           "settings": {},
           "timeout_seconds": 90
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated; pi binds Escape to 'interrupt the in-flight LLM turn' (startup banner: 'escape interrupt · ctrl+c/ctrl+d clear/exit')",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "PI-SPECIFIC: pi's parser has no '[Request interrupted by user]' marker and never sets LastWasUserInterrupt, so classifier rule 3 (user ESC interrupt → ready) does NOT fire for pi. The interrupt emits no standalone working→ready transition — the post-interrupt return to ready is carried by the RECOVERY prompt's stopReason=stop (turn_done → rule 2b). Unlike the claudecode row above, do NOT verify an interrupt marker or a rule-3 transition."
+          ],
+          "setup": [
+            "Pi cannot accept a pre-assigned UUID; the interactive driver discovers it from the rollout transcript header",
+            "A transient proc-<PID> pre-session is born ready at launch and bridges the gap until the UUID-keyed rollout transcript appears (same shape as pi/session-start, pi/multi-turn-conversation, pi/interrupted-turn)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "interrupt"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly: ok"
+            },
+            {
+              "type": "wait_turn"
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or presession_created for proc-<PID>) so a session appears in ready within 2s of REPL launch",
+            "events.jsonl contains a state_transition to working on the rollout session after the first (long-essay) prompt lands — this binds the rollout session; the pre-session never enters working",
+            "events.jsonl contains a pid_discovered for the rollout session",
+            "events.jsonl contains a state_transition to ready on the rollout session that the RECOVERY prompt's turn_done carries (NOT a standalone interrupt-triggered transition — pi emits none); state does not stick in working post-interrupt",
+            "events.jsonl never contains a state_transition to waiting",
+            "events.jsonl contains exactly one process_exited on the rollout session; the live state immediately before teardown is ready",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 360
         }
       }
     },
