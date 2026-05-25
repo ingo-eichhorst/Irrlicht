@@ -183,7 +183,7 @@
           "notes": "/resume command + picker (2026)"
         },
         "pi": {
-          "agent_supports": "unknown",
+          "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
@@ -220,7 +220,7 @@
           "notes": "/new (or /clear) starts a fresh session that supersedes the old one. Daemon (Source=FilesUnderRoot ~/.codex/sessions) detects the new rollout as a brand-new session_id in ready — the complete reset signal. Both rollouts share one PID, so when the new rollout's PID is discovered the daemon's same-PID cleanup (#169, pid_manager.go:373-399) removes the old session and emits transcript_removed — the SAME path as claudecode, ~7ms after the new pid_discovered (NOT a readyTTL idle sweep). No old_session_ended phase is asserted: a fixture scoping choice (v2_session_birth is the canonical reset proxy, and reset is lazy so the removal isn't anchored to the keystroke), not a codex limitation. Recorded via the reset_session step (both rollout session_ids captured); expected.jsonl 8/8."
         },
         "pi": {
-          "agent_supports": "unknown",
+          "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
@@ -257,7 +257,7 @@
           "notes": "No native checkpoint-rewind as of v0.130 (May 2026): no /rewind command, no file-edit checkpoint restore; the experimental /undo was removed (#9618). codex HAS /fork (conversation fork → new linked session_id, original intact) and TUI Esc-Esc backtrack, but that is branching, not file+conversation rollback — do NOT re-mark this `yes` on the strength of /fork. Open feature requests #11626 + #12558 model after Claude Code. Reassess on next major Codex release."
         },
         "pi": {
-          "agent_supports": "no",
+          "agent_supports": "partial",
           "daemon_capability": "full",
           "driver_capability": "gap:keys",
           "notes": "Stock Pi CLI has no rewind (pi-mono discussion #1223). Third-party `pi-rewind` extension exists at arpagon/pi-rewind but isn't part of the default install, so irrlicht's observation target — stock Pi — has nothing to record."
@@ -442,7 +442,7 @@
           "notes": ""
         },
         "pi": {
-          "agent_supports": "unknown",
+          "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
@@ -510,7 +510,7 @@
           "notes": "/goal slash command (self-prompt); session holds working across internal iterations — recorded, 6/6 phases pass. Background-loop nuances remain partial."
         },
         "codex": {
-          "agent_supports": "yes",
+          "agent_supports": "partial",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "Codex /goal command (Ralph loop)"
@@ -547,7 +547,7 @@
           "notes": "/goal with iteration cap resolves to ready cleanly at the cap — recorded, 6/6 phases pass."
         },
         "codex": {
-          "agent_supports": "yes",
+          "agent_supports": "partial",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "/goal has caps"
@@ -590,7 +590,7 @@
           "notes": ""
         },
         "pi": {
-          "agent_supports": "yes",
+          "agent_supports": "partial",
           "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": ""
@@ -627,7 +627,7 @@
           "notes": ""
         },
         "pi": {
-          "agent_supports": "unknown",
+          "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
@@ -658,7 +658,7 @@
           "notes": "Auto Mode (shipped Mar 2026); PermissionPending path covers waiting on risky calls — recorded, 4/4 phases pass."
         },
         "codex": {
-          "agent_supports": "no",
+          "agent_supports": "partial",
           "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": ""
@@ -806,13 +806,13 @@
           "notes": "#62 closed; ! prefix handled; BashExecution events skipped"
         },
         "codex": {
-          "agent_supports": "unknown",
+          "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
-          "agent_supports": "unknown",
+          "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
@@ -880,7 +880,7 @@
           "notes": "AskUserQuestion detected explicitly; #150 + #307 fswatcher/JSONL race scenarios fixed"
         },
         "codex": {
-          "agent_supports": "no",
+          "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "no question tool in schema"
@@ -1028,7 +1028,7 @@
           "notes": ""
         },
         "codex": {
-          "agent_supports": "yes",
+          "agent_supports": "partial",
           "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": "task_complete fallback to assistant_message risks mid-stream flicker"
@@ -1145,7 +1145,7 @@
           "notes": "shell tool can spawn background process; not tracked"
         },
         "pi": {
-          "agent_supports": "yes",
+          "agent_supports": "no",
           "daemon_capability": "n/a",
           "driver_capability": "n/a",
           "notes": ""

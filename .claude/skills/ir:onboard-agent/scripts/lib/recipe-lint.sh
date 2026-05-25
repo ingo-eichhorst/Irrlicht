@@ -55,6 +55,10 @@ recipe_step_types_from_json() {
 recipe_lint_gaps() {
   local driver="$1" json="$2" scenario="$3" agent="$4"
   local handled needed gaps
+  # A missing driver file would otherwise yield an empty handled-set, making
+  # every needed step look like a gap with no hint why. Say so explicitly —
+  # the gap list that follows is then "all steps" because no driver exists.
+  [[ -f "$driver" ]] || echo "recipe-lint: interactive driver not found: $driver" >&2
   handled="$(driver_step_types_from_file "$driver")"
   needed="$(recipe_step_types_from_json "$json" "$scenario" "$agent")"
   # Lines in `needed` absent from `handled`.
