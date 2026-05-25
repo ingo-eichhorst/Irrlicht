@@ -6459,24 +6459,27 @@
           ],
           "setup": [
             "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches aider in a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
-            "RECIPE INTENT — force the reflection loop to its cap: aider's reflection loop fires on auto-lint / auto-test failure, so the cell needs aider launched with --auto-lint (and/or --auto-test '<failing-cmd>') against code/tests that keep failing, so each pass produces a reflected_message and re-prompts the model until max_reflections=3 is hit. NOTE: the shared driver currently launches aider with a fixed arg set (--no-auto-commits --yes-always --no-gitignore [+ --model]); wiring --auto-lint/--auto-test in is a driver/config concern handled when the recording is actually taken (auth-gated, deferred here). The recipe documents the intended forcing mechanism; the step grammar (send/wait_turn/sleep) is fully supported by the driver today (no driver_gap).",
+            "HOW the reflection is elicited deterministically (mirror of the aider/self-correction-iteration sibling that validated 6/6): settings.aider_extra_args launches aider with `--auto-test --test-cmd false`. `false` always exits non-zero, so EVERY edit aider makes inside the turn trips a test failure and forces a reflected_message — independent of what gpt-5-nano actually writes. The loop re-prompts until it hits max_reflections=3, then stops with `> Only 3 reflections allowed, stopping.` and returns; the turn always settles to ready, so we never depend on the model producing passing code. The driver appends these flags to its fixed arg set (--no-auto-commits --yes-always --no-gitignore [+ --model]); the step grammar (send/wait_turn/sleep) is fully supported (no driver_gap). The send asks for a small file edit aider can reliably perform, which is what arms --auto-test; it deliberately does NOT request a shell command — aider's reflection loop fires on --auto-lint/--auto-test failure, not on a model-invoked shell tool's exit code.",
             "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD, RawLineParser), so the daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session and no handoff/reconcile; the turn arc, pid_discovered and teardown all land on that one proc-<PID> row. The transcript is LAZY (materializes on first input), but the proc-<PID> pre-session is observable from launch (that is where the spec's session_birth 'ready within 1s' is grounded)",
             "WHY the capped loop is ONE turn: io.user_input() writes the `#### ` history header exactly once per top-level prompt, before Coder.run_one; run_one's reflection loop sets reflected_message and calls send_message directly, never re-emitting a `#### ` header (base_coder.py:860/879/924-944). The parser treats every `> Tokens:` line as assistant_message (NOT turn_done) so the turn stays open across the multiple capped model calls (parser.go:18-23,146-188), and `> Running <cmd>`→tool_result markers never change state away from working — so the whole capped reflection chain is one contiguous ready→working→ready span",
             "No auto-mode / permission step is needed and there is no gate to enable: aider runs under --yes-always and has NO permission hook (capabilities.json permission_hooks:false), so any shell-command confirmation auto-answers and the session never enters waiting — unlike the claudecode sibling for this cell, which must enable auto mode to keep its Stop-hook loop alive without tripping a gate",
             "WHY interactive, not headless `aider --message`: aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
-            "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker — it fires on EACH model call inside the reflection loop, so it returns on the first one; the ≥8s trailing sleep then absorbs the full capped reflection chain plus one idle-flush cycle so the terminal working→ready settle is observed before teardown)"
+            "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker — one per model call inside the reflection loop). The recipe waits TWICE (same as the self-correction sibling): the FIRST wait_turn returns on the initial edit's `> Tokens:`, the SECOND returns on the first reflection round's `> Tokens:` (the auto-test failed and aider re-called the model). This guarantees the reflection loop actually entered before teardown — a single wait_turn returns too early (the first reflection call is still in flight). The ≥20s trailing sleep then absorbs the remaining capped reflection rounds (max_reflections=3) plus one full ~1.5s IdleFlush cycle so the terminal working→ready settle is observed before the single tmux kill-session teardown"
           ],
           "script": [
             {
               "type": "send",
-              "text": "Edit README.md so it contains some python: add a fenced ```python code block with deliberately broken style (no docstring, unused import, a bare `x=1` with no spaces). Do not run any other command. After you apply the edit, just reply with exactly: done"
+              "text": "Create a new file loop.py containing a single Python function add(a, b) that returns a + b. Make the edit now; do not ask me anything."
+            },
+            {
+              "type": "wait_turn"
             },
             {
               "type": "wait_turn"
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 20
             }
           ],
           "verify": [
@@ -6492,7 +6495,13 @@
             "KNOWN TIMING RISK (observes:partial): if any single inter-reflection model call is silent >~1.5s, IdleFlush can fire a premature working→ready then the next `> Tokens:` reopens working→working flicker — flag it as a known timing limitation, do NOT widen the spec to accept it",
             "Do not assert the auto-lint/auto-test output text — it is model/tool/OS-dependent; assert only the state topology and the single graceful turn end"
           ],
-          "settings": {},
+          "settings": {
+            "aider_extra_args": [
+              "--auto-test",
+              "--test-cmd",
+              "false"
+            ]
+          },
           "timeout_seconds": 300
         }
       }
