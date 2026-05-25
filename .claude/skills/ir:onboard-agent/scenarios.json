@@ -1152,21 +1152,63 @@
               "/tree is sent as a slash step (text + Enter) to open the picker; the picker is then driven with `keys` steps (Up/Down to highlight the turn-1 checkpoint, Enter to confirm). The `keys` step is the missing primitive."
             ],
             "script": [
-              {"type": "send", "text": "Reply with exactly the word: one"},
-              {"type": "wait_turn"},
-              {"type": "sleep", "seconds": 3},
-              {"type": "send", "text": "Reply with exactly the word: two"},
-              {"type": "wait_turn"},
-              {"type": "sleep", "seconds": 3},
-              {"type": "slash", "text": "/tree"},
-              {"type": "sleep", "seconds": 3},
-              {"type": "keys", "keys": "Up Up"},
-              {"type": "sleep", "seconds": 1},
-              {"type": "keys", "keys": "Enter"},
-              {"type": "sleep", "seconds": 4},
-              {"type": "send", "text": "Reply with exactly the word: three"},
-              {"type": "wait_turn"},
-              {"type": "sleep", "seconds": 4}
+              {
+                "type": "send",
+                "text": "Reply with exactly the word: one"
+              },
+              {
+                "type": "wait_turn"
+              },
+              {
+                "type": "sleep",
+                "seconds": 3
+              },
+              {
+                "type": "send",
+                "text": "Reply with exactly the word: two"
+              },
+              {
+                "type": "wait_turn"
+              },
+              {
+                "type": "sleep",
+                "seconds": 3
+              },
+              {
+                "type": "slash",
+                "text": "/tree"
+              },
+              {
+                "type": "sleep",
+                "seconds": 3
+              },
+              {
+                "type": "keys",
+                "keys": "Up Up"
+              },
+              {
+                "type": "sleep",
+                "seconds": 1
+              },
+              {
+                "type": "keys",
+                "keys": "Enter"
+              },
+              {
+                "type": "sleep",
+                "seconds": 4
+              },
+              {
+                "type": "send",
+                "text": "Reply with exactly the word: three"
+              },
+              {
+                "type": "wait_turn"
+              },
+              {
+                "type": "sleep",
+                "seconds": 4
+              }
             ],
             "verify": [
               "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the rollout-keyed session in ready",
@@ -2596,6 +2638,58 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (PI_API_KEY or configured provider; verified against pi 0.70.0)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "pi version ships the manual /compact slash command (verified live against pi 0.70.0: registered in dist/core/slash-commands.js as name:\"compact\")"
+          ],
+          "setup": [
+            "Driver boots a fresh pi REPL in a per-run cwd under <staging>/cwd/; pi assigns its own session UUID per rollout (one rollout file for the whole scenario)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "slash",
+              "text": "/compact"
+            },
+            {
+              "type": "sleep",
+              "seconds": 14
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: still-here"
+            },
+            {
+              "type": "sleep",
+              "seconds": 7
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session born ready at launch, then the UUID rollout session reconciling into ready",
+            "events.jsonl shows ready→working→ready for the priming turn on the rollout session",
+            "after /compact runs, events.jsonl shows ANOTHER ready→working→ready arc on the SAME rollout session_id (the compaction entry is parsed as assistant/working activity — pi appends it to the existing rollout, NO new session)",
+            "events.jsonl shows ready→working→ready for the post-compaction turn on the same session (the session keeps working after compaction)",
+            "no state_transition to waiting appears anywhere in the recording",
+            "exactly one process_exited on the rollout session at REPL teardown; final session state is ready",
+            "transcript.jsonl is a SINGLE rollout file (one session id) containing the priming turn (user + assistant/stop), a {type:\"compaction\",summary} entry, and the post-compaction turn (user + assistant/stop); the compaction-vs-normal-turn distinction is not surfaced by the daemon"
+          ],
+          "settings": {},
+          "timeout_seconds": 240,
+          "notes": "Pi difference vs claudecode: pi's /compact appends a single top-level {type:\"compaction\",summary,...} entry to the SAME rollout file (session-manager.js appendCompaction → _appendEntry on the current leaf — NO newSession()), so the whole scenario stays on ONE session UUID — there is no boundary transcript (unlike claudecode 2.1.x) and no supersession (unlike pi /new). The pi parser (parser.go:55-60) maps the compaction event to EventType:\"assistant\" (active model work, ready→working), so the daemon sees it as an ordinary working→ready arc on the same session. irrlicht cannot LABEL the turn as compaction (CompactionState is dead code; the parser collapses it into a generic assistant activity), so the recipe asserts only the visible state arc — priming working→ready, a compaction working→ready arc on the same session, post-compaction working→ready, no waiting. DRIVER-SYNC (load-bearing): /compact writes a `compaction` entry, NOT an assistant stopReason==stop message, so drive-pi-interactive.sh's turn-counter does NOT increment for it. A counted wait_turn after /compact would inflate EXPECTED_TURNS by 1 and force a driver timeout (proven by a standalone probe). So the recipe deliberately uses NO wait_turn after /compact: it sleeps 14s over the real ~8s compaction summarization round (separated from the priming ready by a 3s sleep so the compaction registers as its OWN working blip), then issues the post-compaction prompt and ends on a 7s trailing sleep (NO final wait_turn) to flush that turn's working→ready arc and the post-turn ready dwell before the tmux teardown. Only send/slash/wait_turn/sleep are used — all already implemented by the pi driver; no driver extension needed. WHY interactive (not headless pi --print): a slash command only exists inside the REPL; headless pi is single-shot. WHY manual /compact (not auto): automatic compaction fires only on context-window pressure and is not deterministically reproducible in a bounded recording; manual /compact produces the identical {type:\"compaction\"} entry deterministically. C7 / SESSION-IDENTITY: session_birth matches the transient proc-<PID> pre-session born at launch; prime_start anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout, since the pre-session never goes working); compaction_start anchors to prime_end so it binds the post-priming working arc; every later phase pins to prime_start via same_session_as. Between runs: assistant wording, the summary text, per-turn/compaction token counts, session UUID, PID and timestamps differ; pi may flush a turn as one OR two bursts — the structural baseline is a priming working→ready arc + a compaction working→ready arc + a post-compaction working→ready arc on one rollout session_id, no waiting, a single process_exited, final ready. If it broke, look at core/adapters/inbound/agents/pi/parser.go (eventType==\"compaction\" → assistant) and whether a pi update changed where /compact writes the compaction entry (e.g. into a new session file)."
         }
       }
     },
