@@ -152,6 +152,22 @@ recording present" — fine, you'll re-run after Stage 4.
 
 ## Common pitfalls
 
+- **A transient `proc-<PID>` presession row can steal `session_birth`.**
+  The daemon's process scanner emits a `proc-<PID>` presession `ready`
+  row the moment it detects the process — BEFORE the real session data
+  becomes bindable (the transcript file appears, or the store row
+  becomes readable). If your first phase pins identity to that birth
+  (or later phases do `same_session_as: session_birth`), the matcher
+  greedily binds to the short-lived proc-`<PID>` row and every chained
+  `same_session_as` fails. **Fix:** anchor the first phase to `"start"`
+  and leave it UNPINNED (no `same_session_as`); let the first phase
+  that observes a REAL turn (`turn_start` matching `working`) establish
+  the session identity that later phases chain off. This is
+  transport-neutral — it shows up on FilesUnderRoot adapters
+  (claudecode/codex/pi) AND on opencode's `ProcessOwnedStore`, since
+  the proc-`<PID>` row comes from the shared scanner, not the parser.
+  *Worked example:* pi/multi-turn-conversation went 1/9 → 9/9 once the
+  first turn was anchored to `"start"` unpinned.
 - **Phase-chaining: don't anchor `_turn_done` directly to
   `_session_birth`.** The validator's matcher picks the FIRST
   matching `ready` after the anchor — for a session that goes ready
