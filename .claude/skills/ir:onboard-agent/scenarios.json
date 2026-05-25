@@ -2918,6 +2918,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "applicable: false (daemon_capability=incapable). agent_supports=no — opencode's bash tool runs SYNCHRONOUSLY to completion within the single tool call: there is no run_in_background-style dispatch of a child process that outlives the turn, and no later out-of-band completion event (no BashOutput/KillShell-style poll analogue). daemon_capability=incapable (structural transport gap, NOT a bug): the daemon's entire background-process machinery is bound to the claudecode JSONL path — the parser recognizes a Bash tool_use run_in_background:true + sibling toolUseResult.backgroundTaskId and extracts each tasks/<bash_id>.output path, and background_probe.go's lsof liveness probe (anyLiveOutputWriter, #445/#450) pins the session working over exactly those parser-extracted paths; BackgroundProcessCount/Outputs are populated ONLY by the JSONL-tailer metrics adapter. opencode is the lone ProcessOwnedStore adapter: its MetricsReader (querySessionMetrics, metrics.go) reads the SQLite store for tokens/tasks/tool-call/cost/context but NEVER sets the background fields, and the store carries no backgroundTaskId/output-file the lsof probe could watch — so a backgrounded-dispatch + later-completion is unobservable for opencode at the transport level. CATALOG DRIFT NOTE: the scenario's requires id `background_process` is one flagged missing from features.json this sweep — recorded here as a note only; features.json and the coverage rollup are maintainer-owned and left untouched. No recipe, no recording; pipeline frozen at Stage 1. UNBLOCK would need BOTH a real opencode backgrounded-process primitive (run_in_background-style dispatch + queryable later completion) AND an opencode/ProcessOwnedStore path that surfaces a liveness signal into BackgroundProcessCount/Outputs. See replaydata/agents/opencode/scenarios/background-process/assessment.json (no / incapable / n.a.)."
         }
       }
     },
