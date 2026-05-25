@@ -2800,6 +2800,45 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated/configured (the default model is set in ~/.config/opencode/opencode.json; auth is out-of-band)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model must be capable of function calling — if the model emits no tool call this cell is unrecordable for a MODEL reason (opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"<prompt>\"` in a fresh per-run cwd under <staging>/cwd/ with NO --model flag, so it uses the config default; each send is its own `opencode run` subprocess that exits when the turn completes",
+            "No auto-mode / permission step is needed: in headless default `opencode run` auto-executes tools inside opencode's own sandbox with no interactive gate, so the tool call runs autonomously and the session never enters waiting — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db, FilesUnderRoot→ProcessOwnedStore), keyed on the UUID ses_… session; the daemon's ProcessOwnedStore source polls the session table. The tool call lands in the part table as a `tool` part (status pending→running→completed), which the parser maps to function_call / function_call_output (parser.go parseToolPart)",
+            "wait_turn is a no-op because `opencode run` already blocks until the turn ends; the ≥4s trailing sleep gives the daemon's poller one full tick to observe the working→ready settle before the run process exits",
+            "The send is a crisp single-tool-forcing prompt so the small/slow local default model reliably emits exactly one auto-executed write tool call inside the working span, then replies done"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Create a file named hello.txt containing exactly the text: hello — use your write tool. Then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the tool-using prompt is sent, sustained across the auto-executed write tool call",
+            "the opencode SQLite store / transcript.jsonl contains a tool part (function_call / function_call_output) for the write call — the auto-executed, ungated tool call (opencode has no interactive gate in headless default)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the tool resolves and the turn completes (step-finish reason=stop → turn_done)",
+            "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (the call auto-executes; no permission window)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
