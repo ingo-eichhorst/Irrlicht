@@ -4160,7 +4160,8 @@
         "claudecode",
         "codex",
         "pi",
-        "aider"
+        "aider",
+        "opencode"
       ],
       "requires": [
         "headless_mode"
@@ -4301,6 +4302,42 @@
             "events.jsonl contains the aider session (label aider) and at least one different-adapter session, each keyed to the same cwd slug",
             "each session has its own independent working->ready arc; no transition on one is attributed to the other (aiders fresh per-process parser + per-CWD markdown transport guarantee no shared state)",
             "no cross-contamination: the daemon never merges or flaps the aider row into another adapters; aider has no subagents so its subagent count stays absent"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": true,
+          "partner_adapter": "claudecode",
+          "preconditions": [
+            "opencode AND at least one different-adapter CLI (claude, and the other concurrent adapters codex/pi/aider) on PATH and authenticated; opencode authenticates against its configured default model (a local LM Studio model in ~/.config/opencode/opencode.json, so no remote key is needed)",
+            "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+            "the opencode SQLite watcher is enabled in the recording daemon (ProcessOwnedStore source polling ~/.local/share/opencode/opencode.db)",
+            "no other opencode/claudecode/codex/pi/aider session is live in the run cwd"
+          ],
+          "setup": [
+            "run-cell-multi.sh creates ONE shared cwd and launches each cross_adapter[] driver concurrently, all pointed at it via IRRLICHT_ONBOARD_CWD (the opencode interactive driver honors $IRRLICHT_ONBOARD_CWD — like the codex/pi/aider drivers — so it shares the workspace with the other adapters; opencode keys its SQLite session on session.directory = that shared cwd)",
+            "opencode registers Process.Match=ExactName{Name:opencode} + Source=ProcessOwnedStore{Reader over ~/.local/share/opencode/opencode.db}, the ONLY structured-store transport here — doubly disjoint from claudecode ~/.claude/projects, codex ~/.codex/sessions, pi ~/.pi/agent/sessions (FilesUnderRoot JSONL) and aider .aider.chat.history.md (FilesUnderCWD markdown). opencode.db never holds another adapter's rows, so the daemon keys the opencode session independently; its single-session driver (send/wait_turn/sleep) is sufficient because opencode runs ONE session next to a DIFFERENT adapter",
+            "this cell stores the opencode transcript (exported from the SQLite store) for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (every coexisting adapter)",
+            "the send is a single short text turn (one word) so opencode's working span carries no tool call and the session never enters waiting; opencode's default model is a small slow local LM Studio model (~30-45s/turn), so the spec's working-anchor windows are generous and the trailing sleep must outlast the turn_done settle so working->ready is observed"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: epsilon"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the opencode session (label opencode, ses_… id) and at least one different-adapter session, each keyed to the same cwd slug",
+            "each session has its own independent working->ready arc; no transition on one is attributed to the other (opencode's structured SQLite store is disjoint from every partner's file-based transport, so no shared state can leak)",
+            "no cross-contamination: the daemon never merges or flaps the opencode row into another adapter's; opencode's turn arc and any pid_discovered land on the ses_… session"
           ],
           "settings": {},
           "timeout_seconds": 240

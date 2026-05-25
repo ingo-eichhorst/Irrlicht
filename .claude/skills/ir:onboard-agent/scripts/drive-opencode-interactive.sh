@@ -47,7 +47,14 @@ DRIVER_LOG="$STAGING/driver.log"
 # OpenCode keys sessions on the directory column in the SQLite session
 # table; isolating cwd guarantees the session-lookup query at the end
 # finds OUR session even if the user has other recent opencode runs.
-RUN_CWD="$STAGING/cwd"
+# A CROSS-ADAPTER cell (multiple-agents-same-workspace) forces a SHARED
+# workspace via $IRRLICHT_ONBOARD_CWD so a different adapter coexists in
+# the same cwd — the daemon then keys both sessions to the same cwd slug.
+# The session-lookup query still finds OUR session: opencode.db's session
+# table only ever holds opencode sessions, so directory = $RUN_CWD +
+# ORDER BY time_created DESC picks our row regardless of the partner agents
+# (which write to their own stores, never opencode.db).
+RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
 
 OPENCODE_DB="$HOME/.local/share/opencode/opencode.db"
