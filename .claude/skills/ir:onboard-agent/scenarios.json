@@ -273,9 +273,43 @@
           "timeout_seconds": 90
         },
         "aider": {
-          "prompt": "Reply with exactly the word: ok",
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user)",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the turn",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` in a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD), so the daemon keys the whole session by proc-<PID> — there is no separate transcript-UUID rollout session; the turn arc, pid_discovered and teardown all land on that one proc-<PID> row",
+            "WHY interactive, not headless `aider --message` (drift fix, same shape as the sibling full-lifecycle-toolcall + pi cells): aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run exits ~2.6s after the working flip — BEFORE that settle fires — so the daemon never observes the terminal working→ready edge and turn_end + teardown can't anchor (the prior 3/5 result). Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
+            "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the 8s trailing sleep covers aider's ~1.5s IdleFlush quiet window plus the 5s working-refresh poll (one full idle-flush cycle plus slack) so the working→ready settle is observed before teardown",
+            "The send is a no-tool single turn — aider is asked to reply with exactly one word, so the working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (aider has no permission hook)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + presession_created for the proc-<PID> session born ready within ~1s of REPL launch",
+            "events.jsonl contains a pid_discovered event bound to the same proc-<PID> session_id",
+            "events.jsonl contains a state_transition→working on the proc-<PID> session_id when the prompt is sent (the single assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same proc-<PID> session_id once aider's turn-end is inferred (the `> Tokens:` line closes the model call and IdleFlush synthesizes turn_done after ~1.5s of quiescence, clamped to the 5s working-refresh poll) — observed within the 8s trailing sleep before teardown",
+            "events.jsonl contains NO state_transition to waiting for the session at any point (no tool call, no permission gate)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the proc-<PID> session at REPL teardown"
+          ],
           "settings": {},
-          "timeout_seconds": 120
+          "timeout_seconds": 300
         }
       }
     },
