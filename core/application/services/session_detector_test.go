@@ -1099,12 +1099,16 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
-	// PIDs 42 and 99 don't exist as real processes, so syscall.Kill(pid, 0)
-	// returns ESRCH. All sessions with dead PIDs should be deleted.
+	// Use genuinely-dead PIDs (spawned then reaped) so syscall.Kill(pid, 0)
+	// returns ESRCH. Hardcoded "probably dead" numbers like 42/99 are live
+	// kernel threads on a Linux CI box. All sessions with dead PIDs should be
+	// deleted.
+	deadPID1 := deadPIDForTest(t)
+	deadPID2 := deadPIDForTest(t)
 	repo.states["seed1"] = &session.SessionState{
 		SessionID:      "seed1",
 		State:          session.StateWorking,
-		PID:            42,
+		PID:            deadPID1,
 		TranscriptPath: "/home/.claude/projects/-Users-test/seed1.jsonl",
 		FirstSeen:      time.Now().Unix(),
 		UpdatedAt:      time.Now().Unix(),
@@ -1112,7 +1116,7 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	repo.states["seed2"] = &session.SessionState{
 		SessionID: "seed2",
 		State:     session.StateReady,
-		PID:       99,
+		PID:       deadPID2,
 		FirstSeen: time.Now().Unix(),
 		UpdatedAt: time.Now().Unix(),
 	}
@@ -1129,19 +1133,19 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 
 	// seed1 has a dead PID — should be deleted.
 	if state, _ := repo.Load("seed1"); state != nil {
-		t.Error("seed1 should be deleted (PID 42 is dead)")
+		t.Errorf("seed1 should be deleted (PID %d is dead)", deadPID1)
 	}
 	// seed2 has a dead PID — should be deleted.
 	if state, _ := repo.Load("seed2"); state != nil {
-		t.Error("seed2 should be deleted (PID 99 is dead)")
+		t.Errorf("seed2 should be deleted (PID %d is dead)", deadPID2)
 	}
 
 	// Dead PIDs should NOT be registered with ProcessWatcher.
-	if _, ok := pw.watched[42]; ok {
-		t.Error("PID 42 should not be watched (dead process)")
+	if _, ok := pw.watched[deadPID1]; ok {
+		t.Errorf("PID %d should not be watched (dead process)", deadPID1)
 	}
-	if _, ok := pw.watched[99]; ok {
-		t.Error("PID 99 should not be watched (dead process)")
+	if _, ok := pw.watched[deadPID2]; ok {
+		t.Errorf("PID %d should not be watched (dead process)", deadPID2)
 	}
 }
 

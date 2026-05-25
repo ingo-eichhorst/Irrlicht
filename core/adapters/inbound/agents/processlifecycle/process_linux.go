@@ -22,12 +22,8 @@ type linuxObserver struct{}
 
 func newObserver() outbound.ProcessObserver { return linuxObserver{} }
 
-// FindByName returns PIDs whose /proc/<pid>/comm exactly matches name.
-//
-// Linux truncates comm to 15 characters (TASK_COMM_LEN-1); agent names we
-// match on ("claude", "codex", "opencode", ...) are well under that, and
-// pgrep -x compares against the same truncated comm, so behaviour matches the
-// darwin path.
+// FindByName returns PIDs whose process name matches name, the way `pgrep -x`
+// does on macOS.
 func (linuxObserver) FindByName(name string) ([]int, error) {
 	if name == "" {
 		return nil, nil
@@ -38,15 +34,36 @@ func (linuxObserver) FindByName(name string) ([]int, error) {
 	}
 	var out []int
 	for _, pid := range pids {
-		comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-		if err != nil {
-			continue // process exited or unreadable
-		}
-		if strings.TrimRight(string(comm), "\n") == name {
+		if procNameMatches(pid, name) {
 			out = append(out, pid)
 		}
 	}
 	return out, nil
+}
+
+// procNameMatches reports whether pid's process name equals name. It checks
+// the basename of argv[0] first — that's what was actually invoked, it isn't
+// truncated, and it preserves a symlink/wrapper name (a `claude` symlink to a
+// versioned binary or to node still reads as "claude"), matching the macOS
+// pgrep -x path. It falls back to /proc/<pid>/comm (the kernel's name,
+// truncated to 15 chars and reflecting the resolved binary) for processes that
+// rewrote their argv via prctl(PR_SET_NAME).
+func procNameMatches(pid int, name string) bool {
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
+		argv0 := string(data)
+		if i := strings.IndexByte(argv0, 0); i >= 0 {
+			argv0 = argv0[:i] // cmdline is NUL-separated; take argv[0]
+		}
+		if argv0 != "" && filepath.Base(argv0) == name {
+			return true
+		}
+	}
+	if comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid)); err == nil {
+		if strings.TrimRight(string(comm), "\n") == name {
+			return true
+		}
+	}
+	return false
 }
 
 // FindByCmdline returns PIDs whose full command line matches the regex
