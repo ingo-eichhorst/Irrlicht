@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "scenario_id": "turn-aborted-by-error",
+  "agent": "opencode",
+  "assessed_at": "2026-05-26T00:00:00Z",
+  "agent_supports": "yes",
+  "daemon_capability": "incapable",
+  "driver_capability": "ready",
+  "confidence": 0.85,
+  "body": "## Verdict (LIVE-CORRECTED)\n\nagent_supports: yes\ndaemon_capability: incapable  (DOC-based assess said `full`; the live recording attempt overrode it)\ndriver_capability: ready\n\n## Scenario\n\nturn-aborted-by-error: the model call fails mid-turn (provider error / context overflow / unloadable model); no normal turn-end signal is emitted. User-observable signal per scenario-meanings: state reaches `ready` after the failure and does NOT stick in `working`.\n\n## Why this degrades to applicable_false (observability gap)\n\nThe doc-based assessment (`.specs/agent-assess-opencode.json`, agent-scenarios-coverage.json) recorded daemon_capability=full on the reasoning that opencode's parser maps `case \"error\": ev.EventType = \"turn_done\"` (core/adapters/inbound/agents/opencode/parser.go:164) and the watcher's `isTerminalPart` accepts a `step-finish` part with reason in {stop, interrupted, length, error, content-filter} (watcher.go:435). That parser branch is real — but opencode 1.14.50 NEVER WRITES such a part on an error-aborted turn.\n\nEmpirical evidence, gathered live against ~/.local/share/opencode/opencode.db:\n\n1. Store-wide audit of every step-finish part ever persisted: 102 with reason=stop, 165 with reason=tool-calls, and ZERO with reason=error.\n2. opencode records turn aborts on the PARENT MESSAGE row, not as a part: 39 `message.data.error` rows exist (APIError 'Unauthorized'/'Model not found'/'Failed to load model …', UnknownError 'Unexpected server error', context-overflow UnknownError 'The number of tokens to keep from the initial prompt is greater than the context length (n_keep …)', MessageAbortedError 'Aborted').\n3. The watcher's scanParts query (watcher.go:456-463) is part-driven: it JOINs `message` ONLY to obtain the role context for each part and never inspects `message.data.error` as a terminal-turn signal. So an error turn produces a user `text` part → session goes `working`, then an assistant `message` with `error` set and NO `step-finish` part → no `turn_done` is ever emitted → the session sticks in `working` until `process_exited`. There is no working-state idle sweep (same gap noted for the codex row). The spec's user-observable signal — settle to `ready` after the failure — is therefore not observable from the store.\n\n## Driver angle is moot (every elicitation path probed live)\n\nThe send-only opencode driver (drive-opencode-interactive.sh: send/sleep/wait_turn, blocking `opencode run` per send, --session chaining; no per-step --model injection) was probed against several deterministic triggers; none produces a step-finish reason=error part, so even a driver extension would not help today:\n- Bogus model id (lmstudio/nonexistent-model-zzz) → `Model not found` at config resolution; opencode exits 1 BEFORE creating a session row. No observable session at all. (Differs from the pi/aider siblings, where the bogus model is accepted, a session/transcript is created, and the provider rejects it mid-turn into the transcript.)\n- Unloadable / oversized model (lmstudio/qwen/qwen3-coder-30b, 'insufficient system resources') → session + user text part created, error lands on message.data.error, NO step-finish.\n- Context-window overflow prompt (~80k tokens > the local gemma's loaded_context_length 70419) → message.data.error 'n_keep > context length', NO step-finish; a much larger overflow simply makes LM Studio reset the connection and opencode hangs to timeout.\n\n## Recipe disposition\n\nby_adapter.opencode set to applicable:false with a scope_note; no recipe, no recording, no expected.jsonl authored (a spec phase asserting working→ready would be unrecordable). observability_correction flagged so the maintainer can flip the coverage cell daemon_capability full→incapable.\n\n## Unblocks when\n\nEITHER (a) opencode emits a `step-finish` part with reason=error on error-aborted turns (so isTerminalPart fires), OR (b) the opencode watcher/parser consumes `message.data.error` as a terminal-turn signal and synthesizes a turn_done (mirroring aider's flushErrorTurn epilogue path). Either change would let the existing parser branch resolve working→ready and make this cell recordable via a context-overflow or unloadable-model prompt through the send-only driver.",
+  "caveats": [
+    "DOC-vs-LIVE divergence: the doc-based assess (daemon_capability=full) was overridden by the live recording attempt. The parser branch (case \"error\" → turn_done) exists but is dead for opencode error turns because the upstream step-finish reason=error part is never persisted.",
+    "Not a driver gap: this is a transport/observability gap. Even with a --model-injecting driver, no step-finish reason=error part is written, so the daemon cannot observe the turn-end. Hence applicable_false, not driver_gap.",
+    "Probed on opencode 1.14.50 with the default local model lmstudio/gemma-4-e2b-it-uncensored (LM Studio, loaded_context_length 70419)."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/parser.go",
+      "note": "parseStepFinish maps reason=error → turn_done (line 164) — but this branch only fires when a step-finish part with reason=error is present, which opencode does not write on error-aborted turns."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+      "note": "isTerminalPart (435) accepts reason in {stop,interrupted,length,error,content-filter}; scanParts (456-463) is part-driven and never reads message.data.error as a terminal signal."
+    },
+    {
+      "kind": "command",
+      "ref": "sqlite3 ~/.local/share/opencode/opencode.db",
+      "note": "Store audit: step-finish reasons = stop(102), tool-calls(165), error(0). message.data.error rows = 39 (APIError/UnknownError/MessageAbortedError, incl. context-overflow n_keep>context length). Confirms errors persist at message level, never as a step-finish part."
+    }
+  ]
+}
