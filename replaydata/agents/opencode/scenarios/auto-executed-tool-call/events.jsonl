@@ -1,0 +1,13 @@
+{"seq":3986,"ts":"2026-05-26T00:12:56.264985+02:00","kind":"transcript_new","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_19ecd4160ffenL9Eu7d47URnDV","project_dir":"cwd","cwd":"/Users/ingo/projects/irrlicht/.claude/worktrees/opencode-onboarding/.build/refresh/opencode/auto-executed-tool-call-20260525T221254/cwd"}
+{"seq":3987,"ts":"2026-05-26T00:12:56.310555+02:00","kind":"state_transition","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","new_state":"ready","reason":"new session created"}
+{"seq":3988,"ts":"2026-05-26T00:12:56.311681+02:00","kind":"transcript_activity","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_19ecd4160ffenL9Eu7d47URnDV"}
+{"seq":3989,"ts":"2026-05-26T00:12:56.313567+02:00","kind":"state_transition","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","prev_state":"ready","new_state":"working","reason":"force ready→working on first activity"}
+{"seq":3990,"ts":"2026-05-26T00:12:56.816995+02:00","kind":"pid_discovered","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","pid":94900}
+{"seq":3991,"ts":"2026-05-26T00:12:56.81734+02:00","kind":"pid_discovered","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","pid":94900}
+{"seq":3992,"ts":"2026-05-26T00:14:43.957616+02:00","kind":"transcript_activity","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_19ecd4160ffenL9Eu7d47URnDV"}
+{"seq":3993,"ts":"2026-05-26T00:14:44.549043+02:00","kind":"transcript_activity","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_19ecd4160ffenL9Eu7d47URnDV"}
+{"seq":3994,"ts":"2026-05-26T00:14:44.549133+02:00","kind":"debounce_coalesced","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV"}
+{"seq":3995,"ts":"2026-05-26T00:14:45.354249+02:00","kind":"transcript_activity","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","adapter":"opencode","transcript_path":"/Users/ingo/.local/share/opencode/opencode.db-wal?session=ses_19ecd4160ffenL9Eu7d47URnDV"}
+{"seq":3996,"ts":"2026-05-26T00:14:45.354281+02:00","kind":"debounce_terminal","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV"}
+{"seq":3997,"ts":"2026-05-26T00:14:45.359326+02:00","kind":"state_transition","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","prev_state":"working","new_state":"ready","reason":"agent finished turn → ready"}
+{"seq":3998,"ts":"2026-05-26T00:14:45.367659+02:00","kind":"process_exited","session_id":"ses_19ecd4160ffenL9Eu7d47URnDV","pid":94900}
