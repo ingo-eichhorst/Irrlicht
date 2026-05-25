@@ -554,7 +554,7 @@
     },
     {
       "name": "multi-turn-conversation",
-      "description": "Three consecutive user prompts in one live codex REPL session, validating that state resets to ready between turns (ready\u2192working\u2192ready three times on one session_id) and per-turn Contribution accumulates. WHY interactive (not headless codex exec): exec is single-shot and ends in process_exited after one reply, so it can't show turn-to-turn state reset; the interactive driver keeps the rollout session alive across all three turns via send+wait_turn, then tears the tmux REPL down once. WHY the 3s sleeps between wait_turn and the next send: they sit past the classifier's debounce window so each turn's working\u2192ready flip is observed cleanly before the next prompt re-enters working; without them the next send can land before the prior turn settles and the arcs blur. HOW runs differ: exact assistant wording, per-turn token counts, and sub-second timing vary (model-output variance) \u2014 only the structural three-turn arc, distinct-session count, and final ready state are stable. WHERE to look if it breaks: the rollout file under ~/.codex/sessions (the driver resolves it lazily after the first task_complete); a missing third arc usually means a wait_turn timed out or a sleep was too short for the debounce.",
+      "description": "Three consecutive user prompts in one live interactive REPL session, validating that state resets to ready between turns (ready\u2192working\u2192ready three times on one session) and per-turn Contribution accumulates. WHY interactive (not a headless single-shot run): single-shot modes end in process_exited after one reply, so they can't show turn-to-turn state reset; the interactive driver keeps the session alive across all three turns via send+wait_turn, then tears the tmux REPL down once. WHY the inter-turn sleeps between wait_turn and the next send: they sit past the classifier's debounce window so each turn's working\u2192ready flip is observed cleanly before the next prompt re-enters working; without them the next send can land before the prior turn settles and the arcs blur. The required sleep length is adapter-specific \u2014 transcript-marker adapters (codex/pi) settle quickly (~3s), but aider has NO turn-end marker and synthesizes turn-end via IdleFlush behind a ~5s SessionDetector poll, so its recipe needs \u22657s inter-turn / trailing sleeps. HOW runs differ: exact assistant wording, per-turn token counts, and sub-second timing vary (model-output variance) \u2014 only the structural three-turn arc, distinct-session count, and final ready state are stable. WHERE to look if it breaks: the per-adapter transcript (codex rollout under ~/.codex/sessions; pi rollout under ~/.pi/agent/sessions; aider .aider.chat.history.md in the run cwd); a missing arc usually means a wait_turn timed out or a sleep was too short for the settle window.",
       "coverage_id": "basic-turn",
       "requires": [
         "headless_mode"
@@ -565,6 +565,18 @@
       },
       "by_adapter": {
         "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs on the model-auth prompt; the live REPL needs a model that actually answers each prompt.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it can send three prompts to one long-lived session",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the first prompt",
+            "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
+            "Each send bumps the turn counter; wait_turn blocks until a new `> Tokens:` line appears (signals aider finished one model call). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet, surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency)",
+            "After the third wait_turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session"
+          ],
           "script": [
             {
               "type": "send",
@@ -575,7 +587,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 3
+              "seconds": 7
             },
             {
               "type": "send",
@@ -586,7 +598,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 3
+              "seconds": 7
             },
             {
               "type": "send",
@@ -597,8 +609,17 @@
             },
             {
               "type": "sleep",
-              "seconds": 4
+              "seconds": 8
             }
+          ],
+          "verify": [
+            "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+            "events.jsonl contains a pid_discovered event bound to the live aider session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleeps are ≥7s, covering the ~5s effective latency; with shorter sleeps the next #### prompt opens a new turn with no intervening turn_done and the per-turn reset is lost)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session, not three exits)",
+            "no state_transition to waiting appears for the session at any point",
+            "per-turn token contribution (TotalTokens > 0) accumulates from each `> Tokens:` snapshot — observable in the parser's assistant_message events but NOT expressible in the expected.jsonl phase DSL (no metric form); aider's cost_tracking is false so no provider dollar cost is carried"
           ],
           "settings": {},
           "timeout_seconds": 300
