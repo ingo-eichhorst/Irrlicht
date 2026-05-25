@@ -2685,6 +2685,80 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver runs pi in a tmux REPL so it stays alive across all four turns",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "PARTIAL caveat (mirrored from coverage): if pi fires context compaction during the rollout, the compaction summary interleaves as assistant content and may add an extra working→ready→working flicker that is NOT a user turn boundary — compaction is not deterministic on a 4-turn proxy run, so the spec asserts the first four clean arcs and no waiting, not an exact arc count"
+          ],
+          "setup": [
+            "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd under <staging>/cwd/ inside a tmux session, waits for the REPL 'Ready' line, then sends each prompt; it keeps ONE rollout alive across all four turns and kills the tmux session exactly once at the end → a single process_exited",
+            "pi writes one JSONL rollout file per session under ~/.pi/agent/sessions/<cwd-slug>/ on launch (FilesUnderRoot, non-lazy); the driver resolves that file and extracts the UUID from line 1 (pi assigns its own UUID; it can't be pre-set)",
+            "WHY tool calls are KEPT here (unlike the claudecode sibling, which had to drop them): pi auto-executes its bash tool with NO permission gate, so the tool-call turns never stall in waiting. The four prompts each elicit a real bash tool call against a file the session builds for itself (create → list → grep → read back), exercising interleaved assistant+tool_use+tool_result content across a long rollout — the actual stress this scenario names",
+            "WHY interactive (not headless `pi --print`): headless pi is single-shot and exits after one reply, so it can't build a long multi-turn rollout; keeping pi alive in the REPL across four send+wait_turn cycles lets the daemon observe four clean working→ready settles on one session",
+            "WHY the 3s sleeps between wait_turn and the next send: they sit past the classifier's debounce window so each turn's working→ready flip is observed cleanly before the next prompt re-enters working; without them the next send can land before the prior turn settles and the arcs blur. The trailing 5s sleep lets the final settle land before the single tmux teardown"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Using your bash tool, run: printf 'apple\\nbanana\\ncherry\\n' > fruits.txt — then reply with exactly: created"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Using your bash tool, run: ls -la — then reply with exactly: listed"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Using your bash tool, run: grep banana fruits.txt — then reply with exactly: matched"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Using your bash tool, run: cat fruits.txt — then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; every turn arc, pid_discovered and teardown land on the UUID-keyed rollout session)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "for EACH of the four turns: exactly one state_transition→working / →ready arc on the rollout session_id, sustained across the auto-executed bash call (four clean arcs in order on one session)",
+            "transcript.jsonl contains four user lines and, across the rollout, four toolCall / toolResult pairs (the auto-executed bash calls: printf create, ls, grep, cat) — pi has no permission hook so each runs ungated",
+            "across the entire rollout, NO state_transition to waiting fires for the rollout session at any point (every tool call auto-executes; pi never gates)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the rollout session at the single tmux teardown (not four — the REPL is long-lived)",
+            "ACCEPT-EITHER: if pi fires compaction mid-rollout an extra working→ready→working arc may appear; the recording still passes because the spec asserts the first four clean arcs and no waiting, not an exact arc count"
+          ],
+          "settings": {},
+          "timeout_seconds": 360
         }
       }
     },

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "scenario_id": "long-agentic-session-stress",
+  "agent": "pi",
+  "assessed_at": "2026-05-25T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "partial",
+  "confidence": 0.82,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: partial\n\n## Reasoning\n\nlong-agentic-session-stress is a long multi-turn agentic session with several tool calls, stress-testing that irrlicht's transcript parser stays coherent across a large volume of interleaved assistant messages and tool-call/result pairs — no flicker WITHIN a turn, clean working→ready / ready→working BETWEEN turns, state never wedged. Pi supports this natively: an interactive pi REPL holds one rollout session open under ~/.pi/agent/sessions/<cwd-slug>/<ts>_<UUID>.jsonl (FilesUnderRoot, non-lazy) while accepting many prompts, several of which call tools (read/ls/grep against files staged in setup). Pi auto-executes read-only tools without a permission gate (unlike modern claudecode defaults), so tool-call turns don't stall — the recipe can therefore keep the tool calls that the claudecode sibling had to drop. Each assistant turn's stopReason=stop maps to turn_done, so the daemon observes one clean working→ready settle per turn on the SAME rollout session_id, with state resetting to ready between prompts and never entering waiting.\n\nThe cell is recorded with the INTERACTIVE pi driver (drive-pi-interactive.sh): 4-6 back-to-back send+wait_turn cycles in one tmux REPL, several eliciting tool calls, then a single teardown. Headless `pi --print` is single-shot (one reply → process_exited) so it cannot build a long multi-turn rollout; the interactive driver keeps the rollout alive for all turns and kills the tmux session once → a SINGLE process_exited.\n\nirrlicht observes all of the lifecycle scaffolding: a transient proc-<PID> pre-session born ready, the UUID-keyed rollout's transcript_new, N clean working→ready arcs (one per prompt) on the rollout session, pid_discovered, and one process_exited at teardown.\n\n## Why PARTIAL\n\nThe observes verdict is `partial` (not `yes`) because of the compaction caveat: if pi fires context compaction during the long rollout, the compaction summary interleaves as assistant content in the transcript. A compaction burst risks an extra working→ready→working flicker that is NOT a user turn boundary. Compaction does not fire deterministically on a compressed-proxy run of 4-6 turns, so the spec does NOT assert a compaction phase. The spec asserts that the FIRST N user-turn arcs reset cleanly and never enter waiting, and that there is a single process_exited — not an exact arc count — so an incidental compaction-driven extra arc does not fail the spec.",
+  "caveats": [
+    "Pi cannot accept a pre-assigned UUID — it generates one itself. The interactive driver discovers the UUID from the session header on line 1 of the freshly-created rollout transcript.",
+    "COMPACTION INTERLEAVE: if pi fires context compaction during the long rollout, the compaction summary interleaves as assistant content and may produce an extra working→ready→working flicker that is not a user turn boundary. Compaction is not deterministic on a 4-6-turn proxy run, so the spec does NOT assert a compaction phase; it asserts the first N user-turn arcs reset cleanly with no waiting, not an exact arc count.",
+    "Exact assistant wording, per-turn token counts, tool-result content, and sub-second timing vary run-to-run (model-output variance). Only the structural multi-turn arc (N clean working→ready arcs on one rollout session), the single process_exited, and the final ready state are stable across re-records.",
+    "3s sleeps between wait_turn and the next send sit past the classifier's debounce window so each turn's working→ready flip is observed cleanly before the next prompt re-enters working."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/agent.go",
+      "note": "Identity.Name=pi, Source variant FilesUnderRoot under ~/.pi/agent/sessions/, ExactName{Name: \"pi\"} process matcher."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/parser.go",
+      "note": "stopReason=stop on each assistant turn maps to turn_done (working→ready); tool_use/tool_result events stay within the working span; many turns on one session yield many clean arcs."
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh",
+      "note": "Interactive tmux REPL driver supporting send/slash/wait_turn/interrupt/sleep; keeps one pi session alive across all turns, then kills the tmux session once → single process_exited."
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+      "note": "long-agentic-session-stress: per-turn ready→working→ready arcs with no within-turn flicker, no stuck state, over a large transcript volume with tool calls."
+    }
+  ]
+}
