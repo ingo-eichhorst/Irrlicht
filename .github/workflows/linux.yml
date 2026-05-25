@@ -1,0 +1,36 @@
+name: Linux
+
+# Real Linux build+test gate. coverage.yml runs `go test ./...` on ubuntu but
+# pipes it to >/dev/null and ignores the exit code (it only scrapes a coverage
+# %), which is why monitor.go failing to compile on Linux went unnoticed
+# (#478). This job builds and tests and FAILS on any compile/test error.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache: false
+
+      - name: Build (linux)
+        run: cd core && go build ./...
+
+      - name: Test (linux, race)
+        # Includes the headless daemon smoke test and the /proc+pidfd
+        # observer-conformance test (processlifecycle, //go:build linux).
+        run: cd core && go test ./... -race -count=1
+
+      - name: Replay fixtures (golden byte-identity, OS-neutral)
+        run: tools/replay-fixtures.sh
