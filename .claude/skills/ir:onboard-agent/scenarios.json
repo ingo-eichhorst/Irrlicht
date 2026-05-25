@@ -4382,7 +4382,7 @@
             "aider is FilesUnderCWD{.aider.chat.history.md, RawLineParser} — there is no transcript-UUID rollout session; the daemon keys the whole session by proc-<PID> (the process scanner), so the turn arc, pid_discovered and teardown all land on that one proc-<PID> row (cf. the full-lifecycle-toolcall recipe)",
             "WHY this exercises the oversized-line path: the prompt asks aider for ONE very long single-line sentence (≥5000 words, no embedded newlines), so aider appends one large `> …`/prose line to .aider.chat.history.md. The shared tailer reads it via readLineCapped(64MB cap, issue #270) BEFORE the isRawLine branch hands the trimmed line to aider's ParseLineRaw — i.e. aider's RawLineParser path is gated by the SAME oversized-line cap as the JSONL adapters. A ~30 KB line is far under the 64 MB cap, so it is buffered whole into assistantBuffer and the turn resolves via the usual `> Tokens:`/IdleFlush close. This is a sanity-check that the arc completes on a large single line, NOT a true >64 MB cap-stress (a live aider CLI cannot be coerced into a multi-megabyte single line — markdown prose wraps and tool output is multi-line `>` blockquotes); the genuine >64 MB cap behavior is pinned agent-agnostically by core/pkg/tailer/large_line_test.go",
             "WHY interactive, not headless `aider --message`: aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1500ms quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle, and the single tmux kill-session teardown then yields one clean process_exited",
-            "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the ≥6s trailing sleep is one full idle-flush cycle plus slack so the working→ready settle is observed before teardown"
+            "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the ≥8s trailing sleep is one full idle-flush cycle plus slack so the working→ready settle is observed before teardown"
           ],
           "script": [
             {
@@ -4394,7 +4394,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 6
+              "seconds": 8
             }
           ],
           "verify": [
