@@ -1367,7 +1367,7 @@
         },
         "pi": {
           "applicable": false,
-          "scope_note": "Pi accepts `--session <UUID>` to resume an existing session, but drive-pi-interactive.sh doesn't expose `exit_clean` / `resume` step types. Headless drive-pi.sh launches one-shot only. Recording deferred until a driver-level resume primitive is added."
+          "notes": "DRIVER GAP. Reassessed 2026-05-25 → agent_supports:yes / irrlicht_observes:yes (0.78): pi natively reopens a prior session at relaunch (`pi -c` continue-last / `pi -r` / `pi --session <uuid>`), reusing the SAME uuid.jsonl under ~/.pi/agent/sessions; because the adapter watches that dir (FilesUnderRoot) the daemon sees the same session_id row come back after the first lifetime exits — same observable shape as claudecode/session-resume. BUT this cell cannot be recorded: drive-pi-interactive.sh implements only send/slash/wait_turn/interrupt/sleep — it lacks the `exit_clean` and `resume`/`restart` step types needed to exit pi after turn 1 and relaunch with the same uuid for turn 2, and it tracks only one session UUID + transcript per run. Same gap that froze pi/session-reset. Recording deferred until drive-pi-interactive.sh gains exit_clean + a resume primitive (relaunch-with-same-uuid). expected.jsonl is committed as the documented target arc."
         },
         "aider": {
           "applicable": false,

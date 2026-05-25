@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "scenario_id": "session-resume",
+  "agent": "pi",
+  "assessed_at": "2026-05-25T00:00:00Z",
+  "agent_supports": "yes",
+  "irrlicht_observes": "yes",
+  "confidence": 0.78,
+  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nThis reassessment flips the previous applicable:false verdict for the AGENT axis. Pi natively reopens a prior session at relaunch: `pi -c` (continue the most-recent session), `pi -r` (resume picker), and `pi --session <uuid>` (resume a specific session). Each reuses the SAME uuid.jsonl transcript under ~/.pi/agent/sessions/--<cwd>--/, rather than minting a new one.\n\nirrlicht observes this with no code change. The pi adapter's Source is FilesUnderRoot{~/.pi/agent/sessions} (agent.go), so the resumed process appends to the existing UUID-keyed transcript and the daemon sees the SAME session_id row come back after the first lifetime exits — structurally identical to the claudecode session-resume cell, which records cleanly. The state band would show a v1 arc, a grey gap (process gone between exit and resume), and a v2 arc on the same UUID. DiscoverPID (pid.go) re-binds the newly-launched pi PID to the existing session by matching the process CWD to the session's working directory on each new lifetime.\n\nSo the spec's three primary assertions are all observable: (1) same session_id reappears (not a new row), (2) state ready initially on resume, (3) ready→working on the first new turn of the resumed lifetime.\n\n## Driver concern (C9) — why no recording yet\n\nDespite the yes/yes verdict, this cell CANNOT be recorded with the current tooling. drive-pi-interactive.sh implements only `send`, `slash`, `wait_turn`, `interrupt`, `sleep`. Recording session-resume requires a multi-phase driver capability the pi driver lacks: launch pi, run a turn, EXIT the process cleanly, then RELAUNCH pi with a resume flag (`-c` / `-r` / `--session <uuid>`) pointing at the same session, and run a second turn. That needs `exit_clean` + `resume` (or `restart`) step types. The pi driver tracks only ONE session UUID + transcript per run and never relaunches.\n\nThis is the same gap that degraded the sibling session-reset cell to applicable:false. It is a developer task (extend drive-pi-interactive.sh with exit_clean + a resume primitive that relaunches with the same uuid), out of scope for the implement pipeline. The recipe is therefore committed applicable:false with a scope_note, and expected.jsonl is committed as the documented TARGET arc for when the driver gains the capability.",
+  "caveats": [
+    "Recording deferred: drive-pi-interactive.sh lacks exit_clean + resume/restart step types, so the relaunch-with-same-uuid arc cannot be driven. Same driver gap as session-reset.",
+    "The recipe records the clean-exit-then-resume primary variant only. The spec's second variant (multiple kill+resume across PID lifetimes) shares the same observability surface and can be a follow-up cell once the driver supports relaunch.",
+    "Resume re-binding relies on DiscoverPID matching the relaunched pi's CWD to the session's working directory; the recipe must reuse the same cwd across launches."
+  ],
+  "sources": [
+    {"kind": "file", "ref": "core/adapters/inbound/agents/pi/agent.go", "note": "Source: FilesUnderRoot{sessionsDir()} watches ~/.pi/agent/sessions — a resumed pi reopens the same uuid.jsonl, so the same session_id reappears."},
+    {"kind": "file", "ref": "core/adapters/inbound/agents/pi/pid.go", "note": "DiscoverPID matches a pi process to a session by CWD — re-binds the relaunched PID to the existing session on each new lifetime."},
+    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/scripts/drive-pi-interactive.sh", "note": "Case labels are send/slash/wait_turn/interrupt/sleep only — no exit_clean / resume / restart. This is the C9 driver gap that blocks recording."}
+  ]
+}
