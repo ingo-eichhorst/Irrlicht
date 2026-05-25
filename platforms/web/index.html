@@ -49,6 +49,30 @@
         </span>
       </label>
 
+      <h2>Sources</h2>
+      <label>
+        <input type="checkbox" data-setting="enableLocalSource">
+        <span class="settings-label-text">
+          <span class="settings-title">Local</span>
+          <span class="settings-hint">Watch the daemon (or relay) that served this page.</span>
+        </span>
+      </label>
+      <label>
+        <input type="checkbox" data-setting="enableRelaySource">
+        <span class="settings-label-text">
+          <span class="settings-title">Relay server</span>
+          <span class="settings-hint">Also connect to a relay to see other machines' sessions.</span>
+        </span>
+      </label>
+      <label class="settings-text-row">
+        <span class="settings-label-text">
+          <span class="settings-title">Relay server URL</span>
+          <span class="settings-hint">e.g. ws://localhost:7838</span>
+        </span>
+        <input type="text" class="settings-text-input" data-setting="relayUrl"
+               placeholder="ws://localhost:7838" spellcheck="false" autocomplete="off">
+      </label>
+
       <h2>Provider quota</h2>
       <label>
         <input type="checkbox" data-quota-setting="showQuotaForecast">

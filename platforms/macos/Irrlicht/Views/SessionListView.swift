@@ -983,15 +983,17 @@ struct SessionListView: View {
             .fill(statusColor)
             .frame(width: 6, height: 6)
             .shadow(color: statusColor.opacity(0.5), radius: 3)
-            .tooltip(sessionManager.connectionState.tooltip)
+            // Multi-source: one line per source — "Local — connected" and, for
+            // a relay, one line per connected daemon by label.
+            .tooltip(sessionManager.connectionTooltip)
             // The dot is the only visible affordance now; VoiceOver
             // needs an explicit label since "Circle" alone tells the
             // user nothing about connection state.
-            .accessibilityLabel("Connection: \(sessionManager.connectionState.tooltip)")
+            .accessibilityLabel("Connection: \(sessionManager.connectionTooltip)")
     }
 
     private var statusColor: Color {
-        switch sessionManager.connectionState {
+        switch sessionManager.aggregateConnectionState {
         case .connected: return IrrColors.wsConnected
         case .connecting, .reconnecting: return IrrColors.wsConnecting
         case .disconnected: return IrrColors.wsDisconnected

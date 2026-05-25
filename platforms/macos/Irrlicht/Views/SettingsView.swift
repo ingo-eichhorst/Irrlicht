@@ -14,6 +14,13 @@ struct SettingsView: View {
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = true
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = true
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = true
+    // Sources (multi-source): mirror the web dashboard's keys. The relay URL is
+    // edited in a draft and committed on Return so the connection doesn't churn
+    // on every keystroke.
+    @AppStorage("useLocalDaemon") private var useLocalDaemon: Bool = true
+    @AppStorage("useRelayServer") private var useRelayServer: Bool = false
+    @AppStorage("relayServerURL") private var relayServerURL: String = ""
+    @State private var relayURLDraft: String = ""
     @State private var notificationsDenied = false
     @State private var customImportError: String?
 
@@ -68,6 +75,39 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .onChange(of: launchAtLogin) { newValue in LoginItemManager.setEnabled(newValue) }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Sources")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
+                LeadingToggle(isOn: $useLocalDaemon, label: "Local")
+                Text("Watch the daemon this app connects to directly.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                LeadingToggle(isOn: $useRelayServer, label: "Relay server")
+                Text("Also connect to a relay to see sessions from other machines.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if useRelayServer {
+                    TextField("ws://localhost:7838", text: $relayURLDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.caption, design: .monospaced))
+                        .autocorrectionDisabled(true)
+                        .onSubmit { commitRelayURL() }
+                    Text("Press Return to apply.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .onAppear { relayURLDraft = relayServerURL }
+            .onChange(of: useRelayServer) { on in if on { commitRelayURL() } }
 
             Divider()
 
@@ -216,6 +256,12 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
         }
+    }
+
+    /// Commits the relay URL draft to @AppStorage (trimmed), which the
+    /// SessionManager observes to (re)connect the relay source.
+    private func commitRelayURL() {
+        relayServerURL = relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func checkNotificationAuth() {

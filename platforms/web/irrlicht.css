@@ -1081,6 +1081,20 @@
     .settings-modal .settings-label-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .settings-modal .settings-label-text .settings-title { color: var(--text-bright); font-weight: 500; }
     .settings-modal .settings-label-text .settings-hint { color: var(--muted); font-size: 11px; }
+    /* Relay URL row: label text stacked above a full-width text field. */
+    .settings-modal label.settings-text-row { flex-direction: column; align-items: stretch; gap: 6px; cursor: default; }
+    .settings-modal .settings-text-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-family: inherit;
+      color: var(--text-bright);
+      background: var(--surface-hover);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+    .settings-modal .settings-text-input:focus { outline: none; border-color: var(--working); }
     .settings-modal .settings-modal-footer {
       display: flex;
       justify-content: space-between;
