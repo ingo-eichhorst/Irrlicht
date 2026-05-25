@@ -3627,6 +3627,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "pi": {
+          "applicable": false,
+          "notes": "scope_note: driver_gap (C9). Needs concurrent same-adapter multi-session capture, but drive-pi-interactive.sh is single-session — it supports only send/slash/wait_turn/interrupt/sleep, runs ONE tmux session with ONE resolved transcript and ONE turn counter, and has no start_session step or per-step {\"session\":N} routing. The claudecode and codex recipes for this scenario both depend on start_session + {\"session\":N} (their drivers gained a per-slot session model: step_start_session, slot allocation, claimed-path exclusion); the pi driver has none of it, so two concurrent pi sessions in one cwd cannot be staged for a recording. Extending the pi driver is a developer task (out of scope for this cell). Secondary seam (irrlicht_observes:partial): pi's DiscoverPID = DiscoverPIDByCWD (cwd-only narrowing + highest-PID disambiguate fallback) — UNLIKE codex's per-rollout-file-writer binding and claudecode's metadata-first lookup, two same-cwd pi processes both survive the cwd narrowing, so the daemon cannot cleanly bind each session to its own PID by cwd alone; even with the driver extended, the scenario's 'stable, non-cross-contaminating PID binding' assertion is not guaranteed for pi. expected.jsonl is committed as the documented target (adapted from the codex/claudecode spec, anchored on working transitions to dodge pi's born-ready proc-<PID> placeholder). No recording; no retry."
         }
       }
     },
