@@ -5401,7 +5401,7 @@
           "setup": [
             "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the first prompt",
             "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
-            "Each send bumps the turn counter; wait_turn blocks until a new `> Tokens:` line appears (signals aider finished one model call and wrote the per-turn token snapshot). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet, surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency), which is why the inter-turn / trailing sleeps are ≥7s",
+            "Each send bumps the turn counter; wait_turn blocks until a new `> Tokens:` line appears (signals aider finished one model call and wrote the per-turn token snapshot). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet, surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency), which is why the inter-turn sleep is ≥12s and the trailing sleep ≥10s — gpt-5-nano answers fast enough that a shorter gap risks the next prompt re-entering working before IdleFlush fires (turn coalescing), losing the per-turn reset",
             "Two turns give exactly one accumulation boundary (T1→T2) to witness the non-decreasing TotalTokens invariant — the minimum that exercises cross-turn accumulation. After the second wait_turn + trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session",
             "No special model or context flags beyond IRRLICHT_AIDER_MODEL — the assertion is about token accumulation, not which model produced the tokens"
           ],
@@ -5415,7 +5415,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 7
+              "seconds": 12
             },
             {
               "type": "send",
@@ -5426,13 +5426,13 @@
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 10
             }
           ],
           "verify": [
             "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
             "events.jsonl contains a pid_discovered event bound to the live aider session_id",
-            "events.jsonl contains two state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleep is ≥7s, covering the ~5s effective latency)",
+            "events.jsonl contains two state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleep is ≥12s, covering the ~5s effective latency with headroom for gpt-5-nano's fast replies)",
             "events.jsonl carries a PerTurnContribution / UsageBreakdown for each turn from its `> Tokens: N sent, M received.` snapshot; input + output tokens > 0 on each turn (the aider parser routes each `> Tokens:` line through closeModelCall → assistant_message with TokenSnapshot{Input:sent,Output:received})",
             "SessionMetrics.TotalTokens after turn 1 > 0",
             "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic accumulation across the one T1→T2 boundary)",
