@@ -2679,6 +2679,46 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against its configured provider/model (auth is set up out-of-band; the rig's precheck delegates auth to the user). Headless aider with no reachable provider hangs on the model-auth prompt; the live REPL needs a model that actually answers the prompt so the file-edit tool call really runs.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it stays alive across the turn (the working→ready settle is idle-flush-bound and must be observed before teardown)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
+            "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD, RawLineParser), so the daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session and no handoff/reconcile; the turn arc, pid_discovered and teardown all land on that one proc-<PID> row. The transcript is LAZY (materializes on first input), but the proc-<PID> pre-session is observable from launch (that is where the spec's session_birth ‘ready within 1s’ is grounded)",
+            "No auto-mode / permission step is needed and there is no gate to enable: aider runs under --yes-always and has NO permission hook (capabilities.json permission_hooks:false), so the file-add confirmation auto-answers and the edit applies straight through with no permission window — unlike the claudecode recipe for this cell, which must enable auto mode to keep a Bash call from tripping a gate. The session therefore never enters waiting (parser.go appliedEditRE collapses the edit into a single tool_result; ShouldSynthesizeCollapsedWaiting never fires for an Edit/Bash marker)",
+            "WHY interactive, not headless `aider --message` (drift fix, same shape as the pi/codex siblings for this coverage_id): aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
+            "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker), so the trailing sleep never races a still-running turn; the ≥6s trailing sleep is one full idle-flush cycle plus slack so the working→ready settle is observed before teardown",
+            "The send self-contains the fixture: aider is asked to create hello.txt then reply done, forcing exactly one auto-executed file-edit tool call inside the working span"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Create a new file named hello.txt with exactly the contents: hello\n\nThen on the next line reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new + presession_created for the proc-<PID> session born ready within ~1s of REPL launch",
+            "events.jsonl contains a pid_discovered event bound to the same proc-<PID> session_id",
+            "events.jsonl contains exactly one state_transition→working / →ready arc on the proc-<PID> session_id, sustained across the auto-executed file-edit tool call",
+            "transcript.jsonl contains a collapsed tool_result (an Edit ToolUse, parsed from the `> Applied edit to hello.txt` marker) inside the working span — the auto-executed, ungated tool call (coarse-grained: one marker, no args/result payload)",
+            "events.jsonl contains NO state_transition to waiting for the session at any point (the edit auto-executes under --yes-always; aider never gates)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the proc-<PID> session at REPL teardown"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
