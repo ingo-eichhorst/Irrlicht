@@ -106,8 +106,10 @@ if [[ -f "$TARGET_DIR/events.jsonl" ]]; then
   mkdir -p "$ARCHIVE_DIR"
   echo "archiving previous recording to $ARCHIVE_DIR" >&2
 
-  # Move the current trio into the archive.
-  for f in events.jsonl transcript.jsonl; do
+  # Move the current trio into the archive. transcript.md covers
+  # markdown-transcript adapters (aider); the -f guard no-ops for the
+  # rest, which use transcript.jsonl.
+  for f in events.jsonl transcript.jsonl transcript.md; do
     if [[ -f "$TARGET_DIR/$f" ]]; then
       mv "$TARGET_DIR/$f" "$ARCHIVE_DIR/$f"
     fi
@@ -150,9 +152,10 @@ if [[ -f "$TARGET_DIR/events.jsonl" ]]; then
   echo "wrote $ARCHIVE_DIR/manifest.json ($EXPECTED_PASS_RATE)" >&2
 fi
 
-# 2. Copy the staged recording into the top-level slot.
+# 2. Copy the staged recording into the top-level slot. transcript.md
+# covers markdown-transcript adapters (aider); -f guard no-ops otherwise.
 mkdir -p "$TARGET_DIR"
-for f in events.jsonl transcript.jsonl; do
+for f in events.jsonl transcript.jsonl transcript.md; do
   if [[ -f "$STAGED_DIR/$f" ]]; then
     cp "$STAGED_DIR/$f" "$TARGET_DIR/$f"
   fi
