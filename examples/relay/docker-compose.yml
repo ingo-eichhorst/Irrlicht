@@ -12,5 +12,6 @@ services:
       dockerfile: examples/relay/Dockerfile
     image: irrlicht-relay
     ports:
-      - "7839:7839"                        # v0 relay is no-auth; keep it on a trusted loopback
+      # Loopback-only: v0 relay is no-auth/no-TLS, so don't expose it on the LAN.
+      - "127.0.0.1:7839:7839"
     restart: unless-stopped

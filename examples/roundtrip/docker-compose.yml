@@ -11,7 +11,9 @@ services:
       dockerfile: examples/relay/Dockerfile
     image: irrlicht-relay
     ports:
-      - "7839:7839"                        # the ONLY port published to the host
+      # The ONLY port published to the host. Loopback-only — v0 relay is
+      # no-auth/no-TLS, so it must not be reachable from the LAN.
+      - "127.0.0.1:7839:7839"
 
   # Linux daemon + Claude Code, co-located. Drive `claude` via:
   #   docker compose -f examples/roundtrip/docker-compose.yml exec -it agent claude
