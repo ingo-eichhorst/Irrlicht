@@ -131,6 +131,17 @@ type SessionMetrics struct {
 	// episode (issue #150). Transient — per-pass, not persisted.
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
 
+	// OpenToolStalled is a transient, live-only signal set by the detector
+	// when a permission-gated file-edit tool (Edit/Write/MultiEdit/
+	// NotebookEdit) has stayed open with no transcript progress long enough
+	// that the agent is almost certainly blocked on a permission prompt
+	// rather than mid-execution (those tools complete near-instantly). It is
+	// the transcript-based fallback for permission detection when the
+	// curl-delivered PermissionRequest hook can't reach the daemon (#488).
+	// Like HasLiveBackgroundProcess it is wall-clock derived and never set
+	// under replay. Read by ClassifyState.
+	OpenToolStalled bool `json:"-"`
+
 	// NoSubstantiveActivity reflects the last tailer pass: true when the
 	// pass consumed new transcript content but produced no state-relevant
 	// change (every line was Skip=true with no SubagentCompletions and no
@@ -210,6 +221,36 @@ func (m *SessionMetrics) NeedsUserAttention() bool {
 // trigger the "waiting" state.
 func isUserBlockingTool(name string) bool {
 	return name == "AskUserQuestion" || name == "ExitPlanMode" || name == "question"
+}
+
+// HasOpenEditPermissionTool reports whether an open tool call is a
+// permission-gated file-edit tool (Edit/Write/MultiEdit/NotebookEdit). These
+// run in-process and complete near-instantly, so an open one that lingers is
+// a strong signal the agent is blocked on a permission prompt — the basis for
+// the OpenToolStalled fallback (#488). Bash/WebFetch/MCP are deliberately
+// excluded: they can legitimately run for seconds, so duration alone can't
+// distinguish "blocked" from "executing" for them (they rely on the hook).
+func (m *SessionMetrics) HasOpenEditPermissionTool() bool {
+	if m == nil || !m.HasOpenToolCall {
+		return false
+	}
+	for _, name := range m.LastOpenToolNames {
+		if isPermissionGatedEditTool(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPermissionGatedEditTool reports whether name is a fast, in-process
+// file-edit tool that prompts for permission by default.
+func isPermissionGatedEditTool(name string) bool {
+	switch name {
+	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		return true
+	default:
+		return false
+	}
 }
 
 // trailingMarkdownNoise are characters that commonly appear AFTER a

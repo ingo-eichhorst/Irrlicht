@@ -27,9 +27,13 @@ RUN go build -trimpath -ldflags "-X main.Version=${VERSION}" \
 # ---- runtime: Node (Claude Code) + the daemon, run as a non-root user ----
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # git: the scratch repo + Claude's own tooling. tini: PID-1 reaper/signals.
-# procps: handy for debugging inside the container.
+# procps: handy for debugging inside the container. curl: REQUIRED — the
+# daemon's auto-installed Claude Code hooks POST to the daemon via
+# `curl … || true`; without curl the hook silently no-ops (the `|| true`
+# swallows "command not found"), so PermissionRequest never reaches the
+# daemon and tool-use permission prompts never surface as `waiting` (#488).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git tini procps \
+    && apt-get install -y --no-install-recommends ca-certificates git tini procps curl \
     && rm -rf /var/lib/apt/lists/*
 # Claude Code CLI (the real agent this testbed observes).
 RUN npm install -g @anthropic-ai/claude-code

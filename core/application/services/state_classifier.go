@@ -44,6 +44,19 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 		return currentState, ""
 	}
 
+	// 1b. A permission-gated file-edit tool has been open and idle long enough
+	// that the agent is almost certainly blocked on a permission prompt →
+	// waiting. Transcript-based fallback for when the curl-delivered
+	// PermissionRequest hook can't reach the daemon (#488). The detector sets
+	// OpenToolStalled only after the open tool has lingered with no transcript
+	// progress, so this never fires on a tool that is actively executing.
+	if metrics.OpenToolStalled {
+		if currentState != session.StateWaiting {
+			return session.StateWaiting, "stalled edit tool → likely permission prompt → waiting"
+		}
+		return currentState, ""
+	}
+
 	// 2. Agent finished turn — check if waiting for user input first.
 	if metrics.IsAgentDone() {
 		// 2a. Turn ended with a question or imperative cue (e.g. "let me

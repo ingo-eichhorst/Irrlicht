@@ -31,6 +31,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	// keep the entry forever, and a recycled session ID would inherit it.
 	d.permMu.Lock()
 	delete(d.permissionPending, ev.SessionID)
+	delete(d.editToolOpenSince, ev.SessionID)
 	d.permMu.Unlock()
 
 	state, err := d.repo.Load(ev.SessionID)
