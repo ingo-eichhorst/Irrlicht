@@ -2810,7 +2810,7 @@
             "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
             "tmux available — the interactive driver runs pi in a tmux REPL so a follow-up can be typed while the first turn is still in flight",
             "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
-            "PARTIAL caveat (mirrored from the coverage assessment): pi does NOT fold the queued follow-up into the in-flight turn the way claudecode/codex do — it consumes the queued message as the NEXT turn, so the observable is TWO working→ready arcs on one rollout session, not one contiguous span. The spec asserts the in-flight turn's working span is contiguous (no mid-turn ready/waiting flicker on the queued arrival) and the queued message then yields a clean follow-on arc — not a single uninterrupted span."
+            "PARTIAL caveat (mirrored from the coverage assessment): pi queues the mid-turn follow-up (Enter steers/queues) and consumes it immediately after the in-flight turn — the queued user line is written to the transcript within ~1ms of the first turn's stopReason==stop and the next turn begins at once, so the daemon never observes an intervening ready and the two back-to-back transcript turns COLLAPSE into ONE contiguous working span (the canonical observable, same shape claudecode/codex produce). It is PARTIAL rather than yes because this single-span observability hinges on that sub-ms queue→consume timing; if pi's consumption were delayed past the classifier's debounce window the queued message could instead surface as a separate working→ready arc."
           ],
           "setup": [
             "The interactive driver (drive-pi-interactive.sh) launches pi in a fresh per-run cwd inside a tmux session and waits for the REPL prompt",
@@ -2843,12 +2843,11 @@
           "verify": [
             "events.jsonl contains a transcript_new for the rollout session born ready within ~2s of REPL launch (a transient proc-<PID> pre-session may also appear; the turns and pid_discovered land on the UUID-keyed rollout session)",
             "events.jsonl contains a pid_discovered event bound to the rollout session_id",
-            "events.jsonl shows the in-flight turn as a CONTIGUOUS working span: NO state_transition to ready between the first ready→working and that turn's own completion, even though the follow-up was typed (queued) mid-turn",
+            "events.jsonl shows a single CONTIGUOUS working span on the rollout session: NO state_transition to ready between the first ready→working and the cycle's completion, even though the follow-up was typed (queued) mid-turn — pi folds the queued turn in within ~1ms of the first turn's stop so no intervening ready is observed",
             "events.jsonl contains NO state_transition to waiting at any point on the rollout session",
-            "events.jsonl shows a SECOND working→ready arc on the same rollout session for the queued follow-up (pi consumes it as the next turn, not folded into the first)",
-            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "the rollout session's final live state is ready before the driver tears the REPL down (the cycle ends at ready once both the count and the queued follow-up are consumed)",
             "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown (one long-lived session)",
-            "transcript.jsonl contains at least two user lines (initial prompt + queued follow-up); the queued user line introduces no turn boundary itself — only stopReason==stop flips state to ready"
+            "transcript.jsonl contains at least two user lines (initial prompt + queued follow-up) and two assistant stopReason==stop lines; the queued user line introduces no turn boundary itself — only stopReason==stop flips state to ready, so the queued arrival cannot inject a synthetic working→ready flicker"
           ],
           "settings": {},
           "timeout_seconds": 240
