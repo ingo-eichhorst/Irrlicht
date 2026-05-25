@@ -6803,6 +6803,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: stock opencode has no documented autonomous self-prompting / goal-loop mode; a turn ends at session.idle (step-finish) and waits for the next user message — autonomous self-prompting exists only via third-party plugins (oh-my-opencode Ralph Loop / Ultrawork), and the upstream built-in /loop request (anomalyco/opencode#23578) is still open. Nothing autonomously recordable here. agent_supports=unknown (see assessment.json)."
         }
       }
     },
