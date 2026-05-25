@@ -5584,6 +5584,44 @@
             "model": "openai-codex/irrlicht-turn-abort-unsupported-model"
           },
           "timeout_seconds": 90
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated for the model the bogus id routes through (e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY, or a reachable OpenAI-compatible endpoint). The cell deliberately requests an UNSUPPORTED/INVALID model id, so auth must already work for normal aider recordings — the provider must accept the connection and then reject the model, not hang on a missing key. Headless aider with no reachable provider hangs ~5 min on the model-auth prompt (e.g. OpenRouter OAuth); that is an infra/auth failure, not a cell failure.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so the process outlives the post-error settle window (see AIDER-SPECIFIC note in setup)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "AIDER-SPECIFIC ELICITATION (mirrors the pi sibling — a bogus model id, NO mock/proxy/faked transcript line): the operator must export IRRLICHT_AIDER_MODEL=<bogus-model> when invoking run-cell.sh. The driver passes it via `aider --model <bogus>`; the provider returns an unsupported/invalid-model error whose litellm message does NOT match aider's retry class, so aider does NOT retry, prints a `> …Error`/`> …Exception` blockquote to .aider.chat.history.md, and the turn aborts with no `> Tokens:` end-of-call line. Do NOT use a 5xx/rate-limit/timeout-class trigger — litellm would retry it and the abort would be non-deterministic. The claudecode mock-anthropic-5xx path does NOT transfer here: that path is `claude --bare` + ANTHROPIC_BASE_URL against a local Go mock; aider routes through litellm and needs the bogus-model trigger instead."
+          ],
+          "setup": [
+            "WIRING NOTE (differs from the pi sibling): drive-aider-interactive.sh reads the bogus model ONLY from the IRRLICHT_AIDER_MODEL env var — it accepts the settings-blob path for ABI parity but ignores it, unlike drive-pi.sh which reads `.model` from the blob. settings.model below is recorded for documentation parity, but the OPERATIVE mechanism for aider is the env var; export IRRLICHT_AIDER_MODEL=<bogus-model> before run-cell.sh.",
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore --model <bogus>` inside a tmux session, and waits for the `> Repo-map:` banner line before sending the prompt.",
+            "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears.",
+            "INTERACTIVE not headless: aider's working→ready error settle rides flushErrorTurn (the error blockquote) with IdleFlush (1500ms transcript-quiet) as the inactivity backstop, behind the daemon's 5s SessionDetector staleWorking poll. A headless `aider --message` would exit non-zero the instant it writes the error blockquote and truncate that settle and the teardown observation. The REPL must outlive the window — hence the trailing sleep ≥6s after the prompt before the driver tears the tmux session down once (one process_exited)."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable for 'session appears in ready')",
+            "events.jsonl shows a state_transition→working on the per-cwd rollout session_id when the prompt lands (the first working in the whole recording — the pre-session never enters working)",
+            "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+            "events.jsonl shows a state_transition→ready on the SAME rollout session_id after the model call aborts: aider writes a `> …Error`/`> …Exception` blockquote with no `> Tokens:` line, and the parser's flushErrorTurn (#262) synthesizes a turn_done carrying the error text (IdleFlush is the inactivity backstop) → the classifier's 'agent finished turn → ready' rule settles working→ready; state does NOT stick in working",
+            "events.jsonl never contains a state_transition to waiting for the session",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown; the live state immediately before teardown is ready",
+            "final session state is ready"
+          ],
+          "settings": {
+            "model": "openrouter/irrlicht-turn-abort-unsupported-model"
+          },
+          "timeout_seconds": 120
         }
       }
     },
