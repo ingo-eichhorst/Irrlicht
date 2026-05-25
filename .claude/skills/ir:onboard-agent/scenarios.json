@@ -4840,6 +4840,48 @@
         "pi": {
           "applicable": false,
           "notes": "DEGRADED to applicable:false after a live recording proved the streaming-stability property is not observable for pi at the transcript layer. SCOPE_NOTE: pi writes its rollout JSONL session file ONCE, on turn completion — the assistant turn lands as a SINGLE consolidated `message`/assistant line carrying `stopReason=stop` and the whole multi-line reply in one content block (confirmed: a '6-line poem, one line at a time' prompt produced exactly 1 user line + 1 assistant(stop=stop) line). There are ZERO intermediate partial-assistant flushes in the transcript the daemon tails; pi's incremental streaming is purely a terminal-UI rendering concern that never reaches the JSONL. The spec's streaming window — sustaining `working` across multiple non-terminal partial flushes with no premature `→ ready` — therefore has nothing to assert over: the completed turn lands all-at-once, so the daemon emits ready→working→ready essentially instantaneously (working→ready at +0 ms because stopReason=stop is already present on the first activity). The live recording also exhibited a SECOND spurious working→ready arc ~2 s later from the daemon re-touching the already-completed file — a file-touch artifact, NOT streamed-content flicker, and unrelated to the property this cell targets. Validator result on the captured recording: 1/5 phases (turn_start 'no state_transition to ready' invariant violated at +0 ms). This is an adapter-transport limitation, not a flaky recipe: no live-CLI prompt can make pi emit intermediate partial-assistant JSONL flushes. The torn/partial-line concern lives in the separate oversized-transcript-line cell. expected.jsonl is retained as the documented target should pi ever switch to incremental rollout writes. Reassessment was yes/yes (0.72) on the PARSER logic (parser.go:78-83 sustains working on every non-stop assistant message; parser.go:55-60 maps compaction to assistant so even a mid-stream compaction can't flicker) — the parser would hold working correctly IF partial flushes existed, but pi's transport never produces them, so the cell is unrecordable as specified."
+        },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs on the model-auth prompt; the live REPL needs a model that actually answers the prompt and streams a multi-part reply.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so the streamed turn is observed across its partial flushes while the process stays alive",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "OBSERVES:PARTIAL CARVE-OUT (mirror of the coverage note): aider's end-of-turn is synthesized by IdleFlush after 1500ms of transcript quiet (parser.go:54); a SLOW remote model call that leaves the history file quiet >1500ms BETWEEN flushes (mid-turn) can fire a premature turn_done → premature working→ready, flickering the no-flicker invariant this cell pins. The no-flicker property holds for normal back-to-back flushes (the common case) but is NOT airtight against a slow remote call; this recipe targets the no-flicker IDEAL, and the streaming_window invariant is what surfaces any such premature-ready drift in a recording."
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the prompt",
+            "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears. aider is keyed by proc-<PID> — there is no transcript UUID rollout session; the whole arc stays on the one proc-<PID> row",
+            "AIDER'S PARTIAL-FLUSH UNIT IS THE PER-MODEL-CALL PROSE BLOCK, NOT TOKEN-LEVEL STREAMING: aider has no JSONL streaming event and the markdown history is written as completed message blocks (incremental token rendering is terminal-UI only and never reaches the file). Under --yes-always one `####` user turn can drive several model calls (an initial reply, auto-accepted file-adds, a follow-up analysis), each closed by its own `> Tokens:` line. closeModelCall (parser.go:153-188) emits assistant_message — NOT turn_done — at each `> Tokens:` line and leaves the turn open, and IsAgentDone (session.go:461-496) does not treat aider's assistant_message as done, so no per-call flush can flip the session to ready: the session holds working across every partial flush (TestParser_MultiModelCall_KeepsTurnOpen)",
+            "wait_turn blocks until a new `> Tokens:` line appears (one model call finished). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet (parser.go:54,216-229), surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency); the trailing sleep (≥8s) lets that flip fire AND be observed before teardown",
+            "After the trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Add core/domain/session/session.go and core/adapters/inbound/agents/aider/parser.go to the chat, then give me a detailed multi-paragraph walkthrough of how each file handles end-of-turn detection. Take your time and be thorough."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 10
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+            "events.jsonl contains a pid_discovered event bound to the live aider session_id",
+            "events.jsonl shows exactly one ready→working transition for the session when the prompt lands — the streaming window opens here",
+            "across the streaming window (multiple partial flushes — each per-model-call prose block closed by its own `> Tokens:` line emits assistant_message, not turn_done), NO state_transition to ready fires before the synthesized end-of-turn; the session holds working solidly across all flushes (the no-flicker invariant)",
+            "NO state_transition to waiting fires during the streaming window",
+            "events.jsonl shows exactly one working→ready transition at the synthesized turn end (IdleFlush after the history goes quiet, ~5s effective latency)",
+            "the session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session)",
+            "transcript .aider.chat.history.md contains 1 `####` user line and at least 2 `> Tokens:` lines (the multiple partial flushes within the one turn)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
