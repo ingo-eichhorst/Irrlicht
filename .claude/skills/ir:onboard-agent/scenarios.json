@@ -3637,6 +3637,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "driver_gap (gap:mid-turn-injection). agent_supports:partial — opencode's TUI has a live composer so a user CAN type a second message while a turn runs, but whether that mid-turn message is QUEUED (buffered, folded into one contiguous working span) vs. interrupts/rejects the running turn has NOT been verified against the live TUI. NOT a daemon limitation — opencode is the lone ProcessOwnedStore adapter; the daemon reads session state from the SQLite store (ComputeMetrics keyed on ses_…), so a contiguous working span + clean working→ready close WOULD be observable, the same store-read signals basic-turn proves (daemon_capability:full). NOT recordable: the scenario needs a SECOND user message injected WHILE the first turn is in progress, so the agent has an in-flight turn to queue against. drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (handles only send|wait_turn|sleep): each `send` shells out to `opencode run` and WAITS for the turn to fully complete, and steps run strictly SEQUENTIALLY — by the time a second send could fire the first turn is already over, so there is no in-flight turn to queue against and no async/queue step. The driver can only produce back-to-back COMPLETED turns, never an in-flight turn with a second message arriving during it. NOT a recipe-lint step-TYPE gap either (a two-send recipe lints in-grammar); the gap is architectural (blocking `opencode run` + sequential sends, no async/queue primitive). UNBLOCK: a live-REPL opencode driver that holds the TUI open, sends the slow first prompt, then injects a SECOND message into the composer WHILE that turn is still running (plus a way to verify the TUI queues vs. interrupts). Recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full contiguous-working-span target arc; see replaydata/agents/opencode/scenarios/mid-turn-message-queued/assessment.json (driver_capability: gap:mid-turn-injection)."
         }
       }
     },
