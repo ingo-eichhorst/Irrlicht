@@ -2,6 +2,7 @@
 # run-cell.sh — execute one (adapter, scenario) cell end-to-end.
 #
 # Pipeline:
+#   recipe-lint  →  refuse a step type the driver lacks (#476, exit 3)
 #   precheck.sh  →  spawn isolated irrlichd --record
 #                →  drive-<adapter>.sh (runs the agent under timeout)
 #                →  SIGINT → 6s grace → SIGTERM → SIGKILL the daemon
@@ -119,6 +120,25 @@ SCRIPT_JSON="$(jq -c '.script // empty' <<<"$CELL_JSON")"
 if [[ -z "$PROMPT" && -z "$SCRIPT_JSON" ]]; then
   echo "cell has neither prompt nor script: scenario=$SCENARIO adapter=$ADAPTER" >&2
   exit 1
+fi
+
+# --- Recipe ↔ driver lint (#476) ----------------------------------------
+# Static backstop: refuse a recipe that needs a step type the agent's
+# interactive driver doesn't implement, BEFORE spinning up a daemon + CLI
+# and burning tokens only to hit the runtime `unknown step type` arm.
+# Headless `prompt` cells have no script and skip this. Exit 3 = driver_gap
+# (distinct from exit 2 = applicable:false / cross-adapter), so the caller
+# routes it to a driver-extension task rather than degrading the cell.
+if [[ -n "$SCRIPT_JSON" ]]; then
+  # shellcheck source=lib/recipe-lint.sh
+  . "$SCRIPT_DIR/lib/recipe-lint.sh"
+  LINT_DRIVER="$SCRIPT_DIR/drive-$ADAPTER-interactive.sh"
+  if LINT_GAPS="$(recipe_lint_gaps "$LINT_DRIVER" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
+    echo "driver_gap: $ADAPTER/$SCENARIO needs step type(s) drive-$ADAPTER-interactive.sh doesn't implement:" >&2
+    printf '  - gap:%s\n' $LINT_GAPS >&2
+    echo "Extend the driver (developer task) or mark the cell applicable:false — not recording." >&2
+    exit 3
+  fi
 fi
 
 # --- Precheck ------------------------------------------------------------

@@ -4,16 +4,29 @@
   "agent": "claudecode",
   "assessed_at": "2026-05-18T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.95,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code records authoritative token usage per turn in the JSONL transcript. Every assistant event carries a `usage` block (at `raw.usage`, `raw.message.usage`, or `raw.response.usage`) with `input_tokens`, `output_tokens`, `cache_read_input_tokens`, and the nested `cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` (with the legacy flat `cache_creation_input_tokens` fallback). The parser extracts these into a `UsageBreakdown` and emits a `PerTurnContribution` on the requestId boundary (see `applyRequestIDContribution` and `extractAnthropicUsageBreakdown` in `parser.go`).\n\nirrlicht's session metrics accumulate Contributions across turns into `SessionMetrics.TotalTokens` (input + output + cache, see `session.go`). The merge logic in `MergeMetrics` is monotonic for tokens — once a turn's contribution is folded in, it never reduces.\n\nSpec Scenario 1 (two-turn session):\n- 'After turn 1: TotalTokens > 0' — turn 1's assistant event carries a usage block; the requestId-boundary flush on turn 2's first event emits turn 1's Contribution; metrics aggregator increments TotalTokens.\n- 'After turn 2: TotalTokens ≥ turn-1 total' — turn 2's Contribution adds on top; monotonicity holds.\n\nSpec Scenario 2 (turn fits in prompt cache):\n- 'Fresh input tokens = 0' — `input_tokens` field reads 0 when the prompt is fully a cache hit. Parser reads the raw value directly.\n- 'CacheReadTokens > 0' — `cache_read_input_tokens` is populated by the Anthropic API and lands in `UsageBreakdown.CacheRead`. UsageBreakdown is exposed on the Contribution and rolled up.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe pre-flush pending contribution (current turn, requestId still open) is exposed via `PendingContribution()` but does NOT yet land in `SessionMetrics.TotalTokens` — that's by design (only completed turns are counted). The dashboard surfaces pending separately. The spec asserts on post-turn totals, so this asymmetry is fine.\n\nA turn-without-usage (e.g. an attachment-only event or a fully-skipped event) contributes nothing — also correct, since there is no token cost to record.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code records authoritative token usage per turn in the JSONL transcript. Every assistant event carries a `usage` block (at `raw.usage`, `raw.message.usage`, or `raw.response.usage`) with `input_tokens`, `output_tokens`, `cache_read_input_tokens`, and the nested `cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` (with the legacy flat `cache_creation_input_tokens` fallback). The parser extracts these into a `UsageBreakdown` and emits a `PerTurnContribution` on the requestId boundary (see `applyRequestIDContribution` and `extractAnthropicUsageBreakdown` in `parser.go`).\n\nirrlicht's session metrics accumulate Contributions across turns into `SessionMetrics.TotalTokens` (input + output + cache, see `session.go`). The merge logic in `MergeMetrics` is monotonic for tokens — once a turn's contribution is folded in, it never reduces.\n\nSpec Scenario 1 (two-turn session):\n- 'After turn 1: TotalTokens > 0' — turn 1's assistant event carries a usage block; the requestId-boundary flush on turn 2's first event emits turn 1's Contribution; metrics aggregator increments TotalTokens.\n- 'After turn 2: TotalTokens ≥ turn-1 total' — turn 2's Contribution adds on top; monotonicity holds.\n\nSpec Scenario 2 (turn fits in prompt cache):\n- 'Fresh input tokens = 0' — `input_tokens` field reads 0 when the prompt is fully a cache hit. Parser reads the raw value directly.\n- 'CacheReadTokens > 0' — `cache_read_input_tokens` is populated by the Anthropic API and lands in `UsageBreakdown.CacheRead`. UsageBreakdown is exposed on the Contribution and rolled up.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe pre-flush pending contribution (current turn, requestId still open) is exposed via `PendingContribution()` but does NOT yet land in `SessionMetrics.TotalTokens` — that's by design (only completed turns are counted). The dashboard surfaces pending separately. The spec asserts on post-turn totals, so this asymmetry is fine.\n\nA turn-without-usage (e.g. an attachment-only event or a fully-skipped event) contributes nothing — also correct, since there is no token cost to record.",
   "caveats": [
     "The cache-hit subscenario depends on the Anthropic backend actually caching the prompt. A recipe-controlled cache hit needs two near-identical sends within the cache TTL (5 min default); a one-shot recording can't guarantee CacheRead > 0 because cache state is server-side and varies. The recipe should run send-1, sleep ~3s, send-1-again, and assert on the SECOND turn's CacheRead.",
     "Cost (USD) computation is downstream of UsageBreakdown via the pricing/aliases table; if the alias map is missing the model, Total is still recorded but cost displays as $0. That's an alias-table concern, not a token-accounting concern."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go", "note": "extractClaudeCodeTokens / extractAnthropicUsageBreakdown / applyRequestIDContribution — pull input/output/cache_read/cache_creation from raw.usage (and message.usage / response.usage), emit PerTurnContribution on requestId boundary."},
-    {"kind": "file", "ref": "core/domain/session/session.go L30-31, L584-628", "note": "SessionMetrics.TotalTokens, MergeMetrics monotonicity — turn contributions roll up and old totals stick if a transient pass returns 0."},
-    {"kind": "spec", "ref": ".specs/agent-scenarios.md L410-420", "note": "Feature: Token accounting — two-turn monotonicity and cache-hit scenarios."}
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+      "note": "extractClaudeCodeTokens / extractAnthropicUsageBreakdown / applyRequestIDContribution — pull input/output/cache_read/cache_creation from raw.usage (and message.usage / response.usage), emit PerTurnContribution on requestId boundary."
+    },
+    {
+      "kind": "file",
+      "ref": "core/domain/session/session.go L30-31, L584-628",
+      "note": "SessionMetrics.TotalTokens, MergeMetrics monotonicity — turn contributions roll up and old totals stick if a transient pass returns 0."
+    },
+    {
+      "kind": "spec",
+      "ref": ".specs/agent-scenarios.md L410-420",
+      "note": "Feature: Token accounting — two-turn monotonicity and cache-hit scenarios."
+    }
   ]
 }

@@ -4,9 +4,18 @@
   "agent": "codex",
   "assessed_at": "2026-05-23T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.85,
   "body": "Codex's REPL is a persistent process; the daemon's PID-liveness check holds the rollout session across the recipe's 20s idle window. Recording shows ready→working→ready before the idle window and ready→working→ready after the second send, with no transcript_removed event in between.",
-  "caveats": ["Production daemon readyTTL is 30 min; this recording proves continuity over 20 s but does not exercise the TTL itself. IRRLICHT_READY_SESSION_TTL=15s on the daemon would harden the assertion."],
-  "sources": [{"kind":"file","ref":"core/adapters/inbound/agents/codex/agent.go","note":"Codex adapter."}]
+  "caveats": [
+    "Production daemon readyTTL is 30 min; this recording proves continuity over 20 s but does not exercise the TTL itself. IRRLICHT_READY_SESSION_TTL=15s on the daemon would harden the assertion."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/agent.go",
+      "note": "Codex adapter."
+    }
+  ]
 }

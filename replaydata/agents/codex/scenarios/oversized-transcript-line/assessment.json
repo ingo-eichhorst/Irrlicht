@@ -4,17 +4,34 @@
   "agent": "codex",
   "assessed_at": "2026-05-23T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.85,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nThe scenario's Primitive exercised is explicit: \"Parser robustness — transcript tailer and line parser correctly handle lines exceeding normal size (>2 MB). No special agent capability required.\" So there is nothing codex-specific to support: codex writes an append-only JSONL transcript under its sessions dir (`Source: FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser}` in `core/adapters/inbound/agents/codex/agent.go`), one record per `\\n`-terminated line. A single large command/tool output naturally produces one big JSONL row, so agent_supports is trivially yes.\n\nThe observable is parser resilience: the session must arc `ready → working → ready` and NOT stick in `working` because the tailer stalled on a giant line. This is a property of irrlicht's SHARED tailer, not of any adapter. `core/pkg/tailer/tailer.go` reads lines via `bufio.NewReaderSize` + a custom `readLineCapped` (NOT `bufio.Scanner`, whose old ~2 MB cap would wedge), with `maxTranscriptLineSize = 64 * 1024 * 1024` (64 MB, issue #270). Lines beyond the cap are logged ('skipping oversized line at offset N') and the offset is advanced past them so processing continues with the next line; there is also an `errPartialAtEOF` re-read path for a partially-written giant line. Codex's `JSONLineParser` runs on top of this same tailer, so codex inherits the exact same robustness as claudecode — the cap path is parser-agnostic.\n\nBecause codex goes through the identical shared-tailer code path, the regression is already pinned by `core/pkg/tailer/large_line_test.go` (a 3 MB tool-result line does not block downstream `turn_done`; the direct skip path is exercised by `TestReadLineCapped_OversizedLineSkipped`). That test is agent-agnostic and is the authoritative coverage for the >2 MB / 64 MB cap.\n\nNet for the cell: an oversized codex line either fits under 64 MB (parsed normally, arc completes) or is skipped with a log line (offset advances, next line parses); either way the `ready → working → ready` arc completes. The verdict is yes/yes — but see caveats: a LIVE codex recipe cannot deterministically manufacture a >64 MB (or even >2 MB) single line, so a recording would only be a ~30 KB sanity-check, not true cap-stress.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's Primitive exercised is explicit: \"Parser robustness — transcript tailer and line parser correctly handle lines exceeding normal size (>2 MB). No special agent capability required.\" So there is nothing codex-specific to support: codex writes an append-only JSONL transcript under its sessions dir (`Source: FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser}` in `core/adapters/inbound/agents/codex/agent.go`), one record per `\\n`-terminated line. A single large command/tool output naturally produces one big JSONL row, so agent_supports is trivially yes.\n\nThe observable is parser resilience: the session must arc `ready → working → ready` and NOT stick in `working` because the tailer stalled on a giant line. This is a property of irrlicht's SHARED tailer, not of any adapter. `core/pkg/tailer/tailer.go` reads lines via `bufio.NewReaderSize` + a custom `readLineCapped` (NOT `bufio.Scanner`, whose old ~2 MB cap would wedge), with `maxTranscriptLineSize = 64 * 1024 * 1024` (64 MB, issue #270). Lines beyond the cap are logged ('skipping oversized line at offset N') and the offset is advanced past them so processing continues with the next line; there is also an `errPartialAtEOF` re-read path for a partially-written giant line. Codex's `JSONLineParser` runs on top of this same tailer, so codex inherits the exact same robustness as claudecode — the cap path is parser-agnostic.\n\nBecause codex goes through the identical shared-tailer code path, the regression is already pinned by `core/pkg/tailer/large_line_test.go` (a 3 MB tool-result line does not block downstream `turn_done`; the direct skip path is exercised by `TestReadLineCapped_OversizedLineSkipped`). That test is agent-agnostic and is the authoritative coverage for the >2 MB / 64 MB cap.\n\nNet for the cell: an oversized codex line either fits under 64 MB (parsed normally, arc completes) or is skipped with a log line (offset advances, next line parses); either way the `ready → working → ready` arc completes. The verdict is yes/yes — but see caveats: a LIVE codex recipe cannot deterministically manufacture a >64 MB (or even >2 MB) single line, so a recording would only be a ~30 KB sanity-check, not true cap-stress.",
   "caveats": [
     "A live codex session cannot be deterministically driven to emit a >64 MB (or even >2 MB) single JSONL line — that is shared-tailer robustness, not a codex behavior; the authoritative coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go, so a codex recording would only sanity-check a moderate (~30 KB) line.",
     "Lines above the 64 MB cap are dropped silently from the parser's point of view (offset advances, content lost) and surface only as an operator log line; the spec asserts the state arc, not content, so this is fine for the cell."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/agent.go", "note": "Source: FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser} — codex transcripts run through the shared tailer, so they inherit the same oversized-line handling as every JSONL adapter."},
-    {"kind": "file", "ref": "core/pkg/tailer/tailer.go", "note": "bufio.NewReaderSize + readLineCapped + maxTranscriptLineSize=64MB (line 21); oversized lines logged ('skipping oversized line at offset N', line 431) and skipped past, not stalled — references issue #270."},
-    {"kind": "file", "ref": "core/pkg/tailer/large_line_test.go", "note": "Agent-agnostic regression for #270: TestTailAndProcess_LargeToolResultLine (3 MB line still yields turn_done) and TestReadLineCapped_OversizedLineSkipped (direct skip path). This is the authoritative coverage for the cap."},
-    {"kind": "issue", "ref": "ingo-eichhorst/Irrlicht#270", "note": "Oversized JSONL line wedge fixed by switching the shared tailer from bufio.Scanner to bufio.Reader + readLineCapped."}
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/agent.go",
+      "note": "Source: FilesUnderRoot{Dir: sessionsDir(), Parser: JSONLineParser} — codex transcripts run through the shared tailer, so they inherit the same oversized-line handling as every JSONL adapter."
+    },
+    {
+      "kind": "file",
+      "ref": "core/pkg/tailer/tailer.go",
+      "note": "bufio.NewReaderSize + readLineCapped + maxTranscriptLineSize=64MB (line 21); oversized lines logged ('skipping oversized line at offset N', line 431) and skipped past, not stalled — references issue #270."
+    },
+    {
+      "kind": "file",
+      "ref": "core/pkg/tailer/large_line_test.go",
+      "note": "Agent-agnostic regression for #270: TestTailAndProcess_LargeToolResultLine (3 MB line still yields turn_done) and TestReadLineCapped_OversizedLineSkipped (direct skip path). This is the authoritative coverage for the cap."
+    },
+    {
+      "kind": "issue",
+      "ref": "ingo-eichhorst/Irrlicht#270",
+      "note": "Oversized JSONL line wedge fixed by switching the shared tailer from bufio.Scanner to bufio.Reader + readLineCapped."
+    }
   ]
 }

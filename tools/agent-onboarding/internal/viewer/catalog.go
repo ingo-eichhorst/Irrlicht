@@ -35,6 +35,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		annotateCatalogCodes(top)
 		annotateMeasurements(top, s.RepoRoot)
 		annotatePipelineState(top, s.RepoRoot)
+		annotateDisplayState(top) // after measurements: the recording axis feeds the rollup
 		if out, mErr := json.Marshal(top); mErr == nil {
 			b = out
 		}
@@ -125,7 +126,8 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 func buildCellVerdict(repoRoot, agentSlug, scenarioID string, overlay map[string]map[string]map[string]any) map[string]any {
 	cell := map[string]any{
 		"agent_supports":    "unknown",
-		"irrlicht_observes": "unknown",
+		"daemon_capability": "unknown",
+		"driver_capability": "ready",
 		"notes":             "",
 	}
 	if overlay != nil {
@@ -134,8 +136,11 @@ func buildCellVerdict(repoRoot, agentSlug, scenarioID string, overlay map[string
 				if s, ok := v["agent_supports"].(string); ok && s != "" {
 					cell["agent_supports"] = s
 				}
-				if o, ok := v["irrlicht_observes"].(string); ok && o != "" {
-					cell["irrlicht_observes"] = o
+				if d, ok := v["daemon_capability"].(string); ok && d != "" {
+					cell["daemon_capability"] = d
+				}
+				if dr, ok := v["driver_capability"].(string); ok && dr != "" {
+					cell["driver_capability"] = dr
 				}
 				if n, ok := v["notes"].(string); ok {
 					cell["notes"] = n
@@ -147,7 +152,8 @@ func buildCellVerdict(repoRoot, agentSlug, scenarioID string, overlay map[string
 	if b, err := os.ReadFile(apath); err == nil {
 		var asmt struct {
 			AgentSupports    string  `json:"agent_supports"`
-			IrrlichtObserves string  `json:"irrlicht_observes"`
+			DaemonCapability string  `json:"daemon_capability"`
+			DriverCapability string  `json:"driver_capability"`
 			Confidence       float64 `json:"confidence"`
 			Body             string  `json:"body"`
 			Notes            string  `json:"notes"`
@@ -156,8 +162,11 @@ func buildCellVerdict(repoRoot, agentSlug, scenarioID string, overlay map[string
 			if asmt.AgentSupports != "" {
 				cell["agent_supports"] = asmt.AgentSupports
 			}
-			if asmt.IrrlichtObserves != "" {
-				cell["irrlicht_observes"] = asmt.IrrlichtObserves
+			if asmt.DaemonCapability != "" {
+				cell["daemon_capability"] = asmt.DaemonCapability
+			}
+			if asmt.DriverCapability != "" {
+				cell["driver_capability"] = asmt.DriverCapability
 			}
 			if asmt.Confidence > 0 {
 				cell["confidence"] = asmt.Confidence
@@ -170,6 +179,84 @@ func buildCellVerdict(repoRoot, agentSlug, scenarioID string, overlay map[string
 		}
 	}
 	return cell
+}
+
+// deriveDisplayState rolls the three orthogonal facts — agent support,
+// daemon capability, driver capability — plus the MEASURED recording
+// status up into one display state for the matrix (#476). Precedence is
+// fixed and daemon-before-driver: a product (daemon) problem outranks a
+// tooling (driver) gap because it's the more fundamental blocker.
+//
+//	n.a.            agent doesn't support the feature (or daemon n/a)
+//	unknown         support or daemon capability not yet determined
+//	unobservable    behavior leaves no trace the daemon can ever see
+//	blocked-daemon  observable in principle, but the daemon mis-handles it (bug)
+//	blocked-driver  observable, but the harness lacks a driver primitive (gap:*)
+//	pending-record  full + ready, no recording captured yet
+//	observed        full + ready + a recording exists (drift shown via outline)
+//
+// hasRecording is true when a recording has been captured (measurement
+// status is anything other than the no-recording / no-spec sentinels).
+func deriveDisplayState(supports, daemon, driver string, hasRecording bool) string {
+	switch supports {
+	case "no":
+		return "n.a."
+	case "", "unknown":
+		return "unknown"
+	}
+	switch {
+	case daemon == "n/a":
+		return "n.a."
+	case daemon == "incapable":
+		return "unobservable"
+	case daemon == "bug":
+		return "blocked-daemon"
+	case strings.HasPrefix(driver, "gap:"):
+		return "blocked-driver"
+	case daemon == "" || daemon == "unknown":
+		return "unknown"
+	}
+	// daemon == full, driver == ready
+	if !hasRecording {
+		return "pending-record"
+	}
+	return "observed"
+}
+
+// annotateDisplayState decorates each coverage cell with a derived
+// `display_state` string (see deriveDisplayState), mutating top in place.
+// Runs AFTER annotateMeasurements so the recording axis is available.
+func annotateDisplayState(top map[string]any) {
+	rawScenarios, ok := top["scenarios"].([]any)
+	if !ok {
+		return
+	}
+	for _, raw := range rawScenarios {
+		sc, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		coverage, ok := sc["coverage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, cellRaw := range coverage {
+			cell, ok := cellRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			supports, _ := cell["agent_supports"].(string)
+			daemon, _ := cell["daemon_capability"].(string)
+			driver, _ := cell["driver_capability"].(string)
+			hasRecording := false
+			if meas, ok := cell["measurement"].(map[string]any); ok {
+				if st, ok := meas["status"].(string); ok {
+					hasRecording = st != "" && st != "no_recording" && st != "no_expected"
+				}
+			}
+			cell["display_state"] = deriveDisplayState(supports, daemon, driver, hasRecording)
+		}
+	}
 }
 
 // loadSpecsOverlay reads the coverage rollup (if reachable) and returns a

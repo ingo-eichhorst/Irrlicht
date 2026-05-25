@@ -279,9 +279,10 @@ function scrollFocusInto(focus) {
 // Two catalog shapes are supported:
 //
 //   coverage  (.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json, source of truth):
-//     38 scenarios × 5 agents. Each cell has agent_supports +
-//     irrlicht_observes verdicts (yes/no/partial/unknown) plus a notes
-//     field. Cell badge colors reflect the verdict combo.
+//     38 scenarios × 5 agents. Each cell has agent_supports plus the
+//     orthogonal daemon_capability + driver_capability verdicts, which
+//     the daemon rolls up to a derived display_state, plus a notes field.
+//     Cell badge colors reflect the display_state.
 //
 //   scenarios (.claude/skills/ir:onboard-agent/scenarios.json, fallback):
 //     8 actively-driven cells with by_adapter prompts. Cell badge =
@@ -324,13 +325,11 @@ function loadOverview() {
 }
 
 // renderCoverageMatrix paints the 38×5 maintainer coverage matrix.
-// Each cell colored by the (agent_supports, irrlicht_observes) combo:
-//   both yes        → green
-//   both partial    → amber
-//   either no       → red
-//   any unknown     → gray
-//   either partial  → light amber
-// Notes (if any) show in the tooltip.
+// Each cell's segment-2 chip is colored by the derived display_state
+// (observed / pending-record / blocked-daemon / blocked-driver /
+// unobservable / n.a. / unknown), rolled up daemon-side from
+// agent_supports + daemon_capability + driver_capability + the measured
+// recording status. Notes (if any) show in the tooltip.
 function renderCoverageMatrix(detail) {
   // catalog.agents is [{id, onboarded}, …] — extract ids for column iteration.
   const agents = (catalog.agents || []).map(a => typeof a === "string" ? a : a.id);
@@ -432,7 +431,9 @@ function renderCoverageMatrix(detail) {
       const cov = sc.coverage && sc.coverage[agent];
       if (!cov) continue;
       withEntry++;
-      const sup = cov.agent_supports, obs = cov.irrlicht_observes;
+      const sup = cov.agent_supports;
+      const daemon = cov.daemon_capability || "unknown";
+      const driver = cov.driver_capability || "ready";
       const pipe = cov.pipeline || {};
       const meas = cov.measurement || {};
       if (sup === "no") { stages.blocked++; continue; }
@@ -443,12 +444,13 @@ function renderCoverageMatrix(detail) {
       if (!specOK) { stages.awaitingSpec++; continue; }
       if (recCount === 0) { stages.awaitingRecording++; continue; }
       stages.recorded++;
-      // Divergence flags
-      const verdictExpectsPass = (sup === "yes" && obs === "yes");
-      const verdictExpectsPartial = (obs === "partial");
+      // Divergence flags (mirror renderPipelineStrip's outline logic)
+      const capable = (daemon === "full" && driver === "ready");
+      const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
+        String(driver).startsWith("gap:"));
       if (meas.status === "fail") stages.divergent++;
-      else if (meas.status === "known_failing" && verdictExpectsPass) stages.divergent++;
-      else if (meas.status === "pass" && verdictExpectsPartial) stages.divergent++;
+      else if (meas.status === "known_failing" && capable) stages.divergent++;
+      else if (meas.status === "pass" && verdictBlocks) stages.divergent++;
       else if (meas.status === "known_failing_now_passing") stages.divergent++;
     }
   }
@@ -493,12 +495,14 @@ function renderCoverageMatrix(detail) {
       stateChip("⚙", "#f8c8c8", "#8a0000", "no — freezes the pipeline") +
       stateChip("⚙", "#e5e5e5", "#555",    "unknown — needs assessment") +
       stateChip("⚙", "#eeece4", "#999",    "n/a"))}
-    ${row("2", "Observes", "irrlicht emits the right events.jsonl — glyph ◉, color = state",
-      stateChip("◉", "#d6f0d4", "#1f5a1d", "yes — full coverage") +
-      stateChip("◉", "#fde7c1", "#8a4500", "partial — some signals missing") +
-      stateChip("◉", "#f8c8c8", "#8a0000", "no — daemon gap") +
-      stateChip("◉", "#e5e5e5", "#555",    "unknown — needs assessment") +
-      stateChip("◉", "#eeece4", "#999",    "n/a — agent doesn't support feature"))}
+    ${row("2", "Observability", "derived from daemon + driver capability — glyph ◉, color = display state",
+      stateChip("◉", "#d6f0d4", "#1f5a1d", "observed — daemon full, driver ready, recorded") +
+      stateChip("◉", "#e7eef7", "#33598a", "pending record — capable, not yet recorded") +
+      stateChip("◉", "#f8c8c8", "#8a0000", "blocked: daemon — observable but mis-handled (bug)") +
+      stateChip("◉", "#fde7c1", "#8a4500", "blocked: driver — needs a driver primitive (gap:*)") +
+      stateChip("◉", "#dcdbd0", "#555",    "unobservable — leaves no trace the daemon can see") +
+      stateChip("◉", "#eeece4", "#999",    "n.a. — agent doesn't support feature") +
+      stateChip("◉", "#e5e5e5", "#555",    "unknown — needs assessment"))}
     ${row("3", "Recipe", "driver script in scenarios.json",
       stateChip("✎", "#d6f0d4", "#1f5a1d", "authored") +
       stateChip("·", "transparent", "#bbb",  "not yet authored"))}
@@ -516,10 +520,10 @@ function renderCoverageMatrix(detail) {
       stateChip("!", "#e5e5e5", "#555",    "validator error") +
       stateChip("·", "transparent", "#bbb",  "no recording / no spec"))}
     <div style="margin-top:8px;padding-top:6px;border-top:1px solid #ece9dd;color:#666;">
-      <b>Cell outlines</b> (drift between verdict and measurement):
-      <span style="display:inline-block;border:1px solid #c0392b;background:#fff5f5;padding:1px 6px;border-radius:3px;margin:0 4px;">red</span> matrix says yes but recording fails
-      <span style="display:inline-block;border:1px solid #d68a2a;background:#fffaf0;padding:1px 6px;border-radius:3px;margin:0 4px;">amber</span> matrix marked partial but recording passes (stale verdict)
-      <span style="display:inline-block;border:1px solid #1c3f7a;background:#f0f5ff;padding:1px 6px;border-radius:3px;margin:0 4px;">blue</span> known_failing flag should be dropped.
+      <b>Cell outlines</b> (drift between capability verdict and measurement):
+      <span style="display:inline-block;border:1px solid #c0392b;background:#fff5f5;padding:1px 6px;border-radius:3px;margin:0 4px;">red</span> daemon full + driver ready but recording fails
+      <span style="display:inline-block;border:1px solid #d68a2a;background:#fffaf0;padding:1px 6px;border-radius:3px;margin:0 4px;">amber</span> marked blocked/unobservable but recording passes (stale verdict)
+      <span style="display:inline-block;border:1px solid #1c3f7a;background:#f0f5ff;padding:1px 6px;border-radius:3px;margin:0 4px;">blue</span> daemon=bug / known_failing but now passes — drop the flag.
       <div style="margin-top:4px;color:#888;">Click a cell to open the recording (or scenario detail if none).</div>
     </div>
   `;
@@ -672,8 +676,10 @@ function buildAgentPlanPanel(sc, agent, recipe) {
 
   const cov = sc.coverage && sc.coverage[agent];
   const sup = cov && cov.agent_supports || "unknown";
-  const obs = cov && cov.irrlicht_observes || "unknown";
-  const {label, bg, fg} = coverageBadge(sup, obs);
+  const daemon = cov && cov.daemon_capability || "unknown";
+  const driver = cov && cov.driver_capability || "ready";
+  const display = cov && cov.display_state || "unknown";
+  const {label, bg, fg} = coverageBadge(display);
 
   const headerHTML = `
     <h3 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
@@ -681,7 +687,7 @@ function buildAgentPlanPanel(sc, agent, recipe) {
       <span style="background: ${bg}; color: ${fg}; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">${label}</span>
     </h3>
     <div style="font-size: 11px; color: #555; margin-bottom: 6px;">
-      agent_supports: <b>${sup}</b> · irrlicht_observes: <b>${obs}</b>
+      agent_supports: <b>${sup}</b> · daemon: <b>${daemon}</b> · driver: <b>${driver}</b>
     </div>
   `;
   let html = headerHTML;
@@ -828,23 +834,36 @@ function renderRecipePanel(recipe) {
   return p;
 }
 
-function coverageBadge(sup, obs) {
-  if (sup === "no" || obs === "no") return {label: "✗", bg: "#f8c8c8", fg: "#8a0000"};
-  if (sup === "yes" && obs === "yes") return {label: "●●", bg: "#d6f0d4", fg: "#1f5a1d"};
-  if (sup === "unknown" || obs === "unknown") return {label: "?", bg: "#e5e5e5", fg: "#555"};
-  if (sup === "partial" || obs === "partial") return {label: "●◐", bg: "#fde7c1", fg: "#8a4500"};
-  return {label: "—", bg: "transparent", fg: "#ccc"};
+// _displayMeta is the single palette + label source for the #476 derived
+// display state (computed daemon-side in catalog.go, attached to each
+// coverage cell as `display_state`). Every chip/badge/outline that needs
+// to show "where does this cell stand" reads through here so colors and
+// wording stay consistent across the overview strip, the detail header,
+// and the legend.
+function _displayMeta(state) {
+  switch (state) {
+    case "observed":       return {bg: "#d6f0d4", fg: "#1f5a1d", text: "observed"};
+    case "pending-record": return {bg: "#e7eef7", fg: "#33598a", text: "pending record"};
+    case "blocked-driver": return {bg: "#fde7c1", fg: "#8a4500", text: "blocked: driver"};
+    case "blocked-daemon": return {bg: "#f8c8c8", fg: "#8a0000", text: "blocked: daemon"};
+    case "unobservable":   return {bg: "#dcdbd0", fg: "#555",    text: "unobservable"};
+    case "n.a.":           return {bg: "#eeece4", fg: "#999",    text: "n.a."};
+    default:               return {bg: "#e5e5e5", fg: "#555",    text: "unknown"};
+  }
 }
 
-// _axisBadge returns chip data for ONE assessment axis.
-//   axis = "supports" → glyph is ⚙ (gear, "agent has this capability")
-//   axis = "observes" → glyph is ◉ (fisheye, "irrlicht watches this")
-// The glyph identifies WHICH axis the chip is for; the chip color
-// carries the state. Splits the old combined ●●/●◐ badge into two
-// segments with the same visual weight as the downstream Recipe /
-// Spec / Recordings / Validation glyphs (✎ § N ✓).
-function _axisBadge(value, axis) {
-  const label = axis === "observes" ? "◉" : "⚙";
+// coverageBadge renders the detail-page header pill from the derived
+// display state.
+function coverageBadge(displayState) {
+  const m = _displayMeta(displayState);
+  return {label: m.text, bg: m.bg, fg: m.fg};
+}
+
+// _axisBadge returns chip data for the agent_supports axis (segment 1 of
+// the strip). glyph ⚙ ("agent has this capability"); the chip color
+// carries the state.
+function _axisBadge(value) {
+  const label = "⚙";
   switch (value) {
     case "yes":     return {label, bg: "#d6f0d4", fg: "#1f5a1d"};
     case "partial": return {label, bg: "#fde7c1", fg: "#8a4500"};
@@ -852,6 +871,15 @@ function _axisBadge(value, axis) {
     case "n/a":     return {label, bg: "#eeece4", fg: "#999"};
     default:        return {label, bg: "#e5e5e5", fg: "#555"}; // unknown / undefined
   }
+}
+
+// _displayBadge returns chip data for segment 2 — the derived
+// observability display state (#476), rolled up from daemon_capability +
+// driver_capability + the measured recording status. glyph ◉; color from
+// the shared _displayMeta palette so it matches the detail header + legend.
+function _displayBadge(displayState) {
+  const m = _displayMeta(displayState);
+  return {label: "◉", bg: m.bg, fg: m.fg};
 }
 
 // renderPipelineStrip paints a compact 6-segment indicator that
@@ -875,7 +903,9 @@ function _axisBadge(value, axis) {
 //   rec   — recording lookup entry from recIndex (or undefined)
 function renderPipelineStrip(agent, scenarioID, cov, rec) {
   const sup = cov.agent_supports || "unknown";
-  const obs = cov.irrlicht_observes || "unknown";
+  const daemon = cov.daemon_capability || "unknown";
+  const driver = cov.driver_capability || "ready";
+  const display = cov.display_state || "unknown";
   const pipe = cov.pipeline || {};
   const meas = cov.measurement || {};
 
@@ -907,12 +937,13 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
   // Build 6 segments. Segments 1 + 2 are the two assessment axes,
   // each its own button; both jump to the same Assessment panel
   // (its chips render the two axes individually inside).
-  const supChip = _axisBadge(sup, "supports");
-  const obsChip = _axisBadge(obs, "observes");
+  const supChip = _axisBadge(sup);
+  const obsChip = _displayBadge(display);
   wrap.appendChild(_pipeBtn(supChip.label, supChip.bg, supChip.fg,
     jump("supports"), false, "Supports — agent CLI implements this feature"));
   wrap.appendChild(_pipeBtn(obsChip.label, obsChip.bg, obsChip.fg,
-    jump("observes"), false, "Observes — irrlicht emits the right events"));
+    jump("observes"), false,
+    `Observability: ${_displayMeta(display).text} (daemon=${daemon}, driver=${driver})`));
   if (blocked) {
     // Four disabled placeholders so the cell width stays consistent
     // across rows when supports=no freezes the pipeline.
@@ -953,23 +984,30 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
           "Validation — no recording yet"));
   }
 
-  // Drift outlines
-  const verdictExpectsPass = (sup === "yes" && obs === "yes");
-  const verdictExpectsPartial = (obs === "partial");
-  if (meas.status === "fail" || (meas.status === "known_failing" && verdictExpectsPass)) {
+  // Drift outlines — the verdict (capability) vs the measured recording:
+  //   red   = expected to observe cleanly (full+ready) but the recording fails
+  //   blue  = marked daemon=bug or known_failing yet the recording now passes
+  //           (the bug/known_failing verdict is stale — drop it)
+  //   amber = marked blocked/unobservable yet a recording passes clean
+  //           (capability verdict looks stale)
+  const capable = (daemon === "full" && driver === "ready");
+  const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
+    String(driver).startsWith("gap:"));
+  if (meas.status === "fail" || (meas.status === "known_failing" && capable)) {
     wrap.style.border = "1px solid #c0392b";
     wrap.style.background = "#fff5f5";
-  } else if (meas.status === "pass" && verdictExpectsPartial) {
-    wrap.style.border = "1px solid #d68a2a";
-    wrap.style.background = "#fffaf0";
-  } else if (meas.status === "known_failing_now_passing") {
+  } else if (meas.status === "known_failing_now_passing" ||
+             (meas.status === "pass" && daemon === "bug")) {
     wrap.style.border = "1px solid #1c3f7a";
     wrap.style.background = "#f0f5ff";
+  } else if (meas.status === "pass" && verdictBlocks) {
+    wrap.style.border = "1px solid #d68a2a";
+    wrap.style.background = "#fffaf0";
   }
 
   // Tooltip with the per-stage detail
   const lines = [`${agent} × ${scenarioID}`];
-  lines.push(`Assessment: supports=${sup}, observes=${obs}`);
+  lines.push(`Assessment: supports=${sup}, daemon=${daemon}, driver=${driver} → ${_displayMeta(display).text}`);
   if (cov.notes) lines.push(`  ${cov.notes}`);
   if (!blocked) {
     const recipe = pipe.recipe || {};
@@ -993,11 +1031,11 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
     lines.push(`(pipeline frozen — agent_supports=no)`);
   }
   if (wrap.style.border && wrap.style.border.includes("#c0392b")) {
-    lines.push(`⚠ regression: matrix says yes but recording fails`);
-  } else if (wrap.style.border && wrap.style.border.includes("#d68a2a")) {
-    lines.push(`⚠ matrix may be stale: marked partial but recording passes`);
+    lines.push(`⚠ regression: daemon=full/driver=ready but recording fails`);
   } else if (wrap.style.border && wrap.style.border.includes("#1c3f7a")) {
-    lines.push(`↑ flag drop: marked known_failing but now passes`);
+    lines.push(`↑ flag drop: marked daemon=bug / known_failing but now passes`);
+  } else if (wrap.style.border && wrap.style.border.includes("#d68a2a")) {
+    lines.push(`⚠ verdict may be stale: marked blocked/unobservable but recording passes`);
   }
   lines.push(`↻ click a segment to jump to its section`);
   wrap.title = lines.join("\n");
@@ -1049,50 +1087,6 @@ function _validationGlyph(status) {
   }
 }
 
-// renderMeasurementChip returns a small second pill that reflects what
-// expected.jsonl actually says about the recorded recipe. Distinct
-// signal from the verdict badge (coverage breadth) so divergence is
-// visible at a glance. Returns null when there's nothing to render
-// (no recording or no expected.jsonl yet).
-//
-// Also highlights when the verdict badge and the measurement disagree —
-// e.g. matrix "partial" but recipe passes clean, or matrix "yes" but
-// recipe fails. The border around the chip turns red on disagreement.
-function renderMeasurementChip(meas, sup, obs) {
-  if (!meas || !meas.status) return null;
-  const palette = {
-    pass:                       {label: "✓", bg: "#d6f0d4", fg: "#1f5a1d", desc: "recording passes spec"},
-    known_failing:              {label: "⚠", bg: "#fff7d6", fg: "#8a4500", desc: "known_failing flagged by author"},
-    known_failing_now_passing:  {label: "↑", bg: "#cfe7ff", fg: "#1c3f7a", desc: "marked known_failing but now passes — drop the flag"},
-    fail:                       {label: "✗", bg: "#f8c8c8", fg: "#8a0000", desc: "recording fails spec"},
-    validator_error:            {label: "!", bg: "#e5e5e5", fg: "#555",    desc: "validator error"},
-  };
-  const p = palette[meas.status];
-  if (!p) return null; // no_recording / no_expected → render nothing
-  const chip = document.createElement("span");
-  chip.textContent = p.label;
-  chip.style.cssText = `display: inline-block; padding: 1px 6px; border-radius: 8px; ` +
-    `font: inherit; font-size: 11px; font-weight: 600; line-height: 1; ` +
-    `background: ${p.bg}; color: ${p.fg}; vertical-align: middle;`;
-  // Divergence highlight: matrix says "partial" but recipe passes
-  // clean OR matrix says "yes" but recipe fails. The verdict-vs-measurement
-  // mismatch is the actionable signal — usually a stale matrix entry.
-  const verdictExpectsPass = (sup === "yes" && obs === "yes");
-  const verdictExpectsPartial = (obs === "partial" || sup === "partial");
-  const isClean = meas.status === "pass";
-  const isFailing = meas.status === "fail" || meas.status === "known_failing";
-  let mismatch = false;
-  if (verdictExpectsPartial && isClean) mismatch = true;
-  if (verdictExpectsPass && isFailing) mismatch = true;
-  if (meas.status === "known_failing_now_passing") mismatch = true;
-  if (mismatch) {
-    chip.style.boxShadow = "0 0 0 2px #c0392b";
-    chip.title = `${p.desc}${meas.summary ? " · " + meas.summary : ""}  — matrix verdict (${obs}) diverges; consider updating`;
-  } else {
-    chip.title = `${p.desc}${meas.summary ? " · " + meas.summary : ""}`;
-  }
-  return chip;
-}
 
 // renderScenariosMatrix paints the older 8×5 by_adapter view from
 // scenarios.json (fallback when .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json
@@ -1385,9 +1379,8 @@ function renderMeta(data) {
 // renderAssessment paints the Stage 1 (Assessment) point-in-time
 // record loaded from <scenarioDir>/assessment.json. Surfaces:
 //   - dated subtitle (when the assessment was made)
-//   - verdict chips for agent_supports + irrlicht_observes, using the
-//     "full / partial / none / unknown / n/a" display labels mapped
-//     from the underlying enum values
+//   - verdict chips for agent_supports + daemon_capability +
+//     driver_capability (the orthogonal observability axes, #476)
 //   - optional confidence pill
 //   - prose body (markdown rendered as preformatted text — headings
 //     read fine via the literal `##` prefix)
@@ -1409,7 +1402,8 @@ function renderAssessment(a) {
   const row = document.createElement("div");
   row.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px;";
   row.appendChild(_assessmentChip("Agent", a.agent_supports));
-  row.appendChild(_assessmentChip("Irrlicht", a.irrlicht_observes));
+  row.appendChild(_capabilityChip("Daemon", a.daemon_capability));
+  row.appendChild(_capabilityChip("Driver", a.driver_capability));
   if (typeof a.confidence === "number") {
     const conf = document.createElement("span");
     conf.style.cssText = "padding: 2px 8px; background: #f5f4ee; border: 1px solid #ece9dd; border-radius: 10px; font-size: 11px; font-family: monospace; color: #555;";
@@ -1484,7 +1478,7 @@ function renderAssessment(a) {
 
 // renderAssessmentFallback paints a stub Assessment panel for cells
 // without an assessment.json artifact. Just the matrix verdict
-// (agent_supports + irrlicht_observes chips) + notes line. Keeps the
+// (agent_supports + daemon/driver capability chips) + notes line. Keeps the
 // ⚙ / ◉ pipeline-strip anchors landable even when no rich record
 // exists. coverageEntry may be null if /api/catalog didn't return one
 // for this cell.
@@ -1504,7 +1498,8 @@ function renderAssessmentFallback(coverageEntry) {
   const row = document.createElement("div");
   row.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px;";
   row.appendChild(_assessmentChip("Agent", coverageEntry.agent_supports));
-  row.appendChild(_assessmentChip("Irrlicht", coverageEntry.irrlicht_observes));
+  row.appendChild(_capabilityChip("Daemon", coverageEntry.daemon_capability));
+  row.appendChild(_capabilityChip("Driver", coverageEntry.driver_capability));
   p.appendChild(row);
   if (coverageEntry.notes) {
     const notes = document.createElement("div");
@@ -1515,11 +1510,10 @@ function renderAssessmentFallback(coverageEntry) {
   return p;
 }
 
-// _assessmentChip maps the agent_supports / irrlicht_observes enum
-// values ("yes" / "partial" / "no" / "unknown" / "n/a") to user-facing
-// display labels ("full" / "partial" / "none" / "unknown" / "n/a") and
-// the color palette already used by coverageBadge() / the pipeline
-// strip Assessment segment. The schema stays on the enum values; the
+// _assessmentChip maps the agent_supports enum values ("yes" / "partial"
+// / "no" / "unknown") to user-facing display labels ("full" / "partial" /
+// "none" / "unknown") and a color palette. The daemon/driver axes use
+// _capabilityChip instead. The schema stays on the enum values; the
 // labels are presentation-only.
 function _assessmentChip(prefix, value) {
   const v = String(value || "unknown");
@@ -1534,6 +1528,27 @@ function _assessmentChip(prefix, value) {
   const chip = document.createElement("span");
   chip.style.cssText = `display: inline-flex; align-items: center; padding: 3px 10px; background: ${bg}; color: ${fg}; border-radius: 12px; font-size: 12px; font-weight: 500;`;
   chip.textContent = `${prefix}: ${label}`;
+  return chip;
+}
+
+// _capabilityChip renders one orthogonal observability axis (#476):
+// daemon_capability (full / bug / incapable / unknown / n/a) or
+// driver_capability (ready / gap:<primitive>). The value shows verbatim
+// — these are already display-ready — colored by severity.
+function _capabilityChip(prefix, value) {
+  const v = String(value || "unknown");
+  let bg, fg;
+  switch (true) {
+    case v === "full" || v === "ready": bg = "#d6f0d4"; fg = "#1f5a1d"; break;
+    case v === "bug":                   bg = "#f8c8c8"; fg = "#8a0000"; break;
+    case v === "incapable":             bg = "#dcdbd0"; fg = "#555";    break;
+    case v.startsWith("gap:"):          bg = "#fde7c1"; fg = "#8a4500"; break;
+    case v === "n/a":                   bg = "#eeece4"; fg = "#999";    break;
+    default:                            bg = "#e5e5e5"; fg = "#555";    break; // unknown
+  }
+  const chip = document.createElement("span");
+  chip.style.cssText = `display: inline-flex; align-items: center; padding: 3px 10px; background: ${bg}; color: ${fg}; border-radius: 12px; font-size: 12px; font-weight: 500;`;
+  chip.textContent = `${prefix}: ${v}`;
   return chip;
 }
 

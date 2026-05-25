@@ -206,6 +206,16 @@
       "id": "provider-failover-midturn",
       "section": "Metrics",
       "feature": "Provider failover mid-turn"
+    },
+    {
+      "id": "subscription-detection",
+      "section": "Metrics",
+      "feature": "Subscription / billing-model detection"
+    },
+    {
+      "id": "quota-burndown",
+      "section": "Metrics",
+      "feature": "Quota burndown (rate-limit usage)"
     }
   ],
   "scenarios": [

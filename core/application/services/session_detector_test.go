@@ -3,6 +3,7 @@ package services_test
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -1099,12 +1100,13 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
-	// Use genuinely-dead PIDs (spawned then reaped) so syscall.Kill(pid, 0)
-	// returns ESRCH. Hardcoded "probably dead" numbers like 42/99 are live
-	// kernel threads on a Linux CI box. All sessions with dead PIDs should be
-	// deleted.
-	deadPID1 := deadPIDForTest(t)
-	deadPID2 := deadPIDForTest(t)
+	// Derive PIDs that are GUARANTEED dead: spawn a process, reap it, reuse the
+	// now-defunct PID. syscall.Kill(pid, 0) on it returns ESRCH — the signal the
+	// detector uses to classify a seeded session's process as dead. Hardcoded
+	// low PIDs are not reliable here: 42/99 are live system daemons on some
+	// hosts (CI macOS runners) and live kernel threads on a Linux CI box, which
+	// made this test fail on both.
+	deadPID1, deadPID2 := deadPID(t), deadPID(t)
 	repo.states["seed1"] = &session.SessionState{
 		SessionID:      "seed1",
 		State:          session.StateWorking,
@@ -1147,6 +1149,19 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	if _, ok := pw.watched[deadPID2]; ok {
 		t.Errorf("PID %d should not be watched (dead process)", deadPID2)
 	}
+}
+
+// deadPID spawns a trivial process, waits for it to exit (which reaps it), and
+// returns its now-defunct PID. Because the child has been reaped,
+// syscall.Kill(pid, 0) returns ESRCH — exactly what the detector treats as a
+// dead process — without relying on the host's low PIDs being unused.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("spawn dead-pid helper: %v", err)
+	}
+	return cmd.Process.Pid
 }
 
 // TestSessionDetector_HandlePermissionHook_PreToolUseTransitionsToWaiting is

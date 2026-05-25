@@ -4,18 +4,35 @@
   "agent": "pi",
   "assessed_at": "2026-05-25T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.9,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Primitive\n\nModel metadata reporting: pi's JSONL rollout records the active model name on every assistant message in a field the parser extracts, so the dashboard shows the launch model rather than 'unknown'.\n\n## agent_supports — yes\n\npi boots on a concrete model and writes that model into the rollout on every assistant turn. There is no way to run a turn without a model, so a single basic turn is enough to exercise this scenario — the model name is present from turn 1.\n\n## irrlicht_observes — yes\n\nThe pi parser reads the model from two places, both normalized through tailer.NormalizeModelName (lowercases, strips provider prefixes): assistant messages carry it at message.model (parser.go L104 → ev.ModelName), and model_change events carry it at modelId (parser.go L40-42). ev.ModelName flows into SessionMetrics.ModelName, populated from the first assistant turn onward. extractPiContribution (parser.go L148) also tags the per-turn contribution with the same model name.\n\n## Observability caveat — where the assertion lives\n\nThe expected.jsonl validator DSL (validate/expected.go Phase struct: phase / expected_state / kind / max_delay_ms / duration_at_least_ms / same_session_as / new_session / invariants) operates over the lifecycle events.jsonl stream, which carries NO model_name field — so expected.jsonl cannot directly assert the model name. The model-identification proof is the metrics-level summary.model_name in the .replay.json.golden snapshot (non-empty / not 'unknown'), validated by replay-fixtures, plus the pi parser unit tests on message.model extraction. expected.jsonl therefore asserts only the basic-turn lifecycle skeleton (session born ready → working → ready, no waiting, a single process_exited); the model presence is the golden's / parser-test's job. Per issue #440 the concrete model_name string is environment-dependent (whatever model the account boots on), so the assertion is 'a model_name IS present', not a hardcoded value.\n\n## Conclusion\n\napplicable: yes. A thin cell — the basic-turn arc plus the (metrics-level) assertion that a model_name was extracted from message.model.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Primitive\n\nModel metadata reporting: pi's JSONL rollout records the active model name on every assistant message in a field the parser extracts, so the dashboard shows the launch model rather than 'unknown'.\n\n## agent_supports — yes\n\npi boots on a concrete model and writes that model into the rollout on every assistant turn. There is no way to run a turn without a model, so a single basic turn is enough to exercise this scenario — the model name is present from turn 1.\n\n## irrlicht_observes — yes\n\nThe pi parser reads the model from two places, both normalized through tailer.NormalizeModelName (lowercases, strips provider prefixes): assistant messages carry it at message.model (parser.go L104 → ev.ModelName), and model_change events carry it at modelId (parser.go L40-42). ev.ModelName flows into SessionMetrics.ModelName, populated from the first assistant turn onward. extractPiContribution (parser.go L148) also tags the per-turn contribution with the same model name.\n\n## Observability caveat — where the assertion lives\n\nThe expected.jsonl validator DSL (validate/expected.go Phase struct: phase / expected_state / kind / max_delay_ms / duration_at_least_ms / same_session_as / new_session / invariants) operates over the lifecycle events.jsonl stream, which carries NO model_name field — so expected.jsonl cannot directly assert the model name. The model-identification proof is the metrics-level summary.model_name in the .replay.json.golden snapshot (non-empty / not 'unknown'), validated by replay-fixtures, plus the pi parser unit tests on message.model extraction. expected.jsonl therefore asserts only the basic-turn lifecycle skeleton (session born ready → working → ready, no waiting, a single process_exited); the model presence is the golden's / parser-test's job. Per issue #440 the concrete model_name string is environment-dependent (whatever model the account boots on), so the assertion is 'a model_name IS present', not a hardcoded value.\n\n## Conclusion\n\napplicable: yes. A thin cell — the basic-turn arc plus the (metrics-level) assertion that a model_name was extracted from message.model.",
   "caveats": [
     "ContextWindow may briefly read 0 between session detection and the first assistant event; assert model/context only after wait_turn, not at presession_created.",
     "The concrete model_name is environment-dependent (pi's boot default); per issue #440 the spec/golden assertion is that a model_name is present (non-empty, not 'unknown'), not a specific hardcoded string, so the cell stays deterministic and worktree-portable.",
     "The model name lives at metrics level (SessionMetrics.ModelName), not in the events.jsonl lifecycle stream the expected.jsonl DSL operates over — so the DSL spec asserts only the lifecycle arc; the model claim is covered by parser unit tests + the replay golden."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/pi/parser.go L40-42 / L103-105", "note": "model_change.modelId and assistant message.model → ev.ModelName via tailer.NormalizeModelName"},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/pi/parser.go L148-149", "note": "extractPiContribution tags the per-turn contribution with the same model name"},
-    {"kind": "file", "ref": "tools/agent-onboarding/internal/validate/expected.go", "note": "Phase struct has no model field — DSL asserts state/kind on events.jsonl, not model_name"},
-    {"kind": "issue", "ref": "ingo-eichhorst/Irrlicht#440", "note": "replay-summary model_name is environment-dependent — assert presence, not a hardcoded string"}
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/parser.go L40-42 / L103-105",
+      "note": "model_change.modelId and assistant message.model → ev.ModelName via tailer.NormalizeModelName"
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/parser.go L148-149",
+      "note": "extractPiContribution tags the per-turn contribution with the same model name"
+    },
+    {
+      "kind": "file",
+      "ref": "tools/agent-onboarding/internal/validate/expected.go",
+      "note": "Phase struct has no model field — DSL asserts state/kind on events.jsonl, not model_name"
+    },
+    {
+      "kind": "issue",
+      "ref": "ingo-eichhorst/Irrlicht#440",
+      "note": "replay-summary model_name is environment-dependent — assert presence, not a hardcoded string"
+    }
   ]
 }

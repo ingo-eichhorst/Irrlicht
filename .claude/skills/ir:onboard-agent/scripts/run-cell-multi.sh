@@ -54,6 +54,10 @@ SCENARIOS_JSON="$SKILL_DIR/scenarios.json"
 # sid_in_recording, reconcile_slot_csv) — shared + unit-tested in lib/.
 # shellcheck source=lib/reconcile.sh
 source "$SCRIPT_DIR/lib/reconcile.sh"
+# Recipe ↔ driver lint (#476) — same backstop run-cell.sh applies, so the
+# cross-adapter path also refuses a missing driver step BEFORE recording.
+# shellcheck source=lib/recipe-lint.sh
+source "$SCRIPT_DIR/lib/recipe-lint.sh"
 
 [[ $# -eq 1 ]] || { echo "usage: run-cell-multi.sh <scenario-name>" >&2; exit 2; }
 SCENARIO="$1"
@@ -90,6 +94,13 @@ for a in "${ADAPTERS[@]}"; do
   [[ "$applic" == "true" ]] || { echo "adapter $a is not applicable:true for $SCENARIO" >&2; exit 1; }
   has_script="$(jq -r --arg a "$a" '.by_adapter[$a].script | if (.|type)=="array" then "yes" else "no" end' <<<"$SCEN_JSON")"
   [[ "$has_script" == "yes" ]] || { echo "adapter $a has no script for $SCENARIO" >&2; exit 1; }
+  # Driver-gap backstop (#476): refuse a step type this adapter's driver lacks
+  # before launching any daemon/CLI, mirroring run-cell.sh's exit 3.
+  if gaps="$(recipe_lint_gaps "$SCRIPT_DIR/drive-$a-interactive.sh" "$SCENARIOS_JSON" "$SCENARIO" "$a")"; then :; else
+    echo "driver_gap: $a/$SCENARIO needs step type(s) drive-$a-interactive.sh doesn't implement:" >&2
+    printf '  - gap:%s\n' $gaps >&2
+    exit 3
+  fi
 done
 
 # --- Precheck each adapter (builds bins, checks port, CLI versions) ------

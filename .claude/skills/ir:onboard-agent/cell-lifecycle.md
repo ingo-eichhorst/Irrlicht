@@ -51,11 +51,21 @@ to `unknown` — only record it when an honest search came up empty.
 
 ```json
 {
-  "agent_supports":   "yes" | "no" | "partial" | "unknown",
-  "irrlicht_observes": "yes" | "no" | "partial" | "unknown" | "n/a",
+  "agent_supports":    "yes" | "no" | "partial" | "unknown",
+  "daemon_capability": "full" | "bug" | "incapable" | "unknown" | "n/a",
+  "driver_capability": "ready" | "gap:<primitive>",
   "notes": "one or two sentences citing the source"
 }
 ```
+
+The two observability axes replace the old single `irrlicht_observes` (#476):
+`daemon_capability` answers "given a recording + working driver, can the
+daemon observe it?" (full / bug / incapable) and `driver_capability`
+answers "can the harness drive/record it?" (ready / gap:<primitive>). The
+viewer rolls them up — together with the *measured* recording status — into
+a derived `display_state` (observed / pending-record / blocked-daemon /
+blocked-driver / unobservable / n.a. / unknown). See
+[`assess/SKILL.md`](assess/SKILL.md) for the full vocabulary + evidence rule.
 
 **Assessment artifact shape (record):**
 
@@ -65,8 +75,9 @@ to `unknown` — only record it when an honest search came up empty.
   "scenario_id": "<id>",
   "agent": "<agent-slug>",
   "assessed_at": "2026-05-17T00:00:00Z",
-  "agent_supports": "yes" | "no" | "partial" | "unknown",
-  "irrlicht_observes": "yes" | "no" | "partial" | "unknown" | "n/a",
+  "agent_supports":    "yes" | "no" | "partial" | "unknown",
+  "daemon_capability": "full" | "bug" | "incapable" | "unknown" | "n/a",
+  "driver_capability": "ready" | "gap:<primitive>",
   "confidence": 0.0-1.0,
   "body": "markdown prose — Verdict, Reasoning, etc.",
   "caveats": [
@@ -86,7 +97,7 @@ wrapping text — markdown headings (`## Verdict`) read fine as-is.
 
 **When to use `caveats`:** the spec for many cells is narrower than
 "irrlicht has zero blind spots about the feature." A cell can be
-`irrlicht_observes: yes` for spec purposes while still having known
+`daemon_capability: full` for spec purposes while still having known
 limitations that a maintainer should be aware of. Use the caveats
 array to capture them. Two common patterns:
 
@@ -102,10 +113,11 @@ array to capture them. Two common patterns:
    subset of the transcript; irrlicht sums the whole file).
    Caveat: "Context utilization % may overstate after …".
 
-Authoring rule: if you're tempted to downgrade the verdict to
-`partial` because of a known-but-narrow gap, ask first whether the
-canonical spec actually requires the missing observation. If not,
-keep the verdict honest (`yes`) and surface the gap as a caveat.
+Authoring rule: if you're tempted to label `daemon_capability: bug`
+because of a known-but-narrow gap, ask first whether the canonical spec
+actually requires the missing observation. If not, keep
+`daemon_capability: full` and surface the gap as a caveat. Reserve `bug`
+for a spec-required observable the daemon mis-handles, cited to an event.
 
 **Authoring flow:** `/ir:onboard-agent assess <agent> <scenario>`
 dispatches a research subagent, synthesizes the verdict + caveats +
@@ -318,7 +330,7 @@ suitable for the viewer's Spec expectations panel.
 
 | Result                              | Action                                                |
 |---                                   |---                                                    |
-| All phases pass                      | Done. Update matrix to `irrlicht_observes: "yes"`.    |
+| All phases pass                      | Done. Matrix cell is `daemon_capability: "full"`.     |
 | Some fail, `known_failing` set       | Documented daemon gap. Stays in the spec. File issue. |
 | Some fail, no `known_failing`        | Choose: tighten recipe / fix daemon / fix spec        |
 | All pass, but `known_failing` set    | Gap closed. Drop the flag immediately.                |
@@ -386,7 +398,7 @@ Taking `claudecode/session-reset` as a worked example:
 
 | Stage | Artifact                                                                                                           | Tool                         |
 |---    |---                                                                                                                 |---                            |
-| 1     | matrix entry `irrlicht_observes: "yes"` after issue #169 daemon fix                                               | `/assess`                     |
+| 1     | matrix entry `daemon_capability: "full"` after issue #169 daemon fix                                              | `/assess`                     |
 | 2     | `scenarios.json` `by_adapter.claudecode.script` — send + wait_turn + sleep + reset_session + send + wait_turn      | `/recipe`                     |
 | 3     | `replaydata/.../session-reset/expected.jsonl` — 9 phases including `same_session_as: v1_session_handoff` and `new_session: true` on v2 | `/spec`                       |
 | 4     | `replaydata/.../session-reset/{events,transcript}.jsonl` + `manifest.json` + N archived `recordings/<ts>_irrlichd-<ver>/` | `/record`                     |

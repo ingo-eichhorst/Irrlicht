@@ -67,8 +67,8 @@ shape `{phases: [{phase, status, reason, matched_event_idx}, ...]}`.
 
 | Result                              | Action                                                |
 |---                                   |---                                                    |
-| All phases pass                      | Done. Update matrix to `irrlicht_observes: "yes"`.    |
-| Some fail, `known_failing` set       | Documented daemon gap. Stays in the spec. File issue. |
+| All phases pass                      | Done. Matrix cell is `daemon_capability: "full"`.     |
+| Some fail, `known_failing` set       | Documented daemon gap (`daemon_capability: bug`). Stays in the spec. File issue. |
 | Some fail, no `known_failing`        | Choose: tighten recipe / fix daemon / fix spec        |
 | All pass, but `known_failing` set    | Gap closed. Drop the flag immediately.                |
 | Validator error (exit 2)             | Spec is malformed; fix `expected.jsonl`.              |

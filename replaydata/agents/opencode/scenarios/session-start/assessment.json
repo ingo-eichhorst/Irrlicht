@@ -4,9 +4,10 @@
   "agent": "opencode",
   "assessed_at": "2026-05-23T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.85,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nThe scenario's two Expected bullets are (1) the session appears in `ready` within 1s of agent launch and (2) the PID is bound within 1s. Both are directly observable for the opencode adapter. Unlike file-tailing adapters, opencode uses a SQLite database (`~/.local/share/opencode/opencode.db`) — the daemon's ProcessOwnedStore source polls the session table and emits transcript_new + state_transition→ready for the UUID-keyed (`ses_…`) session.\n\nIn the recording, the `proc-<PID>` pre-session row is born at +72 ms (well under the 1000 ms budget) and pid_discovered fires at +74 ms; the SQLite-backed `ses_…` session reconciles at +528 ms when opencode's first part lands.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's two Expected bullets are (1) the session appears in `ready` within 1s of agent launch and (2) the PID is bound within 1s. Both are directly observable for the opencode adapter. Unlike file-tailing adapters, opencode uses a SQLite database (`~/.local/share/opencode/opencode.db`) — the daemon's ProcessOwnedStore source polls the session table and emits transcript_new + state_transition→ready for the UUID-keyed (`ses_…`) session.\n\nIn the recording, the `proc-<PID>` pre-session row is born at +72 ms (well under the 1000 ms budget) and pid_discovered fires at +74 ms; the SQLite-backed `ses_…` session reconciles at +528 ms when opencode's first part lands.",
   "caveats": [
     "OpenCode does not expose CLI-assignable session IDs; the driver discovers the session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns.",
     "OpenCode shares its SQLite store across all opencode runs system-wide; per-cwd isolation only holds because the driver creates a fresh staging cwd per recording."
