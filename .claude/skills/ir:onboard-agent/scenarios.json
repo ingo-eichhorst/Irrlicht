@@ -621,7 +621,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 7
+              "seconds": 12
             },
             {
               "type": "send",
@@ -632,7 +632,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 7
+              "seconds": 12
             },
             {
               "type": "send",
@@ -643,13 +643,13 @@
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 12
             }
           ],
           "verify": [
             "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
             "events.jsonl contains a pid_discovered event bound to the live aider session_id",
-            "events.jsonl contains three state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleeps are ≥7s, covering the ~5s effective latency; with shorter sleeps the next #### prompt opens a new turn with no intervening turn_done and the per-turn reset is lost)",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleeps are ≥12s: a fast model like gpt-5-nano answers in well under aider's 1.5s IdleFlush + the daemon's 5s detector-poll settle, so a 7s gap can merge the next turn into the prior one — turn 3 coalesced into turn 2 in the prior recording; 12s leaves clear daylight so all three turns produce distinct ready→working→ready arcs, matching the sibling token-accounting/model-switch cells that hit 7/7 with 12s)",
             "the session's final live state is ready before the driver tears the REPL down",
             "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session, not three exits)",
             "no state_transition to waiting appears for the session at any point",
