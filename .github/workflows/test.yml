@@ -17,7 +17,13 @@ on:
 
 jobs:
   go-test:
-    runs-on: ubuntu-latest
+    # macOS, not ubuntu: the core daemon is a macOS product and its process
+    # death-detection (processlifecycle/monitor.go) calls kqueue syscalls
+    # (syscall.Kqueue/Kevent/EVFILT_PROC) that don't exist on Linux, so core
+    # does not even compile there. This matches the platform developers build
+    # and run the suite on. (coverage.yml runs on ubuntu but silently swallows
+    # the resulting build failure.)
+    runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
