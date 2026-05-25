@@ -3923,6 +3923,50 @@
           "settings": {},
           "timeout_seconds": 120,
           "notes": "Codex difference vs claudecode: a synchronous slash command writes NOTHING to the rollout (verified live against codex-cli 0.130.0 — /status appended 0 lines, task_complete count unchanged), so there's no <local-command> wrapper for the parser to filter; the daemon simply sees no activity. The warm-up turn FIRST is mandatory: codex creates rollout-*.jsonl only after the first user message, so without it resolve_transcript hangs. Only /status is exercised (single slash) because it's the cleanest verified no-LLM render; /help and /mcp are equally synchronous but /status was the one probed. Between runs: warm-up assistant wording, token counts, session UUID, PID and timestamps differ; the state_transition set (ready, ready→working, working→ready) and its order are the structural baseline. If it broke, look at core/adapters/inbound/agents/codex/parser.go (task_complete→turn_done) and whether a codex update started logging slash invocations into the rollout."
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (PI_API_KEY or configured provider; verified against pi 0.70.0)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "/session must remain a local-only render in the running pi version — if pi ever routes it through the model the scenario premise breaks (verified live against pi 0.70.0: /session renders session stats in the TUI and appends ZERO lines to the rollout)"
+          ],
+          "setup": [
+            "Driver boots a fresh pi REPL in a per-run cwd under <staging>/cwd/; pi assigns its own session UUID per rollout",
+            "Avoid /clear and /new (session-reset — mint a fresh rollout, a different scenario) and /compact (real model call, a different scenario)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "slash",
+              "text": "/session"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working→ready cycle for the entire run, driven by the warm-up turn only (pi's first message drives working, stopReason=stop drives ready)",
+            "events.jsonl contains NO state_transition to working after the warm-up turn returns to ready — /session drives none because pi writes no rollout line for it",
+            "events.jsonl contains NO state_transition to waiting at any point",
+            "the slash window (≥6s after the warm-up turn ends) shows the rollout session continuously ready — no transcript_activity is recorded for /session",
+            "transcript.jsonl contains exactly 1 user message line and 1 assistant stopReason=stop line (the /session command does NOT appear as a user turn)",
+            "events.jsonl contains exactly one process_exited on the rollout session; final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "notes": "Pi difference vs claudecode: a synchronous slash command writes NOTHING to the rollout (verified live against pi 0.70.0 — /session renders ID/message-counts/tokens/cost directly in the TUI and the rollout line count was unchanged before/after), so there's no <local-command> wrapper for the parser to filter; the daemon simply sees no transcript activity and the session stays ready. The whole observable is the ABSENCE of a second working transition. The warm-up turn FIRST is mandatory: pi creates ~/.pi/agent/sessions/.../<ts>_<uuid>.jsonl only after the first user message, so without it the driver's resolve_transcript never binds a UUID. /session was chosen because it's a verified no-LLM local command (pi's slash menu lists it as 'Show session info and stats'); /usage, /status, /help, /cost are NOT pi commands (the slash menu shows no match). C7 / SESSION-IDENTITY: the live REPL emits a transient proc-<PID> pre-session born ready at launch (bridges the gap until the UUID rollout transcript appears); session_birth legitimately matches that pre-session, while the turn arc and post-slash dwell pin to the rollout via same_session_as (turn_start anchors to recording start with NO pin so the matcher binds the FIRST working — necessarily the rollout, since the pre-session never goes working). Between runs: warm-up assistant wording, token counts, session UUID, PID and timestamps differ; the state_transition set (ready, ready→working, working→ready) and its order are the structural baseline. If it broke, look at core/adapters/inbound/agents/pi/parser.go (message/assistant stopReason=stop → turn_done) and whether a pi update started logging slash invocations into the rollout."
         }
       }
     },
