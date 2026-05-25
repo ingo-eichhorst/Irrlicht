@@ -4896,35 +4896,45 @@
           "setup": [
             "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in the transcript before sending the prompt",
             "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears. aider is keyed by proc-<PID> — there is no transcript UUID rollout session; the whole arc stays on the one proc-<PID> row",
-            "AIDER'S PARTIAL-FLUSH UNIT IS THE PER-MODEL-CALL PROSE BLOCK, NOT TOKEN-LEVEL STREAMING: aider has no JSONL streaming event and the markdown history is written as completed message blocks (incremental token rendering is terminal-UI only and never reaches the file). Under --yes-always one `####` user turn can drive several model calls (an initial reply, auto-accepted file-adds, a follow-up analysis), each closed by its own `> Tokens:` line. closeModelCall (parser.go:153-188) emits assistant_message — NOT turn_done — at each `> Tokens:` line and leaves the turn open, and IsAgentDone (session.go:461-496) does not treat aider's assistant_message as done, so no per-call flush can flip the session to ready: the session holds working across every partial flush (TestParser_MultiModelCall_KeepsTurnOpen)",
-            "wait_turn blocks until a new `> Tokens:` line appears (one model call finished). aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet (parser.go:54,216-229), surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency); the trailing sleep (≥10s) lets that flip fire AND be observed before teardown — a teardown race bit a sibling cell at 8s, so the final working→ready IdleFlush settle + teardown needs ≥10s of headroom before the tmux kill",
+            "AIDER'S PARTIAL-FLUSH UNIT IS THE PER-MODEL-CALL PROSE BLOCK, NOT TOKEN-LEVEL STREAMING: aider has no JSONL streaming event and the markdown history is written as completed message blocks (incremental token rendering is terminal-UI only and never reaches the file). The partial-flush analog is the per-model-CALL prose block closed by its own `> Tokens:` line. closeModelCall (parser.go:153-188) emits assistant_message — NOT turn_done — at each `> Tokens:` line and leaves the turn open, and IsAgentDone (session.go:461-496) does not treat aider's assistant_message as done, so no per-call flush can flip the session to ready: the session holds working across every partial flush (TestParser_MultiModelCall_KeepsTurnOpen)",
+            "ELICITING A MULTI-MODEL-CALL TURN DETERMINISTICALLY (the fix for the single-flush failure mode): a plain reply prompt — even a long 'walk through these files' one — can be answered by the model in ONE model call (one `> Tokens:` flush), so there are NO intermediate partial flushes to observe and the streaming_window has nothing to assert (the prior recording reproduced exactly this: one `> Tokens:` line, then a late --yes-always file-write reopened working AFTER the turn settled, exiting while working). Instead, borrow the aider/self-correction-iteration mechanism: settings.aider_extra_args launches aider with `--auto-test --test-cmd false`. The send asks aider to create one small Python file (an edit it can reliably perform); `false` always exits non-zero, so EVERY edit trips a test failure and forces a reflection re-call within the SAME `#### ` turn (run_one's max_reflections=3 loop, base_coder.py:860/879/924-944, never re-emits a `#### ` header). Each reflection round closes its own `> Tokens:` line, so one user turn deterministically produces ≥2 model calls — a genuine multi-flush span the session must hold working across, independent of what gpt-5-nano writes. The loop self-limits at max_reflections=3 so the turn always settles to ready; no permission gate (--yes-always, permission_hooks:false) so the edit + auto-test auto-execute and the session never enters waiting.",
+            "wait_turn blocks until a new `> Tokens:` line appears (one model call finished). The recipe waits TWICE: the FIRST wait_turn returns on the initial edit's `> Tokens:`, the SECOND returns on the first reflection round's `> Tokens:` (the auto-test failed and aider re-called the model) — this guarantees a genuine multi-call streaming span completed before teardown; a single wait_turn returns while the reflection call is still in flight and truncates the turn. aider has NO turn-end transcript marker — end-of-turn is synthesized by IdleFlush after 1.5s quiet (parser.go:54,216-229), surfaced as working→ready behind the daemon's 5s SessionDetector poll (~5s effective latency); the trailing sleep (≥10s; here 20s) absorbs all reflection rounds (max_reflections=3 — gpt-5-nano needs >12s to complete them, so 12s teardown-interrupted an in-flight third round) plus one full ~5s IdleFlush cycle so the final working→ready settle fires AND is observed before teardown — a teardown race bit a sibling cell at 8s, so the final settle + teardown needs ≥10s of headroom before the tmux kill",
             "After the trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session"
           ],
           "script": [
             {
               "type": "send",
-              "text": "Add core/domain/session/session.go and core/adapters/inbound/agents/aider/parser.go to the chat, then give me a detailed multi-paragraph walkthrough of how each file handles end-of-turn detection. Take your time and be thorough."
+              "text": "Create a new file solution.py containing a single Python function add(a, b) that returns a + b. Make the edit now; do not ask me anything."
+            },
+            {
+              "type": "wait_turn"
             },
             {
               "type": "wait_turn"
             },
             {
               "type": "sleep",
-              "seconds": 10
+              "seconds": 20
             }
           ],
           "verify": [
             "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
             "events.jsonl contains a pid_discovered event bound to the live aider session_id",
             "events.jsonl shows exactly one ready→working transition for the session when the prompt lands — the streaming window opens here",
-            "across the streaming window (multiple partial flushes — each per-model-call prose block closed by its own `> Tokens:` line emits assistant_message, not turn_done), NO state_transition to ready fires before the synthesized end-of-turn; the session holds working solidly across all flushes (the no-flicker invariant)",
+            "across the streaming window (the --auto-test reflection loop drives MULTIPLE model calls within the one `####` turn — each per-model-call prose block closed by its own `> Tokens:` line emits assistant_message, not turn_done), NO state_transition to ready fires before the synthesized end-of-turn; the session holds working solidly across all flushes (the no-flicker invariant)",
             "NO state_transition to waiting fires during the streaming window",
             "events.jsonl shows exactly one working→ready transition at the synthesized turn end (IdleFlush after the history goes quiet, ~5s effective latency)",
             "the session's final live state is ready before the driver tears the REPL down",
             "events.jsonl contains exactly one process_exited on the session at REPL teardown (one long-lived session)",
-            "transcript .aider.chat.history.md contains 1 `####` user line and at least 2 `> Tokens:` lines (the multiple partial flushes within the one turn)"
+            "transcript .aider.chat.history.md contains 1 `####` user line and at least 2 `> Tokens:` lines (the initial edit plus ≥1 reflection re-edit — the multiple partial flushes within the one turn)"
           ],
-          "settings": {},
+          "settings": {
+            "aider_extra_args": [
+              "--auto-test",
+              "--test-cmd",
+              "false"
+            ]
+          },
           "timeout_seconds": 300
         }
       }
