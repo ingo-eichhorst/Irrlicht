@@ -201,6 +201,78 @@ func TestRelayReplaysCacheToLateClient(t *testing.T) {
 	}
 }
 
+func TestRelayDaemonDisconnectDeletesSessions(t *testing.T) {
+	wsURL, baseURL := newTestServer(t)
+
+	client := dial(t, wsURL)
+	if err := client.WriteJSON(relay.Hello{Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion, Role: relay.RoleClient}); err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, client, relay.MsgSnapshot)
+
+	daemon := dial(t, wsURL)
+	if err := daemon.WriteJSON(relay.Hello{
+		Type: relay.MsgHello, ProtocolVersion: relay.ProtocolVersion,
+		Role: relay.RoleDaemon, DaemonID: "d1", DaemonLabel: "laptop",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ack relay.HelloAck
+	if err := daemon.ReadJSON(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.WriteJSON(relay.DaemonSnapshot{
+		Type:     relay.MsgDaemonSnapshot,
+		Sessions: []*session.SessionState{{SessionID: "s1", State: "working", ProjectName: "proj"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain the connect status + the snapshot-reconciliation push, and confirm
+	// the session is cached.
+	readUntil(t, client, relay.MsgDaemonStatus)
+	readUntil(t, client, relay.MsgPush)
+	if body := httpGet(t, baseURL+"/api/v1/sessions"); !bytes.Contains(body, []byte(`"session_id":"s1"`)) {
+		t.Fatalf("expected s1 cached before disconnect, got %s", body)
+	}
+
+	// Daemon drops → the relay must fan out a session_deleted for its cached
+	// session and a disconnected status, and evict the session from the cache.
+	daemon.Close()
+	sawDelete, sawDisconnect := false, false
+	deadline := time.Now().Add(2 * time.Second)
+	for (!sawDelete || !sawDisconnect) && time.Now().Before(deadline) {
+		client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, data, err := client.ReadMessage()
+		if err != nil {
+			t.Fatalf("reading after daemon close: %v", err)
+		}
+		switch relay.FrameType(data) {
+		case relay.MsgPush:
+			var p relay.Push
+			mustJSON(t, data, &p)
+			if p.Msg.Type == outbound.PushTypeDeleted && p.Msg.Session != nil && p.Msg.Session.SessionID == "s1" {
+				sawDelete = true
+			}
+		case relay.MsgDaemonStatus:
+			var ds relay.DaemonStatus
+			mustJSON(t, data, &ds)
+			if ds.DaemonID == "d1" && ds.Status == relay.StatusDisconnected {
+				sawDisconnect = true
+			}
+		}
+	}
+	if !sawDelete {
+		t.Fatal("no session_deleted push for the disconnected daemon's session")
+	}
+	if !sawDisconnect {
+		t.Fatal("no daemon disconnect status")
+	}
+	if body := httpGet(t, baseURL+"/api/v1/sessions"); bytes.Contains(body, []byte(`"session_id":"s1"`)) {
+		t.Fatalf("s1 should be evicted from the cache after daemon disconnect, got %s", body)
+	}
+}
+
 func TestResolveUIDirEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644); err != nil {

@@ -41,7 +41,11 @@ func main() {
 		args = args[1:]
 	}
 	fs := flag.NewFlagSet("irrlichtrelay", flag.ExitOnError)
-	addr := fs.String("addr", ":7839", "TCP address to listen on (e.g. :7839)")
+	// Loopback by default: v0 has no auth and a permissive WS origin policy, so
+	// it must not be reachable from the LAN unless explicitly asked. Pass
+	// --addr 0.0.0.0:7839 (or a specific interface) to expose it — and only
+	// once bearer-token auth lands. Mirrors the daemon's loopback default.
+	addr := fs.String("addr", "127.0.0.1:7839", "TCP address to listen on; defaults to loopback (use 0.0.0.0:7839 to expose on the LAN)")
 	_ = fs.Parse(args)
 
 	// Serve web assets with correct Content-Type regardless of the host OS

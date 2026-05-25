@@ -130,17 +130,23 @@ dashboard served from a different port is cross-origin). Tighten alongside auth.
 ## Running it
 
 ```sh
-irrlichd                                    # daemon on :7837 (its default)
+irrlichd                                          # daemon on :7837 (its default)
 IRRLICHT_RELAY_URL=ws://localhost:7839 irrlichd   # …also forwards to the relay
-irrlichtrelay serve --addr :7839            # the relay
+irrlichtrelay serve                               # the relay on 127.0.0.1:7839
 ```
+
+> **Bind:** the relay listens on **`127.0.0.1:7839`** by default. v0 has no auth
+> and a permissive WS origin policy, so it stays loopback-only until bearer-token
+> auth lands. To watch sessions across machines, opt in explicitly with
+> `irrlichtrelay serve --addr 0.0.0.0:7839` (or a specific interface) — aware
+> that anyone who can reach that address can read every session and inject as a
+> daemon. This mirrors the daemon's own loopback-by-default posture.
 
 > **Port choice:** irrlicht uses three contiguous ports — `7837` (production
 > daemon), `7838` (dev-daemon coexist via `IRRLICHT_DAEMON_PORT`/`BIND_ADDR`),
 > and `7839` (relay default). All three sit in the `7836–7850` band, which has
 > no IANA-notable service and is effectively never seen open in the wild (per
-> nmap-services frequency data), so collisions are unlikely. Override any of
-> them — `--addr` for the relay — if your environment already uses one.
+> nmap-services frequency data), so collisions are unlikely.
 
 Then in **Settings → Sources** (macOS or web) enable **Local** and/or enter the
 **Relay server URL**; both clients show the union of sessions, live, and the
