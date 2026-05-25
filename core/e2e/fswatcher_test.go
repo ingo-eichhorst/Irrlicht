@@ -31,8 +31,14 @@ func TestFSWatcher_EmitsEventsForTranscriptCreateAndModify(t *testing.T) {
 	watchDone := make(chan struct{})
 	go func() { _ = w.Watch(ctx); close(watchDone) }()
 
-	// Give the watcher a moment to attach kqueue/inotify before we touch files.
-	time.Sleep(100 * time.Millisecond)
+	// Wait until the watcher has actually attached kqueue/inotify before we
+	// touch files — a fixed sleep races the attach on a loaded CI runner and
+	// drops the create event (flaky TestFSWatcher failures on macOS CI).
+	select {
+	case <-w.Ready():
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not become ready within 5s")
+	}
 
 	transcriptPath := filepath.Join(root, projectDir, "abc-create.jsonl")
 	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user"}`+"\n"), 0644); err != nil {

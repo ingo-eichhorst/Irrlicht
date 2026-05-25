@@ -26,6 +26,34 @@ type Watcher struct {
 
 	subMu sync.Mutex
 	subs  []chan agent.Event
+
+	readyMu   sync.Mutex
+	readyOnce sync.Once
+	ready     chan struct{} // closed once the root watch is attached
+}
+
+// Ready returns a channel that is closed once Watch has attached the
+// underlying fsnotify watch to the root (and any pre-existing subdirs).
+// After it is readable, file mutations under the tree are guaranteed to be
+// observed — tests and wiring can wait on it instead of sleeping a guessed
+// interval to dodge the attach race. The channel never sends; it is only
+// closed. Safe to call before, during, or after Watch.
+func (w *Watcher) Ready() <-chan struct{} { return w.readyChan() }
+
+// readyChan lazily creates the ready channel so the literal constructors
+// (New, NewWithRoot) don't each have to initialize it.
+func (w *Watcher) readyChan() chan struct{} {
+	w.readyMu.Lock()
+	defer w.readyMu.Unlock()
+	if w.ready == nil {
+		w.ready = make(chan struct{})
+	}
+	return w.ready
+}
+
+// signalReady closes the ready channel exactly once.
+func (w *Watcher) signalReady() {
+	w.readyOnce.Do(func() { close(w.readyChan()) })
 }
 
 // WithIdentity sets the full agent.Identity for this watcher so it
@@ -111,6 +139,10 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	if err := watcher.Add(w.root); err != nil {
 		return err
 	}
+
+	// The watch is now live for the root and all pre-existing subdirs;
+	// unblock anyone waiting on Ready() before mutating files.
+	w.signalReady()
 
 	for {
 		select {
