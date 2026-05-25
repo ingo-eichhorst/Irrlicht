@@ -4556,39 +4556,45 @@
           "setup": [
             "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line in .aider.chat.history.md before sending the prompt",
             "aider stores its transcript as .aider.chat.history.md in the cwd (FilesUnderCWD, RawLineParser), so the daemon keys the WHOLE session by proc-<PID> — there is no separate transcript-UUID rollout session and no handoff/reconcile; the turn arc, pid_discovered and teardown all land on that one proc-<PID> row. The transcript is LAZY (materializes on first input), but the proc-<PID> pre-session is observable from launch (that is where the spec's session_birth ‘ready within 1s’ is grounded)",
-            "WHY the retry is one turn: io.user_input() writes the `#### ` history header exactly once per top-level prompt, before Coder.run_one; run_one's reflection loop sets reflected_message and calls send_message directly, never re-emitting a `#### ` header (base_coder.py:860/879/924-944). The parser treats every `> Tokens:` line as assistant_message (NOT turn_done) so the turn stays open across the multiple model calls (parser.go:18-23,146-188), and `> Running <cmd>`→tool_result(Bash) markers never change state away from working — so the fail→retry→recover arc is one contiguous ready→working→ready span",
-            "No auto-mode / permission step is needed and there is no gate to enable: aider runs under --yes-always and has NO permission hook (capabilities.json permission_hooks:false), so the shell-command confirmation auto-answers and both the failing command and the corrective command auto-execute — unlike the claudecode recipe for this cell, which must enable auto mode to keep a Bash call from tripping a gate. The session therefore never enters waiting",
+            "WHY the retry is one turn: io.user_input() writes the `#### ` history header exactly once per top-level prompt, before Coder.run_one; run_one's reflection loop (max_reflections=3) sets reflected_message and calls send_message directly, never re-emitting a `#### ` header (base_coder.py:860/879/924-944). The loop is driven by --auto-test: after aider applies the edit, the test_cmd runs; a non-zero exit feeds its output back as reflected_message, so aider edits again and re-tests — repeating until the test passes or max_reflections is hit. The parser treats every `> Tokens:` line as assistant_message (NOT turn_done) so the turn stays open across the multiple model calls (parser.go:18-23,146-188), and the `> Running <test_cmd>`→tool_result markers never change state away from working — so the edit→test-fail→reflect→re-edit arc is one contiguous ready→working→ready span",
+            "HOW the reflection is elicited deterministically: settings.aider_extra_args launches aider with `--auto-test --test-cmd false`. `false` always exits non-zero, so EVERY edit aider makes inside the turn trips a test failure and forces at least one reflection — independent of what gpt-5-nano actually writes. The loop self-limits at max_reflections=3, so the turn always settles to ready; we never depend on the model eventually producing passing code. No permission gate is involved: aider runs under --yes-always with NO permission hook (capabilities.json permission_hooks:false), the edit and the auto-test auto-execute, and the session never enters waiting",
             "WHY interactive, not headless `aider --message` (drift fix, same shape as the pi/codex siblings): aider emits no end-of-turn marker, so working→ready is synthesized by IdleFlush after a ~1.5s quiet window, clamped to the SessionDetector's ~5s working-refresh poll; a headless --message run can exit promptly after the reply, so the daemon misses the terminal working→ready settle before process_exited and truncates the arc. Keeping aider alive in the REPL across one send + wait_turn lets the daemon observe the full ready→working→ready settle cleanly, and the single tmux kill-session teardown then yields one clean process_exited",
             "wait_turn blocks until a new `> Tokens:` line appears in the transcript (aider's per-round close marker — fires on EACH model call inside the reflection loop, so it returns on the first one; the ≥6s trailing sleep then absorbs the full reflection chain plus one idle-flush cycle so the terminal working→ready settle is observed before teardown)",
-            "The send self-contains the fixture: aider is asked to run a failing shell command, then on failure run a corrective shell command in the same turn, then reply done — forcing at least two shell tool calls (one failing) inside the single working span"
+            "The send asks aider to create a small Python file (an edit aider can reliably perform), which is what arms --auto-test: the post-edit test (`false`) fails, driving the within-turn reflection loop. The prompt deliberately avoids requesting a shell command — aider's reflection loop fires on --auto-lint/--auto-test failures, NOT on a model-invoked shell tool's exit code, so the lint/test path is the only reliable in-turn self-correction trigger"
           ],
           "script": [
             {
               "type": "send",
-              "text": "Run the shell command 'cat /nonexistent_file_xyz.txt' using your shell tool. It will fail. When it fails, do not ask me anything — run the shell command 'echo recovered' in the same turn and report what it printed. Then on the next line reply with exactly: done"
+              "text": "Create a new file solution.py containing a single Python function add(a, b) that returns a + b. Make the edit now; do not ask me anything."
             },
             {
               "type": "wait_turn"
             },
             {
               "type": "sleep",
-              "seconds": 6
+              "seconds": 8
             }
           ],
           "verify": [
             "events.jsonl contains a transcript_new + presession_created for the proc-<PID> session born ready within ~1s of REPL launch",
             "events.jsonl contains a pid_discovered event bound to the same proc-<PID> session_id",
-            "events.jsonl shows exactly one state_transition→working on the proc-<PID> session_id when the prompt is sent, sustained across the failing shell call and its corrective retry",
-            "transcript.jsonl contains at least two Bash tool_result markers inside the single working span — the failing `cat` (its result carries the shell error) and the corrective `echo recovered` (the auto-executed, ungated retry — aider has no permission hook) (coarse-grained: one marker per tool, no args/result payload)",
-            "events.jsonl contains NO state_transition to ready between the failing tool_result and the corrective tool call — the session stays continuously working across the retry (the parser holds working across `> Tokens:`/tool_result runs within one `#### ` turn)",
-            "events.jsonl contains NO state_transition to waiting at any point during the working span (both commands auto-execute under --yes-always; aider never gates)",
-            "events.jsonl shows exactly one working→ready transition at the single turn end (synthesized by IdleFlush ~1.5s after the last `> Tokens:`)",
+            "events.jsonl shows exactly one state_transition→working on the proc-<PID> session_id when the prompt is sent, sustained across the edit and its auto-test-driven reflection retries",
+            "transcript.jsonl shows the single working span spanning multiple `> Tokens:` model-call markers (the initial edit plus ≥1 reflection re-edit) — the within-turn self-correction (coarse-grained: aider's tool markers carry no args/result payload)",
+            "events.jsonl contains NO state_transition to ready between the failing auto-test and the corrective re-edit — the session stays continuously working across the reflection loop (the parser holds working across `> Tokens:`/tool_result runs within one `#### ` turn)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (the edit and auto-test auto-execute under --yes-always; aider never gates)",
+            "events.jsonl shows exactly one working→ready transition at the single turn end (synthesized by IdleFlush ~1.5s after the last `> Tokens:`, after max_reflections is reached)",
             "the session's final live state is ready before the driver tears the REPL down",
             "events.jsonl contains exactly one process_exited on the proc-<PID> session at REPL teardown",
             "KNOWN TIMING RISK (observes:partial): if any single inter-reflection model call is silent >~1.5s, IdleFlush can fire a premature working→ready then the next `> Tokens:` reopens working→working flicker — flag it as a known timing limitation, do NOT widen the spec to accept it",
-            "Do not assert the shell tool's error text — it is model/OS-dependent; assert only the state topology and the tool-call pairing"
+            "Do not assert the auto-test command's output text — assert only the state topology and the multi-call reflection span"
           ],
-          "settings": {},
+          "settings": {
+            "aider_extra_args": [
+              "--auto-test",
+              "--test-cmd",
+              "false"
+            ]
+          },
           "timeout_seconds": 300
         }
       }

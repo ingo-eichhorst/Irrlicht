@@ -25,6 +25,11 @@
 # Optional env:
 #   IRRLICHT_AIDER_MODEL  — passed via `aider --model` if set
 #
+# Optional recipe settings (settings.json, arg 4):
+#   aider_extra_args: [string]  — extra aider CLI flags appended at launch,
+#       e.g. ["--auto-test","--test-cmd","false"] to force the within-turn
+#       reflection loop (max_reflections=3) for self-correction scenarios.
+#
 # Usage:
 #   drive-aider-interactive.sh <staging-dir> <session-uuid> \
 #       <timeout-seconds> <settings-path> <script-json>
@@ -62,6 +67,16 @@ TRANSCRIPT="$RUN_CWD/.aider.chat.history.md"
 AIDER_ARGS=( --no-auto-commits --yes-always --no-gitignore )
 if [[ -n "${IRRLICHT_AIDER_MODEL:-}" ]]; then
   AIDER_ARGS+=( --model "$IRRLICHT_AIDER_MODEL" )
+fi
+# The recipe's settings blob may carry an `aider_extra_args` array — extra
+# CLI flags appended to the aider launch (e.g. ["--auto-test","--test-cmd",
+# "false"] to force the within-turn reflection loop for self-correction).
+# This keeps the recipe authoritative: the flags that shape the scenario
+# live in scenarios.json, not in ad-hoc env at invocation time.
+if [[ -f "$_SETTINGS_PATH" ]]; then
+  while IFS= read -r _xa; do
+    [[ -n "$_xa" ]] && AIDER_ARGS+=( "$_xa" )
+  done < <(jq -r '.aider_extra_args[]? // empty' "$_SETTINGS_PATH" 2>/dev/null)
 fi
 
 SESSION="aider-onboard-${UUID:0:8}-$$"
