@@ -40,12 +40,22 @@ type ScenarioDetail struct {
 // .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json is the current-state rollup;
 // this struct preserves when and why the verdict was reached.
 type AssessmentReport struct {
-	SchemaVersion    int                `json:"schema_version"`
-	ScenarioID       string             `json:"scenario_id"`
-	Agent            string             `json:"agent"`
-	AssessedAt       string             `json:"assessed_at"`
-	AgentSupports    string             `json:"agent_supports"`    // yes / partial / no / unknown
-	IrrlichtObserves string             `json:"irrlicht_observes"` // yes / partial / no / unknown / n/a
+	SchemaVersion int    `json:"schema_version"`
+	ScenarioID    string `json:"scenario_id"`
+	Agent         string `json:"agent"`
+	AssessedAt    string `json:"assessed_at"`
+	AgentSupports string `json:"agent_supports"` // yes / partial / no / unknown
+	// DaemonCapability and DriverCapability replace the old single
+	// irrlicht_observes axis (#476). Orthogonal facts:
+	//   DaemonCapability — given a recording + working driver, can the
+	//     daemon observe it? full / bug / incapable / unknown / n/a.
+	//   DriverCapability — can the harness drive/record it? ready, or
+	//     gap:<primitive> when a driver step type is missing.
+	// The recording axis stays MEASURED (events.jsonl + validation), so
+	// it isn't stored here. DisplayState rolls all three up — see
+	// deriveDisplayState in catalog.go.
+	DaemonCapability string             `json:"daemon_capability"` // full / bug / incapable / unknown / n/a
+	DriverCapability string             `json:"driver_capability"` // ready / gap:<primitive>
 	Confidence       float64            `json:"confidence,omitempty"`
 	Body             string             `json:"body"`
 	Sources          []AssessmentSource `json:"sources,omitempty"`

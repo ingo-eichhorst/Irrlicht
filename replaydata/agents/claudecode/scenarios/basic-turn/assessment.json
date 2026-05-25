@@ -4,16 +4,29 @@
   "agent": "claudecode",
   "assessed_at": "2026-05-18T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.95,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nThe spec's two Expected: bullets are the foundational lifecycle assertion that every other scenario builds on:\n\n1. **`ready → working → ready`.** Standard turn arc. Observable in irrlicht via `state_transition` events emitted by the claudecode parser: the user-line append in the JSONL transcript drives `ready → working`; the assistant's terminal `stop_reason: end_turn` drives `working → ready`. Both transitions are first-class in `core/adapters/inbound/agents/claudecode/parser.go` and have been load-bearing since the adapter's initial commit.\n2. **`TotalTokens > 0` after the turn.** Observable in the recording's `events.jsonl` via the parser's `extractAnthropicUsageBreakdown` helper, which pulls `input_tokens` / `output_tokens` / `cache_*` from each assistant message's `usage` payload. The spec assertion isn't expressible in the current phase DSL (no metric-form invariant), but the data IS in the recording — committed manifest carries the token totals.\n\nThe recipe is the minimum-cost prompt that exercises this arc end-to-end: `'Reply with exactly the word: ok'`. Single user line, single assistant line with `stop_reason: end_turn`, no tool calls, no waiting state. The 4/4 passing committed recording (`recordings/2026-05-15T07-37_irrlichd-0.4.x/`) demonstrates the spec lands cleanly across re-records.\n\nThis is the canonical baseline cell for every other claudecode scenario — failure here would invalidate dozens of derived recipes.\n\n## What irrlicht does NOT see (and why that's narrow)\n\nThe `TotalTokens > 0` bullet from the spec doesn't have a corresponding phase DSL field; it's verified by reading the recording's metrics directly. Bringing it under the validator would require a `min_total_tokens` invariant or similar — future work for the phase DSL, not a transport gap.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe spec's two Expected: bullets are the foundational lifecycle assertion that every other scenario builds on:\n\n1. **`ready → working → ready`.** Standard turn arc. Observable in irrlicht via `state_transition` events emitted by the claudecode parser: the user-line append in the JSONL transcript drives `ready → working`; the assistant's terminal `stop_reason: end_turn` drives `working → ready`. Both transitions are first-class in `core/adapters/inbound/agents/claudecode/parser.go` and have been load-bearing since the adapter's initial commit.\n2. **`TotalTokens > 0` after the turn.** Observable in the recording's `events.jsonl` via the parser's `extractAnthropicUsageBreakdown` helper, which pulls `input_tokens` / `output_tokens` / `cache_*` from each assistant message's `usage` payload. The spec assertion isn't expressible in the current phase DSL (no metric-form invariant), but the data IS in the recording — committed manifest carries the token totals.\n\nThe recipe is the minimum-cost prompt that exercises this arc end-to-end: `'Reply with exactly the word: ok'`. Single user line, single assistant line with `stop_reason: end_turn`, no tool calls, no waiting state. The 4/4 passing committed recording (`recordings/2026-05-15T07-37_irrlichd-0.4.x/`) demonstrates the spec lands cleanly across re-records.\n\nThis is the canonical baseline cell for every other claudecode scenario — failure here would invalidate dozens of derived recipes.\n\n## What irrlicht does NOT see (and why that's narrow)\n\nThe `TotalTokens > 0` bullet from the spec doesn't have a corresponding phase DSL field; it's verified by reading the recording's metrics directly. Bringing it under the validator would require a `min_total_tokens` invariant or similar — future work for the phase DSL, not a transport gap.",
   "caveats": [
     "Assessment backfilled in 2026-05-18 to fill the Stage-1 artifact gap. The recording + spec predate the assessment.json convention (introduced in commit de926ab); the verdict here is consistent with the existing 4/4 pass-rate and the committed recipe in scenarios.json.",
     "TotalTokens > 0 assertion lives outside the phase DSL; it's structurally verified by the manifest's recorded metrics rather than by expected-validate."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go", "note": "extractAnthropicUsageBreakdown + end_turn → ready classifier path; load-bearing since the adapter's initial commit."},
-    {"kind": "file", "ref": ".specs/agent-scenarios.md", "note": "Feature: Basic turn (L112-119) — two Expected: bullets (state arc + tokens > 0)."},
-    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/scenarios.json", "note": "by_adapter.claudecode for basic-turn — single-prompt headless recipe."}
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+      "note": "extractAnthropicUsageBreakdown + end_turn → ready classifier path; load-bearing since the adapter's initial commit."
+    },
+    {
+      "kind": "file",
+      "ref": ".specs/agent-scenarios.md",
+      "note": "Feature: Basic turn (L112-119) — two Expected: bullets (state arc + tokens > 0)."
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+      "note": "by_adapter.claudecode for basic-turn — single-prompt headless recipe."
+    }
   ]
 }

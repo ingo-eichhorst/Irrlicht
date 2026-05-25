@@ -95,11 +95,13 @@ which adds matrix COLUMNS (a whole new agent). Don't confuse them.
      "feature": "<same feature title>",
      "coverage": {
        // one entry per slug in the top-level `agents[]` array:
-       "<agent>": {"agent_supports": "unknown", "irrlicht_observes": "unknown", "notes": ""}
+       "<agent>": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "ready", "notes": ""}
      }
    }
    ```
-   Every adapter starts `unknown`/`unknown` — you are not assessing here.
+   Every adapter starts `agent_supports: unknown` / `daemon_capability:
+   unknown` — you are not assessing here. (`driver_capability` defaults to
+   `ready`; `assess` flips it to `gap:<primitive>` only on evidence.)
 4. **`replaydata/agents/features.json`** — ONLY if `requires` needs a
    capability that doesn't exist yet. Append a `features[]` entry
    `{id, title, category, description, added_in}` (category = one of the

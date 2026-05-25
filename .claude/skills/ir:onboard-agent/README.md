@@ -74,8 +74,9 @@ mid-turn" for claudecode.
    /ir:onboard-agent assess claudecode mid-turn-message-queued
    ```
    Researches claudecode's docs + the adapter transport, writes
-   `assessment.json`, and returns e.g. `applicable: yes`. (If it returned
-   `no`/`n/a`, you'd stop here — the assessment documents why.)
+   `assessment.json`, and returns a `route` e.g. `record`. (If it returned
+   `frozen`, you'd stop here — the assessment documents why; `driver-gap`
+   routes to a driver-extension task instead.)
 
 3. **Implement it** (spends tokens, needs a recording daemon):
    ```

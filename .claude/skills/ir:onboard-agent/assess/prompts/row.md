@@ -19,7 +19,7 @@ For each adapter, prefer primary sources in this order:
 1. The agent's official docs site and reference pages.
 2. The agent's published changelog or release notes.
 3. The agent's open-source code repository if one exists.
-4. The adapter's source under `core/adapters/inbound/agents/<adapter>/` (especially `config.go` and `capabilities.json`) — tells you what irrlicht can see, which constrains the `irrlicht_observes` axis. (You're producing `agent_supports` here, but transport mismatches sometimes inform the verdict.)
+4. The adapter's source under `core/adapters/inbound/agents/<adapter>/` (especially `config.go` and `capabilities.json`) — tells you what irrlicht can see, which constrains the daemon-observability axis. (You're producing `agent_supports` here, but transport mismatches sometimes inform the verdict.)
 
 Do **not** rely on:
 

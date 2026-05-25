@@ -4,19 +4,44 @@
   "agent": "codex",
   "assessed_at": "2026-05-25T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.9,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## agent_supports: yes\n\nCodex's reset command is `/new`: it starts a fresh conversation that SUPERSEDES the current one, without relaunching the binary. The fresh session's rollout (`~/.codex/sessions/.../rollout-<ts>-<uuid2>.jsonl`, a distinct `session_meta.id`) materializes lazily on the first post-reset prompt and contains none of the pre-reset history. (`/clear` produces the same observable supersession and is what the committed recording was driven with; both rotate to a brand-new rollout UUID.)\n\n## irrlicht_observes: yes\n\nReset for codex is supersession: a new session replaces the old one, and that IS the expected, correct behavior. The daemon (codex Source = FilesUnderRoot watching ~/.codex/sessions — agent.go:32) detects the new rollout the instant it appears and emits transcript_new + a state_transition to ready + pid_discovered under a session_id never seen before. That fresh session_id appearing in ready is the complete, user-observable reset signal — exactly the scenario's assertion 'a new session row appears with a different session_id in ready'.\n\nThe committed recording captures the full arc: proc-<PID> pre-session → first rollout (UUID-1) runs a turn → reset → second rollout (UUID-2, fresh session_id) runs a turn. expected.jsonl encodes it as 8 phases and validates 8/8.\n\n## Why there is no old_session_ended phase (and why that is correct)\n\ncodex actually reaches the SAME removal path as claudecode. Both rollouts share one PID (28434 in the recording), so when the post-reset rollout (UUID-2) is PID-discovered the daemon's same-PID cleanup (pid_manager.go:373-399, issue #169 / commit 56c4667 — a non-subagent PID can only belong to one session at a time) immediately deletes UUID-1 and records transcript_removed: seq 1602 at 00:27:12.103, ~7ms after UUID-2's pid_discovered (seq 1601) and ~280ms after v2_session_birth — NOT the readyTTL idle sweep (that path is gated by IsStale(readyTTL) at pid_manager.go:634 and cannot fire this fast).\n\nSo why is there no old_session_ended phase? NOT because codex fails to produce a removal — it produces one, via the same #169 path as claudecode. The removal is simply not anchored to the reset keystroke: codex reset is LAZY, so the new rollout, its PID bind, and the resulting #169 cleanup all land together on the first post-reset prompt (the old rollout FILE meanwhile lingers frozen on disk — only the daemon's session row is removed). expected.jsonl asserts the canonical reset proxy — a fresh session_id appearing in ready (v2_session_birth) — across its 8 phases; the old-session removal is present in events.jsonl (seq 1602) but left unasserted as a scoping choice, not because it is absent. The daemon fully observes the reset — irrlicht_observes: yes.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## agent_supports: yes\n\nCodex's reset command is `/new`: it starts a fresh conversation that SUPERSEDES the current one, without relaunching the binary. The fresh session's rollout (`~/.codex/sessions/.../rollout-<ts>-<uuid2>.jsonl`, a distinct `session_meta.id`) materializes lazily on the first post-reset prompt and contains none of the pre-reset history. (`/clear` produces the same observable supersession and is what the committed recording was driven with; both rotate to a brand-new rollout UUID.)\n\n## daemon_capability: full; driver_capability: ready\n\nReset for codex is supersession: a new session replaces the old one, and that IS the expected, correct behavior. The daemon (codex Source = FilesUnderRoot watching ~/.codex/sessions — agent.go:32) detects the new rollout the instant it appears and emits transcript_new + a state_transition to ready + pid_discovered under a session_id never seen before. That fresh session_id appearing in ready is the complete, user-observable reset signal — exactly the scenario's assertion 'a new session row appears with a different session_id in ready'.\n\nThe committed recording captures the full arc: proc-<PID> pre-session → first rollout (UUID-1) runs a turn → reset → second rollout (UUID-2, fresh session_id) runs a turn. expected.jsonl encodes it as 8 phases and validates 8/8.\n\n## Why there is no old_session_ended phase (and why that is correct)\n\ncodex actually reaches the SAME removal path as claudecode. Both rollouts share one PID (28434 in the recording), so when the post-reset rollout (UUID-2) is PID-discovered the daemon's same-PID cleanup (pid_manager.go:373-399, issue #169 / commit 56c4667 — a non-subagent PID can only belong to one session at a time) immediately deletes UUID-1 and records transcript_removed: seq 1602 at 00:27:12.103, ~7ms after UUID-2's pid_discovered (seq 1601) and ~280ms after v2_session_birth — NOT the readyTTL idle sweep (that path is gated by IsStale(readyTTL) at pid_manager.go:634 and cannot fire this fast).\n\nSo why is there no old_session_ended phase? NOT because codex fails to produce a removal — it produces one, via the same #169 path as claudecode. The removal is simply not anchored to the reset keystroke: codex reset is LAZY, so the new rollout, its PID bind, and the resulting #169 cleanup all land together on the first post-reset prompt (the old rollout FILE meanwhile lingers frozen on disk — only the daemon's session row is removed). expected.jsonl asserts the canonical reset proxy — a fresh session_id appearing in ready (v2_session_birth) — across its 8 phases; the old-session removal is present in events.jsonl (seq 1602) but left unasserted as a scoping choice, not because it is absent. The daemon fully observes the reset — daemon_capability: full; driver_capability: ready.",
   "caveats": [
     "Codex's reset command is /new; the committed recording was driven via the reset_session step (which sends /clear) — both produce the same observable: the old rollout freezes and a fresh rollout with a new session_id appears. Switching the driver's reset_session to /new for label fidelity is an optional follow-up that would need a re-record.",
     "The old session IS removed — via the same #169 same-PID cleanup as claudecode (both rollouts share one PID; transcript_removed for UUID-1 lands ~7ms after the new rollout's pid_discovered, seq 1602). It is just not anchored to the reset keystroke (codex reset is lazy, so removal fires on the first post-reset prompt). No old_session_ended phase is asserted — a fixture scoping choice, since v2_session_birth is the canonical reset proxy — not because codex emits no removal."
   ],
   "sources": [
-    {"kind": "url", "ref": "https://developers.openai.com/codex/cli/slash-commands", "note": "Codex CLI slash commands — /new starts a fresh chat (session reset)."},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/agent.go", "note": "Agent() constructor sets Source = FilesUnderRoot watching ~/.codex/sessions (agent.go:32) — any new rollout under the root is detected, so a reset-spawned new session is daemon-observable as a fresh session_id."},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/pid.go", "note": "DiscoverPID binds the codex PID via transcript-writer; both pre- and post-reset sessions share one PID — the precondition for the #169 same-PID cleanup that removes the old session."},
-    {"kind": "file", "ref": "core/application/services/pid_manager.go", "note": "Lines 373-399: same-PID cleanup (issue #169) — when a new session claims a PID already held by an old session, the old one is deleted and transcript_removed is recorded immediately. This retires codex's UUID-1 ~7ms after the new rollout's pid_discovered (NOT the readyTTL sweep at line 634, gated by IsStale(readyTTL))."},
-    {"kind": "file", "ref": "replaydata/agents/codex/scenarios/session-reset/events.jsonl", "note": "Committed recording: two distinct rollout session_ids (UUID-1, UUID-2) + proc-PID pre-session; expected.jsonl validates 8/8."},
-    {"kind": "maintainer", "ref": "Ingo (2026-05-25)", "note": "Reset command is /new; new-replaces-old is expected behavior — absent reset-time removal is not a gap."}
+    {
+      "kind": "url",
+      "ref": "https://developers.openai.com/codex/cli/slash-commands",
+      "note": "Codex CLI slash commands — /new starts a fresh chat (session reset)."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/agent.go",
+      "note": "Agent() constructor sets Source = FilesUnderRoot watching ~/.codex/sessions (agent.go:32) — any new rollout under the root is detected, so a reset-spawned new session is daemon-observable as a fresh session_id."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/pid.go",
+      "note": "DiscoverPID binds the codex PID via transcript-writer; both pre- and post-reset sessions share one PID — the precondition for the #169 same-PID cleanup that removes the old session."
+    },
+    {
+      "kind": "file",
+      "ref": "core/application/services/pid_manager.go",
+      "note": "Lines 373-399: same-PID cleanup (issue #169) — when a new session claims a PID already held by an old session, the old one is deleted and transcript_removed is recorded immediately. This retires codex's UUID-1 ~7ms after the new rollout's pid_discovered (NOT the readyTTL sweep at line 634, gated by IsStale(readyTTL))."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/codex/scenarios/session-reset/events.jsonl",
+      "note": "Committed recording: two distinct rollout session_ids (UUID-1, UUID-2) + proc-PID pre-session; expected.jsonl validates 8/8."
+    },
+    {
+      "kind": "maintainer",
+      "ref": "Ingo (2026-05-25)",
+      "note": "Reset command is /new; new-replaces-old is expected behavior — absent reset-time removal is not a gap."
+    }
   ]
 }

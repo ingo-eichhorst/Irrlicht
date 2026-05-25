@@ -4,18 +4,39 @@
   "agent": "codex",
   "assessed_at": "2026-05-23T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.9,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\n`auto-executed-tool-call` (scenario-meanings.md): the agent uses one or more tools mid-turn, every call auto-resolves with NO user approval gate, and the turn completes — the user-observable arc is `ready → working → ready` and state NEVER enters `waiting`. Primitive `tool_calls`; requires `headless_mode` and `tool_calls`. This cell focuses on the AUTO-EXECUTED (ungated) nature of the round-trip; the sibling `full-lifecycle-toolcall` (coverage_id auto-executed-tool-call, codex recorded 6/6) already showed a function_call/function_call_output round-trip mid-turn.\n\n**agent_supports: yes.** Codex CLI 0.130.0 runs shell/exec tools autonomously inside its own sandbox with no permission hook — `replaydata/agents/codex/capabilities.json` records `tool_calls: true` and `permission_hooks: false`. A prompt that asks codex to run a quick read-only shell command (e.g. `pwd`) produces a real tool round-trip that auto-resolves without ever blocking on the user.\n\n**irrlicht_observes: yes.** The codex parser (parser.go) translates `function_call` / `function_call_output` transcript events into tool-use / tool-result records and `task_complete` event_msg into `turn_done`, so the daemon keeps the session `working` across the tool call and settles `working → ready` at turn end via the primary `IsAgentDone()` path. With no permission hook, no `waiting` transition is ever emitted — matching the scenario's negative invariant. Sibling interactive cells multi-turn-conversation (10/10) and full-lifecycle-toolcall (6/6) confirm the daemon observes codex's live-REPL working↔ready arcs cleanly.\n\n## Recipe-shape note (interactive, not headless)\n\nRecorded with the INTERACTIVE driver (`send` a tool-using prompt → `wait_turn` → trailing `sleep`), not headless `codex exec`. A single-shot `exec` turn is too short for the daemon to observe the `ready → working` flip (debounce coalesces it — basic-turn headless lands 3/5), and its turn-end surfaces as `process_exited` rather than a `working → ready` settle. The live REPL stays alive across the turn so the daemon observes the full working→ready arc on the rollout session, then `process_exited` only at REPL teardown.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`auto-executed-tool-call` (scenario-meanings.md): the agent uses one or more tools mid-turn, every call auto-resolves with NO user approval gate, and the turn completes — the user-observable arc is `ready → working → ready` and state NEVER enters `waiting`. Primitive `tool_calls`; requires `headless_mode` and `tool_calls`. This cell focuses on the AUTO-EXECUTED (ungated) nature of the round-trip; the sibling `full-lifecycle-toolcall` (coverage_id auto-executed-tool-call, codex recorded 6/6) already showed a function_call/function_call_output round-trip mid-turn.\n\n**agent_supports: yes.** Codex CLI 0.130.0 runs shell/exec tools autonomously inside its own sandbox with no permission hook — `replaydata/agents/codex/capabilities.json` records `tool_calls: true` and `permission_hooks: false`. A prompt that asks codex to run a quick read-only shell command (e.g. `pwd`) produces a real tool round-trip that auto-resolves without ever blocking on the user.\n\n**daemon_capability: full; driver_capability: ready.** The codex parser (parser.go) translates `function_call` / `function_call_output` transcript events into tool-use / tool-result records and `task_complete` event_msg into `turn_done`, so the daemon keeps the session `working` across the tool call and settles `working → ready` at turn end via the primary `IsAgentDone()` path. With no permission hook, no `waiting` transition is ever emitted — matching the scenario's negative invariant. Sibling interactive cells multi-turn-conversation (10/10) and full-lifecycle-toolcall (6/6) confirm the daemon observes codex's live-REPL working↔ready arcs cleanly.\n\n## Recipe-shape note (interactive, not headless)\n\nRecorded with the INTERACTIVE driver (`send` a tool-using prompt → `wait_turn` → trailing `sleep`), not headless `codex exec`. A single-shot `exec` turn is too short for the daemon to observe the `ready → working` flip (debounce coalesces it — basic-turn headless lands 3/5), and its turn-end surfaces as `process_exited` rather than a `working → ready` settle. The live REPL stays alive across the turn so the daemon observes the full working→ready arc on the rollout session, then `process_exited` only at REPL teardown.",
   "caveats": [
     "claudecode's auto-executed-tool-call recipe enables auto mode to keep a safe Bash call from tripping a permission gate; codex has no such gate (permission_hooks:false), so the codex recipe needs no auto-mode step — the shell tool auto-runs inside codex's sandbox and the spec asserts a no-waiting invariant.",
     "Near-duplicate of the sibling full-lifecycle-toolcall codex recording (same ready→working→ready arc, same no-waiting invariant). Differentiated by intent: this cell uses a read-only `pwd` prompt to spotlight the ungated auto-execution, where the sibling's prose framing leans on the round-trip itself."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/parser.go", "note": "function_call / function_call_output → tool-use/tool-result; task_complete → turn_done so working→ready settles via primary path"},
-    {"kind": "file", "ref": "replaydata/agents/codex/capabilities.json", "note": "tool_calls: true, permission_hooks: false — tools auto-resolve in-sandbox, no waiting gate"},
-    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md", "note": "auto-executed-tool-call canonical flow: ready→working→ready, never enters waiting"},
-    {"kind": "file", "ref": "replaydata/agents/codex/scenarios/full-lifecycle-toolcall/expected.jsonl", "note": "sibling codex cell, coverage_id auto-executed-tool-call, recorded 6/6 — interactive recording shape reused here"},
-    {"kind": "file", "ref": "replaydata/agents/codex/scenarios/multi-turn-conversation/manifest.json", "note": "interactive codex live-REPL turn arcs validated 10/10 — the recording shape used here"}
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/parser.go",
+      "note": "function_call / function_call_output → tool-use/tool-result; task_complete → turn_done so working→ready settles via primary path"
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/codex/capabilities.json",
+      "note": "tool_calls: true, permission_hooks: false — tools auto-resolve in-sandbox, no waiting gate"
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scenario-meanings.md",
+      "note": "auto-executed-tool-call canonical flow: ready→working→ready, never enters waiting"
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/codex/scenarios/full-lifecycle-toolcall/expected.jsonl",
+      "note": "sibling codex cell, coverage_id auto-executed-tool-call, recorded 6/6 — interactive recording shape reused here"
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/codex/scenarios/multi-turn-conversation/manifest.json",
+      "note": "interactive codex live-REPL turn arcs validated 10/10 — the recording shape used here"
+    }
   ]
 }

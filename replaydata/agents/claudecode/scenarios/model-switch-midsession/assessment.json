@@ -4,9 +4,10 @@
   "agent": "claudecode",
   "assessed_at": "2026-05-22T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.85,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code exposes `/model <name>` as a slash command in the TUI; selecting a new model takes effect on the NEXT turn. Internally, the next assistant event's `message.model` field carries the new model name, exactly the same field the parser reads for first-turn identification. There is no separate 'model-changed' event; the change is implicit in the per-turn model field.\n\nirrlicht's parser already calls `extractClaudeCodeModel` on every event and writes the result to `ev.ModelName`. The metrics aggregator's merge rule (see `MergeMetrics` in `session.go`) is 'latest non-unknown wins' for ModelName — line 627 keeps the old name sticky only when the new one is empty/unknown, so a genuine new model name from turn 2 overwrites turn 1's. `PerTurnContribution.Model` is also set per-turn (in `applyRequestIDContribution`), so the cost calculator attributes turn-1 tokens to model A and turn-2 tokens to model B.\n\nSpec bullets:\n- 'After turn 1: ModelName = <model A>' — first assistant event carries A in message.model; ModelName is set.\n- 'After turn 2: ModelName = <model B> (latest wins)' — second assistant event carries B; the latest-wins merge updates the session row.\n- 'TotalTokens after turn 2 > after turn 1 (accumulates across models)' — each turn's PerTurnContribution is added independently; the tokens accumulate regardless of model identity.\n\nNote that the existing `model-switch` recipe in `scenarios.json` (line 290) is marked `aider`-only because aider's `/model` semantics are slightly different (and aider records model on a separate `> Model:` line). For claudecode the equivalent recipe is a new one — `/model <other-model>` between two `send` steps — and the assertions land on the same parser output.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe `/model` command itself is a local-command wrapper (`<local-command-stdout>` etc.) that the parser explicitly skips in `isLocalCommandContent`. That is correct: the slash command is administrative; the observable signal is the next turn's model field.\n\nThere is no per-turn ModelName history exposed via the API today — the dashboard sees only the latest. The spec doesn't require historical per-turn model, only that turn-N's model is reflected when queried. Per-turn cost attribution via PerTurnContribution.Model is internal-only.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code exposes `/model <name>` as a slash command in the TUI; selecting a new model takes effect on the NEXT turn. Internally, the next assistant event's `message.model` field carries the new model name, exactly the same field the parser reads for first-turn identification. There is no separate 'model-changed' event; the change is implicit in the per-turn model field.\n\nirrlicht's parser already calls `extractClaudeCodeModel` on every event and writes the result to `ev.ModelName`. The metrics aggregator's merge rule (see `MergeMetrics` in `session.go`) is 'latest non-unknown wins' for ModelName — line 627 keeps the old name sticky only when the new one is empty/unknown, so a genuine new model name from turn 2 overwrites turn 1's. `PerTurnContribution.Model` is also set per-turn (in `applyRequestIDContribution`), so the cost calculator attributes turn-1 tokens to model A and turn-2 tokens to model B.\n\nSpec bullets:\n- 'After turn 1: ModelName = <model A>' — first assistant event carries A in message.model; ModelName is set.\n- 'After turn 2: ModelName = <model B> (latest wins)' — second assistant event carries B; the latest-wins merge updates the session row.\n- 'TotalTokens after turn 2 > after turn 1 (accumulates across models)' — each turn's PerTurnContribution is added independently; the tokens accumulate regardless of model identity.\n\nNote that the existing `model-switch` recipe in `scenarios.json` (line 290) is marked `aider`-only because aider's `/model` semantics are slightly different (and aider records model on a separate `> Model:` line). For claudecode the equivalent recipe is a new one — `/model <other-model>` between two `send` steps — and the assertions land on the same parser output.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe `/model` command itself is a local-command wrapper (`<local-command-stdout>` etc.) that the parser explicitly skips in `isLocalCommandContent`. That is correct: the slash command is administrative; the observable signal is the next turn's model field.\n\nThere is no per-turn ModelName history exposed via the API today — the dashboard sees only the latest. The spec doesn't require historical per-turn model, only that turn-N's model is reflected when queried. Per-turn cost attribution via PerTurnContribution.Model is internal-only.",
   "caveats": [
     "The recipe's between-turn step must be a TUI slash command, not a CLI flag: `claudecode` does not accept a mid-session model change via stdin in headless mode the same way. The driver may need to use tmux send-keys for /model.",
     "Model name normalization (lowercasing, prefix stripping) can mask whether the user typed `claude-sonnet-4-5` vs `Claude Sonnet 4.5`. The recipe should compare against the normalized form, not the typed form.",
@@ -14,9 +15,25 @@
     "Capture status (as of 2026-05-22, issue #405): the committed recording does NOT satisfy the spec — phase t2_start fails because the tmux /model picker doesn't deterministically select model B, and t2_end then cascades with an unknown-anchor error. expected.jsonl is marked known_failing pending a driver primitive that selects the /model picker target deterministically. The yes/yes verdict is unchanged: the daemon-side observability path is sound; only the capture/recording path is blocked."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go L260-279", "note": "applyRequestIDContribution sets PerTurnContribution.Model from extractClaudeCodeModel — per-turn model attribution is built in."},
-    {"kind": "file", "ref": "core/domain/session/session.go L627-628", "note": "MergeMetrics ModelName rule: latest non-empty/non-unknown wins, so turn 2's new model replaces turn 1's."},
-    {"kind": "spec", "ref": ".specs/agent-scenarios.md L433-439", "note": "Feature: Model switch mid-session — two turns, model A then model B, latest wins, tokens accumulate across models."},
-    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/scenarios.json L288-311", "note": "model-switch scenario exists for aider; claudecode branch needs to be added with a similar /model script."}
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/parser.go L260-279",
+      "note": "applyRequestIDContribution sets PerTurnContribution.Model from extractClaudeCodeModel — per-turn model attribution is built in."
+    },
+    {
+      "kind": "file",
+      "ref": "core/domain/session/session.go L627-628",
+      "note": "MergeMetrics ModelName rule: latest non-empty/non-unknown wins, so turn 2's new model replaces turn 1's."
+    },
+    {
+      "kind": "spec",
+      "ref": ".specs/agent-scenarios.md L433-439",
+      "note": "Feature: Model switch mid-session — two turns, model A then model B, latest wins, tokens accumulate across models."
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scenarios.json L288-311",
+      "note": "model-switch scenario exists for aider; claudecode branch needs to be added with a similar /model script."
+    }
   ]
 }

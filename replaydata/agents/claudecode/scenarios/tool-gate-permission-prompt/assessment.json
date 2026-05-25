@@ -4,17 +4,34 @@
   "agent": "claudecode",
   "assessed_at": "2026-05-17T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.9,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code shows a permission prompt whenever the agent invokes a tool that isn't in the user's allowlist (commonly Bash with a never-seen command). The TUI blocks the agent until the user approves or denies. Claude Code surfaces this to integrators via its hook protocol — specifically `PermissionRequest` (the prompt opens) and `PostToolUse` / `PostToolUseFailure` (the prompt resolves). irrlicht's hook installer (`core/adapters/inbound/agents/claudecode/hookinstaller.go`) wires those into the daemon at install time.\n\n**Variant 1 — prompt opens, prompt resolves.** When PermissionRequest hits the HTTP endpoint at `core/adapters/inbound/agents/claudecode/hooks.go`, the handler calls `HandlePermissionHook` on the detector, which flips `metrics.PermissionPending = true`. Rule 0 of `ClassifyState` (state_classifier.go:32) is the most authoritative gate in the tree: when `PermissionPending` is true the session is `waiting` regardless of `HasOpenToolCall` — this defends against the race where the hook fires before fswatcher processes the tool_use JSONL line (issue #108). When the user resolves the prompt, PostToolUse or PostToolUseFailure clears `PermissionPending`; the resulting tool_result + next assistant text drive `waiting → working → ready` along the normal path.\n\n**Variant 2 — late PostToolUse after working → ready.** The spec asserts that a delayed PostToolUse hook arriving *after* the session has already gone ready must NOT bounce the session back to waiting. The classifier handles this naturally because rule 0 only flips to waiting when `PermissionPending` becomes true — a PostToolUse for a tool whose PermissionRequest already paired with it just clears (or no-ops) the flag. The detector's `HandlePermissionHook` logic at `session_detector_lifecycle.go` (the PreToolUse / Permission counterpart) only sets the flag on the prompt-open events; the resolve events are idempotent. So a late PostToolUse is a metadata update, not a state-flap trigger.\n\nThe recipe (`scenarios.json` claudecode block) drives this with a Bash tool call to a file that doesn't exist outside the allowlist; `verify.contains_hook: \"PostToolUseFailure\"` and `tool_call_failed: true` confirm both ends of the prompt lifecycle landed.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code shows a permission prompt whenever the agent invokes a tool that isn't in the user's allowlist (commonly Bash with a never-seen command). The TUI blocks the agent until the user approves or denies. Claude Code surfaces this to integrators via its hook protocol — specifically `PermissionRequest` (the prompt opens) and `PostToolUse` / `PostToolUseFailure` (the prompt resolves). irrlicht's hook installer (`core/adapters/inbound/agents/claudecode/hookinstaller.go`) wires those into the daemon at install time.\n\n**Variant 1 — prompt opens, prompt resolves.** When PermissionRequest hits the HTTP endpoint at `core/adapters/inbound/agents/claudecode/hooks.go`, the handler calls `HandlePermissionHook` on the detector, which flips `metrics.PermissionPending = true`. Rule 0 of `ClassifyState` (state_classifier.go:32) is the most authoritative gate in the tree: when `PermissionPending` is true the session is `waiting` regardless of `HasOpenToolCall` — this defends against the race where the hook fires before fswatcher processes the tool_use JSONL line (issue #108). When the user resolves the prompt, PostToolUse or PostToolUseFailure clears `PermissionPending`; the resulting tool_result + next assistant text drive `waiting → working → ready` along the normal path.\n\n**Variant 2 — late PostToolUse after working → ready.** The spec asserts that a delayed PostToolUse hook arriving *after* the session has already gone ready must NOT bounce the session back to waiting. The classifier handles this naturally because rule 0 only flips to waiting when `PermissionPending` becomes true — a PostToolUse for a tool whose PermissionRequest already paired with it just clears (or no-ops) the flag. The detector's `HandlePermissionHook` logic at `session_detector_lifecycle.go` (the PreToolUse / Permission counterpart) only sets the flag on the prompt-open events; the resolve events are idempotent. So a late PostToolUse is a metadata update, not a state-flap trigger.\n\nThe recipe (`scenarios.json` claudecode block) drives this with a Bash tool call to a file that doesn't exist outside the allowlist; `verify.contains_hook: \"PostToolUseFailure\"` and `tool_call_failed: true` confirm both ends of the prompt lifecycle landed.",
   "caveats": [
     "The permission flow only fires if the user has installed irrlicht's Claude settings.json hooks. The installer is idempotent and the onboard-agent flow does this before recording — but a hand-run claude session without hooks would not surface PermissionPending, and the session would only register the open tool window via the JSONL tool_use → tool_result sweep (still classified as waiting via rule 1, but lossier).",
     "Issue #108's race fix (rule 0 over rule 1) means the observable state arc is correct even when the hook fires before the JSONL tool_use lands. Spec assertions are timing-tolerant by construction."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/hooks.go", "note": "HookPermissionRequest / HookPostToolUse / HookPostToolUseFailure HTTP handler dispatches HandlePermissionHook into the detector."},
-    {"kind": "file", "ref": "core/application/services/state_classifier.go", "note": "ClassifyState rule 0 (permission prompt open → waiting) — most authoritative, predates HasOpenToolCall check; idempotent on resolve so late PostToolUse won't flap."},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/hookinstaller.go", "note": "Installer wires PermissionRequest + PostToolUse + PostToolUseFailure + PreToolUse into Claude Code's settings.json; required for the variant-1 observable."},
-    {"kind": "issue", "ref": "ingo-eichhorst/Irrlicht#108", "note": "Original cause: hook race vs. JSONL tool_use ordering — fixed by promoting the PermissionPending check to rule 0 in the classifier."}
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/hooks.go",
+      "note": "HookPermissionRequest / HookPostToolUse / HookPostToolUseFailure HTTP handler dispatches HandlePermissionHook into the detector."
+    },
+    {
+      "kind": "file",
+      "ref": "core/application/services/state_classifier.go",
+      "note": "ClassifyState rule 0 (permission prompt open → waiting) — most authoritative, predates HasOpenToolCall check; idempotent on resolve so late PostToolUse won't flap."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/hookinstaller.go",
+      "note": "Installer wires PermissionRequest + PostToolUse + PostToolUseFailure + PreToolUse into Claude Code's settings.json; required for the variant-1 observable."
+    },
+    {
+      "kind": "issue",
+      "ref": "ingo-eichhorst/Irrlicht#108",
+      "note": "Original cause: hook race vs. JSONL tool_use ordering — fixed by promoting the PermissionPending check to rule 0 in the classifier."
+    }
   ]
 }
