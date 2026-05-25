@@ -6094,6 +6094,51 @@
           "settings": {},
           "timeout_seconds": 90
         },
+        "aider": {
+          "applicable": true,
+          "preconditions": [
+            "aider CLI on PATH and authenticated against a model out-of-band (IRRLICHT_AIDER_MODEL plus the matching provider key/endpoint — e.g. a local LM Studio / OpenAI-compatible server). Headless aider with no reachable provider hangs on the model-auth prompt; the live REPL needs a model that actually answers the long-essay prompt so the turn stays in working long enough to interrupt mid-flight.",
+            "tmux available — the interactive driver runs aider in a tmux REPL so it can send the long prompt and then deliver the interrupt to the same long-lived session",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "AIDER-SPECIFIC (observes: partial): aider's cancel key is Ctrl-C, not ESC — aider has no ESC-to-interrupt binding (scenario-meanings names Ctrl-C for aider; ESC is for claudecode/codex/pi). The ready→working→ready arc IS observed, but ONLY via the generic turn-end path: a Ctrl-C-cancelled turn writes NO `> Tokens:` line and no error blockquote, so the parser's explicit turn-closers never fire and IdleFlush synthesizes a bare turn_done after 1.5s of transcript quiet — the SAME path every clean aider turn takes. irrlicht therefore observes the interrupt only as a GENERIC turn-end; there is NO interrupt-IDENTITY signal. aider's markdown has no '[Request interrupted by user]' marker (that is claudecode-specific) and the aider parser sets no LastWasUserInterrupt, so classifier rule 3 ('user ESC interrupt') is never engaged. Unlike the claudecode row above, do NOT verify an interrupt marker or a rule-3 transition; the interrupt is invisible AS an interrupt."
+          ],
+          "setup": [
+            "The interactive driver (drive-aider-interactive.sh) git-inits a fresh per-run cwd under <staging>/cwd/, launches `aider --no-auto-commits --yes-always --no-gitignore` (plus --model if IRRLICHT_AIDER_MODEL is set) inside a tmux session, and waits for the `> Repo-map:` banner line before sending the prompt",
+            "aider's transcript .aider.chat.history.md is LAZY (FilesUnderCWD): it materializes only once the first user input lands, so the live REPL is observable from launch as a transient proc-<PID> pre-session born ready (the process scanner) until the per-cwd transcript appears",
+            "The interrupt step sends tmux Ctrl-C. A Ctrl-C-cancelled turn writes NO `> Tokens:` line, so the parser emits no turn-closing assistant_message and the interrupt is NOT followed by wait_turn (it would hang). The cancelled turn simply never completes a model call.",
+            "End-of-turn has no transcript marker in aider; the interrupted turn is closed by IdleFlush, which synthesizes a bare turn_done after 1.5s of transcript quiet, surfaced as working→ready behind the daemon's 5s SessionDetector staleWorking poll (~max(1.5s, 5s) effective latency) — this is why the trailing sleep AFTER the interrupt is ≥6s so the settle lands before teardown",
+            "After the trailing sleep the driver kills the tmux session once — aider exits and the daemon emits a single process_exited for the session"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a long detailed essay about the history of computing, at least 500 words. Take your time."
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            },
+            {
+              "type": "interrupt"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
+            "events.jsonl contains a state_transition→working on the rollout session_id when the long-essay prompt lands (the first working in the whole recording — the pre-session never enters working)",
+            "events.jsonl contains a pid_discovered event bound to the live aider rollout session_id",
+            "after the Ctrl-C interrupt, events.jsonl shows a state_transition→ready on the SAME rollout session_id within the IdleFlush + 5s staleWorking window — the cancelled turn writes no `> Tokens:` line, so this ready is synthesized by IdleFlush from transcript-quiet alone (the GENERIC turn-end path), NOT by observing the interrupt (irrlicht has no abort-marker visibility for aider); state must NOT stick in working post-interrupt",
+            "events.jsonl never contains a state_transition to waiting for the session",
+            "events.jsonl contains exactly one process_exited on the rollout session at REPL teardown; the live state immediately before teardown is ready",
+            "final session state is ready",
+            "the cancelled turn contributes zero tokens/cost — no `> Tokens:` line was written for the interrupted model call, so the partial generation aider keeps in its conversation is invisible to the token/cost chips (accurate: no completed API call was reported)"
+          ],
+          "settings": {},
+          "timeout_seconds": 360
+        },
         "pi": {
           "applicable": true,
           "preconditions": [
