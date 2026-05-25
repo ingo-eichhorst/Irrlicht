@@ -220,9 +220,9 @@ func (s *Scanner) poll() {
 	var pids []int
 	var err error
 	if s.commandLineMatch != "" {
-		pids, err = findProcessesByCmdLine(s.commandLineMatch)
+		pids, err = osProc.FindByCmdline(s.commandLineMatch)
 	} else {
-		pids, err = findProcesses(s.processName)
+		pids, err = osProc.FindByName(s.processName)
 	}
 	if err != nil {
 		return
@@ -239,7 +239,7 @@ func (s *Scanner) poll() {
 		_, alreadyTracked := s.tracked[pid]
 		s.mu.Unlock()
 
-		cwd, err := processCWD(pid)
+		cwd, err := osProc.CWDOf(pid)
 		if err != nil || cwd == "" || cwd == "/" {
 			continue
 		}

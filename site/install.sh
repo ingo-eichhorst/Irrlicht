@@ -92,6 +92,17 @@ uninstall_previous() {
         removed_something=1
     fi
 
+    # Linux: stop/disable the systemd user unit if a daemon-only install
+    # registered one.
+    if [ "${PLATFORM:-}" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
+        if [ -f "$HOME/.config/systemd/user/irrlichd.service" ]; then
+            systemctl --user disable --now irrlichd.service 2>/dev/null || true
+            rm -f "$HOME/.config/systemd/user/irrlichd.service"
+            systemctl --user daemon-reload 2>/dev/null || true
+            removed_something=1
+        fi
+    fi
+
     # Remove app bundle
     if [ -d "$APP_PATH" ]; then
         rm -rf "$APP_PATH" 2>/dev/null || fail "Could not remove $APP_PATH (try with sudo?)"
@@ -124,9 +135,35 @@ done
 
 # ─── Preflight ─────────────────────────────────────────────────────────────
 
-[ "$(uname -s)" = "Darwin" ] || fail "Irrlicht is macOS-only."
+# Platform detection. macOS gets the full menu-bar app; Linux is daemon-only
+# (the web dashboard at 127.0.0.1:7837 is its UI — there is no tray app yet).
+case "$(uname -s)" in
+    Darwin) PLATFORM="darwin" ;;
+    Linux)
+        PLATFORM="linux"
+        if [ "$DAEMON_ONLY" -eq 0 ] && [ "$UNINSTALL" -eq 0 ]; then
+            DAEMON_ONLY=1
+            warn "Linux has no menu-bar app yet — installing the daemon only."
+        fi
+        ;;
+    *) fail "Unsupported OS: $(uname -s) (Irrlicht supports macOS and Linux)." ;;
+esac
 
 command -v curl >/dev/null 2>&1 || fail "curl is required but not found."
+
+# sha256_verify <dir> <asset> — checksum-check one asset against
+# checksums.sha256, using whichever tool the platform ships (shasum on macOS,
+# sha256sum on most Linux distros). Both read the "HASH  FILENAME" format.
+sha256_verify() {
+    _dir="$1"; _asset="$2"
+    if command -v shasum >/dev/null 2>&1; then
+        (cd "$_dir" && grep " $_asset\$" checksums.sha256 | shasum -a 256 -c --status)
+    elif command -v sha256sum >/dev/null 2>&1; then
+        (cd "$_dir" && grep " $_asset\$" checksums.sha256 | sha256sum -c --status)
+    else
+        fail "Need shasum or sha256sum to verify the download."
+    fi
+}
 
 say ""
 say "  ${BOLD}Irrlicht installer${RESET}"
@@ -144,8 +181,6 @@ if [ "$UNINSTALL" -eq 1 ]; then
     say ""
     exit 0
 fi
-
-command -v shasum >/dev/null 2>&1 || fail "shasum is required but not found."
 
 # ─── Detect version ────────────────────────────────────────────────────────
 
@@ -182,7 +217,16 @@ ok
 # ─── Daemon-only path ──────────────────────────────────────────────────────
 
 if [ "$DAEMON_ONLY" -eq 1 ]; then
-    ASSET="irrlichd-darwin-universal.tar.gz"
+    if [ "$PLATFORM" = "darwin" ]; then
+        ASSET="irrlichd-darwin-universal.tar.gz"
+    else
+        case "$(uname -m)" in
+            x86_64|amd64)  ARCH="amd64" ;;
+            aarch64|arm64) ARCH="arm64" ;;
+            *) fail "Unsupported Linux architecture: $(uname -m)" ;;
+        esac
+        ASSET="irrlichd-linux-${ARCH}.tar.gz"
+    fi
     DEST="$HOME/.local/bin/irrlichd"
     UI_DIR="$HOME/.local/share/irrlicht/web"
 
@@ -191,8 +235,7 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     ok
 
     step "Verifying checksum"
-    (cd "$TMPDIR" && grep " $ASSET\$" checksums.sha256 | shasum -a 256 -c --status) \
-        || fail "Checksum mismatch — aborting"
+    sha256_verify "$TMPDIR" "$ASSET" || fail "Checksum mismatch — aborting"
     ok
 
     step "Extracting $ASSET"
@@ -209,11 +252,39 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     install -m 644 "$TMPDIR/extract/web/irrlicht.js"  "$UI_DIR/irrlicht.js"
     ok
 
+    # On Linux, install a systemd user unit so the autostart command we print
+    # below is actually runnable. We write it but don't enable it — that's the
+    # user's call. --uninstall removes it.
+    if [ "$PLATFORM" = "linux" ]; then
+        step "Writing systemd user unit"
+        mkdir -p "$HOME/.config/systemd/user"
+        cat > "$HOME/.config/systemd/user/irrlichd.service" <<'UNIT'
+[Unit]
+Description=Irrlicht — AI coding-agent session monitor
+Documentation=https://irrlicht.io/docs/installation.html
+
+[Service]
+ExecStart=%h/.local/bin/irrlichd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+UNIT
+        systemctl --user daemon-reload 2>/dev/null || true
+        ok
+    fi
+
     say ""
     say "  ${GREEN}✓${RESET} ${BOLD}irrlichd v$VERSION${RESET} installed"
     say ""
     say "  Start the daemon:"
     say "    ${DIM}\$${RESET} $DEST &"
+    if [ "$PLATFORM" = "linux" ]; then
+        say ""
+        say "  Or autostart it with systemd (unit installed; survives logout/reboot):"
+        say "    ${DIM}\$${RESET} systemctl --user enable --now irrlichd"
+    fi
     say ""
     say "  Dashboard will be at ${BOLD}http://127.0.0.1:7837${RESET}"
     say ""
@@ -230,8 +301,7 @@ curl -fsSL -o "$TMPDIR/$ASSET" "$BASE/$ASSET" \
 ok
 
 step "Verifying checksum"
-(cd "$TMPDIR" && grep " $ASSET\$" checksums.sha256 | shasum -a 256 -c --status) \
-    || fail "Checksum mismatch — aborting"
+sha256_verify "$TMPDIR" "$ASSET" || fail "Checksum mismatch — aborting"
 ok
 
 step "Installing to /Applications"

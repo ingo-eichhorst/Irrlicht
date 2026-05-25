@@ -1,13 +1,9 @@
 package processlifecycle
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strconv"
-	"strings"
-	"time"
+	"path/filepath"
 )
 
 // DiscoverPIDByCWD finds a process by exact name whose CWD matches the given
@@ -17,7 +13,7 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 	if cwd == "" || processName == "" {
 		return 0, nil
 	}
-	pids, err := findProcesses(processName)
+	pids, err := osProc.FindByName(processName)
 	if err != nil {
 		return 0, fmt.Errorf("find %s processes: %w", processName, err)
 	}
@@ -25,15 +21,16 @@ func DiscoverPIDByCWD(processName, cwd string, disambiguate func([]int) int) (in
 }
 
 // DiscoverPIDByCWDAndCmdLine finds a process whose full command line matches
-// the given regex pattern (via pgrep -f) and whose CWD matches cwd. Use this
-// for agents whose OS process name doesn't match their CLI name — e.g. Python
-// tools where the OS process is `python` and the agent script is in argv[1].
-// Mirrors DiscoverPIDByCWD's contract: returns 0, nil when no match.
+// the given regex pattern (via the observer's FindByCmdline) and whose CWD
+// matches cwd. Use this for agents whose OS process name doesn't match their
+// CLI name — e.g. Python tools where the OS process is `python` and the agent
+// script is in argv[1]. Mirrors DiscoverPIDByCWD's contract: returns 0, nil
+// when no match.
 func DiscoverPIDByCWDAndCmdLine(cmdLinePattern, cwd string, disambiguate func([]int) int) (int, error) {
 	if cwd == "" || cmdLinePattern == "" {
 		return 0, nil
 	}
-	pids, err := findProcessesByCmdLine(cmdLinePattern)
+	pids, err := osProc.FindByCmdline(cmdLinePattern)
 	if err != nil {
 		return 0, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
 	}
@@ -41,10 +38,10 @@ func DiscoverPIDByCWDAndCmdLine(cmdLinePattern, cwd string, disambiguate func([]
 }
 
 // LiveCWDs returns the set of working directories currently held by live
-// processes whose binary name matches processName (via `pgrep -x`). Excludes
-// the daemon's own PID. PIDs whose CWD cannot be read (race against process
-// exit, restricted permissions) are skipped silently — this is a best-effort
-// snapshot, not a guarantee.
+// processes whose binary name matches processName. Excludes the daemon's own
+// PID. PIDs whose CWD cannot be read (race against process exit, restricted
+// permissions) are skipped silently — this is a best-effort snapshot, not a
+// guarantee.
 //
 // Used by the OpenCode adapter to gate EventNewSession on a live process: a
 // session row in the DB is only surfaced if some opencode process currently
@@ -53,7 +50,7 @@ func LiveCWDs(processName string) (map[string]struct{}, error) {
 	if processName == "" {
 		return nil, nil
 	}
-	pids, err := findProcesses(processName)
+	pids, err := osProc.FindByName(processName)
 	if err != nil {
 		return nil, fmt.Errorf("find %s processes: %w", processName, err)
 	}
@@ -63,7 +60,7 @@ func LiveCWDs(processName string) (map[string]struct{}, error) {
 		if pid == myPID {
 			continue
 		}
-		dir, err := processCWD(pid)
+		dir, err := osProc.CWDOf(pid)
 		if err != nil {
 			continue
 		}
@@ -76,13 +73,21 @@ func LiveCWDs(processName string) (map[string]struct{}, error) {
 // resolves to a single PID via disambiguate (falling back to highest PID).
 // Excludes the daemon's own PID. Returns 0 when no match.
 func narrowByCWD(pids []int, cwd string, disambiguate func([]int) int) int {
+	// CWDOf returns the OS-canonical working directory (e.g. on Linux
+	// /proc/<pid>/cwd is fully symlink-resolved). The caller's cwd may carry
+	// symlink components, so canonicalise it before the equality check or a
+	// symlinked $HOME would never match. EvalSymlinks needs the dir to exist;
+	// it does (the process is live), and on failure we keep the original.
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
 	myPID := os.Getpid()
 	var matches []int
 	for _, pid := range pids {
 		if pid == myPID {
 			continue
 		}
-		dir, err := processCWD(pid)
+		dir, err := osProc.CWDOf(pid)
 		if err != nil {
 			continue
 		}
@@ -118,49 +123,5 @@ func DiscoverPIDByTranscriptWriter(transcriptPath string) (int, error) {
 	if transcriptPath == "" {
 		return 0, nil
 	}
-
-	// lsof <path> lists all processes with the file open.
-	// Output format:
-	//   COMMAND  PID USER  FD   TYPE DEVICE SIZE/OFF NODE NAME
-	//   codex  24454 ingo  14w  REG  1,18   3330     ...  /path/to/transcript.jsonl
-	//
-	// The FD column ends with 'w' for write mode, 'r' for read.
-	out, err := lsofFile(transcriptPath)
-	if err != nil {
-		return 0, nil // file not open by any process
-	}
-
-	myPID := os.Getpid()
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		// Skip header row.
-		if fields[0] == "COMMAND" {
-			continue
-		}
-		pid, err := strconv.Atoi(fields[1])
-		if err != nil || pid <= 0 || pid == myPID {
-			continue
-		}
-		// FD column (e.g. "14w", "8299r") — writer ends with 'w'.
-		fd := fields[3]
-		if len(fd) > 0 && fd[len(fd)-1] == 'w' {
-			return pid, nil
-		}
-	}
-	return 0, nil
-}
-
-// lsofFile runs lsof on a single file path and returns the output.
-func lsofFile(path string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", path).Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	return osProc.WriterOf(transcriptPath)
 }

@@ -1104,7 +1104,8 @@ func TestSessionDetector_SeedFromDisk_DeletesDeadPIDs(t *testing.T) {
 	// now-defunct PID. syscall.Kill(pid, 0) on it returns ESRCH — the signal the
 	// detector uses to classify a seeded session's process as dead. Hardcoded
 	// low PIDs are not reliable here: 42/99 are live system daemons on some
-	// hosts (notably CI macOS runners), which made this test fail there.
+	// hosts (CI macOS runners) and live kernel threads on a Linux CI box, which
+	// made this test fail on both.
 	deadPID1, deadPID2 := deadPID(t), deadPID(t)
 	repo.states["seed1"] = &session.SessionState{
 		SessionID:      "seed1",

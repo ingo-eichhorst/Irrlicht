@@ -175,3 +175,28 @@ type ProcessWatcher interface {
 	// Close releases kqueue resources.
 	Close() error
 }
+
+// ProcessObserver concentrates the OS coupling of process observation behind
+// one seam. Agent adapters declare *what* to observe (a process name, a
+// command-line pattern, a transcript path); the observer fulfils *how* per
+// platform — pgrep/lsof/sysctl on darwin, /proc on linux. A new OS is "add
+// one file that implements this interface," with no change to adapters or to
+// the discovery/scanner orchestration that routes every OS primitive through
+// it. The concrete implementation is selected at compile time by build tag.
+type ProcessObserver interface {
+	// FindByName returns the PIDs of processes whose executable base name
+	// exactly matches name. Returns nil, nil when none match.
+	FindByName(name string) ([]int, error)
+	// FindByCmdline returns the PIDs whose full command line matches the
+	// given pattern. Returns nil, nil when none match.
+	FindByCmdline(pattern string) ([]int, error)
+	// CWDOf returns the working directory of pid.
+	CWDOf(pid int) (string, error)
+	// WriterOf returns the PID that currently has path open for writing, or
+	// 0 when no process is writing it. A missing/unopened file is not an
+	// error — it returns 0, nil.
+	WriterOf(path string) (int, error)
+	// EnvOf returns the whitelisted launcher env vars of pid. Returns an
+	// empty/nil map (not an error) when the env is unreadable.
+	EnvOf(pid int) (map[string]string, error)
+}

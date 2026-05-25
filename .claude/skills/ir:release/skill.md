@@ -353,6 +353,29 @@ cp /Users/ingo/projects/irrlicht/platforms/web/index.html /tmp/irrlichd-tarball/
 tar -czf /tmp/irrlichd-darwin-universal.tar.gz -C /tmp/irrlichd-tarball .
 ```
 
+#### Linux daemon tarballs (daemon-only — no tray app on Linux)
+
+These ship the Linux curl install path (`site/install.sh` auto-detects Linux
+and downloads `irrlichd-linux-<arch>.tar.gz`). Pure cross-compile from macOS,
+no cgo. **Required** — omitting them makes every Linux `curl … | sh` 404 on
+the asset. Each Linux tarball carries all three web files (index.html + css +
+js), because the Linux installer installs all three.
+
+```bash
+cd /Users/ingo/projects/irrlicht/core
+for arch in amd64 arm64; do
+  GOOS=linux GOARCH="$arch" go build -ldflags "-s -w -X main.Version=$NEW_VERSION" \
+    -o "/tmp/irrlichd-linux-$arch" ./cmd/irrlichd
+  rm -rf "/tmp/irrlichd-linux-tarball-$arch" && mkdir -p "/tmp/irrlichd-linux-tarball-$arch/web"
+  cp "/tmp/irrlichd-linux-$arch" "/tmp/irrlichd-linux-tarball-$arch/irrlichd"
+  cp /Users/ingo/projects/irrlicht/platforms/web/index.html \
+     /Users/ingo/projects/irrlicht/platforms/web/irrlicht.css \
+     /Users/ingo/projects/irrlicht/platforms/web/irrlicht.js \
+     "/tmp/irrlichd-linux-tarball-$arch/web/"
+  tar -czf "/tmp/irrlichd-linux-$arch.tar.gz" -C "/tmp/irrlichd-linux-tarball-$arch" .
+done
+```
+
 ### Swift app (release build — universal)
 **MUST pass both arches explicitly.** A plain `swift build -c release` only
 builds the host arch (arm64 on Apple Silicon) and leaves
@@ -753,6 +776,8 @@ release where the standalone daemon installer fails the integrity check.
 cd /tmp && shasum -a 256 \
   irrlichd-darwin-universal \
   irrlichd-darwin-universal.tar.gz \
+  irrlichd-linux-amd64.tar.gz \
+  irrlichd-linux-arm64.tar.gz \
   Irrlicht-$NEW_VERSION.dmg \
   Irrlicht-$NEW_VERSION-mac-installer.pkg \
   Irrlicht-$NEW_VERSION.zip \
@@ -918,6 +943,8 @@ better in a file than inline-escaped.
 ```bash
 gh release create v$NEW_VERSION \
   /tmp/irrlichd-darwin-universal.tar.gz \
+  /tmp/irrlichd-linux-amd64.tar.gz \
+  /tmp/irrlichd-linux-arm64.tar.gz \
   /tmp/Irrlicht-$NEW_VERSION.dmg \
   /tmp/Irrlicht-$NEW_VERSION-mac-installer.pkg \
   /tmp/Irrlicht-$NEW_VERSION.zip \

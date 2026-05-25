@@ -91,6 +91,7 @@
 
       <ul>
         <li><strong>macOS 13 (Ventura) or later</strong> &mdash; Irrlicht uses SwiftUI APIs that require Ventura as a minimum.</li>
+        <li><strong>Linux (daemon-only)</strong> &mdash; x86-64 or ARM64, Linux 5.3+ (for <code>pidfd</code> exit detection). The daemon runs headless with the web dashboard as its UI; there is no menu-bar app on Linux yet. See <a href="#linux">Linux setup</a> below.</li>
         <li><strong>At least one supported AI coding agent</strong> installed and working:
           <ul>
             <li><a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a></li>
@@ -176,6 +177,49 @@ curl -fsSL https://irrlicht.io/install.sh | sh -s -- --version 0.3.4</code></pre
           <p>On first launch the app also registers itself as a macOS login item (via <code>SMAppService</code>), so the menu-bar overlay is up before you open your first terminal after a reboot. Toggle this off in <em>Preferences &rarr; "Start Irrlicht at login"</em> if you prefer to launch the app manually; the choice is persisted and the default never re-applies.</p>
         </li>
       </ol>
+
+      <!-- ── Linux ── -->
+      <h2 id="linux">Linux (daemon-only)</h2>
+
+      <p>On Linux, Irrlicht ships as a headless daemon &mdash; the same <code>irrlichd</code> as on macOS, observing sessions via <code>/proc</code> and <code>pidfd</code> instead of <code>lsof</code>/<code>kqueue</code>. There is no tray app yet; the <strong>web dashboard at <code>http://127.0.0.1:7837</code> is the UI</strong>. Session detection, states, costs, token metrics, and lifecycle all work; terminal-window focus is macOS-only and degrades cleanly to "unsupported."</p>
+
+      <p>The curl installer auto-detects Linux and installs the daemon only (it picks the right <code>amd64</code>/<code>arm64</code> build):</p>
+
+      <pre><code>curl -fsSL https://irrlicht.io/install.sh | sh</code></pre>
+
+      <p>This installs <code>irrlichd</code> to <code>~/.local/bin/</code>, the dashboard assets to <code>~/.local/share/irrlicht/web/</code>, and a systemd <em>user</em> unit at <code>~/.config/systemd/user/irrlichd.service</code> (written but not enabled). Start it directly with <code>~/.local/bin/irrlichd &amp;</code>, or enable the unit for autostart.</p>
+
+      <h3>Autostart with systemd</h3>
+
+      <p>The installer already wrote the unit, so just enable it:</p>
+
+      <pre><code>systemctl --user enable --now irrlichd</code></pre>
+
+      <p>If you built from source instead of using the installer, create the unit yourself (<code>%h</code> expands to your home directory):</p>
+
+      <pre><code>mkdir -p ~/.config/systemd/user
+cat &gt; ~/.config/systemd/user/irrlichd.service &lt;&lt;'EOF'
+[Unit]
+Description=Irrlicht — AI coding-agent session monitor
+Documentation=https://irrlicht.io/docs/installation.html
+
+[Service]
+ExecStart=%h/.local/bin/irrlichd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now irrlichd</code></pre>
+
+      <p>On a headless server, allow the user service to keep running after you log out:</p>
+
+      <pre><code>loginctl enable-linger "$USER"</code></pre>
+
+      <p>Check it: <code>systemctl --user status irrlichd</code>, then open <code>http://127.0.0.1:7837</code>. The curl installer's <code>--uninstall</code> flag stops and removes the unit.</p>
 
       <!-- ── Build from Source ── -->
       <h2 id="build-from-source">Build from Source</h2>
