@@ -36,6 +36,8 @@
 #     /tmp/rec/codex/session-reset/events.jsonl
 set -euo pipefail
 
+fail() { echo "✗ $*" >&2; exit 1; }
+
 [ $# -eq 2 ] || { echo "usage: $0 <macos-events.jsonl> <linux-events.jsonl>" >&2; exit 2; }
 MAC="$1"; LINUX="$2"
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
@@ -68,7 +70,16 @@ echo "linux record : $LINUX"
 echo "comparing user-observable state-transition sequence (timing ignored)…"
 echo
 
-if diff -u <(project "$MAC") <(project "$LINUX"); then
+# Project into variables (not process substitution) so a jq/awk failure on a
+# malformed recording aborts here under `set -o pipefail` instead of silently
+# yielding an empty FIFO that diff would call "identical". Then refuse to
+# compare empty sequences — an empty-vs-empty diff is not a parity proof.
+mac_seq=$(project "$MAC")     || fail "could not project $MAC (malformed events.jsonl?)"
+linux_seq=$(project "$LINUX") || fail "could not project $LINUX (malformed events.jsonl?)"
+[ -n "$mac_seq" ]   || fail "$MAC projected to an empty state sequence — nothing to compare"
+[ -n "$linux_seq" ] || fail "$LINUX projected to an empty state sequence — nothing to compare"
+
+if diff -u <(printf '%s\n' "$mac_seq") <(printf '%s\n' "$linux_seq"); then
     echo
     echo "✓ PARITY OK — Linux state transitions match macOS. Discard the Linux"
     echo "  recording; the corpus stays OS-neutral (nothing to commit)."

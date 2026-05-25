@@ -121,7 +121,11 @@ func (m *pidMonitor) Run(ctx context.Context) error {
 		}
 
 		for i := range fds {
-			if fds[i].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR) == 0 {
+			// POLLNVAL covers an fd a concurrent Unwatch closed between the
+			// snapshot and this poll; it counts toward poll's return, so
+			// include it here and let the membership/fd re-check below drop
+			// it rather than letting the loop spin re-polling a stale set.
+			if fds[i].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) == 0 {
 				continue
 			}
 			pid := pids[i]

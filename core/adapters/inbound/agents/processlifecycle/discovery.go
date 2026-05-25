@@ -3,6 +3,7 @@ package processlifecycle
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // DiscoverPIDByCWD finds a process by exact name whose CWD matches the given
@@ -72,6 +73,14 @@ func LiveCWDs(processName string) (map[string]struct{}, error) {
 // resolves to a single PID via disambiguate (falling back to highest PID).
 // Excludes the daemon's own PID. Returns 0 when no match.
 func narrowByCWD(pids []int, cwd string, disambiguate func([]int) int) int {
+	// CWDOf returns the OS-canonical working directory (e.g. on Linux
+	// /proc/<pid>/cwd is fully symlink-resolved). The caller's cwd may carry
+	// symlink components, so canonicalise it before the equality check or a
+	// symlinked $HOME would never match. EvalSymlinks needs the dir to exist;
+	// it does (the process is live), and on failure we keep the original.
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
 	myPID := os.Getpid()
 	var matches []int
 	for _, pid := range pids {

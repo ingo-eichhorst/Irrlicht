@@ -252,6 +252,29 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     install -m 644 "$TMPDIR/extract/web/irrlicht.js"  "$UI_DIR/irrlicht.js"
     ok
 
+    # On Linux, install a systemd user unit so the autostart command we print
+    # below is actually runnable. We write it but don't enable it — that's the
+    # user's call. --uninstall removes it.
+    if [ "$PLATFORM" = "linux" ]; then
+        step "Writing systemd user unit"
+        mkdir -p "$HOME/.config/systemd/user"
+        cat > "$HOME/.config/systemd/user/irrlichd.service" <<'UNIT'
+[Unit]
+Description=Irrlicht — AI coding-agent session monitor
+Documentation=https://irrlicht.io/docs/installation.html
+
+[Service]
+ExecStart=%h/.local/bin/irrlichd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+UNIT
+        systemctl --user daemon-reload 2>/dev/null || true
+        ok
+    fi
+
     say ""
     say "  ${GREEN}✓${RESET} ${BOLD}irrlichd v$VERSION${RESET} installed"
     say ""
@@ -259,9 +282,8 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     say "    ${DIM}\$${RESET} $DEST &"
     if [ "$PLATFORM" = "linux" ]; then
         say ""
-        say "  Or autostart it with systemd (survives logout/reboot):"
+        say "  Or autostart it with systemd (unit installed; survives logout/reboot):"
         say "    ${DIM}\$${RESET} systemctl --user enable --now irrlichd"
-        say "  ${DIM}(unit file: see https://irrlicht.io/docs/installation.html#linux)${RESET}"
     fi
     say ""
     say "  Dashboard will be at ${BOLD}http://127.0.0.1:7837${RESET}"

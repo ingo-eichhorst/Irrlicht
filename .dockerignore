@@ -1,0 +1,12 @@
+# Keep the linux-replay build context hermetic and small. The Dockerfile only
+# needs source + replaydata fixtures; exclude host build output, deps, and VCS
+# so the image is identical across dev machines and CI's clean checkout.
+.git
+.build
+**/node_modules
+**/.build
+platforms/macos/.build
+*.dmg
+*.pkg
+*.tar.gz
+.claude/worktrees

@@ -11,6 +11,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only token — this job only builds and tests. Runs on fork PRs, so don't
+# inherit the repo-default (often write) scope.
+permissions:
+  contents: read
+
+# Don't pile up redundant multi-minute -race runs on rapid pushes.
+concurrency:
+  group: linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     runs-on: ubuntu-latest

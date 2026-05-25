@@ -117,9 +117,11 @@ func (darwinObserver) WriterOf(path string) (int, error) {
 }
 
 // EnvOf returns the whitelisted launcher env of pid via KERN_PROCARGS2 sysctl
-// (readProcessEnv, defined in osutil_darwin.go).
+// (readProcessEnv, defined in osutil_darwin.go). Per the port contract an
+// unreadable env is an empty map, not an error.
 func (darwinObserver) EnvOf(pid int) (map[string]string, error) {
-	return readProcessEnv(pid)
+	m, _ := readProcessEnv(pid)
+	return m, nil
 }
 
 // runPgrep invokes pgrep with the given flag and pattern, parses the PIDs from

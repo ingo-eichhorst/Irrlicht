@@ -15,6 +15,13 @@
 ARG GO_VERSION=1.25
 FROM golang:${GO_VERSION}-bookworm
 
+# replay-fixtures.sh shells out to python3 (report rendering) and jq (the
+# known_failing gate); the slim golang image ships neither. Install them in a
+# cached layer before COPY so source edits don't re-run apt.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 jq \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /src
 COPY . .
 
@@ -24,9 +31,12 @@ RUN cd core && go build ./...
 # Run the cross-platform gate. Kept as the image's default command (not a
 # RUN) so `docker run` re-executes it against the built layers and a fresh
 # process table for the conformance test.
+# -race matches the linux.yml CI job — the conformance test exists to catch
+# pidfd/poll concurrency bugs, so the local harness must exercise the detector
+# too, or a race could pass here and fail CI.
 CMD set -eux; \
     cd /src/core; \
-    go test ./cmd/replay/... -count=1; \
-    go test ./adapters/inbound/agents/processlifecycle/... -count=1; \
+    go test ./cmd/replay/... -race -count=1; \
+    go test ./adapters/inbound/agents/processlifecycle/... -race -count=1; \
     cd /src; \
     tools/replay-fixtures.sh

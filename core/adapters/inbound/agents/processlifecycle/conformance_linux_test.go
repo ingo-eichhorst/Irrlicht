@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,8 +93,7 @@ func TestLinuxObserverConformance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read helper comm: %v", err)
 	}
-	comm := string(commBytes)
-	comm = comm[:len(comm)-1] // strip trailing newline
+	comm := strings.TrimRight(string(commBytes), "\n") // tolerate empty/short reads
 	pids, err := osProc.FindByName(comm)
 	if err != nil {
 		t.Fatalf("FindByName(%q): %v", comm, err)

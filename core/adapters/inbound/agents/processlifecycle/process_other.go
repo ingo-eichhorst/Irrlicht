@@ -27,4 +27,7 @@ func (stubObserver) CWDOf(pid int) (string, error) {
 
 func (stubObserver) WriterOf(string) (int, error) { return 0, nil }
 
-func (stubObserver) EnvOf(pid int) (map[string]string, error) { return readProcessEnv(pid) }
+func (stubObserver) EnvOf(pid int) (map[string]string, error) {
+	m, _ := readProcessEnv(pid) // empty map, never an error (port contract)
+	return m, nil
+}

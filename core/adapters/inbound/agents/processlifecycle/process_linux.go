@@ -5,6 +5,7 @@ package processlifecycle
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -102,6 +103,15 @@ func (linuxObserver) WriterOf(path string) (int, error) {
 	if path == "" {
 		return 0, nil
 	}
+	// /proc/<pid>/fd/* readlinks are fully symlink-resolved by the kernel,
+	// but the caller's transcript path is only filepath.Clean'd (fswatcher
+	// joins os.UserHomeDir() + a relative dir, no symlink resolution). On a
+	// host where $HOME or the data dir traverses a symlink, an exact string
+	// compare would never match — so canonicalise the target path too.
+	want := path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		want = resolved
+	}
 	pids, err := procPIDs()
 	if err != nil {
 		return 0, nil
@@ -118,7 +128,7 @@ func (linuxObserver) WriterOf(path string) (int, error) {
 		}
 		for _, fd := range fds {
 			target, err := os.Readlink(fdDir + "/" + fd.Name())
-			if err != nil || target != path {
+			if err != nil || target != want {
 				continue
 			}
 			if fdWritable(pid, fd.Name()) {
@@ -130,9 +140,11 @@ func (linuxObserver) WriterOf(path string) (int, error) {
 }
 
 // EnvOf returns the whitelisted launcher env of pid via /proc/<pid>/environ
-// (readProcessEnv, defined in osutil_linux.go).
+// (readProcessEnv, defined in osutil_linux.go). Per the port contract an
+// unreadable env (process exited, root-owned) is an empty map, not an error.
 func (linuxObserver) EnvOf(pid int) (map[string]string, error) {
-	return readProcessEnv(pid)
+	m, _ := readProcessEnv(pid)
+	return m, nil
 }
 
 // procPIDs returns the PIDs of every process currently in /proc.
