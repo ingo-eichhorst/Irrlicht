@@ -3711,6 +3711,44 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "coverage cell editorially reads irrlicht_observes:partial ('compaction event interspersing risks flicker'), but the reassessment lifts it to yes/yes: pi maps a top-level `compaction` event to assistant (sustains working, parser.go:55-60), so a mid-stream compaction cannot flicker to ready either"
+          ],
+          "setup": [
+            "Interactive pi REPL driver (drive-pi-interactive.sh) launches pi in a fresh tmux session; pi generates its own rollout UUID and writes one JSONL session file under ~/.pi/agent/sessions/ — the driver discovers the UUID from the session header on line 1",
+            "Driver tears down the tmux session once after the single send + wait_turn → one clean process_exited"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a 6-line haiku-style poem about the sea. Output one line at a time, each line on its own line, with no preamble and no commentary."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a session entering ready within 2s of REPL launch",
+            "events.jsonl shows exactly one ready→working transition for the rollout UUID session",
+            "across the streaming window (multiple intermediate assistant transcript flushes with non-terminal stopReason), NO state_transition to ready fires before the terminal stopReason=stop assistant message — the whole streamed turn is a single contiguous working→ready arc",
+            "NO state_transition to waiting fires during the streaming window (pi has no permission hook)",
+            "events.jsonl shows exactly one working→ready transition at turn end (only stopReason=stop closes the turn)",
+            "events.jsonl contains a pid_discovered event for the rollout session",
+            "events.jsonl contains exactly one process_exited for the rollout session after teardown; state immediately before teardown is ready",
+            "final session state is ready",
+            "transcript.jsonl contains 1 user line and at least 2 assistant lines (intermediate streamed flushes + terminal stop)"
+          ],
+          "settings": {},
+          "timeout_seconds": 150
         }
       }
     },
