@@ -7,8 +7,8 @@ the macOS app running on the host Mac**.
 
 You bring the two containers up, add the relay as a Source in the Mac app, then
 `docker compose exec` into the agent and drive `claude` by hand — and watch the
-Linux session appear and transition `working → waiting → ready` on your Mac,
-with live cost/tokens.
+Linux session appear and transition `working → ready` on your Mac, with live
+cost/tokens.
 
 ```
   ┌──────────────── docker compose network ────────────────┐
@@ -55,11 +55,16 @@ docker compose -f examples/roundtrip/docker-compose.yml exec -it agent claude
 
 **Expected on the Mac, live:**
 
-- a new session appears under daemon **`linux-dev`**;
-- it transitions **`working → waiting → ready`** as the turn runs and settles
-  — the first tool-use **permission prompt** is the natural `waiting` — with
-  live **cost/tokens**;
+- a new session appears under daemon **`linux-dev`**, project **`work`**;
+- it transitions **`working → ready`** as the turn runs and settles, with live
+  **cost/tokens** (a one-edit turn ran ~$0.14 / 25.8k tokens, model
+  `claude-opus-4-7`);
 - hovering the connection-status indicator shows **`linux-dev — connected`**.
+
+> **Note:** claude 2.x's tool-use **permission prompts stay `working`**, not
+> `waiting` — so you'll see `working → ready`, not a `waiting` dip. (Surfacing
+> the permission prompt as `waiting` is a separate daemon-side gap, not a fault
+> of this testbed.)
 
 ```bash
 # Relay restart: the daemon reconnects (backoff) and the Mac re-hydrates,
@@ -95,9 +100,10 @@ fallback.) Credentials land in the `claude-home` volume and survive
 - **Daemon liveness.** `irrlichd` logs to the container's stdout:
   `docker compose -f examples/roundtrip/docker-compose.yml logs -f agent`.
   If it exits, the entrypoint logs a warning rather than idling silently.
-- **Process matching on Linux.** Claude Code is a Node program, so
-  `/proc/<pid>/comm` may read `node`. The Linux observer matches argv[0]
-  basename first; the daemon's primary discovery for Claude is its
-  transcript + `~/.claude/sessions/<pid>.json` (name-independent), so the
-  session should surface regardless. If it doesn't, that's the gap this
-  testbed exists to find — file it.
+- **Process matching on Linux.** Claude Code 2.x ships a **native binary**
+  (`claude.exe`); a live process exposes `comm="claude"` / `argv0="claude"`, so
+  the daemon's `ExactName{"claude"}` matcher works directly (verified — the
+  session is keyed `proc-<pid>` before its transcript UUID is even known). PID
+  discovery also has a name-independent path via the transcript +
+  `~/.claude/sessions/<pid>.json`. (The old worry that `/proc/<pid>/comm` reads
+  `node` applied to the previous Node-*script* distribution.)
