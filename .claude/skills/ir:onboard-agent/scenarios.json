@@ -1999,7 +1999,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 7
+              "seconds": 12
             }
           ],
           "verify": [
@@ -2011,7 +2011,7 @@
           ],
           "settings": {},
           "timeout_seconds": 180,
-          "scope_note": "Proves aider's PID-liveness keeps a ready session alive PAST readyTTL: aider's PID is discoverable via the /aider command-line match, so the daemon's sweep skips deletion while kill(pid,0)==nil — exactly as for claudecode. Recording uses IRRLICHT_READY_SESSION_TTL=15s so the 'past TTL' assertion is testable in ~45 s. Aider's idle-flush window (~5 s) means the post-turn ready transition lags actual LLM completion; the recipe budgets a 25 s idle sleep (and a 7 s trailing sleep) so each turn settles and the dwell clearly exceeds the TTL."
+          "scope_note": "Proves aider's PID-liveness keeps a ready session alive PAST readyTTL: aider's PID is discoverable via the /aider command-line match, so the daemon's sweep skips deletion while kill(pid,0)==nil — exactly as for claudecode. Recording uses IRRLICHT_READY_SESSION_TTL=15s so the 'past TTL' assertion is testable in ~45 s. Aider's idle-flush window (~5 s) means the post-turn ready transition lags actual LLM completion; the recipe budgets a 25 s idle sleep (≥20 s, clearly past the 15 s TTL) and a 12 s trailing sleep (gpt-5-nano is fast + aider's ~5 s settle) so each per-turn working→ready settles cleanly and the dwell clearly exceeds the TTL."
         },
         "opencode": {
           "applicable": true,
