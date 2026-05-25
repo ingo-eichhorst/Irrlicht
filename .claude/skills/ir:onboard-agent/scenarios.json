@@ -3696,6 +3696,52 @@
           ],
           "settings": {},
           "timeout_seconds": 150
+        },
+        "pi": {
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (PI_API_KEY or configured provider; verified against pi 0.70.0)",
+            "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+            "pi is launched in interactive REPL mode so the ! shell-escape syntax is available — headless `pi --print` is single-shot and has no interactive ! shell mode",
+            "INTENT READING (per assessment.json — irrlicht_observes: partial): the pi parser deliberately SKIPS the bashExecution wrapper (parser.go:128-131), so irrlicht does NOT reproduce the literal ready→working→ready arc the scenario-meanings Conceptual flow describes for the shell command. This cell asserts the safety invariant instead — the escape must not leave the session stuck in working and must not emit waiting; state stays ready across the escape. The literal arc would require a parser change."
+          ],
+          "setup": [
+            "Driver boots a fresh pi REPL in a per-run cwd under <staging>/cwd/; pi assigns its own session UUID per rollout",
+            "The shell escape is issued via a `send` step typing the literal text `!echo hi` + Enter (the pi driver's send handler uses tmux send-keys -l, so the leading ! is sent verbatim and pi runs it as a local shell command); NO wait_turn follows the escape, since `!`-prefixed input produces a bashExecution rollout line, not an assistant stopReason=stop turn",
+            "Avoid !! only if you want context inclusion to differ — either ! or !! is skipped identically by the pi parser; this recipe uses single ! (output retained in context, no LLM round-trip at escape time)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "!echo hi"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows exactly one ready→working→ready cycle for the entire run, driven by the warm-up turn only (pi's first message drives working, stopReason=stop drives ready); pi may flush the single warm-up turn as one OR two working→ready bursts",
+            "events.jsonl contains NO state_transition to working after the warm-up turn returns to ready — the !echo shell escape drives none because the pi parser skips the bashExecution wrapper (parser.go:128-131)",
+            "events.jsonl contains NO state_transition to waiting at any point",
+            "the escape window (≥6s after the warm-up turn ends) shows the rollout session continuously ready — no transcript_activity is recorded for the !echo escape; the session is NOT left stuck in working",
+            "transcript.jsonl contains 1 user message line, 1 assistant stopReason=stop line (the warm-up turn), and 1 bashExecution line (the !echo escape — which does NOT appear as an assistant turn and is skipped by the parser)",
+            "events.jsonl contains exactly one process_exited on the rollout session; final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 120,
+          "notes": "Pi difference vs claudecode/codex: pi runs `!`-prefixed REPL input as a LOCAL shell command with no LLM round-trip (verified live against pi 0.70.0 — interactive-mode.js text.startsWith(\"!\") → handleBashCommand → executeBash + recordBashResult; the `!!` variant additionally excludes output from context). Pi records the escape as ONE {\"type\":\"message\",\"message\":{\"role\":\"bashExecution\",...}} rollout line. The pi parser (core/adapters/inbound/agents/pi/parser.go:128-131) deliberately SKIPS the bashExecution role (ev.Skip = true), so — UNLIKE codex, which synthesizes a working→ready arc for its !-escape, and LIKE claudecode, which skips its <bash-input> wrappers — the daemon sees no transcript_activity and the session stays ready across the escape. The whole observable is the ABSENCE of a second working transition plus the proof (warm-up arc) that a NORMAL prompt still drives state. RECIPE SHAPE: the warm-up turn comes FIRST (the escape SECOND) — opposite to the claudecode recipe — because pi creates ~/.pi/agent/sessions/.../<ts>_<uuid>.jsonl only after the first user message, so without a leading real turn the driver's resolve_transcript never binds a UUID. The escape uses `send` (not the claudecode `keys` step): the pi interactive driver supports send/slash/wait_turn/interrupt/sleep but NOT keys, and step_send types the literal text (-l) then Enter, so `!echo hi` is delivered verbatim. NO wait_turn after the escape: it produces no assistant stopReason=stop, so wait_turn would time out; the trailing 6s sleep instead holds the recording open past the classifier debounce so the post-escape ready dwell is observed cleanly and the daemon-kill doesn't race the final-state emission. C7 / SESSION-IDENTITY: the live REPL emits a transient proc-<PID> pre-session born ready at launch (bridges the gap until the UUID rollout transcript appears); session_birth legitimately matches that pre-session, while the warm-up arc and post-escape dwell pin to the rollout via same_session_as (turn_start anchors to recording start with NO pin so the matcher binds the FIRST working — necessarily the rollout, since the pre-session never goes working). Between runs: warm-up assistant wording, token counts, session UUID, PID and timestamps differ, and pi may flush the warm-up turn as one or two working→ready bursts; the load-bearing assertion is the silent ready dwell across the escape window. If it broke, look at core/adapters/inbound/agents/pi/parser.go (case \"bashExecution\" → ev.Skip) and whether a pi update changed how `!` escapes are recorded in the rollout."
         }
       }
     },
