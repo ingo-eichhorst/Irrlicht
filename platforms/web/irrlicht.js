@@ -119,7 +119,16 @@
       notifyOnReady: false,
       notifyOnWaiting: false,
       notifyOnContextPressure: false,
+      // Sources: the local source (the origin that served this page) is on by
+      // default; a relay source is opt-in by URL. Mirrors the macOS
+      // useLocalDaemon / useRelayServer / relayServerURL @AppStorage keys.
+      enableLocalSource: true,
+      enableRelaySource: false,
+      relayUrl: '',
     };
+    // Settings keys that change the live source connections (vs. display-only
+    // toggles), so the change handler knows to reconnect.
+    const SOURCE_SETTING_KEYS = new Set(['enableLocalSource', 'enableRelaySource', 'relayUrl']);
     function loadSettings() {
       try {
         const raw = localStorage.getItem(SETTINGS_KEY);
@@ -1357,32 +1366,222 @@
       });
     }, 30000);
 
-    // --- WebSocket ---
-    let ws = null;
-    let reconnectDelay = 1000;
+    // --- Sources & connections (multi-source) ---
+    // The dashboard connects to one or more sources at once: the local source
+    // (the origin that served this page — a daemon or a relay) and/or a relay
+    // server entered in Settings → Sources. A daemon speaks raw PushMessage
+    // frames; a relay wraps them in a `push` envelope behind a `hello`
+    // handshake. One handler covers both: we always send a client `hello` (a
+    // daemon ignores unexpected frames; a relay requires it) and dispatch by
+    // frame type — `push` unwraps `.msg`, relay control frames
+    // (`snapshot`/`daemon_status`) feed the connection tooltip, and anything
+    // else is a raw daemon frame processed exactly as the single socket was.
+    //
+    // Sessions are keyed by `session_id` (the existing model), so the same
+    // daemon reached over both the local socket and a relay collapses to one
+    // row automatically. Two *different* daemons that happen to share a
+    // session_id (e.g. proc-<pid>) would merge — a documented v0 caveat;
+    // per-source keying is deferred with row-level source badges.
 
-    // Status labels mirror the overlay's statusIndicator at SessionListView.swift:387:
-    // connected → "watching", reconnecting → "reconnecting", else state name.
-    function setWsStatus(status) {
+    // relayFrameKind classifies an incoming frame so the handler can branch.
+    // Pure; exported for tests.
+    function relayFrameKind(msg) {
+      if (!msg || typeof msg.type !== 'string') return 'raw';
+      switch (msg.type) {
+        case 'hello_ack': return 'hello_ack';
+        case 'snapshot': return 'snapshot';
+        case 'daemon_status': return 'daemon_status';
+        case 'push': return 'push';
+        default: return 'raw';
+      }
+    }
+
+    // aggregateConnState reduces per-source states into the single header dot:
+    // connected wins (we're watching at least one source), then connecting,
+    // then reconnecting, else disconnected. Pure; exported for tests.
+    function aggregateConnState(states) {
+      if (!states || states.length === 0) return 'disconnected';
+      if (states.some(s => s === 'connected')) return 'connected';
+      if (states.some(s => s === 'connecting')) return 'connecting';
+      if (states.some(s => s === 'reconnecting')) return 'reconnecting';
+      return 'disconnected';
+    }
+
+    // relayWsUrl normalizes a user-entered relay address into a ws(s):// stream
+    // URL. Accepts http(s)://, ws(s)://, or a bare host[:port], with or without
+    // the stream path. Pure; exported for tests. Returns '' for empty input.
+    function relayWsUrl(raw) {
+      let u = (raw || '').trim();
+      if (!u) return '';
+      u = u.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+      if (!/^wss?:\/\//i.test(u)) u = 'ws://' + u;
+      u = u.replace(/\/+$/, '');
+      if (!/\/api\/v1\/sessions\/stream$/.test(u)) u += '/api/v1/sessions/stream';
+      return u;
+    }
+
+    function localWsUrl() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      return proto + '://' + location.host + '/api/v1/sessions/stream';
+    }
+
+    // Active sources, keyed by a stable id. Each: { id, label, kind, wsUrl,
+    // state, ws, reconnectDelay, closing, daemons: Map<id,{label,status}> }.
+    const sources = new Map();
+
+    function desiredSources() {
+      const out = [];
+      if (settings.enableLocalSource) {
+        out.push({ id: 'local', label: 'Local', kind: 'local', wsUrl: localWsUrl() });
+      }
+      if (settings.enableRelaySource) {
+        const wsUrl = relayWsUrl(settings.relayUrl);
+        if (wsUrl) out.push({ id: 'relay:' + wsUrl, label: settings.relayUrl || 'Relay', kind: 'relay', wsUrl });
+      }
+      return out;
+    }
+
+    // rebuildSources reconciles the live connections with the configured
+    // sources, closing dropped ones and opening new ones. Called on load and
+    // whenever a Sources setting changes, so toggling reconnects without a
+    // page reload.
+    function rebuildSources() {
+      const desired = desiredSources();
+      const desiredById = new Map(desired.map(s => [s.id, s]));
+      for (const [id, src] of [...sources]) {
+        if (!desiredById.has(id)) {
+          src.closing = true;
+          try { if (src.ws) src.ws.close(); } catch (e) {}
+          sources.delete(id);
+        }
+      }
+      for (const d of desired) {
+        if (!sources.has(d.id)) {
+          const src = Object.assign({ state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map() }, d);
+          sources.set(d.id, src);
+          connectSource(src);
+        }
+      }
+      updateWsStatus();
+    }
+
+    function connectSource(src) {
+      src.state = src.ws ? 'reconnecting' : 'connecting';
+      updateWsStatus();
+      let ws;
+      try { ws = new WebSocket(src.wsUrl); } catch (e) { scheduleReconnect(src); return; }
+      src.ws = ws;
+      ws.onopen = function() {
+        src.state = 'connected';
+        src.reconnectDelay = 1000;
+        try { ws.send(JSON.stringify({ type: 'hello', protocol_version: 1, role: 'client' })); } catch (e) {}
+        updateWsStatus();
+      };
+      ws.onmessage = function(evt) {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch (e) { return; }
+        handleSourceFrame(src, msg);
+      };
+      ws.onerror = function() {};
+      ws.onclose = function() {
+        if (src.closing) return;
+        src.state = 'disconnected';
+        src.daemons.clear();
+        updateWsStatus();
+        scheduleReconnect(src);
+      };
+    }
+
+    function scheduleReconnect(src) {
+      if (src.closing) return;
+      const delay = src.reconnectDelay;
+      src.reconnectDelay = Math.min(src.reconnectDelay * 2, 30000);
+      setTimeout(() => { if (!src.closing && sources.get(src.id) === src) connectSource(src); }, delay);
+    }
+
+    function handleSourceFrame(src, msg) {
+      if (!msg) return;
+      switch (relayFrameKind(msg)) {
+        case 'hello_ack':
+          return;
+        case 'snapshot':
+          src.daemons.clear();
+          for (const d of (msg.daemons || [])) {
+            if (d && d.daemon_id) src.daemons.set(d.daemon_id, { label: d.daemon_label || d.daemon_id, status: d.status || 'connected' });
+          }
+          updateWsStatus();
+          return;
+        case 'daemon_status':
+          if (msg.daemon_id) {
+            if (msg.status === 'disconnected') src.daemons.delete(msg.daemon_id);
+            else src.daemons.set(msg.daemon_id, { label: msg.daemon_label || msg.daemon_id, status: msg.status || 'connected' });
+          }
+          updateWsStatus();
+          return;
+        case 'push':
+          if (msg.msg) dispatchRawFrame(msg.msg);
+          return;
+        default:
+          dispatchRawFrame(msg);
+      }
+    }
+
+    // dispatchRawFrame processes a raw daemon PushMessage — the local frame
+    // format, or a relay push's unwrapped `.msg`. Both source kinds funnel
+    // here, so the render/history/notification paths are unchanged.
+    function dispatchRawFrame(msg) {
+      if (!msg) return;
+      if (msg.type === 'orchestrator_state' && msg.orchestrator) {
+        const orch = msg.orchestrator;
+        orchestrator = orch.running ? orch : null;
+        orchFull = orch.running ? orch : null;
+        render();
+        return;
+      }
+      if (msg.type === 'history_snapshot' && msg.session_id && msg.history) {
+        applyHistorySnapshot(msg.session_id, msg.history, msg.generations);
+        repaintHistory();
+        return;
+      }
+      if (msg.type === 'history_tick' && typeof msg.granularity_sec === 'number' && msg.buckets) {
+        applyHistoryTick(msg.granularity_sec, msg.buckets, msg.bucket_generations);
+        if (msg.granularity_sec === currentGranularity) repaintHistory();
+        return;
+      }
+      if (msg.type === 'history_upgrade' && msg.session_id && typeof msg.priority === 'number') {
+        applyHistoryUpgrade(msg.session_id, msg.priority);
+        repaintHistory();
+        return;
+      }
+      if (!msg.session) return;
+      var s = msg.session;
+      if (msg.type === 'session_deleted') {
+        applySessionDelete(s.session_id);
+      } else {
+        applySessionUpdate(s);
+      }
+      render();
+    }
+
+    // --- Connection status (header dot + banner + tooltip) ---
+    function setDotLabel(status) {
       const dot = document.getElementById('ws-dot');
       const label = document.getElementById('ws-label');
-      dot.className = 'ws-dot ' + status;
+      if (dot) dot.className = 'ws-dot ' + status;
       let text;
       if (status === 'connected') text = 'watching';
       else if (status === 'reconnecting') text = 'reconnecting';
       else if (status === 'connecting') text = 'connecting';
       else text = 'disconnected';
-      label.textContent = text;
-      // Surface a full-width banner over the session list when the daemon
-      // connection is impaired — the header dot alone is easy to miss.
+      if (label) label.textContent = text;
       const banner = document.getElementById('connection-banner');
       if (banner) {
         if (status === 'reconnecting') {
           banner.className = 'reconnecting';
-          banner.textContent = 'Reconnecting to daemon…';
+          banner.textContent = 'Reconnecting…';
         } else if (status === 'disconnected') {
           banner.className = 'disconnected';
-          banner.textContent = 'Disconnected — the irrlicht daemon is unreachable. Check that it is running.';
+          banner.textContent = 'Disconnected — no configured source is reachable. Check that the daemon (or relay) is running.';
         } else {
           banner.className = '';
           banner.textContent = '';
@@ -1390,64 +1589,31 @@
       }
     }
 
-    function connect() {
-      // ws is non-null on every subsequent reconnect attempt; use that to
-      // distinguish the initial "connecting" from a "reconnecting" cycle.
-      setWsStatus(ws ? 'reconnecting' : 'connecting');
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(proto + '://' + location.host + '/api/v1/sessions/stream');
-
-      ws.onopen = function() {
-        setWsStatus('connected');
-        reconnectDelay = 1000;
-      };
-
-      ws.onmessage = function(evt) {
-        var msg;
-        try { msg = JSON.parse(evt.data); } catch(e) { return; }
-        if (!msg) return;
-        if (msg.type === 'orchestrator_state' && msg.orchestrator) {
-          const orch = msg.orchestrator;
-          orchestrator = orch.running ? orch : null;
-          orchFull = orch.running ? orch : null;
-          render();
-          return;
-        }
-        if (msg.type === 'history_snapshot' && msg.session_id && msg.history) {
-          applyHistorySnapshot(msg.session_id, msg.history, msg.generations);
-          repaintHistory();
-          return;
-        }
-        if (msg.type === 'history_tick' && typeof msg.granularity_sec === 'number' && msg.buckets) {
-          applyHistoryTick(msg.granularity_sec, msg.buckets, msg.bucket_generations);
-          if (msg.granularity_sec === currentGranularity) repaintHistory();
-          return;
-        }
-        if (msg.type === 'history_upgrade' && msg.session_id && typeof msg.priority === 'number') {
-          applyHistoryUpgrade(msg.session_id, msg.priority);
-          repaintHistory();
-          return;
-        }
-        if (!msg.session) return;
-        var s = msg.session;
-        if (msg.type === 'session_deleted') {
-          applySessionDelete(s.session_id);
+    // sourceTooltipLines builds the connection tooltip: one line per source. A
+    // connected relay lists its daemons by label; everything else shows the
+    // source's own label and state. Pure-ish (reads the sources map).
+    function sourceTooltipLines() {
+      const lines = [];
+      for (const src of sources.values()) {
+        if (src.kind === 'relay' && src.state === 'connected' && src.daemons.size > 0) {
+          for (const d of src.daemons.values()) {
+            lines.push(d.label + ' — ' + (d.status === 'connected' ? 'connected' : d.status));
+          }
         } else {
-          applySessionUpdate(s);
+          lines.push(src.label + ' — ' + src.state);
         }
-        render();
-      };
-
-      ws.onerror = function() {};
-
-      ws.onclose = function() {
-        setWsStatus('disconnected');
-        setTimeout(connect, reconnectDelay);
-        reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-      };
+      }
+      return lines;
     }
 
-    connect();
+    function updateWsStatus() {
+      const states = [...sources.values()].map(s => s.state);
+      setDotLabel(aggregateConnState(states));
+      const wrap = document.querySelector('.ws-status');
+      if (wrap) wrap.title = sourceTooltipLines().join('\n');
+    }
+
+    rebuildSources();
 
     // Granularity is derived from the display-mode cycle — no need to
     // persist it separately; restoring irrlicht_displayMode re-derives it.
@@ -1951,7 +2117,9 @@
     function syncSettingsForm() {
       for (const el of document.querySelectorAll('[data-setting]')) {
         const key = el.dataset.setting;
-        if (key in settings) el.checked = !!settings[key];
+        if (!(key in settings)) continue;
+        if (el.type === 'checkbox') el.checked = !!settings[key];
+        else el.value = settings[key] != null ? String(settings[key]) : '';
       }
       for (const el of document.querySelectorAll('[data-quota-setting="showQuotaForecast"]')) {
         el.checked = showQuotaForecast();
@@ -2033,10 +2201,12 @@
             return;
           }
         }
-        settings[key] = this.checked;
+        settings[key] = (this.type === 'checkbox') ? this.checked : this.value;
         persistSettings();
         applySettings();
         refreshPermNote();
+        // Source toggles/URL reconnect live, no page reload.
+        if (SOURCE_SETTING_KEYS.has(key)) rebuildSources();
       });
     }
 
@@ -2050,4 +2220,5 @@ export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
   formatCost, formatUsageCost, pressureClass, historyPriorityForState,
   lastNotifiedPressure,
+  relayFrameKind, aggregateConnState, relayWsUrl,
 };

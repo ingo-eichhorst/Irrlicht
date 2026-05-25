@@ -31,6 +31,7 @@ import (
 	"irrlicht/core/adapters/outbound/mdns"
 	"irrlicht/core/adapters/outbound/metrics"
 	"irrlicht/core/adapters/outbound/recorder"
+	"irrlicht/core/adapters/outbound/relay"
 	wshub "irrlicht/core/adapters/outbound/websocket"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/config"
@@ -155,6 +156,40 @@ func main() {
 	// so the agent-onboarding viewer can build the same metrics Registry
 	// during replay without duplicating the construction.
 	allAgents := agents.All()
+
+	// Outbound relay forwarder (opt-in via IRRLICHT_RELAY_URL): subscribe to
+	// the same push broadcaster the local WebSocket uses and push every
+	// session event out to a standalone irrlichtrelay, so remote clients see
+	// this daemon's sessions through the relay. Pushing out means the daemon
+	// needs no inbound reachability (works behind NAT). No-op when unset.
+	if relayURL := os.Getenv("IRRLICHT_RELAY_URL"); relayURL != "" {
+		home, _ := os.UserHomeDir()
+		identity, err := relay.LoadOrCreateIdentity(dataDir(home))
+		if err != nil {
+			logger.LogError("startup", "", fmt.Sprintf("relay identity persistence failed (using ephemeral id): %v", err))
+		}
+		snapshot := func() ([]*session.SessionState, []relay.AgentInfo) {
+			sessions, err := cachedRepo.ListAll()
+			if err != nil {
+				sessions = nil
+			}
+			infos := make([]relay.AgentInfo, 0, len(allAgents))
+			for _, a := range allAgents {
+				infos = append(infos, relay.AgentInfo{
+					Name:         a.Identity.Name,
+					DisplayName:  a.Identity.DisplayName,
+					IconSVGLight: a.Identity.IconSVGLight,
+					IconSVGDark:  a.Identity.IconSVGDark,
+				})
+			}
+			return sessions, infos
+		}
+		fwd := relay.NewForwarder(relayURL, identity, push, snapshot, logger)
+		relayCtx, relayCancel := context.WithCancel(context.Background())
+		defer relayCancel()
+		go fwd.Run(relayCtx)
+		logger.LogInfo("startup", "", fmt.Sprintf("relay forwarder enabled → %s (daemon %q / %s)", relayURL, identity.DaemonLabel, identity.DaemonID))
+	}
 
 	// Shared adapters for SessionDetector.
 	gitResolver := git.New()

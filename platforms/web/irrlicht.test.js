@@ -8,6 +8,9 @@ import {
   pressureClass,
   historyPriorityForState,
   lastNotifiedPressure,
+  relayFrameKind,
+  aggregateConnState,
+  relayWsUrl,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -144,5 +147,59 @@ describe('formatUsageCost', () => {
 
   test('>= $100 drops to integer dollars', () => {
     expect(formatUsageCost(105.3)).toBe('$105')
+  })
+})
+
+describe('relayFrameKind', () => {
+  test('classifies relay envelope frames', () => {
+    expect(relayFrameKind({ type: 'push', msg: {} })).toBe('push')
+    expect(relayFrameKind({ type: 'snapshot', daemons: [] })).toBe('snapshot')
+    expect(relayFrameKind({ type: 'daemon_status' })).toBe('daemon_status')
+    expect(relayFrameKind({ type: 'hello_ack' })).toBe('hello_ack')
+  })
+
+  test('treats raw daemon frames (and junk) as raw', () => {
+    expect(relayFrameKind({ type: 'session_updated', session: {} })).toBe('raw')
+    expect(relayFrameKind({ type: 'history_tick' })).toBe('raw')
+    expect(relayFrameKind(null)).toBe('raw')
+    expect(relayFrameKind({})).toBe('raw')
+  })
+})
+
+describe('aggregateConnState', () => {
+  test('connected wins over any other source state', () => {
+    expect(aggregateConnState(['connected', 'reconnecting'])).toBe('connected')
+    expect(aggregateConnState(['disconnected', 'connected'])).toBe('connected')
+  })
+
+  test('falls through connecting → reconnecting → disconnected', () => {
+    expect(aggregateConnState(['connecting', 'reconnecting'])).toBe('connecting')
+    expect(aggregateConnState(['reconnecting', 'disconnected'])).toBe('reconnecting')
+    expect(aggregateConnState(['disconnected'])).toBe('disconnected')
+  })
+
+  test('no sources reads as disconnected', () => {
+    expect(aggregateConnState([])).toBe('disconnected')
+  })
+})
+
+describe('relayWsUrl', () => {
+  test('empty input yields empty', () => {
+    expect(relayWsUrl('')).toBe('')
+    expect(relayWsUrl('   ')).toBe('')
+  })
+
+  test('bare host gets ws:// scheme and the stream path', () => {
+    expect(relayWsUrl('localhost:7839')).toBe('ws://localhost:7839/api/v1/sessions/stream')
+  })
+
+  test('http(s) is rewritten to ws(s)', () => {
+    expect(relayWsUrl('http://relay.example:7839')).toBe('ws://relay.example:7839/api/v1/sessions/stream')
+    expect(relayWsUrl('https://relay.example')).toBe('wss://relay.example/api/v1/sessions/stream')
+  })
+
+  test('an explicit stream path is preserved (not doubled)', () => {
+    expect(relayWsUrl('ws://localhost:7839/api/v1/sessions/stream'))
+      .toBe('ws://localhost:7839/api/v1/sessions/stream')
   })
 })

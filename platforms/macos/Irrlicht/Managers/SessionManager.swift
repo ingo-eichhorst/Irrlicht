@@ -18,6 +18,17 @@ enum ConnectionState {
         case .disconnected: return "Daemon disconnected"
         }
     }
+
+    /// Compact one-word label for the per-source line in the multi-source
+    /// connection tooltip (e.g. "Local — connected").
+    var shortLabel: String {
+        switch self {
+        case .connected:    return "connected"
+        case .connecting:   return "connecting"
+        case .reconnecting: return "reconnecting"
+        case .disconnected: return "disconnected"
+        }
+    }
 }
 
 @MainActor
@@ -76,6 +87,45 @@ class SessionManager: ObservableObject {
     private let maxReconnectDelay: TimeInterval = 30.0
     var sessionMap: [String: SessionState] = [:]
 
+    // MARK: - Relay source (multi-source)
+    // A second, optional connection to a standalone irrlichtrelay. It speaks
+    // the relay envelope (a `hello` handshake, then `push`-wrapped frames);
+    // the local connection above speaks raw daemon frames. Relay sessions are
+    // held in their own map so the 30s local re-hydration — which replaces
+    // `sessionMap` wholesale — can never drop them. A relay session whose id
+    // also exists locally collapses to the local copy on merge, so the same
+    // daemon reached over both paths shows once.
+
+    private var relayWebSocketTask: URLSessionWebSocketTask?
+    private var relayConnectTask: Task<Void, Never>?
+    private var relayReconnectDelay: TimeInterval = 1.0
+    @Published var relayConnectionState: ConnectionState = .disconnected
+    /// Relay-sourced sessions, keyed by session id.
+    private var relaySessionMap: [String: SessionState] = [:]
+    /// Daemons the relay reports connected: daemon_id → label, for the tooltip.
+    /// Drives `connectionTooltip` (a computed property read by the view) but
+    /// isn't @Published, so nudge SwiftUI on every change — otherwise a
+    /// daemon_status update with no accompanying session change leaves the
+    /// tooltip stale.
+    private var relayDaemons: [String: String] = [:] {
+        willSet { objectWillChange.send() }
+    }
+    /// The relay URL currently connected, so a URL change forces a reconnect.
+    private var activeRelayURL: String = ""
+    /// Local groups before relay groups are appended. `apiGroups` (published)
+    /// is always `orderedGroups(localApiGroups) + relayGroups()`.
+    private var localApiGroups: [AgentGroup] = []
+    /// Last-applied source configuration, so the UserDefaults observer only
+    /// reconnects when a Sources setting actually changed.
+    private var lastSourceConfig: String = ""
+
+    private var useLocalDaemon: Bool { UserDefaults.standard.bool(forKey: "useLocalDaemon") }
+    private var useRelayServer: Bool { UserDefaults.standard.bool(forKey: "useRelayServer") }
+    private var relayServerURL: String {
+        (UserDefaults.standard.string(forKey: "relayServerURL") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// GasTownProvider reference for forwarding Gas Town availability.
     weak var gasTownProvider: GasTownProvider? {
         didSet {
@@ -118,6 +168,11 @@ class SessionManager: ObservableObject {
         var defaultsSeed: [String: Any] = [
             "launchAtLogin": true,
             "didApplyDefaultLoginItem": false,
+            // Sources: local on by default, relay opt-in by URL (mirrors the
+            // web dashboard's enableLocalSource / enableRelaySource / relayUrl).
+            "useLocalDaemon": true,
+            "useRelayServer": false,
+            "relayServerURL": "",
         ]
         for event in NotificationEvent.allCases {
             defaultsSeed[event.enabledKey] = true
@@ -125,11 +180,20 @@ class SessionManager: ObservableObject {
         }
         UserDefaults.standard.register(defaults: defaultsSeed)
 
+        // Reconnect sources live when a Sources setting changes (no relaunch).
+        // didChangeNotification fires for any default; sourcesSettingsChanged
+        // diffs and only reconnects on an actual source-config change.
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.sourcesSettingsChanged() }
+        }
+
         Task {
             loadSessionOrder()
             loadProjectGroupOrder()
             requestNotificationPermission()
-            self.startWebSocket()
+            self.sourcesSettingsChanged()
             self.startProjectCostsPolling()
         }
     }
@@ -139,6 +203,10 @@ class SessionManager: ObservableObject {
         connectTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
+        relayConnectTask?.cancel()
+        relayConnectTask = nil
+        relayWebSocketTask?.cancel(with: .normalClosure, reason: nil)
+        relayWebSocketTask = nil
         projectCostsTimer?.invalidate()
         projectCostsTimer = nil
     }
@@ -157,6 +225,10 @@ class SessionManager: ObservableObject {
         connectTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
+        // Cancel a pending debounced rehydration too, so disabling the Local
+        // source can't be undone ~0.5s later by an in-flight hydrateSessions().
+        rehydrationTask?.cancel()
+        rehydrationTask = nil
         connectionState = .disconnected
     }
 
@@ -211,6 +283,310 @@ class SessionManager: ObservableObject {
 
         reconnectDelay = min(reconnectDelay * 2, maxReconnectDelay)
         scheduleConnect(after: delay)
+    }
+
+    // MARK: - Sources reconciliation
+
+    /// Diffs the current Sources config against the last applied one and
+    /// reconnects only on change. Cheap to call on every UserDefaults change.
+    private func sourcesSettingsChanged() {
+        let cfg = "\(useLocalDaemon)|\(useRelayServer)|\(relayServerURL)"
+        guard cfg != lastSourceConfig else { return }
+        lastSourceConfig = cfg
+        reconcileSources()
+    }
+
+    /// Brings the live connections in line with the Sources settings: starts
+    /// or stops the local and relay links, restarting the relay if its URL
+    /// changed.
+    private func reconcileSources() {
+        if useLocalDaemon {
+            if connectionState == .disconnected { startWebSocket() }
+        } else if connectionState != .disconnected {
+            stopWebSocket()
+            sessionMap.removeAll()
+            localApiGroups.removeAll()
+            rebuildSessionsFromMap()
+            recomposeApiGroups()
+        }
+
+        let url = relayServerURL
+        if useRelayServer && !url.isEmpty {
+            if relayConnectionState == .disconnected || url != activeRelayURL {
+                stopRelay()
+                activeRelayURL = url
+                startRelay()
+            }
+        } else if relayConnectionState != .disconnected {
+            stopRelay()
+        }
+    }
+
+    // MARK: - Relay WebSocket
+
+    func startRelay() {
+        guard relayConnectionState == .disconnected else { return }
+        relayConnectionState = .connecting
+        relayReconnectDelay = 1.0
+        scheduleRelayConnect(after: 0)
+    }
+
+    func stopRelay() {
+        relayConnectTask?.cancel()
+        relayConnectTask = nil
+        relayWebSocketTask?.cancel(with: .normalClosure, reason: nil)
+        relayWebSocketTask = nil
+        relayConnectionState = .disconnected
+        relayDaemons.removeAll()
+        if !relaySessionMap.isEmpty {
+            relaySessionMap.removeAll()
+            rebuildSessionsFromMap()
+            recomposeApiGroups()
+        }
+    }
+
+    private func scheduleRelayConnect(after delay: TimeInterval) {
+        relayConnectTask = Task { [weak self] in
+            guard let self else { return }
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard !Task.isCancelled else { return }
+            await self.relayConnect()
+        }
+    }
+
+    private func relayConnect() async {
+        guard let url = relayStreamURL(activeRelayURL) else {
+            relayConnectionState = .disconnected
+            return
+        }
+        let task = URLSession.shared.webSocketTask(with: url)
+        relayWebSocketTask = task
+        task.resume()
+        relayConnectionState = .connected
+        print("🔌 Relay connected to \(activeRelayURL)")
+
+        // Announce as a client so the relay streams enveloped frames. Harmless
+        // if the URL actually points at a daemon (it ignores the frame).
+        try? await task.send(.string(#"{"type":"hello","protocol_version":1,"role":"client"}"#))
+
+        do {
+            var confirmed = false
+            while !Task.isCancelled {
+                let message = try await task.receive()
+                // Reset the backoff only once the relay actually delivers a
+                // frame. resume() returns before the connection is known good,
+                // so resetting there would defeat the backoff and spin a ~1/s
+                // reconnect loop against an unreachable relay.
+                if !confirmed {
+                    confirmed = true
+                    relayReconnectDelay = 1.0
+                }
+                switch message {
+                case .string(let text):
+                    handleRelayMessage(text)
+                case .data(let data):
+                    if let text = String(data: data, encoding: .utf8) { handleRelayMessage(text) }
+                @unknown default:
+                    break
+                }
+            }
+        } catch {
+            print("🔌 Relay disconnected: \(error.localizedDescription)")
+        }
+
+        guard relayConnectionState != .disconnected && !Task.isCancelled else { return }
+        // While the link is down we no longer know the remote state, so drop
+        // the relay's daemons and sessions — otherwise a remote session that
+        // ended during the outage lingers as a ghost row (the relay's replay
+        // can only re-add survivors, never signal the deletions we missed).
+        // The relay's replay rebuilds the live set on reconnect; sessions also
+        // present locally stay (they live in sessionMap, which local wins).
+        relayDaemons.removeAll()
+        if !relaySessionMap.isEmpty {
+            relaySessionMap.removeAll()
+            rebuildSessionsFromMap()
+            recomposeApiGroups()
+        }
+        let jitter = Double.random(in: 0...(relayReconnectDelay * 0.2))
+        let delay = relayReconnectDelay + jitter
+        relayConnectionState = .reconnecting
+        relayReconnectDelay = min(relayReconnectDelay * 2, maxReconnectDelay)
+        scheduleRelayConnect(after: delay)
+    }
+
+    /// Normalizes a user-entered relay address into a ws(s):// stream URL.
+    /// Accepts http(s)://, ws(s)://, or a bare host[:port], with or without
+    /// the stream path. Mirrors the web dashboard's relayWsUrl().
+    private func relayStreamURL(_ raw: String) -> URL? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        if s.hasPrefix("http://") { s = "ws://" + s.dropFirst("http://".count) }
+        else if s.hasPrefix("https://") { s = "wss://" + s.dropFirst("https://".count) }
+        if !s.hasPrefix("ws://") && !s.hasPrefix("wss://") { s = "ws://" + s }
+        while s.hasSuffix("/") { s.removeLast() }
+        if !s.hasSuffix("/api/v1/sessions/stream") { s += "/api/v1/sessions/stream" }
+        return URL(string: s)
+    }
+
+    private struct RelayFrameType: Decodable { let type: String }
+
+    private struct RelayPush: Decodable {
+        let type: String
+        let source: String?
+        let msg: WsEnvelope?
+    }
+
+    private struct RelayDaemonInfo: Decodable {
+        let daemonID: String
+        let daemonLabel: String?
+        let status: String?
+        enum CodingKeys: String, CodingKey {
+            case daemonID = "daemon_id"
+            case daemonLabel = "daemon_label"
+            case status
+        }
+    }
+
+    private struct RelayControl: Decodable {
+        let type: String
+        let daemons: [RelayDaemonInfo]?
+        let daemonID: String?
+        let daemonLabel: String?
+        let status: String?
+        enum CodingKeys: String, CodingKey {
+            case type, daemons, status
+            case daemonID = "daemon_id"
+            case daemonLabel = "daemon_label"
+        }
+    }
+
+    private func handleRelayMessage(_ text: String) {
+        guard let data = text.data(using: .utf8),
+              let kind = (try? JSONDecoder().decode(RelayFrameType.self, from: data))?.type else { return }
+        switch kind {
+        case "push":
+            if let push = try? JSONDecoder().decode(RelayPush.self, from: data), let inner = push.msg {
+                applyRelayInner(inner)
+            }
+        case "snapshot":
+            if let ctrl = try? JSONDecoder().decode(RelayControl.self, from: data) {
+                relayDaemons.removeAll()
+                for d in ctrl.daemons ?? [] { relayDaemons[d.daemonID] = d.daemonLabel ?? d.daemonID }
+            }
+        case "daemon_status":
+            if let ctrl = try? JSONDecoder().decode(RelayControl.self, from: data), let id = ctrl.daemonID {
+                if ctrl.status == "disconnected" { relayDaemons.removeValue(forKey: id) }
+                else { relayDaemons[id] = ctrl.daemonLabel ?? id }
+            }
+        case "hello_ack":
+            break
+        default:
+            // The URL pointed at a daemon (raw frames): handle it like one.
+            if let inner = try? JSONDecoder().decode(WsEnvelope.self, from: data) {
+                applyRelayInner(inner)
+            }
+        }
+    }
+
+    /// Applies a relay session frame into the relay-only map. History and
+    /// focus frames are ignored for relay sources in v0 (history bars for
+    /// relay-only sessions are deferred; focus is host-local).
+    private func applyRelayInner(_ env: WsEnvelope) {
+        switch env.type {
+        case "session_created", "session_updated":
+            if let s = env.session {
+                // Notify on a state transition for a relay-only session. One
+                // also present locally is handled by the local path, so
+                // notifying here too would double-fire.
+                if sessionMap[s.id] == nil, let old = relaySessionMap[s.id]?.state, old != s.state {
+                    checkStateTransitionNotification(session: s, previousState: old)
+                }
+                relaySessionMap[s.id] = s
+                rebuildSessionsFromMap()
+                recomposeApiGroups()
+            }
+        case "session_deleted":
+            if let s = env.session, relaySessionMap.removeValue(forKey: s.id) != nil {
+                rebuildSessionsFromMap()
+                recomposeApiGroups()
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: - apiGroups composition (local + relay)
+
+    /// Rebuilds the published `apiGroups` from the local groups plus
+    /// client-side groups for relay-only sessions, and refreshes
+    /// `groupedSessionIds` (used by the local patch guard) from the local set.
+    private func recomposeApiGroups() {
+        apiGroups = orderedGroups(localApiGroups) + relayGroups()
+        groupedSessionIds = Set(localApiGroups.flatMap { collectSessionIds(from: $0) })
+    }
+
+    /// Groups relay-only sessions (ids not present locally) by project name.
+    /// No orchestrator handling or child nesting in v0; the common same-daemon
+    /// case yields no relay-only rows, so this only renders a genuine second
+    /// daemon's sessions.
+    private func relayGroups() -> [AgentGroup] {
+        guard !relaySessionMap.isEmpty else { return [] }
+        let localIDs = Set(sessionMap.keys)
+        let relayOnly = relaySessionMap.values.filter { !localIDs.contains($0.id) }
+        // A relay session is top-level only if its parent is unknown in BOTH
+        // maps — matching rebuildSessionsFromMap, which excludes any session
+        // whose parent it can see. Keeps a relay child of a local parent from
+        // surfacing as a stray top-level row that the flat list omits.
+        let knownIDs = localIDs.union(relaySessionMap.keys)
+        let topLevel = relayOnly.filter { s in
+            guard let pid = s.parentSessionId else { return true }
+            return !knownIDs.contains(pid)
+        }
+        guard !topLevel.isEmpty else { return [] }
+        var byProject: [String: [SessionState]] = [:]
+        var order: [String] = []
+        for s in topLevel.sorted(by: { $0.id < $1.id }) {
+            let key = s.projectName ?? "unknown"
+            if byProject[key] == nil { order.append(key) }
+            byProject[key, default: []].append(s)
+        }
+        return order.map { AgentGroup(name: $0, agents: byProject[$0]) }
+    }
+
+    /// One line per source for the connection-status tooltip: the local daemon
+    /// (when enabled) plus each daemon the relay reports. Falls back to the
+    /// single-source tooltip when nothing is configured.
+    var connectionTooltip: String {
+        var lines: [String] = []
+        if useLocalDaemon {
+            lines.append("Local — \(connectionState.shortLabel)")
+        }
+        if useRelayServer && !relayServerURL.isEmpty {
+            if relayConnectionState == .connected && !relayDaemons.isEmpty {
+                for label in relayDaemons.values.sorted() {
+                    lines.append("\(label) — connected")
+                }
+            } else {
+                lines.append("\(relayServerURL) — \(relayConnectionState.shortLabel)")
+            }
+        }
+        return lines.isEmpty ? connectionState.tooltip : lines.joined(separator: "\n")
+    }
+
+    /// Aggregate connection state across enabled sources for the header dot:
+    /// connected wins, then connecting, then reconnecting, else disconnected.
+    var aggregateConnectionState: ConnectionState {
+        let states = [
+            useLocalDaemon ? connectionState : nil,
+            (useRelayServer && !relayServerURL.isEmpty) ? relayConnectionState : nil,
+        ].compactMap { $0 }
+        if states.isEmpty { return .disconnected }
+        if states.contains(.connected) { return .connected }
+        if states.contains(.connecting) { return .connecting }
+        if states.contains(.reconnecting) { return .reconnecting }
+        return .disconnected
     }
 
     /// Top-level /api/v1/sessions payload: the dashboard hierarchy plus
@@ -431,6 +807,11 @@ class SessionManager: ObservableObject {
     }
 
     private func hydrateSessions() async {
+        // The Local source feeds sessionMap/localApiGroups from the local
+        // daemon's REST API. When Local is disabled this must not run, or the
+        // 30s cost-poll timer (and any pending rehydration) would silently
+        // re-add the local sessions that disabling the source just cleared.
+        guard useLocalDaemon else { return }
         guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions") else { return }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
@@ -440,8 +821,8 @@ class SessionManager: ObservableObject {
             let topGroups = payload.groups
             providerCosts = payload.providerCosts ?? [:]
 
-            apiGroups = orderedGroups(topGroups)
-            groupedSessionIds = Set(topGroups.flatMap { collectSessionIds(from: $0) })
+            localApiGroups = topGroups
+            recomposeApiGroups()
             if isDebugMode {
                 print("💧 hydrate: groupedSessionIds=\(groupedSessionIds.count) ids, sample=\(groupedSessionIds.prefix(3))")
             }
@@ -577,7 +958,8 @@ class SessionManager: ObservableObject {
             scheduleRehydration()
             return
         }
-        apiGroups = apiGroups.map { patchGroup($0, with: session) }
+        localApiGroups = localApiGroups.map { patchGroup($0, with: session) }
+        recomposeApiGroups()
     }
 
     func patchGroup(_ group: AgentGroup, with session: SessionState) -> AgentGroup {
@@ -623,12 +1005,13 @@ class SessionManager: ObservableObject {
     /// overlay can't render a stale row while the menu bar is already idle.
     func removeFromApiGroups(sessionId: String) {
         guard groupedSessionIds.contains(sessionId) else { return }
-        apiGroups = apiGroups.compactMap { pruneGroup($0, removing: sessionId) }
-        // Rebuild rather than `remove(sessionId)` — pruning a parent or a
-        // nested group transitively orphans embedded ids that must also leave
-        // `groupedSessionIds`, otherwise `patchApiGroups` will pass the guard
+        // Prune the local groups, then recompose. Rebuilding groupedSessionIds
+        // (inside recompose) rather than `remove(sessionId)` matters because
+        // pruning a parent or nested group transitively orphans embedded ids
+        // that must also leave the set, else `patchApiGroups` passes its guard
         // for sessions that no longer have a row.
-        groupedSessionIds = Set(apiGroups.flatMap { collectSessionIds(from: $0) })
+        localApiGroups = localApiGroups.compactMap { pruneGroup($0, removing: sessionId) }
+        recomposeApiGroups()
     }
 
     /// Returns `nil` when the group has nothing left to render — except
@@ -670,7 +1053,14 @@ class SessionManager: ObservableObject {
     }
 
     private func rebuildSessionsFromMap() {
-        let all = Array(sessionMap.values)
+        // Merge relay-only sessions (ids not present locally) so the cycle and
+        // menu-bar counts include other machines' sessions. Local wins on id
+        // collision — the same daemon reached via both sources shows once.
+        var combined = sessionMap
+        for (id, s) in relaySessionMap where combined[id] == nil {
+            combined[id] = s
+        }
+        let all = Array(combined.values)
         let ids = Set(all.map { $0.id })
 
         // Exclude child sessions (subagents) from the main session list
@@ -1089,7 +1479,7 @@ class SessionManager: ObservableObject {
         guard let i = projectGroupOrder.firstIndex(of: name), i > 0 else { return }
         projectGroupOrder.swapAt(i, i - 1)
         saveProjectGroupOrder()
-        apiGroups = orderedGroups(apiGroups)
+        recomposeApiGroups()
     }
 
     func moveProjectGroupDown(name: String) {
@@ -1097,7 +1487,7 @@ class SessionManager: ObservableObject {
               i < projectGroupOrder.count - 1 else { return }
         projectGroupOrder.swapAt(i, i + 1)
         saveProjectGroupOrder()
-        apiGroups = orderedGroups(apiGroups)
+        recomposeApiGroups()
     }
 
     // MARK: - Duplicate Session Handling
