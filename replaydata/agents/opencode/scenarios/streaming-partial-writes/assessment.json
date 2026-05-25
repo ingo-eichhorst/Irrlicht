@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "agent": "opencode",
+  "scenario": "streaming-partial-writes",
+  "agent_version": "1.14.50",
+  "assessed_at": "2026-05-25",
+  "agent_supports": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
+  "confidence": 0.75,
+  "verdict": "record",
+  "notes": "opencode streams assistant output as incremental text parts; parseTextPart maps assistant text to assistant_message (no turn boundary, excluded from IsAgentDone) and step-finish reason=tool-calls also stays working — only step-finish reason=stop emits turn_done. The WAL-fsnotify ProcessOwnedStore watcher observes the SQLite part rows for the ses_… session, so partial flushes that reach the WAL across multiple scan windows do not flicker to ready. Driver: a single send producing a longer multi-line reply (opencode run blocks; wait_turn no-op). OBSERVABILITY RISK to confirm at record time: a no-tool prose turn run headlessly can flush all assistant text + the terminal step-finish to the WAL in one scan window (basic-turn collapsed working→ready in ~0.3ms), giving the streaming_window nothing intermediate to assert; if so this is an observability gap to surface, not a spec rebase.",
+  "sources": [
+    {
+      "kind": "source_code",
+      "ref": "core/adapters/inbound/agents/opencode/parser.go",
+      "excerpt": "parseTextPart assistant -> assistant_message (no turn boundary); only step-finish reason=stop -> turn_done"
+    },
+    {
+      "kind": "source_code",
+      "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+      "excerpt": "WAL-fsnotify-driven scanParts: part rows with time_updated >= cursor emitted as EventActivity"
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/opencode/capabilities.json",
+      "excerpt": "\"streaming_output\": true"
+    }
+  ]
+}
