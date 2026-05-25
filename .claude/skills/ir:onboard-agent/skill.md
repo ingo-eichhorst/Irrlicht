@@ -48,7 +48,8 @@ five-stage pipeline the subagents implement.
 | capture how `<agent>` does `<scenario>` | `implement <agent> <scenario>` | `implement` subagent |
 | re-record after a daemon change | `implement <agent> <scenario> --re-record` | `implement` subagent |
 | onboard a brand-NEW agent CLI | `--new <slug>` | discovery (see below) |
-| verify nothing regressed | `tools/replay-fixtures.sh` | nothing — pure script |
+| verify nothing regressed (fixtures) | `tools/replay-fixtures.sh` | nothing — pure script |
+| verify the rig scripts themselves | `scripts/smoke-test.sh` | nothing — pure script (bash -n + lib/reconcile_test.sh; the rig isn't covered by replay-fixtures/go test) |
 | run an orchestrator scenario | `<orch> [<scenario>]` | inline (see Orchestrators) |
 
 The legacy per-stage verbs (`assess`/`recipe`/`spec`/`record`/`validate`)
