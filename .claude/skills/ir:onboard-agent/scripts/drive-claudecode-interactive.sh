@@ -189,22 +189,53 @@ init_session() {
   tmux pipe-pane -t "$CURRENT_TMUX" -o "cat >> '$slot_stdout'"
   echo "[driver] tmux started: $CURRENT_TMUX (slot=$ACTIVE, uuid=$CURRENT_UUID, cwd=$CURRENT_CWD, mode=${RESUME_MODE:+resume})" >&2
 
-  # Trust dialog on first encounter with a directory. claude caches
-  # trust per-directory, so a concurrent session sharing an already-
-  # trusted cwd never sees the prompt — skip the wait so we don't stall
-  # 15s for a dialog that will never appear.
+  # Startup gate dialog(s) on first encounter with a directory. Two kinds
+  # can fire, both answered "1 → Enter" (the allow/trust option):
+  #   1. "trust this folder" — the per-directory trust prompt.
+  #   2. "Allow external CLAUDE.md file imports?" — fires when the cwd is
+  #      nested under a project whose CLAUDE.md @-imports files OUTSIDE the
+  #      cwd (e.g. the run-cell-multi shared cwd lives under the irrlicht
+  #      worktree, whose CLAUDE.md imports ../AGENTS.md). This dialog
+  #      appears BEFORE the trust prompt and, if left unanswered, blocks
+  #      the REPL forever — claude reaches "auto mode on" but never starts
+  #      a turn, so no transcript is created → readiness_timeout.
+  # claude caches both decisions per-directory, so a concurrent session
+  # sharing an already-trusted cwd never sees either prompt — skip the
+  # wait so we don't stall for dialogs that will never appear. We keep
+  # scanning until "auto mode on" so BOTH dialogs (import-then-trust) get
+  # answered if they fire in sequence.
   if cwd_already_trusted; then
     echo "[driver] trust: cwd already trusted by an earlier session — skipping prompt" >&2
   else
-    local WAITED=0
+    local WAITED=0 import_done=0 trust_done=0
     while [[ $WAITED -lt 30 ]]; do
-      if [[ -f "$slot_stdout" ]] && \
-         grep -aq 'trust this folder' "$slot_stdout" 2>/dev/null; then
-        tmux send-keys -t "$CURRENT_TMUX" "1"
-        sleep 0.3
-        tmux send-keys -t "$CURRENT_TMUX" Enter
-        echo "[driver] accepted trust dialog" >&2
-        break
+      if [[ -f "$slot_stdout" ]]; then
+        # The TUI lays the dialog title out with per-word cursor-move
+        # escapes (e.g. "external\e[18GCLAUDE.md\e[28Gimports"), so a
+        # literal multi-word phrase never matches the raw pane bytes.
+        # The dialog is uniquely identified by both "external" AND
+        # "imports" being present (the trust-folder prompt has neither).
+        if [[ $import_done -eq 0 ]] && \
+           grep -aq 'external' "$slot_stdout" 2>/dev/null && \
+           grep -aq 'imports' "$slot_stdout" 2>/dev/null; then
+          tmux send-keys -t "$CURRENT_TMUX" "1"
+          sleep 0.3
+          tmux send-keys -t "$CURRENT_TMUX" Enter
+          echo "[driver] accepted external-CLAUDE.md-imports dialog" >&2
+          import_done=1
+          sleep 0.5
+          continue
+        fi
+        if [[ $trust_done -eq 0 ]] && \
+           grep -aq 'trust this folder' "$slot_stdout" 2>/dev/null; then
+          tmux send-keys -t "$CURRENT_TMUX" "1"
+          sleep 0.3
+          tmux send-keys -t "$CURRENT_TMUX" Enter
+          echo "[driver] accepted trust dialog" >&2
+          trust_done=1
+        fi
+        # Both kinds handled (or whichever fired) once the footer is up.
+        grep -aq 'auto mode on' "$slot_stdout" 2>/dev/null && break
       fi
       sleep 0.5
       WAITED=$((WAITED + 1))

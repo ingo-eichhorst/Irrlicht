@@ -51,15 +51,30 @@ mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 
 # Per-run git-init'd CWD — same trick as drive-aider.sh; aider walks up
-# from CWD looking for a git root and writes .aider.chat.history.md there.
+# from CWD looking for a git root and writes .aider.chat.history.md AT that
+# root (its "git working dir"), not necessarily in CWD.
 # Honor IRRLICHT_ONBOARD_CWD (set per-adapter by run-cell-multi.sh) so a
 # cross-adapter run shares ONE workspace with the other agents — matching
-# the codex/claudecode interactive drivers. Only git-init when the cwd is
-# not already a repo: in a shared workspace another adapter may have
-# initialized it, and a second `git init`/commit would race them.
+# the codex/claudecode interactive drivers.
+#
+# Aider REQUIRES $RUN_CWD to be its OWN git toplevel: only then does it
+# write the transcript into $RUN_CWD (the shared workspace) instead of
+# walking up to an enclosing repo. The shared cwd run-cell-multi.sh hands
+# us lives UNDER the irrlicht worktree (.build/refresh/_multi/.../cwd), and
+# the sibling claudecode/codex/pi drivers never git-init it — so a bare
+# `rev-parse --git-dir` would SUCCEED against the enclosing irrlicht repo
+# and we'd skip the init, making aider resolve its git working dir to the
+# irrlicht root (1,685 files) and write the transcript THERE, outside the
+# shared cwd. Guard on whether $RUN_CWD is ITSELF the toplevel, not merely
+# inside some repo: init only when the resolved toplevel != $RUN_CWD. The
+# init is idempotent enough for a shared workspace — if a sibling already
+# made $RUN_CWD a toplevel, this branch is skipped.
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
-if ! git -C "$RUN_CWD" rev-parse --git-dir >/dev/null 2>&1; then
+RUN_CWD_ABS="$(cd "$RUN_CWD" && pwd -P)"
+TOPLEVEL="$(git -C "$RUN_CWD" rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -n "$TOPLEVEL" ]] && TOPLEVEL="$(cd "$TOPLEVEL" && pwd -P)"
+if [[ "$TOPLEVEL" != "$RUN_CWD_ABS" ]]; then
   ( cd "$RUN_CWD" \
       && git init -q \
       && git config user.email aider-onboard@local \
