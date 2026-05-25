@@ -4,19 +4,44 @@
   "agent": "pi",
   "assessed_at": "2026-05-25T00:00:00Z",
   "agent_supports": "no",
-  "irrlicht_observes": "n/a",
+  "daemon_capability": "n/a",
+  "driver_capability": "n/a",
   "confidence": 0.85,
-  "body": "## Verdict\n\nagent_supports: no\nirrlicht_observes: n/a\n\n## Scenario\n\n`permission-hook-denial` (coverage_id `tool-gate-permission-prompt`) exercises the `permission_hooks` primitive: a tool call triggers an explicit permission/denial gate that blocks execution, driving `ready → working → waiting → working → ready`, and a delayed post-tool hook arriving after `→ ready` does NOT bounce the session. The canonical scenario mirrors claudecode's `15-permission-hooks-*` fixture (a failing Bash call firing `PostToolUseFailure`).\n\n## agent_supports: no\n\nStock pi has no per-tool permission prompt and no `PreToolUse`/`PostToolUse`/`PostToolUseFailure` hook family. Built-in `read`/`bash`/`edit`/`write` tools auto-execute with no blocking approval gate (README markets direct, unguarded tool execution). `capabilities.json` records `permission_hooks: false`.\n\nThe Step 2.5 binary scan went deeper than `--help` because pi is a REPL/TUI agent. A bundle scan of the installed package (`@mariozechner/pi-coding-agent@0.70.0`, `dist/`) returned **zero** hits for every permission-gate primitive: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `canUseTool`, `requestPermission`, `approve`, `permissionMode`, `allowedTools`, `blockedTools`.\n\npi DOES ship a hook subsystem (175 `hook` string hits), but inspecting the type defs shows none of it is a permission/denial gate:\n- `BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext` — documented as \"Hook to adjust command, cwd, or env before execution.\" It is a command-*rewriting* hook that returns a (possibly mutated) context and passes through; it cannot block, deny, or raise a waiting state.\n- `_installAgentToolHooks` — internal tool-*wrapper* installation on the Agent instance, not a user-facing approval prompt.\n- The one RPC-mode hook is \"used by RPC mode to observe prompt preflight acceptance or rejection\" — prompt-level preflight in RPC mode, not per-tool execution permission.\n\nThe only `permission`/`deny` strings in the bundle are unrelated: a clipboard-error comment (`may not have permission`) and a model-registry privacy field (`data_collection: \"deny\"|\"allow\"`).\n\nThe sole tool-gating surface pi exposes is launch-time: `--no-tools`, `--no-builtin-tools`, `--tools <allowlist>`. That is a static allowlist applied at startup, not an interactive per-call gate that pauses a turn — so it cannot produce the `working → waiting → working` arc the scenario requires.\n\n## irrlicht_observes: n/a\n\nDerived from the verdict, not a transport gap: with no permission gate in the agent there is nothing for the daemon to observe. Even hypothetically, the pi adapter could not surface it — `agent.go` wires `FilesUnderRoot` + a JSONL line parser, and `parser.go`'s `ParseLine` handles only `session`, `model_change`, `compaction`, `thinking_level_change`/`branch_summary`/`custom` (skipped), and `message` rows (`assistant`/`user`/`toolResult`/`bashExecution`). There is no `waiting`-state mapping and no hook/permission event kind. No event in `events.jsonl` would prove a permission prompt or a denial.\n\n## Conclusion\n\nFrozen at the agent layer. Pipeline stops at Stage 1 — no recipe, no recording. This ratifies the column reassessment (`agent_supports: no`, `permission_hooks: false`) and the existing coverage cell (`no` / `n/a`). What would unblock it: a future pi release adding an interactive per-tool permission/denial gate that writes a distinguishable transcript line, plus pi-parser support for a `waiting`-producing event kind.",
+  "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Scenario\n\n`permission-hook-denial` (coverage_id `tool-gate-permission-prompt`) exercises the `permission_hooks` primitive: a tool call triggers an explicit permission/denial gate that blocks execution, driving `ready → working → waiting → working → ready`, and a delayed post-tool hook arriving after `→ ready` does NOT bounce the session. The canonical scenario mirrors claudecode's `15-permission-hooks-*` fixture (a failing Bash call firing `PostToolUseFailure`).\n\n## agent_supports: no\n\nStock pi has no per-tool permission prompt and no `PreToolUse`/`PostToolUse`/`PostToolUseFailure` hook family. Built-in `read`/`bash`/`edit`/`write` tools auto-execute with no blocking approval gate (README markets direct, unguarded tool execution). `capabilities.json` records `permission_hooks: false`.\n\nThe Step 2.5 binary scan went deeper than `--help` because pi is a REPL/TUI agent. A bundle scan of the installed package (`@mariozechner/pi-coding-agent@0.70.0`, `dist/`) returned **zero** hits for every permission-gate primitive: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `canUseTool`, `requestPermission`, `approve`, `permissionMode`, `allowedTools`, `blockedTools`.\n\npi DOES ship a hook subsystem (175 `hook` string hits), but inspecting the type defs shows none of it is a permission/denial gate:\n- `BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext` — documented as \"Hook to adjust command, cwd, or env before execution.\" It is a command-*rewriting* hook that returns a (possibly mutated) context and passes through; it cannot block, deny, or raise a waiting state.\n- `_installAgentToolHooks` — internal tool-*wrapper* installation on the Agent instance, not a user-facing approval prompt.\n- The one RPC-mode hook is \"used by RPC mode to observe prompt preflight acceptance or rejection\" — prompt-level preflight in RPC mode, not per-tool execution permission.\n\nThe only `permission`/`deny` strings in the bundle are unrelated: a clipboard-error comment (`may not have permission`) and a model-registry privacy field (`data_collection: \"deny\"|\"allow\"`).\n\nThe sole tool-gating surface pi exposes is launch-time: `--no-tools`, `--no-builtin-tools`, `--tools <allowlist>`. That is a static allowlist applied at startup, not an interactive per-call gate that pauses a turn — so it cannot produce the `working → waiting → working` arc the scenario requires.\n\n## daemon_capability: n/a; driver_capability: n/a\n\nDerived from the verdict, not a transport gap: with no permission gate in the agent there is nothing for the daemon to observe. Even hypothetically, the pi adapter could not surface it — `agent.go` wires `FilesUnderRoot` + a JSONL line parser, and `parser.go`'s `ParseLine` handles only `session`, `model_change`, `compaction`, `thinking_level_change`/`branch_summary`/`custom` (skipped), and `message` rows (`assistant`/`user`/`toolResult`/`bashExecution`). There is no `waiting`-state mapping and no hook/permission event kind. No event in `events.jsonl` would prove a permission prompt or a denial.\n\n## Conclusion\n\nFrozen at the agent layer. Pipeline stops at Stage 1 — no recipe, no recording. This ratifies the column reassessment (`agent_supports: no`, `permission_hooks: false`) and the existing coverage cell (`no` / `n/a`). What would unblock it: a future pi release adding an interactive per-tool permission/denial gate that writes a distinguishable transcript line, plus pi-parser support for a `waiting`-producing event kind.",
   "caveats": [
     "pi has a hook subsystem (BashSpawnHook, _installAgentToolHooks) but it rewrites/wraps tool invocations — it is not a permission/denial gate and cannot produce a waiting state.",
     "pi can gate tools wholesale at launch via --no-tools / --tools <allowlist>, but that is a static startup allowlist, not an interactive per-call permission prompt."
   ],
   "sources": [
-    {"kind": "file", "ref": "replaydata/agents/pi/capabilities.json", "note": "\"permission_hooks\": false"},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/pi/parser.go", "note": "ParseLine handles session/model_change/compaction/message only; no waiting-state mapping, no hook/permission event kind"},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/pi/agent.go", "note": "Source: FilesUnderRoot + JSONLineParser — transcript-only; no channel for an interactive permission gate"},
-    {"kind": "binary-scan", "ref": "$(which pi) → @mariozechner/pi-coding-agent@0.70.0 dist/", "note": "0 hits for PreToolUse/PostToolUse/PostToolUseFailure/canUseTool/requestPermission/approve/permissionMode/allowedTools/blockedTools across the bundle"},
-    {"kind": "file", "ref": "@mariozechner/pi-coding-agent dist/core/tools/bash.d.ts", "note": "BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext; \"Hook to adjust command, cwd, or env before execution\" — rewrite hook, not a deny gate"},
-    {"kind": "docs", "ref": "pi --help (0.70.0)", "note": "--no-tools / --no-builtin-tools / --tools <allowlist> — launch-time tool allowlist; no per-call permission/approve/deny flag"}
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/pi/capabilities.json",
+      "note": "\"permission_hooks\": false"
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/parser.go",
+      "note": "ParseLine handles session/model_change/compaction/message only; no waiting-state mapping, no hook/permission event kind"
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/pi/agent.go",
+      "note": "Source: FilesUnderRoot + JSONLineParser — transcript-only; no channel for an interactive permission gate"
+    },
+    {
+      "kind": "binary-scan",
+      "ref": "$(which pi) → @mariozechner/pi-coding-agent@0.70.0 dist/",
+      "note": "0 hits for PreToolUse/PostToolUse/PostToolUseFailure/canUseTool/requestPermission/approve/permissionMode/allowedTools/blockedTools across the bundle"
+    },
+    {
+      "kind": "file",
+      "ref": "@mariozechner/pi-coding-agent dist/core/tools/bash.d.ts",
+      "note": "BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext; \"Hook to adjust command, cwd, or env before execution\" — rewrite hook, not a deny gate"
+    },
+    {
+      "kind": "docs",
+      "ref": "pi --help (0.70.0)",
+      "note": "--no-tools / --no-builtin-tools / --tools <allowlist> — launch-time tool allowlist; no per-call permission/approve/deny flag"
+    }
   ]
 }

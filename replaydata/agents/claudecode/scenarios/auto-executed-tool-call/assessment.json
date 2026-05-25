@@ -4,15 +4,28 @@
   "agent": "claudecode",
   "assessed_at": "2026-05-17T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.95,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code is built around auto-executed tool use. Its model emits `tool_use` content blocks for `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, etc., the runtime executes them against pre-approved permissions, then feeds `tool_result` blocks back into the next assistant turn — all without a user prompt. A prompt like \"read README.md and summarise it\" exercises this path directly.\n\nThe spec's two Expected bullets map cleanly onto irrlicht's claudecode transport:\n\n**Bullet 1 — `ready → working → ready`.** The JSONL transcript appends a `user` message (drives `ready → working`), then one or more `assistant` messages containing `tool_use` blocks, interleaved with `user` messages containing `tool_result` blocks. The parser's `scanMessageContent` (parser.go:305-329) walks these blocks and records `ToolUses` / `ToolResultIDs` on the parsed event, but the session-level state stays `working` for the duration. Once the final assistant message lands with a terminal `stop_reason` (`end_turn`, `stop_sequence`, etc. — parser.go:286-298), state transitions `working → ready`. The daemon emits the two `state_transition` events that satisfy this bullet.\n\n**Bullet 2 — state never entered `waiting`.** `waiting` is reserved for user-blocking signals (permission prompt, AskUserQuestion). An auto-executed tool call with pre-approved permissions emits neither. The recipe's `expect_no_waiting` invariant on the turn phase asserts this directly against the daemon's event stream.\n\n## What irrlicht does NOT see (and why that's OK)\n\nIndividual tool_use / tool_result pairs are parsed and counted but do not appear as state_transitions — by design, intra-turn tool calls must not flicker state. The assessment's bullets only assert state-level observables, which matches what irrlicht emits.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code is built around auto-executed tool use. Its model emits `tool_use` content blocks for `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, etc., the runtime executes them against pre-approved permissions, then feeds `tool_result` blocks back into the next assistant turn — all without a user prompt. A prompt like \"read README.md and summarise it\" exercises this path directly.\n\nThe spec's two Expected bullets map cleanly onto irrlicht's claudecode transport:\n\n**Bullet 1 — `ready → working → ready`.** The JSONL transcript appends a `user` message (drives `ready → working`), then one or more `assistant` messages containing `tool_use` blocks, interleaved with `user` messages containing `tool_result` blocks. The parser's `scanMessageContent` (parser.go:305-329) walks these blocks and records `ToolUses` / `ToolResultIDs` on the parsed event, but the session-level state stays `working` for the duration. Once the final assistant message lands with a terminal `stop_reason` (`end_turn`, `stop_sequence`, etc. — parser.go:286-298), state transitions `working → ready`. The daemon emits the two `state_transition` events that satisfy this bullet.\n\n**Bullet 2 — state never entered `waiting`.** `waiting` is reserved for user-blocking signals (permission prompt, AskUserQuestion). An auto-executed tool call with pre-approved permissions emits neither. The recipe's `expect_no_waiting` invariant on the turn phase asserts this directly against the daemon's event stream.\n\n## What irrlicht does NOT see (and why that's OK)\n\nIndividual tool_use / tool_result pairs are parsed and counted but do not appear as state_transitions — by design, intra-turn tool calls must not flicker state. The assessment's bullets only assert state-level observables, which matches what irrlicht emits.",
   "caveats": [
     "Tool calls that trigger an interactive permission prompt would push state to `waiting` and belong to a different feature (`Tool gate via permission prompt`). This scenario's recipe must pre-approve the tool set or use only auto-approved tools (Read, Glob, Grep)."
   ],
   "sources": [
-    {"kind": "file", "ref": ".specs/agent-scenarios.md", "note": "Section 'Feature: Auto-executed tool call' (lines 121-127) — two Expected bullets."},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go", "note": "scanMessageContent walks tool_use/tool_result blocks (305-329); terminal stop_reason set drives working→ready (286-298)."},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/agent.go", "note": "Adapter declares JSONLineParser source — turn-end transitions derive from assistant message stop_reason."}
+    {
+      "kind": "file",
+      "ref": ".specs/agent-scenarios.md",
+      "note": "Section 'Feature: Auto-executed tool call' (lines 121-127) — two Expected bullets."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+      "note": "scanMessageContent walks tool_use/tool_result blocks (305-329); terminal stop_reason set drives working→ready (286-298)."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+      "note": "Adapter declares JSONLineParser source — turn-end transitions derive from assistant message stop_reason."
+    }
   ]
 }

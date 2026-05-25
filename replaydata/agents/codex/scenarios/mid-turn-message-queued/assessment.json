@@ -4,17 +4,34 @@
   "agent": "codex",
   "assessed_at": "2026-05-23T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.9,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\n`mid-turn-message-queued`: the user sends a follow-up WHILE the agent is mid-turn; the runtime queues it without emitting a turn boundary, the state stays `working` with no `→ ready` flicker, and the cycle still ends at `ready` once everything is consumed. The primitive is message-queue handling: the transcript must NOT emit a turn boundary when the queued message lands.\n\n**agent_supports: yes.** Probed codex CLI 0.130.0 (gpt-5.5 medium) live in a tmux REPL. Sent a slow count-to-20 prompt (the model ran a `sleep 0.5` shell call per number, keeping the turn busy ~30s), then ~3s in submitted a second message with Enter while the turn was still running. The TUI footer showed `Messages to be submitted after next tool call (press esc to interrupt and send immediately)` with the queued text below it — codex explicitly buffers the submitted message and dispatches it at the next tool-call boundary rather than rejecting it or starting a competing turn. The turn footer stayed `Working (..s • esc to interrupt)` continuously; there was no idle/ready flip when the queued message arrived. The arc completed with `done` then `secondmessage`, then returned to idle.\n\n**irrlicht_observes: yes.** Inspected the resulting rollout (`~/.codex/sessions/.../rollout-*.jsonl`): it contains exactly ONE `task_started` and ONE `task_complete` event_msg across the whole arc, plus TWO `user_message` response_items (the initial prompt and the queued follow-up). The queued message was folded into the same turn — no second turn boundary. The codex parser (parser.go) maps only `task_complete → turn_done`; a mid-turn `user_message` becomes `EventType: \"user_message\"` and does NOT set a turn-done event type. `SessionMetrics.IsAgentDone()` (session.go) fires the `working → ready` transition exclusively on `LastEventType == \"turn_done\"` for codex (the assistant_message fallback is deliberately excluded for codex to avoid working→ready→working flicker). With exactly one `task_complete`, the daemon observes a single contiguous `working` span through the queued-message arrival and a single `working → ready` settle at turn end — no waiting state, no premature ready. This is precisely the scenario's invariant.\n\nNo carve-outs apply. The queue is a first-class runtime feature in codex's TUI, and the JSONL rollout the daemon tails records the queued message inside the existing turn without a turn boundary, so the contiguous-working assertion is directly observable.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n`mid-turn-message-queued`: the user sends a follow-up WHILE the agent is mid-turn; the runtime queues it without emitting a turn boundary, the state stays `working` with no `→ ready` flicker, and the cycle still ends at `ready` once everything is consumed. The primitive is message-queue handling: the transcript must NOT emit a turn boundary when the queued message lands.\n\n**agent_supports: yes.** Probed codex CLI 0.130.0 (gpt-5.5 medium) live in a tmux REPL. Sent a slow count-to-20 prompt (the model ran a `sleep 0.5` shell call per number, keeping the turn busy ~30s), then ~3s in submitted a second message with Enter while the turn was still running. The TUI footer showed `Messages to be submitted after next tool call (press esc to interrupt and send immediately)` with the queued text below it — codex explicitly buffers the submitted message and dispatches it at the next tool-call boundary rather than rejecting it or starting a competing turn. The turn footer stayed `Working (..s • esc to interrupt)` continuously; there was no idle/ready flip when the queued message arrived. The arc completed with `done` then `secondmessage`, then returned to idle.\n\n**daemon_capability: full; driver_capability: ready.** Inspected the resulting rollout (`~/.codex/sessions/.../rollout-*.jsonl`): it contains exactly ONE `task_started` and ONE `task_complete` event_msg across the whole arc, plus TWO `user_message` response_items (the initial prompt and the queued follow-up). The queued message was folded into the same turn — no second turn boundary. The codex parser (parser.go) maps only `task_complete → turn_done`; a mid-turn `user_message` becomes `EventType: \"user_message\"` and does NOT set a turn-done event type. `SessionMetrics.IsAgentDone()` (session.go) fires the `working → ready` transition exclusively on `LastEventType == \"turn_done\"` for codex (the assistant_message fallback is deliberately excluded for codex to avoid working→ready→working flicker). With exactly one `task_complete`, the daemon observes a single contiguous `working` span through the queued-message arrival and a single `working → ready` settle at turn end — no waiting state, no premature ready. This is precisely the scenario's invariant.\n\nNo carve-outs apply. The queue is a first-class runtime feature in codex's TUI, and the JSONL rollout the daemon tails records the queued message inside the existing turn without a turn boundary, so the contiguous-working assertion is directly observable.",
   "caveats": [
     "The queued follow-up is folded into the SAME turn (one task_started/task_complete pair), not consumed as a separate post-turn turn. Codex submits queued input 'after next tool call', so a recipe must NOT bump the turn counter for the mid-turn input (use a raw `keys` Enter, not `send`); a `send` would make wait_turn block on a second task_complete that never arrives.",
     "Probe used a prompt that elicits `sleep` shell calls to extend the turn; exact tool-call count and timing are model-dependent and may differ between runs. The structural invariant (one task_complete, contiguous working) is stable."
   ],
   "sources": [
-    {"kind": "probe", "ref": "tmux codex --no-alt-screen, gpt-5.5 medium", "note": "live: 'Messages to be submitted after next tool call' footer; turn stayed Working through queued arrival; arc ended idle"},
-    {"kind": "file", "ref": "~/.codex/sessions/.../rollout-*.jsonl (probe)", "note": "1 task_started + 1 task_complete + 2 user_message — queued follow-up folded into one turn, no turn boundary"},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/parser.go", "note": "task_complete→turn_done; user_message (role user) → EventType user_message, no turn-done"},
-    {"kind": "file", "ref": "core/domain/session/session.go", "note": "IsAgentDone() fires working→ready only on LastEventType==turn_done for codex; assistant fallback excluded for codex to avoid flicker"}
+    {
+      "kind": "probe",
+      "ref": "tmux codex --no-alt-screen, gpt-5.5 medium",
+      "note": "live: 'Messages to be submitted after next tool call' footer; turn stayed Working through queued arrival; arc ended idle"
+    },
+    {
+      "kind": "file",
+      "ref": "~/.codex/sessions/.../rollout-*.jsonl (probe)",
+      "note": "1 task_started + 1 task_complete + 2 user_message — queued follow-up folded into one turn, no turn boundary"
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/parser.go",
+      "note": "task_complete→turn_done; user_message (role user) → EventType user_message, no turn-done"
+    },
+    {
+      "kind": "file",
+      "ref": "core/domain/session/session.go",
+      "note": "IsAgentDone() fires working→ready only on LastEventType==turn_done for codex; assistant fallback excluded for codex to avoid flicker"
+    }
   ]
 }

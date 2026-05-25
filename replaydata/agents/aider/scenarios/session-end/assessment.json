@@ -4,9 +4,10 @@
   "agent": "aider",
   "assessed_at": "2026-05-23T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "partial",
+  "daemon_capability": "unknown",
+  "driver_capability": "ready",
   "confidence": 0.85,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: partial\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. For the aider adapter, irrlicht observes variant 1 cleanly — the per-cwd `.aider.chat.history.md` is detected on launch, the session lands in ready, and process_exited fires after the working window closes (about 2 minutes in the recording due to the headless driver's idle-flush window). Variants 2 and 3 are NOT currently observable end-to-end because aider's headless `--print` is single-shot and the aider interactive driver does not currently expose `sigkill` / `restart` / `exit_clean`.\n\nThe captured invariants hold: process_exited fires while session is in ready, with no transition to waiting in the tail.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: unknown; driver_capability: ready\n\n## Reasoning\n\nThe scenario's three Expected variants are: (1) clean exit, (2) SIGKILL while idle in ready, and (3) SIGKILL mid-turn while still working. For the aider adapter, irrlicht observes variant 1 cleanly — the per-cwd `.aider.chat.history.md` is detected on launch, the session lands in ready, and process_exited fires after the working window closes (about 2 minutes in the recording due to the headless driver's idle-flush window). Variants 2 and 3 are NOT currently observable end-to-end because aider's headless `--print` is single-shot and the aider interactive driver does not currently expose `sigkill` / `restart` / `exit_clean`.\n\nThe captured invariants hold: process_exited fires while session is in ready, with no transition to waiting in the tail.",
   "caveats": [
     "Variants 2 and 3 unobservable: would need driver-level sigkill primitive added to drive-aider-interactive.sh.",
     "Aider's TUI is not designed to outlive a single --print invocation; multi-variant chaining like claudecode's restart path doesn't translate directly."

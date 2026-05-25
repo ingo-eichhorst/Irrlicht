@@ -66,18 +66,23 @@ the viewer renders on the detail page and what later audits read.
 
 Three rules:
 
-1. **Honest verdicts.** `yes` only when the docs/code state the
-   behavior explicitly. `partial` only when there's a concrete
-   carve-out (cite it). `no` when something fundamental blocks the
-   scenario (cloud-only, missing API, etc.). `unknown` is allowed
-   and preferred over a guess.
+1. **Honest verdicts, anchored to evidence.** `agent_supports: yes` only
+   when the docs/code state the behavior explicitly; `no` when something
+   fundamental blocks it; `unknown` over a guess. For the observability
+   axes, name the RIGHT owner: `daemon_capability: bug` (product) and
+   `incapable` (architecture) and `driver_capability: gap:<primitive>`
+   (tooling) each route differently, so every non-`full`/non-`ready`
+   verdict cites the event or code that proves it. Don't park ambiguity in
+   `bug` the way the old `partial` was a dumping ground.
 2. **Caveats over downgrades.** If the canonical spec is met but a
-   narrow detail is gappy, keep the verdict honest (`yes`) and put
-   the gap in `caveats`. The viewer surfaces caveats as a yellow
-   callout — they're visible without misrepresenting the matrix.
+   narrow detail is gappy, keep `daemon_capability: full` and put the gap
+   in `caveats`. The viewer surfaces caveats as a yellow callout — they're
+   visible without misrepresenting the matrix. A caveat is NOT a `bug`:
+   reserve `bug` for a spec-required observable the daemon mis-handles.
 3. **Cite primary sources.** Agent docs, official changelog, agent
-   source files, irrlicht adapter source. Tutorials and blog posts
-   don't count. Even an `unknown` verdict cites what you searched.
+   source files, irrlicht adapter source, and — for `bug`/`incapable` —
+   the recording's `events.jsonl`. Tutorials and blog posts don't count.
+   Even an `unknown` verdict cites what you searched.
 
 ## Invocation
 
@@ -119,9 +124,10 @@ Shape (per `cell-lifecycle.md` Stage 1):
   "agent": "<agent-slug>",
   "assessed_at": "2026-05-17T00:00:00Z",
   "agent_supports":   "yes" | "no" | "partial" | "unknown",
-  "irrlicht_observes": "yes" | "no" | "partial" | "unknown" | "n/a",
+  "daemon_capability": "full" | "bug" | "incapable" | "unknown" | "n/a",
+  "driver_capability": "ready" | "gap:<primitive>",
   "confidence": 0.85,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\n...",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n...",
   "caveats": [
     "One short sentence per caveat — viewer renders as yellow callout."
   ],
@@ -131,6 +137,40 @@ Shape (per `cell-lifecycle.md` Stage 1):
   ]
 }
 ```
+
+`agent_supports` is unchanged. The old `irrlicht_observes` axis is split
+into two orthogonal facts (#476) because the old `partial` conflated four
+conditions with different owners and different next actions:
+
+- **`daemon_capability`** — *given a recording + a working driver*, can the
+  daemon observe it?
+  - `full` — a trace exists in the watched Source **and** the
+    parser/classifier handles it today. (Owner: — )
+  - `bug` — a trace exists but the daemon mis-handles it today.
+    (Owner: product → file an issue; the cell records as `known_failing`.)
+  - `incapable` — the behavior leaves **no trace** in the Source, or the
+    3-state model can't represent it. (Owner: architecture → accept/redesign.)
+  - `n/a` — the agent doesn't support the feature (`agent_supports: no`),
+    so there's no observation question.
+  - `unknown` — not yet determined; honest signal, not a guess.
+- **`driver_capability`** — can the recording harness drive/record it?
+  - `ready` — the interactive driver has every step type the recipe needs.
+  - `gap:<primitive>` — the driver lacks a step type (e.g. `gap:sigkill`).
+    (Owner: tooling → extend the driver. Do **not** degrade to
+    `agent_supports:no` / a frozen cell.)
+
+**Evidence rule:** any verdict other than `daemon_capability: full` /
+`driver_capability: ready` MUST be anchored in `sources[]` to a cited event
+(`events.jsonl`) or code/doc reference — never a plausible-sounding
+mechanism. Finer granularity multiplies the chance of mislabeling (the
+codex `session-reset` mislabel in #472 / the first #473 pass), so the bar
+for `bug` / `incapable` / `gap:*` is a concrete citation.
+
+The recording axis (`recorded` / `drift` / `none`) is **measured**, not
+stored here — the viewer derives it from `events.jsonl` + validation and
+rolls all three facts up to a display state (`observed` / `pending-record`
+/ `blocked-daemon` / `blocked-driver` / `unobservable` / `n.a.` /
+`unknown`).
 
 Overwrite the existing file silently when re-running. Git preserves
 the previous version.
@@ -156,7 +196,7 @@ output.
 From the scenario-meanings block capture all five fields (Essence,
 User-observable signal, Primitive exercised, Not to be confused with,
 Conceptual flow). The **User-observable signal** lines are the candidate
-assertions you judge `irrlicht_observes` against; **Primitive exercised**
+assertions you judge `daemon_capability` against; **Primitive exercised**
 is the canonical capability-key anchor (use it in Step 4 to pick the
 right `capabilities.json` key).
 
@@ -172,7 +212,7 @@ slice is sufficient without it.
   verbatim from the scenario-meanings block.
 - [ ] Captured every User-observable signal (and any `.specs/` Expected:
   bullet, if present). Each is a candidate assertion for
-  `irrlicht_observes`.
+  `daemon_capability`.
 
 ### Step 2 — Read the current matrix verdict
 
@@ -222,9 +262,9 @@ correction pointed at the live `/goal` slash command. Re-running
 `/goal <condition>`, `/goal clear`, `/goal active`,
 `AUTONOMOUS_LOOP_PREAMBLE`, `goal_status` / `goal_set` / `goal_met`
 telemetry events, and the Stop-hook re-prompt mechanism — all of
-which made the correct verdict `agent_supports: yes`,
-`irrlicht_observes: partial`. The fix landed in commits `3e33768`
-and `6898561`; corrected assessments live at
+which flipped the verdict to `agent_supports: yes` (its
+`daemon_capability` is then judged separately, per Step 3). The fix landed
+in commits `3e33768` and `6898561`; corrected assessments live at
 `replaydata/agents/claudecode/scenarios/autonomous-loop/assessment.json`
 and `.../autonomous-loop-iteration-limit/assessment.json`.
 
@@ -248,19 +288,33 @@ core/adapters/inbound/agents/<agent>/
   <parser source>        # what events the daemon can emit from this agent
 ```
 
-This is how you judge `irrlicht_observes`. The verdict isn't "is this
+This is how you judge `daemon_capability`. The verdict isn't "is this
 theoretically observable" — it's "does the daemon, AS IT EXISTS
 TODAY, emit the lifecycle events the spec requires?"
 
 Concrete check: for each Expected: bullet from Step 1, ask "what
 event in `events.jsonl` would prove this?" Then ask "does the
-adapter's parser produce that event?" If yes for all bullets →
-`irrlicht_observes: yes`. If yes for some → `partial` (and the
-specific gap goes in caveats). If no transport at all (e.g. cloud
-session with no local file) → `no`.
+adapter's parser produce that event?"
 
-The `cloud-background-agent` assessment is the canonical example of
-a clear `no` derived from transport mismatch (no local file ⇒ no
+- yes for all bullets, handled correctly → `daemon_capability: full`.
+- a trace exists but the daemon mis-handles a spec-required observable
+  → `daemon_capability: bug` (cite the event that proves the mishandling;
+  the cell will record `known_failing` and an issue gets filed).
+- no trace at all (cloud session with no local file; behavior the 3-state
+  model can't represent) → `daemon_capability: incapable`.
+
+A narrow gap that the spec does NOT require is a **caveat**, not a `bug`
+— keep `full` and note it.
+
+`driver_capability` is a separate question: does the agent's interactive
+driver (`scripts/drive-<agent>-interactive.sh`) implement the step types a
+recipe would need? If a primitive is missing (arrow-key picker → `keys`,
+forced kill → `sigkill`, …), set `driver_capability: gap:<primitive>`.
+This is a tooling task, NOT an observability limit — don't let a driver gap
+masquerade as `incapable` (the codex `session-end` mislabel, #471).
+
+The `cloud-background-agent` assessment is the canonical example of a clear
+`incapable` derived from transport mismatch (no local file ⇒ no
 FilesUnderRoot watch can see the session).
 
 ► **Verify before moving on:**
@@ -280,10 +334,12 @@ verdict (Step 2), and the adapter transport read (Step 3):
   source files relevant to the feature. Use web search + fetch.
 - Decide `agent_supports` honestly (see the three rules above and the
   Step 2.5 strings-scan guard before any `no`).
-- Derive `irrlicht_observes` from the transport read (Step 3) and what
-  you learn about the agent's emission shape. The agent emitting an
-  event ≠ the daemon parsing it — ground this claim in `config.go` +
-  the parser source, not docs alone.
+- Derive `daemon_capability` (full/bug/incapable) from the transport read
+  (Step 3) and the agent's emission shape, and `driver_capability`
+  (ready/gap:<primitive>) from the driver's step grammar. The agent
+  emitting an event ≠ the daemon parsing it — ground the daemon verdict in
+  `config.go` + the parser source (and, for `bug`, a cited `events.jsonl`
+  line), not docs alone.
 - Map the **Primitive exercised** field from Step 1 to the matching key
   in `replaydata/agents/<agent>/capabilities.json`. Derive the key
   directly from the primitive text and the existing keys — do NOT infer
@@ -303,7 +359,9 @@ Forbidden:
 
 - Made-up sources.
 - Downgrading verdicts to "be safe" — the authoring rule is honest
-  verdicts + caveats, not defensive `partial`s.
+  verdicts + caveats, not defensive `bug`/`incapable` labels.
+- Calling a driver gap `incapable` (or vice-versa) — they have different
+  owners; pick the one the evidence supports.
 - Reasoning purely from general LLM knowledge — every claim needs a
   primary source.
 
@@ -318,13 +376,15 @@ Assemble the JSON document conforming to the "Output" schema. Sanity-check:
 
 - `schema_version: 1`.
 - `scenario_id`, `agent`, `assessed_at` correct.
-- `agent_supports` and `irrlicht_observes` are one of the allowed
-  enum values.
+- `agent_supports`, `daemon_capability`, `driver_capability` are each one
+  of the allowed enum values.
 - `confidence` is a number in `[0, 1]`.
 - `body` is non-empty markdown that explains the verdict.
 - `caveats` is an array (may be empty).
 - `sources` is an array with at least one entry; each entry has
-  `kind`, `ref`, `note`.
+  `kind`, `ref`, `note`. For any `daemon_capability` other than `full` or
+  any `driver_capability` other than `ready`, at least one source must be
+  the event/code reference that proves it.
 
 If any check fails, fix the document before writing (re-run the
 research for the specific gap if needed).
@@ -336,30 +396,34 @@ readability — the viewer parses any valid JSON shape.
 
 ### Step 6 — Return contract
 
-Compute `applicable` from the two verdicts — this is the signal
-`implement` keys on to decide whether to proceed:
+Compute the routing signal from the three facts — this is what
+`implement` keys on:
 
-| agent_supports | irrlicht_observes | `applicable` | meaning |
-|---|---|---|---|
-| `yes` / `partial` | `yes` / `partial` | `yes`  | proceed to `implement` |
-| `no`              | (any)             | `no`   | agent lacks the feature — pipeline frozen |
-| `yes` / `partial` | `n/a` / `no`      | `n/a`  | agent has it, irrlicht can't observe it — no recording |
-| `unknown`         | (any)             | `n/a`  | inconclusive — re-assess after the gap named in `body` closes |
+| agent_supports | daemon_capability | driver_capability | route | meaning |
+|---|---|---|---|---|
+| `yes` / `partial` | `full`      | `ready`        | **record**           | proceed to `implement` |
+| `yes` / `partial` | `bug`       | `ready`        | **record-known-failing** | record it AND file a daemon issue; spec marked `known_failing` |
+| `yes` / `partial` | `full`/`bug`| `gap:<prim>`   | **driver-gap**       | extend the driver first; do NOT freeze the cell |
+| `yes` / `partial` | `incapable` | (any)          | **frozen**           | irrlicht fundamentally can't observe — no recording |
+| `no`              | `n/a`       | `n/a`          | **frozen**           | agent lacks the feature |
+| `unknown`         | (any)       | (any)          | **frozen**           | inconclusive — re-assess after the gap named in `body` closes |
 
 Return ONLY this (≤5 lines), no transcripts:
 
 ```
-verdict: <agent_supports> / <irrlicht_observes> (confidence <n>)
-applicable: yes | no | n/a
-summary: <one sentence — the load-bearing reason for the verdict>
+verdict: supports=<v> daemon=<full|bug|incapable|n/a> driver=<ready|gap:*> (confidence <n>)
+route: record | record-known-failing | driver-gap | frozen
+summary: <one sentence — the load-bearing reason, citing the anchoring event/code for any non-full/non-ready verdict>
 wrote: replaydata/agents/<agent>/scenarios/<scenario>/assessment.json
-matrix_drift: none | matrix says <old>/<old>, coverage row should update
+matrix_drift: none | matrix says <old>, coverage row should update
 ```
 
-**If `applicable` is `no` or `n/a`, stop here.** There is no recipe or
-recording follow-up — the assessment.json documents *why* the cell is
-frozen and what would unblock it. The maintainer transcribes the
-verdict into the coverage matrix; this stage never writes
+**If `route` is `frozen`, stop here** — no recipe or recording follow-up;
+the assessment.json documents *why* the cell is frozen and what would
+unblock it. **`driver-gap`** also produces no recording yet, but it routes
+to a tooling task (extend the driver), not a freeze. **`record`** and
+**`record-known-failing`** hand off to `implement`. The maintainer
+transcribes the verdict into the coverage matrix; this stage never writes
 `agent-scenarios-coverage.json`.
 
 ## Column and row batch modes
@@ -469,10 +533,15 @@ column prompt covers when to omit vs include with `"unknown"`.
 
 ## Anti-patterns
 
-- **Don't downgrade to `partial` for a narrow gap.** If the canonical
-  spec is met, the verdict is `yes`. Use `caveats` for the gap. The
-  authoring rule from `cell-lifecycle.md` exists because every
-  defensive `partial` makes the matrix less actionable.
+- **Don't reach for `bug`/`incapable` for a narrow gap.** If the canonical
+  spec is met, `daemon_capability` stays `full`. Use `caveats` for the gap.
+  The authoring rule from `cell-lifecycle.md` exists because every
+  defensive non-`full` label makes the matrix less actionable — that's the
+  old `partial`-dumping-ground problem #476 set out to kill.
+- **Don't conflate the two observability axes.** A missing driver step is
+  `driver_capability: gap:<prim>` (tooling), never `daemon_capability:
+  incapable` (architecture). Mislabeling routes the fix to the wrong owner
+  (#471).
 - **Don't fabricate sources.** An empty `sources` array is honest;
   a fake citation poisons future re-assessments. If a primary source
   doesn't exist, set `confidence` low and say so in the body.
@@ -484,7 +553,7 @@ column prompt covers when to omit vs include with `"unknown"`.
   rollup in `.claude/skills/ir:onboard-agent/agent-scenarios-coverage.json` is maintainer-
   owned. Report the transcription hint and stop.
 - **Don't dispatch the subagent without the adapter-transport read.**
-  Step 3 is what grounds the `irrlicht_observes` claim. A subagent
+  Step 3 is what grounds the `daemon_capability` claim. A subagent
   guessing from agent docs alone will overstate observability —
   the agent emitting an event ≠ the daemon parsing it.
 
@@ -496,10 +565,11 @@ column prompt covers when to omit vs include with `"unknown"`.
   before).
 - The canonical spec text in `.specs/agent-scenarios.md` changes
   meaningfully (re-read Step 1, re-judge).
-- A drift signal: the viewer shows a pipeline-strip outline because
-  the verdict says `partial` but the recording's measurement is
-  `pass`. Re-assess to either upgrade the verdict to `yes` or
-  document why the recording overshoots.
+- A drift signal: the viewer shows a pipeline-strip outline because the
+  verdict says `daemon_capability: bug` (or `incapable`/`gap:*`) but the
+  recording's measurement is `pass`. Re-assess to either upgrade
+  `daemon_capability` to `full` (dropping any `known_failing`) or document
+  why the recording overshoots.
 
 ## What this mode does NOT do
 

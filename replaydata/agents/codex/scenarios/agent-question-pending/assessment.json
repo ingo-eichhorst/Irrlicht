@@ -4,22 +4,55 @@
   "agent": "codex",
   "assessed_at": "2026-05-23T17:03:44Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.8,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Scope\n\nThis cell is the `agent-question-pending` scenario (coverage_id `user-blocking-question`), but it exercises the **trailing-`?` text path** through the state classifier — not the structured AskUserQuestion tool. The scenario.json `verify` block is explicit: it \"validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a)\". So the question being assessed is NOT \"does codex have a dedicated question tool\" (it doesn't — see the matrix prior below) but \"can codex end a turn with a literal question that the daemon classifies as `waiting`, and can irrlicht observe that episode.\"\n\n## agent_supports: yes\n\ncodex can be prompted to end its turn with a single clarifying question. Its rollout transcript records the reply as a `response_item`/`message`(assistant) whose `output_text` carries the question text, followed by an `event_msg`/`task_complete` turn-finish marker. The trailing-`?` waiting signal is text-based and adapter-agnostic — any agent whose final assistant message ends in `?` qualifies. Confirmed against a real codex rollout tail (basic-turn recording): the event order is `…message(assistant)` → `token_count` → `task_complete`.\n\n## irrlicht_observes: yes (via the interactive TUI, not headless exec)\n\nThe codex adapter is `FilesUnderRoot{Dir: ~/.codex/sessions, JSONLineParser}` (agent.go). The parser (parser.go) maps the assistant message to `assistant_message` and sets `ev.AssistantText` via `tailer.ExtractAssistantText`; it maps `event_msg`/`task_complete` to `turn_done`. At the final `task_complete`:\n\n- `IsAgentDone()` is true — codex relies SOLELY on the `turn_done` primary path (session.go explicitly excludes codex from the `assistant`/`assistant_output` fallback, because codex emits preliminary assistant messages mid-turn).\n- `IsWaitingForUserInput()` is true when `LastAssistantText` ends in `?` (ExtractQuestionSnippet, session.go).\n- The classifier therefore takes **decision 2a** (`turn ended with question or cue → waiting`) instead of 2b (`agent finished turn → ready`), because 2a is checked before 2b (state_classifier.go).\n\nThe load-bearing constraint is session liveness. In **headless** `codex exec`, the process is single-shot and terminates at turn end, so the daemon observes `process_exited` instead of a working→waiting flip — exactly as the committed basic-turn spec documents. The thin `prompt` stub in scenarios.json cannot reach the waiting episode for that reason. The **interactive TUI** (`drive-codex-interactive.sh` driving `codex --no-alt-screen` under tmux) keeps the rollout session alive after the turn: the REPL is only torn down at script end, so the daemon classifies the live session into `waiting` and a trailing `sleep` lets that episode settle (≥4s) before teardown. The multi-turn-conversation recording proves the interactive driver produces real per-turn state arcs on a single live rollout session.\n\n## Matrix prior\n\nThe coverage matrix lists `codex: agent_supports no / irrlicht_observes n/a` with note \"no question tool in schema.\" That verdict is correct for the *structured* AskUserQuestion primitive but does not govern this scenario, which tests the trailing-`?` text classifier. The matrix row should be updated to `yes / yes` for `agent-question-pending` with a note distinguishing the text path from the structured tool — a maintainer transcription, not done here.\n\n## Recipe implication\n\nUse an INTERACTIVE `script` recipe (send a prompt designed to make codex ask one clarifying question → wait_turn → sleep), not the headless `prompt` stub.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Scope\n\nThis cell is the `agent-question-pending` scenario (coverage_id `user-blocking-question`), but it exercises the **trailing-`?` text path** through the state classifier — not the structured AskUserQuestion tool. The scenario.json `verify` block is explicit: it \"validates the trailing-? path through the state classifier (session.IsWaitingForUserInput → state_classifier.go decision 2a)\". So the question being assessed is NOT \"does codex have a dedicated question tool\" (it doesn't — see the matrix prior below) but \"can codex end a turn with a literal question that the daemon classifies as `waiting`, and can irrlicht observe that episode.\"\n\n## agent_supports: yes\n\ncodex can be prompted to end its turn with a single clarifying question. Its rollout transcript records the reply as a `response_item`/`message`(assistant) whose `output_text` carries the question text, followed by an `event_msg`/`task_complete` turn-finish marker. The trailing-`?` waiting signal is text-based and adapter-agnostic — any agent whose final assistant message ends in `?` qualifies. Confirmed against a real codex rollout tail (basic-turn recording): the event order is `…message(assistant)` → `token_count` → `task_complete`.\n\n## daemon_capability: full; driver_capability: ready (via the interactive TUI, not headless exec)\n\nThe codex adapter is `FilesUnderRoot{Dir: ~/.codex/sessions, JSONLineParser}` (agent.go). The parser (parser.go) maps the assistant message to `assistant_message` and sets `ev.AssistantText` via `tailer.ExtractAssistantText`; it maps `event_msg`/`task_complete` to `turn_done`. At the final `task_complete`:\n\n- `IsAgentDone()` is true — codex relies SOLELY on the `turn_done` primary path (session.go explicitly excludes codex from the `assistant`/`assistant_output` fallback, because codex emits preliminary assistant messages mid-turn).\n- `IsWaitingForUserInput()` is true when `LastAssistantText` ends in `?` (ExtractQuestionSnippet, session.go).\n- The classifier therefore takes **decision 2a** (`turn ended with question or cue → waiting`) instead of 2b (`agent finished turn → ready`), because 2a is checked before 2b (state_classifier.go).\n\nThe load-bearing constraint is session liveness. In **headless** `codex exec`, the process is single-shot and terminates at turn end, so the daemon observes `process_exited` instead of a working→waiting flip — exactly as the committed basic-turn spec documents. The thin `prompt` stub in scenarios.json cannot reach the waiting episode for that reason. The **interactive TUI** (`drive-codex-interactive.sh` driving `codex --no-alt-screen` under tmux) keeps the rollout session alive after the turn: the REPL is only torn down at script end, so the daemon classifies the live session into `waiting` and a trailing `sleep` lets that episode settle (≥4s) before teardown. The multi-turn-conversation recording proves the interactive driver produces real per-turn state arcs on a single live rollout session.\n\n## Matrix prior\n\nThe coverage matrix lists `codex: agent_supports no / irrlicht_observes n/a` with note \"no question tool in schema.\" That verdict is correct for the *structured* AskUserQuestion primitive but does not govern this scenario, which tests the trailing-`?` text classifier. The matrix row should be updated to `yes / yes` for `agent-question-pending` with a note distinguishing the text path from the structured tool — a maintainer transcription, not done here.\n\n## Recipe implication\n\nUse an INTERACTIVE `script` recipe (send a prompt designed to make codex ask one clarifying question → wait_turn → sleep), not the headless `prompt` stub.",
   "caveats": [
     "Observable ONLY via the interactive TUI — headless `codex exec` exits at turn end and the waiting episode is lost to a process_exited race (basic-turn spec documents this). The recipe must be interactive.",
     "Distinct from the structured AskUserQuestion path: codex has no question tool in its schema (matrix prior), so this is the trailing-`?` text classifier (decision 2a), which is adapter-agnostic.",
     "Detection depends on the model actually ending its reply with a literal `?`. The prompt must steer it to a single clarifying question and nothing after it; a trailing status sentence after the `?` could still match via first-question-wins, but a non-question ending would drop to decision 2b (ready)."
   ],
   "sources": [
-    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/scenarios.json", "note": "agent-question-pending: verify.has_waiting_state=true, final_state=waiting; description names the trailing-? path / state_classifier.go decision 2a"},
-    {"kind": "file", "ref": "core/application/services/state_classifier.go", "note": "decision 2a (IsWaitingForUserInput → waiting) checked before 2b (IsAgentDone → ready)"},
-    {"kind": "file", "ref": "core/domain/session/session.go", "note": "IsWaitingForUserInput via ExtractQuestionSnippet (trailing ?); IsAgentDone for codex relies only on turn_done, not the assistant fallback"},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/parser.go", "note": "assistant_message sets AssistantText; event_msg/task_complete → turn_done; FilesUnderRoot watch"},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/codex/parser_test.go", "note": "TestParser_FullWrappedTranscript_MetadataAndWaitingState: LastAssistantText='Should I run the tests?'; TestParser_ProposedPlan_EndToEndWaitingState confirms codex drives a waiting state"},
-    {"kind": "file", "ref": "replaydata/agents/codex/scenarios/basic-turn/expected.jsonl", "note": "documents headless codex exec single-shot: turn-end observed as process_exited, never waiting — why the headless prompt stub can't elicit this scenario"},
-    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh", "note": "interactive driver keeps the codex REPL alive across the turn (kill-session only at script end); supports send/wait_turn/sleep — the steps this recipe needs"},
-    {"kind": "file", "ref": ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json", "note": "matrix prior: codex user-blocking-question = no/n/a 'no question tool in schema' — correct for the structured tool, not this text path"}
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scenarios.json",
+      "note": "agent-question-pending: verify.has_waiting_state=true, final_state=waiting; description names the trailing-? path / state_classifier.go decision 2a"
+    },
+    {
+      "kind": "file",
+      "ref": "core/application/services/state_classifier.go",
+      "note": "decision 2a (IsWaitingForUserInput → waiting) checked before 2b (IsAgentDone → ready)"
+    },
+    {
+      "kind": "file",
+      "ref": "core/domain/session/session.go",
+      "note": "IsWaitingForUserInput via ExtractQuestionSnippet (trailing ?); IsAgentDone for codex relies only on turn_done, not the assistant fallback"
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/parser.go",
+      "note": "assistant_message sets AssistantText; event_msg/task_complete → turn_done; FilesUnderRoot watch"
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/codex/parser_test.go",
+      "note": "TestParser_FullWrappedTranscript_MetadataAndWaitingState: LastAssistantText='Should I run the tests?'; TestParser_ProposedPlan_EndToEndWaitingState confirms codex drives a waiting state"
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/codex/scenarios/basic-turn/expected.jsonl",
+      "note": "documents headless codex exec single-shot: turn-end observed as process_exited, never waiting — why the headless prompt stub can't elicit this scenario"
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scripts/drive-codex-interactive.sh",
+      "note": "interactive driver keeps the codex REPL alive across the turn (kill-session only at script end); supports send/wait_turn/sleep — the steps this recipe needs"
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/agent-scenarios-coverage.json",
+      "note": "matrix prior: codex user-blocking-question = no/n/a 'no question tool in schema' — correct for the structured tool, not this text path"
+    }
   ]
 }

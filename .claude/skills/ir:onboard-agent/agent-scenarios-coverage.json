@@ -9,12 +9,25 @@
       "partial",
       "unknown"
     ],
-    "irrlicht_observes": [
-      "yes",
-      "no",
-      "partial",
+    "daemon_capability": [
+      "full",
+      "bug",
+      "incapable",
       "unknown",
       "n/a"
+    ],
+    "driver_capability": [
+      "ready",
+      "gap:<primitive>"
+    ],
+    "display_state": [
+      "observed",
+      "pending-record",
+      "blocked-driver",
+      "blocked-daemon",
+      "unobservable",
+      "n.a.",
+      "unknown"
     ],
     "notes": "Free-form. Empty when crystal clear. Otherwise names the gotcha, the issue number, or the unmet condition."
   },
@@ -48,27 +61,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "Markdown transcript discovered lazily per cwd; row appears after the first user message lands in .aider.chat.history.md — recorded + validated."
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "SQLite-backed; no PID binding required"
         }
       }
@@ -80,27 +98,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "clean exit + SIGKILL OK; crash mid-turn covered indirectly via sweep. #321 zombie-on-restart fixed in 0.4.x — recipe now passes 11/11 phases."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "All 3 variants recorded via drive-codex-interactive.sh's sigkill + restart primitives (clean Ctrl-D exit / SIGKILL idle / SIGKILL mid-turn); expected.jsonl validates 14/14 phases. sigkill targets the daemon's PID directly (rollout's lsof write-FD holder, per codex/pid.go) since codex's uniform argv has no per-session marker. Variant 3 sleeps 5 s before the kill to clear codex's ~2.7 s ready→working promotion lag so the mid-turn working state is captured."
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "idle-flush turn-end adds ~5s before ready settles; markdown file persists after exit"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "#296 ghost sessions when no process; #278 ~2.5s tail latency on working→ready"
         }
       }
@@ -112,27 +135,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "PID liveness check holds session past readyTTL"
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "no PID binding — liveness relies on DB watcher signal"
         }
       }
@@ -144,27 +172,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "--continue / --resume; transcript appended"
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "/resume command + picker (2026)"
         },
         "pi": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "aider re-loads chat history from .aider.chat.history.md but no formal session-id concept"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "capabilities.json declares yes; ParentSessionID not populated recursively for resume chains"
         }
       }
@@ -176,27 +209,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "/clear rotates UUID; daemon emits transcript_removed for old UUID via PIDManager's same-PID cleanup (commit 56c4667 / issue #169). ~50ms overlap between new session's transcript_new and old session's transcript_removed is bounded by spec at 1s. Eliminating overlap entirely conflicts with multi-session-same-cwd support."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "/new (or /clear) starts a fresh session that supersedes the old one. Daemon (Source=FilesUnderRoot ~/.codex/sessions) detects the new rollout as a brand-new session_id in ready — the complete reset signal. Both rollouts share one PID, so when the new rollout's PID is discovered the daemon's same-PID cleanup (#169, pid_manager.go:373-399) removes the old session and emits transcript_removed — the SAME path as claudecode, ~7ms after the new pid_discovered (NOT a readyTTL idle sweep). No old_session_ended phase is asserted: a fixture scoping choice (v2_session_birth is the canonical reset proxy, and reset is lazy so the removal isn't anchored to the keystroke), not a codex limitation. Recorded via the reset_session step (both rollout session_ids captured); expected.jsonl 8/8."
         },
         "pi": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "aider has no /clear analogue; restart creates new history file"
         },
         "opencode": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -208,27 +246,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "/rewind (alias /checkpoint, also Esc+Esc) restores files/conversation per prompt — recorded, 8/8 phases pass."
         },
         "codex": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "No native checkpoint-rewind as of v0.130 (May 2026): no /rewind command, no file-edit checkpoint restore; the experimental /undo was removed (#9618). codex HAS /fork (conversation fork → new linked session_id, original intact) and TUI Esc-Esc backtrack, but that is branching, not file+conversation rollback — do NOT re-mark this `yes` on the strength of /fork. Open feature requests #11626 + #12558 model after Claude Code. Reassess on next major Codex release."
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "Stock Pi CLI has no rewind (pi-mono discussion #1223). Third-party `pi-rewind` extension exists at arpagon/pi-rewind but isn't part of the default install, so irrlicht's observation target — stock Pi — has nothing to record."
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "/undo reverts the last aider git commit; /reset wipes files + chat; /clear clears chat history. No multi-point checkpoint picker. The /undo path surfaces as a normal chat turn in the transcript and a git HEAD movement — distinguishable from a regular turn only via the slash-command marker, not via session_id change."
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "/undo + /redo perform a git-snapshot session revert: rewinds to a previous message point, restores files from the snapshot, removes subsequent messages from the session DB. https://opencode.ai/docs/commands/. Multi-point picker tracked at #7794. Irrlicht observability untested — same session_id, transcript shrinks then grows; record before marking yes."
         }
       }
@@ -240,27 +283,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "Cloud variants exist (web, Routines, GHA action, --remote/--teleport) but write no local transcript and expose no read API — FilesUnderRoot+pgrep transport cannot observe them."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "Codex Cloud exists; irrlicht has no API-based watcher"
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         }
       }
@@ -272,27 +320,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "idle-flush turn-end (~5s effective latency on working→ready)"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -304,27 +357,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "tool calls reduced to '> Applied edit' / '> Running' markdown markers; coarse-grained"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -336,27 +394,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "aider retries across turns rather than within; idle-flush splits attempts"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -368,27 +431,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "/help, /cost, /status keep the session ready — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -400,27 +468,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "#102 flicker closed; long multi-turn sessions stable — recorded, 9/9 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "#105 stale-tool timer flicker (closed); task_complete dependence creates fallback risk"
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "compaction events risk working→ready→working flicker"
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "idle-flush windows compound on long sessions"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -432,27 +505,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "/goal slash command (self-prompt); session holds working across internal iterations — recorded, 6/6 phases pass. Background-loop nuances remain partial."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "Codex /goal command (Ralph loop)"
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "architect mode does limited multi-step but not continuous self-prompt"
         },
         "opencode": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -464,27 +542,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "/goal with iteration cap resolves to ready cleanly at the cap — recorded, 6/6 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "/goal has caps"
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -496,27 +579,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "5-hour budget end resolves state cleanly — recorded, 5/5 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "LLM error blockquote treated as turn_done (#262); quota errors land in same path"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "step-finish reason=error covers"
         }
       }
@@ -528,27 +616,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "Queued message keeps state working through the turn — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "TUI-based, no queue concept"
         },
         "opencode": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -560,27 +653,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "Auto Mode (shipped Mar 2026); PermissionPending path covers waiting on risky calls — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "/yes-always is blanket, not classifier-based"
         },
         "opencode": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -592,27 +690,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "/compact runs as a turn; transitions should stay working then ready — not specifically validated"
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "Compaction events emitted as bare 'assistant' (not turn-done); risk of working→ready→working flicker per exploration"
         },
         "aider": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -624,27 +727,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "stop_reason=end_turn handled"
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "task_complete handled"
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "stopReason=stop handled (#119 fixed)"
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "idle-flush is the de-facto terminal signal; ~5s lag"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "step-finish reason=stop"
         }
       }
@@ -656,27 +764,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "Turn-level error keeps state working then ready — recorded, 4/4 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "#262 fixed — error blockquote emits turn_done early"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "step-finish reason=error"
         }
       }
@@ -688,27 +801,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "#62 closed; ! prefix handled; BashExecution events skipped"
         },
         "codex": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "/run command available; observability folds into '> Running' tool marker"
         },
         "opencode": {
           "agent_supports": "unknown",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -720,27 +838,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "#270 stuck-working fix; oversized lines handled — recorded, 3/3 phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "RawLineParser; behavior on very long lines unvalidated"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -752,27 +875,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "AskUserQuestion detected explicitly; #150 + #307 fswatcher/JSONL race scenarios fixed"
         },
         "codex": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "no question tool in schema"
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "aider can ask via /ask interactively but no JSONL-style tool marker; not detected"
         },
         "opencode": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "no AskUserQuestion equivalent matched"
         }
       }
@@ -784,27 +912,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "ExitPlanMode tool detected; #152 fixed"
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "#322 OPEN — <proposed_plan> turns end as 'ready' instead of 'waiting'; #325 OPEN — dismissal leaves session stuck in waiting"
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "plan_mode declared in capabilities.json but not detected in parser"
         },
         "opencode": {
           "agent_supports": "partial",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "Plan agent exists but not surfaced as waiting state"
         }
       }
@@ -816,27 +949,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "PreToolUse/PostToolUse hooks wired via HTTP receiver; #204 closed (late hook bounce-back)"
         },
         "codex": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "capabilities.json: permission_hooks: false"
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "aider's confirm prompts are stdin/TUI; not visible to irrlicht via transcript"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "capabilities.json declares permission_hooks: true; wiring/validation status unclear"
         }
       }
@@ -848,27 +986,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "tool-denial + ESC marker recognized; #13 fixed"
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "Ctrl-C in aider TUI; abort markdown signature may differ from claude ESC pattern"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "step-finish reason=interrupted handled"
         }
       }
@@ -880,27 +1023,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "task_complete fallback to assistant_message risks mid-stream flicker"
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "compaction event interspersing risks flicker"
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "idle-flush may fire during slow remote model calls causing premature ready"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -912,27 +1060,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "file-based child transcripts; ParentSessionID inferred from filesystem; #133/#134 stop_reason=null fixed; #88 closed"
         },
         "codex": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "capabilities.json: subagents: false"
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "explicit DB parent_session_id column; agent teams"
         }
       }
@@ -944,27 +1097,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "unified rule: session held working while bg child alive; child counted in SubagentCount; reevaluateParent/hasActiveChildren + ComputeSubagentSummary already satisfy the signal"
         },
         "codex": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "peer-messaging agent teams; not validated as 'background' specifically"
         }
       }
@@ -976,27 +1134,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "#445/#450 + 265ebf22: parser snapshots the Bash run_in_background backgroundTaskId into BackgroundProcessCount and holds the session working past end_turn; a terminal <task-notification> (the SDK-harness completion shape) drops the process so it settles working→ready once the bg process exits. Recorded + validated 5/5."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "shell tool can spawn background process; not tracked"
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -1008,27 +1171,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "deleteWithChildren + orphan transcript predicates"
         },
         "codex": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "DB-backed children — cleanup path differs from PID-based; validation status unclear"
         }
       }
@@ -1040,27 +1208,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "Per-UUID transcripts; pid.go is metadata-first (#60/#109/#169) so no PID-swap flap. Recorded via the new start_session driver primitive — two concurrent same-cwd sessions, 7/7 expected phases pass."
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "partial",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "aider uses a single .aider.chat.history.md per cwd; two aiders in same cwd would race that file"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "DB-keyed sessions; cwd not the disambiguator"
         }
       }
@@ -1072,27 +1245,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "claudecode + codex/pi/aider/opencode coexistence — adapter labels are independent"
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         }
       }
@@ -1104,27 +1282,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "full per-turn deltas via request-ID dedup; cache_read routed to cache bucket"
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "cumulative cursor → delta math; cached_tokens deducted to avoid double-count"
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "message.usage with cacheRead/cacheWrite; per-turn cost when present"
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "regex-parsed '> Tokens: N sent, M received'; no cache-bucket distinction"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "step-finish.tokens nested cache object; 5m + 1h cache creation tracked separately"
         }
       }
@@ -1136,27 +1319,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "from message.model"
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "regex-parsed '> Model:' / '> Main model:'"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "step-finish.model"
         }
       }
@@ -1168,27 +1356,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "codex": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         },
         "pi": {
           "agent_supports": "yes",
-          "irrlicht_observes": "no",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
           "notes": "no model change detection between turns per parser exploration"
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "architect/editor pair detected per turn but inter-turn switch may not refresh"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "mixed-model agent teams; per-step model captured"
         }
       }
@@ -1200,27 +1393,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": "single Anthropic model per turn"
         },
         "codex": {
           "agent_supports": "partial",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "planning agent + executor exists; unclear if surfaced as two contributions"
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "--architect ships two-model pair; markdown parser sees two '> Model:' lines but contribution attribution incomplete"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "agent teams can mix models; per-child captured but parent.ModelName semantics unclear"
         }
       }
@@ -1232,27 +1430,32 @@
       "coverage": {
         "claudecode": {
           "agent_supports": "partial",
-          "irrlicht_observes": "partial",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "Multiple provider backends (Anthropic/Vertex/Bedrock) chosen at startup; no documented mid-turn fallback chain and provider-routed model name is identical. Turn-level state arc is observable; failover-qua-failover is not. conf 0.55."
         },
         "codex": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "pi": {
           "agent_supports": "no",
-          "irrlicht_observes": "n/a",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
           "notes": ""
         },
         "aider": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "aider can configure fallback models; mid-turn switch surfaced in transcript via '> Switching to model …' (untested in irrlicht)"
         },
         "opencode": {
           "agent_supports": "yes",
-          "irrlicht_observes": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "multi-provider model packs; failover observability not validated"
         }
       }

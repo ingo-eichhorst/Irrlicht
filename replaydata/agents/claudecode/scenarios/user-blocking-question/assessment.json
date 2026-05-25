@@ -4,17 +4,34 @@
   "agent": "claudecode",
   "assessed_at": "2026-05-17T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.95,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code ships the `AskUserQuestion` tool, which is the agent-side mechanism the spec is asking about. When the assistant emits a tool_use block with `name: \"AskUserQuestion\"`, the TUI pauses until the user answers. The parser at `core/adapters/inbound/agents/claudecode/parser.go` records this in two ways: (1) `collectToolUse` appends `{Name: \"AskUserQuestion\"}` to `ev.ToolUses`, and (2) the prompt text is surfaced as `ev.AssistantText` (the question becomes the user-facing waiting header).\n\nirrlicht observes the spec's two variants via the state classifier (`core/application/services/state_classifier.go`):\n\n**Variant 1 — question opens, user replies later.** While `AskUserQuestion` is the open tool, `metrics.NeedsUserAttention()` is true (the user-blocking tool list in `core/pkg/tailer/tailer_config.go` covers AskUserQuestion + ExitPlanMode + question). Rule 1 of `ClassifyState` transitions `working → waiting`. Belt-and-braces, the PreToolUse hook (`hooks.go` toolAskUserQuestion branch) calls `HandlePermissionHook` and flips `PermissionPending=true`, which independently fires rule 0 (`permission prompt open → waiting`) — so even if the JSONL tool_use line is delayed by the buffered TUI writer (#307), the waiting episode is still recorded. When the user replies, the next user message clears the open tool and a fresh assistant message drives `waiting → working → ready`.\n\n**Variant 2 — coalesced flush.** When fswatcher batches the tool_use, tool_result, and the next assistant text into one tailer pass, the open-tool window closes inside that pass. The tailer sets `SawUserBlockingToolClosedThisPass=true`, and `ShouldSynthesizeCollapsedWaiting` (state_classifier.go:126) emits a synthetic `working → waiting` followed by `waiting → working → ready` so the user still sees the waiting episode (issue #150). The session does not stick in waiting because the closing event resolves `HasOpenToolCall=false` and `LastEventType=user` clears the user-blocking gate.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code ships the `AskUserQuestion` tool, which is the agent-side mechanism the spec is asking about. When the assistant emits a tool_use block with `name: \"AskUserQuestion\"`, the TUI pauses until the user answers. The parser at `core/adapters/inbound/agents/claudecode/parser.go` records this in two ways: (1) `collectToolUse` appends `{Name: \"AskUserQuestion\"}` to `ev.ToolUses`, and (2) the prompt text is surfaced as `ev.AssistantText` (the question becomes the user-facing waiting header).\n\nirrlicht observes the spec's two variants via the state classifier (`core/application/services/state_classifier.go`):\n\n**Variant 1 — question opens, user replies later.** While `AskUserQuestion` is the open tool, `metrics.NeedsUserAttention()` is true (the user-blocking tool list in `core/pkg/tailer/tailer_config.go` covers AskUserQuestion + ExitPlanMode + question). Rule 1 of `ClassifyState` transitions `working → waiting`. Belt-and-braces, the PreToolUse hook (`hooks.go` toolAskUserQuestion branch) calls `HandlePermissionHook` and flips `PermissionPending=true`, which independently fires rule 0 (`permission prompt open → waiting`) — so even if the JSONL tool_use line is delayed by the buffered TUI writer (#307), the waiting episode is still recorded. When the user replies, the next user message clears the open tool and a fresh assistant message drives `waiting → working → ready`.\n\n**Variant 2 — coalesced flush.** When fswatcher batches the tool_use, tool_result, and the next assistant text into one tailer pass, the open-tool window closes inside that pass. The tailer sets `SawUserBlockingToolClosedThisPass=true`, and `ShouldSynthesizeCollapsedWaiting` (state_classifier.go:126) emits a synthetic `working → waiting` followed by `waiting → working → ready` so the user still sees the waiting episode (issue #150). The session does not stick in waiting because the closing event resolves `HasOpenToolCall=false` and `LastEventType=user` clears the user-blocking gate.",
   "caveats": [
     "The PreToolUse hook only fires if the user has run the irrlicht hook installer (`hookinstaller.go`) into their Claude settings.json. Without the hook, irrlicht still catches the AskUserQuestion via the JSONL tool_use line — but with one fswatcher tick of latency. The recipe should not depend on whether the hook is installed; both paths converge on the same observable state arc.",
     "The PreToolUse-only path can race the JSONL tool_use append on very small AskUserQuestion calls; the synthetic-waiting collapse (#150) plus `PermissionPending` flag are the two seatbelts that keep the waiting episode visible in all timing regimes."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go", "note": "collectToolUse / scanMessageContent — AskUserQuestion tool_use is recorded in ev.ToolUses and its prompt becomes ev.AssistantText."},
-    {"kind": "file", "ref": "core/pkg/tailer/tailer_config.go", "note": "user-blocking tool list (AskUserQuestion, ExitPlanMode, question) — drives NeedsUserAttention()."},
-    {"kind": "file", "ref": "core/application/services/state_classifier.go", "note": "ClassifyState rule 1 (user-blocking tool open → waiting) and ShouldSynthesizeCollapsedWaiting (#150 collapsed-flush synthesis)."},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/hooks.go", "note": "PreToolUse handler for AskUserQuestion/ExitPlanMode flips PermissionPending (issue #307) so waiting fires even before the JSONL line lands."}
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+      "note": "collectToolUse / scanMessageContent — AskUserQuestion tool_use is recorded in ev.ToolUses and its prompt becomes ev.AssistantText."
+    },
+    {
+      "kind": "file",
+      "ref": "core/pkg/tailer/tailer_config.go",
+      "note": "user-blocking tool list (AskUserQuestion, ExitPlanMode, question) — drives NeedsUserAttention()."
+    },
+    {
+      "kind": "file",
+      "ref": "core/application/services/state_classifier.go",
+      "note": "ClassifyState rule 1 (user-blocking tool open → waiting) and ShouldSynthesizeCollapsedWaiting (#150 collapsed-flush synthesis)."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/hooks.go",
+      "note": "PreToolUse handler for AskUserQuestion/ExitPlanMode flips PermissionPending (issue #307) so waiting fires even before the JSONL line lands."
+    }
   ]
 }

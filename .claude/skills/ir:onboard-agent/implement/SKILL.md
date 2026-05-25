@@ -2,8 +2,8 @@
 name: ir:onboard-agent/implement
 description: >
   Agent #3 of the ir:onboard-agent pipeline. Takes one (agent, scenario)
-  cell from an assessed `applicable: yes` verdict all the way to a
-  committed recording: authors the spec + per-adapter recipe, drives the
+  cell from an assessed record / record-known-failing verdict all the way
+  to a committed recording: authors the spec + per-adapter recipe, drives the
   live agent CLI under a recording daemon, validates against the spec,
   promotes the recording, and commits — leaving no dirty tree. Bundles
   the recipe / spec / record / validate building blocks behind one
@@ -23,7 +23,8 @@ description: >
 
 ## What this does
 
-Carries one cell from `applicable: yes` to a committed recording. It
+Carries one cell from a `record` / `record-known-failing` verdict to a
+committed recording. It
 bundles four building-block stages — you READ their docs for mechanics
 and follow them here:
 
@@ -52,11 +53,20 @@ and follow them here:
    `.claude/skills/ir:onboard-agent/assess/SKILL.md` for agent=<agent>
    scenario=<scenario>; return your summary."). Wait for it, then read
    the written `assessment.json`.
-2. **The verdict is actionable.** Refuse unless `assess`'s `applicable`
-   is `yes` (`agent_supports ∈ {yes, partial}` AND `irrlicht_observes ∈
-   {yes, partial}`). For `no`/`n/a`, STOP — return status
-   `applicable_false`, change nothing, note the frozen reason from the
-   assessment body. There is no recipe or recording for a frozen cell.
+2. **The verdict is actionable** (#476 routing). Read `agent_supports`,
+   `daemon_capability`, `driver_capability` from the assessment:
+   - `agent_supports ∈ {yes, partial}` AND `daemon_capability == full` AND
+     `driver_capability == ready` → **record** (the normal path).
+   - `daemon_capability == bug` (driver `ready`) → **record-known-failing**:
+     still record (the failing recording is the evidence), author the spec
+     with `known_failing: true`, and file a daemon bug issue (see step 1).
+     Do NOT freeze the cell.
+   - `driver_capability == gap:<primitive>` → **driver_gap**: a tooling
+     task. Return `driver_gap` (step 3); do NOT record, do NOT degrade to
+     `applicable_false`.
+   - `daemon_capability ∈ {incapable, n/a}`, or `agent_supports ∈ {no,
+     unknown}` → STOP — return `applicable_false`, change nothing, note the
+     frozen reason from the assessment body. No recipe or recording.
 3. **The daemon is recording.** This stage uses `--attach` against the
    user's running `irrlichd --record` (the dashboard stays connected and
    the scenario shows up live). `pgrep -x irrlichd` must return a PID and
@@ -79,6 +89,19 @@ Heed `spec/SKILL.md`'s "Common pitfalls": anchor the first phase to
 `"start"` UNPINNED so a transient `proc-<PID>` presession row doesn't
 steal `session_birth` and cascade `same_session_as` failures.
 
+**`daemon_capability == bug` (record-known-failing route):** set
+`known_failing: true` in the spec's meta line (the spec still asserts the
+*correct* behavior the daemon doesn't yet deliver — never weaken it to
+match the bug), and file a daemon bug issue:
+
+```bash
+gh issue create --repo ingo-eichhorst/Irrlicht --label bug \
+  --title "<agent>/<scenario>: daemon mis-handles <observable>" \
+  --body "<the cited events.jsonl evidence from the assessment + what the spec requires>"
+```
+
+Put the issue number in the spec meta `notes` and in your return `notes`.
+
 ### 2. Author the recipe (Stage 2)
 
 Follow [`../recipe/SKILL.md`](../recipe/SKILL.md) to write
@@ -94,30 +117,27 @@ window, or `turn_end`/`pid_bind`/`teardown` validate as missing).
 
 ### 3. Driver-gap pre-flight (before any recording)
 
-Compare the recipe's step types to what the agent's interactive driver
-implements:
+Run the recipe ↔ driver lint — it extracts the driver's handled step
+types from its `case "$type"` arms and checks them against the recipe:
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
-# step types the recipe needs:
-jq -r '.scenarios[] | select(.name=="<scenario>") | .by_adapter["<agent>"].script[]?.type' \
-  $SK/scenarios.json | sort -u
-# step types the driver handles (case labels):
-grep -oE '^\s*(send|slash|wait_turn|sleep|interrupt|keys|restart|resume|sigkill|exit_clean|reset_session)\)' \
-  $SK/scripts/drive-<agent>-interactive.sh | tr -d ' )' | sort -u
+$SK/scripts/lib/recipe-lint.sh $SK/scenarios.json <scenario> <agent>
+# exit 0 = in grammar (proceed); exit 3 = driver_gap (prints the gap:* list)
 ```
 
-If any needed step type is **not** in the driver's set →
-**`driver_gap`**: this is a developer task (extend the driver), out of
-scope here. (First rule out a false gap: a slash command that takes an
-INLINE argument — `/model <id>`, `/compact` — is sendable via `slash`
-and is NOT a `keys` gap; only an arrow-key picker truly needs `keys`.
-See `recipe/SKILL.md` "Slash command vs picker navigation".) Set `by_adapter.<agent> = {"applicable": false, "notes":
-"<scope_note naming the missing step type, e.g. 'aider driver lacks
-exit_clean'>"}`, commit recipe(applicable:false) + spec + assessment,
-and return `driver_gap`. **Do NOT record, and do NOT retry against a
-known-missing primitive.** (Headless `prompt` cells have no step types
-and can't hit this.)
+`run-cell.sh` runs this same lint and refuses with exit 3, so it's a true
+backstop — but check here first to avoid an `implement` round-trip. If it
+reports a gap → **`driver_gap`**: a developer task (extend the driver),
+out of scope here. (First rule out a false gap: a slash command that takes
+an INLINE argument — `/model <id>`, `/compact` — is sendable via `slash`
+and is NOT a `keys` gap; only an arrow-key picker truly needs `keys`. See
+`recipe/SKILL.md` "Slash command vs picker navigation".) Set
+`by_adapter.<agent> = {"applicable": false, "notes": "<scope_note naming
+the missing step type, e.g. 'aider driver lacks exit_clean'>"}`, commit
+recipe(applicable:false) + spec + assessment, and return `driver_gap`.
+**Do NOT record, and do NOT retry against a known-missing primitive.**
+(Headless `prompt` cells have no step types and can't hit this.)
 
 ### 4. Commit the authored artifacts
 
@@ -173,6 +193,7 @@ doubt run `$SK/scripts/lib/classify-failure.sh <STAGING>` (codes:
 |---|---|
 | manifest `verdict: STAGED` (success) | proceed to step 6 |
 | `run-cell.sh` **exit 2** with "cross-adapter" / "record it with run-cell-multi.sh" | re-record via `run-cell-multi.sh <scenario>` (see above) — NOT a cell failure |
+| `run-cell.sh` **exit 3** "driver_gap" | the recipe needs a step type the driver lacks — return **`driver_gap`** (you should have caught this in step 3); do NOT retry |
 | `timeout` / `transcript_missing`, **first** time | **retry once** — re-run the same `run-cell.sh --attach`. Often a lazy-transcript nudge or trailing-sleep timing issue. |
 | `timeout` / `transcript_missing`, **second** time | degrade → **`applicable_false`** (see below) |
 | `cli_not_found` / `cli_too_old` / `auth_failed` / daemon-not-running | **`infra_fail`** — environment problem, not a cell verdict. Don't retry, don't mark applicable_false. Tree is already clean (spec+recipe committed). Return. |
@@ -269,16 +290,17 @@ commit_sha: <short sha>            # the recording commit (or the recipe/spec/ap
 pass_rate: <N/M phases>            # "n/a" for non-pass statuses
 agent: <agent>   scenario: <scenario>   mode: full | re-record
 notes: <one or two sentences — drift flag, scope_note, retry count, or infra reason>
-observability_correction: <none | the live recording overrode the assess verdict — e.g. assessed observes:yes but the transcript/store proved the signal isn't emitted>
+observability_correction: <none | the live recording overrode the assess verdict — e.g. assessed daemon_capability:full but the transcript/store proved the signal isn't emitted (→ incapable/bug)>
 ```
 
 `observability_correction` is the maintainer's cue to update
 `agent-scenarios-coverage.json` when the LIVE recording disagrees with
 the doc-based `assess` verdict (e.g. pi/streaming-partial-writes assessed
-`observes: yes` but the recording proved pi writes the transcript
-atomically → `observes: no`). Most common on structured-store transports
-(opencode's `ProcessOwnedStore`), where observability is hard to predict
-from docs. Write `none` when the recording matched the assessment.
+`daemon_capability: full` but the recording proved pi writes the
+transcript atomically → `daemon_capability: incapable`). Most common on
+structured-store transports (opencode's `ProcessOwnedStore`), where
+observability is hard to predict from docs. Write `none` when the
+recording matched the assessment.
 
 Status meanings:
 

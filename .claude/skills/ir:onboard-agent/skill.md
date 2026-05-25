@@ -161,24 +161,27 @@ on every non-OK cell.
 
 A cell can be applicable yet un-recordable because the agent's interactive
 driver lacks a step type its recipe needs (`keys`, `resume`, `restart`,
-`reset_session`, `exit_clean`, `sigkill`). Surface these UPFRONT so the
-sweep routes them to a driver-extension task instead of spending an
-`implement` round-trip per cell to rediscover the gap:
+`reset_session`, `exit_clean`, `sigkill`) — this is the `driver_capability:
+gap:<primitive>` axis (#476). Surface these UPFRONT so the sweep routes
+them to a driver-extension task instead of spending an `implement`
+round-trip per cell to rediscover the gap:
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
-# step types the agent's interactive driver implements (its case labels):
-grep -oE '^\s*(send|slash|wait_turn|sleep|interrupt|keys|restart|resume|sigkill|exit_clean|reset_session)\)' \
-  $SK/scripts/drive-<agent>-interactive.sh | tr -d ' )' | sort -u
+# per cell: exit 0 = in grammar, exit 3 = driver_gap (prints the gap:* list)
+$SK/scripts/lib/recipe-lint.sh $SK/scenarios.json <scenario> <agent>
+# or just inspect what a driver implements (its case "$type" arms):
+source $SK/scripts/lib/recipe-lint.sh
+driver_step_types_from_file $SK/scripts/drive-<agent>-interactive.sh
 ```
 
-Cross-check that set against the step types each cell's recipe needs (or,
-for unwritten recipes, the steps the behaviour implies — multi-session ⇒
-`reset_session`/`resume`/`restart`; in-REPL picker navigation ⇒ `keys`).
-Cells needing an absent step are `driver_gap` — a developer task to extend
-the driver, not a recording. New agents start with the sparsest drivers
-(e.g. opencode: `send`/`sleep`/`wait_turn` only), so this report matters
-most at onboarding time.
+For unwritten recipes, judge from the steps the behaviour implies —
+multi-session ⇒ `reset_session`/`resume`/`restart`; in-REPL picker
+navigation ⇒ `keys`. Cells needing an absent step are `driver_gap` — a
+developer task to extend the driver, not a recording. New agents start
+with the sparsest drivers (e.g. opencode: `send`/`sleep`/`wait_turn`
+only), so this report matters most at onboarding time. `run-cell.sh` runs
+the same lint as a record-time backstop (refuses with exit 3).
 
 ### Orchestrator matrix (`orchestrator_scenarios[]` × orchestrators)
 

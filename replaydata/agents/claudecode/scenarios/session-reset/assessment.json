@@ -4,18 +4,35 @@
   "agent": "claudecode",
   "assessed_at": "2026-05-18T00:00:00Z",
   "agent_supports": "yes",
-  "irrlicht_observes": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
   "confidence": 0.9,
-  "body": "## Verdict\n\nagent_supports: yes\nirrlicht_observes: yes\n\n## Reasoning\n\nClaude Code's `/clear` slash command resets the conversation in-place: claude generates a fresh session UUID, materializes a new transcript file under the same `~/.claude/projects/<slug>/` directory, and the old UUID's transcript is closed. Spec assertions:\n\n1. **New session appears in ready with a NEW session_id.** Observable: the daemon's fswatcher detects the new UUID-keyed JSONL via `transcript_new`, the session_detector emits a fresh `session_birth` with `new_session: true`.\n2. **Old session disappears.** Observable: PIDManager's same-PID cleanup emits `KindTranscriptRemoved` for the prior UUID (fixed in #169, commit 56c4667 — the fix is what made this scenario fully observable; pre-fix the old session would linger as a zombie until the readyTTL sweep).\n3. **Subsequent turns drive the NEW session ready→working→ready normally.** Observable: standard turn arc on the new UUID, asserted via `same_session_as: v2_session_birth` in the phase chain.\n\nThe committed recording is 9/9 phases passing. The phase DSL precisely models the pre-session proc-PID → UUID-1 → /clear → UUID-2 lifecycle, including bounding the visible overlap window (the daemon emits the new session's `transcript_new` BEFORE the old session's `transcript_removed` by ~50ms because cleanup triggers at `pid_discovered` time which arrives after the new transcript appears; the `old_session_ended` phase's `max_delay_ms: 1000` relative to `v2_session_birth` bounds this overlap).\n\nEliminating the 50ms overlap entirely would break the legitimate `multiple-sessions-same-cwd` case (different PIDs in same projectDir), so the spec accepts the small window. This trade-off is documented in expected.jsonl's notes field.\n\n## What irrlicht does NOT see (and why that's narrow)\n\nClaude's `/new` slash command (the second variant the prose spec mentions) is functionally identical to `/clear` at the transport level — same UUID rotation, same transcript_removed for the old, same new_session for the new. The recipe covers `/clear` only; `/new` would re-record identically.",
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nClaude Code's `/clear` slash command resets the conversation in-place: claude generates a fresh session UUID, materializes a new transcript file under the same `~/.claude/projects/<slug>/` directory, and the old UUID's transcript is closed. Spec assertions:\n\n1. **New session appears in ready with a NEW session_id.** Observable: the daemon's fswatcher detects the new UUID-keyed JSONL via `transcript_new`, the session_detector emits a fresh `session_birth` with `new_session: true`.\n2. **Old session disappears.** Observable: PIDManager's same-PID cleanup emits `KindTranscriptRemoved` for the prior UUID (fixed in #169, commit 56c4667 — the fix is what made this scenario fully observable; pre-fix the old session would linger as a zombie until the readyTTL sweep).\n3. **Subsequent turns drive the NEW session ready→working→ready normally.** Observable: standard turn arc on the new UUID, asserted via `same_session_as: v2_session_birth` in the phase chain.\n\nThe committed recording is 9/9 phases passing. The phase DSL precisely models the pre-session proc-PID → UUID-1 → /clear → UUID-2 lifecycle, including bounding the visible overlap window (the daemon emits the new session's `transcript_new` BEFORE the old session's `transcript_removed` by ~50ms because cleanup triggers at `pid_discovered` time which arrives after the new transcript appears; the `old_session_ended` phase's `max_delay_ms: 1000` relative to `v2_session_birth` bounds this overlap).\n\nEliminating the 50ms overlap entirely would break the legitimate `multiple-sessions-same-cwd` case (different PIDs in same projectDir), so the spec accepts the small window. This trade-off is documented in expected.jsonl's notes field.\n\n## What irrlicht does NOT see (and why that's narrow)\n\nClaude's `/new` slash command (the second variant the prose spec mentions) is functionally identical to `/clear` at the transport level — same UUID rotation, same transcript_removed for the old, same new_session for the new. The recipe covers `/clear` only; `/new` would re-record identically.",
   "caveats": [
     "Assessment backfilled in 2026-05-18 to fill the Stage-1 artifact gap. The recording + spec predate the assessment.json convention (introduced in commit de926ab); the verdict here is consistent with the existing 9/9 pass-rate.",
     "Issue #169 (PIDManager cleanup emitting transcript_removed) was the load-bearing fix that made this scenario observable; pre-0.4.x daemons would not have passed.",
     "The /clear → /new alternative form is functionally identical at the transport level but is not separately recorded."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/application/services/pid_manager.go", "note": "Same-PID cleanup that emits KindTranscriptRemoved for the rotated-out UUID — the #169 fix."},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/claudecode/parser.go", "note": "Session detector emits session_birth with new_session: true on a fresh UUID's first user-line."},
-    {"kind": "file", "ref": ".specs/agent-scenarios.md", "note": "Feature: Session reset (`/clear`, `/new`) L81-88 — three Expected: bullets all observable."},
-    {"kind": "issue", "ref": "ingo-eichhorst/Irrlicht#169", "note": "Pre-fix the old session would linger as a zombie; the fix added the explicit transcript_removed emit."}
+    {
+      "kind": "file",
+      "ref": "core/application/services/pid_manager.go",
+      "note": "Same-PID cleanup that emits KindTranscriptRemoved for the rotated-out UUID — the #169 fix."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+      "note": "Session detector emits session_birth with new_session: true on a fresh UUID's first user-line."
+    },
+    {
+      "kind": "file",
+      "ref": ".specs/agent-scenarios.md",
+      "note": "Feature: Session reset (`/clear`, `/new`) L81-88 — three Expected: bullets all observable."
+    },
+    {
+      "kind": "issue",
+      "ref": "ingo-eichhorst/Irrlicht#169",
+      "note": "Pre-fix the old session would linger as a zombie; the fix added the explicit transcript_removed emit."
+    }
   ]
 }
