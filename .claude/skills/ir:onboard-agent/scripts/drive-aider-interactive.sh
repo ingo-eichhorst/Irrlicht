@@ -52,15 +52,22 @@ DRIVER_LOG="$STAGING/driver.log"
 
 # Per-run git-init'd CWD — same trick as drive-aider.sh; aider walks up
 # from CWD looking for a git root and writes .aider.chat.history.md there.
-RUN_CWD="$STAGING/cwd"
+# Honor IRRLICHT_ONBOARD_CWD (set per-adapter by run-cell-multi.sh) so a
+# cross-adapter run shares ONE workspace with the other agents — matching
+# the codex/claudecode interactive drivers. Only git-init when the cwd is
+# not already a repo: in a shared workspace another adapter may have
+# initialized it, and a second `git init`/commit would race them.
+RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
-( cd "$RUN_CWD" \
-    && git init -q \
-    && git config user.email aider-onboard@local \
-    && git config user.name aider-onboard \
-    && : > README.md \
-    && git add README.md \
-    && git commit -q -m init )
+if ! git -C "$RUN_CWD" rev-parse --git-dir >/dev/null 2>&1; then
+  ( cd "$RUN_CWD" \
+      && git init -q \
+      && git config user.email aider-onboard@local \
+      && git config user.name aider-onboard \
+      && : > README.md \
+      && git add README.md \
+      && git commit -q -m init )
+fi
 
 TRANSCRIPT="$RUN_CWD/.aider.chat.history.md"
 
@@ -74,9 +81,12 @@ fi
 # This keeps the recipe authoritative: the flags that shape the scenario
 # live in scenarios.json, not in ad-hoc env at invocation time.
 if [[ -f "$_SETTINGS_PATH" ]]; then
+  # No 2>/dev/null here: a malformed settings.json or a non-array
+  # aider_extra_args should surface a jq error (captured into the driver
+  # log) rather than silently dropping the scenario-shaping flags.
   while IFS= read -r _xa; do
     [[ -n "$_xa" ]] && AIDER_ARGS+=( "$_xa" )
-  done < <(jq -r '.aider_extra_args[]? // empty' "$_SETTINGS_PATH" 2>/dev/null)
+  done < <(jq -r '.aider_extra_args[]? // empty' "$_SETTINGS_PATH")
 fi
 
 SESSION="aider-onboard-${UUID:0:8}-$$"
@@ -90,8 +100,12 @@ tmux kill-session -t "$SESSION" 2>/dev/null || true
 # pane output goes through `tmux pipe-pane` instead of an `aider | tee`
 # pipeline — the pipeline form makes Ctrl-C kill the whole process group
 # including aider, which breaks the `interrupt` step type.
-tmux new-session -d -s "$SESSION" -c "$RUN_CWD" \
-  "aider ${AIDER_ARGS[*]}"
+#
+# Build the command with printf %q so each arg is shell-quoted: tmux runs the
+# string via `sh -c`, and a bare `${AIDER_ARGS[*]}` splat would let sh re-split
+# any arg value containing spaces (e.g. aider_extra_args ["--test-cmd","go test ./..."]).
+printf -v AIDER_CMD '%q ' aider "${AIDER_ARGS[@]}"
+tmux new-session -d -s "$SESSION" -c "$RUN_CWD" "$AIDER_CMD"
 tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout'"
 echo "[driver] tmux started: $SESSION (model=${IRRLICHT_AIDER_MODEL:-default})" >&2
 
