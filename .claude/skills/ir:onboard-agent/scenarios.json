@@ -3420,6 +3420,45 @@
           ],
           "settings": {},
           "timeout_seconds": 360
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its configured default model (~/.config/opencode/opencode.json; the local LM Studio model lmstudio/gemma-4-e2b-it-uncensored at authoring time). The driver passes NO --model, so it uses that default",
+            "opencode's SQLite store exists at ~/.local/share/opencode/opencode.db (created on first run); the driver queries it for the ses_… session id and exports the parts transcript",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) runs ONE blocking `opencode run` per send in a fresh per-run cwd under <staging>/cwd/; opencode auto-assigns the ses_… session id (no CLI-assignable id) and the driver captures it from the SQLite session table keyed on that cwd after the first send returns",
+            "WHY ONE multi-step turn rather than many separate user-driven turns: opencode's per-send blocking `opencode run` plus the daemon's poller coalesce rapid back-to-back same-session sends, blurring the per-turn arcs, and the local gemma 2B default model is slow (~30–45s per turn/tool round) so a multi-turn run balloons. A single crisp, fully-enumerated multi-step prompt makes opencode's agent loop chain a HIGH VOLUME of write/read tool calls in one sustained `opencode run` subprocess — capturing the long contiguous working span the daemon must keep coherent, which is the load-bearing observable this scenario names",
+            "WHY tool calls auto-execute without a gate: in headless default (`opencode run`) opencode runs its write/read tools inside its own sandbox with NO interactive permission prompt, so the long burst never enters waiting",
+            "The timeout is deliberately generous (600s) because gemma is small and slow and this is a deliberately LONG multi-tool turn; wait_turn is a no-op (the blocking `opencode run` already returns only at turn end) and the trailing sleep lets the final working→ready settle land before the driver finishes"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do all of the following in THIS single turn, using your file tools, one step at a time (do not ask me anything): 1) create six files named step1.txt, step2.txt, step3.txt, step4.txt, step5.txt, step6.txt; 2) into each file write exactly its step number on a single line (step1.txt contains 1, step2.txt contains 2, and so on through step6.txt contains 6); 3) read all six files back; 4) finally create a file summary.md that lists, one per line, each filename followed by the number it contains. Do every step so I can see each file get created and read."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… session appear in ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains exactly one state_transition→working on the ses_… session when the multi-step prompt is sent (start of the long agentic burst)",
+            "across the entire turn, NO state_transition to ready fires between successive function_call/function_call_output pairs (ONE contiguous working span — no flicker mid-burst across the many write/read tool calls)",
+            "across the entire turn, NO state_transition to waiting fires (opencode auto-executes its file tools in headless run; no permission gate)",
+            "transcript.jsonl / the SQLite part table contains a HIGH VOLUME of tool parts in the single turn (≥5 function_call / function_call_output pairs: the six file writes, the read-backs, and the summary write) — verified out-of-band since the phase DSL has no tool-event form",
+            "events.jsonl contains exactly one state_transition→ready on the ses_… session once the final tool call resolves and step-finish reason=stop → turn_done fires (clean settle, not stuck working)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 600
         }
       }
     },
