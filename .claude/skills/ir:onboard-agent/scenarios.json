@@ -5650,7 +5650,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 12
             }
           ],
           "verify": [
@@ -5663,7 +5663,10 @@
             "final session state is ready"
           ],
           "settings": {
-            "model": "openrouter/irrlicht-turn-abort-unsupported-model"
+            "model": "openai/nonexistent-model-zzz",
+            "aider_extra_args": [
+              "--no-show-model-warnings"
+            ]
           },
           "timeout_seconds": 120
         }
