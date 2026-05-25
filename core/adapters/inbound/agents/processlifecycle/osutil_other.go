@@ -8,6 +8,9 @@ func readProcessEnv(pid int) (map[string]string, error) {
 	return nil, nil
 }
 
+// processTTY is darwin-only host enrichment; other platforms degrade to "".
+func processTTY(pid int) string { return "" }
+
 // resolveTermProgramFromAncestry / resolveHostFromAncestry are darwin-only
 // fallbacks; other platforms return zero values.
 func resolveTermProgramFromAncestry(pid int) string           { return "" }

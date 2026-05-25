@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/fswatcher"
@@ -33,7 +34,7 @@ func buildAgentWatchers(
 	)
 
 	if s, ok := a.Source.(agent.FilesUnderRoot); ok {
-		w := fswatcher.New(s.Dir, a.Identity.Name, maxSessionAge).WithIdentity(a.Identity)
+		w := fswatcher.New(s.RootDirFor(runtime.GOOS), a.Identity.Name, maxSessionAge).WithIdentity(a.Identity)
 		watchers = append(watchers, w)
 		labels = append(labels, fmt.Sprintf("%s (%s)", a.Identity.Name, w.Root()))
 	}

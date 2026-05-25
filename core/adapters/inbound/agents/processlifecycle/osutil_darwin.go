@@ -16,6 +16,32 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// processTTY returns the controlling TTY of pid in the form "/dev/ttysNNN",
+// or "" if the process has no controlling terminal (hardened-runtime
+// children often don't) or the ps lookup fails. The result is normalized
+// to match Terminal.app's AppleScript `tty` property format — `ps -o tty=`
+// on macOS omits the "/dev/" prefix that AppleScript returns. This is host
+// enrichment (window targeting), not observation, so other platforms stub it.
+func processTTY(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	tty := strings.TrimSpace(string(out))
+	if tty == "" || tty == "?" || tty == "??" || tty == "-" {
+		return ""
+	}
+	if !strings.HasPrefix(tty, "/dev/") {
+		tty = "/dev/" + tty
+	}
+	return tty
+}
+
 // readProcessEnv reads the exec-time env of pid via KERN_PROCARGS2 sysctl
 // and returns the whitelisted entries. Modern macOS disables env visibility
 // in `ps e`, so this is the only non-cgo, non-TCC path.

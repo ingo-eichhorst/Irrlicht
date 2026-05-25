@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package processlifecycle
 
@@ -9,12 +9,11 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// stubObserver is the placeholder process observer for every non-darwin
-// platform. Discovery returns nothing, so no sessions are observed via the
-// process scanner — but the package compiles and the daemon boots. The real
-// per-OS mechanism (Linux /proc) replaces this in process_linux.go; env
-// reading already works cross-platform via readProcessEnv, so EnvOf is wired
-// through even here.
+// stubObserver is the placeholder process observer for platforms without a
+// native mechanism yet (e.g. Windows, until process_windows.go lands).
+// Discovery returns nothing, so no sessions are observed via the process
+// scanner — but the package compiles and the daemon boots. Env reading still
+// works wherever readProcessEnv is implemented, so EnvOf is wired through.
 type stubObserver struct{}
 
 func newObserver() outbound.ProcessObserver { return stubObserver{} }

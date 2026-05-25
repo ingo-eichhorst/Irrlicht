@@ -9,12 +9,9 @@
 package processlifecycle
 
 import (
-	"context"
 	"encoding/binary"
-	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	"irrlicht/core/domain/session"
 )
@@ -159,30 +156,10 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	return l
 }
 
-// processTTY returns the controlling TTY of pid in the form "/dev/ttysNNN",
-// or "" if the process has no controlling terminal (hardened-runtime
-// children often don't) or the ps lookup fails. The result is normalized
-// to match Terminal.app's AppleScript `tty` property format — `ps -o tty=`
-// on macOS omits the "/dev/" prefix that AppleScript returns.
-func processTTY(pid int) string {
-	if pid <= 0 {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return ""
-	}
-	tty := strings.TrimSpace(string(out))
-	if tty == "" || tty == "?" || tty == "??" || tty == "-" {
-		return ""
-	}
-	if !strings.HasPrefix(tty, "/dev/") {
-		tty = "/dev/" + tty
-	}
-	return tty
-}
+// processTTY is the controlling-TTY half of the host-enrichment capability;
+// it is darwin-only (ps-based, osutil_darwin.go) and a no-op stub elsewhere
+// (osutil_linux.go, osutil_other.go). Like the kitty/ancestry helpers, it
+// enriches a session for window targeting and never gates observation.
 
 // readProcessEnv is implemented per-platform (osutil_darwin.go,
 // osutil_linux.go, osutil_other.go) and returns the whitelisted env vars
