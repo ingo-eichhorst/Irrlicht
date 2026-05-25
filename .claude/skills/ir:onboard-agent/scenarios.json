@@ -5293,6 +5293,10 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: orphaning needs a mid-turn SIGKILL/restart of the opencode process while a subagent is live; driver has only send/sleep/wait_turn — no restart/sigkill step — needs a live-REPL/process-control opencode driver — gap:restart. drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (case \"$TYPE\" handles only send|wait_turn|sleep) and owns no long-lived process to signal: each `send` blocks inside `opencode run` until the parent's turn — and every concurrent `task` child — has already completed, so by the time control returns there is no in-flight subagent to orphan, and headless `opencode run` exits CLEANLY at turn end (a graceful exit, NOT the abrupt mid-subagent kill the cell needs). NOT an agent or daemon limitation: opencode spawns subagents via the `task` tool (proven by opencode/foreground-subagent) and the daemon reaps orphaned sessions via the transport-agnostic pid_manager/restart sweep (process-exit-driven; no store part needed for the orphaned child), so a genuine orphan WOULD reap cleanly with no spurious working/waiting transition (issue #321 invariant). NOT a recipe-lint step-TYPE gap either (recipe left applicable:false with no script, so no step type to reject) — same shape as the opencode user-esc-interrupt gap:interrupt / model-switch-midsession gap:model-select cells. UNBLOCK: add a live-REPL/process-control primitive to drive-opencode-interactive.sh that holds the opencode process alive across the child's lifetime, sends a long-running `task` subagent prompt, waits for parent_linked, then fires a sigkill/restart step killing the parent process group mid-turn. expected.jsonl is retained as the documented orphan-arc target; see replaydata/agents/opencode/scenarios/subagent-orphan-cleanup/assessment.json (driver_capability: gap:restart; agent_supports: yes — subagents work per foreground-subagent)."
         }
       }
     },
