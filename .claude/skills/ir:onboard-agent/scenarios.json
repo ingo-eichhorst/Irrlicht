@@ -3286,7 +3286,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 7
+              "seconds": 12
             },
             {
               "type": "send",
@@ -3297,7 +3297,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 7
+              "seconds": 12
             },
             {
               "type": "send",
@@ -3308,7 +3308,7 @@
             },
             {
               "type": "sleep",
-              "seconds": 7
+              "seconds": 12
             },
             {
               "type": "send",
@@ -3319,13 +3319,13 @@
             },
             {
               "type": "sleep",
-              "seconds": 8
+              "seconds": 12
             }
           ],
           "verify": [
             "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch (aider's transcript is lazy, so the pre-session is the launch-time observable)",
             "events.jsonl contains a pid_discovered event bound to the live aider session_id",
-            "events.jsonl contains FOUR state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleeps are ≥7s, covering the ~5s effective latency; with shorter sleeps the next #### prompt opens a new turn with no intervening turn_done and the per-turn reset is lost — and the risk COMPOUNDS over four turns, the matrix's observes:partial caveat)",
+            "events.jsonl contains FOUR state_transition→working / →ready arcs on the SAME session_id, one per prompt — the per-turn working→ready flip is synthesized by IdleFlush and must be observed before the next prompt re-enters working (this is why the inter-turn sleeps are ≥12s, covering the ~5s effective latency with ample slack since fast models like gpt-5-nano otherwise outrun the idle window and coalesce turns; with shorter sleeps the next #### prompt opens a new turn with no intervening turn_done and the per-turn reset is lost — and the risk COMPOUNDS over four turns, the matrix's observes:partial caveat)",
             "WITHIN each turn, state stays continuously working across the interleaved assistant fragments and the edit tool_result — NO state_transition to ready fires mid-turn (no flicker between the model fragments and the `> Applied edit` marker and the turn's end)",
             "transcript.jsonl contains four user lines and at least four collapsed tool_result events (one `> Applied edit to notes.txt` per turn) — the contains_tool_call signal; the phase DSL has no tool-event form, so the tool call is asserted only via the working span it sustains",
             "across the entire session, NO state_transition to waiting appears (aider runs under --yes-always, so every edit auto-applies and never gates)",
