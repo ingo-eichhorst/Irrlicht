@@ -219,25 +219,44 @@ RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/d
 # from its PRIMARY transcript but union EVERY session (all adapters, all
 # slots) into the workspace events.jsonl. (bash 3.2 — parallel indexed
 # arrays keyed by ADAPTERS position.)
-# daemon_sid_for_transcript <transcript-path> <fallback-sid> — return the
-# session_id the DAEMON recorded for this transcript, found by matching the
-# transcript_new event's transcript_path. Drivers write the agent's preferred
-# id to session.uuid for naming parity, but the daemon keys some adapters by
-# the transcript-file stem (codex rollout, pi <ts>_<uuid>), NOT the bare
-# transcript .id. run-cell.sh reconciles this same way; run-cell-multi needs
-# it too or the curator filters the workspace events.jsonl against an id that
-# never appears (the per-adapter arc silently drops out). Keying on the path
-# alone is safe — it's unique per session — and is a no-op for claudecode
-# (its bare UUID already equals the daemon session_id). Falls back to the
-# driver-written id when no match (e.g. transcript not yet observed).
+# daemon_sid_for_transcript <transcript-path> <adapter-slug> <fallback-sid> —
+# return the session_id the DAEMON recorded for this transcript, found by
+# matching the transcript_new event's transcript_path AND adapter. Drivers
+# write the agent's preferred id to session.uuid for naming parity, but the
+# daemon keys some adapters by the transcript-file stem (codex rollout, pi
+# <ts>_<uuid>), NOT the bare transcript .id. run-cell.sh reconciles the same
+# way; run-cell-multi needs it too or the curator filters the workspace
+# events.jsonl against an id that never appears (the per-adapter arc silently
+# drops out). The .adapter pin mirrors run-cell.sh: it disambiguates a shared
+# transcript_path across adapters, and is a deliberate no-op for claudecode
+# (its daemon adapter name is "claude-code" ≠ the "claudecode" slug, so the
+# pin finds nothing and the fallback — claudecode's UUID, which already equals
+# the daemon session_id — is preserved). Falls back to the driver-written id
+# when no match (e.g. transcript not yet observed); the caller MUST then
+# confirm the result actually appears in the recording (sid_in_recording)
+# rather than trusting a silent fallback.
 daemon_sid_for_transcript() {
-  local path="$1" fallback="$2" sid
+  local path="$1" ad="$2" fallback="$3" sid
   [[ -n "$path" ]] || { echo "$fallback"; return; }
-  sid="$(jq -r --arg path "$path" '
-    select(.kind=="transcript_new" and .transcript_path==$path)
+  sid="$(jq -r --arg path "$path" --arg ad "$ad" '
+    select(.adapter==$ad and .kind=="transcript_new" and .transcript_path==$path)
     | [.seq, .session_id] | @tsv' "$RECORDING" 2>/dev/null \
     | sort -n | head -n1 | cut -f2)"
   [[ -n "$sid" ]] && echo "$sid" || echo "$fallback"
+}
+
+# sid_in_recording <session-id> — exit 0 iff the id appears as a session_id in
+# the recording. Catches a daemon_sid_for_transcript FALLBACK that the daemon
+# never recorded (transcript_path mismatch / unobserved transcript): curating
+# against such an id would yield a silently-empty per-adapter arc, so the
+# caller fails loudly instead of staging a fixture that doesn't support its
+# own assertions.
+sid_in_recording() {
+  local sid="$1"
+  [[ -n "$sid" ]] || return 1
+  [[ -n "$(jq -r --arg sid "$sid" \
+        'select(.session_id==$sid) | .session_id' "$RECORDING" 2>/dev/null \
+        | head -n1)" ]]
 }
 
 PRIMARY_SID=()
@@ -250,9 +269,19 @@ for idx in "${!ADAPTERS[@]}"; do
   PRIMARY_TRANSCRIPT[$idx]="$(head -n1 "$sub/transcript.path" 2>/dev/null || true)"
   raw_primary_sid="$(head -n1 "$sub/session.uuid" 2>/dev/null || true)"
   # Reconcile the driver's preferred id to the daemon's recorded session_id.
-  PRIMARY_SID[$idx]="$(daemon_sid_for_transcript "${PRIMARY_TRANSCRIPT[$idx]}" "$raw_primary_sid")"
+  PRIMARY_SID[$idx]="$(daemon_sid_for_transcript "${PRIMARY_TRANSCRIPT[$idx]}" "$a" "$raw_primary_sid")"
   if [[ -z "${PRIMARY_SID[$idx]}" || -z "${PRIMARY_TRANSCRIPT[$idx]}" || ! -f "${PRIMARY_TRANSCRIPT[$idx]}" ]]; then
     echo "ERROR: $a driver did not resolve a session (sid=${PRIMARY_SID[$idx]:-missing}, transcript=${PRIMARY_TRANSCRIPT[$idx]:-missing})" >&2
+    DRV_FAIL=1
+    continue
+  fi
+  # The reconciled primary MUST be an id the daemon actually recorded. If
+  # reconcile fell back to the driver-written id (transcript_path mismatch /
+  # transcript unobserved) and that id never appears in the recording,
+  # curating against it yields a silently-empty per-adapter arc — fail loudly
+  # instead of staging a fixture that doesn't support its own assertions.
+  if ! sid_in_recording "${PRIMARY_SID[$idx]}"; then
+    echo "ERROR: $a primary session '${PRIMARY_SID[$idx]}' does not appear in the recording — reconcile fell back to a driver id the daemon never recorded; the per-adapter arc would be empty. Not staging." >&2
     DRV_FAIL=1
     continue
   fi
@@ -261,19 +290,23 @@ for idx in "${!ADAPTERS[@]}"; do
   # session is filtered by its daemon-recorded id, not its preferred id.
   uuids_file="$sub/session.uuids"; [[ -f "$uuids_file" ]] || uuids_file="$sub/session.uuid"
   paths_file="$sub/transcript.paths"; [[ -f "$paths_file" ]] || paths_file="$sub/transcript.path"
-  # Parallel-read uuids + paths line by line (bash 3.2 — no readarray).
-  slot_paths=()
-  while IFS= read -r p; do [[ -n "$p" ]] && slot_paths+=("$p"); done < "$paths_file"
+  # Parallel-read uuids + paths into LINE-INDEXED arrays (bash 3.2 — no
+  # readarray). Do NOT compact empty lines: an empty entry in one file must
+  # keep its slot so uuid[i] still pairs with path[i]. (A prior version
+  # compacted only the paths, which desynced every later uuid->path pairing
+  # whenever a slot had a non-empty uuid but an unresolved/empty transcript
+  # line — e.g. a chained slot whose transcript never resolved.)
+  slot_uuids=(); while IFS= read -r s; do slot_uuids+=("$s"); done < "$uuids_file"
+  slot_paths=(); while IFS= read -r p; do slot_paths+=("$p"); done < "$paths_file"
   csv=""
-  slot=0
-  while IFS= read -r s; do
+  for slot in ${slot_uuids[@]+"${!slot_uuids[@]}"}; do
+    s="${slot_uuids[$slot]}"
     [[ -z "$s" ]] && continue
     sp="${slot_paths[$slot]:-}"
-    s="$(daemon_sid_for_transcript "$sp" "$s")"
+    s="$(daemon_sid_for_transcript "$sp" "$a" "$s")"
     csv+="${csv:+,}$s"
     ALL_SIDS+=("$s")
-    slot=$((slot + 1))
-  done < "$uuids_file"
+  done
   OWN_TRANSCRIPTS[$idx]="$(cat "$paths_file" 2>/dev/null || true)"
   echo "$a: primary=${PRIMARY_SID[$idx]} sids=[$csv]"
 done
