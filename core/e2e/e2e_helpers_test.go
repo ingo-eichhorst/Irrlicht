@@ -170,6 +170,10 @@ func (m *stubMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, erro
 	return nil, nil
 }
 
+func (m *stubMetrics) ComputeMetricsTimeline(_, _ string) ([]session.MetricsTimelinePoint, error) {
+	return nil, nil
+}
+
 func (m *stubMetrics) PruneEntry(_ string) {}
 
 func (m *stubMetrics) IngestRateLimit(_ string, _ *session.RateLimitSnapshot) {}

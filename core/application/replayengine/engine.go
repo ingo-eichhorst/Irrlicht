@@ -68,6 +68,19 @@ type Options struct {
 	// DisableModelConfigFallback keeps replays reproducible across machines
 	// by ignoring the operator's local model config (issue #440).
 	DisableModelConfigFallback bool
+	// EmitMetricsTimeline records a cumulative metrics snapshot after every
+	// batch into Result.MetricsTimeline. Off by default so the transition
+	// stream (and the replay CLI goldens) are untouched; the viewer turns it
+	// on to animate cost/tokens across a recording's playhead.
+	EmitMetricsTimeline bool
+}
+
+// MetricsSnapshot is the cumulative SessionMetrics observed up to a point in a
+// replayed transcript, tagged with that point's transcript-relative timestamp.
+// Emitted only when Options.EmitMetricsTimeline is set.
+type MetricsSnapshot struct {
+	VirtualTime time.Time
+	Metrics     *session.SessionMetrics
 }
 
 // Result is the outcome of replaying a transcript.
@@ -81,6 +94,9 @@ type Result struct {
 	// LastMetrics is the tailer metrics after the final pass, used by the
 	// replay CLI to fill the report's cost/token summary.
 	LastMetrics *tailer.SessionMetrics
+	// MetricsTimeline holds one cumulative snapshot per batch (ascending by
+	// VirtualTime) when Options.EmitMetricsTimeline is set; otherwise nil.
+	MetricsTimeline []MetricsSnapshot
 }
 
 // rawEvent is one line from the source transcript paired with its timestamp.
@@ -125,10 +141,11 @@ func ReplayTranscript(src string, opts Options) (*Result, error) {
 type replayer struct {
 	tmp         *os.File
 	tailer      *tailer.TranscriptTailer
-	result      *Result
-	state       string
-	consumed    int
-	lastMetrics *tailer.SessionMetrics
+	result       *Result
+	state        string
+	consumed     int
+	lastMetrics  *tailer.SessionMetrics
+	emitTimeline bool
 }
 
 func newReplayer(opts Options, events []rawEvent) (*replayer, func(), error) {
@@ -153,10 +170,11 @@ func newReplayer(opts Options, events []rawEvent) (*replayer, func(), error) {
 	}
 
 	r := &replayer{
-		tmp:    tmp,
-		tailer: t,
-		result: &Result{},
-		state:  session.StateReady,
+		tmp:          tmp,
+		tailer:       t,
+		result:       &Result{},
+		state:        session.StateReady,
+		emitTimeline: opts.EmitMetricsTimeline,
 	}
 	// Synthetic initial-state transition mirrors the live detector seeding
 	// a session as ready before any activity.
@@ -188,6 +206,14 @@ func (r *replayer) runBatches(batches [][]rawEvent) error {
 			return fmt.Errorf("batch %d: %w", bi, err)
 		}
 		r.lastMetrics = metrics
+		if r.emitTimeline {
+			// TailerToDomain allocates a fresh struct per call, so the snapshot
+			// never aliases the tailer's mutable cumulative state.
+			r.result.MetricsTimeline = append(r.result.MetricsTimeline, MetricsSnapshot{
+				VirtualTime: nextEventTime,
+				Metrics:     TailerToDomain(metrics),
+			})
+		}
 		cause := CauseEvent
 		if len(batch) > 1 {
 			cause = CauseDebounceCoalesce
@@ -202,6 +228,12 @@ func (r *replayer) runBatches(batches [][]rawEvent) error {
 		if metrics, flushed := r.tailer.FlushIdle(); flushed {
 			r.lastMetrics = metrics
 			last := batches[len(batches)-1]
+			if r.emitTimeline {
+				r.result.MetricsTimeline = append(r.result.MetricsTimeline, MetricsSnapshot{
+					VirtualTime: last[len(last)-1].Time,
+					Metrics:     TailerToDomain(metrics),
+				})
+			}
 			r.classifyBatch(last[len(last)-1].Index, last[len(last)-1].Time, CauseIdleFlush, TailerToDomain(metrics))
 		}
 	}

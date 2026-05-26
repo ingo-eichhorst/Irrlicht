@@ -122,6 +122,10 @@ func (m *mockMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetr
 	return nil, nil
 }
 
+func (m *mockMetrics) ComputeMetricsTimeline(path, adapter string) ([]session.MetricsTimelinePoint, error) {
+	return nil, nil
+}
+
 func (m *mockMetrics) PruneEntry(path string) { m.pruned = append(m.pruned, path) }
 
 func (m *mockMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapshot) {}
@@ -138,6 +142,10 @@ func (m *funcMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetr
 		return nil, nil
 	}
 	return m.fn(path, adapter)
+}
+
+func (m *funcMetrics) ComputeMetricsTimeline(path, adapter string) ([]session.MetricsTimelinePoint, error) {
+	return nil, nil
 }
 
 func (m *funcMetrics) PruneEntry(path string) {}

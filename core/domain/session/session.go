@@ -20,6 +20,15 @@ func IsCanonicalState(s string) bool {
 	return s == StateWorking || s == StateWaiting || s == StateReady
 }
 
+// MetricsTimelinePoint is one cumulative SessionMetrics snapshot tagged with
+// the transcript-relative timestamp it was observed at. A MetricsCollector can
+// return an ordered timeline of these so a replay viewer can show cost/tokens
+// climbing turn-by-turn instead of jumping straight to the final total.
+type MetricsTimelinePoint struct {
+	VirtualTime time.Time
+	Metrics     *SessionMetrics
+}
+
 // SessionMetrics holds computed performance metrics from transcript analysis.
 type SessionMetrics struct {
 	ElapsedSeconds     int64   `json:"elapsed_seconds"`

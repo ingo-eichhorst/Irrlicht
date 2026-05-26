@@ -306,6 +306,14 @@ func (m *PlaybackManager) StartViewerInternal(agent, subtree, scenario string, s
 		bc = enricher
 	}
 	machine := replay.New(events, bc, speed)
+	// Let the enricher read the live playhead + anchor so it can animate
+	// cost/tokens across the recording instead of showing the final total
+	// at every frame. The timeline itself is built lazily on the first
+	// broadcast (using the session's adapter), so this only hands over the
+	// machine reference.
+	if enricher != nil {
+		enricher.attachMachine(machine)
+	}
 	// Apply event 0 synchronously BEFORE returning to the frontend so
 	// the dashboard's initial /api/v1/sessions fetch sees a non-empty
 	// snapshot. Otherwise there's a race window where Run()'s

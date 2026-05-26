@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"irrlicht/core/domain/lifecycle"
@@ -46,6 +47,11 @@ type StateMachine struct {
 	playheadMs       float64
 	lastTickWall     time.Time
 	playheadRunning  bool
+	// playheadAtomicMs mirrors playheadMs for LOCK-FREE reads. The metrics
+	// enricher reads the playhead from inside Broadcast, which the machine
+	// calls while holding mu — so it can't take mu (LivePlayheadMs would
+	// deadlock). Every site that writes playheadMs under mu also stores here.
+	playheadAtomicMs atomic.Int64
 
 	speedMu sync.RWMutex
 	speed   float64 // 1.0, 2.0, 5.0, …; >0 always
@@ -98,6 +104,16 @@ func (m *StateMachine) tickPlayheadLocked() {
 		}
 	}
 	m.lastTickWall = now
+	m.playheadAtomicMs.Store(int64(m.playheadMs))
+}
+
+// PlayheadMsLockFree returns the last-computed playhead offset (ms) without
+// taking mu, so callers invoked from within Broadcast (which runs under mu)
+// can read it without deadlocking. It reflects the value as of the most
+// recent tick/seek — accurate enough to pick the cumulative metrics snapshot
+// for the current frame.
+func (m *StateMachine) PlayheadMsLockFree() int64 {
+	return m.playheadAtomicMs.Load()
 }
 
 // totalDurationMsLocked returns the recording's total span in ms.
@@ -208,6 +224,7 @@ func (m *StateMachine) Run(ctx context.Context) {
 	m.lastTickWall = time.Now()
 	m.playheadRunning = true
 	m.playheadMs = 0
+	m.playheadAtomicMs.Store(0)
 	m.mu.Unlock()
 	paused := false
 
@@ -235,6 +252,7 @@ func (m *StateMachine) Run(ctx context.Context) {
 			m.seekTo(c.seekToMs, anchor)
 			m.mu.Lock()
 			m.playheadMs = float64(c.seekToMs)
+			m.playheadAtomicMs.Store(c.seekToMs)
 			m.lastTickWall = time.Now()
 			m.mu.Unlock()
 		}
