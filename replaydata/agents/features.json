@@ -189,6 +189,30 @@
       "description": "Agent exposes user commands to add/drop files from the active context, mark files as read-only references, or otherwise prune the prompt window mid-session. Test: add a file then drop it; expect the file's contents to leave the next prompt sent to the LLM.",
       "added_in": "2026-04-25",
       "notes": "Aider /add /drop /read-only. claudecode has /clear; the granularity differs but the capability is shared."
+    },
+    {
+      "id": "task_list",
+      "title": "Structured task list / TODO tracking",
+      "category": "workflow",
+      "description": "Agent maintains a structured, mutable task list during a session (a TODO/checklist it creates and updates as work progresses) and surfaces add/update/complete events the recorder can track as task deltas. Test: ask the agent to plan a multi-step task; expect a task-list create followed by per-step status updates in the transcript.",
+      "added_in": "2026-05-26",
+      "notes": "claudecode TodoWrite and opencode todowrite both surface this; irrlicht maps it to TaskDeltas. codex/pi/aider do not expose a structured task list. Required by the task-list scenario."
+    },
+    {
+      "id": "background_process",
+      "title": "Backgrounded long-running process",
+      "category": "workflow",
+      "description": "Agent can launch a long-running process (shell command, server, build) that outlives the turn that started it and report its later output/completion as a separate event, rather than blocking the turn to completion. Test: ask the agent to start a background task; expect a dispatch event during the turn and a later completion/output event after the turn ends.",
+      "added_in": "2026-05-26",
+      "notes": "claudecode Bash run_in_background (dispatch via toolUseResult.backgroundTaskId; completion via BashOutput/KillShell, or TaskOutput under an SDK harness). opencode/codex/pi/aider run shell synchronously to completion — no backgrounded dispatch. Required by the background-process scenario."
+    },
+    {
+      "id": "cost_tracking",
+      "title": "Token / cost accounting",
+      "category": "session",
+      "description": "Agent reports per-turn token usage and/or monetary cost (input/output/cache token counts, dollar estimates) that the recorder can surface as session metrics. Test: run a turn and inspect the transcript; expect token counts (and optionally a cost figure) attached to the turn.",
+      "added_in": "2026-05-26",
+      "notes": "All onboarded CLIs declare a value for this flag. opencode emits step-finish.tokens (nested cache object) but reports no dollar cost (cost_tracking=false). Distinct from the token-accounting scenario — this is the capability flag, not the recorded behavior."
     }
   ]
 }

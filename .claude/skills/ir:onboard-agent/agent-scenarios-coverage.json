@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-05-23",
+  "generated_at": "2026-05-26",
   "source_catalog": ".specs/agent-scenarios.md",
   "legend": {
     "agent_supports": [
@@ -232,10 +232,10 @@
           "notes": "aider has no /clear analogue; restart creates new history file"
         },
         "opencode": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "gap:slash-command",
+          "notes": "/new exists in the TUI; headless `opencode run` stores slash commands as literal user text (no reset) and there is no reset_session step; needs a live-REPL opencode driver"
         }
       }
     },
@@ -270,9 +270,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "/undo + /redo perform a git-snapshot session revert: rewinds to a previous message point, restores files from the snapshot, removes subsequent messages from the session DB. https://opencode.ai/docs/commands/. Multi-point picker tracked at #7794. Irrlicht observability untested — same session_id, transcript shrinks then grows; record before marking yes."
+          "daemon_capability": "full",
+          "driver_capability": "gap:slash-command",
+          "notes": "/undo + /redo are in-TUI slash commands; headless `opencode run` stores them as literal text (no rewind); daemon observability untested; needs a live-REPL opencode driver"
         }
       }
     },
@@ -309,7 +309,7 @@
           "agent_supports": "no",
           "daemon_capability": "n/a",
           "driver_capability": "n/a",
-          "notes": ""
+          "notes": "opencode sessions are a local ProcessOwnedStore (SQLite keyed to a local process + cwd); no cloud/hosted background-agent concept to observe"
         }
       }
     },
@@ -346,7 +346,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": ""
+          "notes": "recorded 2026-05 (4/4)"
         }
       }
     },
@@ -383,7 +383,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": ""
+          "notes": "recorded 2026-05 (4/4); gemma emitted a real write tool call inside the working span"
         }
       }
     },
@@ -418,9 +418,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": ""
+          "notes": "recorded 2026-05 (4/4); write→read→edit in one contiguous working span (daemon was unknown, proven full)"
         }
       }
     },
@@ -455,9 +455,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
+          "daemon_capability": "full",
+          "driver_capability": "gap:slash-command",
+          "notes": "slash commands resolve only in the live TUI; headless `opencode run` treats them as literal user text; needs a live-REPL opencode driver"
         }
       }
     },
@@ -492,9 +492,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "full",
+          "daemon_capability": "bug",
           "driver_capability": "ready",
-          "notes": ""
+          "notes": "recorded 2026-05 (3/4); 12 tool calls sustained in one working span; turn_done known_failing — terminal working→ready settle lands ~175ms AFTER process_exited because headless `opencode run` exits at turn end; clears with a live-REPL driver or settle-on-exit"
         }
       }
     },
@@ -529,9 +529,9 @@
         },
         "opencode": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "daemon_capability": "n/a",
           "driver_capability": "ready",
-          "notes": ""
+          "notes": "stock opencode has no autonomous self-prompting/goal loop — turns end at session.idle awaiting the next user message; self-prompting is plugin-only (oh-my-opencode); upstream /loop request still open"
         }
       }
     },
@@ -566,9 +566,9 @@
         },
         "opencode": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "daemon_capability": "n/a",
           "driver_capability": "ready",
-          "notes": ""
+          "notes": "presupposes the autonomous-loop primitive stock opencode lacks → no max-iterations cap to observe"
         }
       }
     },
@@ -603,9 +603,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "full",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
-          "notes": "step-finish reason=error covers"
+          "notes": "applicable:false — same root as turn-aborted-by-error: quota/error lands on message.data.error with zero step-finish reason=error parts; no observable working→ready settle. Dropped the falsified 'step-finish reason=error covers' note"
         }
       }
     },
@@ -639,10 +639,10 @@
           "notes": "TUI-based, no queue concept"
         },
         "opencode": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
+          "agent_supports": "partial",
+          "daemon_capability": "full",
+          "driver_capability": "gap:mid-turn-injection",
+          "notes": "headless `opencode run` blocks to turn completion and the driver sends sequentially, so a second message can't be injected mid-turn; needs a live-REPL opencode driver"
         }
       }
     },
@@ -676,10 +676,10 @@
           "notes": "/yes-always is blanket, not classifier-based"
         },
         "opencode": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
+          "agent_supports": "partial",
+          "daemon_capability": "full",
+          "driver_capability": "gap:permission-approval",
+          "notes": "opencode's permission classifier is TUI-only; headless `opencode run` auto-executes with no prompt/classification/waiting; needs a live-REPL opencode driver"
         }
       }
     },
@@ -713,10 +713,10 @@
           "notes": ""
         },
         "opencode": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "gap:slash-command",
+          "notes": "/compact + /summarize are in-TUI slash commands; headless `opencode run` can't deliver them; needs a live-REPL opencode driver"
         }
       }
     },
@@ -753,7 +753,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "step-finish reason=stop"
+          "notes": "recorded 2026-05 (4/4); step-finish reason=stop"
         }
       }
     },
@@ -788,9 +788,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "full",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
-          "notes": "step-finish reason=error"
+          "notes": "applicable:false — error/abort turns land on message.data.error, NEVER a step-finish reason=error part; watcher scanParts (watcher.go) ignores message_data, so the turn sticks in working until process_exited (no settle). Candidate daemon fix: read message.data.error"
         }
       }
     },
@@ -825,9 +825,9 @@
         },
         "opencode": {
           "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "no user-level `!cmd` shell escape outside a model turn; shell is the model-invoked bash tool, already covered by auto-executed-tool-call"
         }
       }
     },
@@ -861,10 +861,10 @@
           "notes": "RawLineParser; behavior on very long lines unvalidated"
         },
         "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "applicable:false / blocked — opencode caps tool output (read tool → 2000 chars; bash → ~30-50KB preview with overflow to a tool-output/ sidecar), so a single >=256KB transcript line cannot be induced via opencode tools"
         }
       }
     },
@@ -901,7 +901,7 @@
           "agent_supports": "no",
           "daemon_capability": "n/a",
           "driver_capability": "n/a",
-          "notes": "no AskUserQuestion equivalent matched"
+          "notes": "no AskUserQuestion-style structured blocking-question primitive that surfaces a daemon-observable waiting state (SQLite part schema = step-start/step-finish/text/tool only)"
         }
       }
     },
@@ -937,8 +937,8 @@
         "opencode": {
           "agent_supports": "partial",
           "daemon_capability": "incapable",
-          "driver_capability": "ready",
-          "notes": "Plan agent exists but not surfaced as waiting state"
+          "driver_capability": "n/a",
+          "notes": "opencode Plan mode is a tool-restriction (read-only) mode, not a blocking approval gate; no daemon-observable waiting→approval transition (parser/watcher have no waiting/ExitPlanMode branch)"
         }
       }
     },
@@ -972,10 +972,10 @@
           "notes": "aider's confirm prompts are stdin/TUI; not visible to irrlicht via transcript"
         },
         "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "capabilities.json declares permission_hooks: true; wiring/validation status unclear"
+          "agent_supports": "partial",
+          "daemon_capability": "full",
+          "driver_capability": "gap:permission-approval",
+          "notes": "permission gate is TUI-only; headless `opencode run` auto-executes tools with no prompt (proven via auto-executed-tool-call) and the driver has no approve/deny step; needs a live-REPL opencode driver"
         }
       }
     },
@@ -1011,8 +1011,8 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "step-finish reason=interrupted handled"
+          "driver_capability": "gap:interrupt",
+          "notes": "parser handles step-finish reason=interrupted, but the headless send-only driver can't fire a mid-turn ESC; needs a live-REPL opencode driver"
         }
       }
     },
@@ -1049,7 +1049,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": ""
+          "notes": "recorded 2026-05 (5/5); WAL-fsnotify watcher held working ~110s, no flicker"
         }
       }
     },
@@ -1120,10 +1120,10 @@
           "notes": ""
         },
         "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "peer-messaging agent teams; not validated as 'background' specifically"
+          "agent_supports": "unknown",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "opencode subagents are FOREGROUND task-tool children the parent awaits (foreground-subagent recorded); no documented fire-and-forget background/async dispatch, and the headless driver can't observe a concurrent mid-turn child"
         }
       }
     },
@@ -1157,10 +1157,10 @@
           "notes": ""
         },
         "opencode": {
-          "agent_supports": "yes",
+          "agent_supports": "no",
           "daemon_capability": "incapable",
-          "driver_capability": "ready",
-          "notes": ""
+          "driver_capability": "n/a",
+          "notes": "opencode's bash tool runs synchronously to completion; no run_in_background dispatch + later-completion event observable via the ProcessOwnedStore transport (MetricsReader never sets BackgroundProcessCount)"
         }
       }
     },
@@ -1195,9 +1195,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "DB-backed children — cleanup path differs from PID-based; validation status unclear"
+          "daemon_capability": "full",
+          "driver_capability": "gap:restart",
+          "notes": "subagents work (foreground-subagent recorded); orphaning needs a mid-turn SIGKILL/restart of the opencode process, which the send/sleep/wait_turn driver lacks; needs a process-control / live-REPL driver"
         }
       }
     },
@@ -1271,7 +1271,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": ""
+          "notes": "recorded 2026-05 (3/4); opencode + claudecode/codex/pi/aider in one cwd, all 5 sessions distinguished (load-bearing); agentB turn_done known_failing — poll-race truncation when the headless process exits under concurrent load. Driver now honors $IRRLICHT_ONBOARD_CWD; opencode added to cross_adapter[]"
         }
       }
     },
@@ -1308,7 +1308,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "step-finish.tokens nested cache object; 5m + 1h cache creation tracked separately"
+          "notes": "recorded 2026-05; token EXTRACTION full (counts + 5m/1h cache); per-turn STATE arc coalesces across rapid chained `opencode run` turns → multi-turn known_failing"
         }
       }
     },
@@ -1345,7 +1345,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "step-finish.model"
+          "notes": "recorded 2026-05 (4/4); model observable live via message.data.model.modelID, but NOT re-derivable in the replay golden (_model left empty on the step-finish line) — transport-inherent replay gap"
         }
       }
     },
@@ -1381,8 +1381,8 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "mixed-model agent teams; per-step model captured"
+          "driver_capability": "gap:model-select",
+          "notes": "daemon reads per-turn model fine; the driver runs `opencode run` with no --model and has no per-step model-select step, and inline /model is a no-op headless; needs a model-select / live-REPL driver"
         }
       }
     },
@@ -1457,6 +1457,43 @@
           "daemon_capability": "unknown",
           "driver_capability": "ready",
           "notes": "multi-provider model packs; failover observability not validated"
+        }
+      }
+    },
+    {
+      "id": "task-list",
+      "section": "Turn shape",
+      "feature": "Structured task list / TODO tracking",
+      "coverage": {
+        "claudecode": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "recorded; TodoWrite → TaskDeltas"
+        },
+        "codex": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "no task_list capability"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "no task_list capability"
+        },
+        "aider": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "no task_list capability"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "recorded 2026-05; todowrite → TaskDeltas"
         }
       }
     }
