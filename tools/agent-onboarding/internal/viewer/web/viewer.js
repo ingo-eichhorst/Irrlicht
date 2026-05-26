@@ -500,7 +500,7 @@ function renderCoverageMatrix(detail) {
       stateChip("◉", "#e7eef7", "#33598a", "pending record — capable, not yet recorded") +
       stateChip("◉", "#f8c8c8", "#8a0000", "blocked: daemon — observable but mis-handled (bug)") +
       stateChip("◉", "#fde7c1", "#8a4500", "blocked: driver — needs a driver primitive (gap:*)") +
-      stateChip("◉", "#dcdbd0", "#555",    "unobservable — leaves no trace the daemon can see") +
+      stateChip("◉", "#ffcda3", "#a8480a", "unobservable — leaves no trace the daemon can see") +
       stateChip("◉", "#eeece4", "#999",    "n.a. — agent doesn't support feature") +
       stateChip("◉", "#e5e5e5", "#555",    "unknown — needs assessment"))}
     ${row("3", "Recipe", "driver script in scenarios.json",
@@ -846,7 +846,7 @@ function _displayMeta(state) {
     case "pending-record": return {bg: "#e7eef7", fg: "#33598a", text: "pending record"};
     case "blocked-driver": return {bg: "#fde7c1", fg: "#8a4500", text: "blocked: driver"};
     case "blocked-daemon": return {bg: "#f8c8c8", fg: "#8a0000", text: "blocked: daemon"};
-    case "unobservable":   return {bg: "#dcdbd0", fg: "#555",    text: "unobservable"};
+    case "unobservable":   return {bg: "#ffcda3", fg: "#a8480a", text: "unobservable"};
     case "n.a.":           return {bg: "#eeece4", fg: "#999",    text: "n.a."};
     default:               return {bg: "#e5e5e5", fg: "#555",    text: "unknown"};
   }
@@ -1541,7 +1541,7 @@ function _capabilityChip(prefix, value) {
   switch (true) {
     case v === "full" || v === "ready": bg = "#d6f0d4"; fg = "#1f5a1d"; break;
     case v === "bug":                   bg = "#f8c8c8"; fg = "#8a0000"; break;
-    case v === "incapable":             bg = "#dcdbd0"; fg = "#555";    break;
+    case v === "incapable":             bg = "#ffcda3"; fg = "#a8480a"; break;
     case v.startsWith("gap:"):          bg = "#fde7c1"; fg = "#8a4500"; break;
     case v === "n/a":                   bg = "#eeece4"; fg = "#999";    break;
     default:                            bg = "#e5e5e5"; fg = "#555";    break; // unknown
