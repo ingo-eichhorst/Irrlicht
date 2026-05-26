@@ -8,6 +8,16 @@
 # the turn ends. This is structurally simpler than the claudecode tmux+TUI
 # driver and matches how opencode is most often automated.
 #
+# Per-turn model selection (model-select): a `send` step may carry an
+# optional `model` field; when present the headless arm passes
+# `opencode run -m <provider/model>` so that turn runs on the named model.
+# Omitting it runs on the config default (unchanged for every other cell).
+# This is how a single --session chain runs turn 1 on model A and turn 2 on
+# model B — a real mid-session switch the daemon observes per turn (it reads
+# message.data.model.modelID from the SQLite store, latest-wins). It is a
+# headless-path enhancement, NOT a TUI/run_live change — the in-REPL /models
+# picker is an arrow-key overlay and stays out of scope.
+#
 # Session continuity: the first `send` launches a fresh session in
 # <staging>/cwd; subsequent `send` steps use `--session <id>` with the
 # captured id so the conversation chains within one session record.
@@ -386,9 +396,21 @@ SQL
 
 run_send() {
   local text="$1"
+  # Optional per-step model: when the send step carries a `model` field, thread
+  # `opencode run -m <provider/model>` so THIS turn runs on the named model
+  # instead of the config default. This is the model-select primitive
+  # (gap:model-select): a real A->B model switch across turns within one
+  # --session chain — the daemon reads per-turn message.data.model.modelID from
+  # its SQLite store (latest-non-empty-wins, opencode/metrics.go), so the switch
+  # is observable. Omitting the field (every other cell) passes NO -m flag and
+  # keeps the single-config-default behavior byte-for-byte unchanged.
+  local model="${2:-}"
   local args=()
   if [[ -n "$SESSION_ID" ]]; then
     args+=(--session "$SESSION_ID")
+  fi
+  if [[ -n "$model" ]]; then
+    args+=(-m "$model")
   fi
 
   local remaining
@@ -398,7 +420,7 @@ run_send() {
     return 1
   fi
 
-  echo "[driver] send (session=${SESSION_ID:-<new>}, remaining=${remaining}s): $text" >&2
+  echo "[driver] send (session=${SESSION_ID:-<new>}, model=${model:-<default>}, remaining=${remaining}s): $text" >&2
   set +e
   ( cd "$RUN_CWD" && \
     timeout --signal=SIGINT --kill-after=10 "$remaining" \
@@ -455,7 +477,11 @@ for (( i = 0; i < STEP_COUNT; i++ )); do
   case "$TYPE" in
     send)
       TEXT=$(jq -r '.text' <<<"$STEP")
-      run_send "$TEXT" || break
+      # Optional `model` field → run THIS turn on the named provider/model via
+      # `opencode run -m`; absent → config default (unchanged for every other
+      # cell). This is the gap:model-select unblock for model-switch-midsession.
+      MODEL=$(jq -r '.model // empty' <<<"$STEP")
+      run_send "$TEXT" "$MODEL" || break
       ;;
     wait_turn)
       # opencode run blocks until the turn ends — wait_turn is a no-op.
