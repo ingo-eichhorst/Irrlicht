@@ -1,0 +1,30 @@
+{
+  "$notes": "Semantic companion to recipe-lint's grammar check (#496 RC3). recipe-lint reads a driver's `case \"$type\"` arms to know which step types it ACCEPTS — but accepting a step type is not the same as PRODUCING its effect. The canonical trap: headless `opencode run` accepts a `send` step but stores a leading-slash text as a literal user message, so `send \"/undo\"` lints in-grammar yet elicits nothing. This manifest declares, per adapter, the step types whose effect the driver genuinely produces (`elicits`), plus whether slash commands must use a dedicated step type rather than send-text (`slash_requires_step_type`). `elicits` is normally a subset of the driver's case arms; a discovery-scaffolded driver (RC2) stubs every standard arm but only lists here the ones it truly elicits, so a recipe needing a stubbed-but-not-elicited primitive is caught as a semantic gap BEFORE a recording is attempted.",
+  "adapters": {
+    "claudecode": {
+      "elicits": ["send", "slash", "wait_turn", "interrupt", "keys", "sleep", "restart", "resume", "reset_session", "sigkill", "exit_clean", "start_session", "session"],
+      "slash_requires_step_type": false,
+      "notes": "Full tmux-TUI driver; every dispatched step type is genuinely produced. `send|slash` is one arm, so a slash typed via send reaches the REPL."
+    },
+    "codex": {
+      "elicits": ["send", "slash", "wait_turn", "interrupt", "keys", "sleep", "restart", "resume", "reset_session", "fork", "sigkill", "exit_clean", "start_session", "session"],
+      "slash_requires_step_type": false,
+      "notes": "Full tmux-TUI driver (claudecode set + fork)."
+    },
+    "pi": {
+      "elicits": ["send", "slash", "wait_turn", "interrupt", "sleep"],
+      "slash_requires_step_type": false,
+      "notes": "tmux-TUI driver. No `keys` arm — the /tree picker (checkpoint-rewind) needs arrow-key navigation it cannot elicit; that cell is a driver_gap awaiting `keys` via extend-driver."
+    },
+    "aider": {
+      "elicits": ["send", "slash", "wait_turn", "interrupt", "sleep"],
+      "slash_requires_step_type": false,
+      "notes": "tmux-TUI driver."
+    },
+    "opencode": {
+      "elicits": ["send", "wait_turn", "sleep", "slash", "reset_session"],
+      "slash_requires_step_type": true,
+      "notes": "Hybrid driver. Headless `opencode run` (send/wait_turn/sleep) ignores in-REPL slash commands — it stores a leading-slash text as a literal user message. The live-TUI path (run_live, #495) genuinely elicits slash/reset_session, but ONLY when the recipe uses those STEP TYPES; a bare send \"/cmd\" never reaches the REPL, so slash_requires_step_type is true."
+    }
+  }
+}

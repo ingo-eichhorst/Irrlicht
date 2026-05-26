@@ -76,11 +76,44 @@ assert_eq "gap cell → reports the two missing primitives" \
 recipe_lint_gaps "$TMP/drive-fake-interactive.sh" "$TMP/scenarios.json" headless fake >/dev/null
 assert_eq "headless cell → rc 0 (no script, no gap)" "0" "$?"
 
+echo "== recipe_semantic_gaps: accepts-vs-elicits + slash-in-send (#496 RC3) =="
+# Manifest fixture: fake elicits send/sleep/wait_turn but NOT slash (the driver
+# dispatches slash but doesn't elicit it), and requires a dedicated slash step.
+cat > "$TMP/manifest.json" <<'JSON'
+{"adapters":{"fake":{"elicits":["send","sleep","wait_turn"],"slash_requires_step_type":true}}}
+JSON
+# A cell that drives a `slash` step (in grammar, NOT elicited) and a send-text
+# slash command (the no-op trap).
+cat > "$TMP/sem.json" <<'JSON'
+{"scenarios":[
+  {"name":"clean","by_adapter":{"fake":{"script":[{"type":"send","text":"hi"},{"type":"wait_turn"}]}}},
+  {"name":"slash-step","by_adapter":{"fake":{"script":[{"type":"slash","text":"/new"},{"type":"wait_turn"}]}}},
+  {"name":"send-slash","by_adapter":{"fake":{"script":[{"type":"send","text":"/undo"},{"type":"wait_turn"}]}}}
+]}
+JSON
+recipe_semantic_gaps "$TMP/manifest.json" "$TMP/sem.json" clean fake >/dev/null
+assert_eq "clean cell → rc 0 (every step elicited)" "0" "$?"
+out="$(recipe_semantic_gaps "$TMP/manifest.json" "$TMP/sem.json" slash-step fake)"; rc=$?
+assert_eq "slash step not in elicits → rc 1" "1" "$rc"
+assert_eq "slash step → not-elicited:slash" "not-elicited:slash" "$out"
+out="$(recipe_semantic_gaps "$TMP/manifest.json" "$TMP/sem.json" send-slash fake)"; rc=$?
+assert_eq "send-text slash on slash_requires adapter → rc 1" "1" "$rc"
+assert_eq "send-slash → slash-in-send:/undo" "slash-in-send:/undo" "$out"
+recipe_semantic_gaps "$TMP/scenarios.json" "$TMP/sem.json" clean fake >/dev/null   # absent manifest entry path
+assert_eq "adapter absent from manifest → rc 0 (grammar-only)" "0" \
+  "$(recipe_semantic_gaps "$TMP/no-such-manifest.json" "$TMP/sem.json" slash-step fake >/dev/null; echo $?)"
+
 echo "== CLI exit codes =="
 bash "$DIR/recipe-lint.sh" "$TMP/scenarios.json" ok-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
-assert_eq "CLI ok-cell → exit 0" "0" "$?"
+assert_eq "CLI ok-cell → exit 0 (fake absent from real manifest → grammar-only)" "0" "$?"
 bash "$DIR/recipe-lint.sh" "$TMP/scenarios.json" gap-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
 assert_eq "CLI gap-cell → exit 3 (driver_gap)" "3" "$?"
+bash "$DIR/recipe-lint.sh" "$TMP/sem.json" slash-step fake "$TMP/drive-fake-interactive.sh" "$TMP/manifest.json" >/dev/null 2>&1
+assert_eq "CLI semantic gap → exit 4" "4" "$?"
+bash "$DIR/recipe-lint.sh" "$TMP/scenarios.json" headless fake "$TMP/drive-fake-interactive.sh" "$TMP/manifest.json" >/dev/null 2>&1
+assert_eq "CLI no-recipe-step (headless prompt) → exit 0" "0" "$?"
+bash "$DIR/recipe-lint.sh" "$TMP/sem.json" no-such-cell fake "$TMP/drive-fake-interactive.sh" "$TMP/manifest.json" >/dev/null 2>&1
+assert_eq "CLI absent cell (no by_adapter entry) → exit 0 with note" "0" "$?"
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then

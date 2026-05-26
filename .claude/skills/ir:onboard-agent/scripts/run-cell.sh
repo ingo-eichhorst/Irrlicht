@@ -137,11 +137,21 @@ if [[ -n "$SCRIPT_JSON" ]]; then
   # shellcheck source=lib/recipe-lint.sh
   . "$SCRIPT_DIR/lib/recipe-lint.sh"
   LINT_DRIVER="$SCRIPT_DIR/drive-$ADAPTER-interactive.sh"
+  LINT_MANIFEST="$SCRIPT_DIR/lib/elicitable-primitives.json"
   if LINT_GAPS="$(recipe_lint_gaps "$LINT_DRIVER" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
     echo "driver_gap: $ADAPTER/$SCENARIO needs step type(s) drive-$ADAPTER-interactive.sh doesn't implement:" >&2
     printf '  - gap:%s\n' $LINT_GAPS >&2
-    echo "Extend the driver (developer task) or mark the cell applicable:false — not recording." >&2
+    echo "Queue extend-driver $ADAPTER <primitive> (ports the step type), then implement — not recording yet." >&2
     exit 3
+  fi
+  # Semantic backstop (#496 RC3): a step the driver ACCEPTS but doesn't ELICIT
+  # (or a slash command in send-text on a slash-requires adapter) would record
+  # a no-op. Refuse before burning a daemon + CLI.
+  if SEM_GAPS="$(recipe_semantic_gaps "$LINT_MANIFEST" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
+    echo "semantic_gap: $ADAPTER/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per elicitable-primitives.json):" >&2
+    printf '  - %s\n' $SEM_GAPS >&2
+    echo "Fix the recipe (use a dedicated slash/reset_session step) or extend the driver to truly elicit it — not recording." >&2
+    exit 4
   fi
 fi
 
