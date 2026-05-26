@@ -1673,8 +1673,55 @@
           "scope_note": "Coverage matrix declares aider supports=no for session-reset: aider has /clear (clears chat history) but it does NOT mint a new session id — there is no aider session-id concept. Closing aider creates a fresh `.aider.chat.history.md` on next launch but that's session-end + session-start, not session-reset."
         },
         "opencode": {
-          "applicable": false,
-          "notes": "driver_gap (gap:slash-command, equivalently gap:reset_session). agent_supports:yes — opencode's TUI ships a /new reset (binary carries `session.new` / `New session`), and the daemon (ProcessOwnedStore/SQLite) observes a fresh ses_… in ready exactly as the session-resume cell proves. NOT recordable: drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (handles only send|wait_turn|sleep) and (1) headless `opencode run` IGNORES in-TUI slash commands — PROBED 2026-05-26: `opencode run \"/new\"` stored the literal `/new` as a normal user message in ONE ses_… row, no reset — and (2) the driver has no reset_session step to detect a /new-spawned second ses_… and re-point subsequent turns at it (no session.uuids PLURAL list). session-reset needs a live-REPL opencode driver (reset_session primitive); recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full target supersession arc; assessment.json carries the yes / full / gap:slash-command verdict + the probe evidence."
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.14.50. The session-reset arc is model-agnostic; the dev env's default is a local LM Studio model, which is fine.",
+            "irrlichd is recording — run-cell.sh isolated mode, or --attach against a daemon started with --record.",
+            "LIVE-TUI cell: drive-opencode-interactive.sh routes any recipe carrying a reset_session step to its tmux TUI path, because headless `opencode run` stores a slash command as literal prompt text (PROBED 2026-05-26: `opencode run \"/new\"` minted ONE ses_… and stored `/new` as a user message). tmux must be on PATH."
+          ],
+          "setup": [
+            "Driver launches the opencode TUI in a fresh per-run cwd under <staging>/cwd/; opencode keys sessions on the cwd in its SQLite store, isolating this run's rows even alongside other opencode use.",
+            "opencode mints its own ses_… per session. The first prompt materializes ses_1; an in-TUI `/new` clears the conversation and the first prompt AFTER it materializes a fresh ses_2 under the SAME process. The driver enumerates both top-level ses_… rows for the cwd and emits the multi-session contract (session.uuids / transcript.paths), so curate includes the pre- AND post-reset sessions."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the FIRST ses_… session entering ready, then a working→ready turn (turn 1, 'ok')",
+            "after /new, the first post-reset prompt mints a DIFFERENT ses_… in ready (new session row, no turn-1 history) — the 'old session disappears / new session appears' reset, observed live; opencode retires the old row via the same-PID cleanup like the codex/pi supersession shape",
+            "the second working→ready cycle is on the NEW ses_… session, not the old one",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },
