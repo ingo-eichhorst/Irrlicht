@@ -80,6 +80,43 @@ func TestParser_BackgroundSpawn_FromResultText(t *testing.T) {
 	}
 }
 
+// TestParser_BackgroundSpawn_OutputPathIsStatable closes the parser↔probe
+// contract that the trailing-period bug broke: the path extracted from Claude's
+// launch text must be the real on-disk file, because the daemon's lsof liveness
+// probe (anyLiveOutputWriter) checks that exact path. A corrupted "…output."
+// path is silently un-stat-able, so lsof finds no writer and a still-running
+// background session flips to `ready`. This asserts a real file embedded in the
+// full launch sentence round-trips back to a path os.Stat can resolve — the
+// property the probe relies on, expressed without a live process. See #445.
+func TestParser_BackgroundSpawn_OutputPathIsStatable(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "tasks", "bc1h56v8v.output")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(out, []byte("partial output\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// The exact shape Claude Code writes: the path mid-sentence, trailing prose.
+	text := "Command running in background with ID: bc1h56v8v. Output is being written to: " +
+		out + ". You will be notified when it completes. To check interim output, use Read on that file path."
+	ev := (&Parser{}).ParseLine(bgSpawnResult("toolu_1", "bc1h56v8v", text))
+	if len(ev.BackgroundSpawns) != 1 {
+		t.Fatalf("BackgroundSpawns = %d, want 1", len(ev.BackgroundSpawns))
+	}
+
+	got := ev.BackgroundSpawns[0].OutputPath
+	if got != out {
+		t.Errorf("OutputPath = %q, want %q", got, out)
+	}
+	// The decisive assertion: the recorded path must resolve to the real file.
+	// With the trailing period left in ("…output."), this os.Stat fails — which
+	// is exactly how lsof misses the live writer in production.
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("recorded path is not stat-able (lsof probe would miss the live writer): %v", err)
+	}
+}
+
 func TestParser_NoPhantomSpawnFromArbitraryText(t *testing.T) {
 	p := &Parser{}
 	// The same launch phrase, but with NO structured toolUseResult.backgroundTaskId
