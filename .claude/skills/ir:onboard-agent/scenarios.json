@@ -3249,8 +3249,59 @@
           "notes": "Pi difference vs claudecode: pi's /compact appends a single top-level {type:\"compaction\",summary,...} entry to the SAME rollout file (session-manager.js appendCompaction → _appendEntry on the current leaf — NO newSession()), so the whole scenario stays on ONE session UUID — there is no boundary transcript (unlike claudecode 2.1.x) and no supersession (unlike pi /new). The pi parser (parser.go:55-60) maps the compaction event to EventType:\"assistant\" (active model work, ready→working), so the daemon sees it as an ordinary working→ready arc on the same session. irrlicht cannot LABEL the turn as compaction (CompactionState is dead code; the parser collapses it into a generic assistant activity), so the recipe asserts only the visible state arc — priming working→ready, a compaction working→ready arc on the same session, post-compaction working→ready, no waiting. DRIVER-SYNC (load-bearing): /compact writes a `compaction` entry, NOT an assistant stopReason==stop message, so drive-pi-interactive.sh's turn-counter does NOT increment for it. A counted wait_turn after /compact would inflate EXPECTED_TURNS by 1 and force a driver timeout (proven by a standalone probe). So the recipe deliberately uses NO wait_turn after /compact: it sleeps 14s over the real ~8s compaction summarization round (separated from the priming ready by a 3s sleep so the compaction registers as its OWN working blip), then issues the post-compaction prompt and ends on a 7s trailing sleep (NO final wait_turn) to flush that turn's working→ready arc and the post-turn ready dwell before the tmux teardown. Only send/slash/wait_turn/sleep are used — all already implemented by the pi driver; no driver extension needed. WHY interactive (not headless pi --print): a slash command only exists inside the REPL; headless pi is single-shot. WHY manual /compact (not auto): automatic compaction fires only on context-window pressure and is not deterministically reproducible in a bounded recording; manual /compact produces the identical {type:\"compaction\"} entry deterministically. C7 / SESSION-IDENTITY: session_birth matches the transient proc-<PID> pre-session born at launch; prime_start anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout, since the pre-session never goes working); compaction_start anchors to prime_end so it binds the post-priming working arc; every later phase pins to prime_start via same_session_as. Between runs: assistant wording, the summary text, per-turn/compaction token counts, session UUID, PID and timestamps differ; pi may flush a turn as one OR two bursts — the structural baseline is a priming working→ready arc + a compaction working→ready arc + a post-compaction working→ready arc on one rollout session_id, no waiting, a single process_exited, final ready. If it broke, look at core/adapters/inbound/agents/pi/parser.go (eventType==\"compaction\" → assistant) and whether a pi update changed where /compact writes the compaction entry (e.g. into a new session file)."
         },
         "opencode": {
-          "applicable": false,
-          "notes": "DRIVER GAP (gap:slash-command). /compact (and its sibling /summarize) are in-TUI slash commands; headless `opencode run` stores them as literal user text — proven this sweep with inline /model AND /new (both stored as ordinary user message content with no command effect). context-compaction needs a live-REPL opencode driver to fire the in-TUI command after a priming turn. drive-opencode-interactive.sh handles only send|wait_turn|sleep (no slash/keys step), so the recipe-lint reports gap:slash-command. NOT an agent or daemon limitation: opencode ships /compact + /summarize (slash_commands: true), and the daemon (lone ProcessOwnedStore adapter) reads per-turn session state from the SQLite store, so an in-place /compact turn WOULD surface as a ready→working→ready arc on the same session — see assessment.json (agent_supports: yes, daemon_capability: full, driver_capability: gap:slash-command). expected.jsonl is committed as the documented target. UNBLOCK: add a live-REPL/slash primitive to the opencode driver (tmux send-keys, like claudecode/codex/pi)."
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.14.50. The compaction arc is model-agnostic; the dev env's default is a local LM Studio model (gemma-4-e2b), which is fine but slow (~30-60s/turn).",
+            "irrlichd is recording — run-cell.sh isolated/coexist mode, or --attach against a daemon started with --record.",
+            "LIVE-TUI cell: drive-opencode-interactive.sh routes any recipe carrying a `slash` step to its tmux TUI path (run_live), because headless `opencode run` stores a slash command as literal prompt text. /summarize must execute IN the live REPL to run the summarization round. tmux must be on PATH.",
+            "opencode version with /summarize manual compaction — confirmed v1.14.50 (command.session.compact + /summarize slash literal + session_compact keybind in the binary)."
+          ],
+          "setup": [
+            "Driver launches the opencode TUI in a fresh per-run cwd under <staging>/cwd/; opencode keys sessions on the cwd in its SQLite store, isolating this run's rows even alongside other opencode use.",
+            "opencode mints its own ses_… for the session; both priming turns AND the /summarize compaction round happen IN PLACE on that one ses_… (no new session — distinct from session-reset's /new). The driver enumerates the cwd's top-level ses_… rows; in-place compaction leaves exactly one, so the multi-session contract (session.uuids / transcript.paths) carries a single session."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/summarize"
+            },
+            {
+              "type": "sleep",
+              "seconds": 75
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… session entering ready after launch, then two priming turns (working→ready, 'one' then 'two') on the SAME ses_…",
+            "after /summarize runs, events.jsonl shows ANOTHER ready→working→ready arc on the SAME ses_… (the summarization round is an in-place LLM turn that lands a step-finish reason=stop part — opencode compacts in place, NO new session)",
+            "no state_transition to waiting appears anywhere in the recording",
+            "after the compaction arc the session holds ready (no stuck working); final live state is ready",
+            "exactly ONE distinct ses_… session_id appears (in-place compaction mints no new session — distinct from session-reset's /new)"
+          ],
+          "settings": {},
+          "timeout_seconds": 360,
+          "notes": "opencode in-place compaction via the /summarize slash command. The whole observable is THREE working→ready arcs on ONE ses_…: two priming turns ('one','two') populate context, then /summarize runs an in-place LLM summarization round that surfaces as a third working→ready arc. opencode is the lone ProcessOwnedStore adapter — the daemon reads per-turn state from the SQLite store (watcher.go scanParts), and parser.go's parseStepFinish maps the summarization step-finish (reason=stop) to turn_done, so the daemon sees an ordinary working→ready arc on the SAME session. irrlicht's CompactionState field is dead code, so the compaction-vs-normal-turn LABEL is not surfaced — the recipe asserts only the visible state arc. WHY a `slash` step and NOT a `send`: headless `opencode run -- \"/summarize\"` stores /summarize as literal user prompt text (no command effect); the driver routes any `slash` step to run_live() which delivers it to the live TUI via tmux send-keys -l + Enter (oc_flush composer-clear confirmation). WHY NO wait_turn AFTER /summarize: the driver's `slash` arm does NOT re-snapshot TURN_BASELINE (only `send` does), so a wait_turn after a slash would compare the terminal step-finish total against the SECOND priming turn's baseline — already exceeded — and return immediately (a no-op), never actually waiting for the summarization round. Worse, embedding a send-after-slash re-introduces the slash→send composer-coalescing race that degraded checkpoint-rewind to applicable:false. So /summarize is the LAST input and is followed by a generous 75s trailing sleep — long enough for the slow local model's summarization round to complete (~30-60s) and for the daemon to observe the full working→ready arc plus the post-compaction ready dwell before tmux teardown. WHY manual /summarize (not auto-compaction): auto-compaction fires only on context-window overflow (isOverflow) and is not deterministically reproducible in a bounded recording; manual /summarize runs the identical summarization round deterministically. SINGLE session, no multi-session chain (unlike session-reset's /new): in-place compaction leaves exactly one ses_… for the cwd. What differs between runs: PID/timestamps/token counts, the assistant wording of the priming replies, the summary text, and the per-turn wall-clock latency (~30-60s on the local model). What must NOT differ: three working→ready arcs on one ses_… session (two priming + one compaction), no waiting, ending ready. Where to look if it broke: core/adapters/inbound/agents/opencode/parser.go (parseStepFinish reason=stop → turn_done) and watcher.go (scanParts step-finish detection); if /summarize stopped producing a terminal step-finish (e.g. an opencode update routed it through CompactionPart without a stop reason), the compaction arc would not register and the cell would need re-assessment."
         }
       }
     },
