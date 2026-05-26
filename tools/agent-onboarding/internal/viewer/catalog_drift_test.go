@@ -159,6 +159,58 @@ func TestTransportAxis(t *testing.T) {
 	}
 }
 
+// TestCatalogRollupBijection guards the catalog ⟺ rollup leg (#496 RC5): the
+// overview renders rows from scenarios.json catalog[], and overlays editorial
+// coverage from agent-scenarios-coverage.json. A rollup row naming no catalog
+// cell is a phantom; a catalog cell with no rollup row renders with no coverage
+// data. Either is drift the prose `comm` check only printed — this fails it.
+func TestCatalogRollupBijection(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	skill := filepath.Join(root, ".claude", "skills", "ir:onboard-agent")
+
+	cb, err := os.ReadFile(filepath.Join(skill, "scenarios.json"))
+	if err != nil {
+		t.Skipf("scenarios.json not reachable: %v", err)
+	}
+	var sdoc struct {
+		Catalog []struct {
+			ID string `json:"id"`
+		} `json:"catalog"`
+	}
+	if err := json.Unmarshal(cb, &sdoc); err != nil {
+		t.Fatalf("parse scenarios.json: %v", err)
+	}
+	rb, err := os.ReadFile(filepath.Join(skill, "agent-scenarios-coverage.json"))
+	if err != nil {
+		t.Skipf("agent-scenarios-coverage.json not reachable: %v", err)
+	}
+	var rdoc struct {
+		Scenarios []struct {
+			ID string `json:"id"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(rb, &rdoc); err != nil {
+		t.Fatalf("parse agent-scenarios-coverage.json: %v", err)
+	}
+
+	catalog := make(map[string]bool, len(sdoc.Catalog))
+	for _, c := range sdoc.Catalog {
+		catalog[c.ID] = true
+	}
+	rollup := make(map[string]bool, len(rdoc.Scenarios))
+	for _, s := range rdoc.Scenarios {
+		rollup[s.ID] = true
+		if !catalog[s.ID] {
+			t.Errorf("rollup id %q has no catalog[] row (phantom editorial cell)", s.ID)
+		}
+	}
+	for id := range catalog {
+		if !rollup[id] {
+			t.Errorf("catalog[] row %q is missing from the rollup — renders with no editorial coverage; add a row to agent-scenarios-coverage.json", id)
+		}
+	}
+}
+
 func keysOf(m map[string]bool) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {

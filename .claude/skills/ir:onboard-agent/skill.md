@@ -149,22 +149,24 @@ comm -23 \
 # any output = a scenario requires an unknown capability — block and report it.
 ```
 
-Also confirm the two catalogs agree — `scenarios.json` vs the coverage
-rollup — so no cell is orphaned or unmapped:
+Then run the **catalog-drift gate** — it enforces the bijection across the
+catalogs (`catalog[]` ⟺ rollup, and every `scenarios[]` recipe + rollup
+row names a real `catalog[]` cell) and **fails** on drift instead of just
+printing it (#496 RC5). It also lists catalog cells still awaiting a
+recipe (a tracked TODO, not a failure) and checks the `.specs` source
+catalog when present:
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
-# coverage_ids referenced by scenarios.json but ABSENT from the rollup matrix:
-comm -23 \
-  <(jq -r '.scenarios[].coverage_id' $SK/scenarios.json | sort -u) \
-  <(jq -r '.scenarios[].id'          $SK/agent-scenarios-coverage.json | sort -u)
-# rollup ids with NO recipe row in scenarios.json (orphan coverage cells):
-comm -13 \
-  <(jq -r '.scenarios[].coverage_id' $SK/scenarios.json | sort -u) \
-  <(jq -r '.scenarios[].id'          $SK/agent-scenarios-coverage.json | sort -u)
-# either output = catalog drift: a name maps to a missing coverage cell, or a
-# coverage cell has no recipe. Surface it; don't silently sweep around it.
+bash $SK/scripts/lib/catalog-drift.sh          # exit 1 ⇒ drift; --stub emits
+                                               # paste-ready scenarios[] rows
 ```
+
+A non-zero exit is a hard stop — a recipe or rollup row points at a
+phantom cell, or a catalog cell is invisible to the rollup. Fix it (add
+the catalog/rollup/recipe row) before proceeding; don't sweep around it.
+The Go `TestCatalogRollupBijection` + `TestScenarioCatalogNoDrift` pin the
+same invariants in CI.
 
 Several `name`s legitimately share one `coverage_id` (recipe variants of the
 same canonical cell) — the matrix axis is the coverage id, not the name.

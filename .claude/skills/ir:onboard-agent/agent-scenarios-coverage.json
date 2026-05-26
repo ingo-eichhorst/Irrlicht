@@ -1461,6 +1461,30 @@
       }
     },
     {
+      "id": "subscription-detection",
+      "section": "Metrics",
+      "feature": "Subscription / billing-model detection",
+      "coverage": {
+        "claudecode": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
+        "codex": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
+        "pi": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
+        "aider": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
+        "opencode": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"}
+      }
+    },
+    {
+      "id": "quota-burndown",
+      "section": "Metrics",
+      "feature": "Quota burndown (rate-limit usage)",
+      "coverage": {
+        "claudecode": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
+        "codex": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
+        "pi": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
+        "aider": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
+        "opencode": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"}
+      }
+    },
+    {
       "id": "task-list",
       "section": "Turn shape",
       "feature": "Structured task list / TODO tracking",
