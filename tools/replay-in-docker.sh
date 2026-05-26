@@ -13,7 +13,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
-DOCKERFILE="docker/linux-replay.Dockerfile"
+DOCKERFILE="tools/linux-replay.Dockerfile"
 
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 
