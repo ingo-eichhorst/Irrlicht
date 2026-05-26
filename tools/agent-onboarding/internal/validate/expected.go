@@ -159,10 +159,28 @@ type recordedEvent struct {
 // events.jsonl — so a partial recording can't masquerade as a pass
 // (#496 RC6).
 func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
-	return ValidateExpectedAgainst(
-		filepath.Join(scenarioDir, "expected.jsonl"),
-		filepath.Join(scenarioDir, "events.jsonl"),
-	)
+	expectedPath := filepath.Join(scenarioDir, "expected.jsonl")
+	eventsPath := filepath.Join(scenarioDir, "events.jsonl")
+	// HALF-recorded guard (#496 RC6) — scoped to the CELL path here, NOT to
+	// ValidateExpectedAgainst (the viewer's archive-drift evaluator, which must
+	// keep its silent skip so a missing-events archive isn't reported as a
+	// spurious "re-record" error). A committed cell with expected.jsonl + a
+	// transcript but no events.jsonl is a partial recording; returning (nil,nil)
+	// made replay-fixtures report a vacuous PASS (opencode/task-list).
+	if _, err := os.Stat(expectedPath); err == nil {
+		if _, err := os.Stat(eventsPath); err != nil {
+			for _, t := range []string{"transcript.jsonl", "transcript.md"} {
+				if _, terr := os.Stat(filepath.Join(scenarioDir, t)); terr == nil {
+					return nil, fmt.Errorf(
+						"incomplete recording: %s present but events.jsonl missing — "+
+							"the cell has a spec and a transcript but no captured events; "+
+							"re-record it (run-cell.sh) so validation isn't silently skipped",
+						t)
+				}
+			}
+		}
+	}
+	return ValidateExpectedAgainst(expectedPath, eventsPath)
 }
 
 // ValidateExpectedAgainst runs the validator with explicitly named
@@ -177,26 +195,11 @@ func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, 
 		return nil, nil // not configured for this scenario
 	}
 	if _, err := os.Stat(eventsPath); err != nil {
-		// events.jsonl absent. Two very different cases:
-		//   - genuinely no recording yet (applicable:false: spec committed,
-		//     driver can't produce a recording today) → nothing to validate,
-		//     return (nil, nil) like a missing expected.jsonl.
-		//   - a recording WAS promoted (a transcript sits next to where
-		//     events.jsonl should be) but events.jsonl was never captured →
-		//     a HALF-recorded cell. Returning (nil, nil) here made
-		//     replay-fixtures report a vacuous PASS for it (#496 RC6:
-		//     opencode/task-list). Fail loudly instead.
-		dir := filepath.Dir(eventsPath)
-		for _, t := range []string{"transcript.jsonl", "transcript.md"} {
-			if _, terr := os.Stat(filepath.Join(dir, t)); terr == nil {
-				return nil, fmt.Errorf(
-					"incomplete recording: %s present but events.jsonl missing — "+
-						"the cell has a spec and a transcript but no captured events; "+
-						"re-record it (run-cell.sh) so validation isn't silently skipped",
-					t)
-			}
-		}
-		return nil, nil // no transcript either — genuinely nothing recorded yet
+		// events.jsonl not captured yet — same shape as no expected.jsonl. The
+		// half-recorded (transcript-but-no-events) guard lives in ValidateExpected
+		// (the cell path); this archive-drift evaluator keeps the silent skip so a
+		// missing-events archive isn't reported as a spurious error (#496 RC6).
+		return nil, nil
 	}
 	meta, phases, err := loadExpected(expectedPath)
 	if err != nil {

@@ -127,8 +127,15 @@ types from its `case "$type"` arms and checks them against the recipe:
 ```bash
 SK=.claude/skills/ir:onboard-agent
 $SK/scripts/lib/recipe-lint.sh $SK/scenarios.json <scenario> <agent>
-# exit 0 = in grammar (proceed); exit 3 = driver_gap (prints the gap:* list)
+# exit 0 = clean (proceed); exit 3 = driver_gap (missing step type → extend-driver);
+# exit 4 = semantic_gap (a step the driver accepts but doesn't elicit, or a
+#          slash command in send-text on a slash-requires adapter — #496 RC3)
 ```
+
+An **exit 4 (semantic_gap)** means the recipe is wrong, not the driver: use a
+dedicated `slash`/`reset_session` step instead of embedding the slash command
+in `send` text, or (if the primitive genuinely isn't elicited yet) queue
+`extend-driver`. Fix the recipe and re-lint; do NOT record a no-op.
 
 `run-cell.sh` runs this same lint and refuses with exit 3, so it's a true
 backstop — but check here first to avoid an `implement` round-trip. If it
@@ -203,6 +210,7 @@ doubt run `$SK/scripts/lib/classify-failure.sh <STAGING>` (codes:
 | manifest `verdict: STAGED` (success) | proceed to step 6 |
 | `run-cell.sh` **exit 2** with "cross-adapter" / "record it with run-cell-multi.sh" | re-record via `run-cell-multi.sh <scenario>` (see above) — NOT a cell failure |
 | `run-cell.sh` **exit 3** "driver_gap" | the recipe needs a step type the driver lacks — return **`driver_gap`** (you should have caught this in step 3); do NOT retry |
+| `run-cell.sh` **exit 4** "semantic_gap" | the recipe uses a step the driver accepts but doesn't elicit (e.g. slash-in-send) — fix the recipe (dedicated `slash`/`reset_session` step) or queue `extend-driver`; you should have caught this in step 3; do NOT retry |
 | `timeout` / `transcript_missing`, **first** time | **retry once** — re-run the same `run-cell.sh --attach`. Often a lazy-transcript nudge or trailing-sleep timing issue. |
 | `timeout` / `transcript_missing`, **second** time | degrade → **`applicable_false`** (see below) |
 | `cli_not_found` / `cli_too_old` / `auth_failed` / daemon-not-running | **`infra_fail`** — environment problem, not a cell verdict. Don't retry, don't mark applicable_false. Tree is already clean (spec+recipe committed). Return. |

@@ -13,11 +13,18 @@
 #   chmod +x scripts/drive-<agent>-interactive.sh
 # Then fill the three AGENT-SPECIFIC SEAMS marked TODO(__AGENT__) below by
 # porting from the reference drivers (drive-claudecode-interactive.sh, the
-# fullest; drive-codex-interactive.sh adds `fork`). Leave a step type's arm as
-# the stub until you implement it — recipe-lint will report it as a driver_gap
-# and the elicitable-primitives manifest (lib/elicitable-primitives.json) must
-# list only the step types you ACTUALLY elicit, so a stubbed arm shows up as a
-# semantic gap rather than silently recording a no-op.
+# fullest; drive-codex-interactive.sh adds `fork`).
+#
+# IMPORTANT — how a stubbed arm is caught: every standard arm is PRESENT here
+# (so recipe-lint's GRAMMAR check treats it as handled and will NOT report a
+# driver_gap for it). The real backstop is the SEMANTIC lint: add your <agent>
+# entry to lib/elicitable-primitives.json listing ONLY the step types you
+# actually elicit, and recipe-lint flags any recipe needing a stubbed-but-
+# unlisted primitive as a semantic_gap (exit 4) BEFORE recording. Until that
+# manifest entry exists, the only safety net is the runtime `not_implemented`
+# stub — which aborts AFTER spinning up a daemon + CLI — so add the manifest
+# entry the moment you scaffold (discovery-instructions.md §"Scaffold the
+# per-adapter driver" step 2).
 #
 # Standard step types (port each from the reference driver):
 #   send / slash   — type text + Enter (slash is the same keystrokes)
@@ -76,7 +83,7 @@ mkdir -p "$RUN_CWD"
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
-SESSION="__AGENT__drv-$$-$(date +%s)"
+SESSION=""
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
 
@@ -86,16 +93,28 @@ not_implemented() { # <step-type>
   return 3
 }
 
+# Always honor the staging contract: write driver.exit-reason on ANY exit
+# (including a `set -e` abort mid-launch) and tear tmux down if a session was
+# started. Set EXIT_REASON before a failing `exit` so the reason is accurate.
+cleanup() {
+  [[ -n "$SESSION" ]] && tmux kill-session -t "$SESSION" 2>/dev/null || true
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+trap cleanup EXIT
+
 # --- AGENT-SPECIFIC SEAM 1: launch the REPL under tmux -----------------------
 # Port from the reference driver. Start the agent in a detached tmux session in
 # $RUN_CWD, capturing stdout/stderr to "$DRIVER_LOG.stdout|.stderr". Pass the
-# preferred UUID if the agent accepts one. Always tear the session down on exit.
+# preferred UUID if the agent accepts one. The cleanup trap above tears it down.
 launch_repl() {
-  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; echo "nonzero(2)" > "$STAGING/driver.exit-reason"; exit 1; }
+  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  SESSION="__AGENT__drv-$$-$(date +%s)"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
+  # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
+  # an accurate exit-reason — the cleanup trap then records nonzero(2).
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$RUN_CWD" "__AGENT__" \
-    >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr"
-  trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true' EXIT
+    >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr" \
+    || { echo "[driver] failed to launch __AGENT__ under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   : # TODO(__AGENT__): resolve & record SESSION_ID + transcript path (SEAM 3) once the session is live
 }
 
@@ -138,8 +157,9 @@ while IFS= read -r step; do
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 
 # --- Write the staging contract ----------------------------------------------
-echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
-# TODO(__AGENT__): write session.uuid(s) + transcript.path(s) the daemon keyed on,
-# exactly like the reference driver (single-session: session.uuid + transcript.path;
-# multi-session reset/restart/start: session.uuids + transcript.paths, one per line).
+# driver.exit-reason is written by the cleanup trap on exit (so it's recorded
+# even on an early failure). TODO(__AGENT__): write session.uuid(s) +
+# transcript.path(s) the daemon keyed on, exactly like the reference driver
+# (single-session: session.uuid + transcript.path; multi-session
+# reset/restart/start: session.uuids + transcript.paths, one per line).
 [[ "$EXIT_REASON" == "ok" ]] && exit 0 || exit 1

@@ -206,13 +206,22 @@ while IFS= read -r expected_path; do
   # daemon-side gap doesn't block the test suite. The Go test does
   # the same; this script mirrors the policy.
   known_failing="$(head -n1 "$expected_path" | jq -r '.known_failing // false' 2>/dev/null || echo false)"
-  if go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1; then
+  # Capture the exit code: 0 = pass, 1 = validation failed, 2 = internal error
+  # (malformed expected.jsonl OR a half-recorded cell — #496 RC6). known_failing
+  # only excuses a validation FAILURE (exit 1, a daemon gap); it must NOT excuse
+  # an internal error (exit 2) — an incomplete/broken fixture always fails.
+  go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1
+  ev_rc=$?
+  if [[ "$ev_rc" -eq 0 ]]; then
     if [[ "$known_failing" == "true" ]]; then
       echo "expected: ${agent}/${scenario} PASS (was known_failing — drop the flag from expected.jsonl)" >&2
       expected_failures=$((expected_failures + 1))
     else
       echo "expected: ${agent}/${scenario} PASS" >&2
     fi
+  elif [[ "$ev_rc" -eq 2 ]]; then
+    echo "expected: ${agent}/${scenario} ERROR (incomplete/malformed fixture — see $report_json; known_failing does NOT excuse this)" >&2
+    expected_failures=$((expected_failures + 1))
   else
     if [[ "$known_failing" == "true" ]]; then
       echo "expected: ${agent}/${scenario} known_failing (validation FAIL is expected; see meta.notes)" >&2

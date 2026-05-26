@@ -33,15 +33,21 @@
 #     applicable; no `requires_transport` ⇒ any transport.
 cg_applicable_coverage_ids() {
   local json="$1" caps="$2"
+  # Applicability is computed PER recipe variant, then a coverage_id is
+  # applicable iff ANY of its variants is. (Unioning requires across variants
+  # and AND-ing would wrongly drop a cell whose one applicable variant has a
+  # sibling needing an unmet feature/transport.)
   jq -r --slurpfile c "$caps" '
     (($c[0].features) // {}) as $f
     | (($c[0].transport) // "") as $t
-    | [ .scenarios[] | {cid: .coverage_id, req: (.requires // []), tr: (.requires_transport // [])} ]
+    | [ .scenarios[]
+        | {cid: .coverage_id, req: (.requires // []), tr: (.requires_transport // [])}
+        | .applic = ((.req | all(. as $k | $f[$k] == true))
+                     and (.tr | length == 0 or any(. == $t))) ]
     | group_by(.cid)
-    | map({cid: .[0].cid, req: (map(.req) | add | unique), tr: (map(.tr) | add | unique)})
-    | map(select(.req | all(. as $k | $f[$k] == true)))
-    | map(select(.tr | length == 0 or any(. == $t)))
-    | .[].cid
+    | map(select(any(.[]; .applic)))
+    | map(.[0].cid)
+    | .[]
   ' "$json" 2>/dev/null | sort -u
 }
 
@@ -83,15 +89,25 @@ cg_disposition() {
     jq -r '[.agent_supports, .daemon_capability, .driver_capability] | @tsv' \
       "$assess" 2>/dev/null)
 
+  # Malformed/keyless assessment.json → jq yields empty fields. Treat as
+  # unassessed (re-assess) rather than letting it fall through to a misleading
+  # assessed_not_recorded (which would say "implement" for a broken file).
+  [[ -z "$supports$daemon$driver" ]] && { echo unassessed; return 0; }
+
   # 3. frozen by capability (agent can't, or daemon can't observe / inconclusive).
   case "$supports" in no|unknown) echo applicable_false; return 0 ;; esac
   case "$daemon" in incapable|n/a|"n/a") echo applicable_false; return 0 ;; esac
 
-  # 4. degraded out at record time (by_adapter recipe marked applicable:false).
+  # 4. degraded out at record time — ALL of the agent's recipe variants are
+  #    applicable:false (none is recordable). `any` would wrongly freeze a cell
+  #    that still has a recordable sibling variant.
+  # NB: `.applicable // true` is WRONG here — jq's `//` treats `false` as empty,
+  # so it would yield true for {applicable:false}. Test explicit `== false`.
   local recipe_false
   recipe_false="$(jq -r --arg cid "$cid" --arg a "$agent" '
-    [ .scenarios[] | select(.coverage_id==$cid)
-      | .by_adapter[$a].applicable ] | any(. == false)' "$json" 2>/dev/null)"
+    [ .scenarios[] | select(.coverage_id==$cid) | .by_adapter[$a]
+      | select(. != null) | (.applicable == false) ] as $v
+    | ($v | length) > 0 and ($v | all)' "$json" 2>/dev/null)"
   [[ "$recipe_false" == "true" ]] && { echo applicable_false; return 0; }
 
   # 5. driver gap — queued, owned work (recipe authored, awaiting extend-driver).

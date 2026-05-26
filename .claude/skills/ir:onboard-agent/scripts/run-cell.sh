@@ -149,7 +149,9 @@ if [[ -n "$SCRIPT_JSON" ]]; then
   # a no-op. Refuse before burning a daemon + CLI.
   if SEM_GAPS="$(recipe_semantic_gaps "$LINT_MANIFEST" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
     echo "semantic_gap: $ADAPTER/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per elicitable-primitives.json):" >&2
-    printf '  - %s\n' $SEM_GAPS >&2
+    # Quote + read-loop: a slash-in-send gap carries the full send-text, which
+    # can contain spaces/glob chars — never word-split or pathname-expand it.
+    while IFS= read -r p; do [[ -n "$p" ]] && printf '  - %s\n' "$p" >&2; done <<< "$SEM_GAPS"
     echo "Fix the recipe (use a dedicated slash/reset_session step) or extend the driver to truly elicit it — not recording." >&2
     exit 4
   fi
