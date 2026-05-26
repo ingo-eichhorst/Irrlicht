@@ -174,13 +174,54 @@ run_live() {
     sleep 3
   fi
 
+  # oc_composer_holds <prefix> → 0 if <prefix> is still sitting in the input
+  # composer, 1 otherwise. The composer is the bottom box of the TUI (a ┃-margin
+  # region above the model footer + ╹▀▀▀ top-border); the typed text lands on a
+  # ┃-prefixed line there until Enter flushes it — submitted text moves UP into
+  # the transcript (far above) or, for a local slash, vanishes. So we look ONLY
+  # at the bottom slice (last 12 lines) for the prefix: that excludes the
+  # transcript echo of an earlier prompt, which persists scrolled off the top
+  # but never re-enters the composer box. The box is 200 cols wide (-x 200) so a
+  # 24-char prefix never wraps; the prompt may carry a leading glyph so we match
+  # the prefix substring, not a line anchor.
+  oc_composer_holds() {
+    tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -12 \
+      | grep -qF "${1:0:24}"
+  }
+
+  # oc_flush <prefix> → press Enter and confirm the composer actually FLUSHED
+  # (the just-typed text left the input box). Under the slow local model an
+  # Enter-submitted prompt can linger; without this confirmation the NEXT
+  # oc_send/slash types into a non-empty composer and the two inputs COALESCE
+  # into one merged user message (and a following slash is swallowed as literal
+  # text, never executing). Bounded by remaining_seconds with a 30s cap; if it
+  # has not cleared by then, re-press Enter ONCE and proceed regardless.
+  oc_flush() {
+    local prefix="$1" waited=0 cap=30
+    tmux send-keys -t "$SESSION" Enter
+    while (( $(remaining_seconds) > 0 )) && (( waited < cap )); do
+      sleep 1; waited=$((waited + 1))
+      oc_composer_holds "$prefix" || return 0
+      if (( waited == cap / 2 )); then
+        echo "[driver] live: composer still holds input after ${waited}s, re-pressing Enter" >&2
+        tmux send-keys -t "$SESSION" Enter
+      fi
+    done
+    echo "[driver] live: composer did not confirm flush within ${cap}s; proceeding" >&2
+    return 0
+  }
+
   oc_send() {
     local text="$1" tries=0
     while (( tries < 3 )); do
       tmux send-keys -t "$SESSION" -l -- "$text"
       sleep 0.5
-      # Confirm the keystrokes landed (boot splash can still eat them); the
-      # input box is 200 cols wide so a 24-char prefix never wraps.
+      # Confirm the keystrokes landed (boot splash can still eat them). Scan the
+      # FULL pane, not just the composer slice: on the first send the composer
+      # is the centered welcome screen (the "Ask anything" affordance sits
+      # mid-pane, not in the bottom box), so a bottom-only match would miss it
+      # and retype. The input box is 200 cols wide so a 24-char prefix never
+      # wraps.
       if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qF "${text:0:24}"; then
         break
       fi
@@ -188,12 +229,19 @@ run_live() {
       echo "[driver] live: send did not register (try $tries), retrying" >&2
       sleep 1
     done
-    tmux send-keys -t "$SESSION" Enter
-    # Snapshot the terminal-step-finish high-water mark NOW; the matching
-    # wait_turn waits for the count to strictly exceed this, i.e. for the ONE
-    # new `stop` this turn will produce. Captured here (not in wait_turn) so a
-    # multi-step turn already in flight can't satisfy the next turn's wait.
+    # Snapshot the terminal-step-finish high-water mark BEFORE submitting; the
+    # matching wait_turn waits for the count to strictly exceed this, i.e. for
+    # the ONE new `stop` this turn will produce. Captured pre-Enter (not in
+    # wait_turn, and not after the flush) so that (a) a multi-step turn already
+    # in flight can't satisfy the next turn's wait, and (b) a sub-second turn
+    # that completes before oc_flush confirms the composer cleared does not get
+    # folded INTO its own baseline — which would make its wait_turn need an
+    # extra stop that never comes and time out.
     TURN_BASELINE=$(oc_turn_total)
+    # Press Enter and wait for the composer to FLUSH (text submitted + cleared)
+    # before returning — a lingering composer would let the next input merge
+    # into this one. (See oc_flush.)
+    oc_flush "$text"
     echo "[driver] live send (terminal baseline=$TURN_BASELINE): ${text:0:60}" >&2
   }
 
@@ -243,7 +291,12 @@ run_live() {
         slash)
           local s; s=$(jq -r '.text // .command // empty' <<<"$STEP")
           tmux send-keys -t "$SESSION" -l -- "$s"; sleep 0.5
-          tmux send-keys -t "$SESSION" Enter
+          # A slash must go into an EMPTY composer and confirm it submitted
+          # before the next step runs — otherwise it merges with a lingering
+          # prompt and is swallowed as literal text instead of executing. A
+          # local no-LLM slash (/undo, /help) produces no model turn, so we
+          # confirm via composer-clear (oc_flush), not a turn count.
+          oc_flush "$s"
           echo "[driver] live slash: $s" >&2
           ;;
         sleep)
