@@ -48,8 +48,14 @@ func bgSpawnResult(toolUseID, bashID, content string) map[string]interface{} {
 
 func TestParser_BackgroundSpawn_FromResultText(t *testing.T) {
 	p := &Parser{}
+	// Claude Code's real launch message is a full sentence: the path is
+	// followed by a period and more prose ("…output. You will be notified…").
+	// The captured path must NOT absorb that trailing period — otherwise the
+	// daemon's lsof liveness probe dereferences a non-existent "…output." file,
+	// finds no writer, and wrongly settles a still-running background session to
+	// `ready` (the live working↔ready flapping this guards against).
 	ev := p.ParseLine(bgSpawnResult("toolu_1", "bc1h56v8v",
-		"Command running in background with ID: bc1h56v8v. Output is being written to: /private/tmp/claude-501/x/tasks/bc1h56v8v.output"))
+		"Command running in background with ID: bc1h56v8v. Output is being written to: /private/tmp/claude-501/x/tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path."))
 	if len(ev.BackgroundSpawns) != 1 {
 		t.Fatalf("BackgroundSpawns = %d, want 1", len(ev.BackgroundSpawns))
 	}
@@ -58,7 +64,19 @@ func TestParser_BackgroundSpawn_FromResultText(t *testing.T) {
 		t.Errorf("BashID = %q, want bc1h56v8v", sp.BashID)
 	}
 	if sp.OutputPath != "/private/tmp/claude-501/x/tasks/bc1h56v8v.output" {
-		t.Errorf("OutputPath = %q", sp.OutputPath)
+		t.Errorf("OutputPath = %q (must not include the sentence-ending period)", sp.OutputPath)
+	}
+
+	// Detection must not depend on the file ending in ".output": the trailing
+	// period is stripped from whatever single-token path Claude reports, so a
+	// differently-named output file is still captured cleanly.
+	ev2 := p.ParseLine(bgSpawnResult("toolu_2", "bd2m99zzz",
+		"Command running in background with ID: bd2m99zzz. Output is being written to: /private/tmp/claude-501/x/tasks/bd2m99zzz.log. You will be notified when it completes."))
+	if len(ev2.BackgroundSpawns) != 1 {
+		t.Fatalf("non-.output spawn: BackgroundSpawns = %d, want 1", len(ev2.BackgroundSpawns))
+	}
+	if got := ev2.BackgroundSpawns[0].OutputPath; got != "/private/tmp/claude-501/x/tasks/bd2m99zzz.log" {
+		t.Errorf("non-.output OutputPath = %q (must not include the sentence-ending period)", got)
 	}
 }
 
@@ -124,7 +142,7 @@ func writeBgTranscript(t *testing.T, lines []map[string]interface{}) string {
 }
 
 func TestTailer_BackgroundProcessCount_SpawnAndTerminate(t *testing.T) {
-	spawnResult := "Command running in background with ID: bc1h56v8v. Output is being written to: /tmp/x/tasks/bc1h56v8v.output"
+	spawnResult := "Command running in background with ID: bc1h56v8v. Output is being written to: /tmp/x/tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path."
 
 	t.Run("alive while only spawned", func(t *testing.T) {
 		path := writeBgTranscript(t, []map[string]interface{}{
@@ -258,7 +276,7 @@ func TestParser_TaskNotification_TerminatesBackgroundProcess(t *testing.T) {
 }
 
 func TestTailer_BackgroundProcessCount_ClearedByTaskNotification(t *testing.T) {
-	spawnResult := "Command running in background with ID: bc1h56v8v. Output is being written to: /tmp/x/tasks/bc1h56v8v.output"
+	spawnResult := "Command running in background with ID: bc1h56v8v. Output is being written to: /tmp/x/tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path."
 	for _, tc := range []struct {
 		name      string
 		completed map[string]interface{}
