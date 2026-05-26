@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "agent": "claudecode",
+  "transport": "line_based",
   "discovered_at": "2026-04-25",
   "source": "manual_bootstrap",
   "features": {

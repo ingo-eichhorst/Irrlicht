@@ -363,6 +363,21 @@ record → validate → fail? tighten recipe → record → validate ...
 Tighten recipe means: more sleep between sends, different driver step
 ordering, fix counter drift after non-turn slash commands.
 
+### Driver-gap loop (when a cell needs a step type the driver lacks)
+
+```
+assess/implement → driver_gap:<primitive>  (recipe + spec committed; NOT applicable:false)
+  → extend-driver <agent> <primitive>      (port the arm from claudecode/codex; commit driver)
+  → implement <agent> <scenario>           (record the now-unblocked cell)
+```
+
+A `driver_gap` is **queued, owned work, not a frozen cell** (#496 RC1).
+`recipe-lint` catches it two ways: a missing `case` arm (grammar gap,
+exit 3) and a step the driver accepts but doesn't elicit (semantic gap,
+exit 4, via `elicitable-primitives.json`). The `extend-driver` verb is the
+stage that fills it; `applicable:false` is reserved for cells the agent
+fundamentally can't do.
+
 ### Daemon-fix loop (when validation surfaces a real gap)
 
 ```

@@ -152,14 +152,35 @@ type recordedEvent struct {
 // scenarioDir and validates the recording against the spec-grounded
 // expectations. Returns nil + nil when there is nothing to validate:
 // either expected.jsonl is missing (no expectations declared yet) OR
-// events.jsonl is missing (recording not yet captured — typical for
-// applicable:false scenarios where the spec is committed but the
-// driver can't produce a recording today).
+// neither events.jsonl NOR a transcript is present (recording not yet
+// captured — typical for applicable:false scenarios where the spec is
+// committed but the driver can't produce a recording today). It returns
+// an ERROR for a half-recorded cell — a transcript present but no
+// events.jsonl — so a partial recording can't masquerade as a pass
+// (#496 RC6).
 func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
-	return ValidateExpectedAgainst(
-		filepath.Join(scenarioDir, "expected.jsonl"),
-		filepath.Join(scenarioDir, "events.jsonl"),
-	)
+	expectedPath := filepath.Join(scenarioDir, "expected.jsonl")
+	eventsPath := filepath.Join(scenarioDir, "events.jsonl")
+	// HALF-recorded guard (#496 RC6) — scoped to the CELL path here, NOT to
+	// ValidateExpectedAgainst (the viewer's archive-drift evaluator, which must
+	// keep its silent skip so a missing-events archive isn't reported as a
+	// spurious "re-record" error). A committed cell with expected.jsonl + a
+	// transcript but no events.jsonl is a partial recording; returning (nil,nil)
+	// made replay-fixtures report a vacuous PASS (opencode/task-list).
+	if _, err := os.Stat(expectedPath); err == nil {
+		if _, err := os.Stat(eventsPath); err != nil {
+			for _, t := range []string{"transcript.jsonl", "transcript.md"} {
+				if _, terr := os.Stat(filepath.Join(scenarioDir, t)); terr == nil {
+					return nil, fmt.Errorf(
+						"incomplete recording: %s present but events.jsonl missing — "+
+							"the cell has a spec and a transcript but no captured events; "+
+							"re-record it (run-cell.sh) so validation isn't silently skipped",
+						t)
+				}
+			}
+		}
+	}
+	return ValidateExpectedAgainst(expectedPath, eventsPath)
 }
 
 // ValidateExpectedAgainst runs the validator with explicitly named
@@ -174,7 +195,11 @@ func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, 
 		return nil, nil // not configured for this scenario
 	}
 	if _, err := os.Stat(eventsPath); err != nil {
-		return nil, nil // events.jsonl not captured yet — same shape as no expected.jsonl
+		// events.jsonl not captured yet — same shape as no expected.jsonl. The
+		// half-recorded (transcript-but-no-events) guard lives in ValidateExpected
+		// (the cell path); this archive-drift evaluator keeps the silent skip so a
+		// missing-events archive isn't reported as a spurious error (#496 RC6).
+		return nil, nil
 	}
 	meta, phases, err := loadExpected(expectedPath)
 	if err != nil {

@@ -47,6 +47,7 @@ five-stage pipeline the subagents implement.
 | judge whether `<agent>` supports `<scenario>` | `assess <agent> <scenario>` | `assess` subagent |
 | capture how `<agent>` does `<scenario>` | `implement <agent> <scenario>` | `implement` subagent |
 | re-record after a daemon change | `implement <agent> <scenario> --re-record` | `implement` subagent |
+| teach `<agent>`'s driver a missing step type (unfreeze a `driver_gap`) | `extend-driver <agent> <primitive>` | `extend-driver` subagent |
 | onboard a brand-NEW agent CLI | `--new <slug>` | discovery (see below) |
 | verify nothing regressed (fixtures) | `tools/replay-fixtures.sh` | nothing — pure script |
 | verify the rig scripts themselves | `scripts/smoke-test.sh` | nothing — pure script (bash -n + lib/reconcile_test.sh; the rig isn't covered by replay-fixtures/go test) |
@@ -75,7 +76,22 @@ Agent(
 
 When the user asks for a column/row sweep (e.g. "assess every scenario
 for codex", "implement all never-recorded claudecode cells"), compute
-the cell list from the matrix status below, then dispatch **one Agent
+the cell list **from the matrix files, never from a prior subagent's
+summary.** The per-cell summaries are deliberately lossy (≤5 lines, to
+protect parent context); enumerating the next stage's work from that
+prose is how a cell silently drops (RC4 — `multiple-sessions-same-cwd`
+sat in `scenarios.json` with no assessment or recording because an
+assess summary omitted it). Derive the authoritative work-list straight
+from the catalog × capabilities × on-disk artifacts:
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+# every applicable coverage_id for the agent, with its current disposition:
+bash $SK/scripts/lib/completeness-gate.sh <agent>   # exit 1 lists the non-terminal cells
+```
+
+The `GAP` lines ARE the work-list: `unassessed` → dispatch `assess`,
+`assessed_not_recorded` → dispatch `implement`. Then dispatch **one Agent
 per cell**. Collect each subagent's ≤5-line summary into a table for the
 user. Don't run the per-cell mechanics yourself — that's what blows the
 context budget.
@@ -91,6 +107,30 @@ first `implement` — `precheck.sh` refuses to record on a dirty `replaydata/`.
 After dispatching `implement`, the recording is already committed (that
 is part of its contract). Don't re-stage, re-diff, or re-commit; just
 relay its summary.
+
+**Driver gaps are queued work, not frozen cells.** When `assess` or
+`implement` returns `driver_gap` (the recipe needs a step type the
+agent's driver lacks), do NOT leave the cell frozen. Group the gapped
+cells by their missing `<primitive>`, dispatch one `extend-driver
+<agent> <primitive>` per distinct primitive, and then dispatch
+`implement` for each cell it reports as `unblocked_cells`. A primitive
+usually unblocks several cells in one shot, so a column's driver gaps
+collapse to a handful of `extend-driver` calls.
+
+**Post-sweep completeness gate (mandatory before reporting "done").** A
+sweep is finished only when every applicable coverage_id has reached a
+*terminal* verdict — `recorded`, `applicable_false`, or a `driver_gap`
+with its recipe authored and queued. Re-run the gate after the sweep and
+do not claim completion while it exits non-zero:
+
+```bash
+bash .claude/skills/ir:onboard-agent/scripts/lib/completeness-gate.sh <agent>
+```
+
+Any remaining `GAP` line is unfinished work — loop back and dispatch the
+stage it names (`assess` / `implement` / `extend-driver`) until the gate
+is clean. This is the forcing function that stops a sweep from reporting
+success while cells were never visited.
 
 ## Matrix status (`list` — the no-arg path)
 
@@ -109,22 +149,24 @@ comm -23 \
 # any output = a scenario requires an unknown capability — block and report it.
 ```
 
-Also confirm the two catalogs agree — `scenarios.json` vs the coverage
-rollup — so no cell is orphaned or unmapped:
+Then run the **catalog-drift gate** — it enforces the bijection across the
+catalogs (`catalog[]` ⟺ rollup, and every `scenarios[]` recipe + rollup
+row names a real `catalog[]` cell) and **fails** on drift instead of just
+printing it (#496 RC5). It also lists catalog cells still awaiting a
+recipe (a tracked TODO, not a failure) and checks the `.specs` source
+catalog when present:
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
-# coverage_ids referenced by scenarios.json but ABSENT from the rollup matrix:
-comm -23 \
-  <(jq -r '.scenarios[].coverage_id' $SK/scenarios.json | sort -u) \
-  <(jq -r '.scenarios[].id'          $SK/agent-scenarios-coverage.json | sort -u)
-# rollup ids with NO recipe row in scenarios.json (orphan coverage cells):
-comm -13 \
-  <(jq -r '.scenarios[].coverage_id' $SK/scenarios.json | sort -u) \
-  <(jq -r '.scenarios[].id'          $SK/agent-scenarios-coverage.json | sort -u)
-# either output = catalog drift: a name maps to a missing coverage cell, or a
-# coverage cell has no recipe. Surface it; don't silently sweep around it.
+bash $SK/scripts/lib/catalog-drift.sh          # exit 1 ⇒ drift; --stub emits
+                                               # paste-ready scenarios[] rows
 ```
+
+A non-zero exit is a hard stop — a recipe or rollup row points at a
+phantom cell, or a catalog cell is invisible to the rollup. Fix it (add
+the catalog/rollup/recipe row) before proceeding; don't sweep around it.
+The Go `TestCatalogRollupBijection` + `TestScenarioCatalogNoDrift` pin the
+same invariants in CI.
 
 Several `name`s legitimately share one `coverage_id` (recipe variants of the
 same canonical cell) — the matrix axis is the coverage id, not the name.
@@ -133,7 +175,11 @@ same canonical cell) — the matrix axis is the coverage id, not the name.
 
 A scenario is applicable to an adapter iff every id in `requires` maps to
 `true` in that adapter's `capabilities.json -> features` (`false` and
-`"unknown"` both block). Per-cell state:
+`"unknown"` both block) **AND** the adapter's `capabilities.json ->
+transport` is in the scenario's `requires_transport` (when that field is
+present — e.g. `oversized-transcript-line` declares
+`requires_transport: ["line_based"]`, so opencode's `structured_store`
+transport makes it N/A; #496 RC7). Per-cell state:
 
 - **OK** — fixture committed at
   `replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl`.
@@ -143,7 +189,8 @@ A scenario is applicable to an adapter iff every id in `requires` maps to
   `implement` (which authors it) once `assess` says `applicable: yes`.
 - **unassessed** — no `assessment.json` yet. → `assess` first.
 - **N/A (no <capability>)** — adapter's capabilities don't satisfy
-  `requires`.
+  `requires`, or its `transport` isn't in the scenario's
+  `requires_transport`.
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
@@ -156,6 +203,19 @@ ls replaydata/agents/*/scenarios/ 2>/dev/null
 
 Print a table (rows = adapters, columns = scenarios) with a one-line hint
 on every non-OK cell.
+
+The **completeness gate** is the file-derived, machine-checkable version
+of this per-column state — it collapses the cells to their terminal /
+non-terminal disposition and exits non-zero when any applicable cell was
+never resolved. Run it per agent (it's the same enumeration a sweep uses
+for its work-list, so it doubles as the sweep's done-check):
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+for a in claudecode codex pi aider opencode; do
+  bash $SK/scripts/lib/completeness-gate.sh "$a"   # exit 1 ⇒ open cells listed
+done
+```
 
 ### Driver-capability pre-flight (before an `implement` sweep)
 
@@ -177,11 +237,15 @@ driver_step_types_from_file $SK/scripts/drive-<agent>-interactive.sh
 
 For unwritten recipes, judge from the steps the behaviour implies —
 multi-session ⇒ `reset_session`/`resume`/`restart`; in-REPL picker
-navigation ⇒ `keys`. Cells needing an absent step are `driver_gap` — a
-developer task to extend the driver, not a recording. New agents start
-with the sparsest drivers (e.g. opencode: `send`/`sleep`/`wait_turn`
-only), so this report matters most at onboarding time. `run-cell.sh` runs
-the same lint as a record-time backstop (refuses with exit 3).
+navigation ⇒ `keys`. Cells needing an absent step are `driver_gap` —
+queued work for the `extend-driver <agent> <primitive>` verb (it ports
+the missing step type from the claudecode/codex reference driver and
+reports which cells it unblocks), NOT a frozen cell and NOT a recording
+yet. New agents start with the sparsest drivers (e.g. opencode began with
+`send`/`sleep`/`wait_turn` only, then grew a live-TUI path), so this
+report doubles as the column's driver-gap punch-list at onboarding time.
+`run-cell.sh` runs the same lint as a record-time backstop (refuses with
+exit 3).
 
 ### Orchestrator matrix (`orchestrator_scenarios[]` × orchestrators)
 

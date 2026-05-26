@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
   "agent": "opencode",
+  "transport": "structured_store",
   "discovered_at": "2026-04-27",
   "source": "manual_bootstrap",
   "features": {
-    "headless_mode": false,
+    "headless_mode": true,
     "tui": true,
     "tool_calls": true,
     "task_list": true,

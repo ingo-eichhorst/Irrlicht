@@ -420,9 +420,12 @@ matrix_drift: none | matrix says <old>, coverage row should update
 
 **If `route` is `frozen`, stop here** — no recipe or recording follow-up;
 the assessment.json documents *why* the cell is frozen and what would
-unblock it. **`driver-gap`** also produces no recording yet, but it routes
-to a tooling task (extend the driver), not a freeze. **`record`** and
-**`record-known-failing`** hand off to `implement`. The maintainer
+unblock it. **`driver-gap`** also produces no recording yet, but it is
+**queued tooling work, not a freeze**: the dispatcher routes it to the
+`extend-driver <agent> <primitive>` verb, which ports the missing step
+type from the claudecode/codex reference driver and re-queues the cell
+for `implement`. **`record`** and **`record-known-failing`** hand off to
+`implement`. The maintainer
 transcribes the verdict into the coverage matrix; this stage never writes
 `agent-scenarios-coverage.json`.
 

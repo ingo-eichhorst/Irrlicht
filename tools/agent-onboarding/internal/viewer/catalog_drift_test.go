@@ -100,3 +100,122 @@ func TestScenarioCatalogNoDrift(t *testing.T) {
 			"to <agent>/regression/:\n  %v", orphans)
 	}
 }
+
+// knownTransports is the closed set of transport tags (#496 RC7). They mirror
+// the domain Source sum: FilesUnderRoot / FilesUnderCWD are line_based;
+// ProcessOwnedStore (opencode) is structured_store.
+var knownTransports = map[string]bool{"line_based": true, "structured_store": true}
+
+// TestTransportAxis guards the requires_transport axis: every adapter's
+// capabilities.json must declare a known transport, and every scenario's
+// requires_transport (when present) must list only known transports — else a
+// scenario silently applies to (or excludes) the wrong adapters.
+func TestTransportAxis(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+
+	caps, _ := filepath.Glob(filepath.Join(root, "replaydata", "agents", "*", "capabilities.json"))
+	if len(caps) == 0 {
+		t.Skip("no capabilities.json reachable; skipping transport-axis check")
+	}
+	for _, p := range caps {
+		agent := filepath.Base(filepath.Dir(p))
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Errorf("%s: read: %v", agent, err)
+			continue
+		}
+		var c struct {
+			Transport string `json:"transport"`
+		}
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Errorf("%s: parse capabilities.json: %v", agent, err)
+			continue
+		}
+		if !knownTransports[c.Transport] {
+			t.Errorf("%s: capabilities.json transport %q is not a known transport %v", agent, c.Transport, keysOf(knownTransports))
+		}
+	}
+
+	scenariosPath := filepath.Join(root, ".claude", "skills", "ir:onboard-agent", "scenarios.json")
+	b, err := os.ReadFile(scenariosPath)
+	if err != nil {
+		t.Skipf("scenarios.json not reachable: %v", err)
+	}
+	var doc struct {
+		Scenarios []struct {
+			Name              string   `json:"name"`
+			RequiresTransport []string `json:"requires_transport"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("parse scenarios.json: %v", err)
+	}
+	for _, s := range doc.Scenarios {
+		for _, tr := range s.RequiresTransport {
+			if !knownTransports[tr] {
+				t.Errorf("scenario %q requires_transport %q is not a known transport %v", s.Name, tr, keysOf(knownTransports))
+			}
+		}
+	}
+}
+
+// TestCatalogRollupBijection guards the catalog ⟺ rollup leg (#496 RC5): the
+// overview renders rows from scenarios.json catalog[], and overlays editorial
+// coverage from agent-scenarios-coverage.json. A rollup row naming no catalog
+// cell is a phantom; a catalog cell with no rollup row renders with no coverage
+// data. Either is drift the prose `comm` check only printed — this fails it.
+func TestCatalogRollupBijection(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	skill := filepath.Join(root, ".claude", "skills", "ir:onboard-agent")
+
+	cb, err := os.ReadFile(filepath.Join(skill, "scenarios.json"))
+	if err != nil {
+		t.Skipf("scenarios.json not reachable: %v", err)
+	}
+	var sdoc struct {
+		Catalog []struct {
+			ID string `json:"id"`
+		} `json:"catalog"`
+	}
+	if err := json.Unmarshal(cb, &sdoc); err != nil {
+		t.Fatalf("parse scenarios.json: %v", err)
+	}
+	rb, err := os.ReadFile(filepath.Join(skill, "agent-scenarios-coverage.json"))
+	if err != nil {
+		t.Skipf("agent-scenarios-coverage.json not reachable: %v", err)
+	}
+	var rdoc struct {
+		Scenarios []struct {
+			ID string `json:"id"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(rb, &rdoc); err != nil {
+		t.Fatalf("parse agent-scenarios-coverage.json: %v", err)
+	}
+
+	catalog := make(map[string]bool, len(sdoc.Catalog))
+	for _, c := range sdoc.Catalog {
+		catalog[c.ID] = true
+	}
+	rollup := make(map[string]bool, len(rdoc.Scenarios))
+	for _, s := range rdoc.Scenarios {
+		rollup[s.ID] = true
+		if !catalog[s.ID] {
+			t.Errorf("rollup id %q has no catalog[] row (phantom editorial cell)", s.ID)
+		}
+	}
+	for id := range catalog {
+		if !rollup[id] {
+			t.Errorf("catalog[] row %q is missing from the rollup — renders with no editorial coverage; add a row to agent-scenarios-coverage.json", id)
+		}
+	}
+}
+
+func keysOf(m map[string]bool) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}

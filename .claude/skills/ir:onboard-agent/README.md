@@ -11,6 +11,7 @@ Developer guide for the scenario × adapter fixture-matrix skill.
 | **check if `<agent>` supports `<scenario>`** | `/ir:onboard-agent assess <agent> <scenario>` | free (research only) |
 | **capture how `<agent>` does `<scenario>`** | `/ir:onboard-agent implement <agent> <scenario>` | spends agent CLI tokens |
 | **re-record** after a daemon change | `/ir:onboard-agent implement <agent> <scenario> --re-record` | spends agent CLI tokens |
+| **teach `<agent>`'s driver a missing step type** (unfreeze a `driver_gap`) | `/ir:onboard-agent extend-driver <agent> <primitive>` | free (ports a driver arm) |
 | **onboard a brand-new agent CLI** | `/ir:onboard-agent --new <slug>` | free (web research) |
 | **verify nothing regressed** | `tools/replay-fixtures.sh` | free |
 
@@ -30,7 +31,7 @@ subagents, each of which exhausts its OWN context window and returns a
 ≤5-line summary — so a large sweep doesn't drown the parent session in
 per-cell `events.jsonl` / `transcript.jsonl` output.
 
-## The three subagents
+## The subagents
 
 Each is a self-contained prompt under its own directory; the dispatcher
 spawns it with a one-line brief and relays its summary.
@@ -49,11 +50,18 @@ spawns it with a one-line brief and relays its summary.
 - **`implement/SKILL.md`** — the full pipeline for one cell: authors the
   spec + recipe, records against a live daemon, validates, promotes, and
   commits. Retries a drive timeout exactly once, then degrades to
-  `applicable: false` with a `scope_note`; returns `driver_gap`
-  immediately when the recipe needs a step type the agent's driver lacks
-  (no retry); **always commits before returning**. Returns `{commit_sha,
-  pass_rate, status}` where status is `pass | applicable_false |
-  driver_gap | infra_fail`.
+  `applicable: false` with a `scope_note`. When the recipe needs a step
+  type the agent's driver lacks it commits the spec + recipe as a real
+  recipe and returns `driver_gap` (no `applicable: false`, no retry) —
+  **queued work for `extend-driver`, not a frozen cell**; **always commits
+  before returning**. Returns `{commit_sha, pass_rate, status}` where
+  status is `pass | applicable_false | driver_gap | infra_fail`.
+- **`extend-driver/SKILL.md`** — turns a `driver_gap` into a recording.
+  Takes `<agent> <primitive>`, ports the missing step type into
+  `drive-<agent>-interactive.sh` from the claudecode/codex reference
+  drivers, commits the driver, and reports which cells the new primitive
+  unblocks. The dispatcher then sends each back through `implement`.
+  Returns `{status, primitive, commit_sha, unblocked_cells}`.
 
 ## Worked example — a new scenario, end to end
 
@@ -145,6 +153,22 @@ Not cost-related — these prevent broken runs:
   why `implement` commits the spec + recipe before it records.
 - CLI version minimum check against `scenarios.json.min_versions`.
 - Wall-clock `timeout` per cell (hang protection).
+- **`recipe-lint`** (`scripts/lib/recipe-lint.sh`) — refuses a recipe step
+  type the driver doesn't implement (driver_gap, exit 3) OR accepts but
+  doesn't elicit (semantic_gap, exit 4, via `elicitable-primitives.json`).
+- **`completeness-gate`** (`scripts/lib/completeness-gate.sh`) — every
+  applicable `coverage_id` must reach a terminal verdict; the file-derived
+  done-check for a sweep so no cell silently drops.
+- **`cell-integrity`** (`scripts/lib/cell-integrity.sh`) — a recorded cell
+  must carry its full artifact set and map to a recipe; runs in
+  `replay-fixtures.sh`. `expected-validate` now ERRORS (not skips) on a
+  transcript-without-`events.jsonl` cell.
+- **`catalog-drift`** (`scripts/lib/catalog-drift.sh` + the Go
+  `TestCatalogRollupBijection`/`TestScenarioCatalogNoDrift`) — catalog ⟺
+  rollup ⟺ scenarios bijection; a phantom or invisible cell fails.
+- **`requires_transport`** — a scenario can pin to `line_based` /
+  `structured_store`, so transport-mismatched cells auto-mark N/A
+  (`oversized-transcript-line` is N/A for opencode's structured store).
 
 ## File layout
 
@@ -155,6 +179,7 @@ Not cost-related — these prevent broken runs:
   scenario-create/SKILL.md    — agent #1: add a matrix row
   assess/SKILL.md             — agent #2: judge one cell (+ batch modes)
   implement/SKILL.md          — agent #3: fill one cell end-to-end
+  extend-driver/SKILL.md      — port a missing driver step type (unfreeze driver_gap)
   recipe|spec|record|validate/SKILL.md — stage-level building blocks
   scenario-meanings.md        — committed scenario glossary
   scenarios.json              — canonical scenario catalogue
@@ -166,7 +191,13 @@ Not cost-related — these prevent broken runs:
     precheck.sh               — fail-fast preconditions
     drive-<agent>[-interactive].sh — per-adapter drivers
     discover-agent.sh         — discovery preamble renderer
-    lib/{assert-staging-path,classify-failure}.sh
+    templates/drive-interactive.sh.tmpl — full tmux-REPL driver scaffold (#496 RC2)
+    lib/recipe-lint.sh        — grammar + semantic (elicitable) gap lint
+    lib/elicitable-primitives.json — per-adapter step types genuinely elicited
+    lib/completeness-gate.sh  — every applicable cell reached a terminal verdict
+    lib/cell-integrity.sh     — every recorded cell carries a full artifact set
+    lib/catalog-drift.sh      — catalog ⟺ rollup ⟺ scenarios bijection
+    lib/{assert-staging-path,classify-failure,reconcile}.sh
 
 replaydata/agents/
   features.json               — canonical capability catalog
@@ -195,8 +226,12 @@ replaydata/agents/
   missing/old, no recording daemon, auth). The cell verdict is
   unchanged; fix the environment and re-run.
 - **`implement` returned `driver_gap`** — the recipe needs a driver step
-  type that agent doesn't implement. Extending the interactive driver is
-  a developer task (out of scope for the skill).
+  type that agent doesn't implement. This is **queued work, not a frozen
+  cell**: the dispatcher routes it to `extend-driver <agent> <primitive>`,
+  which ports the missing step type from the claudecode/codex reference
+  driver and reports which cells it unblocks; each then goes back through
+  `implement` to record. The spec + recipe are already committed, so the
+  cell records as soon as the driver gains the primitive.
 
 ## See also
 

@@ -1,5 +1,5 @@
 {
-  "$schema_notes": "Canonical scenario catalogue for the ir:onboard-agent skill. Two parallel axes: 'scenarios' for prompt-driven agent adapters (claudecode/codex/pi) and 'orchestrator_scenarios' for polling-based orchestrator adapters (gastown). Agent scenarios are agent-agnostic — each declares 'requires' capabilities, and 'by_adapter' holds the per-adapter prompt/settings that elicit the behavior. An adapter whose Capabilities (declared in core/adapters/inbound/agents/*/config.go) do not satisfy 'requires' is excluded from that scenario (matrix cell = N/A). If the capabilities match but no 'by_adapter' entry exists, the matrix cell is 'missing-prompt' — actionable by adding one here. Orchestrator scenarios are driven by canned 'gt' CLI responses + seeded GT_ROOT sidecars and verified via snapshot golden compare in core/adapters/inbound/orchestrators/gastown/replay_test.go.",
+  "$schema_notes": "Canonical scenario catalogue for the ir:onboard-agent skill. Two parallel axes: 'scenarios' for prompt-driven agent adapters (claudecode/codex/pi) and 'orchestrator_scenarios' for polling-based orchestrator adapters (gastown). Agent scenarios are agent-agnostic — each declares 'requires' capabilities, and 'by_adapter' holds the per-adapter prompt/settings that elicit the behavior. An adapter whose Capabilities (declared in core/adapters/inbound/agents/*/config.go) do not satisfy 'requires' is excluded from that scenario (matrix cell = N/A). A scenario may also declare 'requires_transport' (a list of transports: 'line_based' for FilesUnderRoot/FilesUnderCWD adapters, 'structured_store' for ProcessOwnedStore adapters like opencode) — an adapter whose capabilities.json 'transport' is not in that list is N/A too. This expresses constraints 'requires' cannot, e.g. oversized-transcript-line stresses the daemon's bufio line-scanner and is inherently N/A for a structured-store adapter that never flows through it (#496 RC7). If the capabilities match but no 'by_adapter' entry exists, the matrix cell is 'missing-prompt' — actionable by adding one here. Orchestrator scenarios are driven by canned 'gt' CLI responses + seeded GT_ROOT sidecars and verified via snapshot golden compare in core/adapters/inbound/orchestrators/gastown/replay_test.go.",
   "min_versions": {
     "claudecode": "2.0.0",
     "codex": "0.50.0",
@@ -4562,6 +4562,9 @@
       "coverage_id": "oversized-transcript-line",
       "requires": [
         "headless_mode"
+      ],
+      "requires_transport": [
+        "line_based"
       ],
       "verify": {
         "transitions_topology": [

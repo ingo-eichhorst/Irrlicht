@@ -206,13 +206,25 @@ while IFS= read -r expected_path; do
   # daemon-side gap doesn't block the test suite. The Go test does
   # the same; this script mirrors the policy.
   known_failing="$(head -n1 "$expected_path" | jq -r '.known_failing // false' 2>/dev/null || echo false)"
-  if go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1; then
+  # Capture the exit code: 0 = pass, 1 = validation failed, 2 = internal error
+  # (malformed expected.jsonl OR a half-recorded cell — #496 RC6). known_failing
+  # only excuses a validation FAILURE (exit 1, a daemon gap); it must NOT excuse
+  # an internal error (exit 2) — an incomplete/broken fixture always fails.
+  # `|| ev_rc=$?` is mandatory: the script runs under `set -e` (and CI's
+  # `bash -e`), so a bare non-zero `go run` (a known_failing cell's exit 1, or
+  # an exit-2 error) would abort the whole script before we could classify it.
+  ev_rc=0
+  go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1 || ev_rc=$?
+  if [[ "$ev_rc" -eq 0 ]]; then
     if [[ "$known_failing" == "true" ]]; then
       echo "expected: ${agent}/${scenario} PASS (was known_failing — drop the flag from expected.jsonl)" >&2
       expected_failures=$((expected_failures + 1))
     else
       echo "expected: ${agent}/${scenario} PASS" >&2
     fi
+  elif [[ "$ev_rc" -eq 2 ]]; then
+    echo "expected: ${agent}/${scenario} ERROR (incomplete/malformed fixture — see $report_json; known_failing does NOT excuse this)" >&2
+    expected_failures=$((expected_failures + 1))
   else
     if [[ "$known_failing" == "true" ]]; then
       echo "expected: ${agent}/${scenario} known_failing (validation FAIL is expected; see meta.notes)" >&2
@@ -223,10 +235,26 @@ while IFS= read -r expected_path; do
   fi
 done < <(find "$FIXTURES_ROOT" -name 'expected.jsonl' -not -path '*/_reports/*' | sort)
 
+# Artifact-completeness gate (#496 RC6): every RECORDED cell under scenarios/
+# must carry a complete, consistent artifact set (recipe row, assessment,
+# expected.jsonl, transcript, events.jsonl, golden). Catches a half-recorded
+# cell (transcript but no events.jsonl — which ValidateExpected now errors on
+# rather than skipping) and an orphan recording (dir maps to no recipe).
+integrity_failures=0
+echo >&2
+echo "== cell-integrity gate (artifact completeness) ==" >&2
+if ! bash .claude/skills/ir:onboard-agent/scripts/lib/cell-integrity.sh >&2; then
+  integrity_failures=1
+fi
+
 echo >&2
 echo "done. reports in $REPORTS_DIR/" >&2
 
 if [[ "$expected_failures" -gt 0 ]]; then
   echo "$expected_failures expected-validation failure(s) — the recording drifted from spec, or the spec changed without re-translating" >&2
+  exit 1
+fi
+if [[ "$integrity_failures" -gt 0 ]]; then
+  echo "cell-integrity gate failed — a recorded cell is incomplete or orphaned (see above)" >&2
   exit 1
 fi
