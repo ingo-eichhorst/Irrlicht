@@ -1,7 +1,7 @@
 # Examples
 
 Copy-paste deployment recipes for irrlicht. (For the hermetic CI Linux gate,
-see [`docker/linux-replay.Dockerfile`](../docker/) instead — that's a test
+see [`tools/linux-replay.Dockerfile`](../tools/linux-replay.Dockerfile) instead — that's a test
 fixture, not a deployment.)
 
 | Example | What it is |
