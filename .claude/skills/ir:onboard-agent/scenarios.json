@@ -5662,8 +5662,46 @@
           "timeout_seconds": 120
         },
         "opencode": {
-          "applicable": false,
-          "notes": "driver_gap (gap:slash-command). agent_supports:yes — opencode's TUI ships no-LLM in-process slash commands (/help and command-palette entries) that resolve in-session without a model call. daemon (ProcessOwnedStore/SQLite) observability assessed full — a no-LLM slash writes no new assistant turn to the store, so the ses_… session stays ready (the read-from-store no-op basic-turn / multi-turn already prove). NOT recordable: synchronous-slash-command is, by definition, about a slash command resolving SYNCHRONOUSLY in-session — exactly the primitive headless `opencode run` cannot deliver. CONFIRMED THIS SWEEP (matching the 2026-05-26 session-reset / checkpoint-rewind probe) that headless `opencode run` does NOT process in-TUI slash commands — it stores them as literal user text (proven with inline /model and /new), so `opencode run \"/help\"` would run a model turn (ready->working->ready), inverting this scenario's premise (state stays ready, NO working transition). drive-opencode-interactive.sh drives BLOCKING `opencode run` subprocesses (case \"$TYPE\" handles only send|wait_turn|sleep) and has NO slash/keys step against a live REPL. synchronous-slash-command needs a live-REPL opencode driver; recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full target arc (warm-up turn, then the ses_… session stays ready across the slash window with no working/waiting transition); assessment.json carries the yes / full / gap:slash-command verdict. Mirrors the opencode session-reset / checkpoint-rewind gap:slash-command cells."
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.14.50. The arc is model-agnostic; the dev env's default is a local LM Studio model, which is fine.",
+            "irrlichd is recording — run-cell.sh isolated mode, or --attach against a daemon started with --record.",
+            "LIVE-TUI cell: drive-opencode-interactive.sh routes any recipe carrying a `slash` step to its tmux TUI path (run_live, PR #495), because headless `opencode run` stores a slash command as literal prompt text and runs a model turn (PROBED 2026-05-26: `opencode run \"/help\"` stored /help as a user message and replied to it). tmux must be on PATH."
+          ],
+          "setup": [
+            "Driver launches the opencode TUI in a fresh per-run cwd under <staging>/cwd/; opencode keys sessions on the cwd in its SQLite store, isolating this run's rows even alongside other opencode use.",
+            "The single warm-up prompt materializes one ses_… row under the TUI process; that row stays the only session for the whole recipe (a no-LLM /help mints no new session). The driver enumerates the cwd's top-level ses_… rows and emits the single-session contract for curate."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/help"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… session entering ready, then ONE working→ready turn (the warm-up 'ok' turn that materializes the store row)",
+            "after /help is delivered to the live TUI, NO state_transition to working and NO state_transition to waiting appears for the ses_… session across the slash window — /help is a no-LLM LOCAL command that writes zero new part rows, so the part-driven watcher fires no activity event and the session stays ready",
+            "exactly ONE distinct ses_… session_id appears (the local slash mints no new session — distinct from session-reset's /new)",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180,
+          "notes": "Synchronous no-LLM slash command on opencode (/help). The whole observable is the ABSENCE of a SECOND working transition: the warm-up 'ok' turn drives ready→working→ready to materialize the SQLite store row, then /help is delivered to the held-open TUI and the session STAYS ready — opencode's part-driven watcher (scanParts, watcher.go) emits EventActivity only when a NEW part row lands, and /help writes zero new parts (confirmed live 2026-05-26: parts/messages/step-finish all unchanged after /help). WHY a `slash` step and NOT a `send`: headless `opencode run -- \"/help\"` stores /help as a literal user prompt and runs a full model turn (ready→working→ready), inverting the scenario; the driver routes any `slash` step to run_live() (PR #495) which delivers it to the live TUI via tmux send-keys -l. WHY NO wait_turn after /help: a local /help makes no model call, so the step-finish count never increments — oc_wait_turn would hang/time out on an unchanged turn count (the race that bit checkpoint-rewind). The 6s trailing sleep is the dwell that lets the daemon observe the session HOLD ready across the slash window; expected.jsonl's slash_window phase asserts ready for duration_at_least_ms:4000 with invariants forbidding working/waiting. SINGLE session, no multi-session chain (unlike sibling session-reset, which uses /new to mint a fresh ses_…). What differs between runs: PID/timestamps/token counts and the warm-up turn's wall-clock latency (~30-45s on the local model). What must NOT differ: one working→ready arc on one ses_… session, then a held-ready slash window with no further state transition, ending ready."
         }
       }
     },
