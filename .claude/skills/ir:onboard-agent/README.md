@@ -49,11 +49,18 @@ spawns it with a one-line brief and relays its summary.
 - **`implement/SKILL.md`** — the full pipeline for one cell: authors the
   spec + recipe, records against a live daemon, validates, promotes, and
   commits. Retries a drive timeout exactly once, then degrades to
-  `applicable: false` with a `scope_note`; returns `driver_gap`
-  immediately when the recipe needs a step type the agent's driver lacks
-  (no retry); **always commits before returning**. Returns `{commit_sha,
-  pass_rate, status}` where status is `pass | applicable_false |
-  driver_gap | infra_fail`.
+  `applicable: false` with a `scope_note`. When the recipe needs a step
+  type the agent's driver lacks it commits the spec + recipe as a real
+  recipe and returns `driver_gap` (no `applicable: false`, no retry) —
+  **queued work for `extend-driver`, not a frozen cell**; **always commits
+  before returning**. Returns `{commit_sha, pass_rate, status}` where
+  status is `pass | applicable_false | driver_gap | infra_fail`.
+- **`extend-driver/SKILL.md`** — turns a `driver_gap` into a recording.
+  Takes `<agent> <primitive>`, ports the missing step type into
+  `drive-<agent>-interactive.sh` from the claudecode/codex reference
+  drivers, commits the driver, and reports which cells the new primitive
+  unblocks. The dispatcher then sends each back through `implement`.
+  Returns `{status, primitive, commit_sha, unblocked_cells}`.
 
 ## Worked example — a new scenario, end to end
 
@@ -195,8 +202,12 @@ replaydata/agents/
   missing/old, no recording daemon, auth). The cell verdict is
   unchanged; fix the environment and re-run.
 - **`implement` returned `driver_gap`** — the recipe needs a driver step
-  type that agent doesn't implement. Extending the interactive driver is
-  a developer task (out of scope for the skill).
+  type that agent doesn't implement. This is **queued work, not a frozen
+  cell**: the dispatcher routes it to `extend-driver <agent> <primitive>`,
+  which ports the missing step type from the claudecode/codex reference
+  driver and reports which cells it unblocks; each then goes back through
+  `implement` to record. The spec + recipe are already committed, so the
+  cell records as soon as the driver gains the primitive.
 
 ## See also
 

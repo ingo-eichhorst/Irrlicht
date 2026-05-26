@@ -47,6 +47,7 @@ five-stage pipeline the subagents implement.
 | judge whether `<agent>` supports `<scenario>` | `assess <agent> <scenario>` | `assess` subagent |
 | capture how `<agent>` does `<scenario>` | `implement <agent> <scenario>` | `implement` subagent |
 | re-record after a daemon change | `implement <agent> <scenario> --re-record` | `implement` subagent |
+| teach `<agent>`'s driver a missing step type (unfreeze a `driver_gap`) | `extend-driver <agent> <primitive>` | `extend-driver` subagent |
 | onboard a brand-NEW agent CLI | `--new <slug>` | discovery (see below) |
 | verify nothing regressed (fixtures) | `tools/replay-fixtures.sh` | nothing — pure script |
 | verify the rig scripts themselves | `scripts/smoke-test.sh` | nothing — pure script (bash -n + lib/reconcile_test.sh; the rig isn't covered by replay-fixtures/go test) |
@@ -91,6 +92,18 @@ first `implement` — `precheck.sh` refuses to record on a dirty `replaydata/`.
 After dispatching `implement`, the recording is already committed (that
 is part of its contract). Don't re-stage, re-diff, or re-commit; just
 relay its summary.
+
+**Driver gaps are queued work, not frozen cells.** When `assess` or
+`implement` returns `driver_gap` (the recipe needs a step type the
+agent's driver lacks), do NOT leave the cell frozen. Group the gapped
+cells by their missing `<primitive>`, dispatch one `extend-driver
+<agent> <primitive>` per distinct primitive, and then dispatch
+`implement` for each cell it reports as `unblocked_cells`. A primitive
+usually unblocks several cells in one shot, so a column's driver gaps
+collapse to a handful of `extend-driver` calls. A sweep is only "done"
+when every applicable cell has reached a terminal verdict — a frozen
+`driver_gap` is not terminal (see the completeness gate in Matrix
+status).
 
 ## Matrix status (`list` — the no-arg path)
 
@@ -177,11 +190,15 @@ driver_step_types_from_file $SK/scripts/drive-<agent>-interactive.sh
 
 For unwritten recipes, judge from the steps the behaviour implies —
 multi-session ⇒ `reset_session`/`resume`/`restart`; in-REPL picker
-navigation ⇒ `keys`. Cells needing an absent step are `driver_gap` — a
-developer task to extend the driver, not a recording. New agents start
-with the sparsest drivers (e.g. opencode: `send`/`sleep`/`wait_turn`
-only), so this report matters most at onboarding time. `run-cell.sh` runs
-the same lint as a record-time backstop (refuses with exit 3).
+navigation ⇒ `keys`. Cells needing an absent step are `driver_gap` —
+queued work for the `extend-driver <agent> <primitive>` verb (it ports
+the missing step type from the claudecode/codex reference driver and
+reports which cells it unblocks), NOT a frozen cell and NOT a recording
+yet. New agents start with the sparsest drivers (e.g. opencode began with
+`send`/`sleep`/`wait_turn` only, then grew a live-TUI path), so this
+report doubles as the column's driver-gap punch-list at onboarding time.
+`run-cell.sh` runs the same lint as a record-time backstop (refuses with
+exit 3).
 
 ### Orchestrator matrix (`orchestrator_scenarios[]` × orchestrators)
 

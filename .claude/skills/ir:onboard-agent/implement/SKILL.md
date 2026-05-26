@@ -61,9 +61,13 @@ and follow them here:
      still record (the failing recording is the evidence), author the spec
      with `known_failing: true`, and file a daemon bug issue (see step 1).
      Do NOT freeze the cell.
-   - `driver_capability == gap:<primitive>` → **driver_gap**: a tooling
-     task. Return `driver_gap` (step 3); do NOT record, do NOT degrade to
-     `applicable_false`.
+   - `driver_capability == gap:<primitive>` → **driver_gap**: queued
+     tooling work, NOT a frozen cell. Author the spec + recipe so the cell
+     is ready to record the moment the driver gains the primitive, then
+     return `driver_gap` naming `<primitive>` (step 3). Do NOT record
+     (yet), and do NOT mark `applicable: false` — the dispatcher routes
+     this to `extend-driver <agent> <primitive>`, which ports the step
+     type; the cell then comes back to `implement` to record.
    - `daemon_capability ∈ {incapable, n/a}`, or `agent_supports ∈ {no,
      unknown}` → STOP — return `applicable_false`, change nothing, note the
      frozen reason from the assessment body. No recipe or recording.
@@ -128,16 +132,21 @@ $SK/scripts/lib/recipe-lint.sh $SK/scenarios.json <scenario> <agent>
 
 `run-cell.sh` runs this same lint and refuses with exit 3, so it's a true
 backstop — but check here first to avoid an `implement` round-trip. If it
-reports a gap → **`driver_gap`**: a developer task (extend the driver),
-out of scope here. (First rule out a false gap: a slash command that takes
-an INLINE argument — `/model <id>`, `/compact` — is sendable via `slash`
-and is NOT a `keys` gap; only an arrow-key picker truly needs `keys`. See
-`recipe/SKILL.md` "Slash command vs picker navigation".) Set
-`by_adapter.<agent> = {"applicable": false, "notes": "<scope_note naming
-the missing step type, e.g. 'aider driver lacks exit_clean'>"}`, commit
-recipe(applicable:false) + spec + assessment, and return `driver_gap`.
-**Do NOT record, and do NOT retry against a known-missing primitive.**
-(Headless `prompt` cells have no step types and can't hit this.)
+reports a gap → **`driver_gap`**: **queued tooling work, not a frozen
+cell.** (First rule out a false gap: a slash command that takes an INLINE
+argument — `/model <id>`, `/compact` — is sendable via `slash` and is NOT
+a `keys` gap; only an arrow-key picker truly needs `keys`. See
+`recipe/SKILL.md` "Slash command vs picker navigation".) Leave the recipe
+you authored in step 2 as a **real recipe** — do NOT mark it
+`applicable: false` — so the cell is ready to record the moment the
+driver gains the primitive. Commit the spec + recipe + assessment (step
+4), and return `driver_gap` naming the missing `<primitive>` in `notes`.
+**Do NOT record yet, and do NOT retry against a known-missing primitive.**
+The dispatcher hands this to `extend-driver <agent> <primitive>`, which
+ports the step type from the claudecode/codex reference driver; the cell
+then returns to `implement` to record. `applicable: false` is reserved
+for cells the agent fundamentally can't do — a fixable driver gap is not
+one. (Headless `prompt` cells have no step types and can't hit this.)
 
 ### 4. Commit the authored artifacts
 
@@ -312,8 +321,11 @@ Status meanings:
   `applicable: false` with a `scope_note`; recipe + spec + assessment
   committed; no recording.
 - **`driver_gap`** — the recipe needs a step type the agent's driver
-  doesn't implement. Recipe marked `applicable: false`; committed; no
-  recording; no retry.
+  doesn't implement. Spec + recipe committed as a **real recipe** (NOT
+  `applicable: false`), ready to record once the driver gains the
+  primitive; no recording yet; no retry. The dispatcher routes it to
+  `extend-driver <agent> <primitive>`, then back here to record. Queued
+  work, not a frozen cell.
 - **`infra_fail`** — environment problem (CLI missing/old, auth, no
   recording daemon). Nothing about the cell verdict changed; tree left
   clean.
