@@ -47,8 +47,20 @@ DRIVER_LOG="$STAGING/driver.log"
 # OpenCode keys sessions on the directory column in the SQLite session
 # table; isolating cwd guarantees the session-lookup query at the end
 # finds OUR session even if the user has other recent opencode runs.
-RUN_CWD="$STAGING/cwd"
+# A CROSS-ADAPTER cell (multiple-agents-same-workspace) forces a SHARED
+# workspace via $IRRLICHT_ONBOARD_CWD so a different adapter coexists in
+# the same cwd — the daemon then keys both sessions to the same cwd slug.
+# The session-lookup query still finds OUR session: opencode.db's session
+# table only ever holds opencode sessions, so directory = $RUN_CWD +
+# ORDER BY time_created DESC picks our row regardless of the partner agents
+# (which write to their own stores, never opencode.db).
+RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
+# Canonicalize (resolve symlinks) so the session-lookup WHERE clause matches
+# what opencode stores: node's process.cwd() writes the RESOLVED path into
+# session.directory, so on macOS a /tmp/... cwd is stored as /private/tmp/...
+# — querying the unresolved value would find no row and silently mis-record.
+RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"
 
 OPENCODE_DB="$HOME/.local/share/opencode/opencode.db"
 if [[ ! -f "$OPENCODE_DB" ]]; then
@@ -105,9 +117,18 @@ run_send() {
   # by time_created DESC so retries reusing a stale staging dir pick
   # the NEW session, not a leftover row whose time_updated may briefly
   # outrank the fresh row before its first part lands.
+  #
+  # `parent_id IS NULL OR parent_id = ''` excludes subagent (child) sessions,
+  # which opencode keys to the SAME directory as their parent — without the
+  # filter a turn that spawns a subagent could capture the child id instead of
+  # the parent the export below intends.
+  #
+  # `.timeout 5000` lets the read wait out a transient SQLITE_BUSY rather than
+  # failing the bare `SESSION_ID=$(...)` under `set -e` — opencode is a
+  # concurrent WAL writer (especially under the cross-adapter shared-cwd load).
   if [[ -z "$SESSION_ID" ]]; then
-    SESSION_ID=$(sqlite3 "$OPENCODE_DB" \
-      "SELECT id FROM session WHERE directory = '$RUN_CWD' ORDER BY time_created DESC LIMIT 1;")
+    SESSION_ID=$(sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
+      "SELECT id FROM session WHERE directory = '$RUN_CWD' AND (parent_id IS NULL OR parent_id = '') ORDER BY time_created DESC LIMIT 1;")
     if [[ -z "$SESSION_ID" ]]; then
       echo "[driver] WARN: no session row found for cwd=$RUN_CWD" >&2
     else
@@ -167,8 +188,10 @@ if [[ -n "$SESSION_ID" ]]; then
   # Concurrent reads against opencode's running DB are safe — opencode
   # writes in WAL mode and sqlite3's default open mode tolerates a
   # parallel writer. The -readonly flag fails on this DB because it
-  # disables the WAL fallback path; omit it.
+  # disables the WAL fallback path; omit it. `.timeout 5000` waits out a
+  # transient SQLITE_BUSY instead of producing a truncated/empty export.
   sqlite3 "$OPENCODE_DB" <<SQL >> "$TRANSCRIPT_OUT"
+.timeout 5000
 .mode list
 .separator ""
 SELECT json_set(

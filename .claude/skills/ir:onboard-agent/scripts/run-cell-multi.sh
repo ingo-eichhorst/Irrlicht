@@ -112,7 +112,11 @@ DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
 REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
 
 # --- Staging ------------------------------------------------------------
-TS="$(date -u +%Y%m%dT%H%M%S)"
+# Append the PID so two runs of the same scenario within one UTC second don't
+# collide on the same staging dir (and thus the same SHARED_CWD passed as
+# IRRLICHT_ONBOARD_CWD), which would otherwise put two opencode sessions in one
+# directory and let the driver's session lookup pick the wrong one.
+TS="$(date -u +%Y%m%dT%H%M%S)-$$"
 STAGING="$REPO_ROOT/.build/refresh/_multi/$SCENARIO-$TS"
 SHARED_CWD="$STAGING/cwd"
 mkdir -p "$STAGING/recordings" "$STAGING/reports" "$SHARED_CWD"

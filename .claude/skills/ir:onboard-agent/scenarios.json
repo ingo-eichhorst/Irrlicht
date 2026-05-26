@@ -320,6 +320,42 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the default is a local LM Studio model so no remote key is needed)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run -- \"<prompt>\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns (opencode does not expose CLI-assignable session IDs)",
+            "The send is a no-tool single turn — opencode is asked to reply with exactly one word, so the working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate fires)",
+            "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleep and timeout are generous: a slow turn must not trip a false timeout, and the trailing sleep must outlast the turn_done settle so working→ready is observed"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the prompt is sent (the single assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the turn completes (step-finish reason=stop → turn_done closes the turn)",
+            "no state_transition to waiting appears for the session at any point (no tool call, no permission gate)",
+            "the session's final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },
@@ -1189,6 +1225,10 @@
           "settings": {},
           "timeout_seconds": 180,
           "notes": "EQUIVALENT to pi/model-switch-midsession (both share coverage_id model-switch-midsession; same Metrics → Model switch mid-session primitive). This row exists so the `model-switch`-named matrix entry is populated for pi; it is not a distinct user-observable behavior. CRITICAL FIRST CHECK RESULT (recordability): pi 0.70.0's `/model <provider>/<id>` accepts an INLINE ARGUMENT — handleModelCommand → findExactModelMatch → session.setModel() switches DIRECTLY with no arrow-key picker when the reference resolves to exactly ONE model (dist/modes/interactive/interactive-mode.js ~L3216, dist/core/model-resolver.js findExactModelReferenceMatch ~L53). Only an empty/ambiguous term opens the selector UI. So the switch is sendable via the existing `slash` step in SCRIPT mode — NO driver_gap (no `keys` primitive needed, unlike the claudecode/codex picker recipes for this same scenario). MUST use the full canonical provider/id form; a bare fuzzy term like `mini` may match multiple models and fall back to the picker. WHY a LEADING /model pin (gpt-5.5) before turn 1: pi PERSISTS the last-used model as ~/.pi/agent/settings.json defaultModel, so a bare `pi` launch boots on whatever the previous session left behind — NON-deterministic. Pinning model A explicitly at the top makes the A→B switch a real change every run regardless of the persisted default. This is the load-bearing determinism fix. WHY NO wait_turn anywhere (both turns driven by trailing sleeps): the driver's `slash` step bumps the expected-turn counter exactly like `send`, but a /model switch produces a model_change line with NO assistant turn (turn_count only counts stopReason==stop). With a leading /model pin, EXPECTED is already 1 before turn 1, so a turn-1 wait_turn would block waiting for count≥2 while only 1 turn exists → driver timeout. The grammar has no 'slash that doesn't bump' primitive, so the recipe drops wait_turn entirely and lets a fixed 18s trailing sleep cover each one-word reply; the driver's end-of-script resolve_transcript fallback still binds the UUID. Same family of compromise as the pi synchronous-slash-command recipe. WHY the 2s/3s sleeps after each slash: they let the model_change line land and the classifier settle before the next prompt. The model lives on each assistant message.model (parser.go L103-105) and on the model_change line at modelId (L39-44), both normalized into ev.ModelName → SessionMetrics.ModelName (latest-non-unknown-wins). The model A→B assertion is NOT expressible in the events.jsonl phase DSL, so expected.jsonl asserts only the two-turn lifecycle skeleton and the model switch is asserted at summary.model_name in the .replay.json.golden plus the pi parser unit tests. C7/SESSION-IDENTITY: the live REPL emits a transient proc-<PID> pre-session born ready at launch; session_birth legitimately matches it. t1_start anchors to recording start with NO session pin so the matcher picks the FIRST working (necessarily the rollout); t1_end/t2_start/t2_end, pid_bind, and teardown then pin to t1_start's session via same_session_as. What differs between runs: token counts/cost, rollout UUID/PID/timestamps, assistant wording, and pi may flush a single turn as more than one working→ready burst (spec asserts ≥2 arcs, not an exact count). What must NOT differ: model A (gpt-5.5) on turn 1 and model B (gpt-5.4-mini) on turn 2 (pinned), two working→ready arcs on ONE rollout session, summary.model_name == model B in the golden, and a single process_exited at teardown."
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: opencode driver has no per-step model selection / mid-session switch primitive — gap:model-select. drive-opencode-interactive.sh drives headless `opencode run` and implements only send/wait_turn/sleep; the `send` arm hardcodes `opencode run --format default [--session] -- text` with NO --model flag, so every turn uses the single config default model (lmstudio/gemma-4-e2b-it-uncensored). No send-only switch path exists: the in-TUI /model picker is an arrow-key overlay (not drivable headlessly, and no `keys` step), and inline `/model <id>` is NOT processed by `opencode run` — proven live (2026-05-26): a send-path run of `opencode run -- \"/model ionos/meta-llama/Llama-3.3-70B-Instruct\"` produced a session whose only message still carried model.modelID=gemma-4-e2b-it-uncensored/providerID=lmstudio (the /model text went to the LLM as content; the model did not switch). NOT an agent or daemon limitation — opencode supports model switching (multi_model_orchestration:true) and the daemon reads per-turn model from its SQLite store (ProcessOwnedStore), so a genuine switch WOULD be observable. NOT a recipe-lint step-TYPE gap either (a recipe would use only handled types); the missing capability is model selection within the send arm, confirmed by behavioral probing. UNBLOCK: add a per-step model-select primitive to drive-opencode-interactive.sh (thread `opencode run -m <provider/model>`), with model A = config default and model B = a second reachable model (e.g. ionos/<model>; IONOS_API_TOKEN is set). expected.jsonl is retained as the documented two-turn lifecycle target; see replaydata/agents/opencode/scenarios/model-switch-midsession/assessment.json (driver_capability: gap:model-select). multi_model_orchestration=yes."
         }
       }
     },
@@ -1480,7 +1520,7 @@
         },
         "opencode": {
           "applicable": false,
-          "scope_note": "OpenCode does have /undo + /redo with git-snapshot semantics (rewinds to a previous message, restores files, removes subsequent messages from the SQLite session). drive-opencode-interactive.sh would need a way to inject /undo as a slash-command step type; today it only supports prompt-as-text via `opencode run`, which is a full new turn rather than an in-session slash command. Recording deferred until the driver gains a slash-command primitive."
+          "notes": "driver_gap (gap:slash-command). agent_supports:yes — opencode ships /undo + /redo with git-snapshot semantics: /undo rewinds the conversation to a previous message AND restores the working-tree files via a git snapshot, REMOVING the subsequent messages from the SQLite session — an in-place rewind on the same ses_… (the strongest form of the canonical checkpoint primitive; stronger than claudecode's conversation-only in-place rewind, and unlike codex which forks). daemon (ProcessOwnedStore/SQLite) observability assessed full but UNTESTED LIVE — the transcript shrink-then-grow (message removal then regrowth on the same ses_…) is a store mutation no other opencode cell exercises. NOT recordable: /undo and /redo are in-TUI slash commands; CONFIRMED THIS SWEEP that headless `opencode run` does NOT process in-TUI slash commands — it stores them as literal user text (proven with inline /model and /new), so a send-shaped recipe sending /undo lints in-grammar but is a semantic no-op. drive-opencode-interactive.sh handles only send|wait_turn|sleep (blocking `opencode run` per send) and has no slash-command step against a live held-open session. Needs a live-REPL opencode driver (slash-command primitive); recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full in-place rewind target arc; assessment.json carries the yes / full(untested) / gap:slash-command verdict."
         }
       }
     },
@@ -1496,6 +1536,10 @@
         "claudecode": {
           "applicable": false,
           "notes": "agent_supports=no per coverage matrix — claudecode is local-only. Translator stops here; no recipe."
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "agent_supports=no per fresh reassessment — opencode has no cloud/hosted background-agent concept; sessions are a LOCAL ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) keyed to a local opencode process + cwd, so there is nothing PID-less/remote for irrlicht to observe. No recipe; pipeline frozen at Stage 1."
         }
       }
     },
@@ -1630,7 +1674,7 @@
         },
         "opencode": {
           "applicable": false,
-          "scope_note": "OpenCode's session row is SQLite-backed; there is no in-process /clear that mints a new ses_… while the same process keeps running. Spawning a new `opencode run` without --session creates a brand new session row — that's session-end + session-start, not session-reset. Coverage assessment is supports=unknown; recording deferred."
+          "notes": "driver_gap (gap:slash-command, equivalently gap:reset_session). agent_supports:yes — opencode's TUI ships a /new reset (binary carries `session.new` / `New session`), and the daemon (ProcessOwnedStore/SQLite) observes a fresh ses_… in ready exactly as the session-resume cell proves. NOT recordable: drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (handles only send|wait_turn|sleep) and (1) headless `opencode run` IGNORES in-TUI slash commands — PROBED 2026-05-26: `opencode run \"/new\"` stored the literal `/new` as a normal user message in ONE ses_… row, no reset — and (2) the driver has no reset_session step to detect a /new-spawned second ses_… and re-point subsequent turns at it (no session.uuids PLURAL list). session-reset needs a live-REPL opencode driver (reset_session primitive); recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full target supersession arc; assessment.json carries the yes / full / gap:slash-command verdict + the probe evidence."
         }
       }
     },
@@ -2593,6 +2637,10 @@
         "codex": {
           "applicable": false,
           "notes": "applicable: n/a (assessment 2026-05-23: agent_supports=partial, irrlicht_observes=no). This scenario's defining signal is a per-call safe-vs-risky classifier that selectively prompts (working→waiting) for risky calls only — primitive permission_hooks, which codex has set false. Codex has a coarse sandbox/approval_policy that auto-runs benign commands and escalates others, but the codex parser exposes no safe-vs-risky classification: its only waiting paths are <proposed_plan>→ExitPlanMode (plan-mode-approval) and a generic open function_call at task_complete (open-tool-call/gate). The daemon therefore cannot observe the selective-gating signal that distinguishes this cell from auto-executed-tool-call. The only codex-observable half (a benign command auto-running with no waiting, ready→working→ready) is already fully captured by the committed codex × auto-executed-tool-call cell; recording it here would be a redundant near-duplicate that proves the wrong thing. No recipe, no recording. See replaydata/agents/codex/scenarios/auto-classified-permission/assessment.json."
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "applicable: n/a (driver_gap, gap:permission-approval; assessment 2026-05-26: agent_supports=partial, daemon_capability=full, driver_capability=gap:permission-approval). opencode permission classification/gate is TUI-only; headless `opencode run` auto-executes tools with NO prompt and NO observable classification/waiting state — proven by opencode/auto-executed-tool-call, which captured the write tool running automatically inside the working span (ready→working→ready, no waiting). drive-opencode-interactive.sh handles only send|wait_turn|sleep — no approve/deny/classify step to surface or answer the auto-classifier — so this safe-path cell is unrecordable until a live-REPL (tmux TUI) opencode driver exists. recipe-lint cannot catch it (no script, no step-TYPE to reject); same shape as the sibling tool-gate-permission-prompt gap:permission-approval cell. A headless recording would be indistinguishable from auto-executed-tool-call and prove the wrong thing. No recipe, no recording. See replaydata/agents/opencode/scenarios/auto-classified-permission/assessment.json."
         }
       }
     },
@@ -2764,6 +2812,45 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated/configured (the default model is set in ~/.config/opencode/opencode.json; auth is out-of-band)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model must be capable of function calling — if the model emits no tool call this cell is unrecordable for a MODEL reason (opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"<prompt>\"` in a fresh per-run cwd under <staging>/cwd/ with NO --model flag, so it uses the config default; each send is its own `opencode run` subprocess that exits when the turn completes",
+            "No auto-mode / permission step is needed: in headless default `opencode run` auto-executes tools inside opencode's own sandbox with no interactive gate, so the tool call runs autonomously and the session never enters waiting — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db, FilesUnderRoot→ProcessOwnedStore), keyed on the UUID ses_… session; the daemon's ProcessOwnedStore source polls the session table. The tool call lands in the part table as a `tool` part (status pending→running→completed), which the parser maps to function_call / function_call_output (parser.go parseToolPart)",
+            "wait_turn is a no-op because `opencode run` already blocks until the turn ends; the ≥4s trailing sleep gives the daemon's poller one full tick to observe the working→ready settle before the run process exits",
+            "The send is a crisp single-tool-forcing prompt so the small/slow local default model reliably emits exactly one auto-executed write tool call inside the working span, then replies done"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Create a file named hello.txt containing exactly the text: hello — use your write tool. Then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the tool-using prompt is sent, sustained across the auto-executed write tool call",
+            "the opencode SQLite store / transcript.jsonl contains a tool part (function_call / function_call_output) for the write call — the auto-executed, ungated tool call (opencode has no interactive gate in headless default)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the tool resolves and the turn completes (step-finish reason=stop → turn_done)",
+            "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (the call auto-executes; no permission window)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -2782,6 +2869,10 @@
         "claudecode": {
           "applicable": false,
           "reason": "Task tool blocks the parent; no SendMessage-to-background-child primitive in current claudecode CLI. irrlicht's SubagentCount(parent) also does not currently distinguish background from foreground children — both layers need work upstream before this scenario is recordable."
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: opencode subagents are FOREGROUND task-tool children the parent AWAITS — opencode ships the `task` tool (opencode/foreground-subagent is recorded yes/full/ready) but no documented fire-and-forget BACKGROUND / async subagent dispatch (no run_in_background-style task that returns immediately while a detached child runs, no SendMessage-to-background-child primitive). agent_supports=unknown → STOP at Stage 1 (applicable:false), no recipe, no recording; the foreground case is already covered by opencode/foreground-subagent. Secondary blocker: even granting a hypothetical background primitive, the headless driver (drive-opencode-interactive.sh, send|wait_turn|sleep over BLOCKING sequential `opencode run`) cannot drive or observe a concurrently-running background child mid-turn. See replaydata/agents/opencode/scenarios/background-subagent/assessment.json (unknown / n/a / n/a)."
         }
       }
     },
@@ -2831,6 +2922,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "applicable: false (daemon_capability=incapable). agent_supports=no — opencode's bash tool runs SYNCHRONOUSLY to completion within the single tool call: there is no run_in_background-style dispatch of a child process that outlives the turn, and no later out-of-band completion event (no BashOutput/KillShell-style poll analogue). daemon_capability=incapable (structural transport gap, NOT a bug): the daemon's entire background-process machinery is bound to the claudecode JSONL path — the parser recognizes a Bash tool_use run_in_background:true + sibling toolUseResult.backgroundTaskId and extracts each tasks/<bash_id>.output path, and background_probe.go's lsof liveness probe (anyLiveOutputWriter, #445/#450) pins the session working over exactly those parser-extracted paths; BackgroundProcessCount/Outputs are populated ONLY by the JSONL-tailer metrics adapter. opencode is the lone ProcessOwnedStore adapter: its MetricsReader (querySessionMetrics, metrics.go) reads the SQLite store for tokens/tasks/tool-call/cost/context but NEVER sets the background fields, and the store carries no backgroundTaskId/output-file the lsof probe could watch — so a backgrounded-dispatch + later-completion is unobservable for opencode at the transport level. CATALOG DRIFT NOTE: the scenario's requires id `background_process` is one flagged missing from features.json this sweep — recorded here as a note only; features.json and the coverage rollup are maintainer-owned and left untouched. No recipe, no recording; pipeline frozen at Stage 1. UNBLOCK would need BOTH a real opencode backgrounded-process primitive (run_in_background-style dispatch + queryable later completion) AND an opencode/ProcessOwnedStore path that surfaces a liveness signal into BackgroundProcessCount/Outputs. See replaydata/agents/opencode/scenarios/background-process/assessment.json (no / incapable / n.a.)."
         }
       }
     },
@@ -3002,6 +3097,10 @@
           "settings": {},
           "timeout_seconds": 240,
           "notes": "Pi difference vs claudecode: pi's /compact appends a single top-level {type:\"compaction\",summary,...} entry to the SAME rollout file (session-manager.js appendCompaction → _appendEntry on the current leaf — NO newSession()), so the whole scenario stays on ONE session UUID — there is no boundary transcript (unlike claudecode 2.1.x) and no supersession (unlike pi /new). The pi parser (parser.go:55-60) maps the compaction event to EventType:\"assistant\" (active model work, ready→working), so the daemon sees it as an ordinary working→ready arc on the same session. irrlicht cannot LABEL the turn as compaction (CompactionState is dead code; the parser collapses it into a generic assistant activity), so the recipe asserts only the visible state arc — priming working→ready, a compaction working→ready arc on the same session, post-compaction working→ready, no waiting. DRIVER-SYNC (load-bearing): /compact writes a `compaction` entry, NOT an assistant stopReason==stop message, so drive-pi-interactive.sh's turn-counter does NOT increment for it. A counted wait_turn after /compact would inflate EXPECTED_TURNS by 1 and force a driver timeout (proven by a standalone probe). So the recipe deliberately uses NO wait_turn after /compact: it sleeps 14s over the real ~8s compaction summarization round (separated from the priming ready by a 3s sleep so the compaction registers as its OWN working blip), then issues the post-compaction prompt and ends on a 7s trailing sleep (NO final wait_turn) to flush that turn's working→ready arc and the post-turn ready dwell before the tmux teardown. Only send/slash/wait_turn/sleep are used — all already implemented by the pi driver; no driver extension needed. WHY interactive (not headless pi --print): a slash command only exists inside the REPL; headless pi is single-shot. WHY manual /compact (not auto): automatic compaction fires only on context-window pressure and is not deterministically reproducible in a bounded recording; manual /compact produces the identical {type:\"compaction\"} entry deterministically. C7 / SESSION-IDENTITY: session_birth matches the transient proc-<PID> pre-session born at launch; prime_start anchors to recording start with NO session pin so the matcher binds the FIRST working (necessarily the rollout, since the pre-session never goes working); compaction_start anchors to prime_end so it binds the post-priming working arc; every later phase pins to prime_start via same_session_as. Between runs: assistant wording, the summary text, per-turn/compaction token counts, session UUID, PID and timestamps differ; pi may flush a turn as one OR two bursts — the structural baseline is a priming working→ready arc + a compaction working→ready arc + a post-compaction working→ready arc on one rollout session_id, no waiting, a single process_exited, final ready. If it broke, look at core/adapters/inbound/agents/pi/parser.go (eventType==\"compaction\" → assistant) and whether a pi update changed where /compact writes the compaction entry (e.g. into a new session file)."
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "DRIVER GAP (gap:slash-command). /compact (and its sibling /summarize) are in-TUI slash commands; headless `opencode run` stores them as literal user text — proven this sweep with inline /model AND /new (both stored as ordinary user message content with no command effect). context-compaction needs a live-REPL opencode driver to fire the in-TUI command after a priming turn. drive-opencode-interactive.sh handles only send|wait_turn|sleep (no slash/keys step), so the recipe-lint reports gap:slash-command. NOT an agent or daemon limitation: opencode ships /compact + /summarize (slash_commands: true), and the daemon (lone ProcessOwnedStore adapter) reads per-turn session state from the SQLite store, so an in-place /compact turn WOULD surface as a ready→working→ready arc on the same session — see assessment.json (agent_supports: yes, daemon_capability: full, driver_capability: gap:slash-command). expected.jsonl is committed as the documented target. UNBLOCK: add a live-REPL/slash primitive to the opencode driver (tmux send-keys, like claudecode/codex/pi)."
         }
       }
     },
@@ -3345,6 +3444,45 @@
           ],
           "settings": {},
           "timeout_seconds": 360
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its configured default model (~/.config/opencode/opencode.json; the local LM Studio model lmstudio/gemma-4-e2b-it-uncensored at authoring time). The driver passes NO --model, so it uses that default",
+            "opencode's SQLite store exists at ~/.local/share/opencode/opencode.db (created on first run); the driver queries it for the ses_… session id and exports the parts transcript",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) runs ONE blocking `opencode run` per send in a fresh per-run cwd under <staging>/cwd/; opencode auto-assigns the ses_… session id (no CLI-assignable id) and the driver captures it from the SQLite session table keyed on that cwd after the first send returns",
+            "WHY ONE multi-step turn rather than many separate user-driven turns: opencode's per-send blocking `opencode run` plus the daemon's poller coalesce rapid back-to-back same-session sends, blurring the per-turn arcs, and the local gemma 2B default model is slow (~30–45s per turn/tool round) so a multi-turn run balloons. A single crisp, fully-enumerated multi-step prompt makes opencode's agent loop chain a HIGH VOLUME of write/read tool calls in one sustained `opencode run` subprocess — capturing the long contiguous working span the daemon must keep coherent, which is the load-bearing observable this scenario names",
+            "WHY tool calls auto-execute without a gate: in headless default (`opencode run`) opencode runs its write/read tools inside its own sandbox with NO interactive permission prompt, so the long burst never enters waiting",
+            "The timeout is deliberately generous (600s) because gemma is small and slow and this is a deliberately LONG multi-tool turn; wait_turn is a no-op (the blocking `opencode run` already returns only at turn end) and the trailing sleep lets the final working→ready settle land before the driver finishes"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do all of the following in THIS single turn, using your file tools, one step at a time (do not ask me anything): 1) create six files named step1.txt, step2.txt, step3.txt, step4.txt, step5.txt, step6.txt; 2) into each file write exactly its step number on a single line (step1.txt contains 1, step2.txt contains 2, and so on through step6.txt contains 6); 3) read all six files back; 4) finally create a file summary.md that lists, one per line, each filename followed by the number it contains. Do every step so I can see each file get created and read."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… session appear in ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains exactly one state_transition→working on the ses_… session when the multi-step prompt is sent (start of the long agentic burst)",
+            "across the entire turn, NO state_transition to ready fires between successive function_call/function_call_output pairs (ONE contiguous working span — no flicker mid-burst across the many write/read tool calls)",
+            "across the entire turn, NO state_transition to waiting fires (opencode auto-executes its file tools in headless run; no permission gate)",
+            "transcript.jsonl / the SQLite part table contains a HIGH VOLUME of tool parts in the single turn (≥5 function_call / function_call_output pairs: the six file writes, the read-backs, and the summary write) — verified out-of-band since the phase DSL has no tool-event form",
+            "events.jsonl contains exactly one state_transition→ready on the ses_… session once the final tool call resolves and step-finish reason=stop → turn_done fires (clean settle, not stuck working)",
+            "final session state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 600
         }
       }
     },
@@ -3511,6 +3649,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "driver_gap (gap:mid-turn-injection). agent_supports:partial — opencode's TUI has a live composer so a user CAN type a second message while a turn runs, but whether that mid-turn message is QUEUED (buffered, folded into one contiguous working span) vs. interrupts/rejects the running turn has NOT been verified against the live TUI. NOT a daemon limitation — opencode is the lone ProcessOwnedStore adapter; the daemon reads session state from the SQLite store (ComputeMetrics keyed on ses_…), so a contiguous working span + clean working→ready close WOULD be observable, the same store-read signals basic-turn proves (daemon_capability:full). NOT recordable: the scenario needs a SECOND user message injected WHILE the first turn is in progress, so the agent has an in-flight turn to queue against. drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (handles only send|wait_turn|sleep): each `send` shells out to `opencode run` and WAITS for the turn to fully complete, and steps run strictly SEQUENTIALLY — by the time a second send could fire the first turn is already over, so there is no in-flight turn to queue against and no async/queue step. The driver can only produce back-to-back COMPLETED turns, never an in-flight turn with a second message arriving during it. NOT a recipe-lint step-TYPE gap either (a two-send recipe lints in-grammar); the gap is architectural (blocking `opencode run` + sequential sends, no async/queue primitive). UNBLOCK: a live-REPL opencode driver that holds the TUI open, sends the slow first prompt, then injects a SECOND message into the composer WHILE that turn is still running (plus a way to verify the TUI queues vs. interrupts). Recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full contiguous-working-span target arc; see replaydata/agents/opencode/scenarios/mid-turn-message-queued/assessment.json (driver_capability: gap:mid-turn-injection)."
         }
       }
     },
@@ -3691,6 +3833,44 @@
             "final session state is ready before teardown."
           ],
           "notes": "Single no-op turn in ONE live aider REPL launched against a specific main model (IRRLICHT_AIDER_MODEL): captures that the dashboard shows the launch model (ModelName != 'unknown') with a populated ContextWindow, not 'unknown'. TEMPLATED FROM claudecode/model-identification (same single send + wait_turn + trailing sleep shape) and adapted to aider's transport. RECORDABILITY (no driver_gap): the recipe needs only send/wait_turn/sleep — the aider interactive driver implements all three (case `send|slash)`, `wait_turn)`, `sleep)`), so there is no missing step type. WHY interactive (not headless `aider --message`): headless aider is single-shot and exits after one reply — on a short run the process can exit before the daemon classifies the working→ready settle and before the PID scanner ticks, truncating turn_end/teardown; the interactive driver keeps the REPL alive across the turn, then kills the tmux session once → a SINGLE clean process_exited. MODEL/CONTEXT ASSERTION IS OUT-OF-BAND: the events.jsonl phase DSL carries no model field, so expected.jsonl asserts only the basic-turn lifecycle skeleton (one ready→working→ready arc on one proc-<PID> session, a single process_exited, no waiting, final ready); the two user-observable signals (ModelName == launch model, ContextWindow == published window) are asserted at summary.model_name in the .replay.json.golden plus the aider parser unit tests for the `> Model:`/`> Main model:` blockquote. SESSION IDENTITY: aider stores its transcript in the cwd (FilesUnderCWD), so the daemon keys the whole session by proc-<PID> — no separate UUID rollout session and no handoff phase; the turn arc, pid_bind, and teardown all pin to session_birth via same_session_as, while session_birth itself is anchored to start UNPINNED so the transient proc-<PID> birth can't steal session identity. LAZY TRANSCRIPT: .aider.chat.history.md materializes only once the first user input lands, so the live REPL is observable from launch as the proc-<PID> pre-session born ready — session_birth matches that. AIDER TURN-END IS SYNTHESIZED, NOT MARKED: the markdown transcript has no turn-end marker — `> Tokens:` closes one model CALL, not the turn; end-of-turn is synthesized by IdleFlush after ~1.5s quiet, clamped to the SessionDetector's ~5s working-refresh poll, so the EFFECTIVE working→ready latency is ~5s; the trailing 9s sleep (≥8s) lets the turn's working→ready flip fire AND be observed before daemon shutdown (a shorter tail would miss the terminal ready). PROMPT: a pure conversational question (`What is the capital of France? Answer in one word, no file edits.`) — gpt-5-nano writes `> Model: gpt-5-nano` on the first assistant block regardless of whether it edits, and a non-edit prompt avoids the post-turn `Applied edit` write that re-triggers transcript_activity inside the idle dwell (the long-idle cell's known gpt-5-nano edit-flicker). What differs between runs: the concrete model value (set IRRLICHT_AIDER_MODEL for a deterministic, LiteLLM-known name; otherwise issue #440 — assert presence, not a hardcoded string), token counts, PID/timestamps, assistant wording, and the working→ready edge lands with ~5s idle-flush latency. What must NOT differ: one working→ready arc on ONE proc-<PID> session, a non-empty summary.model_name == the launch model in the golden, and a single process_exited at teardown. multi_model_orchestration=yes; headless_mode=yes (the scenario's requires:). RECORDING DEFERRED: validated when aider auth is available in-env — at authoring time there is no provider key present and headless aider hangs on OpenRouter OAuth, so this recipe + spec are the DOCUMENTED TARGET pending a recording.",
+          "settings": {},
+          "timeout_seconds": 180
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the worktree default is a local LM Studio model so no remote key is needed)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model in ~/.config/opencode/opencode.json is the one whose name the dashboard should report; the driver passes NO --model flag, so whatever default is set is what gets asserted as ModelName (not 'unknown')"
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run -- \"<prompt>\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns (opencode does not expose CLI-assignable session IDs)",
+            "opencode records the active model on each message under message.data.model = {providerID, modelID}; the metrics path reads modelID (fallback top-level modelID) → tailer.NormalizeModelName → SessionMetrics.ModelName, and ComputeContextUtilization derives ContextWindow from that model. The scenario is about the daemon extracting that name, not about which model produced the tokens",
+            "The send is a no-tool single turn — opencode is asked to reply with exactly one word, so the working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate fires)",
+            "ModelName/ContextWindow are checked AFTER turn_done — ContextWindow may briefly read 0 between session detection and the first assistant event (per assessment caveat); the default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleep and 180s timeout are generous so a slow turn must not trip a false timeout and the trailing sleep must outlast the turn_done settle so working→ready is observed"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl shows one ready→working→ready cycle on the ses_… session_id (the single assistant turn); no state_transition to waiting appears (no tool call, no permission gate)",
+            "the .replay.json.golden carries a non-empty summary.model_name (NOT 'unknown') — opencode's metrics path pulled it from message.data.model.modelID and normalized it. This is where model identification is asserted, since the events.jsonl phase DSL has no model field. The concrete value follows the configured default (this worktree: the local LM Studio model normalizing to 'gemma-4-e2b-it-uncensored'); assert presence + non-'unknown'",
+            "the session's final live state is ready"
+          ],
+          "notes": "Single no-op turn in one headless opencode session: captures that the dashboard shows the configured default model (ModelName != 'unknown') instead of 'unknown'. TEMPLATED FROM opencode/basic-turn (same single send + wait_turn + trailing sleep shape) — the only extra intent over basic-turn is that the daemon extracted a model_name. RECORDABILITY (no driver_gap): the recipe needs only send/wait_turn/sleep, all implemented by drive-opencode-interactive.sh. WHY a blocking `opencode run` (not a long-lived REPL with teardown, unlike codex/pi): opencode's driver launches a fresh blocking `opencode run` per send and chains --session; the run already blocks until the turn completes, so wait_turn is a no-op and there is no in-process REPL to tear down — hence no teardown/process_exited phase (the opencode sibling specs basic-turn and turn-end-terminal-text omit it for the same reason). WHERE THE MODEL CLAIM LIVES: opencode stores model = {providerID, modelID} in its SQLite store; metrics.go reads modelID → NormalizeModelName → SessionMetrics.ModelName, and ComputeContextUtilization derives ContextWindow. The model assertion is NOT expressible in the events.jsonl phase DSL (the validator Phase struct carries no model field), so expected.jsonl asserts only the basic-turn lifecycle skeleton (one ready→working→ready arc on one ses_… session, no waiting, final ready); the user-observable model signal is asserted at summary.model_name in the .replay.json.golden (which replay-fixtures.sh diffs) plus the opencode metrics unit tests. SESSION IDENTITY: session_birth is anchored to recording start UNPINNED so a transient proc-<PID> pre-session can't steal identity; turn1_start (matching working) establishes the ses_… session identity that turn1_done chains off via same_session_as. MODEL note: the driver passes NO --model flag, so whatever default is configured in ~/.config/opencode/opencode.json is reported — this worktree boots on a local LM Studio model whose modelID normalizes to 'gemma-4-e2b-it-uncensored'; per issue #440 the concrete model string is environment-dependent, so assert presence (non-empty, not 'unknown'), with the value following the configured default. What differs between runs: the concrete model value (follows the configured default), token counts/cost, ses_… UUID/PID/timestamps, assistant wording (pinned with 'Reply with exactly the word: ok'). What must NOT differ: one ready→working→ready arc on one ses_… session, a non-empty summary.model_name in the golden, and a final ready state. The local gemma model is small and slow (~30–45s per turn), so the trailing 6s sleep outlasts the turn_done settle and the 180s timeout absorbs a slow turn.",
           "settings": {},
           "timeout_seconds": 180
         }
@@ -3989,6 +4169,10 @@
           "notes": "Canonical agent-agnostic model-switch-midsession cell — the DISTINCTION from the codex-specific `model-switch` sibling is emphasis, not mechanism (both share coverage_id model-switch-midsession; the matrix wants both cells). This cell's spec leans on MID-SESSION CONTINUITY: every turn phase in expected.jsonl is pinned same_session_as the rollout session_birth, and a dedicated switch_window dwell phase asserts the session stays ready (no working/waiting flicker, no new session) while the /model picker is open — so the recording proves the switch happened DURING one live session, in place, not via a restart. Codex /model is an interactive TWO-STEP picker (model list, then reasoning-level list), NOT a one-shot `/model <name>` like aider — so the recipe drives it with `slash /model` to open it, then `keys` steps to navigate. Probed live on codex 0.130.0 (2026-05-23): the model list is 1=gpt-5.5(default) 2=gpt-5.4(current/boot-default, highlighted) 3=gpt-5.4-mini 4=gpt-5.3-codex 5=gpt-5.2, so `Down Down Enter` from the boot-highlighted entry 2 lands on gpt-5.3-codex (entry 4); the reasoning sub-screen then opens with Medium(default) highlighted, so a bare `Enter` confirms gpt-5.3-codex medium (footer flips to `gpt-5.3-codex medium`, rollout writes `• Model changed to gpt-5.3-codex medium`). The two `keys` steps are split with a 2s sleep because the model-confirm Enter and the reasoning-confirm Enter hit DIFFERENT screens that need a render gap; the `keys` step does NOT touch the turn counter, so wait_turn stays correct. Model A is gpt-5.4 (the boot default in this codex build). What differs between runs: assistant token counts/cost, exact rollout UUID/PID/timestamps, and the assistant's wording (we pin it with `Reply with exactly the word: first/second` to keep turns short and deterministic). What must NOT differ: ONE rollout session_id from birth to teardown, two working→ready arcs on it, no flicker during the picker window, the model_name landing on gpt-5.3-codex, and process_exited at teardown. If the picker navigation drifts (codex changes the model list order), the Down-count is wrong — re-probe `/model` and recount. multi_model_orchestration=yes.",
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: opencode driver has no per-step model selection / mid-session switch primitive — gap:model-select. drive-opencode-interactive.sh drives headless `opencode run` and implements only send/wait_turn/sleep; the `send` arm hardcodes `opencode run --format default [--session] -- text` with NO --model flag, so every turn uses the single config default model (lmstudio/gemma-4-e2b-it-uncensored). No send-only switch path exists: the in-TUI /model picker is an arrow-key overlay (not drivable headlessly, and no `keys` step), and inline `/model <id>` is NOT processed by `opencode run` — proven live (2026-05-26): a send-path run of `opencode run -- \"/model ionos/meta-llama/Llama-3.3-70B-Instruct\"` produced a session whose only message still carried model.modelID=gemma-4-e2b-it-uncensored/providerID=lmstudio (the /model text went to the LLM as content; the model did not switch). NOT an agent or daemon limitation — opencode supports model switching (multi_model_orchestration:true) and the daemon reads per-turn model from its SQLite store (ProcessOwnedStore), so a genuine switch WOULD be observable. NOT a recipe-lint step-TYPE gap either (a recipe would use only handled types); the missing capability is model selection within the send arm, confirmed by behavioral probing. UNBLOCK: add a per-step model-select primitive to drive-opencode-interactive.sh (thread `opencode run -m <provider/model>`), with model A = config default and model B = a second reachable model (e.g. ionos/<model>; IONOS_API_TOKEN is set). expected.jsonl is retained as the documented two-turn lifecycle target; see replaydata/agents/opencode/scenarios/model-switch-midsession/assessment.json (driver_capability: gap:model-select). multi_model_orchestration=yes."
         }
       }
     },
@@ -4000,7 +4184,8 @@
         "claudecode",
         "codex",
         "pi",
-        "aider"
+        "aider",
+        "opencode"
       ],
       "requires": [
         "headless_mode"
@@ -4141,6 +4326,42 @@
             "events.jsonl contains the aider session (label aider) and at least one different-adapter session, each keyed to the same cwd slug",
             "each session has its own independent working->ready arc; no transition on one is attributed to the other (aiders fresh per-process parser + per-CWD markdown transport guarantee no shared state)",
             "no cross-contamination: the daemon never merges or flaps the aider row into another adapters; aider has no subagents so its subagent count stays absent"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": true,
+          "partner_adapter": "claudecode",
+          "preconditions": [
+            "opencode AND at least one different-adapter CLI (claude, and the other concurrent adapters codex/pi/aider) on PATH and authenticated; opencode authenticates against its configured default model (a local LM Studio model in ~/.config/opencode/opencode.json, so no remote key is needed)",
+            "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+            "the opencode SQLite watcher is enabled in the recording daemon (ProcessOwnedStore source polling ~/.local/share/opencode/opencode.db)",
+            "no other opencode/claudecode/codex/pi/aider session is live in the run cwd"
+          ],
+          "setup": [
+            "run-cell-multi.sh creates ONE shared cwd and launches each cross_adapter[] driver concurrently, all pointed at it via IRRLICHT_ONBOARD_CWD (the opencode interactive driver honors $IRRLICHT_ONBOARD_CWD — like the codex/pi/aider drivers — so it shares the workspace with the other adapters; opencode keys its SQLite session on session.directory = that shared cwd)",
+            "opencode registers Process.Match=ExactName{Name:opencode} + Source=ProcessOwnedStore{Reader over ~/.local/share/opencode/opencode.db}, the ONLY structured-store transport here — doubly disjoint from claudecode ~/.claude/projects, codex ~/.codex/sessions, pi ~/.pi/agent/sessions (FilesUnderRoot JSONL) and aider .aider.chat.history.md (FilesUnderCWD markdown). opencode.db never holds another adapter's rows, so the daemon keys the opencode session independently; its single-session driver (send/wait_turn/sleep) is sufficient because opencode runs ONE session next to a DIFFERENT adapter",
+            "this cell stores the opencode transcript (exported from the SQLite store) for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (every coexisting adapter)",
+            "the send is a single short text turn (one word) so opencode's working span carries no tool call and the session never enters waiting; opencode's default model is a small slow local LM Studio model (~30-45s/turn), so the spec's working-anchor windows are generous and the trailing sleep must outlast the turn_done settle so working->ready is observed"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: epsilon"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the opencode session (label opencode, ses_… id) and at least one different-adapter session, each keyed to the same cwd slug",
+            "each session has its own independent working->ready arc; no transition on one is attributed to the other (opencode's structured SQLite store is disjoint from every partner's file-based transport, so no shared state can leak)",
+            "no cross-contamination: the daemon never merges or flaps the opencode row into another adapter's; opencode's turn arc and any pid_discovered land on the ses_… session"
           ],
           "settings": {},
           "timeout_seconds": 240
@@ -4420,6 +4641,10 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "applicable:false — observed opencode INCAPABILITY (not a model weakness): a live opencode session cannot deterministically produce a single oversized (>=256 KB) transcript part, because opencode's tools cap their output before persisting it to the SQLite store. Verified empirically at record time (2026-05-26) on opencode 1.14.50 + the local default model: (1) the recipe's tool-induction path DID run cleanly — bash created a 300000-byte single-line big.txt and the read tool read it back, arc ready->working->ready completed twice on one ses_… session (run-cell STAGED) — but the read-tool-result part was only ~4.6 KB: opencode's read tool truncates each line to 2000 chars (the recorded output literally says 'line truncated to 2000 chars'). (2) A direct probe forcing ~300 KB of bash stdout produced part.data of only ~82 KB with state.metadata.truncated=1 and 'Full output saved to: ~/.local/share/opencode/tool-output/tool_…' — opencode stores a ~30-50 KB preview in the part row and overflows the full bytes to a SEPARATE sidecar file that the daemon never reads as a transcript part. So no tool path yields a single >=256 KB part.data row / >=256 KB exported transcript.jsonl line. This is a shared-tailer/store robustness PROPERTY, not an opencode feature, and opencode is structurally stronger here anyway: it is the lone ProcessOwnedStore adapter (agent.go:41) — the live watcher reads part.data straight from SQLite via rows.Scan (watcher.go:456-499) and ComputeMetrics likewise (metrics.go:67-103) with NO bufio line-buffer cap, so even an oversized part would be read whole; the shared tailer's 64 MB readLineCapped guard (tailer.go, issue #270) never gates opencode store reads. The authoritative cap-stress coverage is the agent-agnostic unit test core/pkg/tailer/large_line_test.go (TestTailAndProcess_LargeToolResultLine + TestReadLineCapped_OversizedLineSkipped), which pins the 64 MB cap on the shared tailer. We do NOT fabricate a >256 KB part into a fixture. expected.jsonl is retained as the documented state-arc target (the assessment route was record; the live recording overrode it — see assessment.json and the implement observability_correction)."
         }
       }
     },
@@ -4608,6 +4833,47 @@
               "false"
             ]
           },
+          "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated/configured (the default model is set in ~/.config/opencode/opencode.json; auth is out-of-band)",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "the configured default model must be capable of emitting MULTIPLE tool calls in one turn — if the model will not iterate (write then read then edit) this cell is unrecordable for a MODEL reason (opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+          ],
+          "setup": [
+            "The driver (drive-opencode-interactive.sh) launches a blocking `opencode run -- \"<prompt>\"` in a fresh per-run cwd under <staging>/cwd/ with NO --model flag, so it uses the config default; the whole multi-tool self-correction turn rides ONE `opencode run` subprocess that exits when the turn completes",
+            "No auto-mode / permission step is needed: in headless default `opencode run` auto-executes tools inside opencode's own sandbox with no interactive gate, so every tool call in the iteration runs autonomously and the session never enters waiting — unlike the claudecode recipe, which must enable auto mode to keep a Bash call from tripping a gate",
+            "Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db, ProcessOwnedStore), keyed on the UUID ses_… session; the daemon's ProcessOwnedStore source polls the session table. Each tool call lands in the part table as a `tool` part (status pending→running→completed/error) that the parser maps to function_call / function_call_output (parser.go parseToolPart). A tool-calls step-finish reason keeps the session working; only step-finish reason=stop → turn_done settles working→ready — so the write→read→edit sequence is one contiguous working span (parser.go parseStepFinish)",
+            "wait_turn is a no-op because `opencode run` already blocks until the turn ends; the ≥4s trailing sleep gives the daemon's poller one full tick to observe the working→ready settle before the run process exits",
+            "The send is a crisp create-a-deliberate-bug-then-read-it-back-and-fix prompt so the small/slow local default model reliably emits MULTIPLE auto-executed tool calls (write → read → corrective edit/write) inside ONE sustained working span before replying done — this is the iteration the cell captures",
+            "WHY one send, not multiple: the whole self-correction is a SINGLE turn (try → observe problem → fix), so it must ride one `opencode run` to be one contiguous working span; splitting it into back-to-back sends would create separate working→ready arcs (and the known opencode poller nuance coalesces rapid same-session arcs anyway). Verify ≥2 tool parts landed before turn_done in the SQLite store at record time"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Do this all in ONE turn, using your tools, and do not ask me anything: (1) use your write tool to create a file calc.py containing exactly `def add(a, b):\\n    return a - b` — note the body deliberately SUBTRACTS, which is a bug; (2) use your read tool to read calc.py back; (3) notice add() should ADD, and use your edit/write tool to fix the body to `return a + b`. After all three steps reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the iteration prompt is sent, sustained across the write → read → corrective-edit tool calls (one contiguous working span)",
+            "the opencode SQLite store / transcript.jsonl contains at least TWO tool parts (function_call / function_call_output) inside the working span — the buggy write, the read-back, and the corrective edit (the auto-executed, ungated tool calls; opencode has no interactive gate in headless default)",
+            "events.jsonl contains NO state_transition to ready between the buggy write and the corrective edit — the session stays continuously working across the retry cycle (a tool-calls step-finish reason does not close the turn)",
+            "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (every tool call auto-executes; no permission window)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the corrective edit resolves and the turn completes (step-finish reason=stop → turn_done)",
+            "final session state is ready"
+          ],
+          "settings": {},
           "timeout_seconds": 300
         }
       }
@@ -4837,6 +5103,10 @@
           "settings": {},
           "timeout_seconds": 180,
           "notes": "aider vs claudecode/codex/pi for this scenario: aider's `/run <cmd>` (documented alias `!<cmd>`) runs a shell command locally with no LLM round-trip — the direct analog of Claude Code's `!cmd` shell-escape (assessment.json agent_supports: yes). The recipe is templated from the claudecode shell-escape recipe but diverges on the observation shape (assessment.json irrlicht_observes: PARTIAL). claudecode's parser deliberately SKIPS the <bash-input>/<bash-stdout> wrappers so the escape synthesizes NO turn and state stays ready throughout (its top-level verify.tool_calls_max:0 holds). OBSERVABILITY CORRECTION (live aider 0.86.2 recording — supersedes the earlier doc-based prediction that aider folds the escape into a Bash tool_result): aider 0.86.2's `/run` does NOT write a `> Running <cmd>` blockquote, so runningRE (^>\\\\s*Running\\\\s+, parser.go:69-70) never matches and p.toolCall(\"Bash\") (parser.go:122-124) never fires — ZERO Bash tool_results are emitted. aider 0.86.2 instead writes `> Add command output to the chat?` + `> Added N lines of output` confirmation blockquotes, which fall through to the generic ignored-blockquote branch. (parser_test.go TestParser_ToolCall_RunningShell still pins the runningRE→Bash path for a LITERAL `> Running` line, but `/run` never produces that line.) What still holds: the `####` user-prompt line aider writes for `/run` opens a real turn (→working), and ~1500ms later IdleFlush synthesizes turn_done (working→ready, clamped behind the SessionDetector ~5s poll). So the observable is a genuine ready→working→ready arc (NOT claudecode's stay-in-ready) with NO tool call — the escape is observed only as that arc, never as a distinct shell-escape event; that indistinguishability is exactly why the cell is partial. verify.tool_calls_max:0 happens to hold for aider 0.86.2 (zero tool calls), but for a different reason than claudecode. RECIPE SHAPE: the escape comes FIRST (via `slash` — the aider interactive driver supports send/slash/wait_turn/interrupt/sleep but NOT keys; `/run echo hello` is an inline-arg slash so `slash` delivers it verbatim, no `keys` gap), with NO wait_turn (it produces no `> Tokens:` line) followed by a ≥7s sleep so IdleFlush's working→ready lands before the next prompt re-enters working; then a normal `send`+`wait_turn` proves the session is still alive and a real prompt still drives the arc; a ≥12s trailing sleep holds the recording open past the final IdleFlush settle so the tmux kill doesn't race the final working→ready emission + process_exited (TEARDOWN RACE: an 8s tail let the kill land mid-working and lost the final ready + process_exited; ≥12s gives the ~5s SessionDetector poll + IdleFlush full room to settle). SESSION-IDENTITY: the live REPL surfaces a transient proc-<PID> pre-session born ready at launch; the whole arc lives on that one proc-<PID> row (no transcript-UUID rollout for FilesUnderCWD). In expected.jsonl, escape_start anchors to recording start with NO session pin (matcher picks the FIRST working — the pre-session never goes working), and pid_bind / escape_end / final_turn_start / final_turn_end / teardown pin via same_session_as so a co-occurring pre-session can never satisfy them. Between runs: the shell command stdout, exact final-turn assistant wording, per-turn token counts, session UUID, PID and timestamps differ. If it broke, look at core/adapters/inbound/agents/aider/parser.go (the `####`→turn-open at parser.go:94-108 and the IdleFlush turn_done at parser.go:216-229) and whether an aider update changed how `/run` / `!` escapes are written into .aider.chat.history.md (e.g. a return of the `> Running` line, which would re-introduce a Bash tool_result). KNOWN FAILING (5/7, live aider 0.86.2): the load-bearing escape arc (escape_start→escape_end: the /run shell-escape does NOT stick in working) + session_birth/pid_bind/final_turn_start all PASS, but final_turn_end + teardown FAIL — aider does not reliably emit the FINAL turn's working→ready settle before the tmux kill. When the final turn's last transcript write coincides with the working transition (no later fswatcher activity to re-arm the tailer), the SessionDetector refresh-ticker IdleFlush (~5s poll) races process death and the settle is lost. Reproduced across 4 recordings (trailing sleeps 12/18/20s; both file-editing and plain-reply final prompts). This is the assessed irrlicht_observes:partial latency carve-out, not a daemon regression and not recipe-fixable; marked known_failing in expected.jsonl. PROMPT NOTE: the final prompt is \"Reply with exactly the word: ok\" (mirrors basic-turn), but gpt-5-nano sometimes still interprets the word as a filename and edits a file — harmless to the arc; the teardown gap is independent of whether the final turn edits."
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: opencode has no user-level shell-escape (`!cmd`) that runs outside a model turn; shell is the model-invoked bash tool, already covered by auto-executed-tool-call. agent_supports:unknown (per assessment.json) → applicable_false (#476): no recipe script, no recording. The headless `opencode run` driver also has no escape/`!` step, but that gap is downstream of the missing agent primitive (not a driver_gap)."
         }
       }
     },
@@ -4894,6 +5164,46 @@
         "pi": {
           "applicable": false,
           "notes": "DEGRADED to applicable:false after a live recording proved the streaming-stability property is not observable for pi at the transcript layer. SCOPE_NOTE: pi writes its rollout JSONL session file ONCE, on turn completion — the assistant turn lands as a SINGLE consolidated `message`/assistant line carrying `stopReason=stop` and the whole multi-line reply in one content block (confirmed: a '6-line poem, one line at a time' prompt produced exactly 1 user line + 1 assistant(stop=stop) line). There are ZERO intermediate partial-assistant flushes in the transcript the daemon tails; pi's incremental streaming is purely a terminal-UI rendering concern that never reaches the JSONL. The spec's streaming window — sustaining `working` across multiple non-terminal partial flushes with no premature `→ ready` — therefore has nothing to assert over: the completed turn lands all-at-once, so the daemon emits ready→working→ready essentially instantaneously (working→ready at +0 ms because stopReason=stop is already present on the first activity). The live recording also exhibited a SECOND spurious working→ready arc ~2 s later from the daemon re-touching the already-completed file — a file-touch artifact, NOT streamed-content flicker, and unrelated to the property this cell targets. Validator result on the captured recording: 1/5 phases (turn_start 'no state_transition to ready' invariant violated at +0 ms). This is an adapter-transport limitation, not a flaky recipe: no live-CLI prompt can make pi emit intermediate partial-assistant JSONL flushes. The torn/partial-line concern lives in the separate oversized-transcript-line cell. expected.jsonl is retained as the documented target should pi ever switch to incremental rollout writes. Reassessment was yes/yes (0.72) on the PARSER logic (parser.go:78-83 sustains working on every non-stop assistant message; parser.go:55-60 maps compaction to assistant so even a mid-stream compaction can't flicker) — the parser would hold working correctly IF partial flushes existed, but pi's transport never produces them, so the cell is unrecordable as specified."
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the default is a local LM Studio model so no remote key is needed)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "OBSERVABILITY CAVEAT (mirror of the spec's notes): opencode persists session parts to SQLite, observed by the daemon's WAL-fsnotify-driven ProcessOwnedStore watcher (scanParts, time_updated cursor). A no-tool prose turn run headlessly via blocking `opencode run` can flush its assistant text part(s) AND the terminal step-finish reason=stop to the WAL inside one scan window at turn completion — basic-turn collapsed working→ready in ~0.3ms for exactly this reason. The multi-line prompt aims to spread the assistant text across several WAL flushes so the working dwell is genuinely observable; but if opencode writes the whole reply atomically the streaming_window has nothing intermediate to assert over. If a live recording confirms the atomic-write behavior, that is an inherent ProcessOwnedStore observability gap (surface it as observability_correction → daemon_capability:incapable), NOT a flaky recipe and NOT a reason to rebase expected.jsonl."
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run -- \"<prompt>\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the part table (WAL-fsnotify-driven, debounced by minScanGap) and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns (opencode does not expose CLI-assignable session IDs)",
+            "OPENCODE'S STREAMED UNIT IS THE ASSISTANT TEXT PART: parseTextPart maps every assistant text part to assistant_message (parser.go:178-197 — no turn boundary, excluded from IsAgentDone), and step-finish reason=tool-calls also maps to assistant_message (parser.go:155-157). Only step-finish reason=stop emits turn_done (parser.go:152-154) and settles the turn working→ready. So no intermediate part flush can flip the session to ready: the session holds working across every text/non-stop flush that reaches the WAL — the no-flicker invariant the streaming_window pins",
+            "ELICITING A MULTI-FLUSH WORKING DWELL: the send asks for a moderately long multi-line prose answer (a short numbered list, one item per line) so the assistant emits its content as several text parts that flush to the WAL across multiple scan windows, giving the daemon an observable working dwell BEFORE the terminal step-finish reason=stop. This is the no-tool analog of opencode/self-correction-iteration's multi-step turn — but with tool_calls_max:0 there is no permission gate, so the session never enters waiting",
+            "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleep and timeout are generous: a slow multi-line turn must not trip a false timeout, and the trailing sleep must outlast the turn_done settle so the step-finish-driven working→ready is observed before teardown"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a 5-step guide for making a cup of tea. Number each step 1 through 5, and put each step on its own line. Write at least one full sentence per step."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl shows exactly one state_transition→working on the ses_… session_id when the multi-line prompt is sent — the streaming window opens here",
+            "across the streaming window (opencode emits the assistant content as incremental text parts, each mapped to assistant_message — non-terminal), NO state_transition to ready fires before the terminal step-finish reason=stop; the session holds working solidly across all flushes (the no-flicker invariant)",
+            "NO state_transition to waiting fires during the streaming window (tool_calls_max:0 — no tool call, no permission gate)",
+            "events.jsonl shows exactly one state_transition→ready on the same ses_… session_id at turn end (step-finish reason=stop → turn_done closes the turn)",
+            "the session's final live state is ready",
+            "transcript.jsonl contains 1 user line and at least 1 assistant text line plus the terminal step-finish (if the reply lands as multiple text parts, multiple assistant lines appear — the observable multi-flush span)"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         },
         "aider": {
           "applicable": true,
@@ -5003,6 +5313,10 @@
           ],
           "settings": {},
           "timeout_seconds": 180
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: orphaning needs a mid-turn SIGKILL/restart of the opencode process while a subagent is live; driver has only send/sleep/wait_turn — no restart/sigkill step — needs a live-REPL/process-control opencode driver — gap:restart. drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (case \"$TYPE\" handles only send|wait_turn|sleep) and owns no long-lived process to signal: each `send` blocks inside `opencode run` until the parent's turn — and every concurrent `task` child — has already completed, so by the time control returns there is no in-flight subagent to orphan, and headless `opencode run` exits CLEANLY at turn end (a graceful exit, NOT the abrupt mid-subagent kill the cell needs). NOT an agent or daemon limitation: opencode spawns subagents via the `task` tool (proven by opencode/foreground-subagent) and the daemon reaps orphaned sessions via the transport-agnostic pid_manager/restart sweep (process-exit-driven; no store part needed for the orphaned child), so a genuine orphan WOULD reap cleanly with no spurious working/waiting transition (issue #321 invariant). NOT a recipe-lint step-TYPE gap either (recipe left applicable:false with no script, so no step type to reject) — same shape as the opencode user-esc-interrupt gap:interrupt / model-switch-midsession gap:model-select cells. UNBLOCK: add a live-REPL/process-control primitive to drive-opencode-interactive.sh that holds the opencode process alive across the child's lifetime, sends a long-running `task` subagent prompt, waits for parent_linked, then fires a sigkill/restart step killing the parent process group mid-turn. expected.jsonl is retained as the documented orphan-arc target; see replaydata/agents/opencode/scenarios/subagent-orphan-cleanup/assessment.json (driver_capability: gap:restart; agent_supports: yes — subagents work per foreground-subagent)."
         }
       }
     },
@@ -5196,6 +5510,10 @@
           "notes": "RECORDING DEFERRED: spec+recipe authored as the DOCUMENTED TARGET; not yet recorded because aider has no provider key in this environment (headless aider hangs ~5min on OpenRouter OAuth; the rig precheck delegates auth to the user — proven infra_fail). Validate when aider auth is available in-env. RECORDABILITY (no driver_gap): a BARE local slash like `/tokens` is sendable via the existing `slash` step (the aider interactive driver handles `send|slash)` identically — types the text + Enter); there is no inline picker and no arrow-key navigation, so this is NOT a `keys` gap. The driver implements send/slash/wait_turn/sleep, covering every step this recipe needs. WHY a single `slash` + sleep (no warm-up turn, no wait_turn): unlike claudecode (which needs a warm-up LLM turn first because its UUID transcript only materializes on a real model turn), aider's `#### ` history line materializes .aider.chat.history.md on ANY first user input — the bare `/tokens` line IS that first input, so it both materializes the transcript and drives the one working arc; a warm-up turn would just add a second, redundant arc and break the canonical [ready, working, ready] topology. NO wait_turn after the slash: a local /tokens makes no model call and writes no `> Tokens:` close, so there is no assistant turn to wait for — a wait_turn would hang on an unchanged turn count; the recipe covers the working→ready settle with a fixed 10s sleep instead. AIDER TURN-END IS SYNTHESIZED, NOT MARKED: the markdown transcript has no turn-end marker — end-of-turn is synthesized by IdleFlush after ~1.5s quiet (parser.go aiderIdleTurnDoneAfter), clamped to the SessionDetector ~5s working-refresh poll, so the EFFECTIVE working→ready latency is ~5s; the 10s trailing sleep lets that flip fire AND be observed before the daemon shuts down (with a shorter sleep the final ready transition is missed). BEHAVIORAL DIVERGENCE FROM THE CLAUDECODE FRAMING: the scenario-meanings 'User-observable signal' (state stays ready, no → working transition) is written from claudecode's filtered path; aider logs the slash as a normal `#### ` prompt and DOES flicker ready→working→ready. This still satisfies the canonical verify block (which explicitly lists [ready, working, ready], final ready, tool_calls_max 0, has_waiting_state false) — the user-observable OUTCOME (ends ready, zero tool calls, no waiting) is correct; only the intra-window topology differs by design (no <local-command> filter in aider). SESSION IDENTITY: aider stores its transcript in the cwd (FilesUnderCWD), so the daemon keys the whole session by proc-<PID> — no separate UUID rollout session and no handoff phase; the working arc, pid_bind, and teardown all pin to session_birth via same_session_as. What differs between runs: PID/timestamps and the exact token figure in the `/tokens` blockquote; the working→ready edge lands with ~5s idle-flush latency. What must NOT differ: a single working→ready arc on ONE proc-<PID> session, zero tool calls, no waiting, and a single process_exited at teardown.",
           "settings": {},
           "timeout_seconds": 120
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "driver_gap (gap:slash-command). agent_supports:yes — opencode's TUI ships no-LLM in-process slash commands (/help and command-palette entries) that resolve in-session without a model call. daemon (ProcessOwnedStore/SQLite) observability assessed full — a no-LLM slash writes no new assistant turn to the store, so the ses_… session stays ready (the read-from-store no-op basic-turn / multi-turn already prove). NOT recordable: synchronous-slash-command is, by definition, about a slash command resolving SYNCHRONOUSLY in-session — exactly the primitive headless `opencode run` cannot deliver. CONFIRMED THIS SWEEP (matching the 2026-05-26 session-reset / checkpoint-rewind probe) that headless `opencode run` does NOT process in-TUI slash commands — it stores them as literal user text (proven with inline /model and /new), so `opencode run \"/help\"` would run a model turn (ready->working->ready), inverting this scenario's premise (state stays ready, NO working transition). drive-opencode-interactive.sh drives BLOCKING `opencode run` subprocesses (case \"$TYPE\" handles only send|wait_turn|sleep) and has NO slash/keys step against a live REPL. synchronous-slash-command needs a live-REPL opencode driver; recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full target arc (warm-up turn, then the ses_… session stays ready across the slash window with no working/waiting transition); assessment.json carries the yes / full / gap:slash-command verdict. Mirrors the opencode session-reset / checkpoint-rewind gap:slash-command cells."
         }
       }
     },
@@ -5464,6 +5782,70 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (the default is a local LM Studio model, so no remote key is needed; run a single message in the opencode TUI to confirm it answers)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "For a local/zero-cost model the estimated cost may read $0 — this is a model-pricing artifact, not a token-accounting gap. The assertion is about token COUNTS/deltas (which step-finish emits regardless), not a nonzero dollar cost."
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run -- \"<prompt>\"` for the first send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op. After the first run returns the driver discovers the ses_… session id from SQLite (opencode exposes no CLI-assignable session IDs) and chains `--session` for turns 2 and 3 so all three turns land on one session",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd",
+            "Each send is a no-tool single turn — opencode is asked to reply with exactly one word, so each working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate fires)",
+            "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleeps and timeout are generous: a slow turn must not trip a false timeout, and each inter-turn / trailing sleep must outlast the turn_done settle so every working→ready is observed before the next prompt re-enters working"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-<PID> pre-session may also appear; the turn arcs and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME ses_… session_id, one per prompt (state resets to ready between turns; the driver chains --session so all three land on one session)",
+            "events.jsonl carries a PerTurnContribution / UsageBreakdown on each turn boundary; the opencode parser pulls step-finish.tokens.input/output and the nested cache.read/cache.write into UsageBreakdown{Input,Output,CacheRead,CacheCreation5m}, so input + output tokens > 0 across the turns",
+            "SessionMetrics.TotalTokens after turn 1 > 0",
+            "SessionMetrics.TotalTokens after turn 2 ≥ TotalTokens after turn 1 (monotonic)",
+            "SessionMetrics.TotalTokens after turn 3 ≥ TotalTokens after turn 2 (monotonic accumulation across 3 turns)",
+            "if opencode reports cache.read/cache.write on a cached turn they populate the CacheRead / CacheCreation5m buckets; on these tiny no-tool turns the buckets may stay 0 — do not assert a nonzero cache",
+            "no state_transition to waiting appears for the session at any point (no tool call, no permission gate)",
+            "the session's final live state is ready",
+            "NOTE: the token-accumulation claim (TotalTokens > 0 / non-decreasing / cache buckets) is not expressible in the expected.jsonl phase DSL (no metric form); it is covered by the opencode parser path + unit tests and the replay .golden summary. expected.jsonl asserts only the three-turn lifecycle arc the accounting rides on."
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
@@ -5504,6 +5886,10 @@
         "codex": {
           "applicable": false,
           "notes": "Not recordable: the quota-exhausted signal cannot be elicited deterministically live. Codex DOES emit it (v3 rate_limit_reached_type → RateLimitSnapshot.ReachedType, observed by irrlicht), but (1) the real account quota cannot be burned on demand, (2) there is no codex/OpenAI-compatible 429 mock — tools/agent-onboarding/recording/mock-anthropic-429/main.go is Anthropic-only and launches claude --bare, with no codex equivalent, and (3) the codex interactive driver has no quota-exhausted-response injection primitive. The in-window observability is already validated by the sibling codex/quota-burndown cell (monotonic UsedPercent below the cap); this cap-hit ReachedType variant only becomes recordable if a codex 429 mock or a driver fixture-injection primitive is added (a developer task). See assessment.json."
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: NOT RECORDABLE — daemon observability gap (live-corrected from the doc verdict daemon_capability=full, \"step-finish reason=error covers\"). This is the SAME transport gap as the opencode/turn-aborted-by-error sibling: a quota/token-budget exhaustion is one error class of an error-aborted turn, and opencode 1.14.50 records ALL turn aborts on the message row (message.data.error), never as a step-finish part. Live store audit of ~/.local/share/opencode/opencode.db: step-finish reasons = stop(102)/tool-calls(165)/error(0) — ZERO error parts ever persisted; the closest live token-budget analog (context overflow, UnknownError \"n_keep: 27429 >= n_ctx: 4096\") plus quota/auth APIErrors all land on message.data.error. The watcher's scanParts JOINs message only for role context and discards it (watcher.go:498 `_ = msgData`); the terminal-turn decision (watcher.go:495) reads only isTerminalPart(partData), so no step-finish reason=error part means no turn_done — the session sticks in `working` until process_exited and never settles to `ready`. So the scenario's user-observable signal (final_state ready after the quota failure, no waiting) is unobservable from the store. NOT a driver_gap: the send-only driver is `ready` and a context-overflow prompt elicits the error live, but no observable part is written. Unblocks when opencode emits a step-finish reason=error part on quota aborts OR the watcher consumes message.data.error as a terminal signal (mirroring aider's flushErrorTurn, #262). No recipe, no recording, no expected.jsonl. See replaydata/agents/opencode/scenarios/token-quota-exhausted/assessment.json."
         },
         "pi": {
           "applicable": false,
@@ -5577,6 +5963,10 @@
             }
           },
           "timeout_seconds": 120
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "driver_gap (gap:permission-approval). agent_supports:yes — opencode declares permission_hooks:true and its interactive TUI gates tool execution behind an approve/deny permission overlay. NOT recordable: opencode's permission gate is TUI-only, and the rig drives opencode via headless `opencode run`, which AUTO-EXECUTES tools with NO permission prompt — PROVEN this sweep by the sibling opencode/auto-executed-tool-call recording, where gemma's `write` tool ran automatically inside the working span with zero waiting/approval state (ready→working→ready, no waiting). So the `waiting` episode this cell asserts cannot arise on the headless driver. Even if it did, drive-opencode-interactive.sh drives BLOCKING `opencode run` subprocesses and implements ONLY send / wait_turn (no-op) / sleep in its `case \"$TYPE\"` dispatch — there is NO approve/deny (or keys) step to RESOLVE a prompt, so the waiting → working/ready resolution half is unreachable too. Eliciting AND resolving a permission gate needs a live-REPL opencode driver (permission-approval primitive); recording deferred — a developer task, out of scope for implement. NOT a recipe-lint step-TYPE gap (the recipe is left applicable:false with no script, so there is no step type to reject) — same shape as the opencode user-esc-interrupt (gap:interrupt) / model-switch-midsession (gap:model-select) cells. daemon side is UNPROVEN: opencode is the lone ProcessOwnedStore adapter (agent.go) and its store-reading parser/watcher have no permission/waiting branch, so whether a permission waiting episode is observable from the SQLite store cannot be confirmed until a live-REPL driver elicits one (a likely observability_correction if/when recorded). expected.jsonl documents the full target arc (ready→working→waiting→working→ready, resolved by approval); assessment.json carries the yes / full / gap:permission-approval verdict. permission_hooks=yes (TUI). UNBLOCK: replace/augment drive-opencode-interactive.sh with a live-REPL driver (tmux-based, like claudecode/pi/aider) that launches the opencode TUI, sends a tool-inducing prompt to open the permission overlay, then fires an approve/deny step."
         }
       }
     },
@@ -5622,6 +6012,10 @@
         "codex": {
           "applicable": false,
           "notes": "No deterministic way to elicit a mid-turn provider error against codex with any recipe primitive. The claudecode cell injects a 5xx via tools/agent-onboarding/recording/mock-anthropic-5xx/main.go behind an Anthropic base-URL override (tools/agent-onboarding/recording/record-turn-aborted-by-error.sh); codex has no equivalent — the mock tooling is Anthropic-API-specific, and neither drive-codex.sh (headless `codex exec`) nor drive-codex-interactive.sh wires an OPENAI_BASE_URL override or any error-injection step. The only primitive that emits codex's turn_aborted marker is `interrupt` (Escape), which is the user-cancel path (the distinct user-esc-interrupt scenario), not a provider error. A real network/5xx error is non-deterministic and can't be a committed fixture. Independently, even a hand-induced abort would be UNOBSERVABLE today: the codex parser maps only task_complete→turn_done and skips turn_aborted (empty `grep turn_aborted core/`), and there is no working-state idle sweep (pid_manager TTL-cleans only ready/PID-dead sessions), so an aborted turn sticks in working until process_exited — identical to the committed codex/interrupted-turn cell (known_failing, 2/5) and the frozen codex/user-esc-interrupt cell. Unblocks when both (a) a codex/OpenAI error-injection driver path exists and (b) the codex parser maps turn_aborted→turn_done. See assessment.json."
+        },
+        "opencode": {
+          "applicable": false,
+          "scope_note": "UNOBSERVABLE — opencode does not persist a `step-finish reason=error` part on an error-aborted turn (verified live, opencode 1.14.50, against opencode.db). The assess verdict assumed daemon_capability=full because the parser maps `case \"error\": → turn_done` (core/adapters/inbound/agents/opencode/parser.go) and the watcher's isTerminalPart accepts reason=error (watcher.go:435). But empirically that part is NEVER written: a probe of the whole store shows 102 step-finish reason=stop + 165 reason=tool-calls parts and ZERO reason=error parts. opencode instead records turn aborts on the parent message row's `message.data.error` field (APIError / UnknownError / context-overflow `n_keep > context length` — 39 such message-level errors in the store), and the watcher's scanParts query is part-driven only (JOIN message just for role context; it never inspects message.data.error as a terminal signal). So a turn aborted by error produces a user `text` part → working, then an assistant message with error set and NO step-finish part → no turn_done → the session sticks in `working` until process_exited (no working-state sweep exists, same gap as the codex row). Driver angle is moot: every error-injection path tried with the send-only driver fails to produce the part anyway — bogus model id (e.g. lmstudio/nonexistent-model-zzz) errors at config resolution and exits before a session row exists; an unloadable/oversized model (qwen3-coder-30b) or a context-overflow prompt (~80k tokens > the local gemma's loaded_context_length 70419) lands on message.data.error with no step-finish; a huge overflow simply hangs LM Studio (connection reset, opencode times out). Unblocks when EITHER opencode emits a step-finish reason=error part on aborted turns, OR the watcher consumes message.data.error as a terminal-turn signal. See assessment.json; observability_correction flagged for agent-scenarios-coverage.json (daemon_capability full→incapable)."
         },
         "pi": {
           "applicable": true,
@@ -5860,6 +6254,42 @@
           ],
           "settings": {},
           "timeout_seconds": 120
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the default is a local LM Studio model so no remote key is needed)",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run -- \"<prompt>\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the assistant turn finishes, so wait_turn is a no-op",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files; the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for this cwd. The driver discovers that session id from SQLite after the run returns (opencode does not expose CLI-assignable session IDs)",
+            "This cell pins opencode's adapter-specific terminal-text end signal: the assistant produces a final plain-text message, opencode writes a step-finish part with reason=stop, and the parser maps it to turn_done (parser.go parseStepFinish: case \"stop\" → EventType \"turn_done\"), settling the turn working→ready. The prompt is a no-tool single turn with no trailing question, so the working span carries no auto-executed tool call (tool_calls_max: 0) and the session never enters waiting (no permission gate, no waiting cue)",
+            "The default model is a small, slow local LM Studio model (~30–45s per turn), so the trailing sleep and timeout are generous: a slow turn must not trip a false timeout, and the trailing sleep must outlast the turn_done settle so the step-finish-driven working→ready is observed"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a transcript_new (or session_created) for the ses_… session, born ready, within ~2s of agent launch (a transient proc-<PID> pre-session may also appear; the turn arc and pid_discovered land on the ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the prompt is sent (the single tool-less assistant turn)",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the terminal-text turn completes — opencode emits step-finish reason=stop on the final plain-text message, the parser maps it to turn_done, and the classifier settles working→ready",
+            "no state_transition to waiting appears for the session at any point (no tool call, no permission gate, no trailing-question waiting cue)",
+            "the session's final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     },
@@ -5970,6 +6400,10 @@
           ],
           "settings": {},
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: opencode plan mode is a TOOL-RESTRICTION (read-only) mode, not a blocking plan-approval gate — the plan turn runs to completion (ready→working→ready) with no pause for user approval, so there is no daemon-observable waiting→approval transition. agent_supports:partial (a plan mode exists, but the wrong KIND — tool-restriction, not approval-gate), daemon_capability:incapable. Even if opencode paused for approval, the opencode adapter (lone ProcessOwnedStore) has NO waiting/user-blocking/ExitPlanMode branch in parser.go/watcher.go to classify it as waiting (grep returns nothing relevant). NOT a driver_gap (no agent primitive to elicit, no adapter branch to surface). Mirrors the sibling opencode/user-blocking-question cell (no daemon-observable structured-blocking waiting state from the SQLite store). No recipe, no recording; frozen at assessment. See replaydata/agents/opencode/scenarios/user-blocking-plan-mode-approval/assessment.json."
         }
       }
     },
@@ -6106,6 +6540,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "opencode has no AskUserQuestion-equivalent structured blocking-question primitive that surfaces a daemon-observable waiting state via the headless path; the SQLite part schema records only step-start/step-finish/text/tool parts (no question/ask-user/elicit part type or blocking finish reason). agent_supports:no, daemon_capability:n/a. The adapter-agnostic trailing-? TEXT-classifier waiting path is a separate cell, not this structured-tool primitive."
         }
       }
     },
@@ -6254,6 +6692,10 @@
           ],
           "settings": {},
           "timeout_seconds": 360
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: opencode driver lacks a keys/interrupt step to fire a mid-turn ESC against blocking `opencode run`; needs a live-REPL driver — gap:interrupt. drive-opencode-interactive.sh drives opencode through BLOCKING headless `opencode run` subprocesses and implements only send / wait_turn (no-op; `opencode run` blocks until the turn ends) / sleep in its `case \"$TYPE\"` dispatch. There is NO `keys` or `interrupt` step, and structurally no way to deliver a mid-turn ESC: each `send` blocks inside the subprocess until the turn is already over, so by the time control returns there is no in-flight turn left to cancel. Eliciting a step-finish reason=interrupted part requires holding a live interactive opencode TUI open and sending Escape WHILE the turn streams. NOT an agent or daemon limitation — opencode supports mid-turn cancel and the daemon PARSES step-finish reason=interrupted → turn_done (parser.go:158 `case \"interrupted\"`; watcher.go:435 isTerminalPart accepts `interrupted`), so a genuine interrupted-turn step-finish part WOULD settle the session working→ready (daemon_capability:full). NOT a recipe-lint step-TYPE gap either — the recipe is left applicable:false with no script, so there is no step type to reject; the missing capability is a live-REPL Escape-mid-turn primitive (same shape as the opencode model-switch-midsession gap:model-select, which recipe-lint also could not catch). DISTINCT from the sibling turn-aborted-by-error cell (daemon_capability:incapable, error aborts never persist a step-finish part) — an ESC-cancelled turn DOES finish as a step-finish reason=interrupted part. UNBLOCK: replace/augment drive-opencode-interactive.sh with a LIVE-REPL driver (tmux-based, like claudecode/pi/aider) that launches the opencode TUI, sends a long prompt, then fires a keys/interrupt step delivering Escape mid-stream. expected.jsonl is retained as the documented ready→working→[interrupt]→ready + recovery-arc target; see replaydata/agents/opencode/scenarios/user-esc-interrupt/assessment.json (driver_capability: gap:interrupt). MATRIX DRIFT: coverage cell currently driver_capability:ready (\"step-finish reason=interrupted handled\") — that conflates the parser handling it (true) with the driver eliciting it (false); should update to gap:interrupt. headless_mode=no (opencode capabilities.json), but the live REPL/TUI is the recordable surface."
         }
       }
     },
@@ -6369,6 +6811,10 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: stock opencode has no documented autonomous self-prompting / goal-loop mode; a turn ends at session.idle (step-finish) and waits for the next user message — autonomous self-prompting exists only via third-party plugins (oh-my-opencode Ralph Loop / Ultrawork), and the upstream built-in /loop request (anomalyco/opencode#23578) is still open. Nothing autonomously recordable here. agent_supports=unknown (see assessment.json)."
         }
       }
     },
@@ -6523,6 +6969,10 @@
             ]
           },
           "timeout_seconds": 300
+        },
+        "opencode": {
+          "applicable": false,
+          "notes": "scope_note: opencode has no autonomous self-prompting loop, so no iteration-limit stop to observe; presupposes the autonomous-loop primitive opencode lacks. Stock opencode is turn-based (a turn ends at session.idle awaiting the next user message), with no /goal, /loop, --auto, or max-iterations cap; self-prompting is plugin-only (oh-my-opencode Ralph Loop / Ultrawork) and the upstream built-in /loop request (anomalyco/opencode#23578) is still open. With no native loop there is no iteration cap to hit. agent_supports=unknown (see assessment.json)."
         }
       }
     },

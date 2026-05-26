@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "scenario_id": "self-correction-iteration",
+  "agent": "opencode",
+  "assessed_at": "2026-05-26T00:00:00Z",
+  "agent_supports": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
+  "confidence": 0.8,
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nself-correction-iteration asserts that the agent iterates WITHIN a single turn — it tries something with a tool, observes a problem, and fixes it — so the working span contains MULTIPLE tool-call/result pairs before settling. The user-observable signal is that state stays continuously `working` across all the retry cycles (no flicker to `ready` or `waiting` between attempts) and the turn finally settles to `ready`. This locks down the classifier's terminal-stop_reason gate: intermediate tool_use/tool_result pairs do NOT close the turn. Distinct from long-agentic-session-stress (many separate user-driven turns) and turn-aborted-by-error (the agent gives up and a provider error closes the turn).\n\nOpenCode supports tool calls (capabilities.json tool_calls:true). In headless default (`opencode run`) tools auto-execute inside OpenCode's own sandbox with no interactive permission prompt, so a multi-tool single-turn run produces exactly the ungated, contiguous ready→working→ready arc with no waiting. Session state lives in OpenCode's SQLite store (~/.local/share/opencode/opencode.db); the daemon's ProcessOwnedStore source polls the UUID-keyed ses_… session.\n\nEach tool call lands in the part table as a `tool` part progressing pending → running → completed/error; the opencode parser maps it to function_call (pending/running) and function_call_output (completed/error) events (parser.go parseToolPart), and the turn settles working→ready only when the parser sees a step-finish part with reason=\"stop\" → turn_done (parser.go parseStepFinish). Crucially, a tool-calls step-finish reason keeps the session in working (mid-turn pause), so a sequence of write→read→edit tool parts inside one turn is one sustained working span — exactly the iteration this scenario asserts. The phase DSL has no tool-event form, so the multiple tool calls are asserted via the single sustained working span plus the no-waiting invariant, and verified out-of-band in the SQLite store (≥2 tool parts before turn_done).\n\nMODEL note: opencode's default model is the local LM Studio model lmstudio/gemma-4-e2b-it-uncensored (set in ~/.config/opencode/opencode.json). The driver (drive-opencode-interactive.sh) runs blocking `opencode run` with NO --model flag, so it uses that default. gemma is a small (2B) model that is slow (~30–45s/turn) and may be unreliable at emitting MULTIPLE tool calls in one turn; the recipe uses a crisp create-a-bug-then-read-back-and-fix prompt to force write→read→edit so several tool calls land in one working span. If gemma simply will not iterate / will not emit the tool calls this becomes an infra/MODEL limitation, not an opencode/daemon incapability (capabilities.json tool_calls:true).\n\nThe driver runs a blocking `opencode run` per turn (not a held-open REPL); one send + wait_turn (a no-op) + a ≥4s trailing sleep is within its grammar, so driver_capability: ready. A single send carries the whole multi-tool turn, so the contiguous working span is captured in one `opencode run` subprocess lifetime.",
+  "caveats": [
+    "OpenCode does not expose CLI-assignable session IDs; the driver discovers the ses_… session id by querying SQLite for the most recent row keyed on directory after the first `opencode run` returns.",
+    "The local gemma 2B model is slow (~30–45s per turn) and may be unreliable at emitting MULTIPLE tool calls in one turn; the cell records normally if it iterates (≥2 tool parts), otherwise the limitation is the model, not opencode (capabilities.json tool_calls:true).",
+    "The phase DSL has no tool-event form, so the iteration is asserted via the single sustained working span + the no-waiting invariant; the ≥2 tool parts are verified in the SQLite store / transcript out-of-band at record time."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/parser.go",
+      "note": "parseToolPart: tool part status pending/running → function_call (ToolUses), completed/error → function_call_output (ToolResultIDs); parseStepFinish: reason=\"stop\" → turn_done settles working→ready, while a tool-calls step-finish reason keeps the session working — so a multi-tool single-turn run is one contiguous working span."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/opencode/capabilities.json",
+      "note": "tool_calls:true; opencode can invoke tools. Headless default `opencode run` auto-executes tools with no interactive gate, so the iteration never enters waiting."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/agent.go",
+      "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name:\"opencode\"}; daemon polls the session table for the ses_… session."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/opencode/scenarios/auto-executed-tool-call/expected.jsonl",
+      "note": "Sibling committed opencode spec proving the ProcessOwnedStore ready→working→ready arc with a tool call inside the working span, session_birth anchored UNPINNED to start and the no-waiting invariant — the exact shape this cell extends with MULTIPLE tool calls (the iteration) inside the single working span."
+    }
+  ]
+}

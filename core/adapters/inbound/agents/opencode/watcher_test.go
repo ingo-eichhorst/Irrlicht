@@ -597,3 +597,75 @@ func TestIsTerminalPart(t *testing.T) {
 		})
 	}
 }
+
+func TestIsErrorMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"error-object", `{"role":"assistant","error":{"name":"ProviderError","message":"boom"}}`, true},
+		{"error-string", `{"error":"boom"}`, true},
+		{"empty-error-string", `{"error":""}`, false},
+		{"empty-error-object", `{"error":{}}`, false},
+		{"null-error", `{"error":null}`, false},
+		{"false-error", `{"error":false}`, false},
+		{"zero-error", `{"error":0}`, false},
+		{"array-error", `{"error":[]}`, false},
+		{"no-error", `{"role":"assistant"}`, false},
+		{"malformed-json", `{not valid json`, false},
+		{"empty", `{}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isErrorMessage(tc.data); got != tc.want {
+				t.Errorf("isErrorMessage(%q) = %v, want %v", tc.data, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestScanSessions_ErrorMessageTerminal verifies that an aborted/errored turn —
+// which opencode records on message.data.error WITHOUT a step-finish
+// reason=error part — still produces a terminal EventActivity so the session
+// settles to ready instead of sticking in working. (#493)
+func TestScanSessions_ErrorMessageTerminal(t *testing.T) {
+	w, db := setupTestDB(t)
+	ch := w.Subscribe()
+	defer w.Unsubscribe(ch)
+
+	now := time.Now().UnixMilli()
+	insertSession(t, db, "ses_err", "/tmp", now, "")
+	// A message whose data carries message.data.error (insertMessage hardcodes
+	// data='{}', so insert directly to populate the error field).
+	if _, err := db.Exec(
+		`INSERT INTO message (id, session_id, role, modelID, data, time_created)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"msg_err", "ses_err", "assistant", "gpt-4",
+		`{"role":"assistant","error":{"name":"ProviderError","message":"boom"}}`, now,
+	); err != nil {
+		t.Fatalf("insert error message: %v", err)
+	}
+	// A NON-terminal part (plain text), so the ONLY terminal signal is the
+	// message-level error — proving isErrorMessage is what flips Terminal.
+	insertPart(t, db, "part_err", "ses_err", "msg_err", "text", `{"text":"partial"}`, now)
+
+	w.scanSessions()
+
+	events := collectEvents(ch, 500*time.Millisecond)
+	var sawTerminal, sawActivity bool
+	for _, ev := range events {
+		if ev.Type == agent.EventActivity && ev.SessionID == "ses_err" {
+			sawActivity = true
+			if ev.Terminal {
+				sawTerminal = true
+			}
+		}
+	}
+	if !sawActivity {
+		t.Fatalf("expected an EventActivity for ses_err, got events=%v", events)
+	}
+	if !sawTerminal {
+		t.Errorf("expected EventActivity.Terminal=true for an errored turn (message.data.error), got events=%v", events)
+	}
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "scenario_id": "turn-end-terminal-text",
+  "agent": "opencode",
+  "assessed_at": "2026-05-25T00:00:00Z",
+  "agent_supports": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
+  "confidence": 0.88,
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nturn-end-terminal-text asserts the smallest tool-less round-trip and pins the adapter-specific end-of-turn signal: the assistant produces a final plain-text message and the parser resolves the session back to ready. The user-observable signal is the canonical ready → working → ready arc, reached regardless of which adapter token closes the turn.\n\nFor opencode the terminal-text end signal is the step-finish part with reason=\"stop\". The parser maps it to a turn_done event (parser.go parseStepFinish: `case \"stop\": ev.EventType = \"turn_done\"`), which drives the session working→ready. Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db); the daemon's ProcessOwnedStore source polls the session table and observes the UUID-keyed ses_… session for the cwd.\n\nThe committed sibling recordings (basic-turn, long-idle-live-session) confirm a single `opencode run` produces exactly this arc on one ses_… session: new_state=ready → working → ready. Because the prompt is tool-less and carries no trailing question, the working span carries no auto-executed tool call and the session never enters waiting.\n\nThe interactive driver (drive-opencode-interactive.sh) launches a blocking `opencode run` per send and passes NO --model flag, so opencode uses its configured default (a local LM Studio model). turn-end-terminal-text is a single plain-text turn (one send + wait_turn no-op + trailing sleep) — well within this grammar, so driver_capability: ready.\n\nMODEL note: opencode's default model is the local LM Studio model `lmstudio/gemma-4-e2b-it-uncensored`, set in ~/.config/opencode/opencode.json. It is small and slow (~30–45s per turn), so the recipe budgets generous timeouts (180s) and a trailing sleep that outlasts the turn_done settle.",
+  "caveats": [
+    "OpenCode does not expose CLI-assignable session IDs; the driver discovers the session id from SQLite (most recent row keyed on directory) after the first `opencode run` returns.",
+    "The local gemma model is slow (~30–45s per turn); the recipe uses a 180s timeout and a generous trailing sleep so a slow turn does not trip a false timeout or miss the working→ready settle."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/parser.go",
+      "note": "parseStepFinish: reason=\"stop\" → EventType \"turn_done\" closes the turn (working→ready). This is the adapter-specific terminal-text end signal this cell pins."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/agent.go",
+      "note": "Source variant ProcessOwnedStore (SQLite at ~/.local/share/opencode/opencode.db) with ExactName{Name: \"opencode\"} process matcher; daemon polls the session table for the ses_… session."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/opencode/scenarios/basic-turn/events.jsonl",
+      "note": "Sibling recording: a single `opencode run` emits state_transition new_state ready→working→ready on one ses_… session — the same arc this cell records, with the spec framing the end-signal mechanism."
+    }
+  ]
+}
