@@ -443,22 +443,24 @@ func isTerminalPart(data string) bool {
 // quota, context overflow) on message.data.error rather than emitting a
 // step-finish part with reason="error", so for such turns the message-level
 // error is the only signal that the turn has ended — without it the session
-// sticks in `working` until the process exits. Fail-open (returns false) on a
-// parse failure or a missing/empty error. (#493)
+// sticks in `working` until the process exits. opencode writes error as an
+// `{name, message, …}` object (or occasionally a bare string); only a
+// non-empty string or object counts. Fail-open (returns false) on a parse
+// failure, a missing/empty error, or any other JSON shape. (#493)
 func isErrorMessage(data string) bool {
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(data), &raw); err != nil {
 		return false
 	}
 	switch e := raw["error"].(type) {
-	case nil:
-		return false
 	case string:
 		return e != ""
 	case map[string]interface{}:
 		return len(e) > 0
 	default:
-		return true
+		// nil (absent/null), and any unexpected shape (bool/number/array) —
+		// not a real error signal.
+		return false
 	}
 }
 
@@ -519,7 +521,10 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 		// A turn ends via a step-finish part with a terminal reason, OR — for an
 		// aborted/errored turn — opencode records the failure on
 		// message.data.error and emits NO step-finish reason=error part, so the
-		// message-level error is the only terminal signal for a failed turn. (#493)
+		// message-level error is the terminal signal for a failed turn. Note this
+		// is part-driven: a turn that errors before emitting ANY part won't be
+		// surfaced here (the part↔message join has no row to carry msgData) — that
+		// rarer zero-part case is the remaining half of #493. (#493)
 		if !hasTerminal && (isTerminalPart(partData) || isErrorMessage(msgData)) {
 			hasTerminal = true
 		}
