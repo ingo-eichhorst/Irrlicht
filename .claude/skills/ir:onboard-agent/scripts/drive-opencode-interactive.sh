@@ -35,9 +35,14 @@ fi
 STAGING="$1"
 # UUID ($2) ignored — opencode mints its own session id.
 TIMEOUT_S="$3"
-# SETTINGS_PATH ($4) accepted for contract parity; opencode reads its
-# config from ~/.config/opencode/opencode.json today, not a per-run
-# settings file. Reserved for future use.
+# SETTINGS_PATH ($4): a recipe `settings` blob. opencode resolves config
+# from a project-local opencode.json in the run directory (then walks up to
+# the global ~/.config/opencode/opencode.json), so a non-empty blob is
+# seeded as RUN_CWD/opencode.json below to drive per-run policy — most
+# importantly the `permission` classifier (bash/edit/… = allow|ask|deny,
+# bash wildcards). An empty blob ({} / absent) writes NO file, preserving
+# the prior global-config-only behavior for every other opencode cell.
+SETTINGS_PATH="$4"
 SCRIPT_JSON="$5"
 
 mkdir -p "$STAGING"
@@ -61,6 +66,22 @@ mkdir -p "$RUN_CWD"
 # session.directory, so on macOS a /tmp/... cwd is stored as /private/tmp/...
 # — querying the unresolved value would find no row and silently mis-record.
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"
+
+# Seed a project-local opencode.json from the recipe's `settings` blob when
+# it carries config (a non-empty object). opencode loads project config from
+# the run directory before the global ~/.config/opencode/opencode.json, so
+# this is how a cell pins a per-run `permission` policy (the auto-classifier:
+# bash/edit/… = allow|ask|deny + bash wildcards) without touching the user's
+# global config. The $schema is injected if the blob omits it so opencode
+# validates it as a real config. An empty/absent blob writes NOTHING, so
+# every other opencode cell keeps using the global-config-only path.
+if [[ -n "${SETTINGS_PATH:-}" && -f "$SETTINGS_PATH" ]]; then
+  if [[ "$(jq -r 'if (type=="object" and (.|length)>0) then "yes" else "no" end' "$SETTINGS_PATH" 2>/dev/null)" == "yes" ]]; then
+    jq '. + (if has("$schema") then {} else {"$schema":"https://opencode.ai/config.json"} end)' \
+      "$SETTINGS_PATH" > "$RUN_CWD/opencode.json"
+    echo "[driver] seeded project config $RUN_CWD/opencode.json from recipe settings" >&2
+  fi
+fi
 
 OPENCODE_DB="$HOME/.local/share/opencode/opencode.db"
 if [[ ! -f "$OPENCODE_DB" ]]; then

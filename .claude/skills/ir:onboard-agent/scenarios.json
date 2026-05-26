@@ -2748,8 +2748,49 @@
           "notes": "applicable: n/a (assessment 2026-05-23: agent_supports=partial, irrlicht_observes=no). This scenario's defining signal is a per-call safe-vs-risky classifier that selectively prompts (working→waiting) for risky calls only — primitive permission_hooks, which codex has set false. Codex has a coarse sandbox/approval_policy that auto-runs benign commands and escalates others, but the codex parser exposes no safe-vs-risky classification: its only waiting paths are <proposed_plan>→ExitPlanMode (plan-mode-approval) and a generic open function_call at task_complete (open-tool-call/gate). The daemon therefore cannot observe the selective-gating signal that distinguishes this cell from auto-executed-tool-call. The only codex-observable half (a benign command auto-running with no waiting, ready→working→ready) is already fully captured by the committed codex × auto-executed-tool-call cell; recording it here would be a redundant near-duplicate that proves the wrong thing. No recipe, no recording. See replaydata/agents/codex/scenarios/auto-classified-permission/assessment.json."
         },
         "opencode": {
-          "applicable": false,
-          "notes": "applicable: n/a (driver_gap, gap:permission-approval; assessment 2026-05-26: agent_supports=partial, daemon_capability=full, driver_capability=gap:permission-approval). opencode permission classification/gate is TUI-only; headless `opencode run` auto-executes tools with NO prompt and NO observable classification/waiting state — proven by opencode/auto-executed-tool-call, which captured the write tool running automatically inside the working span (ready→working→ready, no waiting). drive-opencode-interactive.sh handles only send|wait_turn|sleep — no approve/deny/classify step to surface or answer the auto-classifier — so this safe-path cell is unrecordable until a live-REPL (tmux TUI) opencode driver exists. recipe-lint cannot catch it (no script, no step-TYPE to reject); same shape as the sibling tool-gate-permission-prompt gap:permission-approval cell. A headless recording would be indistinguishable from auto-executed-tool-call and prove the wrong thing. No recipe, no recording. See replaydata/agents/opencode/scenarios/auto-classified-permission/assessment.json."
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated/configured (default model in ~/.config/opencode/opencode.json; auth is out-of-band)",
+            "irrlichd is recording — run-cell.sh in isolated/coexist mode, or --attach against a running daemon started with --record",
+            "the configured default model must be capable of function calling — if it emits no tool call this cell is unrecordable for a MODEL reason (opencode capabilities.json tool_calls:true), not an opencode/daemon incapability"
+          ],
+          "setup": [
+            "SAFE branch of opencode's config-driven permission classifier (the RISKY branch — a tool set to \"ask\" — is the sibling tool-gate-permission-prompt cell; it hangs forever headlessly, opencode #14473/#16367, so only the safe branch is recordable on the headless driver)",
+            "The recipe `settings` blob is seeded by drive-opencode-interactive.sh as a project-local opencode.json in the per-run cwd BEFORE the run. It pins `permission: {bash:\"allow\", edit:\"allow\"}` so the bash echo is config-CLASSIFIED-ALLOWED and auto-executes with NO prompt — this explicit allow policy is what gives the cell distinct permission-classification signal vs auto-executed-tool-call (which pins no policy and relies on the headless default). opencode loads project config before the global ~/.config/opencode config, so the policy applies to this run only and never mutates the user's global config",
+            "The driver launches a blocking `opencode run -- \"<prompt>\"` in a fresh per-run cwd under <staging>/cwd/ with NO --model flag (uses the config default); the send is its own subprocess that exits when the turn completes",
+            "No approve/deny/classify driver step is needed: the allow policy means the permission prompt never fires, so the existing send|wait_turn|sleep headless path records the safe arc. wait_turn is a no-op because `opencode run` already blocks until the turn ends; the ≥4s trailing sleep gives the daemon's poller one full tick to observe the working→ready settle before the run process exits",
+            "Session state lives in opencode's SQLite store (~/.local/share/opencode/opencode.db, ProcessOwnedStore), keyed on the UUID ses_… session; the bash call lands in the part table as a `tool` part (status pending→running→completed) which the parser maps to function_call / function_call_output (parser.go parseToolPart). The ProcessOwnedStore transport has NO waiting/permission source, so the no-waiting invariant holds by construction for the safe branch",
+            "The send is a crisp single-tool-forcing prompt so the small/slow local default model reliably emits exactly one auto-classified-allowed bash tool call inside the working span, then replies done"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Run the shell command `echo hello` using your bash tool. Then reply with exactly: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains the ses_… session born ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the turn arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains a state_transition→working on the ses_… session_id when the bash-tool prompt is sent, sustained across the auto-classified-allowed bash call",
+            "the opencode SQLite store / transcript.jsonl contains a tool part (function_call / function_call_output) for the bash call — config-classified ALLOWED, so it auto-executes with no permission window",
+            "events.jsonl contains a state_transition→ready on the same ses_… session_id once the tool resolves and the turn completes (step-finish reason=stop → turn_done)",
+            "events.jsonl contains NO state_transition to waiting for the ses_… session at any point (the allow policy means the prompt never fires; the safe-path arc is ready→working→ready)",
+            "final session state is ready"
+          ],
+          "settings": {
+            "permission": {
+              "bash": "allow",
+              "edit": "allow"
+            }
+          },
+          "timeout_seconds": 240
         }
       }
     },
