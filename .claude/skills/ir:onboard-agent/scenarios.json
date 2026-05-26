@@ -1519,7 +1519,7 @@
           "scope_note": "Coverage matrix marks aider supports=partial, observes=no. /undo reverts the last aider git commit and surfaces as a normal chat turn in the transcript; there is no multi-point checkpoint picker. Capturing it requires aider to first make a file edit and commit, then /undo — a recipe shape that needs file-tool granularity the current driver doesn't deterministically produce. Recording deferred."
         },
         "opencode": {
-          "applicable": true,
+          "applicable": false,
           "preconditions": [
             "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.14.50. The checkpoint-rewind arc is model-agnostic; the dev env's default is a local LM Studio model, which is fine.",
             "irrlichd is recording — run-cell.sh isolated mode, or --attach against a daemon started with --record.",
@@ -1581,7 +1581,8 @@
             "exactly one process_exited on teardown; final live state is ready"
           ],
           "settings": {},
-          "timeout_seconds": 240
+          "timeout_seconds": 240,
+          "notes": "DEGRADED applicable:false after two consecutive drive timeouts (2026-05-26, opencode v1.14.50, run-cell coexist mode, local gemma-4-e2b model). agent_supports:yes and the /undo slash step IS delivered live by drive-opencode-interactive.sh's run_live() tmux path (lint clean; the slash fired both runs). The recipe (turn1 / turn2 / slash /undo / turn3) does NOT reliably elicit the spec's three-clean-arcs-plus-rewind arc, REPRODUCIBLY both runs: run_live()'s oc_wait_turn counts cross-session `step-finish` parts as a high-water mark and returned a FALSE turn-2 completion (step-finish total=2 within ~1s of turn 1 settling), so /undo fired while turn 2's prompt was still UNSUBMITTED in the TUI input box. Result: turn-2 text ('two') and turn-3 text ('three') merged into ONE user message ('...twoReply with exactly...three') -> only 2 real model turns, step-finish maxed at 2, wait_turn for turn 3 timed out, and the session.revert column was never left set on a settled checkpoint. The state band shows 2 arcs, not the spec's 3+rewind-dwell. This is a run_live() TURN-DETECTION defect (false step-finish high-water mark when a turn settles fast / the model is slow), NOT a missing step type (so not a SKILL driver_gap) and NOT a daemon bug (the daemon faithfully recorded the 2 arcs that actually happened). OBSERVABILITY CORRECTION vs assessment: the assessment's live probe claimed /undo leaves msg/part counts UNCHANGED (no row deletion); under run-cell timing the recording instead shows the reverted turn's prompt swallowed/merged, so a faithful 2-turns-then-/undo-then-turn-3 capture was never produced. Fix path: tighten run_live() turn detection (require a step-finish whose message_id post-dates the just-sent prompt, or confirm the input box flushed/empty before advancing) so /undo lands on a settled checkpoint; then re-record. expected.jsonl stays as the documented in-place-rewind target. Tracking: opencode run_live() oc_wait_turn false-completion / slash-collides-with-unsubmitted-prompt."
         }
       }
     },
