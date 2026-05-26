@@ -18,10 +18,11 @@ command -v jq >/dev/null || { echo "completeness-gate_test: jq is required" >&2;
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Capabilities: feat_a/feat_b true, feat_x false. A scenario requiring feat_x
-# is N/A (not applicable); requiring feat_a is applicable.
+# Capabilities: feat_a/feat_b true, feat_x false; transport=structured_store.
+# A scenario requiring feat_x is N/A; one requiring transport line_based is N/A
+# too (#496 RC7); requiring feat_a (no transport constraint) is applicable.
 cat > "$TMP/capabilities.json" <<'JSON'
-{"agent":"fake","features":{"feat_a":true,"feat_b":true,"feat_x":false}}
+{"agent":"fake","transport":"structured_store","features":{"feat_a":true,"feat_b":true,"feat_x":false}}
 JSON
 
 # Catalog: six cells exercising every disposition + one N/A (requires feat_x).
@@ -37,7 +38,8 @@ cat > "$TMP/scenarios.json" <<'JSON'
   {"name":"ready-unrec","coverage_id":"ready-unrec","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
   {"name":"dual","coverage_id":"dual","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
   {"name":"dual-variant","coverage_id":"dual","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"na","coverage_id":"na","requires":["feat_x"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}}
+  {"name":"na","coverage_id":"na","requires":["feat_x"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
+  {"name":"line-only","coverage_id":"line-only","requires":["feat_a"],"requires_transport":["line_based"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}}
 ]}
 JSON
 
@@ -65,9 +67,15 @@ assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"; }
 
 echo "== cg_applicable_coverage_ids: requires vs capabilities =="
 applicable="$(cg_applicable_coverage_ids "$TMP/scenarios.json" "$TMP/capabilities.json")"
-assert_eq "applicable set = the feat_a coverage_ids (dual collapses, na excluded)" \
+assert_eq "applicable set = feat_a coverage_ids (dual collapses; na + line-only excluded)" \
   "$(printf 'degraded\ndual\nfrozen\ngap\nmissed\nready-unrec\nrec')" \
   "$applicable"
+# line-only requires transport line_based; the fake agent is structured_store.
+if printf '%s\n' "$applicable" | grep -qx line-only; then
+  fail "requires_transport excludes line-only for structured_store agent" "absent" "present"
+else
+  pass "requires_transport excludes line-only for structured_store agent"
+fi
 
 echo "== cg_disposition: one verdict per cell =="
 assert_eq "recorded"               recorded               "$(cg_disposition "$TMP/scenarios.json" fake rec "$SDIR")"

@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "agent": "opencode",
+  "transport": "structured_store",
   "discovered_at": "2026-04-27",
   "source": "manual_bootstrap",
   "features": {

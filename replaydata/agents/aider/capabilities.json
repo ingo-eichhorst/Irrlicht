@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "agent": "aider",
+  "transport": "line_based",
   "discovered_at": "2026-04-25",
   "source": "discovery_subagent",
   "transcript_extension": "md",

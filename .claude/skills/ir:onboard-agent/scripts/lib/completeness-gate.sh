@@ -28,15 +28,19 @@
 #   → applicable coverage_ids, one per line, sorted-unique. A coverage_id is
 #     applicable iff every id in its scenarios' `requires` maps to `true` in
 #     the agent's capabilities (false / "unknown" both block, matching the
-#     matrix rule). No `requires` ⇒ applicable.
+#     matrix rule) AND, when a scenario declares `requires_transport`, the
+#     agent's `transport` is in that list (#496 RC7). No `requires` ⇒
+#     applicable; no `requires_transport` ⇒ any transport.
 cg_applicable_coverage_ids() {
   local json="$1" caps="$2"
   jq -r --slurpfile c "$caps" '
     (($c[0].features) // {}) as $f
-    | [ .scenarios[] | {cid: .coverage_id, req: (.requires // [])} ]
+    | (($c[0].transport) // "") as $t
+    | [ .scenarios[] | {cid: .coverage_id, req: (.requires // []), tr: (.requires_transport // [])} ]
     | group_by(.cid)
-    | map({cid: .[0].cid, req: (map(.req) | add | unique)})
+    | map({cid: .[0].cid, req: (map(.req) | add | unique), tr: (map(.tr) | add | unique)})
     | map(select(.req | all(. as $k | $f[$k] == true)))
+    | map(select(.tr | length == 0 or any(. == $t)))
     | .[].cid
   ' "$json" 2>/dev/null | sort -u
 }

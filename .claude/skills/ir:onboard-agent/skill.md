@@ -173,7 +173,11 @@ same canonical cell) — the matrix axis is the coverage id, not the name.
 
 A scenario is applicable to an adapter iff every id in `requires` maps to
 `true` in that adapter's `capabilities.json -> features` (`false` and
-`"unknown"` both block). Per-cell state:
+`"unknown"` both block) **AND** the adapter's `capabilities.json ->
+transport` is in the scenario's `requires_transport` (when that field is
+present — e.g. `oversized-transcript-line` declares
+`requires_transport: ["line_based"]`, so opencode's `structured_store`
+transport makes it N/A; #496 RC7). Per-cell state:
 
 - **OK** — fixture committed at
   `replaydata/agents/<adapter>/scenarios/<scenario>/{transcript,events}.jsonl`.
@@ -183,7 +187,8 @@ A scenario is applicable to an adapter iff every id in `requires` maps to
   `implement` (which authors it) once `assess` says `applicable: yes`.
 - **unassessed** — no `assessment.json` yet. → `assess` first.
 - **N/A (no <capability>)** — adapter's capabilities don't satisfy
-  `requires`.
+  `requires`, or its `transport` isn't in the scenario's
+  `requires_transport`.
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
