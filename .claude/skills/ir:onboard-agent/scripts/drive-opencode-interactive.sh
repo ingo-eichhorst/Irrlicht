@@ -126,7 +126,14 @@ run_live() {
   }
 
   local SESSION="ocdrv-$$-$(date +%s)"
-  local EXPECTED_TURNS=0
+  # Per-turn baseline: the terminal-step-finish high-water mark captured at the
+  # moment a send fires. oc_wait_turn waits for the terminal count to strictly
+  # exceed it — exactly one NEW `stop` per turn. (A raw all-step count compared
+  # to a turn counter over-counts: opencode emits a step-finish PER STEP, with
+  # reason="tool-calls" for every mid-turn tool iteration, so a single
+  # multi-step turn would push the total past the turn counter and make the
+  # NEXT wait_turn return immediately on an unprocessed prompt.)
+  local TURN_BASELINE=0
 
   echo "[driver] live mode: launching opencode TUI (tmux=$SESSION, cwd=$RUN_CWD)" >&2
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -135,15 +142,20 @@ run_live() {
   # Always tear the TUI down, even on an error/timeout exit below.
   trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true' EXIT
 
-  # step-finish parts across OUR cwd's top-level sessions = completed turns.
+  # TERMINAL step-finish parts across OUR cwd's top-level sessions = completed
+  # turns. opencode emits a step-finish per STEP, so only the terminal one —
+  # reason="stop" — marks a turn boundary (matching parser.go's
+  # parseStepFinish: `case "stop": ev.EventType = "turn_done"`). Mid-turn
+  # tool-call iterations carry reason="tool-calls" and must NOT count.
   # Counting across all of the cwd's sessions (not just the active one) makes
   # the high-water mark survive the reset boundary: the post-/new session's
-  # first step-finish simply bumps the same total.
+  # first terminal step-finish simply bumps the same total.
   oc_turn_total() {
     sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
       "SELECT count(*) FROM part p JOIN session s ON p.session_id = s.id
        WHERE s.directory = '$RUN_CWD' AND (s.parent_id IS NULL OR s.parent_id = '')
-         AND json_extract(p.data,'\$.type') = 'step-finish';" 2>/dev/null || echo 0
+         AND json_extract(p.data,'\$.type') = 'step-finish'
+         AND json_extract(p.data,'\$.reason') = 'stop';" 2>/dev/null || echo 0
   }
 
   # Readiness: opencode swallows keystrokes during its boot splash, so wait
@@ -177,28 +189,33 @@ run_live() {
       sleep 1
     done
     tmux send-keys -t "$SESSION" Enter
-    EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
-    echo "[driver] live send (expect turn $EXPECTED_TURNS): ${text:0:60}" >&2
+    # Snapshot the terminal-step-finish high-water mark NOW; the matching
+    # wait_turn waits for the count to strictly exceed this, i.e. for the ONE
+    # new `stop` this turn will produce. Captured here (not in wait_turn) so a
+    # multi-step turn already in flight can't satisfy the next turn's wait.
+    TURN_BASELINE=$(oc_turn_total)
+    echo "[driver] live send (terminal baseline=$TURN_BASELINE): ${text:0:60}" >&2
   }
 
   oc_wait_turn() {
     local now
     while (( $(remaining_seconds) > 0 )); do
       now=$(oc_turn_total)
-      if (( now >= EXPECTED_TURNS )); then
-        echo "[driver] live wait_turn: step-finish total=$now (>= $EXPECTED_TURNS)" >&2
+      if (( now > TURN_BASELINE )); then
+        echo "[driver] live wait_turn: terminal step-finish total=$now (> baseline $TURN_BASELINE)" >&2
         return 0
       fi
       sleep 2
     done
-    echo "[driver] live wait_turn: timeout (total=$(oc_turn_total), expected >= $EXPECTED_TURNS)" >&2
+    echo "[driver] live wait_turn: timeout (total=$(oc_turn_total), needed > baseline $TURN_BASELINE)" >&2
     EXIT_REASON="timeout"
     return 1
   }
 
   # /new clears the conversation; the fresh ses_ row is minted lazily on the
   # NEXT send (same as the initial session, and codex's post-/clear rollout).
-  # No EXPECTED_TURNS bump — the reset itself is not a turn.
+  # No baseline bump — the reset itself is not a turn, and the next oc_send
+  # snapshots the (monotonic, reset-surviving) terminal count for its own turn.
   oc_reset() {
     echo "[driver] live reset_session: delivering /new" >&2
     tmux send-keys -t "$SESSION" -l -- "/new"
