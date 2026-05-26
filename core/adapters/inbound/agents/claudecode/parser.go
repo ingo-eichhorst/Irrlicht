@@ -15,12 +15,21 @@ const eventTypeAssistantStreaming = "assistant_streaming"
 // backgroundSpawnRe matches the text Claude Code writes in a `Bash`
 // tool_result when the command was launched with `run_in_background: true`:
 //
-//	Command running in background with ID: bc1h56v8v. Output is being written to: /private/tmp/.../tasks/bc1h56v8v.output
+//	Command running in background with ID: bc1h56v8v. Output is being written to: /private/tmp/.../tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path.
 //
 // Group 1 is the background id; group 2 is the output-file path. The
 // background id and output path are read from the *result* because the Bash
 // tool_use input carries only the run_in_background flag — the id is assigned
 // at launch and reported back here. See issue #445.
+//
+// The path is a single whitespace-delimited token, but Claude writes it
+// mid-sentence ("…output. You will be notified…"), so `(\S+)` captures the
+// sentence-ending period as a trailing ".". collectToolResult strips that one
+// trailing period; leaving it in yields a non-existent "…output." path on which
+// the daemon's lsof liveness probe finds no writer, wrongly settling a
+// still-running background session to `ready`. Matching the whole token (rather
+// than anchoring on a `.output` suffix) keeps detection working even if Claude
+// ever names the file differently.
 var backgroundSpawnRe = regexp.MustCompile(`running in background with ID: (\S+?)\.\s+Output is being written to:\s+(\S+)`)
 
 // Parser implements tailer.TranscriptParser for Claude Code transcripts.
@@ -472,8 +481,11 @@ func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgT
 	if bgTaskID != "" {
 		if m := backgroundSpawnRe.FindStringSubmatch(text); m != nil {
 			ev.BackgroundSpawns = append(ev.BackgroundSpawns, tailer.BackgroundSpawn{
-				BashID:     bgTaskID,
-				OutputPath: m[2],
+				BashID: bgTaskID,
+				// Strip the sentence-ending period the launch text places after
+				// the path ("…output. You will be notified…") so the recorded
+				// path is the real file the lsof liveness probe must check.
+				OutputPath: strings.TrimSuffix(m[2], "."),
 			})
 		}
 	}
