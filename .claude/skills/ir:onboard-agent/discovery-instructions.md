@@ -341,6 +341,66 @@ probably `claude-code` matching against your own running irrlicht
 session (the daemon you're running this script from). Filter event
 inspection to `.adapter=="<slug>"` to avoid this confusion.
 
+## Scaffold the per-adapter driver + column gap forecast (REQUIRED)
+
+The smoke proves the daemon observes one happy-path turn. It does NOT
+make the agent recordable across the matrix — that needs a per-scenario
+driver. Historically discovery stopped at the smoke and the column grew a
+3-step driver, so ~12 scenarios froze on missing step types with no stage
+to build them (#496 RC2). Instead, scaffold the FULL driver up front and
+emit the column's driver-gap punch-list as a discovery deliverable.
+
+### 1. Scaffold the driver from the tmux-REPL template
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+cp "$SK/scripts/templates/drive-interactive.sh.tmpl" \
+   "$SK/scripts/drive-<slug>-interactive.sh"
+sed -i '' 's/__AGENT__/<slug>/g' "$SK/scripts/drive-<slug>-interactive.sh"
+chmod +x "$SK/scripts/drive-<slug>-interactive.sh"
+```
+
+The scaffold carries EVERY standard step-type arm (send, slash, wait_turn,
+interrupt, keys, sleep, reset_session, restart, resume, sigkill,
+exit_clean, start_session, session) — implemented ones run, un-ported ones
+fail loudly via `not_implemented` (exit 3), so a cell can never silently
+freeze on a missing arm. Fill the three AGENT-SPECIFIC SEAMs (launch,
+turn-detection, send) by porting from `drive-claudecode-interactive.sh`
+(fullest reference) / `drive-codex-interactive.sh`. If `<slug>` is
+headless-first (a blocking `run -p` mode), follow the HEADLESS ESCAPE
+HATCH in the template (opencode's hybrid headless + `run_live` shape).
+
+### 2. Declare what the driver actually elicits
+
+Add a `<slug>` entry to `scripts/lib/elicitable-primitives.json` listing
+ONLY the step types you genuinely produce so far (a subset of the stubbed
+arms), plus `slash_requires_step_type` if a bare `send "/cmd"` is a no-op
+(true for headless drivers). recipe-lint's semantic check (#496 RC3) reads
+this — a stubbed-but-not-elicited arm is then caught as a semantic gap
+before a recording is attempted, not recorded as a no-op.
+
+### 3. Emit the column driver-gap forecast (the punch-list)
+
+For every catalog cell applicable to `<slug>`, project the step types its
+behaviour implies (multi-session ⇒ reset_session/resume/restart; in-REPL
+picker ⇒ keys; mid-turn cancel ⇒ interrupt) and compare against what the
+driver elicits. The shortfall is the column's `extend-driver` punch-list:
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+# every applicable cell + its current disposition (mostly unassessed at onboarding):
+bash $SK/scripts/lib/completeness-gate.sh <slug>
+# the driver's elicited step types vs the full standard set = the punch-list:
+source $SK/scripts/lib/recipe-lint.sh
+echo "elicited:"; elicitable_primitives_for_agent $SK/scripts/lib/elicitable-primitives.json <slug>
+```
+
+Record the punch-list in the discovery summary as a list of
+`extend-driver <slug> <primitive>` tasks. A new agent now starts with a
+near-complete driver + an explicit gap forecast — not a 3-step stub and a
+column that freezes silently. Each gap is queued work for the
+`extend-driver` verb, dispatched and recorded as the column is built out.
+
 ## Per-agent setup notes
 
 Most adapters (claudecode, codex, pi) authenticate out-of-band — the
