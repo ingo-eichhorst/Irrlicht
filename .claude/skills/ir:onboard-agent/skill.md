@@ -76,7 +76,22 @@ Agent(
 
 When the user asks for a column/row sweep (e.g. "assess every scenario
 for codex", "implement all never-recorded claudecode cells"), compute
-the cell list from the matrix status below, then dispatch **one Agent
+the cell list **from the matrix files, never from a prior subagent's
+summary.** The per-cell summaries are deliberately lossy (≤5 lines, to
+protect parent context); enumerating the next stage's work from that
+prose is how a cell silently drops (RC4 — `multiple-sessions-same-cwd`
+sat in `scenarios.json` with no assessment or recording because an
+assess summary omitted it). Derive the authoritative work-list straight
+from the catalog × capabilities × on-disk artifacts:
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+# every applicable coverage_id for the agent, with its current disposition:
+bash $SK/scripts/lib/completeness-gate.sh <agent>   # exit 1 lists the non-terminal cells
+```
+
+The `GAP` lines ARE the work-list: `unassessed` → dispatch `assess`,
+`assessed_not_recorded` → dispatch `implement`. Then dispatch **one Agent
 per cell**. Collect each subagent's ≤5-line summary into a table for the
 user. Don't run the per-cell mechanics yourself — that's what blows the
 context budget.
@@ -100,10 +115,22 @@ cells by their missing `<primitive>`, dispatch one `extend-driver
 <agent> <primitive>` per distinct primitive, and then dispatch
 `implement` for each cell it reports as `unblocked_cells`. A primitive
 usually unblocks several cells in one shot, so a column's driver gaps
-collapse to a handful of `extend-driver` calls. A sweep is only "done"
-when every applicable cell has reached a terminal verdict — a frozen
-`driver_gap` is not terminal (see the completeness gate in Matrix
-status).
+collapse to a handful of `extend-driver` calls.
+
+**Post-sweep completeness gate (mandatory before reporting "done").** A
+sweep is finished only when every applicable coverage_id has reached a
+*terminal* verdict — `recorded`, `applicable_false`, or a `driver_gap`
+with its recipe authored and queued. Re-run the gate after the sweep and
+do not claim completion while it exits non-zero:
+
+```bash
+bash .claude/skills/ir:onboard-agent/scripts/lib/completeness-gate.sh <agent>
+```
+
+Any remaining `GAP` line is unfinished work — loop back and dispatch the
+stage it names (`assess` / `implement` / `extend-driver`) until the gate
+is clean. This is the forcing function that stops a sweep from reporting
+success while cells were never visited.
 
 ## Matrix status (`list` — the no-arg path)
 
@@ -169,6 +196,19 @@ ls replaydata/agents/*/scenarios/ 2>/dev/null
 
 Print a table (rows = adapters, columns = scenarios) with a one-line hint
 on every non-OK cell.
+
+The **completeness gate** is the file-derived, machine-checkable version
+of this per-column state — it collapses the cells to their terminal /
+non-terminal disposition and exits non-zero when any applicable cell was
+never resolved. Run it per agent (it's the same enumeration a sweep uses
+for its work-list, so it doubles as the sweep's done-check):
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+for a in claudecode codex pi aider opencode; do
+  bash $SK/scripts/lib/completeness-gate.sh "$a"   # exit 1 ⇒ open cells listed
+done
+```
 
 ### Driver-capability pre-flight (before an `implement` sweep)
 
