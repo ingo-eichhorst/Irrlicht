@@ -1519,8 +1519,69 @@
           "scope_note": "Coverage matrix marks aider supports=partial, observes=no. /undo reverts the last aider git commit and surfaces as a normal chat turn in the transcript; there is no multi-point checkpoint picker. Capturing it requires aider to first make a file edit and commit, then /undo — a recipe shape that needs file-tool granularity the current driver doesn't deterministically produce. Recording deferred."
         },
         "opencode": {
-          "applicable": false,
-          "notes": "driver_gap (gap:slash-command). agent_supports:yes — opencode ships /undo + /redo with git-snapshot semantics: /undo rewinds the conversation to a previous message AND restores the working-tree files via a git snapshot, REMOVING the subsequent messages from the SQLite session — an in-place rewind on the same ses_… (the strongest form of the canonical checkpoint primitive; stronger than claudecode's conversation-only in-place rewind, and unlike codex which forks). daemon (ProcessOwnedStore/SQLite) observability assessed full but UNTESTED LIVE — the transcript shrink-then-grow (message removal then regrowth on the same ses_…) is a store mutation no other opencode cell exercises. NOT recordable: /undo and /redo are in-TUI slash commands; CONFIRMED THIS SWEEP that headless `opencode run` does NOT process in-TUI slash commands — it stores them as literal user text (proven with inline /model and /new), so a send-shaped recipe sending /undo lints in-grammar but is a semantic no-op. drive-opencode-interactive.sh handles only send|wait_turn|sleep (blocking `opencode run` per send) and has no slash-command step against a live held-open session. Needs a live-REPL opencode driver (slash-command primitive); recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full in-place rewind target arc; assessment.json carries the yes / full(untested) / gap:slash-command verdict."
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.14.50. The checkpoint-rewind arc is model-agnostic; the dev env's default is a local LM Studio model, which is fine.",
+            "irrlichd is recording — run-cell.sh isolated mode, or --attach against a daemon started with --record.",
+            "LIVE-TUI cell: drive-opencode-interactive.sh routes any recipe carrying a `slash` step to its tmux TUI path, because headless `opencode run` stores a slash command as literal prompt text (PROBED 2026-05-26: `opencode run \"/undo\"` would store `/undo` as a user message rather than performing the rewind). tmux must be on PATH.",
+            "opencode version with /undo support — confirmed v1.14.50 (command.session.undo, slash 'undo'; footer 'Use /undo to revert the last message and file changes')."
+          ],
+          "setup": [
+            "Driver launches the opencode TUI in a fresh per-run cwd under <staging>/cwd/; opencode keys sessions on the cwd in its SQLite store, isolating this run's rows even alongside other opencode use.",
+            "opencode mints its own ses_… for the session; all three turns AND the /undo rewind happen IN PLACE on that one ses_… (no fork — unlike codex's /fork). The driver enumerates the cwd's top-level ses_… rows; an in-place rewind leaves exactly one, so the multi-session contract (session.uuids / transcript.paths) carries a single session."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "slash",
+              "text": "/undo"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… session entering ready, then turn 1 (working→ready, 'one') and turn 2 (working→ready, 'two') on the SAME ses_…",
+            "after /undo the session stays ready — a rewind is not a turn; opencode sets the session.revert column and restores files via a git snapshot but writes no part rows, so no state_transition distinguishes the rewind from a dwell (assert a ready dwell, not a working/waiting flip)",
+            "the message/part rows are NOT deleted (revert is a column flip) — do NOT assert any message/part-count shrink; same ses_… throughout, no new session_id minted (in-place rewind, not a fork)",
+            "turn 3 ('three') is a clean ready→working→ready arc on the SAME ses_…, issued from the rewound point",
+            "exactly one process_exited on teardown; final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         }
       }
     },
