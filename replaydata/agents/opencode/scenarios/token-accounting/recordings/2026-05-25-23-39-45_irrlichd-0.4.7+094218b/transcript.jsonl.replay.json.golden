@@ -11,12 +11,12 @@
     "total_events": 12,
     "consumed_events": 12,
     "total_transitions": 7,
-    "first_event_time": "2026-05-26T22:00:05.708Z",
-    "last_event_time": "2026-05-26T22:03:02.27Z",
-    "wall_clock_session_duration": 176562000000,
+    "first_event_time": "2026-05-25T21:39:41.929Z",
+    "last_event_time": "2026-05-25T21:42:31.398Z",
+    "wall_clock_session_duration": 169469000000,
     "state_durations": {
-      "ready": 12759000000,
-      "working": 163803000000
+      "ready": 14036000000,
+      "working": 155433000000
     },
     "flicker_count": 2,
     "flickers_by_category": {
@@ -25,14 +25,14 @@
     "flickers_by_reason": {
       "agent finished turn → ready": 2
     },
-    "cum_input_tokens": 64180,
+    "cum_input_tokens": 63173,
     "cum_output_tokens": 6
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-26T22:00:05.708Z",
+      "virtual_time": "2026-05-25T21:39:41.929Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -46,7 +46,7 @@
     {
       "index": 1,
       "event_index": 0,
-      "virtual_time": "2026-05-26T22:00:05.708Z",
+      "virtual_time": "2026-05-25T21:39:41.929Z",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
@@ -60,7 +60,7 @@
     {
       "index": 2,
       "event_index": 3,
-      "virtual_time": "2026-05-26T22:00:56.996Z",
+      "virtual_time": "2026-05-25T21:40:34.095Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -75,7 +75,7 @@
     {
       "index": 3,
       "event_index": 4,
-      "virtual_time": "2026-05-26T22:01:02.852Z",
+      "virtual_time": "2026-05-25T21:40:40.108Z",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
@@ -89,7 +89,7 @@
     {
       "index": 4,
       "event_index": 7,
-      "virtual_time": "2026-05-26T22:02:55.367Z",
+      "virtual_time": "2026-05-25T21:42:23.375Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -104,7 +104,7 @@
     {
       "index": 5,
       "event_index": 11,
-      "virtual_time": "2026-05-26T22:03:02.27Z",
+      "virtual_time": "2026-05-25T21:42:31.398Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -119,7 +119,7 @@
     {
       "index": 6,
       "event_index": 11,
-      "virtual_time": "2026-05-26T22:03:02.27Z",
+      "virtual_time": "2026-05-25T21:42:31.398Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
