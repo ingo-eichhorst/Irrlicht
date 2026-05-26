@@ -3206,6 +3206,44 @@
           ],
           "settings": {},
           "timeout_seconds": 240
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (run a single message in the opencode TUI to confirm; the dev env default is a local LM Studio model, so no remote key is needed). Verified opencode 1.14.50.",
+            "irrlichd is recording with the opencode SQLite watcher enabled — either run-cell.sh in isolated/coexist mode, or --attach against a daemon started with --record",
+            "opencode's `task` (subagent) tool is available — capabilities.json declares subagents:true; the built-in `general`/`explore`/`scout` subagents and `@<name>` invocation are on by default"
+          ],
+          "setup": [
+            "The interactive driver (drive-opencode-interactive.sh) creates a fresh per-run cwd under <staging>/cwd/ and launches a blocking `opencode run --format default -- \"<prompt>\"` for the single send (no --model flag, so opencode uses its configured default model); the run blocks until the parent assistant turn finishes — including the time the parent spends awaiting the foreground subagent — so wait_turn is a no-op",
+            "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic, tiny file to read and report back (keeps the child turn short and the recording cheap)",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db), not per-cwd transcript files. The parent invokes the `task` tool, which calls Session.create(parentSessionID, …); the child session row carries `parent_id = parent.id`. The daemon's ProcessOwnedStore watcher polls the session table, surfaces the child as transcript_new, and the detector emits parent_linked. For opencode the daemon-recorded parent_linked count IS the spawn proof (run-cell.sh:447-450) — NO separate child .jsonl file on disk is required (unlike claudecode's <parent>/subagents/ probe)",
+            "The default model is a small, slow local LM Studio model (~30–45s/turn), and a subagent run is two turns deep (parent + child), so the trailing sleep and timeout are generous: a slow parent+child sequence must not trip a false timeout, and the trailing sleep must outlast the parent's working→ready settle after the child returns"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Use the task tool to launch a subagent (the built-in 'explore' agent) that reads the README.md file in the current directory and reports its first heading. Wait for that subagent to finish, then reply with exactly the word: done."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the parent ses_… session entering ready, then a single ready→working transition driven by the user prompt",
+            "events.jsonl contains at least 1 parent_linked event whose parent_session_id is the parent ses_… UUID — the child session row (parent_id set) was discovered by the SQLite watcher and bound to the parent (this is opencode's spawn proof; no child .jsonl is expected on disk)",
+            "events.jsonl contains a transcript_new for the child session born after the parent turn started",
+            "no state_transition to ready or waiting fires on the parent ses_… between parent_linked and the final working→ready (the parent's outstanding `task` tool part holds it in working until the child reports back)",
+            "the child session transitions working→ready when its read/report work completes (dashboard subagent count drops 1 → 0)",
+            "events.jsonl shows a working→ready transition for the parent ses_… at turn end, after the child finishes",
+            "final session state for the parent is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
