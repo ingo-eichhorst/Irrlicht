@@ -210,8 +210,11 @@ while IFS= read -r expected_path; do
   # (malformed expected.jsonl OR a half-recorded cell — #496 RC6). known_failing
   # only excuses a validation FAILURE (exit 1, a daemon gap); it must NOT excuse
   # an internal error (exit 2) — an incomplete/broken fixture always fails.
-  go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1
-  ev_rc=$?
+  # `|| ev_rc=$?` is mandatory: the script runs under `set -e` (and CI's
+  # `bash -e`), so a bare non-zero `go run` (a known_failing cell's exit 1, or
+  # an exit-2 error) would abort the whole script before we could classify it.
+  ev_rc=0
+  go run ./tools/agent-onboarding/cmd/expected-validate "$scenario_dir" > "$report_json" 2>&1 || ev_rc=$?
   if [[ "$ev_rc" -eq 0 ]]; then
     if [[ "$known_failing" == "true" ]]; then
       echo "expected: ${agent}/${scenario} PASS (was known_failing — drop the flag from expected.jsonl)" >&2
