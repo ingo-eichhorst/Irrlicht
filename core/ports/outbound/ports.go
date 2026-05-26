@@ -90,6 +90,12 @@ type GitResolver interface {
 // "codex", "pi") so the correct parser is used.
 type MetricsCollector interface {
 	ComputeMetrics(transcriptPath, adapter string) (*session.SessionMetrics, error)
+	// ComputeMetricsTimeline returns cumulative metrics snapshots (ascending by
+	// VirtualTime), one per transcript turn, so a replay viewer can animate
+	// cost/tokens across the playhead. Returns nil for transcripts that can't
+	// be accumulated turn-by-turn (absent/empty, or provider-backed adapters);
+	// callers fall back to ComputeMetrics.
+	ComputeMetricsTimeline(transcriptPath, adapter string) ([]session.MetricsTimelinePoint, error)
 	// PruneEntry releases per-session state — both the in-memory tailer
 	// cache and the on-disk ledger file — when a session ends. Idempotent
 	// on a missing or already-removed entry.

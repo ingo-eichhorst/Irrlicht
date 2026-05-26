@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/application/replayengine"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
@@ -185,6 +186,43 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 		result.LastAssistantText = snippet
 	}
 	return result, nil
+}
+
+// ComputeMetricsTimeline returns cumulative SessionMetrics snapshots — one per
+// transcript turn/accumulation point, ascending by VirtualTime — so a replay
+// viewer can animate cost/tokens across the playhead instead of showing only
+// the final total. It drives a throwaway replayengine pass on a private tailer
+// (its own scratch file), so it never touches the per-path tailer cache or the
+// on-disk ledger that ComputeMetrics maintains.
+//
+// Returns nil for an absent/empty transcript and for adapters backed by a
+// MetricsProvider (e.g. OpenCode's SQLite store) which have no transcript-line
+// stream to accumulate over — callers fall back to a single ComputeMetrics.
+func (a *Adapter) ComputeMetricsTimeline(transcriptPath, adapter string) ([]session.MetricsTimelinePoint, error) {
+	if transcriptPath == "" {
+		return nil, nil
+	}
+	if _, ok := a.metricsProviders[adapter]; ok {
+		return nil, nil // no transcript-line stream; caller uses single-shot
+	}
+	parser := a.parserFor(adapter)
+	if parser == nil {
+		return nil, nil
+	}
+	res, err := replayengine.ReplayTranscript(transcriptPath, replayengine.Options{
+		Adapter:                    adapter,
+		Parser:                     parser,
+		DisableModelConfigFallback: true,
+		EmitMetricsTimeline:        true,
+	})
+	if err != nil || res == nil || len(res.MetricsTimeline) == 0 {
+		return nil, err //nolint:nilerr — absent/empty transcript is not an error
+	}
+	out := make([]session.MetricsTimelinePoint, 0, len(res.MetricsTimeline))
+	for _, s := range res.MetricsTimeline {
+		out = append(out, session.MetricsTimelinePoint{VirtualTime: s.VirtualTime, Metrics: s.Metrics})
+	}
+	return out, nil
 }
 
 // IngestRateLimit pushes a rate-limit snapshot into the tailer for
