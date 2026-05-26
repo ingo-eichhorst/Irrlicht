@@ -152,9 +152,12 @@ type recordedEvent struct {
 // scenarioDir and validates the recording against the spec-grounded
 // expectations. Returns nil + nil when there is nothing to validate:
 // either expected.jsonl is missing (no expectations declared yet) OR
-// events.jsonl is missing (recording not yet captured — typical for
-// applicable:false scenarios where the spec is committed but the
-// driver can't produce a recording today).
+// neither events.jsonl NOR a transcript is present (recording not yet
+// captured — typical for applicable:false scenarios where the spec is
+// committed but the driver can't produce a recording today). It returns
+// an ERROR for a half-recorded cell — a transcript present but no
+// events.jsonl — so a partial recording can't masquerade as a pass
+// (#496 RC6).
 func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
 	return ValidateExpectedAgainst(
 		filepath.Join(scenarioDir, "expected.jsonl"),
@@ -174,7 +177,26 @@ func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, 
 		return nil, nil // not configured for this scenario
 	}
 	if _, err := os.Stat(eventsPath); err != nil {
-		return nil, nil // events.jsonl not captured yet — same shape as no expected.jsonl
+		// events.jsonl absent. Two very different cases:
+		//   - genuinely no recording yet (applicable:false: spec committed,
+		//     driver can't produce a recording today) → nothing to validate,
+		//     return (nil, nil) like a missing expected.jsonl.
+		//   - a recording WAS promoted (a transcript sits next to where
+		//     events.jsonl should be) but events.jsonl was never captured →
+		//     a HALF-recorded cell. Returning (nil, nil) here made
+		//     replay-fixtures report a vacuous PASS for it (#496 RC6:
+		//     opencode/task-list). Fail loudly instead.
+		dir := filepath.Dir(eventsPath)
+		for _, t := range []string{"transcript.jsonl", "transcript.md"} {
+			if _, terr := os.Stat(filepath.Join(dir, t)); terr == nil {
+				return nil, fmt.Errorf(
+					"incomplete recording: %s present but events.jsonl missing — "+
+						"the cell has a spec and a transcript but no captured events; "+
+						"re-record it (run-cell.sh) so validation isn't silently skipped",
+					t)
+			}
+		}
+		return nil, nil // no transcript either — genuinely nothing recorded yet
 	}
 	meta, phases, err := loadExpected(expectedPath)
 	if err != nil {

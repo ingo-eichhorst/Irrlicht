@@ -96,6 +96,30 @@ func TestValidateExpected_missingEventsReturnsNil(t *testing.T) {
 	}
 }
 
+// TestValidateExpected_transcriptWithoutEventsErrors — a HALF-recorded
+// cell (expected.jsonl + a promoted transcript.jsonl, but no events.jsonl)
+// must ERROR, not silently skip. Returning (nil, nil) here made
+// replay-fixtures report a vacuous PASS (#496 RC6: opencode/task-list).
+// Distinct from the missing-events-AND-no-transcript case above, which is
+// a genuine applicable:false cell and stays a silent skip.
+func TestValidateExpected_transcriptWithoutEventsErrors(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"p1","expected_state":"ready","relative_to":"start","text":"_"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "transcript.jsonl"), `{"type":"user"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err == nil {
+		t.Fatalf("expected an error for a transcript-without-events cell, got report=%+v", report)
+	}
+	if report != nil {
+		t.Fatalf("expected nil report alongside the error, got %+v", report)
+	}
+	if !strings.Contains(err.Error(), "events.jsonl missing") {
+		t.Errorf("expected 'events.jsonl missing' in error, got %q", err.Error())
+	}
+}
+
 // TestValidateExpected_corruptFileFails — a phase whose anchor doesn't
 // exist (typo in relative_to) should produce a failing report, not a
 // silent pass. This is the canary the user asked for: "manually

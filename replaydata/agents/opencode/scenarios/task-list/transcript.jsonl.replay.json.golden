@@ -8,34 +8,34 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 12,
-    "consumed_events": 12,
+    "total_events": 7,
+    "consumed_events": 7,
     "total_transitions": 3,
-    "first_event_time": "2025-04-26T20:40:00Z",
-    "last_event_time": "2025-04-26T20:40:02.3Z",
-    "wall_clock_session_duration": 2300000000,
+    "first_event_time": "2026-05-26T19:19:01.945Z",
+    "last_event_time": "2026-05-26T19:19:56.141Z",
+    "wall_clock_session_duration": 54196000000,
     "state_durations": {
-      "ready": 2300000000
+      "working": 54196000000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "estimated_cost_usd": 0.0002,
-    "model_name": "claude-sonnet-4-5",
+    "cum_input_tokens": 21550,
+    "cum_output_tokens": 2,
     "tasks": [
       {
         "id": "1",
-        "subject": "Sleep 1s (task A)",
-        "status": "completed"
+        "subject": "Task 1 description",
+        "status": "pending"
       },
       {
         "id": "2",
-        "subject": "Sleep 1s (task B)",
-        "status": "in_progress"
+        "subject": "Task 2 description",
+        "status": "pending"
       },
       {
         "id": "3",
-        "subject": "Sleep 1s (task C)",
+        "subject": "Task 3 description",
         "status": "pending"
       }
     ]
@@ -44,7 +44,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2025-04-26T20:40:00Z",
+      "virtual_time": "2026-05-26T19:19:01.945Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -57,23 +57,22 @@
     },
     {
       "index": 1,
-      "event_index": 11,
-      "virtual_time": "2025-04-26T20:40:02.3Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-26T19:19:01.945Z",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "All tasks tracked; finishing up."
+      "waiting_for_user_input": false
     },
     {
       "index": 2,
-      "event_index": 11,
-      "virtual_time": "2025-04-26T20:40:02.3Z",
+      "event_index": 6,
+      "virtual_time": "2026-05-26T19:19:56.141Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -83,7 +82,7 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "All tasks tracked; finishing up."
+      "last_assistant_text_head": "done"
     }
   ]
 }

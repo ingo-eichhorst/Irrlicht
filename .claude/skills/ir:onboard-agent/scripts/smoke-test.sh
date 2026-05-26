@@ -41,6 +41,10 @@ echo "== unit tests (lib/completeness-gate_test.sh) =="
 bash "$SCRIPT_DIR/lib/completeness-gate_test.sh" || rc=1
 
 echo ""
+echo "== unit tests (lib/cell-integrity_test.sh) =="
+bash "$SCRIPT_DIR/lib/cell-integrity_test.sh" || rc=1
+
+echo ""
 echo "== shellcheck (advisory) =="
 if command -v shellcheck >/dev/null 2>&1; then
   # -x follows `source`d libs; advisory only — does not change rc.

@@ -223,10 +223,26 @@ while IFS= read -r expected_path; do
   fi
 done < <(find "$FIXTURES_ROOT" -name 'expected.jsonl' -not -path '*/_reports/*' | sort)
 
+# Artifact-completeness gate (#496 RC6): every RECORDED cell under scenarios/
+# must carry a complete, consistent artifact set (recipe row, assessment,
+# expected.jsonl, transcript, events.jsonl, golden). Catches a half-recorded
+# cell (transcript but no events.jsonl — which ValidateExpected now errors on
+# rather than skipping) and an orphan recording (dir maps to no recipe).
+integrity_failures=0
+echo >&2
+echo "== cell-integrity gate (artifact completeness) ==" >&2
+if ! bash .claude/skills/ir:onboard-agent/scripts/lib/cell-integrity.sh >&2; then
+  integrity_failures=1
+fi
+
 echo >&2
 echo "done. reports in $REPORTS_DIR/" >&2
 
 if [[ "$expected_failures" -gt 0 ]]; then
   echo "$expected_failures expected-validation failure(s) — the recording drifted from spec, or the spec changed without re-translating" >&2
+  exit 1
+fi
+if [[ "$integrity_failures" -gt 0 ]]; then
+  echo "cell-integrity gate failed — a recorded cell is incomplete or orphaned (see above)" >&2
   exit 1
 fi
