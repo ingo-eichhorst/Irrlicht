@@ -438,6 +438,30 @@ func isTerminalPart(data string) bool {
 	return false
 }
 
+// isErrorMessage reports whether a message JSON blob carries a non-empty
+// `error`. OpenCode records a turn that aborted (provider/runtime error,
+// quota, context overflow) on message.data.error rather than emitting a
+// step-finish part with reason="error", so for such turns the message-level
+// error is the only signal that the turn has ended — without it the session
+// sticks in `working` until the process exits. Fail-open (returns false) on a
+// parse failure or a missing/empty error. (#493)
+func isErrorMessage(data string) bool {
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+		return false
+	}
+	switch e := raw["error"].(type) {
+	case nil:
+		return false
+	case string:
+		return e != ""
+	case map[string]interface{}:
+		return len(e) > 0
+	default:
+		return true
+	}
+}
+
 // scanParts queries new/updated part rows for a session since lastCursor and
 // emits EventActivity events. Updates the cursor on success.
 //
@@ -492,10 +516,13 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 			newSeenIDs[partID] = struct{}{}
 		}
 		hasActivity = true
-		if !hasTerminal && isTerminalPart(partData) {
+		// A turn ends via a step-finish part with a terminal reason, OR — for an
+		// aborted/errored turn — opencode records the failure on
+		// message.data.error and emits NO step-finish reason=error part, so the
+		// message-level error is the only terminal signal for a failed turn. (#493)
+		if !hasTerminal && (isTerminalPart(partData) || isErrorMessage(msgData)) {
 			hasTerminal = true
 		}
-		_ = msgData
 	}
 
 	if hasActivity && maxSeen > lastTS {
