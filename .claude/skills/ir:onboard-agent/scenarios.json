@@ -4410,8 +4410,73 @@
           "timeout_seconds": 300
         },
         "opencode": {
-          "applicable": false,
-          "notes": "scope_note: opencode driver has no per-step model selection / mid-session switch primitive — gap:model-select. drive-opencode-interactive.sh drives headless `opencode run` and implements only send/wait_turn/sleep; the `send` arm hardcodes `opencode run --format default [--session] -- text` with NO --model flag, so every turn uses the single config default model (lmstudio/gemma-4-e2b-it-uncensored). No send-only switch path exists: the in-TUI /model picker is an arrow-key overlay (not drivable headlessly, and no `keys` step), and inline `/model <id>` is NOT processed by `opencode run` — proven live (2026-05-26): a send-path run of `opencode run -- \"/model ionos/meta-llama/Llama-3.3-70B-Instruct\"` produced a session whose only message still carried model.modelID=gemma-4-e2b-it-uncensored/providerID=lmstudio (the /model text went to the LLM as content; the model did not switch). NOT an agent or daemon limitation — opencode supports model switching (multi_model_orchestration:true) and the daemon reads per-turn model from its SQLite store (ProcessOwnedStore), so a genuine switch WOULD be observable. NOT a recipe-lint step-TYPE gap either (a recipe would use only handled types); the missing capability is model selection within the send arm, confirmed by behavioral probing. UNBLOCK: add a per-step model-select primitive to drive-opencode-interactive.sh (thread `opencode run -m <provider/model>`), with model A = config default and model B = a second reachable model (e.g. ionos/<model>; IONOS_API_TOKEN is set). expected.jsonl is retained as the documented two-turn lifecycle target; see replaydata/agents/opencode/scenarios/model-switch-midsession/assessment.json (driver_capability: gap:model-select). multi_model_orchestration=yes."
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated — verified opencode 1.14.50. This cell exercises a per-turn model switch, so it needs TWO reachable models.",
+            "irrlichd is recording — run-cell.sh isolated/coexist mode (IRRLICHT_ONBOARD_HOME + alt port), or --attach against a daemon started with --record.",
+            "LM Studio (http://127.0.0.1:1234) serving BOTH the config-default model A (lmstudio/gemma-4-e2b-it-uncensored, ~3.4GB) AND model B (lmstudio/google/gemma-4-26b-a4b, ~18GB at 16384 ctx). On a 32GB host both fit RESIDENT at once (~21GB total) so no mid-recording eviction/reload is needed — load both before recording (lms load google/gemma-4-26b-a4b --context-length 16384) so the 26B does NOT overflow opencode's ~14k-token system prompt (at 4096 ctx it errors n_keep>n_ctx and emits 0 tokens). Model B at 16384 ctx responds in ~3-4 min on this MoE; budget the timeout accordingly.",
+            "Model values are environment-dependent (issue #440): the recipe asserts a per-turn model CHANGE A→B, not a hardcoded pair. If LM Studio cannot host a viable second local model, model B may instead be an API model the env has a key for (e.g. ionos/<model> when IONOS_API_TOKEN is set) — declare it in `settings.provider` and reference it in turn 2's `model` field."
+          ],
+          "setup": [
+            "Driver launches headless `opencode run` in a fresh per-run cwd under <staging>/cwd/; opencode keys sessions on the cwd in its SQLite store, isolating this run's rows even alongside other opencode use.",
+            "The recipe's `settings` blob is seeded as a project-local opencode.json in the run cwd (drive-opencode-interactive.sh): it declares the default model A and the lmstudio provider with BOTH models, so turn 2's `-m lmstudio/google/gemma-4-26b-a4b` resolves without depending on the operator's global ~/.config/opencode/opencode.json.",
+            "Turn 1 launches the session (config-default model A); the driver captures the minted ses_… and chains turn 2 with `--session <id>`. Turn 2's `send` carries a `model` field → the driver threads `opencode run -m lmstudio/google/gemma-4-26b-a4b` so that turn runs on model B IN PLACE on the same ses_… (a real mid-session switch, no /new, no restart)."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: two",
+              "model": "lmstudio/google/gemma-4-26b-a4b"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… session entering ready within ~2s of launch, then PID bound to it",
+            "turn 1 (model A) drives the SAME ses_… ready→working→ready; no state_transition to waiting (no tool use)",
+            "turn 2 (model B) drives the SAME ses_… ready→working→ready again; still no waiting; final live state is ready",
+            "exactly ONE distinct ses_… session_id appears across both turns (the switch happened in place — no /new, no restart)",
+            "GOLDEN-LEVEL (not events.jsonl): summary.model_name in transcript.jsonl.replay.json.golden equals the normalized model B (gemma-4-26b), proving ModelName followed the latest-wins switch; cumulative tokens after turn 2 exceed after turn 1 (accumulation across the model change)"
+          ],
+          "settings": {
+            "$schema": "https://opencode.ai/config.json",
+            "model": "lmstudio/gemma-4-e2b-it-uncensored",
+            "provider": {
+              "lmstudio": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "LM Studio (local)",
+                "options": {
+                  "baseURL": "http://127.0.0.1:1234/v1"
+                },
+                "models": {
+                  "gemma-4-e2b-it-uncensored": {
+                    "name": "Gemma 4 e2b-it (uncensored, local)"
+                  },
+                  "google/gemma-4-26b-a4b": {
+                    "name": "Gemma 4 26b-a4b (local)"
+                  }
+                }
+              }
+            }
+          },
+          "timeout_seconds": 480,
+          "notes": "opencode mid-session model switch via the headless `send` step's per-turn `model` field (gap:model-select unblock, driver commit bbf82830). The observable is TWO ready→working→ready arcs on ONE ses_… session: turn 1 runs on the config-default model A (lmstudio/gemma-4-e2b-it-uncensored), then turn 2 carries model:lmstudio/google/gemma-4-26b-a4b so the driver threads `opencode run -m lmstudio/google/gemma-4-26b-a4b` and that turn runs on model B IN PLACE on the same `--session` chain — a genuine A→B mid-session switch. opencode is the lone ProcessOwnedStore adapter: the daemon reads per-turn model from the SQLite store (metrics.go: message.data.model.modelID, with a top-level message.data.modelID fallback — the 26B writes the top-level form), setting ModelName = NormalizeModelName(modelID) latest-non-empty-wins, so by turn 2 ModelName follows to model B and TotalTokens accumulates across the switch. The events.jsonl phase DSL carries NO model field, so expected.jsonl asserts only the two-turn mid-session lifecycle SKELETON (ready→working→ready twice on one ses_…, no waiting, PID bound); the model A→B change is asserted GOLDEN-LEVEL at summary.model_name in the .replay.json.golden (diffed by replay-fixtures), NOT in expected.jsonl. WHY the headless path (no `slash`/`reset_session` step): the in-REPL /models picker is an arrow-key DialogSelectModel overlay the opencode driver cannot navigate (no `keys` step) and inline `/model <id>` is a no-op on headless `opencode run` (proven by a live store probe — see assessment.json); the `-m` flag is the deterministic, navigation-free switch and keeps the cell on the simpler headless route. WHY a complete `settings` blob (not the usual empty {} for opencode cells): turn 2 references lmstudio/google/gemma-4-26b-a4b, which the operator's global config may not declare — seeding a project-local opencode.json that declares the default model A AND the lmstudio provider with BOTH models makes the run self-contained and re-recordable without editing the global config. WHY the 26B at 16384 context: opencode's system prompt is ~14k tokens; at the default 4096 ctx the 26B errors `n_keep>n_ctx` and emits 0 tokens (no real turn) — load it at >=16384 (lms load google/gemma-4-26b-a4b --context-length 16384). On a 32GB host model A (~3.4GB) + model B (~18GB) both stay RESIDENT, so there is no mid-recording model swap and timing stays deterministic; turn 2 still takes ~3-4 min on this MoE, hence timeout_seconds 480. WHY model values are not hardcoded as a contract (issue #440): the recipe and golden assert a per-turn CHANGE A→B and a non-empty model B, not a specific pair — a different env may substitute another reachable second model (e.g. ionos/<model> with IONOS_API_TOKEN). What differs between runs: the ses_… UUID/PID, timestamps, the assistant wording of the two replies, per-turn token counts and latency. What must NOT differ: two ready→working→ready arcs on ONE ses_… session, no waiting, ending ready, and (golden-level) summary.model_name = the normalized model B. Where to look if it broke: core/adapters/inbound/agents/opencode/metrics.go (modelID extraction + latest-wins ModelName) and drive-opencode-interactive.sh run_send (the `-m` thread + --session chaining); if a future opencode build stopped writing modelID on the assistant message, or the daemon's nested/top-level fallback no longer matched the store shape, summary.model_name would not follow the switch."
         }
       }
     },

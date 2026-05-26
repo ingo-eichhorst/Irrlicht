@@ -10,7 +10,7 @@ engineering the ~600-line driver. Stay inside it: an unknown `type`
 
 | type            | extra fields            | semantics                                                                 | drivers                          |
 |---              |---                      |---                                                                        |---                                |
-| `send`          | `text`                  | type `text` + Enter; bumps the expected-turn count                        | all interactive                  |
+| `send`          | `text`, `model` (opt)   | type `text` + Enter; bumps the expected-turn count. opencode-only `model` (`provider/model`) runs THIS turn on the named model (`opencode run -m`) — a per-turn switch | all interactive                  |
 | `slash`         | `text`                  | alias of `send` for `/cmd` slash commands                                 | all except opencode              |
 | `wait_turn`     | —                       | block until the agent finishes the current LLM round                      | all interactive                  |
 | `sleep`         | `seconds` (default `1`) | pause N seconds (idle dwell, lazy-transcript settle)                      | all interactive                  |
@@ -39,7 +39,11 @@ Notes:
 - **opencode** has the narrowest driver — it implements only `send`,
   `wait_turn`, and `sleep`. Any other step type aborts the recording, so
   opencode recipes can't use interrupts, slash commands, or multi-session
-  steps.
+  steps. The `send` step accepts an OPTIONAL opencode-only `model`
+  (`provider/model`, e.g. `lmstudio/google/gemma-4-26b-a4b`) that threads
+  `opencode run -m` so that turn runs on the named model — the per-turn
+  model-select primitive for `model-switch-midsession` (commit bbf82830).
+  Omit it and the turn runs on the config default.
 - Per-agent quirks (CLI flags, trust dialogs, exact key sequences for a
   picker) live in the driver; if a step you need isn't in this table, ask
   the maintainer rather than inventing a `type`.
