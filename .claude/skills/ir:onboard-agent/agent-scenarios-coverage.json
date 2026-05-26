@@ -235,7 +235,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:slash-command",
-          "notes": "/new exists in the TUI; headless `opencode run` stores slash commands as literal user text (no reset) and there is no reset_session step; needs a live-REPL opencode driver"
+          "notes": "/new exists in the TUI; headless `opencode run` stores slash commands as literal user text (no reset) and there is no reset_session step; needs a live-REPL opencode driver (tracked: #492)"
         }
       }
     },
@@ -272,7 +272,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:slash-command",
-          "notes": "/undo + /redo are in-TUI slash commands; headless `opencode run` stores them as literal text (no rewind); daemon observability untested; needs a live-REPL opencode driver"
+          "notes": "/undo + /redo are in-TUI slash commands; headless `opencode run` stores them as literal text (no rewind); daemon observability untested; needs a live-REPL opencode driver (tracked: #492)"
         }
       }
     },
@@ -457,7 +457,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:slash-command",
-          "notes": "slash commands resolve only in the live TUI; headless `opencode run` treats them as literal user text; needs a live-REPL opencode driver"
+          "notes": "slash commands resolve only in the live TUI; headless `opencode run` treats them as literal user text; needs a live-REPL opencode driver (tracked: #492)"
         }
       }
     },
@@ -494,7 +494,7 @@
           "agent_supports": "yes",
           "daemon_capability": "bug",
           "driver_capability": "ready",
-          "notes": "recorded 2026-05 (3/4); 12 tool calls sustained in one working span; turn_done known_failing — terminal working→ready settle lands ~175ms AFTER process_exited because headless `opencode run` exits at turn end; clears with a live-REPL driver or settle-on-exit"
+          "notes": "recorded 2026-05 (3/4); 12 tool calls sustained in one working span; turn_done known_failing — terminal working→ready settle lands ~175ms AFTER process_exited because headless `opencode run` exits at turn end; clears with a live-REPL driver or settle-on-exit (tracked: #492)"
         }
       }
     },
@@ -605,7 +605,7 @@
           "agent_supports": "yes",
           "daemon_capability": "incapable",
           "driver_capability": "ready",
-          "notes": "applicable:false — same root as turn-aborted-by-error: quota/error lands on message.data.error with zero step-finish reason=error parts; no observable working→ready settle. Dropped the falsified 'step-finish reason=error covers' note"
+          "notes": "applicable:false — same root as turn-aborted-by-error: quota/error lands on message.data.error with zero step-finish reason=error parts; no observable working→ready settle. Dropped the falsified 'step-finish reason=error covers' note (tracked: #493)"
         }
       }
     },
@@ -642,7 +642,7 @@
           "agent_supports": "partial",
           "daemon_capability": "full",
           "driver_capability": "gap:mid-turn-injection",
-          "notes": "headless `opencode run` blocks to turn completion and the driver sends sequentially, so a second message can't be injected mid-turn; needs a live-REPL opencode driver"
+          "notes": "headless `opencode run` blocks to turn completion and the driver sends sequentially, so a second message can't be injected mid-turn; needs a live-REPL opencode driver (tracked: #492)"
         }
       }
     },
@@ -679,7 +679,7 @@
           "agent_supports": "partial",
           "daemon_capability": "full",
           "driver_capability": "gap:permission-approval",
-          "notes": "opencode's permission classifier is TUI-only; headless `opencode run` auto-executes with no prompt/classification/waiting; needs a live-REPL opencode driver"
+          "notes": "opencode's permission classifier is TUI-only; headless `opencode run` auto-executes with no prompt/classification/waiting; needs a live-REPL opencode driver (tracked: #492)"
         }
       }
     },
@@ -716,7 +716,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:slash-command",
-          "notes": "/compact + /summarize are in-TUI slash commands; headless `opencode run` can't deliver them; needs a live-REPL opencode driver"
+          "notes": "/compact + /summarize are in-TUI slash commands; headless `opencode run` can't deliver them; needs a live-REPL opencode driver (tracked: #492)"
         }
       }
     },
@@ -790,7 +790,7 @@
           "agent_supports": "yes",
           "daemon_capability": "incapable",
           "driver_capability": "ready",
-          "notes": "applicable:false — error/abort turns land on message.data.error, NEVER a step-finish reason=error part; watcher scanParts (watcher.go) ignores message_data, so the turn sticks in working until process_exited (no settle). Candidate daemon fix: read message.data.error"
+          "notes": "applicable:false — error/abort turns land on message.data.error, NEVER a step-finish reason=error part; watcher scanParts (watcher.go) ignores message_data, so the turn sticks in working until process_exited (no settle). Candidate daemon fix: read message.data.error (tracked: #493)"
         }
       }
     },
@@ -975,7 +975,7 @@
           "agent_supports": "partial",
           "daemon_capability": "full",
           "driver_capability": "gap:permission-approval",
-          "notes": "permission gate is TUI-only; headless `opencode run` auto-executes tools with no prompt (proven via auto-executed-tool-call) and the driver has no approve/deny step; needs a live-REPL opencode driver"
+          "notes": "permission gate is TUI-only; headless `opencode run` auto-executes tools with no prompt (proven via auto-executed-tool-call) and the driver has no approve/deny step; needs a live-REPL opencode driver (tracked: #492)"
         }
       }
     },
@@ -1012,7 +1012,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:interrupt",
-          "notes": "parser handles step-finish reason=interrupted, but the headless send-only driver can't fire a mid-turn ESC; needs a live-REPL opencode driver"
+          "notes": "parser handles step-finish reason=interrupted, but the headless send-only driver can't fire a mid-turn ESC; needs a live-REPL opencode driver (tracked: #492)"
         }
       }
     },
@@ -1197,7 +1197,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:restart",
-          "notes": "subagents work (foreground-subagent recorded); orphaning needs a mid-turn SIGKILL/restart of the opencode process, which the send/sleep/wait_turn driver lacks; needs a process-control / live-REPL driver"
+          "notes": "subagents work (foreground-subagent recorded); orphaning needs a mid-turn SIGKILL/restart of the opencode process, which the send/sleep/wait_turn driver lacks; needs a process-control / live-REPL driver (tracked: #492)"
         }
       }
     },
@@ -1271,7 +1271,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "recorded 2026-05 (3/4); opencode + claudecode/codex/pi/aider in one cwd, all 5 sessions distinguished (load-bearing); agentB turn_done known_failing — poll-race truncation when the headless process exits under concurrent load. Driver now honors $IRRLICHT_ONBOARD_CWD; opencode added to cross_adapter[]"
+          "notes": "recorded 2026-05 (3/4); opencode + claudecode/codex/pi/aider in one cwd, all 5 sessions distinguished (load-bearing); agentB turn_done known_failing — poll-race truncation when the headless process exits under concurrent load. Driver now honors $IRRLICHT_ONBOARD_CWD; opencode added to cross_adapter[] (tracked: #492)"
         }
       }
     },
@@ -1382,7 +1382,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:model-select",
-          "notes": "daemon reads per-turn model fine; the driver runs `opencode run` with no --model and has no per-step model-select step, and inline /model is a no-op headless; needs a model-select / live-REPL driver"
+          "notes": "daemon reads per-turn model fine; the driver runs `opencode run` with no --model and has no per-step model-select step, and inline /model is a no-op headless; needs a model-select / live-REPL driver (tracked: #492)"
         }
       }
     },
