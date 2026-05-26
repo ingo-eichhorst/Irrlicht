@@ -80,6 +80,7 @@ CELL_JSON="$(jq --arg s "$SCENARIO" --arg a "$ADAPTER" '
       verify,
       applicable: .by_adapter[$a].applicable,
       scope_note: .by_adapter[$a].scope_note,
+      notes: .by_adapter[$a].notes,
       partner_adapter: .by_adapter[$a].partner_adapter,
       prompt: .by_adapter[$a].prompt,
       script: .by_adapter[$a].script,
@@ -92,13 +93,16 @@ if [[ -z "$CELL_JSON" || "$CELL_JSON" == "null" ]]; then
   exit 1
 fi
 
-# An applicable:false cell carries a scope_note explaining why; refuse
-# with a clear message rather than the generic 'no prompt' error.
+# An applicable:false cell carries a scope_note (or `notes`) explaining why;
+# refuse with a clear message rather than the generic 'no prompt' error.
+# Accept either key: the implement/recipe SKILL prescribes `notes`, while some
+# older cells (and aider/pi) use `scope_note` — read both so the rationale is
+# never silently dropped.
 # Note: `jq -r '.applicable // empty'` collapses to empty because jq's //
 # treats `false` as a falsy default — use `if … then … else …` instead.
 APPLICABLE="$(jq -r 'if .applicable == false then "false" elif .applicable == true then "true" else "" end' <<<"$CELL_JSON")"
 if [[ "$APPLICABLE" == "false" ]]; then
-  SCOPE_NOTE="$(jq -r '.scope_note // "no scope_note provided"' <<<"$CELL_JSON")"
+  SCOPE_NOTE="$(jq -r '.scope_note // .notes // "no scope_note provided"' <<<"$CELL_JSON")"
   echo "cell is not applicable for this adapter: scenario=$SCENARIO adapter=$ADAPTER" >&2
   echo "scope_note: $SCOPE_NOTE" >&2
   exit 2
