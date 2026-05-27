@@ -4810,6 +4810,70 @@
         "pi": {
           "applicable": false,
           "notes": "scope_note: driver_gap (C9). Needs concurrent same-adapter multi-session capture, but drive-pi-interactive.sh is single-session — it supports only send/slash/wait_turn/interrupt/sleep, runs ONE tmux session with ONE resolved transcript and ONE turn counter, and has no start_session step or per-step {\"session\":N} routing. The claudecode and codex recipes for this scenario both depend on start_session + {\"session\":N} (their drivers gained a per-slot session model: step_start_session, slot allocation, claimed-path exclusion); the pi driver has none of it, so two concurrent pi sessions in one cwd cannot be staged for a recording. Extending the pi driver is a developer task (out of scope for this cell). Secondary seam (irrlicht_observes:partial): pi's DiscoverPID = DiscoverPIDByCWD (cwd-only narrowing + highest-PID disambiguate fallback) — UNLIKE codex's per-rollout-file-writer binding and claudecode's metadata-first lookup, two same-cwd pi processes both survive the cwd narrowing, so the daemon cannot cleanly bind each session to its own PID by cwd alone; even with the driver extended, the scenario's 'stable, non-cross-contaminating PID binding' assertion is not guaranteed for pi. expected.jsonl is committed as the documented target (adapted from the codex/claudecode spec, anchored on working transitions to dodge pi's born-ready proc-<PID> placeholder). No recording; no retry."
+        },
+        "opencode": {
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.x. The arc is model-agnostic; the dev env's default is a slow local LM Studio model (~30-45s/turn), which is fine — the spec windows are widened to ≤60s so a slow turn never reads as a missing transition.",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon), or --attach against a daemon started with --record.",
+            "no other opencode session is live in the run cwd (a stray same-cwd opencode would add a third row and confuse the two-row assertion)."
+          ],
+          "setup": [
+            "HEADLESS cell — NOT tmux/TUI. The driver routes to run_live (tmux) ONLY for reset_session/slash steps; this recipe uses just send/wait_turn/start_session/sleep, so it stays on the deterministic headless `opencode run` path (two interleaved `opencode run --session <ses>` chains in one shared <staging>/cwd).",
+            "Driver slot 1's first send launches `opencode run` in <staging>/cwd, minting ses_1; wait_turn is a no-op because `opencode run` already blocks until the turn ends.",
+            "The start_session step allocates a SECOND slot (empty id) in the SAME cwd; its first send (no --session) mints a fresh ses_2 — opencode keys sessions on the SQLite session.id, not the directory (watcher.go scanSessions; the directory column is only a liveness gate via liveCWDs), so two same-cwd chains are two independent ses_… rows.",
+            "The step carrying {\"session\":1} switches the active slot back to slot 1, so the final send/wait_turn re-drives ses_1 (via --session ses_1) WHILE ses_2 is still alive — exercising the two concurrent, independent arcs. The driver's epilogue exports session.uuids + transcript.paths for BOTH ses_ chains so curate-lifecycle-fixture.sh captures both arcs."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct ses_… session_ids, both keyed to the same cwd slug (two independent SQLite session rows, not one merged row)",
+            "each ses_… has its own independent working->ready arc; no transition on one session is attributed to the other",
+            "session 1 (ses_1) shows TWO working->ready arcs (turn1 'alpha' + the post-start_session re-drive 'alpha2'); session 2 (ses_2) shows ONE ('bravo') — proving session 1 stayed bound and independent while session 2 was alive",
+            "no state flapping/merge: the daemon never collapses the two same-cwd rows into one nor swaps a transition between them",
+            "transcript.jsonl concatenates both sessions: 3 user prompts + 3 completed turns total across the two ses_… ids",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
