@@ -46,10 +46,12 @@
         "slash",
         "wait_turn",
         "interrupt",
-        "sleep"
+        "sleep",
+        "exit_clean",
+        "resume"
       ],
       "slash_requires_step_type": false,
-      "notes": "tmux-TUI driver. No `keys` arm — the /tree picker (checkpoint-rewind) needs arrow-key navigation it cannot elicit; that cell is a driver_gap awaiting `keys` via extend-driver."
+      "notes": "tmux-TUI driver. `exit_clean` (Ctrl-D graceful exit → daemon process_exited) + `resume` (relaunch `pi --session <transcript>`, which reopens and APPENDS to the SAME <ts>_<uuid>.jsonl across two process lifetimes so the daemon sees the same session_id row come back) ported from the codex reference for session-resume; one slot, two lifetimes — no new session is minted. No `keys` arm — the /tree picker (checkpoint-rewind) needs arrow-key navigation it cannot elicit; that cell is a driver_gap awaiting `keys` via extend-driver."
     },
     "aider": {
       "elicits": [
