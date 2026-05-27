@@ -1919,8 +1919,62 @@
           "scope_note": "Re-assessed 2026-05-23: the prior applicable:false (driver lacked resume) is STALE. The codex interactive driver now exposes exit_clean + resume (commit 8296cd0), and codex 0.130.0's `codex resume <uuid>` reopens the SAME rollout file (verified empirically) — one session id across two process lifetimes. Same single-session-two-lifetimes shape as claudecode/session-resume, but codex resume is explicit (`codex resume <uuid>`) where claudecode re-passes `--session-id`. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (birth → turn1 working/ready → process_exited → same-id re-bind → turn2 working/ready → final ready) is fixed. If it breaks, check drive-codex-interactive.sh step_resume (UUID resolution + `codex resume <uuid>` relaunch) and confirm codex flushed the rollout on Ctrl-D before relaunch."
         },
         "pi": {
-          "applicable": false,
-          "notes": "DRIVER GAP. Reassessed 2026-05-25 → agent_supports:yes / irrlicht_observes:yes (0.78): pi natively reopens a prior session at relaunch (`pi -c` continue-last / `pi -r` / `pi --session <uuid>`), reusing the SAME uuid.jsonl under ~/.pi/agent/sessions; because the adapter watches that dir (FilesUnderRoot) the daemon sees the same session_id row come back after the first lifetime exits — same observable shape as claudecode/session-resume. BUT this cell cannot be recorded: drive-pi-interactive.sh implements only send/slash/wait_turn/interrupt/sleep — it lacks the `exit_clean` and `resume`/`restart` step types needed to exit pi after turn 1 and relaunch with the same uuid for turn 2, and it tracks only one session UUID + transcript per run. Same gap that froze pi/session-reset. Recording deferred until drive-pi-interactive.sh gains exit_clean + a resume primitive (relaunch-with-same-uuid). expected.jsonl is committed as the documented target arc."
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (auth set up out-of-band).",
+            "irrlichd is recording (--attach against a daemon with --record).",
+            "drive-pi-interactive.sh exposes the `exit_clean` and `resume` step types (added in commit e88e35b1).",
+            "No other pi session is being driven in the same cwd while this records (DiscoverPID matches a running pi to a session by CWD)."
+          ],
+          "setup": [
+            "Pi assigns its own session UUID per launch under ~/.pi/agent/sessions/--<cwd>--/ as <ts>_<uuid>.jsonl, created lazily on the first user message. The driver discovers that transcript during wait_turn.",
+            "The `resume` step Ctrl-D's the running pi (graceful shutdown flushes the transcript -> daemon emits process_exited), kills the tmux session, then relaunches `pi --session <transcript>` in the SAME cwd. Pi reopens and APPENDS to the same <ts>_<uuid>.jsonl, so the daemon-side session_id is stable across both process lifetimes.",
+            "The driver keeps UUID/TRANSCRIPT unchanged across the resume and does NOT allocate a second slot — the single-session curator captures both lifetimes because they share one session_id (session.uuids/transcript.paths each hold one entry).",
+            "No separate exit_clean step precedes resume: the resume step performs the clean Ctrl-D exit itself, which is what emits the first-lifetime process_exited. Adding a standalone exit_clean first would tear down the (only) tmux server, so resume's own `tmux send-keys` would then hit a dead server and abort the driver — drop it."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "resume"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the first launch's session entering ready, then the working/ready cycle for turn 1.",
+            "events.jsonl contains a process_exited event for the session after turn 1 (the Ctrl-D clean exit performed by the resume step).",
+            "the SAME session_id re-binds to a new PID after the resume — NOT a new session_id. This proves pi reopened the existing transcript across PID lifetimes (spec: 'Same session_id reappears').",
+            "second-lifetime working transition fires on the SAME session_id, then back to ready.",
+            "state never enters working between the first-lifetime exit and the second turn (no premature/incorrect waiting state on resume).",
+            "final session state is ready.",
+            "transcript.jsonl carries both turns appended to one <ts>_<uuid>.jsonl — pi --session reopens the same file rather than minting a new one."
+          ],
+          "settings": {},
+          "timeout_seconds": 240,
+          "scope_note": "Re-assessed 2026-05-25 -> agent_supports:yes / daemon_capability:full / driver_capability:ready (0.78): the prior applicable:false (driver lacked exit_clean + resume) is STALE. The pi interactive driver now exposes exit_clean + resume (commit e88e35b1), and `pi --session <transcript>` reopens and APPENDS to the SAME <ts>_<uuid>.jsonl across two process lifetimes — one session_id, two lifetimes. Same single-session-two-lifetimes shape as claudecode/codex session-resume. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (v1 birth -> turn1 working/ready -> process_exited -> same-id re-bind in ready -> turn2 working/ready -> final ready) is fixed. Pi turns can be slow, hence generous wait_turn/sleep budgets. If it breaks, check drive-pi-interactive.sh step_resume (transcript resolution + `pi --session` relaunch in the same cwd so DiscoverPID re-binds the new PID) and confirm pi flushed the transcript on Ctrl-D before relaunch."
         },
         "aider": {
           "applicable": false,
