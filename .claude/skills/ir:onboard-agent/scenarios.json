@@ -7118,18 +7118,18 @@
           "script": [
             {
               "type": "send",
-              "text": "Write a detailed 600-word essay about the history of the printing press, with many paragraphs covering Gutenberg, movable type, the spread across Europe, and the impact on literacy. Take your time and write thoroughly."
+              "text": "Do NOT use any tools. Start writing immediately. Write a very long, detailed 800-word essay about the history of the printing press, with many paragraphs covering Gutenberg, movable type, the spread across Europe, and the impact on literacy. Keep writing paragraph after paragraph."
             },
             {
               "type": "sleep",
-              "seconds": 14
+              "seconds": 30
             },
             {
               "type": "interrupt"
             },
             {
               "type": "sleep",
-              "seconds": 4
+              "seconds": 6
             },
             {
               "type": "send",
