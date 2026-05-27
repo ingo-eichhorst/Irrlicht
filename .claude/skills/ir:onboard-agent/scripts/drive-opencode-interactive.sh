@@ -369,6 +369,87 @@ run_live() {
     sleep 2
   }
 
+  # oc_opencode_pid — the live opencode PID the daemon is tracking. opencode's
+  # PID discovery (opencode/pid.go → DiscoverPIDByCWD) matches a process named
+  # exactly `opencode` whose CWD == $RUN_CWD, so mirror that lookup here: the
+  # SIGKILL MUST land on the very PID the daemon watches, or it never observes
+  # process_exited. Primary: pgrep the `opencode` whose cwd is $RUN_CWD (lsof
+  # the process's cwd FD). Fallback: the opencode descendant of this slot's
+  # tmux pane (in case tmux wrapped the command in a shell) — and only if that
+  # also fails, the pane PID itself, so the kill can't merely orphan opencode
+  # while it keeps the parent+child sessions alive.
+  oc_opencode_pid() {
+    local pid="" p
+    for p in $(pgrep -x opencode 2>/dev/null); do
+      # lsof a process's cwd: FD column 'cwd', NAME column is the dir.
+      if lsof -a -p "$p" -d cwd 2>/dev/null | awk 'NR>1 {print $NF}' | grep -qxF "$RUN_CWD"; then
+        pid="$p"; break
+      fi
+    done
+    if [[ -z "$pid" ]]; then
+      local pane_pid
+      pane_pid=$(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null | head -1)
+      if [[ -n "$pane_pid" ]]; then
+        pid=$(pgrep -x opencode -P "$pane_pid" 2>/dev/null | head -1)
+        [[ -z "$pid" ]] && pid="$pane_pid"
+      fi
+    fi
+    printf '%s' "$pid"
+  }
+
+  # oc_sigkill — kill -9 the live opencode process mid-turn (the SIGKILL
+  # counterpart to a graceful exit). opencode runs foreground Task subagents as
+  # CHILD SQLite sessions of the SAME process (session.parent_id), so killing
+  # the one opencode process orphans BOTH the parent and any in-flight child —
+  # the daemon's PIDManager sees the PID vanish and its transport-agnostic
+  # CleanupZombies / deleteWithChildren sweep reaps the orphaned parent+child
+  # (pure repo.Delete + broadcast, no SetState → no spurious working
+  # transition, #321). Mirrors the claudecode/codex step_sigkill: target the
+  # daemon's PID, leave the dead pane for teardown — the kill alone produces
+  # process_exited. (For the eventual subagent-orphan-cleanup recipe: send a
+  # Task-spawning prompt, sleep until the child ses_ row exists in opencode.db
+  # with parent_id set AND a turn is in flight, then sigkill.)
+  oc_sigkill() {
+    local pid; pid=$(oc_opencode_pid)
+    if [[ -n "$pid" ]]; then
+      kill -9 "$pid" 2>/dev/null || true
+      echo "[driver] live sigkill: killed opencode PID $pid (cwd=$RUN_CWD)" >&2
+    else
+      echo "[driver] live sigkill: no opencode PID found for cwd=$RUN_CWD" >&2
+    fi
+    sleep 1
+  }
+
+  # oc_restart — SIGKILL the live opencode (orphaning parent+child for the
+  # daemon's zombie sweep, exactly as oc_sigkill) and then relaunch a FRESH
+  # opencode TUI in the SAME cwd so the recipe can continue against a new
+  # process. Mirrors claudecode/codex step_restart (end the active session,
+  # start a fresh one). The post-restart session is minted lazily on the next
+  # send — the run_live epilogue enumerates EVERY top-level ses_ under the cwd,
+  # so both the pre-restart (now orphaned/reaped) and post-restart sessions are
+  # captured in the multi-session contract (session.uuids / transcript.paths),
+  # the same shape codex's restart produces. The child (subagent) sessions are
+  # NOT in that contract by design — they carry parent_id and the daemon reaps
+  # them as zombies; the contract enumerates top-level rows only.
+  oc_restart() {
+    oc_sigkill
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    sleep 1
+    echo "[driver] live restart: relaunching opencode TUI (tmux=$SESSION, cwd=$RUN_CWD)" >&2
+    tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$RUN_CWD" "opencode" \
+      >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr"
+    # Re-wait the input affordance before any subsequent send (same readiness
+    # gate as the initial launch; opencode swallows keystrokes during boot).
+    local waited=0
+    while (( $(remaining_seconds) > 0 )) && (( waited < 40 )); do
+      if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -q "Ask anything"; then
+        break
+      fi
+      sleep 1; waited=$((waited + 1))
+    done
+    sleep 3
+  }
+
   if [[ "$EXIT_REASON" == "ok" ]]; then
     local STEP_COUNT i STEP TYPE
     STEP_COUNT=$(jq 'length' <<<"$SCRIPT_JSON")
@@ -393,6 +474,17 @@ run_live() {
           ;;
         keys)
           oc_keys "$(jq -r '.keys' <<<"$STEP")"
+          ;;
+        sigkill)
+          # kill -9 the live opencode process mid-turn — orphans the parent and
+          # any in-flight child (subagent) session of the same process; the
+          # daemon's zombie sweep reaps both.
+          oc_sigkill
+          ;;
+        restart)
+          # SIGKILL the live opencode (orphaning parent+child) then relaunch a
+          # fresh TUI in the same cwd so the recipe can continue.
+          oc_restart
           ;;
         slash)
           local s; s=$(jq -r '.text // .command // empty' <<<"$STEP")
@@ -585,14 +677,17 @@ run_start_session() {
   echo "[driver] start_session: concurrent slot #$ACTIVE in $RUN_CWD (next send mints a fresh ses_)" >&2
 }
 
-# Route: a `reset_session` / `slash` / `interrupt` / `keys` step needs the live
-# opencode TUI — headless `opencode run` treats slash commands as ordinary
-# prompt text and offers no in-flight signal channel (an interrupt = a bare
-# Escape to the running TUI; `keys` = raw key navigation). All other opencode
-# cells stay on the simpler, deterministic headless path — including
+# Route: a `reset_session` / `slash` / `interrupt` / `keys` / `restart` /
+# `sigkill` step needs the live opencode TUI — headless `opencode run` treats
+# slash commands as ordinary prompt text and offers no in-flight signal
+# channel (an interrupt = a bare Escape to the running TUI; `keys` = raw key
+# navigation; restart/sigkill must kill a long-lived TUI process so the daemon
+# observes process_exited — a headless `opencode run` already self-exits per
+# turn, so there is no parent process to orphan a child against). All other
+# opencode cells stay on the simpler, deterministic headless path — including
 # start_session, which is just a SECOND headless `opencode run` chain (two
 # interleaved chains, no TUI), so it does NOT force run_live.
-if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash" or .type == "interrupt" or .type == "keys")' <<<"$SCRIPT_JSON")" == "true" ]]; then
+if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash" or .type == "interrupt" or .type == "keys" or .type == "restart" or .type == "sigkill")' <<<"$SCRIPT_JSON")" == "true" ]]; then
   run_live   # drives the TUI under tmux and exits; never returns here.
 fi
 
