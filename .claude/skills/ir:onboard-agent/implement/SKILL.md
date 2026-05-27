@@ -310,14 +310,32 @@ notes: <one or two sentences — drift flag, scope_note, retry count, or infra r
 observability_correction: <none | the live recording overrode the assess verdict — e.g. assessed daemon_capability:full but the transcript/store proved the signal isn't emitted (→ incapable/bug)>
 ```
 
-`observability_correction` is the maintainer's cue to update
-`agent-scenarios-coverage.json` when the LIVE recording disagrees with
+`observability_correction` fires when the LIVE recording disagrees with
 the doc-based `assess` verdict (e.g. pi/streaming-partial-writes assessed
 `daemon_capability: full` but the recording proved pi writes the
 transcript atomically → `daemon_capability: incapable`). Most common on
 structured-store transports (opencode's `ProcessOwnedStore`), where
 observability is hard to predict from docs. Write `none` when the
 recording matched the assessment.
+
+**A non-`none` correction MUST be written back into `assessment.json` in
+the SAME commit — not left as a cue.** Update the affected axis
+(`daemon_capability` / `agent_supports` / `driver_capability`), bump
+`assessed_at`, and add a caveat citing the recording that proved it. This
+is the BACKFLOW LOOP: when you also mark `by_adapter.<agent>` as
+`applicable:false`, the `scenarios.json` matrix and the `assessment.json`
+verdict must move TOGETHER. Correcting only the matrix (or only the
+prose notes) while the assessment keeps the stale optimistic axes is
+exactly the desync that hid pi/streaming-partial-writes for weeks — the
+viewer reads `assessment.json` and showed it recordable while the matrix
+said `applicable:false`. The `consistency-gate` (run at sweep-end and in
+CI) now FAILS that state: a cell whose assessment still routes RECORD but
+is marked `applicable:false` with no recording and no `record_blocked` is
+a hard error. So if the recording shows the cell genuinely can't be
+recorded for a reason ORTHOGONAL to the three axes (auth/mock missing, a
+flaky driver, unit-test-covered, upstream gap — NOT an axis fact), set
+`assessment.json` `record_blocked` to `infra` / `driver_bug` /
+`unit_test` / `upstream` accordingly instead of lying about the axes.
 
 Status meanings:
 

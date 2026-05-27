@@ -126,6 +126,7 @@ Shape (per `cell-lifecycle.md` Stage 1):
   "agent_supports":   "yes" | "no" | "partial" | "unknown",
   "daemon_capability": "full" | "bug" | "incapable" | "unknown" | "n/a",
   "driver_capability": "ready" | "gap:<primitive>",
+  "record_blocked":   "infra" | "unit_test" | "driver_bug" | "upstream",  // OPTIONAL — omit unless the axes say record-now but the cell still can't be recorded
   "confidence": 0.85,
   "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n...",
   "caveats": [
@@ -158,6 +159,25 @@ conditions with different owners and different next actions:
   - `gap:<primitive>` — the driver lacks a step type (e.g. `gap:sigkill`).
     (Owner: tooling → extend the driver. Do **not** degrade to
     `agent_supports:no` / a frozen cell.)
+- **`record_blocked`** (OPTIONAL) — the escape hatch for a cell whose three
+  axes all say record-now (supports yes/partial, daemon full/bug, driver
+  ready) yet still can't be recorded for a reason ORTHOGONAL to the axes.
+  Without it, such a cell can only be marked `applicable:false` in
+  `scenarios.json` prose — invisible to the viewer (which reads the axes) and
+  a contradiction the `consistency-gate` rejects. Set it instead of lying
+  about an axis:
+  - `infra` — auth/mock/environment the recording needs isn't available
+    (e.g. aider/token-quota: no provider key + no deterministic quota mock).
+  - `unit_test` — the property is covered by an agent-agnostic unit test, not
+    a live recording (e.g. codex/oversized-transcript-line → the 64 MB tailer
+    cap test).
+  - `driver_bug` — the driver HAS the step types (recipe-lint passes — this is
+    NOT a `gap:*`) but they race/misbehave (e.g. opencode's TUI composer race).
+  - `upstream` — the agent CLI or the daemon needs work before the scenario is
+    recordable at all (e.g. claudecode/background-subagent).
+  When the recording itself reveals the block, `implement` writes this back
+  (see its backflow rule). A `record_blocked` cell stays `applicable:false`
+  AND keeps honest axes — the two files agree, so the gate is green.
 
 **Evidence rule:** any verdict other than `daemon_capability: full` /
 `driver_capability: ready` MUST be anchored in `sources[]` to a cited event
@@ -165,6 +185,20 @@ conditions with different owners and different next actions:
 mechanism. Finer granularity multiplies the chance of mislabeling (the
 codex `session-reset` mislabel in #472 / the first #473 pass), so the bar
 for `bug` / `incapable` / `gap:*` is a concrete citation.
+
+**Observation vs emission (provisional code-read verdicts).** `agent_supports`
+("the agent performs the behavior") and `daemon_capability` ("the signal
+reaches the Source the daemon tails") are DIFFERENT questions — do not let a
+plausible parser reading collapse them. A `daemon_capability: full` derived
+purely from reading `parser.go` is PROVISIONAL for any property about *what
+the agent writes to its transcript* (streaming, partial flushes, ordering,
+atomicity): the parser may handle a trace that the agent never actually
+emits. pi/streaming-partial-writes was assessed `full` because the parser
+*would* sustain `working` across partial flushes — but pi writes each turn as
+one atomic line, so the flushes never exist and the true verdict is
+`incapable`. When the verdict hinges on emission you can't confirm from docs,
+keep `confidence` low and say so in `caveats`; a live recording is the only
+thing that promotes such a verdict from provisional to settled.
 
 The recording axis (`recorded` / `drift` / `none`) is **measured**, not
 stored here — the viewer derives it from `events.jsonl` + validation and
@@ -174,6 +208,19 @@ rolls all three facts up to a display state (`observed` / `pending-record`
 
 Overwrite the existing file silently when re-running. Git preserves
 the previous version.
+
+**Schema/bulk migrations must re-run the gates, never carry verdicts
+forward blindly.** A mechanical migration that rewrites the axis fields
+across MANY assessments (e.g. #480 split `irrlicht_observes` into
+`daemon_capability`/`driver_capability` across 129 files) can silently
+re-bless a verdict that a later recording had already refuted — the new
+`assessed_at` then makes the stale content look fresh. pi/streaming-partial-writes
+desynced this way: the empirical degrade lived in `scenarios.json`, but the
+migration translated the *old* optimistic `full` into the new schema and
+overwrote nothing in `scenarios.json`. Any migration touching verdict fields
+MUST run `scripts/lib/consistency-gate.sh` (and `catalog-drift.sh`) afterward
+and reconcile every contradiction before committing — a migration that leaves
+the gate red has introduced exactly the drift the gate exists to stop.
 
 ## Steps (single cell)
 
@@ -408,11 +455,18 @@ Compute the routing signal from the three facts — this is what
 | `no`              | `n/a`       | `n/a`          | **frozen**           | agent lacks the feature |
 | `unknown`         | (any)       | (any)          | **frozen**           | inconclusive — re-assess after the gap named in `body` closes |
 
+`record_blocked` OVERRIDES a `record`/`record-known-failing` route to
+**deferred**: the axes say recordable but a non-axis blocker (infra /
+unit_test / driver_bug / upstream) means no recording happens now. The cell
+is `applicable:false` with honest axes — distinct from `frozen` (an axis says
+irrlicht can't) and from `driver-gap` (a missing step type, fixable by
+`extend-driver`).
+
 Return ONLY this (≤5 lines), no transcripts:
 
 ```
-verdict: supports=<v> daemon=<full|bug|incapable|n/a> driver=<ready|gap:*> (confidence <n>)
-route: record | record-known-failing | driver-gap | frozen
+verdict: supports=<v> daemon=<full|bug|incapable|n/a> driver=<ready|gap:*> (confidence <n>) [record_blocked=<reason>]
+route: record | record-known-failing | driver-gap | frozen | deferred
 summary: <one sentence — the load-bearing reason, citing the anchoring event/code for any non-full/non-ready verdict>
 wrote: replaydata/agents/<agent>/scenarios/<scenario>/assessment.json
 matrix_drift: none | matrix says <old>, coverage row should update

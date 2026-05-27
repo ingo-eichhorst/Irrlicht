@@ -125,12 +125,19 @@ do not claim completion while it exits non-zero:
 
 ```bash
 bash .claude/skills/ir:onboard-agent/scripts/lib/completeness-gate.sh <agent>
+bash .claude/skills/ir:onboard-agent/scripts/lib/consistency-gate.sh   # all agents
 ```
 
 Any remaining `GAP` line is unfinished work — loop back and dispatch the
 stage it names (`assess` / `implement` / `extend-driver`) until the gate
 is clean. This is the forcing function that stops a sweep from reporting
-success while cells were never visited.
+success while cells were never visited. The **consistency gate** is the
+second half of "done": completeness proves every cell reached a terminal
+*label*, consistency proves the assessment verdict and the matrix
+`applicable` flag *agree* on every un-recorded cell — a sweep that degrades
+a cell to `applicable:false` (or un-freezes one) without reconciling the
+assessment leaves the two files telling different stories, which is the
+exact silent desync this gate catches. Both must be clean.
 
 ## Matrix status (`list` — the no-arg path)
 
@@ -167,6 +174,34 @@ phantom cell, or a catalog cell is invisible to the rollup. Fix it (add
 the catalog/rollup/recipe row) before proceeding; don't sweep around it.
 The Go `TestCatalogRollupBijection` + `TestScenarioCatalogNoDrift` pin the
 same invariants in CI.
+
+Then run the **consistency gate** — the SEMANTIC companion to catalog-drift
+(which is purely structural). It fails when, for an un-recorded cell, the
+`assessment.json` verdict and the `scenarios.json` `by_adapter.applicable`
+flag tell different stories: an assessment that routes RECORD (supports
+yes/partial, daemon full/bug, driver ready) while the matrix says
+`applicable:false` with no recording and no documented `record_blocked`, or a
+FROZEN assessment (supports no/unknown, or daemon incapable/n-a) while the
+matrix says `applicable:true`. This is the gap that hid
+`pi/streaming-partial-writes` — daemon=full in the viewer AND applicable:false
+in the matrix at once, every structural gate green, because the
+completeness-gate silently prefers `applicable:false`:
+
+```bash
+SK=.claude/skills/ir:onboard-agent
+bash $SK/scripts/lib/consistency-gate.sh        # exit 1 ⇒ a cell's verdict and
+                                                # its matrix flag disagree
+```
+
+A non-zero exit is a hard stop. Resolve each contradiction by making the two
+files agree: fix the assessment DOWN (e.g. `daemon→incapable` when a recording
+proves the signal isn't emitted), fix it UP (a stale `no` for a feature the
+agent does support), record the cell, or — when the axes are genuinely
+record-now but the cell can't be recorded for a reason ORTHOGONAL to the three
+axes — add a `record_blocked` value to the assessment (`infra` / `unit_test` /
+`driver_bug` / `upstream`; see `assess/SKILL.md`). The Go
+`TestAssessmentScenarioConsistency` + `lib/consistency-gate_test.sh` pin this
+in CI / the smoke test.
 
 Several `name`s legitimately share one `coverage_id` (recipe variants of the
 same canonical cell) — the matrix axis is the coverage id, not the name.
