@@ -357,7 +357,8 @@ SELECT json_set(
   '\$._role',  json_extract(m.data, '\$.role'),
   '\$._cwd',   s.directory,
   '\$._ts',    p.time_updated,
-  '\$._model', json_extract(m.data, '\$.model.modelID')
+  '\$._model', json_extract(m.data, '\$.model.modelID'),
+  '\$._error', json(json_extract(m.data, '\$.error'))
 )
 FROM part p
 JOIN message m ON p.message_id = m.id
@@ -512,14 +513,23 @@ echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 echo "${SESSION_ID:-}" > "$STAGING/session.uuid"
 
 # Export the parent session's parts as a JSONL stream with the synthetic
-# `_role`, `_cwd`, `_ts`, `_model` fields the OpenCode parser expects.
-# This is what the replay tool reads from transcript.jsonl in the
+# `_role`, `_cwd`, `_ts`, `_model`, `_error` fields the OpenCode parser
+# expects. This is what the replay tool reads from transcript.jsonl in the
 # committed fixture.
 TRANSCRIPT_OUT="$STAGING/opencode-transcript.jsonl"
 : > "$TRANSCRIPT_OUT"
 if [[ -n "$SESSION_ID" ]]; then
   # Role lives inside message.data JSON (no top-level column), so extract
   # it with json_extract. modelID lives in message.data.model.modelID.
+  # `_error` carries message.data.error: an aborted/errored turn (quota,
+  # context-overflow, provider error) records the failure on the MESSAGE,
+  # not as a step-finish reason=error part — opencode emits only a bare
+  # step-start part on that message — so message.data.error is the sole
+  # turn-ending signal the daemon's watcher.go isErrorMessage keys on.
+  # Without it the exported fixture loses the error and the replayed turn
+  # never settles working→ready. `json(...)` nests the error sub-object as
+  # real JSON (SQLite JSON null when absent — isErrorMessage treats null as
+  # "no error"). (#493 daemon side; this is the matching export.)
   # Concurrent reads against opencode's running DB are safe — opencode
   # writes in WAL mode and sqlite3's default open mode tolerates a
   # parallel writer. The -readonly flag fails on this DB because it
@@ -534,7 +544,8 @@ SELECT json_set(
   '\$._role',  json_extract(m.data, '\$.role'),
   '\$._cwd',   s.directory,
   '\$._ts',    p.time_updated,
-  '\$._model', json_extract(m.data, '\$.model.modelID')
+  '\$._model', json_extract(m.data, '\$.model.modelID'),
+  '\$._error', json(json_extract(m.data, '\$.error'))
 )
 FROM part p
 JOIN message m ON p.message_id = m.id
