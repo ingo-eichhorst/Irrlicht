@@ -487,6 +487,15 @@ run_live() {
       STEP=$(jq -c ".[$i]" <<<"$SCRIPT_JSON")
       TYPE=$(jq -r '.type' <<<"$STEP")
       case "$TYPE" in
+        live)
+          # No-op marker: its mere presence in script[] forces this recipe onto
+          # the long-lived run_live path (see router below), so a PLAIN
+          # send/wait_turn session keeps ONE opencode process alive across every
+          # turn instead of spawning a fresh `opencode run` per turn. That
+          # avoids the headless per-run process-exit-before-poll race that
+          # truncates the final settle on long agentic sessions.
+          echo "[driver] live marker: long-lived run_live path" >&2
+          ;;
         send)
           oc_send "$(jq -r '.text' <<<"$STEP")"
           ;;
@@ -726,7 +735,7 @@ run_start_session() {
 # stay on the simpler, deterministic headless path — including start_session,
 # which is just a SECOND headless `opencode run` chain (two interleaved chains,
 # no TUI), so it does NOT force run_live.
-if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash" or .type == "interrupt" or .type == "keys" or .type == "restart" or .type == "sigkill" or .type == "mid_turn_send")' <<<"$SCRIPT_JSON")" == "true" ]]; then
+if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash" or .type == "interrupt" or .type == "keys" or .type == "restart" or .type == "sigkill" or .type == "mid_turn_send" or .type == "live")' <<<"$SCRIPT_JSON")" == "true" ]]; then
   run_live   # drives the TUI under tmux and exits; never returns here.
 fi
 

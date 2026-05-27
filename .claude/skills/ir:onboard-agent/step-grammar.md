@@ -25,6 +25,7 @@ engineering the ~600-line driver. Stay inside it: an unknown `type`
 | `start_session` | `cwd` (optional)        | launch a concurrent session WITHOUT killing the current one (same cwd unless overridden) | claudecode, opencode |
 | `session`       | `session` (slot N)      | switch focus to an existing session slot N (use after `start_session`)    | claudecode, opencode             |
 | `mid_turn_send` | `text`                  | type `text` + Enter into the composer WHILE a turn is in flight; the TUI queues it and runs it as the NEXT turn — does NOT bump the turn count (a later `wait_turn` detects the queued turn) | opencode |
+| `live`          | —                       | no-op marker; its presence forces a plain `send`/`wait_turn` recipe onto the long-lived process path (one process across all turns) so a long agentic session avoids the per-turn process-exit settle-truncation race | opencode |
 
 Notes:
 
@@ -41,8 +42,8 @@ Notes:
   headless path (`send`/`wait_turn`/`sleep`, plus `start_session`/`session`
   — a second `opencode run` chain in the same cwd is a second independent
   ses_-keyed arc, so multi-session-same-cwd needs no TUI); `slash`,
-  `reset_session`, `interrupt`, `keys`, `restart`, `sigkill`, and
-  `mid_turn_send` switch it to the live-TUI path
+  `reset_session`, `interrupt`, `keys`, `restart`, `sigkill`,
+  `mid_turn_send`, and `live` switch it to the live-TUI path
   (`run_live`, tmux) — `interrupt` fires a bare Escape mid-turn (opencode writes
   a step-finish reason=interrupted, which the parser maps to turn_done);
   `mid_turn_send` types a 2nd message into the composer DURING an in-flight turn
