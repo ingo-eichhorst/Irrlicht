@@ -26,6 +26,17 @@
 #   exit_clean — Ctrl-D for a graceful shutdown (pi flushes its
 #                transcript and the daemon emits process_exited). Pi's
 #                banner binds ctrl+d to exit.
+#   reset_session — send pi's in-REPL `/new` slash. Pi mints a FRESH
+#                <ts>_<uuid2>.jsonl under the SAME project dir
+#                (parentSession:null) while keeping the SAME process
+#                alive (no relaunch — distinct from resume). The codex
+#                /new supersession shape: the NEW session supersedes the
+#                OLD; the old UUID-1 file lingers frozen while the daemon
+#                removes the old session row via the #169 same-PID cleanup
+#                once UUID-2's PID is discovered. Allocates a new slot
+#                reusing the same tmux/process and re-arms transcript
+#                resolution onto UUID-2, so session.uuids/transcript.paths
+#                list BOTH UUIDs and curate captures both rollouts.
 #   resume     — Exit the running pi cleanly (Ctrl-D), kill the tmux
 #                session, then relaunch `pi --session <transcript>` (or
 #                `pi -c` if the transcript is unknown). Pi APPENDS to the
@@ -41,7 +52,9 @@
 #
 # Session model: every session lifetime is a 1-based "slot". The initial
 # session is slot 1. resume relaunches in place (same slot, same
-# transcript file). At the end, ALL slots' session_ids + transcripts are
+# transcript file); reset_session (/new) allocates a NEW slot reusing the
+# same process (a fresh rollout supersedes the old one). At the end, ALL
+# slots' session_ids + transcripts are
 # written to session.uuids / transcript.paths so run-cell.sh's
 # multi-session curation unions them. A single-session run leaves these
 # with one entry each — same shape, but run-cell.sh's multi-session
@@ -340,9 +353,57 @@ step_resume() {
   fi
 }
 
+# swap_after_slash <slash-text> — shared handler for pi's in-REPL /new
+# (reset_session). Pi's /new (interactive-mode.js handleClearCommand →
+# runtimeHost.newSession → session-manager.js newSession()) mints a FRESH
+# <ts>_<uuid2>.jsonl under the SAME project dir, parentSession:null, while
+# keeping the SAME process alive (no exit/relaunch — distinct from resume).
+# This is the codex /new supersession shape: the NEW session supersedes
+# the OLD; the old UUID-1 file lingers frozen on disk while the daemon
+# removes the old session row via the #169 same-PID cleanup once UUID-2's
+# PID is discovered. The new rollout materializes LAZILY — only on the
+# first post-/new user message.
+#
+# Mirrors drive-codex-interactive.sh's swap_after_slash: resolve the
+# current transcript (so its session_id is recorded in the slot list),
+# send the slash, then allocate a NEW slot that reuses the same
+# tmux/process. The new slot's fresh marker makes the next wait_turn's
+# resolve_transcript find the new <ts>_<uuid2>.jsonl (newest .jsonl NEWER
+# than $MARKER) instead of the frozen UUID-1 file.
+swap_after_slash() {
+  local slash="$1"
+  resolve_transcript || true
+  local old_tmux="$SESSION"
+  local old_cwd="${SES_CWD[$ACTIVE]}"
+  save_active
+  # The old rollout is frozen; retire the slot but keep it in the list so
+  # the epilogue flushes its session_id. The process keeps running (the
+  # new slot reuses its tmux), so its tmux is killed exactly once at
+  # teardown.
+  SES_ALIVE[$ACTIVE]=0
+  echo "[driver] swap ($slash): recorded old session sid=$(daemon_sid "$TRANSCRIPT")" >&2
+
+  tmux send-keys -t "$old_tmux" -l -- "$slash"
+  sleep 0.3
+  tmux send-keys -t "$old_tmux" Enter
+
+  # Allocate the new slot reusing the same tmux/process. alloc_slot mints a
+  # fresh marker; sleep first so it sorts strictly after the old rollout's
+  # mtime (the find -newer poll has 1s granularity), then re-touch to be
+  # safe. EXPECTED_TURNS resets to 0 with the new slot, so the next send +
+  # wait_turn pair counts turns in the UUID-2 file from scratch.
+  sleep 1
+  alloc_slot "$old_tmux" "$old_cwd"
+  SES_ALIVE[$ACTIVE]=1
+  touch "$MARKER"
+  echo "[driver] swap ($slash): new slot #${ACTIVE}, marker bumped, awaiting new rollout" >&2
+  sleep 1
+}
+
 # Bring up the first session as slot 1. SCRIPT_JSON's resume step
-# relaunches in place; future session-minting primitives may allocate
-# further slots.
+# relaunches in place; reset_session allocates a further slot (a new
+# rollout under the same process); future session-minting primitives may
+# allocate more.
 alloc_slot "pi-onboard-$(date +%s)-$$" "$RUN_CWD"
 boot_session pi
 
@@ -369,6 +430,9 @@ while read -r step; do
       ;;
     exit_clean)
       step_exit_clean
+      ;;
+    reset_session)
+      swap_after_slash "/new"
       ;;
     resume)
       step_resume
