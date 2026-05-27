@@ -11,24 +11,24 @@
     "total_events": 8,
     "consumed_events": 8,
     "total_transitions": 5,
-    "first_event_time": "2026-05-26T16:21:08.255Z",
-    "last_event_time": "2026-05-26T16:22:14.934Z",
-    "wall_clock_session_duration": 66679000000,
+    "first_event_time": "2026-05-26T21:26:23.098Z",
+    "last_event_time": "2026-05-26T21:28:37.615Z",
+    "wall_clock_session_duration": 134517000000,
     "state_durations": {
-      "ready": 14076000000,
-      "working": 52603000000
+      "ready": 12886000000,
+      "working": 121631000000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "cum_input_tokens": 42224,
+    "cum_input_tokens": 43402,
     "cum_output_tokens": 4
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-26T16:21:08.255Z",
+      "virtual_time": "2026-05-26T21:26:23.098Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -42,7 +42,7 @@
     {
       "index": 1,
       "event_index": 0,
-      "virtual_time": "2026-05-26T16:21:08.255Z",
+      "virtual_time": "2026-05-26T21:26:23.098Z",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
@@ -56,7 +56,7 @@
     {
       "index": 2,
       "event_index": 3,
-      "virtual_time": "2026-05-26T16:22:00.858Z",
+      "virtual_time": "2026-05-26T21:28:24.729Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -71,7 +71,7 @@
     {
       "index": 3,
       "event_index": 7,
-      "virtual_time": "2026-05-26T16:22:14.934Z",
+      "virtual_time": "2026-05-26T21:28:37.615Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -86,7 +86,7 @@
     {
       "index": 4,
       "event_index": 7,
-      "virtual_time": "2026-05-26T16:22:14.934Z",
+      "virtual_time": "2026-05-26T21:28:37.615Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",

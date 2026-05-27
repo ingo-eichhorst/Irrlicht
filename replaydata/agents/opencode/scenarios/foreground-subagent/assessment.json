@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "scenario_id": "foreground-subagent",
+  "agent": "opencode",
+  "assessed_at": "2026-05-26T00:00:00Z",
+  "agent_supports": "yes",
+  "daemon_capability": "full",
+  "driver_capability": "ready",
+  "confidence": 0.82,
+  "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nReassessment from scratch: the GREEN rollup claim (yes/full/ready) was unbacked — `replaydata/agents/opencode/scenarios/foreground-subagent/` had no assessment.json and no recording on disk (a prior assessment was retired to `replaydata/agents/opencode/regression/foreground-subagent/`). This artifact re-derives the verdict from agent docs + source and the irrlicht adapter transport, and ratifies the GREEN claim.\n\n## agent_supports: yes\n\nOpenCode ships a first-class foreground-subagent primitive. A primary agent invokes the **Task tool**; the tool's `execute` calls `Session.create(ctx.sessionID, …)` — passing the parent session id as the first argument — which spins up a **child session** with its own tools, system prompt, and context window, runs the subagent's prompt to completion, and returns the result to the parent's `task` tool part. Built-in subagents are `general`, `explore`, `scout`; users can also invoke one via `@<name>`. Foreground subagents block the parent conversation until they finish (per OpenCode's docs, which mirror Claude Code's foreground/background distinction). `capabilities.json` declares `subagents: true`. This matches the scenario's **subagents** primitive exactly: a child session, forked context, linked to the parent, holding the parent in `working` until it completes.\n\n## daemon_capability: full\n\nThe daemon observes the full topology through opencode's `ProcessOwnedStore` (SQLite), with no per-adapter subagent counter required:\n\n1. **Child session appears with `ParentSessionID = parent.session_id`.** OpenCode persists the parent link in the `session.parent_id` column (`parent_id text()` in opencode's `session.sql.ts`). The irrlicht watcher's session-table poll selects `id, directory, time_updated, parent_id` (`watcher.go:257,266,284`) and emits `EventNewSession` with `ParentSessionID: s.parentID` (`watcher.go:346`). The child's `directory` equals the parent's cwd, so it passes the watcher's `liveCWDs` gate (`watcher.go:330`) because a live opencode process owns that cwd. Covered by `TestScanSessions_ParentSessionID` (`watcher_test.go:330`).\n2. **`parent_linked` lifecycle event.** The detector stores `ParentSessionID` on the new `SessionState` and records `lifecycle.KindParentLinked` (`session_detector_activity.go:88-110`) — agent-agnostic, fired for any source that supplies `ParentSessionID`.\n3. **`SubagentCount(parent) = N`.** `session.ComputeSubagentSummary` (`grouped.go:201-235`) derives the count from child `SessionState`s whose `ParentSessionID` matches the parent (the file/store-based component). opencode's in-process `OpenSubagents` is 0, so the count comes entirely from the linked-children graph — exactly the same derivation claudecode uses.\n4. **`SubagentCount` decreases as each child ends.** Each child session accrues its own `step-finish` parts; the watcher's `scanParts` (which queries by `session_id` for every tracked session, including children — the session scan has no `parent_id IS NULL` filter) emits `EventActivity{Terminal:true}` for the child's terminal turn, transitioning it to ready.\n5. **Parent: working → ready only after the last child ends.** `reevaluateParent` (`session_detector_subagent.go:170-221`) holds the parent in `working` while `hasActiveChildren(parentID)` is true, and only re-classifies once the parent's own turn `IsAgentDone()` AND no child is still working/waiting.\n\nAll five user-observable signals land in irrlicht's existing opencode transport with no new daemon work. (The claudecode-specific `applySubagentCompletions`/`finishOrphanedChildren` filename-suffix matching at `session_detector_subagent.go:41-147` does NOT apply to opencode — those key on the `<parent>/subagents/agent-*.jsonl` JSONL layout. opencode's children are real `SessionState`s driven to ready by their own store-derived activity, so the generic `reevaluateParent` path suffices.)\n\n## driver_capability: ready\n\nA foreground-subagent recipe needs only `send` (a prompt that asks opencode to delegate to a subagent) + `wait_turn` + `sleep` — all present in `scripts/drive-opencode-interactive.sh`'s headless path (`opencode run --format default -- <text>`). No new step primitive (no `keys`/`sigkill`/`reset_session`) is required, so this is `ready`, not a `gap`.\n\nThe spawn proof does NOT depend on the driver exporting the child's transcript. The driver's headless export captures only the parent session (`WHERE p.session_id = $SESSION_ID`, with the parent selected via `parent_id IS NULL`), but `run-cell.sh` has an explicit opencode branch in its subagents gate (`run-cell.sh:447-450`): for opencode the **`parent_linked` event count in the daemon recording is the spawn proof** — no separate child `.jsonl` file is required (unlike claudecode's `<parent>/subagents/` probe). The daemon records `parent_linked` directly from the live SQLite DB, so `subagent_transcripts_min: 1` is satisfied by the recorded `parent_linked` count.\n\n## Why confidence 0.82 (not 0.9+)\n\nThe daemon and driver mechanics are documented in source and covered by a passing unit test, but the end-to-end behavior is not yet demonstrated by a recording for this cell, and one recipe-stage risk remains: the model must actually CHOOSE to invoke the Task tool from a single prompt (non-deterministic; a recipe should phrase the prompt to make delegation overwhelmingly likely, e.g. an explicit @-mention of a built-in subagent like `@explore`). That is recipe-authoring, not a daemon/driver limit.",
+  "caveats": [
+    "The scenario's `verify.contains_tool_call: \"Agent\"` is the claudecode-era canonical name; opencode's tool part carries `tool = \"task\"` (lowercase). The daemon DOES emit the tool use (parser.go parseToolPart reads `raw[\"tool\"]` generically), but the spec/expected mapping must assert `task` (or normalize task→Agent) at the record/validate stage — not a daemon or driver gap.",
+    "Subagent invocation is model-driven: a single prompt may not deterministically trigger the Task tool. The recipe should force delegation (explicit `@explore`/`@general` mention or a prompt that clearly fits a read-only explore subagent) so the run reliably spawns a child.",
+    "The subagent kind (`general`/`explore`/`scout`) is carried in the parent's `task` tool input but is not surfaced as a first-class dashboard attribute — the count chip shows N, not which kind. Same narrow gap as claudecode; an enhancement, not a spec failure."
+  ],
+  "sources": [
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/opencode/capabilities.json",
+      "note": "Declares subagents: true — the required-feature gate (primitive `subagents`) for this scenario."
+    },
+    {
+      "kind": "url",
+      "ref": "https://opencode.ai/docs/agents/",
+      "note": "Subagents run in separate child sessions; invoked automatically via the Task tool or manually via @mention; built-ins general/explore/scout; foreground subagents block the parent."
+    },
+    {
+      "kind": "url",
+      "ref": "https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/session.sql.ts",
+      "note": "session table schema: `parent_id: text().$type<SessionID>()` — the parent link the irrlicht watcher reads."
+    },
+    {
+      "kind": "url",
+      "ref": "https://cefboud.com/posts/coding-agents-internals-opencode-deepdive/",
+      "note": "Task tool execute spins up a new session via Session.create(ctx.sessionID, …) — parent id passed as first arg, establishing the child's parent_id."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/watcher.go",
+      "note": "Session-table poll selects parent_id (lines 257,266,284) and emits EventNewSession with ParentSessionID (line 346); liveCWDs gate at 330; child parts flow through scanParts (no parent_id filter on the session scan)."
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/opencode/watcher_test.go",
+      "note": "TestScanSessions_ParentSessionID (line 330) proves the watcher emits EventNewSession with ParentSessionID set from the DB parent_id column."
+    },
+    {
+      "kind": "file",
+      "ref": "core/application/services/session_detector_activity.go",
+      "note": "Lines 88-110: detector stores ParentSessionID and records lifecycle.KindParentLinked — agent-agnostic, fired for any source supplying ParentSessionID."
+    },
+    {
+      "kind": "file",
+      "ref": "core/application/services/session_detector_subagent.go",
+      "note": "reevaluateParent (170-221) + hasActiveChildren hold the parent in working until the last child ends; the claudecode-specific filename-suffix matchers (41-147) do not apply to opencode's store-backed children."
+    },
+    {
+      "kind": "file",
+      "ref": "core/domain/session/grouped.go",
+      "note": "ComputeSubagentSummary (201-235) derives SubagentCount from linked child SessionStates; opencode's in-process OpenSubagents is 0, so the count is purely graph-derived."
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scripts/run-cell.sh",
+      "note": "Lines 447-450: opencode subagents gate uses the daemon recording's parent_linked count as the spawn proof — no separate child .jsonl file required (unlike the claudecode <parent>/subagents/ probe)."
+    },
+    {
+      "kind": "file",
+      "ref": ".claude/skills/ir:onboard-agent/scripts/drive-opencode-interactive.sh",
+      "note": "Headless path drives plain prompts via `opencode run -- <text>` (send/wait_turn/sleep); a subagent-triggering prompt needs no new step primitive → driver ready."
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/opencode/regression/foreground-subagent/assessment.json",
+      "note": "Retired 2026-05-22 assessment (same yes/full/ready verdict); this reassessment re-derives and ratifies it from scratch after finding the live cell unbacked."
+    }
+  ]
+}

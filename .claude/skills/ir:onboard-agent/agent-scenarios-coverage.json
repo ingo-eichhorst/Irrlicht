@@ -234,8 +234,8 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:slash-command",
-          "notes": "/new exists in the TUI; headless `opencode run` stores slash commands as literal user text (no reset) and there is no reset_session step; needs a live-REPL opencode driver (tracked: #492)"
+          "driver_capability": "ready",
+          "notes": "recorded — live-TUI reset_session (/new); the prior gap:slash-command was stale (the live-REPL driver landed in #495)."
         }
       }
     },
@@ -272,7 +272,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:slash-command",
-          "notes": "/undo + /redo are in-TUI slash commands; headless `opencode run` stores them as literal text (no rewind); daemon observability untested; needs a live-REPL opencode driver (tracked: #492)"
+          "notes": "/undo executes correctly, but recording it needs a send->send->/undo->send sequence and the run_live slash->send composer hand-off coalesces prompts under the slow local model (3 attempts). Spec authored (target); commit 49d53556. Records once the hand-off is hardened or a faster model is available."
         }
       }
     },
@@ -456,8 +456,8 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:slash-command",
-          "notes": "slash commands resolve only in the live TUI; headless `opencode run` treats them as literal user text; needs a live-REPL opencode driver (tracked: #492)"
+          "driver_capability": "ready",
+          "notes": "recorded — /help via the live-TUI slash step; a no-LLM local command writes zero parts so the session stays ready (no working flicker)."
         }
       }
     },
@@ -492,9 +492,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "bug",
+          "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "recorded 2026-05 (3/4); 12 tool calls sustained in one working span; turn_done known_failing — terminal working→ready settle lands ~175ms AFTER process_exited because headless `opencode run` exits at turn end; clears with a live-REPL driver or settle-on-exit (tracked: #492)"
+          "notes": "recorded — prior daemon=bug was a mislabel; routed onto the long-lived run_live path (live marker) so the final settle is captured instead of truncated by the headless per-run process-exit race (#492)."
         }
       }
     },
@@ -605,7 +605,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:error-export",
-          "notes": "daemon now settles errored turns via message.data.error (watcher.go isErrorMessage, fixed this PR, unit-tested); RECORDING still blocked because the driver parts-only transcript export omits message.data.error — gap:error-export (tracked #493)"
+          "notes": "unelicitable in rig — quota exhaustion is a remote-billing condition the local model cannot produce. error-export (ee477644) + isErrorMessage (#493) are groundwork; records when a billed remote model with a hittable quota is configured."
         }
       }
     },
@@ -639,10 +639,10 @@
           "notes": "TUI-based, no queue concept"
         },
         "opencode": {
-          "agent_supports": "partial",
+          "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:mid-turn-injection",
-          "notes": "headless `opencode run` blocks to turn completion and the driver sends sequentially, so a second message can't be injected mid-turn; needs a live-REPL opencode driver (tracked: #492)"
+          "driver_capability": "ready",
+          "notes": "recorded — a message typed mid-turn (mid_turn_send) is queued by the TUI (not written to SQLite until consumed) so the daemon stays working with no flicker, then runs as the next turn."
         }
       }
     },
@@ -676,10 +676,10 @@
           "notes": "/yes-always is blanket, not classifier-based"
         },
         "opencode": {
-          "agent_supports": "partial",
+          "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:permission-approval",
-          "notes": "opencode's permission classifier is TUI-only; headless `opencode run` auto-executes with no prompt/classification/waiting; needs a live-REPL opencode driver (tracked: #492)"
+          "driver_capability": "ready",
+          "notes": "recorded — a config-allowed (permission.bash=allow, per-run settings blob) bash tool auto-executes with no prompt; ready->working->ready, no waiting."
         }
       }
     },
@@ -715,8 +715,8 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:slash-command",
-          "notes": "/compact + /summarize are in-TUI slash commands; headless `opencode run` can't deliver them; needs a live-REPL opencode driver (tracked: #492)"
+          "driver_capability": "ready",
+          "notes": "recorded — /summarize via the live-TUI slash step; the summarization turn drives a working->ready arc on the same session."
         }
       }
     },
@@ -790,7 +790,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:error-export",
-          "notes": "daemon now settles errored turns via message.data.error (watcher.go isErrorMessage, fixed this PR, unit-tested); RECORDING still blocked because the driver parts-only transcript export omits message.data.error — gap:error-export (tracked #493)"
+          "notes": "error-export ported (ee477644); watcher.go isErrorMessage settles on message.data.error but ONLY when the errored message carries >=1 part (zero-part blind spot, watcher.go:524-526). The local model only produces zero-part errors (config error / context-overflow during prompt processing), so it is unrecordable in this rig. Spec authored."
         }
       }
     },
@@ -972,10 +972,10 @@
           "notes": "aider's confirm prompts are stdin/TUI; not visible to irrlicht via transcript"
         },
         "opencode": {
-          "agent_supports": "partial",
-          "daemon_capability": "full",
+          "agent_supports": "yes",
+          "daemon_capability": "incapable",
           "driver_capability": "gap:permission-approval",
-          "notes": "permission gate is TUI-only; headless `opencode run` auto-executes tools with no prompt (proven via auto-executed-tool-call) and the driver has no approve/deny step; needs a live-REPL opencode driver (tracked: #492)"
+          "notes": "frozen — a held tool gate leaves no daemon-observable trace: opencode persists permission state in an ephemeral table the watcher never reads (it reads only part/message/session); the gated call shows only as a normal open tool call."
         }
       }
     },
@@ -1012,7 +1012,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:interrupt",
-          "notes": "parser handles step-finish reason=interrupted, but the headless send-only driver can't fire a mid-turn ESC; needs a live-REPL opencode driver (tracked: #492)"
+          "notes": "interrupt (ESC) step ported (23ab346e), but the local model does not elicit a step-finish reason=interrupted end-to-end (it finishes on stop before the interrupt window or stalls pre-stream). Spec authored (6a5134ec); records with a model that streams long enough to cancel."
         }
       }
     },
@@ -1086,7 +1086,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "explicit DB parent_session_id column; agent teams"
+          "notes": "recorded — a Task-tool subagent persists session.parent_id; the daemon emits parent_linked (SQLite-store spawn proof, no child .jsonl)."
         }
       }
     },
@@ -1196,8 +1196,8 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:restart",
-          "notes": "subagents work (foreground-subagent recorded); orphaning needs a mid-turn SIGKILL/restart of the opencode process, which the send/sleep/wait_turn driver lacks; needs a process-control / live-REPL driver (tracked: #492)"
+          "driver_capability": "ready",
+          "notes": "recorded — sigkill orphans the PID-bound parent+child (the subagent is a child session of the same opencode process); the daemon reaps both and the #321 no-spurious-transition invariant holds."
         }
       }
     },
@@ -1232,9 +1232,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "unknown",
+          "daemon_capability": "bug",
           "driver_capability": "ready",
-          "notes": "DB-keyed sessions; cwd not the disambiguator"
+          "notes": "recorded known_failing — identity isolation holds (two distinct ses_ in one cwd, no flap/merge), but the daemon emits ZERO working transitions for concurrent headless same-cwd sessions (each opencode run exits before the SQLite flush). Filed daemon bug #503."
         }
       }
     },
@@ -1269,9 +1269,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "bug",
+          "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "recorded 2026-05 (3/4); opencode + claudecode/codex/pi/aider in one cwd, all 5 sessions distinguished (load-bearing); agentB turn_done known_failing — poll-race truncation when the headless process exits under concurrent load. Driver now honors $IRRLICHT_ONBOARD_CWD; opencode added to cross_adapter[] (tracked: #492)"
+          "notes": "recorded — prior daemon=bug was a mislabel; 5 adapters coexist in one cwd as independent working->ready arcs, no merge/flap (opencode keyed by SQLite session.id)."
         }
       }
     },
@@ -1306,9 +1306,9 @@
         },
         "opencode": {
           "agent_supports": "yes",
-          "daemon_capability": "bug",
+          "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "recorded 2026-05; token EXTRACTION full (counts + 5m/1h cache); per-turn STATE arc coalesces across rapid chained `opencode run` turns → multi-turn known_failing"
+          "notes": "recorded — prior daemon=bug was a mislabel; token extraction + monotonic accumulation are full (the over-specified third per-turn state arc was de-pinned: a transport WAL-poll coalescing limit, not a token defect)."
         }
       }
     },
@@ -1382,7 +1382,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:model-select",
-          "notes": "daemon reads per-turn model fine; the driver runs `opencode run` with no --model and has no per-step model-select step, and inline /model is a no-op headless; needs a model-select / live-REPL driver (tracked: #492)"
+          "notes": "driver model-select step ported (bbf92830) and a live A->B switch was proven, but no second model is reachable on this 32GB host (opencode's ~21k-token system prompt overflows LM Studio small-context loads; IONOS_API_TOKEN unset). Recipe authored (eea2f166); records when a viable second model exists."
         }
       }
     },
@@ -1465,11 +1465,36 @@
       "section": "Metrics",
       "feature": "Subscription / billing-model detection",
       "coverage": {
-        "claudecode": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
-        "codex": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
-        "pi": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
-        "aider": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
-        "opencode": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"}
+        "claudecode": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "codex": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        }
       }
     },
     {
@@ -1477,11 +1502,36 @@
       "section": "Metrics",
       "feature": "Quota burndown (rate-limit usage)",
       "coverage": {
-        "claudecode": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
-        "codex": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
-        "pi": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
-        "aider": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"},
-        "opencode": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "unknown", "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"}
+        "claudecode": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "codex": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "opencode": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "unknown",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        }
       }
     },
     {

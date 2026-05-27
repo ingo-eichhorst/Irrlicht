@@ -1,8 +1,8 @@
 {
-  "promoted_at": "2026-05-25T22:46:05Z",
-  "daemon_version": "0.4.7+8d9fa03",
+  "promoted_at": "2026-05-27T05:25:55Z",
+  "daemon_version": "0.4.7+860c0a8",
   "agent_cli_version": "unknown",
-  "recipe_hash": "cfc4fb538500be87ef1600dfc145445e461bf83f5aab4fd73bbbe66d7c540859",
-  "expected_pass_rate": "3/4 phases passed",
-  "recording_started_at": "2026-05-26T00:42:40.662362+02:00"
+  "recipe_hash": "14b98067a7a8f8ee6d6d450c14a30b5a4d193aa58692b8fb89de5757590392e2",
+  "expected_pass_rate": "4/4 phases passed",
+  "recording_started_at": "2026-05-27T07:20:36.206061+02:00"
 }

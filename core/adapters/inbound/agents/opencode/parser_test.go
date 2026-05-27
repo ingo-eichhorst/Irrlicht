@@ -32,6 +32,53 @@ func TestParser_StepStart_Skip(t *testing.T) {
 	}
 }
 
+// An errored/aborted turn records the failure on the parent message
+// (message.data.error), exported as the synthetic "_error" key on the bare
+// step-start part — opencode emits no step-finish reason="error" part. On the
+// replay path that "_error" is the sole turn-ending signal, so a part carrying
+// it must settle the turn (mirrors the live watcher's isErrorMessage; #493).
+func TestParser_ErrorMessage_TurnDone(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type": "step-start",
+		"_error": map[string]interface{}{
+			"name":    "UnknownError",
+			"message": "n_keep >= n_ctx",
+		},
+	}))
+	if ev == nil || ev.EventType != "turn_done" {
+		t.Errorf("expected an errored step-start to settle the turn (turn_done); got EventType=%q skip=%v", evType(ev), evSkip(ev))
+	}
+}
+
+// A normal (non-errored) part exports "_error": null — the JSON-null the
+// driver injects when message.data.error is absent — and must NOT settle the
+// turn, or every part of every recording would spuriously close the turn.
+func TestParser_NullError_DoesNotSettle(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(rawPart(map[string]interface{}{
+		"type":   "step-start",
+		"_error": nil,
+	}))
+	if ev == nil || ev.EventType == "turn_done" {
+		t.Errorf("a null _error must not emit turn_done; got EventType=%q", evType(ev))
+	}
+	if !ev.Skip {
+		t.Error("a step-start with null _error should still be skipped")
+	}
+}
+
+func evType(ev *tailer.ParsedEvent) string {
+	if ev == nil {
+		return "<nil>"
+	}
+	return ev.EventType
+}
+
+func evSkip(ev *tailer.ParsedEvent) bool {
+	return ev != nil && ev.Skip
+}
+
 // --- step-finish / turn_done ---
 
 func TestParser_StepFinish_Stop_TurnDone(t *testing.T) {

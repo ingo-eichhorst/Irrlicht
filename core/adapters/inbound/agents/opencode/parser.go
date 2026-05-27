@@ -64,6 +64,24 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	partType, _ := raw["type"].(string)
 
+	// An aborted/errored turn (quota, context overflow, provider error) records
+	// the failure on the parent MESSAGE (message.data.error), which the opencode
+	// onboarding driver exports as the synthetic "_error" key on every part of
+	// that message. opencode emits NO step-finish reason="error" part for such a
+	// turn — only a bare step-start — so on the REPLAY path "_error" is the sole
+	// turn-ending signal (the live daemon settles via watcher.go isErrorMessage
+	// reading the message row directly; #493). Mirror that here so a replayed
+	// errored turn closes instead of sticking in "working". step-finish is
+	// excluded — it carries its own terminal reason, handled below — and a
+	// normal (non-errored) part exports "_error": null, so this never fires
+	// outside an actual error.
+	if partType != "step-finish" {
+		if errVal, ok := raw["_error"]; ok && errVal != nil {
+			ev.EventType = "turn_done"
+			return ev
+		}
+	}
+
 	switch partType {
 	case "step-start":
 		ev.Skip = true
