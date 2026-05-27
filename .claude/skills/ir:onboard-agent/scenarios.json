@@ -5686,8 +5686,49 @@
           "timeout_seconds": 180
         },
         "opencode": {
-          "applicable": false,
-          "notes": "scope_note: orphaning needs a mid-turn SIGKILL/restart of the opencode process while a subagent is live; driver has only send/sleep/wait_turn — no restart/sigkill step — needs a live-REPL/process-control opencode driver — gap:restart. drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (case \"$TYPE\" handles only send|wait_turn|sleep) and owns no long-lived process to signal: each `send` blocks inside `opencode run` until the parent's turn — and every concurrent `task` child — has already completed, so by the time control returns there is no in-flight subagent to orphan, and headless `opencode run` exits CLEANLY at turn end (a graceful exit, NOT the abrupt mid-subagent kill the cell needs). NOT an agent or daemon limitation: opencode spawns subagents via the `task` tool (proven by opencode/foreground-subagent) and the daemon reaps orphaned sessions via the transport-agnostic pid_manager/restart sweep (process-exit-driven; no store part needed for the orphaned child), so a genuine orphan WOULD reap cleanly with no spurious working/waiting transition (issue #321 invariant). NOT a recipe-lint step-TYPE gap either (recipe left applicable:false with no script, so no step type to reject) — same shape as the opencode user-esc-interrupt gap:interrupt / model-switch-midsession gap:model-select cells. UNBLOCK: add a live-REPL/process-control primitive to drive-opencode-interactive.sh that holds the opencode process alive across the child's lifetime, sends a long-running `task` subagent prompt, waits for parent_linked, then fires a sigkill/restart step killing the parent process group mid-turn. expected.jsonl is retained as the documented orphan-arc target; see replaydata/agents/opencode/scenarios/subagent-orphan-cleanup/assessment.json (driver_capability: gap:restart; agent_supports: yes — subagents work per foreground-subagent)."
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (the dev env default is a local LM Studio model — no remote key needed). Verified opencode 1.14.50.",
+            "irrlichd is recording with the opencode SQLite watcher enabled (run-cell.sh in isolated/coexist mode, or --attach against a daemon started with --record)",
+            "opencode's `task` (subagent) tool is available — capabilities.json declares subagents:true; the built-in `general`/`explore` subagents are on by default",
+            "the sigkill driver step must kill the opencode process the daemon is tracking (the one whose cwd == the run cwd) so the child is left ORPHANED rather than reaped by its own clean exit — drive-opencode-interactive.sh's oc_opencode_pid resolves exactly that PID (cwd match), mirroring the daemon's DiscoverPIDByCWD"
+          ],
+          "setup": [
+            "This cell uses the live-TUI path (run_live): a `sigkill` step routes drive-opencode-interactive.sh into the long-lived tmux opencode process rather than a blocking headless `opencode run` (a blocking run would let the child finish before control returns, so there would be no in-flight child to orphan). The driver launches one `opencode` under tmux, holds it alive across the turn, then kill -9's it mid-turn.",
+            "The prompt asks the child to read README.md then run the shell command `sleep 30` before reporting — the `sleep 30` (not the file read, which may not exist: the pipeline seeds no README) is what keeps the child turn IN FLIGHT (working) when the SIGKILL lands. The spawn itself does not depend on the file (the parent invokes `task` regardless), as opencode/foreground-subagent proved with the same empty cwd.",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db); the `task` tool calls Session.create(parentSessionID,…) so the child `session` row carries parent_id = parent.id. The daemon's ProcessOwnedStore watcher polls the table, surfaces the child as transcript_new, and the detector emits parent_linked — opencode's spawn proof (no child .jsonl on disk, unlike claudecode).",
+            "Cleanup is process-exit-driven, NOT parser-driven. The child subagent runs IN-PROCESS, so both the parent ses_ and the child ses_ are bound to the SAME opencode PID (each gets its own pid_discovered for that one PID). When the kill lands, the daemon's PIDManager sees that PID vanish (CheckPIDLiveness → ESRCH) and HandleProcessExit records a process_exited for BOTH PID-bound sessions — the child's on the first liveness tick after the kill, then the parent's on the next. The reap issues NO SetState, so NO spurious state_transition to working/waiting fires during cleanup (issue #321 invariant). OBSERVED ORDERING (this recording): child working at kill time → child process_exited → parent process_exited, with zero state_transitions after the kill. The robustly-observable cleanup signal is therefore BOTH process_exited events plus the #321 negative invariant anchored on the child's process_exited (looking forward through the sweep).",
+            "The default model is a small, slow local LM Studio model: in opencode/foreground-subagent the parent took ~120s after birth to invoke `task` and fire parent_linked. So the sleep-before-sigkill is 150s — long enough for the parent to invoke `task`, the child ses_ row to surface with parent_id set, parent_linked to fire, and the child to enter its `sleep 30` — and the kill then lands while the child is still mid-turn. (Total ~150+kill+20s stays inside timeout_seconds=300; bump the sleep if a future model run shifts parent_linked later.)"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Use the task tool to launch a subagent (the built-in 'explore' agent) that first reads the README.md file in the current directory, then runs the shell command `sleep 30`, then reports the file's first heading. Do not reply to me until that subagent is completely finished."
+            },
+            {
+              "type": "sleep",
+              "seconds": 150
+            },
+            {
+              "type": "sigkill"
+            },
+            {
+              "type": "sleep",
+              "seconds": 20
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the parent ses_… session entering ready, then a single ready→working transition driven by the user prompt",
+            "events.jsonl contains at least 1 parent_linked event whose parent_session_id is the parent ses_… UUID — the child session row (parent_id set) was discovered by the SQLite watcher and bound to the parent BEFORE the kill (opencode's spawn proof; no child .jsonl on disk)",
+            "events.jsonl contains a transcript_new for the child session born after the parent turn started",
+            "events.jsonl contains a process_exited event for the orphaned CHILD ses_… UUID after the kill — the child shares the parent's opencode PID, so the CheckPIDLiveness sweep reaps it on the first tick after the PID vanishes",
+            "events.jsonl contains a process_exited event for the parent ses_… UUID after the child's (the same kill, next liveness tick) — the kill -9 made the daemon observe the watched opencode PID vanish",
+            "no state_transition to working fires for the orphaned child after its process_exited (issue #321 regression invariant — the reap issues no SetState)",
+            "no state_transition to waiting fires for the orphaned child after its process_exited",
+            "no clean child turn_done precedes the reap — the kill, not a graceful exit, ended the child (its last live state was working, mid-turn, at kill time)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
