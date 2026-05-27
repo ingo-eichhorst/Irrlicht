@@ -602,10 +602,10 @@
           "notes": "LLM error blockquote treated as turn_done (#262); quota errors land in same path"
         },
         "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "gap:error-export",
-          "notes": "unelicitable in rig — quota exhaustion is a remote-billing condition the local model cannot produce. error-export (ee477644) + isErrorMessage (#493) are groundwork; records when a billed remote model with a hittable quota is configured."
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "n/a",
+          "notes": "opencode retries a quota 429 indefinitely (AI-SDK backoff) and never writes a terminal message.data.error — the turn hangs in working with no settle to observe (verified via mock-openai-429: 24+ retries over 180s). Quota exhaustion is not a terminal/observable state for opencode; not recordable as a clean abort."
         }
       }
     },
@@ -789,8 +789,8 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:error-export",
-          "notes": "error-export ported (ee477644); watcher.go isErrorMessage settles on message.data.error but ONLY when the errored message carries >=1 part (zero-part blind spot, watcher.go:524-526). The local model only produces zero-part errors (config error / context-overflow during prompt processing), so it is unrecordable in this rig. Spec authored."
+          "driver_capability": "ready",
+          "notes": "recorded — a reason=length abort (output overflows the context window) emits a step-start then a terminal step-finish reason=length, which parser.go maps to turn_done and the daemon/replay both observe (no message.data.error carrier needed). Driven on the long-lived run_live path."
         }
       }
     },
