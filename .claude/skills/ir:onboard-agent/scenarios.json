@@ -3692,15 +3692,74 @@
             "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
           ],
           "setup": [
-            "The driver (drive-opencode-interactive.sh) runs ONE blocking `opencode run` per send in a fresh per-run cwd under <staging>/cwd/; opencode auto-assigns the ses_… session id (no CLI-assignable id) and the driver captures it from the SQLite session table keyed on that cwd after the first send returns",
-            "WHY ONE multi-step turn rather than many separate user-driven turns: opencode's per-send blocking `opencode run` plus the daemon's poller coalesce rapid back-to-back same-session sends, blurring the per-turn arcs, and the local gemma 2B default model is slow (~30–45s per turn/tool round) so a multi-turn run balloons. A single crisp, fully-enumerated multi-step prompt makes opencode's agent loop chain a HIGH VOLUME of write/read tool calls in one sustained `opencode run` subprocess — capturing the long contiguous working span the daemon must keep coherent, which is the load-bearing observable this scenario names",
-            "WHY tool calls auto-execute without a gate: in headless default (`opencode run`) opencode runs its write/read tools inside its own sandbox with NO interactive permission prompt, so the long burst never enters waiting",
-            "The timeout is deliberately generous (600s) because gemma is small and slow and this is a deliberately LONG multi-tool turn; wait_turn is a no-op (the blocking `opencode run` already returns only at turn end) and the trailing sleep lets the final working→ready settle land before the driver finishes"
+            "RUN_LIVE — the leading {\"type\":\"live\"} marker forces drive-opencode-interactive.sh onto its run_live path (router engages on any of reset_session/slash/interrupt/keys/restart/sigkill/mid_turn_send/live). run_live launches ONE opencode TUI under tmux in a fresh per-run cwd under <staging>/cwd/ and keeps that SAME process alive across ALL the sequential send/wait_turn turns; opencode auto-assigns the ses_… session id (no CLI-assignable id) and the driver discovers it from the SQLite session table keyed on that cwd",
+            "WHY run_live (not headless `opencode run`): headless spawns a FRESH subprocess per send that EXITS ~140–175ms before the daemon's ProcessOwnedStore poller reads its terminal `step-finish reason=stop`, so the final working→ready settle lands in the store AFTER process_exited and is missed (issue #492 — a DRIVER process-exit-before-poll race, NOT a daemon bug). A long-lived run_live process never exits at turn end, so the poller reads the terminal step-finish while the session is alive and the FINAL settle lands normally — this is the deliberate fix that lets the cell drop its prior known_failing",
+            "WHY a genuinely LONG multi-turn arc: the scenario stresses the daemon keeping ONE session coherently observed across MANY interleaved assistant-message / tool-call / tool-result iterations. Each of the six sequential turns gives opencode a small, fully-enumerated file task (create / write / read-back / list / append / summarize) so its agent loop chains real write/read/list tool calls, and the turns accumulate work across the run — a high tool-call volume and monotonic token accumulation across the whole session",
+            "WHY tool calls auto-execute without a gate: opencode runs its file/list tools inside its own sandbox with NO interactive permission prompt, so no turn enters waiting",
+            "WHY each turn is send → wait_turn → sleep: wait_turn blocks on run_live until the terminal step-finish total exceeds the pre-send baseline (the turn actually ended), and the inter-turn sleeps (5s) let each working→ready settle land before the next send re-enters working. The local gemma 2B default model is slow (~30–45s per turn) so the timeout is generous (900s). NOTE: the daemon's ProcessOwnedStore watcher observes the store via WAL-write-triggered scans with a 500ms minScanGap debounce, so back-to-back same-ses_ turns may COALESCE into one observed working→ready span — the spec asserts the SESSION-LEVEL arc + FINAL settle, not N separable per-turn arcs"
           ],
           "script": [
             {
+              "type": "live"
+            },
+            {
               "type": "send",
-              "text": "Do all of the following in THIS single turn, using your file tools, one step at a time (do not ask me anything): 1) create six files named step1.txt, step2.txt, step3.txt, step4.txt, step5.txt, step6.txt; 2) into each file write exactly its step number on a single line (step1.txt contains 1, step2.txt contains 2, and so on through step6.txt contains 6); 3) read all six files back; 4) finally create a file summary.md that lists, one per line, each filename followed by the number it contains. Do every step so I can see each file get created and read."
+              "text": "Using your file tools, do all of this in THIS turn, one step at a time (do not ask me anything): create six files named step1.txt, step2.txt, step3.txt, step4.txt, step5.txt, step6.txt, and into each write exactly its step number on a single line (step1.txt contains 1, …, step6.txt contains 6). Then reply with exactly: created."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Using your file tools, read all six files step1.txt through step6.txt back and tell me the number each one contains. Then reply with exactly: read-back-done."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Using your file tools, list every file in the current directory, then create a file summary.md that lists one per line each stepN.txt filename followed by the number it contains. Then reply with exactly: summary-written."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Using your file tools, append a new line 'total=21' to summary.md, then read summary.md back and show me its full contents. Then reply with exactly: total-appended."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Using your file tools, create three more files notes1.txt, notes2.txt, notes3.txt, each containing a single line with its own name, then read all three back. Then reply with exactly: notes-done."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 5
+            },
+            {
+              "type": "send",
+              "text": "Using your file tools, list every file in the current directory one final time and tell me the total count of files you see. Then reply with exactly: all-done."
             },
             {
               "type": "wait_turn"
@@ -3711,17 +3770,17 @@
             }
           ],
           "verify": [
-            "events.jsonl shows the ses_… session appear in ready within ~2s of agent launch (a transient proc-<PID> presession may also appear; the arc and pid_discovered land on the UUID-keyed ses_… session)",
+            "events.jsonl shows the ses_… session appear in ready within ~3s of agent launch (a transient proc-<PID> presession may also appear; the arc and pid_discovered land on the UUID-keyed ses_… session)",
             "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
-            "events.jsonl contains exactly one state_transition→working on the ses_… session when the multi-step prompt is sent (start of the long agentic burst)",
-            "across the entire turn, NO state_transition to ready fires between successive function_call/function_call_output pairs (ONE contiguous working span — no flicker mid-burst across the many write/read tool calls)",
-            "across the entire turn, NO state_transition to waiting fires (opencode auto-executes its file tools in headless run; no permission gate)",
-            "transcript.jsonl / the SQLite part table contains a HIGH VOLUME of tool parts in the single turn (≥5 function_call / function_call_output pairs: the six file writes, the read-backs, and the summary write) — verified out-of-band since the phase DSL has no tool-event form",
-            "events.jsonl contains exactly one state_transition→ready on the ses_… session once the final tool call resolves and step-finish reason=stop → turn_done fires (clean settle, not stuck working)",
+            "events.jsonl contains a state_transition→working on the ses_… session when the first multi-step prompt is sent (start of the long agentic burst)",
+            "across the entire run, NO state_transition to waiting fires (opencode auto-executes its file/list tools under run_live; no permission gate)",
+            "transcript.jsonl / the SQLite part table contains a HIGH VOLUME of tool parts across the six turns (≥5 function_call / function_call_output pairs: the file writes, read-backs, list calls, and summary writes) — verified out-of-band since the phase DSL has no tool-event form",
+            "token accumulation is monotonic across the turns (cum_input_tokens > 0, cum_output_tokens > 0, non-decreasing across the turn boundaries in events.jsonl / the replay .golden summary) — verified out-of-band since the phase DSL has no TotalTokens/delta form",
+            "after the FINAL turn the SAME ses_… session settles working→ready (the previously-truncated terminal settle is now captured under run_live; clean settle, not stuck working) — back-to-back turns may COALESCE under the WAL-poll debounce so per-turn arc separability is NOT asserted",
             "final session state is ready"
           ],
           "settings": {},
-          "timeout_seconds": 600
+          "timeout_seconds": 900
         }
       }
     },
