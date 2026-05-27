@@ -3890,8 +3890,53 @@
           "timeout_seconds": 240
         },
         "opencode": {
-          "applicable": false,
-          "notes": "driver_gap (gap:mid-turn-injection). agent_supports:partial — opencode's TUI has a live composer so a user CAN type a second message while a turn runs, but whether that mid-turn message is QUEUED (buffered, folded into one contiguous working span) vs. interrupts/rejects the running turn has NOT been verified against the live TUI. NOT a daemon limitation — opencode is the lone ProcessOwnedStore adapter; the daemon reads session state from the SQLite store (ComputeMetrics keyed on ses_…), so a contiguous working span + clean working→ready close WOULD be observable, the same store-read signals basic-turn proves (daemon_capability:full). NOT recordable: the scenario needs a SECOND user message injected WHILE the first turn is in progress, so the agent has an in-flight turn to queue against. drive-opencode-interactive.sh drives BLOCKING headless `opencode run` subprocesses (handles only send|wait_turn|sleep): each `send` shells out to `opencode run` and WAITS for the turn to fully complete, and steps run strictly SEQUENTIALLY — by the time a second send could fire the first turn is already over, so there is no in-flight turn to queue against and no async/queue step. The driver can only produce back-to-back COMPLETED turns, never an in-flight turn with a second message arriving during it. NOT a recipe-lint step-TYPE gap either (a two-send recipe lints in-grammar); the gap is architectural (blocking `opencode run` + sequential sends, no async/queue primitive). UNBLOCK: a live-REPL opencode driver that holds the TUI open, sends the slow first prompt, then injects a SECOND message into the composer WHILE that turn is still running (plus a way to verify the TUI queues vs. interrupts). Recording deferred — a developer task, out of scope for implement. expected.jsonl documents the full contiguous-working-span target arc; see replaydata/agents/opencode/scenarios/mid-turn-message-queued/assessment.json (driver_capability: gap:mid-turn-injection)."
+          "applicable": true,
+          "preconditions": [
+            "opencode CLI on PATH and authenticated against its default model (the dev env default is a local LM Studio model — no remote key needed). Verified opencode 1.14.50.",
+            "irrlichd is recording with the opencode SQLite watcher enabled (run-cell.sh in isolated/coexist mode, or --attach against a daemon started with --record)",
+            "the local model must be loaded with a context window large enough to complete a multi-paragraph turn without an n_keep>=n_ctx overflow (the dev env uses gemma-4-e2b-it-uncensored at 32768 context)"
+          ],
+          "setup": [
+            "This cell uses the live-TUI path (run_live): the mid_turn_send step routes drive-opencode-interactive.sh into the long-lived tmux opencode process instead of a blocking headless `opencode run`. A blocking run would complete turn1 before a second message could fire, so there would be no in-flight turn to queue against. The driver launches one `opencode` under tmux and holds it alive across both turns.",
+            "The first prompt asks for a ~400-word explanation, which keeps the ses_… turn IN FLIGHT (working) for ~30-45s on the slow local LM Studio model — a wide window to land the mid-turn message. The pre-injection sleep (12s) lands the second message solidly inside that working window (well after the step-start, before any terminal step-finish).",
+            "mid_turn_send types the SECOND message + Enter into the composer WITHOUT bumping the driver's turn baseline (oc_mid_turn_send): opencode silently QUEUES the message — its documented default (issues #21388/#17691/#12707) — holding it in the runtime/UI queue and NOT writing it to the SQLite part/message tables until consumed. So during the in-flight + injection window the daemon's last store event stays a turn-internal assistant_message/function_call and the session stays working with no →ready or →waiting flicker.",
+            "Two wait_turn steps follow the injection: the first rides the slow-prompt baseline and detects turn1's terminal step-finish (reason=stop); the second detects the QUEUED message running as turn2 (its own working→ready arc). opencode consumes the queued message as a NEW turn — a step-finish reason=stop closes turn1, then turn2 begins — which is legal per the claudecode anchor's note (fold-vs-new-turn both acceptable; only the no-flicker-on-arrival window plus the final ready are asserted).",
+            "OpenCode session state lives in its SQLite store (~/.local/share/opencode/opencode.db); the daemon's ProcessOwnedStore source polls the session/part tables and classifies the ses_… session on the LAST part's event type. The run_live epilogue enumerates the top-level ses_… under the run cwd and stages its transcript after the TUI is dropped. The trailing sleep (8s) outlasts turn2's working→ready settle so the final ready is observed before daemon shutdown."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a 400-word explanation of how TCP works, covering the three-way handshake, sequence numbers, acknowledgements, and flow control. Use full paragraphs."
+            },
+            {
+              "type": "sleep",
+              "seconds": 12
+            },
+            {
+              "type": "mid_turn_send",
+              "text": "Now also list three fun facts about giraffes."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 8
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… session entering ready, then a single ready→working transition driven by the slow first prompt",
+            "events.jsonl contains a pid_discovered event bound to the ses_… session_id",
+            "events.jsonl contains NO state_transition to ready in the window from turn1's ready→working through the queued-message arrival (the working span is contiguous through the injection — opencode holds the queued message in its runtime queue, unwritten to SQLite, so the daemon's last store event stays turn-internal)",
+            "events.jsonl contains NO state_transition to waiting at any point during the working span (no permission gate; the queued message does not flip the session to waiting on arrival)",
+            "events.jsonl eventually shows the queued message running as a SECOND working→ready arc on the same ses_… (consumed as a new turn after turn1's step-finish reason=stop); the final session state is ready",
+            "the recording contains exactly ONE top-level ses_… session — a single mid-turn injection produces two sequential turns on the one session, not a new session"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
