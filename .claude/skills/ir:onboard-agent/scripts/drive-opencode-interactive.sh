@@ -22,11 +22,37 @@
 # <staging>/cwd; subsequent `send` steps use `--session <id>` with the
 # captured id so the conversation chains within one session record.
 #
+# Concurrency (multiple headless sessions in one cwd):
+#   start_session — begin a SECOND independent `opencode run` chain in the
+#                   SAME RUN_CWD without disturbing the first. opencode keys
+#                   sessions on the SQLite session.id (the directory column
+#                   is only a liveness gate — watcher.go scanSessions), so a
+#                   second chain in one cwd is a second, independent
+#                   observable arc (daemon_capability: full). This is the
+#                   headless analogue of claudecode's start_session: it
+#                   allocates a new "slot" with an empty session id, so the
+#                   next `send` (no --session) mints a fresh ses_ row; that
+#                   slot then chains --session <ses2> for its later sends.
+#                   The first slot keeps chaining its own ses1.
+#   any step may carry {"session": N} to switch the active slot to N
+#   (1-based) before executing — e.g. route a later `send` back to slot 1
+#   while slot 2 stays alive. A bare {"type":"session","session":N} just
+#   switches focus. This is the headless port of the claudecode driver's
+#   inline {"session":N} target + start_session/session step types; it
+#   stays on the deterministic headless path (no tmux/TUI), so the two
+#   arcs are two interleaved `opencode run --session <ses>` chains.
+#
 # Contract files written to <staging-dir>:
 #   driver.log[.stdout|.stderr]  — captured CLI output
 #   driver.exit-reason           — ok|timeout|killed|nonzero(N)
-#   transcript.path              — absolute path to the exported parts JSONL
-#   session.uuid                 — opencode session id (ses_…)
+#   transcript.path              — slot-1 exported parts JSONL (back-compat)
+#   session.uuid                 — slot-1 opencode session id (ses_…)
+#   session.uuids                — every slot's ses_ id, one per line
+#   transcript.paths             — every slot's exported parts JSONL path
+#     (single-slot runs write one line each — same shape, so run-cell.sh's
+#      multi-session curation is a no-op below count 2; a start_session run
+#      writes BOTH ses_ ids so curate-lifecycle-fixture.sh captures both
+#      arcs, exactly like codex's reset_session contract.)
 #
 # Usage:
 #   drive-opencode-interactive.sh <staging-dir> <preferred-uuid> \
@@ -101,6 +127,17 @@ fi
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+
+# Per-slot session ids (1-based; index 0 unused). Each slot is an
+# independent `opencode run` chain in RUN_CWD. The initial session is slot 1;
+# a start_session step allocates the next slot with an empty id, so its first
+# send mints a fresh ses_ row. SESSION_ID is the ACTIVE slot's id — a cache of
+# SES_IDS[$ACTIVE], kept in sync via the {"session":N} switch and run_send's
+# capture. Single-slot (the common case) leaves N_SLOTS=1 / ACTIVE=1, so the
+# headless flow is byte-for-byte unchanged for every other opencode cell.
+SES_IDS=("")
+N_SLOTS=1
+ACTIVE=1
 SESSION_ID=""
 
 remaining_seconds() {
@@ -451,21 +488,49 @@ run_send() {
   # `.timeout 5000` lets the read wait out a transient SQLITE_BUSY rather than
   # failing the bare `SESSION_ID=$(...)` under `set -e` — opencode is a
   # concurrent WAL writer (especially under the cross-adapter shared-cwd load).
+  #
+  # Concurrency note: with start_session, two slots share RUN_CWD. The capture
+  # only fires for the ACTIVE slot when its id is still empty (its first send,
+  # which ran with NO --session and therefore minted the newest top-level row).
+  # ORDER BY time_created DESC LIMIT 1 picks that just-minted row; slot 1's id
+  # was captured on ITS first send and is now non-empty, so it is never
+  # re-looked-up and the two chains never alias. The captured id is mirrored
+  # into SES_IDS[$ACTIVE] so the end-of-run epilogue exports every slot.
   if [[ -z "$SESSION_ID" ]]; then
     SESSION_ID=$(sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
       "SELECT id FROM session WHERE directory = '$RUN_CWD' AND (parent_id IS NULL OR parent_id = '') ORDER BY time_created DESC LIMIT 1;")
     if [[ -z "$SESSION_ID" ]]; then
       echo "[driver] WARN: no session row found for cwd=$RUN_CWD" >&2
     else
-      echo "[driver] captured session_id=$SESSION_ID" >&2
+      SES_IDS[$ACTIVE]="$SESSION_ID"
+      echo "[driver] captured session_id=$SESSION_ID (slot $ACTIVE)" >&2
     fi
   fi
   return 0
 }
 
+# start_session — begin a SECOND independent `opencode run` chain in RUN_CWD.
+# Mirror the active slot's id back, allocate the next slot with an EMPTY id,
+# and make it active. The next `send` runs with no --session (empty id) and so
+# mints a fresh ses_ row keyed to the same cwd; run_send captures it into the
+# new slot. The previous slot's chain is untouched (its id stays in SES_IDS),
+# so a later {"session":1} resumes it via --session <ses1>. This is the
+# headless analogue of claudecode's step_start_session (alloc_slot + a fresh
+# session), staying on the deterministic headless path rather than the TUI.
+run_start_session() {
+  SES_IDS[$ACTIVE]="$SESSION_ID"            # persist the active slot's id
+  N_SLOTS=$((N_SLOTS + 1))
+  SES_IDS[$N_SLOTS]=""                      # new slot: empty → next send mints
+  ACTIVE=$N_SLOTS
+  SESSION_ID=""                             # active view follows the new slot
+  echo "[driver] start_session: concurrent slot #$ACTIVE in $RUN_CWD (next send mints a fresh ses_)" >&2
+}
+
 # Route: a `reset_session` (or `slash`) step needs the live opencode TUI —
 # headless `opencode run` treats slash commands as ordinary prompt text. All
-# other opencode cells stay on the simpler, deterministic headless path.
+# other opencode cells stay on the simpler, deterministic headless path —
+# including start_session, which is just a SECOND headless `opencode run`
+# chain (two interleaved chains, no TUI), so it does NOT force run_live.
 if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash")' <<<"$SCRIPT_JSON")" == "true" ]]; then
   run_live   # drives the TUI under tmux and exits; never returns here.
 fi
@@ -475,6 +540,26 @@ STEP_COUNT=$(jq 'length' <<<"$SCRIPT_JSON")
 for (( i = 0; i < STEP_COUNT; i++ )); do
   STEP=$(jq -c ".[$i]" <<<"$SCRIPT_JSON")
   TYPE=$(jq -r '.type' <<<"$STEP")
+
+  # Optional inline session target: switch the active slot to N (1-based)
+  # before executing the step — e.g. route a later send back to slot 1 while
+  # slot 2 stays alive. start_session is exempt (it allocates its own slot).
+  # Persist the current slot's id, then load the target's. A target must
+  # already exist. Same contract as the claudecode driver's {"session":N}.
+  TGT=$(jq -r '.session // empty' <<<"$STEP")
+  if [[ -n "$TGT" && "$TYPE" != "start_session" && "$TGT" != "$ACTIVE" ]]; then
+    if [[ "$TGT" =~ ^[0-9]+$ && "$TGT" -ge 1 && "$TGT" -le "$N_SLOTS" ]]; then
+      SES_IDS[$ACTIVE]="$SESSION_ID"
+      ACTIVE="$TGT"
+      SESSION_ID="${SES_IDS[$ACTIVE]}"
+      echo "[driver] switch -> session slot $ACTIVE (id=${SESSION_ID:-<new>})" >&2
+    else
+      echo "[driver] ERROR: invalid session slot '$TGT' (have $N_SLOTS)" >&2
+      EXIT_REASON="nonzero(2)"
+      break
+    fi
+  fi
+
   case "$TYPE" in
     send)
       TEXT=$(jq -r '.text' <<<"$STEP")
@@ -501,6 +586,14 @@ for (( i = 0; i < STEP_COUNT; i++ )); do
       echo "[driver] sleep ${SECONDS_}s" >&2
       sleep "$SECONDS_"
       ;;
+    start_session)
+      # Begin a SECOND independent `opencode run` chain in the same RUN_CWD.
+      run_start_session
+      ;;
+    session)
+      # Pure focus switch — already handled by the inline target block above.
+      :
+      ;;
     *)
       echo "[driver] ERROR: unknown step type '$TYPE'" >&2
       EXIT_REASON="nonzero(2)"
@@ -510,32 +603,35 @@ for (( i = 0; i < STEP_COUNT; i++ )); do
 done
 
 echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
-echo "${SESSION_ID:-}" > "$STAGING/session.uuid"
 
-# Export the parent session's parts as a JSONL stream with the synthetic
-# `_role`, `_cwd`, `_ts`, `_model`, `_error` fields the OpenCode parser
-# expects. This is what the replay tool reads from transcript.jsonl in the
-# committed fixture.
-TRANSCRIPT_OUT="$STAGING/opencode-transcript.jsonl"
-: > "$TRANSCRIPT_OUT"
-if [[ -n "$SESSION_ID" ]]; then
-  # Role lives inside message.data JSON (no top-level column), so extract
-  # it with json_extract. modelID lives in message.data.model.modelID.
-  # `_error` carries message.data.error: an aborted/errored turn (quota,
-  # context-overflow, provider error) records the failure on the MESSAGE,
-  # not as a step-finish reason=error part — opencode emits only a bare
-  # step-start part on that message — so message.data.error is the sole
-  # turn-ending signal the daemon's watcher.go isErrorMessage keys on.
-  # Without it the exported fixture loses the error and the replayed turn
-  # never settles working→ready. `json(...)` nests the error sub-object as
-  # real JSON (SQLite JSON null when absent — isErrorMessage treats null as
-  # "no error"). (#493 daemon side; this is the matching export.)
-  # Concurrent reads against opencode's running DB are safe — opencode
-  # writes in WAL mode and sqlite3's default open mode tolerates a
-  # parallel writer. The -readonly flag fails on this DB because it
-  # disables the WAL fallback path; omit it. `.timeout 5000` waits out a
-  # transient SQLITE_BUSY instead of producing a truncated/empty export.
-  sqlite3 "$OPENCODE_DB" <<SQL >> "$TRANSCRIPT_OUT"
+# Persist the final active slot's id before enumerating slots.
+SES_IDS[$ACTIVE]="$SESSION_ID"
+
+# Export ONE session's parts as a JSONL stream with the synthetic `_role`,
+# `_cwd`, `_ts`, `_model`, `_error` fields the OpenCode parser expects. This is
+# what the replay tool reads from transcript.jsonl in the committed fixture.
+#   $1 = ses_ id   $2 = output path
+# Role lives inside message.data JSON (no top-level column), so extract it with
+# json_extract. modelID lives in message.data.model.modelID. `_error` carries
+# message.data.error: an aborted/errored turn (quota, context-overflow,
+# provider error) records the failure on the MESSAGE, not as a step-finish
+# reason=error part — opencode emits only a bare step-start part on that
+# message — so message.data.error is the sole turn-ending signal the daemon's
+# watcher.go isErrorMessage keys on. Without it the exported fixture loses the
+# error and the replayed turn never settles working→ready. `json(...)` nests
+# the error sub-object as real JSON (SQLite JSON null when absent —
+# isErrorMessage treats null as "no error"). (#493 daemon side; this is the
+# matching export.)
+# Concurrent reads against opencode's running DB are safe — opencode writes in
+# WAL mode and sqlite3's default open mode tolerates a parallel writer. The
+# -readonly flag fails on this DB because it disables the WAL fallback path;
+# omit it. `.timeout 5000` waits out a transient SQLITE_BUSY instead of
+# producing a truncated/empty export.
+export_session() {
+  local sid="$1" out="$2"
+  : > "$out"
+  [[ -n "$sid" ]] || return 0
+  sqlite3 "$OPENCODE_DB" <<SQL >> "$out"
 .timeout 5000
 .mode list
 .separator ""
@@ -550,11 +646,35 @@ SELECT json_set(
 FROM part p
 JOIN message m ON p.message_id = m.id
 JOIN session s ON p.session_id = s.id
-WHERE p.session_id = '$SESSION_ID'
+WHERE p.session_id = '$sid'
 ORDER BY p.time_created ASC, p.id ASC;
 SQL
-fi
-echo "$TRANSCRIPT_OUT" > "$STAGING/transcript.path"
+}
+
+# Export every slot. Slot 1 keeps the canonical filename + back-compat
+# session.uuid/transcript.path; further slots get .N suffixed files. Emit the
+# multi-session contract (session.uuids / transcript.paths) with EVERY slot's
+# id so a start_session run's BOTH arcs are curated — single-slot runs write
+# one line each, the same shape, so run-cell.sh's multi-session branch is a
+# no-op below count 2 (identical to claudecode's contract).
+: > "$STAGING/session.uuids"
+: > "$STAGING/transcript.paths"
+PRIMARY_OUT="$STAGING/opencode-transcript.jsonl"
+for (( s = 1; s <= N_SLOTS; s++ )); do
+  if [[ "$s" -eq 1 ]]; then
+    TRANSCRIPT_OUT="$PRIMARY_OUT"
+  else
+    TRANSCRIPT_OUT="$STAGING/opencode-transcript.$s.jsonl"
+  fi
+  export_session "${SES_IDS[$s]}" "$TRANSCRIPT_OUT"
+  echo "${SES_IDS[$s]}" >> "$STAGING/session.uuids"
+  echo "$TRANSCRIPT_OUT" >> "$STAGING/transcript.paths"
+  echo "[driver] slot #$s: ${SES_IDS[$s]:-<none>} -> $TRANSCRIPT_OUT ($(wc -l <"$TRANSCRIPT_OUT" | tr -d ' ') parts)" >&2
+done
+
+# Back-compat single-session pointers = slot 1.
+echo "${SES_IDS[1]:-}" > "$STAGING/session.uuid"
+echo "$PRIMARY_OUT" > "$STAGING/transcript.path"
 
 # Combined log for easier review.
 {
@@ -565,11 +685,11 @@ echo "$TRANSCRIPT_OUT" > "$STAGING/transcript.path"
   cat "$DRIVER_LOG.stderr" 2>/dev/null || true
   echo
   echo "=== driver exit reason: $EXIT_REASON ==="
-  echo "=== session_id: ${SESSION_ID:-<none>} ==="
-  echo "=== transcript: $TRANSCRIPT_OUT ($(wc -l < "$TRANSCRIPT_OUT" | tr -d ' ') lines) ==="
+  echo "=== slots: $N_SLOTS (${SES_IDS[*]:1}) ==="
+  echo "=== primary session_id: ${SES_IDS[1]:-<none>} ==="
 } > "$DRIVER_LOG"
 
-echo "drive-opencode-interactive: $EXIT_REASON (session=${SESSION_ID:-<none>}, transcript=$TRANSCRIPT_OUT)"
+echo "drive-opencode-interactive: $EXIT_REASON (slots=$N_SLOTS, primary=${SES_IDS[1]:-<none>}, transcript=$PRIMARY_OUT)"
 
 case "$EXIT_REASON" in
   ok) exit 0 ;;

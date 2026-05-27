@@ -22,8 +22,8 @@ engineering the ~600-line driver. Stay inside it: an unknown `type`
 | `fork`          | —                       | `/fork`; clone the conversation into a new rollout (eager — materializes at once) | codex                    |
 | `sigkill`       | —                       | `kill -9` the agent process (forced termination)                          | claudecode                       |
 | `exit_clean`    | —                       | Ctrl-D to the TUI for a graceful shutdown                                 | claudecode, codex                |
-| `start_session` | `cwd` (optional)        | launch a concurrent session WITHOUT killing the current one (same cwd unless overridden) | claudecode        |
-| `session`       | `session` (slot N)      | switch focus to an existing session slot N (use after `start_session`)    | claudecode                       |
+| `start_session` | `cwd` (optional)        | launch a concurrent session WITHOUT killing the current one (same cwd unless overridden) | claudecode, opencode |
+| `session`       | `session` (slot N)      | switch focus to an existing session slot N (use after `start_session`)    | claudecode, opencode             |
 
 Notes:
 
@@ -36,10 +36,13 @@ Notes:
   recording chains several session lifetimes. The driver tracks every
   session UUID across these so the curator can pull them all.
 - **Idle-only scenarios** (no prompts) use a single `sleep`-only script.
-- **opencode** has the narrowest driver — it implements only `send`,
-  `wait_turn`, and `sleep`. Any other step type aborts the recording, so
-  opencode recipes can't use interrupts, slash commands, or multi-session
-  steps. The `send` step accepts an OPTIONAL opencode-only `model`
+- **opencode** is a hybrid driver. Most cells run the deterministic
+  headless path (`send`/`wait_turn`/`sleep`, plus `start_session`/`session`
+  — a second `opencode run` chain in the same cwd is a second independent
+  ses_-keyed arc, so multi-session-same-cwd needs no TUI); `slash` and
+  `reset_session` switch it to the live-TUI path (`run_live`, tmux). It does
+  NOT implement `interrupt`/`keys`/`restart`/`resume`/`sigkill`/`exit_clean`.
+  The `send` step accepts an OPTIONAL opencode-only `model`
   (`provider/model`, e.g. `lmstudio/google/gemma-4-26b-a4b`) that threads
   `opencode run -m` so that turn runs on the named model — the per-turn
   model-select primitive for `model-switch-midsession` (commit bbf82830).
