@@ -7103,8 +7103,56 @@
           "timeout_seconds": 360
         },
         "opencode": {
-          "applicable": false,
-          "notes": "scope_note: opencode driver lacks a keys/interrupt step to fire a mid-turn ESC against blocking `opencode run`; needs a live-REPL driver — gap:interrupt. drive-opencode-interactive.sh drives opencode through BLOCKING headless `opencode run` subprocesses and implements only send / wait_turn (no-op; `opencode run` blocks until the turn ends) / sleep in its `case \"$TYPE\"` dispatch. There is NO `keys` or `interrupt` step, and structurally no way to deliver a mid-turn ESC: each `send` blocks inside the subprocess until the turn is already over, so by the time control returns there is no in-flight turn left to cancel. Eliciting a step-finish reason=interrupted part requires holding a live interactive opencode TUI open and sending Escape WHILE the turn streams. NOT an agent or daemon limitation — opencode supports mid-turn cancel and the daemon PARSES step-finish reason=interrupted → turn_done (parser.go:158 `case \"interrupted\"`; watcher.go:435 isTerminalPart accepts `interrupted`), so a genuine interrupted-turn step-finish part WOULD settle the session working→ready (daemon_capability:full). NOT a recipe-lint step-TYPE gap either — the recipe is left applicable:false with no script, so there is no step type to reject; the missing capability is a live-REPL Escape-mid-turn primitive (same shape as the opencode model-switch-midsession gap:model-select, which recipe-lint also could not catch). DISTINCT from the sibling turn-aborted-by-error cell (daemon_capability:incapable, error aborts never persist a step-finish part) — an ESC-cancelled turn DOES finish as a step-finish reason=interrupted part. UNBLOCK: replace/augment drive-opencode-interactive.sh with a LIVE-REPL driver (tmux-based, like claudecode/pi/aider) that launches the opencode TUI, sends a long prompt, then fires a keys/interrupt step delivering Escape mid-stream. expected.jsonl is retained as the documented ready→working→[interrupt]→ready + recovery-arc target; see replaydata/agents/opencode/scenarios/user-esc-interrupt/assessment.json (driver_capability: gap:interrupt). MATRIX DRIFT: coverage cell currently driver_capability:ready (\"step-finish reason=interrupted handled\") — that conflates the parser handling it (true) with the driver eliciting it (false); should update to gap:interrupt. headless_mode=no (opencode capabilities.json), but the live REPL/TUI is the recordable surface."
+          "applicable": true,
+          "preconditions": [
+            "opencode on PATH and authenticated (~/.local/share/opencode/auth.json) — verified opencode 1.14.50. The interrupt arc is model-agnostic; the dev env's default is a local LM Studio model, which is fine.",
+            "LM Studio (http://127.0.0.1:1234) serving the config-default model (lmstudio/gemma-4-e2b-it-uncensored) loaded at 32768 context. The interrupt must land MID-turn, so the model must take long enough to stream a 600-word essay that the 12-15s sleep still finds it in-flight; a tiny context window that JIT-reloads small (n_keep>=n_ctx 4096) overflows opencode's system prompt and aborts the turn before it streams — load at 32768.",
+            "irrlichd is recording — run-cell.sh isolated/coexist mode (IRRLICHT_ONBOARD_HOME + alt port), or --attach against a daemon started with --record.",
+            "LIVE-TUI cell: drive-opencode-interactive.sh routes any recipe carrying an `interrupt` step to its tmux TUI path (run_live), because headless `opencode run` blocks until the turn is already over — there is no in-flight turn to cancel by the time control returns. The interrupt must reach a turn that is STILL streaming, which only the live TUI can hold open. tmux must be on PATH."
+          ],
+          "setup": [
+            "Driver launches the opencode TUI in a fresh per-run cwd under <staging>/cwd/; opencode keys sessions on the cwd in its SQLite store, isolating this run's rows even alongside other opencode use.",
+            "opencode mints ONE ses_… for the cwd; the long-essay prompt drives it ready→working, the `interrupt` step (oc_interrupt) sends a bare Escape to the pane mid-stream, and opencode persists a step-finish part with reason=interrupted on that same ses_…. The recovery prompt re-uses the SAME ses_… (no /new, no restart), so a single session row carries both arcs.",
+            "Turn detection for the interrupt reuses the terminal-step-finish high-water mark accepting reason IN ('stop','interrupted') — an ESC-cancelled turn ends ON an `interrupted` step-finish, not a fresh `stop`. The recovery turn's wait_turn then waits for the next `stop`."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a detailed 600-word essay about the history of the printing press, with many paragraphs covering Gutenberg, movable type, the spread across Europe, and the impact on literacy. Take your time and write thoroughly."
+            },
+            {
+              "type": "sleep",
+              "seconds": 14
+            },
+            {
+              "type": "interrupt"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: recovered"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the ses_… store session entering ready within ~2s of launch; never enters waiting (no tool use)",
+            "the long-essay prompt drives the SAME ses_… ready→working (binds the rollout session; a transient proc-<PID> presession never enters working)",
+            "events.jsonl contains a pid_discovered bound to the rollout ses_… session",
+            "after the mid-stream Escape, opencode writes a step-finish reason=interrupted, the parser maps it to turn_done, and the cancelled turn settles the SAME ses_… working→ready — state does NOT stick in working post-interrupt",
+            "the recovery prompt drives the SAME ses_… ready→working→ready again, proving the parser reset after the interrupt; still no waiting",
+            "exactly ONE distinct ses_… session_id appears across both arcs; a single process_exited at teardown; final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     },
