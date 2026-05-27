@@ -321,6 +321,36 @@ run_live() {
     return 1
   }
 
+  # oc_mid_turn_send — type a SECOND message + Enter into the composer WHILE a
+  # turn is still in flight. opencode's TUI silently QUEUES that message (its
+  # documented default) and delivers it as a NEW turn only after the current one
+  # finishes; the queued text is NOT written to SQLite until consumed, so the
+  # daemon stays `working` with no flicker (the queued-mid-turn-message cell).
+  # Reuse the composer landing/flush check from oc_send (the composer accepts
+  # input during a turn), but DELIBERATELY skip the turn-detection bookkeeping:
+  # no TURN_BASELINE snapshot/bump here, because this send does not start its own
+  # observable turn boundary at submit time. A SUBSEQUENT wait_turn waits for the
+  # queued message to run as the next turn (its terminal step-finish bumps the
+  # count past whatever baseline the preceding oc_send set). The flush confirms
+  # the queued text left the composer so a following step can't coalesce into it.
+  oc_mid_turn_send() {
+    local text="$1" tries=0
+    while (( tries < 3 )); do
+      tmux send-keys -t "$SESSION" -l -- "$text"
+      sleep 0.5
+      if tmux capture-pane -t "$SESSION" -p 2>/dev/null | grep -qF "${text:0:24}"; then
+        break
+      fi
+      tries=$((tries + 1))
+      echo "[driver] live: mid-turn send did not register (try $tries), retrying" >&2
+      sleep 1
+    done
+    # NO TURN_BASELINE snapshot/bump — the queued message does not open its own
+    # turn at submit time; the next wait_turn rides the preceding send's baseline.
+    oc_flush "$text"
+    echo "[driver] live mid_turn_send (queued, no baseline bump): ${text:0:60}" >&2
+  }
+
   # oc_interrupt — cancel the in-flight turn by sending a bare Escape to the
   # live TUI (opencode binds Escape to "interrupt"), exactly like the
   # claudecode/codex step_interrupt arms. The cancelled turn lands a step-finish
@@ -459,6 +489,12 @@ run_live() {
       case "$TYPE" in
         send)
           oc_send "$(jq -r '.text' <<<"$STEP")"
+          ;;
+        mid_turn_send)
+          # Queue a SECOND message into the composer WHILE the current turn is
+          # still running — opencode buffers it and runs it as the NEXT turn.
+          # No baseline bump; a SUBSEQUENT wait_turn detects the queued turn.
+          oc_mid_turn_send "$(jq -r '.text' <<<"$STEP")"
           ;;
         wait_turn)
           oc_wait_turn || break
@@ -678,16 +714,19 @@ run_start_session() {
 }
 
 # Route: a `reset_session` / `slash` / `interrupt` / `keys` / `restart` /
-# `sigkill` step needs the live opencode TUI — headless `opencode run` treats
-# slash commands as ordinary prompt text and offers no in-flight signal
-# channel (an interrupt = a bare Escape to the running TUI; `keys` = raw key
-# navigation; restart/sigkill must kill a long-lived TUI process so the daemon
-# observes process_exited — a headless `opencode run` already self-exits per
-# turn, so there is no parent process to orphan a child against). All other
-# opencode cells stay on the simpler, deterministic headless path — including
-# start_session, which is just a SECOND headless `opencode run` chain (two
-# interleaved chains, no TUI), so it does NOT force run_live.
-if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash" or .type == "interrupt" or .type == "keys" or .type == "restart" or .type == "sigkill")' <<<"$SCRIPT_JSON")" == "true" ]]; then
+# `sigkill` / `mid_turn_send` step needs the live opencode TUI — headless
+# `opencode run` treats slash commands as ordinary prompt text and offers no
+# in-flight signal channel (an interrupt = a bare Escape to the running TUI;
+# `keys` = raw key navigation; restart/sigkill must kill a long-lived TUI
+# process so the daemon observes process_exited — a headless `opencode run`
+# already self-exits per turn, so there is no parent process to orphan a child
+# against; mid_turn_send queues a 2nd message into the composer DURING an
+# in-flight turn, which only the persistent TUI can buffer — a per-turn headless
+# run has no composer to type into while it blocks). All other opencode cells
+# stay on the simpler, deterministic headless path — including start_session,
+# which is just a SECOND headless `opencode run` chain (two interleaved chains,
+# no TUI), so it does NOT force run_live.
+if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash" or .type == "interrupt" or .type == "keys" or .type == "restart" or .type == "sigkill" or .type == "mid_turn_send")' <<<"$SCRIPT_JSON")" == "true" ]]; then
   run_live   # drives the TUI under tmux and exits; never returns here.
 fi
 

@@ -24,6 +24,7 @@ engineering the ~600-line driver. Stay inside it: an unknown `type`
 | `exit_clean`    | —                       | Ctrl-D to the TUI for a graceful shutdown                                 | claudecode, codex                |
 | `start_session` | `cwd` (optional)        | launch a concurrent session WITHOUT killing the current one (same cwd unless overridden) | claudecode, opencode |
 | `session`       | `session` (slot N)      | switch focus to an existing session slot N (use after `start_session`)    | claudecode, opencode             |
+| `mid_turn_send` | `text`                  | type `text` + Enter into the composer WHILE a turn is in flight; the TUI queues it and runs it as the NEXT turn — does NOT bump the turn count (a later `wait_turn` detects the queued turn) | opencode |
 
 Notes:
 
@@ -40,10 +41,14 @@ Notes:
   headless path (`send`/`wait_turn`/`sleep`, plus `start_session`/`session`
   — a second `opencode run` chain in the same cwd is a second independent
   ses_-keyed arc, so multi-session-same-cwd needs no TUI); `slash`,
-  `reset_session`, `interrupt`, and `keys` switch it to the live-TUI path
+  `reset_session`, `interrupt`, `keys`, `restart`, `sigkill`, and
+  `mid_turn_send` switch it to the live-TUI path
   (`run_live`, tmux) — `interrupt` fires a bare Escape mid-turn (opencode writes
-  a step-finish reason=interrupted, which the parser maps to turn_done). It does
-  NOT implement `restart`/`resume`/`sigkill`/`exit_clean`.
+  a step-finish reason=interrupted, which the parser maps to turn_done);
+  `mid_turn_send` types a 2nd message into the composer DURING an in-flight turn
+  (opencode silently queues it and runs it as the next turn — no turn-count bump
+  at submit, a later `wait_turn` detects the queued turn). It does
+  NOT implement `resume`/`exit_clean`.
   The `send` step accepts an OPTIONAL opencode-only `model`
   (`provider/model`, e.g. `lmstudio/google/gemma-4-26b-a4b`) that threads
   `opencode run -m` so that turn runs on the named model — the per-turn
