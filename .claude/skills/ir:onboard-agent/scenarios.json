@@ -1727,8 +1727,57 @@
           "timeout_seconds": 180
         },
         "pi": {
-          "applicable": false,
-          "scope_note": "REASSESSED yes/yes (0.72): pi 0.70.0 DOES ship a `/new` reset (interactive-mode.js:2037 → handleClearCommand → runtimeHost.newSession → session-manager.js:484 newSession() mints a fresh UUID `.jsonl` under the same PID, parentSession:null, file flushed lazily). Same supersession shape as codex /new: the NEW session supersedes the OLD; the old UUID-1 file lingers frozen on disk while the daemon removes the old session row via the #169 same-PID cleanup once UUID-2's PID is discovered. The daemon OBSERVES this fully and live (pi Source = FilesUnderRoot ~/.pi/agent/sessions detects UUID-2 the instant its file appears). Recording is nonetheless DEFERRED: drive-pi-interactive.sh lacks the codex-style multi-session capture (no `reset_session` step that re-arms resolve_transcript onto the new rollout slot, and no `session.uuids` PLURAL list). Empirically (standalone dry-run send 'ok' → /new → send 'fresh'): pi correctly wrote TWO distinct UUID files under one PID, but (1) the post-/new `wait_turn` reads the cached stale UUID-1 transcript and times out, and (2) curate-lifecycle-fixture.sh filters the recording to the singular session.uuid (UUID-1), dropping UUID-2 — so a curated fixture can only ever contain UUID-1 and the v2_* phases would be absent. The TARGET 8-phase recipe is the codex-shaped supersession arc: send 'Reply with exactly the word: ok' → wait_turn → sleep 3 → slash '/new' → sleep 3 → send 'Reply with exactly the word: fresh' → wait_turn → sleep 3 (asserting v1 arc on UUID-1, v2_session_birth new UUID after /new, v2 arc on UUID-2, no waiting). Recording deferred until the pi interactive driver gains codex-style multi-session capture (reset_session step + session.uuids) — a developer task, out of scope for the implement stage. expected.jsonl documents the full target arc; assessment.json carries the yes/yes verdict and code citations."
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (~/.pi/ credentials) — verified pi 0.70.0, which ships the in-REPL `/new` reset (interactive-mode.js:2037 → handleClearCommand → runtimeHost.newSession → session-manager.js:484 newSession()).",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record.",
+            "FULL observability (per assessment.json yes/yes 0.72): pi /new is the codex supersession shape — newSession() mints a fresh createSessionId() UUID and a new <ts>_<uuid2>.jsonl under the same PID (parentSession:null, no UUID-1 history, file flushed lazily on the first post-reset message). The daemon (pi Source = FilesUnderRoot ~/.pi/agent/sessions) detects UUID-2 the instant its file appears: a fresh session_id in ready is the user-observable reset signal. The old UUID-1 row is removed via the #169 same-PID cleanup once UUID-2's PID is discovered (~ms after the new pid_discovered, NOT a readyTTL sweep); the old UUID-1 FILE lingers frozen on disk. No transcript_removed fires at the /new keystroke itself (reset is lazy — UUID-2 materializes on the first post-reset prompt)."
+          ],
+          "setup": [
+            "Driver launches pi in a fresh per-run cwd under <staging>/cwd/.",
+            "Pi mints its own session UUID per rollout. The first prompt materializes <ts>_<uuid1>.jsonl; the reset_session step sends pi's in-REPL `/new` (allocating a new driver slot reusing the same tmux/process), and the first prompt AFTER /new materializes a second <ts>_<uuid2>.jsonl with a fresh session_id and no UUID-1 history. The driver re-arms resolve_transcript onto UUID-2 and records BOTH UUIDs into session.uuids / transcript.paths so curate keeps both rollouts."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the FIRST rollout-keyed session (UUID-1) in ready",
+            "events.jsonl shows the FIRST rollout session running a working→ready turn (turn 1, 'ok')",
+            "after /new, the first post-reset prompt spawns a DIFFERENT rollout session_id (UUID-2, parentSession:null, no UUID-1 history) in ready — the 'new session appears with a different session_id' reset, observed live on the dashboard",
+            "the second turn's working→ready cycle is on the NEW rollout session (UUID-2), not on stale UUID-1",
+            "the old UUID-1 daemon row is removed via the #169 same-PID cleanup once UUID-2's PID is discovered (the old UUID-1 file lingers frozen on disk); no transcript_removed fires at the /new keystroke itself",
+            "no waiting state appears at any point; final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         },
         "aider": {
           "applicable": false,
