@@ -272,7 +272,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:slash-command",
-          "notes": "/undo executes correctly, but recording it needs a send->send->/undo->send sequence and the run_live slash->send composer hand-off coalesces prompts under the slow local model (3 attempts). Spec authored (target); commit 49d53556. Records once the hand-off is hardened or a faster model is available."
+          "notes": "driver+daemon ready, but the send->send->/undo->send recording hits a run_live slash->send composer hand-off race under the slow local model (4 attempts); not recordable on this model."
         }
       }
     },
@@ -1012,7 +1012,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:interrupt",
-          "notes": "interrupt (ESC) step ported (23ab346e), but the local model does not elicit a step-finish reason=interrupted end-to-end (it finishes on stop before the interrupt window or stalls pre-stream). Spec authored (6a5134ec); records with a model that streams long enough to cancel."
+          "notes": "interrupt step ported + daemon parses reason=interrupted, but the local gemma model never surfaces a reason=interrupted step-finish for a TUI ESC (stalls then finishes on stop, 4 attempts); not elicitable on this provider."
         }
       }
     },
