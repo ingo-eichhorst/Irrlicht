@@ -14,8 +14,8 @@ engineering the ~600-line driver. Stay inside it: an unknown `type`
 | `slash`         | `text`                  | alias of `send` for `/cmd` slash commands                                 | all except opencode              |
 | `wait_turn`     | —                       | block until the agent finishes the current LLM round                      | all interactive                  |
 | `sleep`         | `seconds` (default `1`) | pause N seconds (idle dwell, lazy-transcript settle)                      | all interactive                  |
-| `interrupt`     | —                       | Escape (claudecode/codex/pi) or Ctrl-C (aider) mid-turn; un-bumps the turn count | all except opencode        |
-| `keys`          | `keys`                  | raw tmux key names, space-separated (e.g. `"Down Down Enter"`) for picker UIs like `/model` | claudecode, codex   |
+| `interrupt`     | —                       | Escape (claudecode/codex/pi/opencode) or Ctrl-C (aider) mid-turn; un-bumps the turn count | all interactive            |
+| `keys`          | `keys`                  | raw tmux key names, space-separated (e.g. `"Down Down Enter"`) for picker UIs like `/model` | claudecode, codex, opencode |
 | `restart`       | —                       | kill current tmux, mint a new UUID + fresh cwd, re-init the session       | claudecode                       |
 | `resume`        | —                       | kill current tmux, relaunch the SAME UUID + cwd with `--resume`           | claudecode, codex                |
 | `reset_session` | —                       | in-app reset (`/clear`); keep the process alive, pick up the new UUID/transcript | claudecode, codex         |
@@ -39,9 +39,11 @@ Notes:
 - **opencode** is a hybrid driver. Most cells run the deterministic
   headless path (`send`/`wait_turn`/`sleep`, plus `start_session`/`session`
   — a second `opencode run` chain in the same cwd is a second independent
-  ses_-keyed arc, so multi-session-same-cwd needs no TUI); `slash` and
-  `reset_session` switch it to the live-TUI path (`run_live`, tmux). It does
-  NOT implement `interrupt`/`keys`/`restart`/`resume`/`sigkill`/`exit_clean`.
+  ses_-keyed arc, so multi-session-same-cwd needs no TUI); `slash`,
+  `reset_session`, `interrupt`, and `keys` switch it to the live-TUI path
+  (`run_live`, tmux) — `interrupt` fires a bare Escape mid-turn (opencode writes
+  a step-finish reason=interrupted, which the parser maps to turn_done). It does
+  NOT implement `restart`/`resume`/`sigkill`/`exit_clean`.
   The `send` step accepts an OPTIONAL opencode-only `model`
   (`provider/model`, e.g. `lmstudio/google/gemma-4-26b-a4b`) that threads
   `opencode run -m` so that turn runs on the named model — the per-turn

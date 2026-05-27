@@ -205,6 +205,20 @@ run_live() {
          AND json_extract(p.data,'\$.reason') = 'stop';" 2>/dev/null || echo 0
   }
 
+  # Like oc_turn_total but counts EITHER terminal reason — a normal `stop` OR an
+  # `interrupted` step-finish. An ESC-cancelled turn ends on reason=interrupted
+  # (never a new `stop`), which parser.go also maps to turn_done; so the
+  # interrupt-settle detector must accept it as turn-ending. Counting both keeps
+  # the high-water mark monotonic across the interrupt boundary just like the
+  # stop-only counter does for normal turns.
+  oc_turn_total_terminal() {
+    sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
+      "SELECT count(*) FROM part p JOIN session s ON p.session_id = s.id
+       WHERE s.directory = '$RUN_CWD' AND (s.parent_id IS NULL OR s.parent_id = '')
+         AND json_extract(p.data,'\$.type') = 'step-finish'
+         AND json_extract(p.data,'\$.reason') IN ('stop','interrupted');" 2>/dev/null || echo 0
+  }
+
   # Readiness: opencode swallows keystrokes during its boot splash, so wait
   # for the input affordance to render before the first send, then a margin.
   local waited=0 ready=0
@@ -307,6 +321,42 @@ run_live() {
     return 1
   }
 
+  # oc_interrupt — cancel the in-flight turn by sending a bare Escape to the
+  # live TUI (opencode binds Escape to "interrupt"), exactly like the
+  # claudecode/codex step_interrupt arms. The cancelled turn lands a step-finish
+  # with reason="interrupted" (parser.go maps it to turn_done), NOT a new
+  # `stop` — so we detect the settle on the TERMINAL counter (stop OR
+  # interrupted) crossing the baseline snapshotted just before Escape. Do NOT
+  # require a fresh `stop`: an interrupted turn ends ON interrupted.
+  oc_interrupt() {
+    local base now
+    base=$(oc_turn_total_terminal)
+    tmux send-keys -t "$SESSION" Escape
+    echo "[driver] live interrupt: sent Escape (terminal baseline=$base)" >&2
+    while (( $(remaining_seconds) > 0 )); do
+      now=$(oc_turn_total_terminal)
+      if (( now > base )); then
+        echo "[driver] live interrupt: settled, terminal step-finish total=$now (> baseline $base)" >&2
+        return 0
+      fi
+      sleep 2
+    done
+    echo "[driver] live interrupt: timeout (terminal total=$(oc_turn_total_terminal), needed > baseline $base)" >&2
+    EXIT_REASON="timeout"
+    return 1
+  }
+
+  # oc_keys — send a raw tmux key sequence (NOT literal text) for navigating
+  # picker UIs (Up/Down/Enter/Escape). Each space-separated token is one tmux
+  # key event; no implicit Enter. Mirrors the claudecode/codex `keys` arm.
+  oc_keys() {
+    local keys="$1"
+    # shellcheck disable=SC2086 — intentional word-splitting of the key list
+    tmux send-keys -t "$SESSION" $keys
+    echo "[driver] live keys: $keys" >&2
+    sleep 0.5
+  }
+
   # /new clears the conversation; the fresh ses_ row is minted lazily on the
   # NEXT send (same as the initial session, and codex's post-/clear rollout).
   # No baseline bump — the reset itself is not a turn, and the next oc_send
@@ -334,6 +384,15 @@ run_live() {
           ;;
         reset_session)
           oc_reset
+          ;;
+        interrupt)
+          # Cancel the in-flight turn (bare Escape) and wait for the
+          # interrupted settle. Reuses the turn-detection high-water mark but
+          # accepts reason IN ('stop','interrupted') as turn-ending.
+          oc_interrupt || break
+          ;;
+        keys)
+          oc_keys "$(jq -r '.keys' <<<"$STEP")"
           ;;
         slash)
           local s; s=$(jq -r '.text // .command // empty' <<<"$STEP")
@@ -526,12 +585,14 @@ run_start_session() {
   echo "[driver] start_session: concurrent slot #$ACTIVE in $RUN_CWD (next send mints a fresh ses_)" >&2
 }
 
-# Route: a `reset_session` (or `slash`) step needs the live opencode TUI —
-# headless `opencode run` treats slash commands as ordinary prompt text. All
-# other opencode cells stay on the simpler, deterministic headless path —
-# including start_session, which is just a SECOND headless `opencode run`
-# chain (two interleaved chains, no TUI), so it does NOT force run_live.
-if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash")' <<<"$SCRIPT_JSON")" == "true" ]]; then
+# Route: a `reset_session` / `slash` / `interrupt` / `keys` step needs the live
+# opencode TUI — headless `opencode run` treats slash commands as ordinary
+# prompt text and offers no in-flight signal channel (an interrupt = a bare
+# Escape to the running TUI; `keys` = raw key navigation). All other opencode
+# cells stay on the simpler, deterministic headless path — including
+# start_session, which is just a SECOND headless `opencode run` chain (two
+# interleaved chains, no TUI), so it does NOT force run_live.
+if [[ "$(jq -r 'any(.[]?; .type == "reset_session" or .type == "slash" or .type == "interrupt" or .type == "keys")' <<<"$SCRIPT_JSON")" == "true" ]]; then
   run_live   # drives the TUI under tmux and exits; never returns here.
 fi
 

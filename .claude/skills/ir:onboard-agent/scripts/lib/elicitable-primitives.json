@@ -22,9 +22,9 @@
       "notes": "tmux-TUI driver."
     },
     "opencode": {
-      "elicits": ["send", "wait_turn", "sleep", "slash", "reset_session", "start_session", "session"],
+      "elicits": ["send", "wait_turn", "sleep", "slash", "reset_session", "interrupt", "keys", "start_session", "session"],
       "slash_requires_step_type": true,
-      "notes": "Hybrid driver. Headless `opencode run` (send/wait_turn/sleep/start_session/session) ignores in-REPL slash commands — it stores a leading-slash text as a literal user message. The live-TUI path (run_live, #495) genuinely elicits slash/reset_session, but ONLY when the recipe uses those STEP TYPES; a bare send \"/cmd\" never reaches the REPL, so slash_requires_step_type is true. start_session/session stay on the headless path: a SECOND `opencode run` chain in the same cwd is a second independent ses_-keyed arc (the directory is only a liveness gate), and {\"session\":N} interleaves the two chains."
+      "notes": "Hybrid driver. Headless `opencode run` (send/wait_turn/sleep/start_session/session) ignores in-REPL slash commands — it stores a leading-slash text as a literal user message. The live-TUI path (run_live, #495) genuinely elicits slash/reset_session/interrupt/keys, but ONLY when the recipe uses those STEP TYPES; a bare send \"/cmd\" never reaches the REPL, so slash_requires_step_type is true. interrupt (extend-driver) fires a bare Escape at the live TUI mid-turn — opencode writes a step-finish reason=interrupted, which parser.go maps to turn_done — and the run_live router enters the TUI on an interrupt/keys step just like slash/reset_session. start_session/session stay on the headless path: a SECOND `opencode run` chain in the same cwd is a second independent ses_-keyed arc (the directory is only a liveness gate), and {\"session\":N} interleaves the two chains."
     }
   }
 }
