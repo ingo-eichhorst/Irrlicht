@@ -53,10 +53,27 @@ five-stage pipeline the subagents implement.
 | verify the rig scripts themselves | `scripts/smoke-test.sh` | nothing — pure script (bash -n + lib/reconcile_test.sh; the rig isn't covered by replay-fixtures/go test) |
 | run an orchestrator scenario | `<orch> [<scenario>]` | inline (see Orchestrators) |
 
-The legacy per-stage verbs (`assess`/`recipe`/`spec`/`record`/`validate`)
-still exist as building blocks under their own `SKILL.md` files;
-`implement` bundles recipe→spec→record→validate behind one contract, so
-you rarely invoke the middle three directly.
+### Verb hierarchy (#508 #5)
+
+Two tiers — the dispatcher routes only to USER VERBS:
+
+```
+USER VERBS (dispatch one subagent each):
+  scenario-create   add a matrix row (a NEW scenario)
+  assess            judge one cell → assessment.json
+  implement         carry one assessed cell to a committed recording
+  extend-driver     port a missing driver step type (unfreeze a driver_gap)
+  --new <slug>      onboard a brand-new agent column (discovery)
+
+STAGES (internal building blocks of `implement` — NOT top-level verbs):
+  recipe → spec → record → validate
+```
+
+The four STAGE dirs (`recipe/ spec/ record/ validate/`) keep their own
+`SKILL.md` because `implement` READS them for mechanics, but you do not
+dispatch them directly — `implement` bundles recipe→spec→record→validate
+behind one contract. Each stage SKILL.md carries a "private stage" banner
+saying so. Treat the user-facing verb set as the five above.
 
 ## Dispatching a subagent
 

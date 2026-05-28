@@ -168,7 +168,9 @@ ready for `implement` now.
 
 ## Return contract
 
-Return ONLY this (≤6 lines), no transcripts:
+Return ONLY this (≤6 lines), no transcripts. Shared-field semantics
+(`commit_sha`, `unblocked_cells`, the envelope rules) are defined once in
+[`../return-contract.md`](../return-contract.md):
 
 ```
 status: extended | needs_design | false_gap

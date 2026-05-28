@@ -299,7 +299,9 @@ dangling.
 
 ## Return contract
 
-Return ONLY this (≤7 lines), no transcripts:
+Return ONLY this (≤7 lines), no transcripts. Shared-field semantics
+(`observability_correction`, `commit_sha`, the envelope rules) are defined once
+in [`../return-contract.md`](../return-contract.md):
 
 ```
 status: pass | applicable_false | driver_gap | infra_fail
