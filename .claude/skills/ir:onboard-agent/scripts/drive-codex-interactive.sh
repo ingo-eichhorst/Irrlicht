@@ -140,60 +140,15 @@ ACTIVE=0
 # appears.
 TRUSTED_CWDS=()
 
-# daemon_sid maps an absolute rollout path to the daemon's session_id
-# (basename minus ".jsonl"). The daemon keys sessions on that filename
-# stem (see fswatcher extractSessionID), and curate-lifecycle-fixture.sh
-# filters events by `.session_id`, so the fixture lists MUST hold the
-# filename-stem form — NOT the bare `.payload.id`.
-daemon_sid() {
-  local p="$1"
-  [[ -z "$p" ]] && { echo ""; return; }
-  local b; b="$(basename "$p")"
-  echo "${b%.jsonl}"
-}
-
-# Persist the active-view variables back into the active slot.
-save_active() {
-  [[ $ACTIVE -ge 1 ]] || return 0
-  SES_SESSION[$ACTIVE]="$SESSION"
-  SES_TRANSCRIPT[$ACTIVE]="$TRANSCRIPT"
-  SES_UUID[$ACTIVE]="$UUID"
-  SES_EXPECTED[$ACTIVE]="$EXPECTED_TURNS"
-  SES_MARKER[$ACTIVE]="$MARKER"
-}
-
-# Make slot $1 the active session and load its state into the view vars.
-load_slot() {
-  ACTIVE="$1"
-  SESSION="${SES_SESSION[$ACTIVE]}"
-  TRANSCRIPT="${SES_TRANSCRIPT[$ACTIVE]}"
-  UUID="${SES_UUID[$ACTIVE]}"
-  EXPECTED_TURNS="${SES_EXPECTED[$ACTIVE]}"
-  MARKER="${SES_MARKER[$ACTIVE]}"
-}
-
-# Allocate a fresh slot (tmux session name, cwd) and make it active.
-# Mints a per-slot discovery marker and clears the view's
-# TRANSCRIPT/UUID/EXPECTED_TURNS so the new session starts known.
-alloc_slot() {
-  local sess="$1" cwd="$2"
-  N_SLOTS=$((N_SLOTS + 1))
-  local marker="$STAGING/.codex-start-marker.$N_SLOTS"
-  touch "$marker"
-  SES_SESSION[$N_SLOTS]="$sess"
-  SES_TRANSCRIPT[$N_SLOTS]=""
-  SES_UUID[$N_SLOTS]=""
-  SES_EXPECTED[$N_SLOTS]=0
-  SES_MARKER[$N_SLOTS]="$marker"
-  SES_CWD[$N_SLOTS]="$cwd"
-  SES_ALIVE[$N_SLOTS]=1
-  ACTIVE=$N_SLOTS
-  SESSION="$sess"
-  TRANSCRIPT=""
-  UUID=""
-  EXPECTED_TURNS=0
-  MARKER="$marker"
-}
+# Slot bookkeeping (daemon_sid / save_active / load_slot / alloc_slot) is the
+# shared model in lib/drive/slots.sh — byte-identical to pi's except the marker
+# filename, set via DRIVE_MARKER_PREFIX (#508 #3).
+_DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib/drive" && pwd)"
+DRIVE_MARKER_PREFIX="$STAGING/.codex-start-marker"
+# shellcheck source=lib/drive/slots.sh
+source "$_DRIVE_LIB/slots.sh"
+# shellcheck source=lib/drive/contracts.sh
+source "$_DRIVE_LIB/contracts.sh"
 
 # Has the active slot's cwd already had its trust dialog accepted this
 # run? Covers BOTH a concurrent second slot in the same cwd AND a resume
@@ -684,33 +639,12 @@ done
   echo
   echo "=== exit reason: $EXIT_REASON ==="
 } > "$DRIVER_LOG"
-# Keep a combined .stdout for backward-compat with any tooling that reads it.
-cat "$DRIVER_LOG".stdout.* > "$DRIVER_LOG.stdout" 2>/dev/null || true
-
-echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
-
-# Primary session = slot 1 (kept for backward-compat with the existing
-# single-session run-cell + curate code paths). Write the daemon-side
-# session_id form (rollout filename stem) so run-cell's primary-skip
-# comparison and curate's `.session_id` filter both match.
-echo "$(daemon_sid "${SES_TRANSCRIPT[1]}")" > "$STAGING/session.uuid"
-echo "${SES_TRANSCRIPT[1]}" > "$STAGING/transcript.path"
-
-# Multi-session metadata. A single-session run leaves these with one
-# entry each — same shape, but run-cell.sh's multi-session branch is a
-# no-op when there's only one line.
-: > "$STAGING/session.uuids"
-: > "$STAGING/transcript.paths"
-for (( i = 1; i <= N_SLOTS; i++ )); do
-  echo "$(daemon_sid "${SES_TRANSCRIPT[$i]}")" >> "$STAGING/session.uuids"
-  echo "${SES_TRANSCRIPT[$i]}" >> "$STAGING/transcript.paths"
-done
+# Staging contract: primary session.uuid is codex's daemon-side session_id
+# (rollout filename stem) so run-cell's primary-skip comparison and curate's
+# `.session_id` filter both match. emit_session_contract handles the combined
+# stdout, exit-reason, and the multi-session lists (lib/drive/contracts.sh).
+emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
 
 echo "drive-codex-interactive: $EXIT_REASON (slots=${N_SLOTS}, primary=$(daemon_sid "${SES_TRANSCRIPT[1]}"), transcript=${SES_TRANSCRIPT[1]})"
 
-case "$EXIT_REASON" in
-  ok)            exit 0 ;;
-  timeout)       exit 124 ;;
-  nonzero\(*\))  exit "${EXIT_REASON//[!0-9]/}" ;;
-  *)             exit 1 ;;
-esac
+drive_exit

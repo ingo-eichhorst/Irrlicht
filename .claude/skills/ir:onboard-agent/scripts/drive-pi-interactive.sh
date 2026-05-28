@@ -136,62 +136,15 @@ SES_ALIVE=()
 N_SLOTS=0
 ACTIVE=0
 
-# daemon_sid maps an absolute transcript path to the daemon's session_id.
-# The daemon keys FilesUnderRoot sessions on the .jsonl filename stem (see
-# fswatcher extractSessionID → strips ".jsonl"), so for pi the session_id
-# is the full "<ts>_<uuid>" filename stem, NOT the bare first-line .id.
-# run-cell.sh's multi-session list (IRRLICHT_EXTRA_SESSION_IDS) filters
-# the recording by `.session_id`, so the fixture lists MUST hold the
-# filename-stem form.
-daemon_sid() {
-  local p="$1"
-  [[ -z "$p" ]] && { echo ""; return; }
-  local b; b="$(basename "$p")"
-  echo "${b%.jsonl}"
-}
-
-# Persist the active-view variables back into the active slot.
-save_active() {
-  [[ $ACTIVE -ge 1 ]] || return 0
-  SES_SESSION[$ACTIVE]="$SESSION"
-  SES_TRANSCRIPT[$ACTIVE]="$TRANSCRIPT"
-  SES_UUID[$ACTIVE]="$UUID"
-  SES_EXPECTED[$ACTIVE]="$EXPECTED_TURNS"
-  SES_MARKER[$ACTIVE]="$MARKER"
-}
-
-# Make slot $1 the active session and load its state into the view vars.
-load_slot() {
-  ACTIVE="$1"
-  SESSION="${SES_SESSION[$ACTIVE]}"
-  TRANSCRIPT="${SES_TRANSCRIPT[$ACTIVE]}"
-  UUID="${SES_UUID[$ACTIVE]}"
-  EXPECTED_TURNS="${SES_EXPECTED[$ACTIVE]}"
-  MARKER="${SES_MARKER[$ACTIVE]}"
-}
-
-# Allocate a fresh slot (tmux session name, cwd) and make it active.
-# Mints a per-slot discovery marker and clears the view's
-# TRANSCRIPT/UUID/EXPECTED_TURNS so the new session starts known.
-alloc_slot() {
-  local sess="$1" cwd="$2"
-  N_SLOTS=$((N_SLOTS + 1))
-  local marker="$STAGING/.pi-start-marker.$N_SLOTS"
-  touch "$marker"
-  SES_SESSION[$N_SLOTS]="$sess"
-  SES_TRANSCRIPT[$N_SLOTS]=""
-  SES_UUID[$N_SLOTS]=""
-  SES_EXPECTED[$N_SLOTS]=0
-  SES_MARKER[$N_SLOTS]="$marker"
-  SES_CWD[$N_SLOTS]="$cwd"
-  SES_ALIVE[$N_SLOTS]=1
-  ACTIVE=$N_SLOTS
-  SESSION="$sess"
-  TRANSCRIPT=""
-  UUID=""
-  EXPECTED_TURNS=0
-  MARKER="$marker"
-}
+# Slot bookkeeping (daemon_sid / save_active / load_slot / alloc_slot) is the
+# shared model in lib/drive/slots.sh — byte-identical to codex's except the
+# marker filename, set via DRIVE_MARKER_PREFIX (#508 #3).
+_DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib/drive" && pwd)"
+DRIVE_MARKER_PREFIX="$STAGING/.pi-start-marker"
+# shellcheck source=lib/drive/slots.sh
+source "$_DRIVE_LIB/slots.sh"
+# shellcheck source=lib/drive/contracts.sh
+source "$_DRIVE_LIB/contracts.sh"
 
 # boot_session brings up a pi REPL in the active slot's tmux session
 # running the given argv, then waits for the "Ready" line. Caller
@@ -560,37 +513,14 @@ done
   echo
   echo "=== exit reason: $EXIT_REASON ==="
 } > "$DRIVER_LOG"
-# Keep a combined .stdout for backward-compat with any tooling that reads it.
-cat "$DRIVER_LOG".stdout.* > "$DRIVER_LOG.stdout" 2>/dev/null || true
-
-echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
-
-# Primary session = slot 1 (kept for backward-compat with the existing
-# single-session run-cell + curate code paths). Write the bare first-line
-# UUID for fixture-naming parity — run-cell.sh re-maps it to the daemon's
-# filename-stem session_id via its transcript_path lookup. transcript.path
-# is the absolute <ts>_<uuid>.jsonl path.
-echo "${SES_UUID[1]}" > "$STAGING/session.uuid"
-echo "${SES_TRANSCRIPT[1]}" > "$STAGING/transcript.path"
-
-# Multi-session metadata. The session.uuids list MUST hold the daemon-side
-# session_id (filename stem), because run-cell.sh feeds it straight into
-# IRRLICHT_EXTRA_SESSION_IDS to filter the recording by `.session_id` (no
-# per-line re-mapping). A single-session run (and a resume run, which keeps
-# ONE slot) leaves these with one entry each — run-cell.sh's multi-session
-# branch is a no-op when there's only one line.
-: > "$STAGING/session.uuids"
-: > "$STAGING/transcript.paths"
-for (( i = 1; i <= N_SLOTS; i++ )); do
-  echo "$(daemon_sid "${SES_TRANSCRIPT[$i]}")" >> "$STAGING/session.uuids"
-  echo "${SES_TRANSCRIPT[$i]}" >> "$STAGING/transcript.paths"
-done
+# Staging contract: pi's primary session.uuid is the bare first-line UUID for
+# fixture-naming parity — run-cell.sh re-maps it to the daemon's filename-stem
+# session_id via its transcript_path lookup. The multi-session session.uuids
+# list still holds the daemon-side stem (emit_session_contract uses daemon_sid),
+# because run-cell.sh feeds that straight into IRRLICHT_EXTRA_SESSION_IDS with
+# no per-line re-mapping (lib/drive/contracts.sh).
+emit_session_contract "${SES_UUID[1]}"
 
 echo "drive-pi-interactive: $EXIT_REASON (slots=${N_SLOTS}, primary=${SES_UUID[1]}, transcript=${SES_TRANSCRIPT[1]})"
 
-case "$EXIT_REASON" in
-  ok)            exit 0 ;;
-  timeout)       exit 124 ;;
-  nonzero\(*\))  exit "${EXIT_REASON//[!0-9]/}" ;;
-  *)             exit 1 ;;
-esac
+drive_exit
