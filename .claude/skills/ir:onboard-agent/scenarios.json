@@ -5020,8 +5020,91 @@
           "timeout_seconds": 240
         },
         "pi": {
-          "applicable": false,
-          "notes": "scope_note: driver_gap (C9). Needs concurrent same-adapter multi-session capture, but drive-pi-interactive.sh is single-session — it supports only send/slash/wait_turn/interrupt/sleep, runs ONE tmux session with ONE resolved transcript and ONE turn counter, and has no start_session step or per-step {\"session\":N} routing. The claudecode and codex recipes for this scenario both depend on start_session + {\"session\":N} (their drivers gained a per-slot session model: step_start_session, slot allocation, claimed-path exclusion); the pi driver has none of it, so two concurrent pi sessions in one cwd cannot be staged for a recording. Extending the pi driver is a developer task (out of scope for this cell). Secondary seam (irrlicht_observes:partial): pi's DiscoverPID = DiscoverPIDByCWD (cwd-only narrowing + highest-PID disambiguate fallback) — UNLIKE codex's per-rollout-file-writer binding and claudecode's metadata-first lookup, two same-cwd pi processes both survive the cwd narrowing, so the daemon cannot cleanly bind each session to its own PID by cwd alone; even with the driver extended, the scenario's 'stable, non-cross-contaminating PID binding' assertion is not guaranteed for pi. expected.jsonl is committed as the documented target (adapted from the codex/claudecode spec, anchored on working transitions to dodge pi's born-ready proc-<PID> placeholder). No recording; no retry."
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver launches each pi REPL in its own tmux session",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon), or --attach against a daemon started with --record",
+            "no other pi session is live in the run cwd (a stray same-cwd pi would surface as a third row and break the two-row assertion)"
+          ],
+          "setup": [
+            "Driver auto-starts session 1 (slot 1) as a pi REPL in <staging>/cwd; the first send lazy-materializes session 1's <ts>_<uuid>.jsonl transcript under ~/.pi/agent/sessions/<cwd-slug>/",
+            "The start_session step launches session 2 (slot 2) in the SAME <staging>/cwd in a fresh tmux/process — its first send lazy-materializes a SECOND distinct <ts>_<uuid>.jsonl in the same project dir (pi keys transcripts by UUID, not by cwd)",
+            "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs across two distinct UUID rollouts",
+            "LAZY-MATERIALIZATION (discovered live in pi/checkpoint-rewind): pi creates each per-session JSONL only AFTER the first user message commits, with turn 1 batched into that initial write; turn 1's working→ready arc is therefore NOT daemon-observable. The recipe sends a SECOND prompt per session so the spec can anchor identity on an observable working transition",
+            "PID-BINDING SEAM (caveat, not asserted): pi's DiscoverPID = DiscoverPIDByCWD (cwd-only narrowing + highest-PID disambiguate fallback) — two pi processes sharing one cwd both survive the narrowing, so the daemon may flap or mis-bind PIDs; the spec asserts what IS observable (two distinct session_id rows, each with its own birth + working→ready arc) and leaves PID-binding stability documented as a known weakness"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo2"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha3",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct pi session_ids (UUID-keyed rollouts), both keyed to the same cwd slug under ~/.pi/agent/sessions/",
+            "each session_id has at least one independent working->ready arc; no working transition on one session is attributed to the other",
+            "session 1 shows TWO daemon-observable working->ready arcs (turn 2 + the post-start_session re-drive turn 3); session 2 shows ONE (turn 2) — proving session 1 stayed observable as a distinct row while session 2 was alive",
+            "turn 1 on each session emits no working transition (lazy materialization batches turn 1 into the initial transcript write); the spec anchors identity on the FIRST observable working arc per session, not on turn 1",
+            "PID-binding stability is NOT asserted: pi's cwd-only DiscoverPID cannot deterministically bind each same-cwd session to its own PID; events.jsonl may show duplicate/flapping pid_discovered or cross-row pid_bind events — that is a known daemon weakness (see assessment.json caveats), not a recipe failure"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         },
         "opencode": {
           "applicable": true,
