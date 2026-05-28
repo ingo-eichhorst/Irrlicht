@@ -5099,9 +5099,9 @@
           "verify": [
             "events.jsonl contains 2 distinct pi session_ids (UUID-keyed rollouts), both keyed to the same cwd slug under ~/.pi/agent/sessions/",
             "each session_id has at least one independent working->ready arc; no working transition on one session is attributed to the other",
-            "session 1 shows TWO daemon-observable working->ready arcs (turn 2 + the post-start_session re-drive turn 3); session 2 shows ONE (turn 2) — proving session 1 stayed observable as a distinct row while session 2 was alive",
-            "turn 1 on each session emits no working transition (lazy materialization batches turn 1 into the initial transcript write); the spec anchors identity on the FIRST observable working arc per session, not on turn 1",
-            "PID-binding stability is NOT asserted: pi's cwd-only DiscoverPID cannot deterministically bind each same-cwd session to its own PID; events.jsonl may show duplicate/flapping pid_discovered or cross-row pid_bind events — that is a known daemon weakness (see assessment.json caveats), not a recipe failure"
+            "session 1 has MULTIPLE working->ready arcs (at least one pre-start_session + at least one post-start_session re-drive); session 2 has at least one — proving session 1 stayed observable as a distinct row while session 2 was alive",
+            "every UUID-keyed phase anchors on a WORKING transition (never on ready), to skip pi's transient proc-<PID> presession placeholder (born in ready, never enters working) and pi's variable lazy-materialization behavior (turn 1 sometimes emits a microsecond-fast batched arc, sometimes doesn't)",
+            "PID-binding stability is NOT asserted: pi's cwd-only DiscoverPID is structurally vulnerable to same-cwd ambiguity, though in practice the sticky-once-bound + highest-PID fallback resolves sequential launches correctly (this recording confirmed two distinct PIDs were bound to the two UUID sessions without flapping — see assessment.json for the live observability correction)"
           ],
           "settings": {},
           "timeout_seconds": 300
