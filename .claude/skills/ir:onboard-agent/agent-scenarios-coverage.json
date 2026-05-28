@@ -272,7 +272,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:slash-command",
-          "notes": "/undo executes correctly, but recording it needs a send->send->/undo->send sequence and the run_live slash->send composer hand-off coalesces prompts under the slow local model (3 attempts). Spec authored (target); commit 49d53556. Records once the hand-off is hardened or a faster model is available."
+          "notes": "driver+daemon ready, but the send->send->/undo->send recording hits a run_live slash->send composer hand-off race under the slow local model (4 attempts); not recordable on this model."
         }
       }
     },
@@ -602,10 +602,10 @@
           "notes": "LLM error blockquote treated as turn_done (#262); quota errors land in same path"
         },
         "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "gap:error-export",
-          "notes": "unelicitable in rig — quota exhaustion is a remote-billing condition the local model cannot produce. error-export (ee477644) + isErrorMessage (#493) are groundwork; records when a billed remote model with a hittable quota is configured."
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "n/a",
+          "notes": "Two distinct blockers verified live with mock-openai-429: (1) a 429 is retried indefinitely by the AI-SDK (never persists message.data.error); (2) a non-retryable 403 DOES persist as message.data.error (APIError isRetryable=false) but on a ZERO-PART assistant message, so the watcher.go scanParts JOIN (watcher.go:482-489) cannot reach msgData/isErrorMessage — the narrow zero-part edge at watcher.go:521-527 is the load-bearing blocker. Records when the watcher broadens to scan messages with .data.error and no terminal part, or when opencode emits a step-start before the API error fires."
         }
       }
     },
@@ -789,8 +789,8 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:error-export",
-          "notes": "error-export ported (ee477644); watcher.go isErrorMessage settles on message.data.error but ONLY when the errored message carries >=1 part (zero-part blind spot, watcher.go:524-526). The local model only produces zero-part errors (config error / context-overflow during prompt processing), so it is unrecordable in this rig. Spec authored."
+          "driver_capability": "ready",
+          "notes": "recorded — a reason=length abort (output overflows the context window) emits a step-start then a terminal step-finish reason=length, which parser.go maps to turn_done and the daemon/replay both observe (no message.data.error carrier needed). Driven on the long-lived run_live path."
         }
       }
     },
@@ -1012,7 +1012,7 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:interrupt",
-          "notes": "interrupt (ESC) step ported (23ab346e), but the local model does not elicit a step-finish reason=interrupted end-to-end (it finishes on stop before the interrupt window or stalls pre-stream). Spec authored (6a5134ec); records with a model that streams long enough to cancel."
+          "notes": "interrupt step ported + daemon parses reason=interrupted, but the local gemma model never surfaces a reason=interrupted step-finish for a TUI ESC (stalls then finishes on stop, 4 attempts); not elicitable on this provider."
         }
       }
     },
