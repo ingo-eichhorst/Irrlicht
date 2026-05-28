@@ -1,21 +1,32 @@
 #!/usr/bin/env bash
-# consistency-gate_test.sh — unit tests for lib/consistency-gate.sh. Plain bash
-# + jq (no framework). Run directly or via scripts/smoke-test.sh. Exits non-zero
-# on any failed assertion.
+# consistency-gate_test.sh — CLI integration test for the thin consistency gate.
+# Plain bash + jq (no framework). Run directly or via scripts/smoke-test.sh.
 #
-# Covers the assessment ⟺ scenarios agreement gate: an un-recorded cell whose
-# assessment routes RECORD but whose matrix flag is applicable:false (with no
-# documented record_blocked) is a hard error; so is a FROZEN assessment whose
-# matrix flag is applicable:true. A documented record_blocked, a committed
-# fixture, or a transport-/capability-inapplicable cell all clear the cell.
+# Since #508 the gate's decision logic lives in Go (internal/matrix) with its
+# own exhaustive parity tests (internal/matrix/matrix_test.go ports the exact
+# fixtures this file used to assert against — cs_route, cs_cell_verdict,
+# cs_applicable_state, cs_errors). What's left to verify HERE is the
+# bash↔binary seam: planted contradictions fail the gate (exit 1), a documented
+# record_blocked or a committed fixture clears them (exit 0), and the
+# maintainer-facing ERROR lines name the right cell. Skips gracefully when the
+# Go toolchain is unavailable.
 
 set -uo pipefail   # NOT -e: assertions capture non-zero return codes
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=consistency-gate.sh
-source "$DIR/consistency-gate.sh"
 
+if ! command -v go >/dev/null 2>&1; then
+  echo "consistency-gate_test: go toolchain not available — skipping (logic covered by internal/matrix tests)"
+  exit 0
+fi
 command -v jq >/dev/null || { echo "consistency-gate_test: jq is required" >&2; exit 2; }
+
+REPO="$(cd "$DIR/../../../../.." && pwd)"
+BIN="$REPO/.build/matrix"
+mkdir -p "$REPO/.build"
+( cd "$REPO/tools/agent-onboarding" && go build -o "$BIN" ./cmd/matrix ) \
+  || { echo "consistency-gate_test: failed to build matrix binary" >&2; exit 2; }
+export IR_MATRIX_BIN="$BIN"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -32,29 +43,6 @@ mkassess() { # mkassess <path> <supports> <daemon> <driver> [record_blocked]
      + (if $b=="" then {} else {record_blocked:$b} end)' > "$1"
 }
 
-echo "== cs_route =="
-mkassess "$TMP/a.json" yes full ready
-assert_eq "yes/full/ready → record_now"   record_now   "$(cs_route "$TMP/a.json")"
-mkassess "$TMP/a.json" no n/a n/a
-assert_eq "no/n.a → frozen"               frozen       "$(cs_route "$TMP/a.json")"
-mkassess "$TMP/a.json" yes incapable ready
-assert_eq "daemon incapable → frozen"     frozen       "$(cs_route "$TMP/a.json")"
-mkassess "$TMP/a.json" yes full "gap:keys"
-assert_eq "driver gap → driver_gap"       driver_gap   "$(cs_route "$TMP/a.json")"
-mkassess "$TMP/a.json" yes unknown ready
-assert_eq "daemon unknown → inconclusive" inconclusive "$(cs_route "$TMP/a.json")"
-
-echo "== cs_cell_verdict (pure decision table) =="
-assert_eq "record_now + applicable:false + no block → contradiction" CONTRADICTION_RECORD_NOW "$(cs_cell_verdict record_now false 0 "")"
-assert_eq "record_now + applicable:false + blocked → ok"             ok                        "$(cs_cell_verdict record_now false 0 infra)"
-assert_eq "record_now + applicable:true → ok"                        ok                        "$(cs_cell_verdict record_now true 0 "")"
-assert_eq "frozen + applicable:true → contradiction"                 CONTRADICTION_FROZEN      "$(cs_cell_verdict frozen true 0 "")"
-assert_eq "frozen + applicable:false → ok"                           ok                        "$(cs_cell_verdict frozen false 0 "")"
-assert_eq "recorded short-circuits everything → ok"                  ok                        "$(cs_cell_verdict record_now false 1 "")"
-assert_eq "driver_gap is never a contradiction → ok"                 ok                        "$(cs_cell_verdict driver_gap false 0 "")"
-assert_eq "inconclusive is never a contradiction → ok"               ok                        "$(cs_cell_verdict inconclusive false 0 "")"
-
-echo "== cs_applicable_state =="
 cat > "$TMP/scenarios.json" <<'JSON'
 {"catalog":[{"id":"cellA"},{"id":"cellB"},{"id":"cellC"}],
  "scenarios":[
@@ -63,41 +51,38 @@ cat > "$TMP/scenarios.json" <<'JSON'
    {"name":"cellC","coverage_id":"cellC","requires":[]}
  ]}
 JSON
-assert_eq "all variants false → false" false  "$(cs_applicable_state "$TMP/scenarios.json" ag cellA)"
-assert_eq "a recordable variant → true" true  "$(cs_applicable_state "$TMP/scenarios.json" ag cellB)"
-assert_eq "no by_adapter entry → absent" absent "$(cs_applicable_state "$TMP/scenarios.json" ag cellC)"
 
-echo "== cs_errors + CLI: planted contradictions =="
 ROOT="$TMP/agents"
 mkdir -p "$ROOT/ag/scenarios"
 jq -n '{features:{},transport:"line_based"}' > "$ROOT/ag/capabilities.json"
-mkassess "$ROOT/ag/scenarios/cellA/assessment.json" yes full ready          # record_now + applicable:false → contradiction
-mkassess "$ROOT/ag/scenarios/cellB/assessment.json" no  n/a  n/a            # frozen + applicable:true   → contradiction
-errs="$(cs_errors "$TMP/scenarios.json" "$ROOT")"; rc=$?
-assert_eq "two contradictions → rc 1" 1 "$rc"
-grep -q "ag/cellA: assessment routes RECORD" <<< "$errs" && pass "flags record_now vs applicable:false" || fail "record_now flag" "cellA error" "$errs"
-grep -q "ag/cellB: scenarios.json marks by_adapter.ag applicable:true" <<< "$errs" && pass "flags frozen vs applicable:true" || fail "frozen flag" "cellB error" "$errs"
+
+run() { bash "$DIR/consistency-gate.sh" "$TMP/scenarios.json" "$ROOT" 2>&1; }
+
+echo "== planted contradictions fail the gate =="
+mkassess "$ROOT/ag/scenarios/cellA/assessment.json" yes full ready   # record_now + applicable:false → contradiction
+mkassess "$ROOT/ag/scenarios/cellB/assessment.json" no  n/a  n/a     # frozen + applicable:true   → contradiction
+errs="$(run)"; rc=$?
+assert_eq "two contradictions → exit 1" 1 "$rc"
+grep -q "ag/cellA: assessment routes RECORD" <<<"$errs" && pass "flags record_now vs applicable:false" || fail "record_now flag" "cellA error" "$errs"
+grep -q "ag/cellB: scenarios.json marks by_adapter.ag applicable:true" <<<"$errs" && pass "flags frozen vs applicable:true" || fail "frozen flag" "cellB error" "$errs"
 
 echo "== record_blocked clears the record_now contradiction =="
 mkassess "$ROOT/ag/scenarios/cellA/assessment.json" yes full ready infra
-errs="$(cs_errors "$TMP/scenarios.json" "$ROOT")"
-grep -q "ag/cellA:" <<< "$errs" && fail "record_blocked should clear cellA" "no cellA" "$errs" || pass "record_blocked=infra clears the cellA contradiction"
+errs="$(run)"
+grep -q "ag/cellA:" <<<"$errs" && fail "record_blocked should clear cellA" "no cellA" "$errs" || pass "record_blocked=infra clears the cellA contradiction"
 
 echo "== a committed fixture clears a contradiction =="
-mkassess "$ROOT/ag/scenarios/cellB/assessment.json" no n/a n/a   # still frozen…
 echo '{}' > "$ROOT/ag/scenarios/cellB/transcript.jsonl"
-echo '{}' > "$ROOT/ag/scenarios/cellB/events.jsonl"              # …but now recorded
-cs_errors "$TMP/scenarios.json" "$ROOT" >/dev/null; rc=$?
-assert_eq "all contradictions cleared → rc 0" 0 "$rc"
+echo '{}' > "$ROOT/ag/scenarios/cellB/events.jsonl"
+run >/dev/null; rc=$?
+assert_eq "cellA blocked + cellB recorded → exit 0" 0 "$rc"
 
-echo "== CLI exit codes =="
+echo "== drop the exemptions → contradiction again =="
 rm -f "$ROOT/ag/scenarios/cellB/transcript.jsonl" "$ROOT/ag/scenarios/cellB/events.jsonl"
-mkassess "$ROOT/ag/scenarios/cellB/assessment.json" partial full ready   # both cells now consistent-ish: cellA blocked, cellB record_now+applicable:true
-bash "$DIR/consistency-gate.sh" "$TMP/scenarios.json" "$ROOT" >/dev/null 2>&1
-assert_eq "clean fixture → exit 0" 0 "$?"
-mkassess "$ROOT/ag/scenarios/cellA/assessment.json" yes full ready       # drop record_blocked → contradiction again
-bash "$DIR/consistency-gate.sh" "$TMP/scenarios.json" "$ROOT" >/dev/null 2>&1
-assert_eq "contradiction → exit 1" 1 "$?"
+mkassess "$ROOT/ag/scenarios/cellB/assessment.json" partial full ready   # cellB now consistent (record_now + applicable:true)
+mkassess "$ROOT/ag/scenarios/cellA/assessment.json" yes full ready       # cellA contradiction again (dropped record_blocked)
+run >/dev/null; rc=$?
+assert_eq "contradiction → exit 1" 1 "$rc"
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then

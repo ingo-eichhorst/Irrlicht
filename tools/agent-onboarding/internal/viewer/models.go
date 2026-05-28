@@ -3,6 +3,7 @@ package viewer
 import (
 	"encoding/json"
 
+	"irrlicht/tools/agent-onboarding/internal/matrix"
 	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
@@ -33,58 +34,18 @@ type ScenarioDetail struct {
 	Assessment     *AssessmentReport        `json:"assessment,omitempty"`      // Stage 1 (Assessment) point-in-time record from assessment.json, if present
 }
 
-// AssessmentReport is the persisted artifact of one Stage-1 assessment
-// (per cell-lifecycle.md). One file per (agent, scenario) at
-// replaydata/agents/<agent>/scenarios/<scenario>/assessment.json,
-// overwritten on re-assessment — git is the history. The matrix in
-// .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json is the current-state rollup;
-// this struct preserves when and why the verdict was reached.
-type AssessmentReport struct {
-	SchemaVersion int    `json:"schema_version"`
-	ScenarioID    string `json:"scenario_id"`
-	Agent         string `json:"agent"`
-	AssessedAt    string `json:"assessed_at"`
-	AgentSupports string `json:"agent_supports"` // yes / partial / no / unknown
-	// DaemonCapability and DriverCapability replace the old single
-	// irrlicht_observes axis (#476). Orthogonal facts:
-	//   DaemonCapability — given a recording + working driver, can the
-	//     daemon observe it? full / bug / incapable / unknown / n/a.
-	//   DriverCapability — can the harness drive/record it? ready, or
-	//     gap:<primitive> when a driver step type is missing.
-	// The recording axis stays MEASURED (events.jsonl + validation), so
-	// it isn't stored here. DisplayState rolls all three up — see
-	// deriveDisplayState in catalog.go.
-	DaemonCapability string `json:"daemon_capability"` // full / bug / incapable / unknown / n/a
-	DriverCapability string `json:"driver_capability"` // ready / gap:<primitive>
-	// RecordBlocked documents why a cell whose three axes say record-now
-	// (supports yes/partial, daemon full/bug, driver ready) is nonetheless
-	// not recorded — a reason ORTHOGONAL to the axes: infra (auth/mock
-	// unavailable), unit_test (covered by an agent-agnostic unit test, not a
-	// live recording), driver_bug (driver has the step types but they race /
-	// misbehave — distinct from a gap:* missing step type), or upstream (the
-	// agent CLI / daemon needs work first). Empty for normal cells. The
-	// consistency-gate REQUIRES this whenever a record-now cell is marked
-	// applicable:false, so the deferral reason lives in the assessment
-	// (visible here) instead of only in scenarios.json prose.
-	RecordBlocked string             `json:"record_blocked,omitempty"`
-	Confidence    float64            `json:"confidence,omitempty"`
-	Body          string             `json:"body"`
-	Sources       []AssessmentSource `json:"sources,omitempty"`
-	// Caveats documents known limitations / metric drifts that don't
-	// invalidate the verdict but a maintainer should know about. E.g.
-	// "feature is invisible to file-watching, but spec compliance is
-	// unaffected" or "context utilization % overstates after a rewind".
-	// One string per caveat, plain prose. Rendered as a bulleted
-	// list in the viewer's Assessment panel.
-	Caveats []string `json:"caveats,omitempty"`
-}
-
-// AssessmentSource is one citation backing an assessment verdict.
-type AssessmentSource struct {
-	Kind string `json:"kind"` // "url" | "file" | other
-	Ref  string `json:"ref"`
-	Note string `json:"note,omitempty"`
-}
+// AssessmentReport / AssessmentSource are the persisted artifact of one
+// Stage-1 assessment (per cell-lifecycle.md): one file per (agent, scenario)
+// at replaydata/agents/<agent>/scenarios/<scenario>/assessment.json. The
+// canonical definitions live in internal/matrix (the single matrix model,
+// #508) so the gates, the matrix CLI, and the viewer share one disk/wire
+// contract; these aliases keep the viewer's existing references working.
+// DisplayState rolls the three axes + measured recording up — see
+// matrix.DeriveDisplayState (mirrored by deriveDisplayState in catalog.go).
+type (
+	AssessmentReport = matrix.AssessmentReport
+	AssessmentSource = matrix.AssessmentSource
+)
 
 // ToolCall is one Anthropic-style tool_use block lifted from the
 // transcript. Today this is the only signal irrlicht has for
