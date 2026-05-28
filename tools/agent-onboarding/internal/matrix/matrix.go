@@ -94,11 +94,14 @@ type catalogEntry struct {
 }
 
 type scenarioVariant struct {
-	Name              string                  `json:"name"`
-	CoverageID        string                  `json:"coverage_id"`
-	Requires          []string                `json:"requires"`
-	RequiresTransport []string                `json:"requires_transport"`
-	ByAdapter         map[string]adapterEntry `json:"by_adapter"`
+	Name              string   `json:"name"`
+	CoverageID        string   `json:"coverage_id"`
+	Requires          []string `json:"requires"`
+	RequiresTransport []string `json:"requires_transport"`
+	// Pointer values so a literal-null entry (`"by_adapter":{"x":null}`)
+	// unmarshals to nil and is dropped, matching the bash gates'
+	// `.by_adapter[$a] | select(. != null)`.
+	ByAdapter map[string]*adapterEntry `json:"by_adapter"`
 }
 
 type adapterEntry struct {
@@ -256,7 +259,8 @@ func (m *Matrix) applicableState(agent, cid string) ApplicableState {
 		if v.CoverageID != cid {
 			continue
 		}
-		if e, ok := v.ByAdapter[agent]; ok {
+		// A nil entry is a literal JSON null — dropped, like jq's select(. != null).
+		if e, ok := v.ByAdapter[agent]; ok && e != nil {
 			vals = append(vals, e.Applicable)
 		}
 	}

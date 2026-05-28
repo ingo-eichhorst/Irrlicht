@@ -79,21 +79,35 @@ recipe_lint_gaps() {
 
 # driver_elicits_from_file <driver-file>
 #   → newline-separated, sorted-unique step types the driver genuinely elicits,
-#     read from its top-level `DRIVE_ELICITS="…"` constant (space-separated).
+#     read from its top-level `DRIVE_ELICITS=…` constant (space-separated).
 #     Empty when the file is missing or declares no such constant.
+#
+#   Tolerant of the common assignment forms — double OR single quotes, and a
+#   trailing `# comment` — because a strict anchored match would silently return
+#   empty (→ grammar-only) on a benign edit, re-opening the semantic-lint drift
+#   #508 #4 closed. Step types are `[a-z_]+`, so stripping quotes is safe.
 driver_elicits_from_file() {
-  local file="$1"
+  local file="$1" raw
   [[ -f "$file" ]] || return 0
-  sed -n 's/^DRIVE_ELICITS="\(.*\)"$/\1/p' "$file" | head -1 | tr ' \t' '\n\n' | sed '/^$/d' | sort -u
+  raw="$(sed -n 's/^DRIVE_ELICITS=//p' "$file" | head -1)"
+  [[ -n "$raw" ]] || return 0
+  raw="${raw%%#*}"        # drop a trailing comment
+  raw="${raw//\"/}"       # strip double quotes
+  raw="${raw//\'/}"       # strip single quotes
+  # Unquoted expansion word-splits on whitespace and ignores leading/trailing.
+  printf '%s\n' $raw | sed '/^$/d' | sort -u
 }
 
 # driver_slash_requires_step_type <driver-file> → "true" | "false"
 #   Reads the driver's top-level `DRIVE_SLASH_REQUIRES_STEP_TYPE=` constant;
-#   anything other than literal `true` (incl. absent) is false.
+#   anything other than literal `true` (incl. absent) is false. Tolerates quotes
+#   and a trailing comment, like driver_elicits_from_file.
 driver_slash_requires_step_type() {
   local file="$1" v
   [[ -f "$file" ]] || { echo false; return 0; }
-  v="$(sed -n 's/^DRIVE_SLASH_REQUIRES_STEP_TYPE=\(.*\)$/\1/p' "$file" | head -1)"
+  v="$(sed -n 's/^DRIVE_SLASH_REQUIRES_STEP_TYPE=//p' "$file" | head -1)"
+  v="${v%%#*}"             # drop a trailing comment
+  v="${v//[\"\' ]/}"       # strip quotes and whitespace
   [[ "$v" == "true" ]] && echo true || echo false
 }
 

@@ -182,11 +182,12 @@ func TestDisposition(t *testing.T) {
 func TestApplicableState(t *testing.T) {
 	tmp := t.TempDir()
 	scenarios := filepath.Join(tmp, "scenarios.json")
-	writeFile(t, scenarios, `{"catalog":[{"id":"cellA"},{"id":"cellB"},{"id":"cellC"}],
+	writeFile(t, scenarios, `{"catalog":[{"id":"cellA"},{"id":"cellB"},{"id":"cellC"},{"id":"cellD"}],
  "scenarios":[
    {"name":"cellA","coverage_id":"cellA","requires":[],"by_adapter":{"ag":{"applicable":false}}},
    {"name":"cellB","coverage_id":"cellB","requires":[],"by_adapter":{"ag":{"applicable":true}}},
-   {"name":"cellC","coverage_id":"cellC","requires":[]}
+   {"name":"cellC","coverage_id":"cellC","requires":[]},
+   {"name":"cellD","coverage_id":"cellD","requires":[],"by_adapter":{"ag":null}}
  ]}`)
 	root := filepath.Join(tmp, "agents")
 	writeFile(t, filepath.Join(root, "ag", "capabilities.json"), `{"features":{},"transport":"line_based"}`)
@@ -201,6 +202,9 @@ func TestApplicableState(t *testing.T) {
 		{"cellA", AppFalse},
 		{"cellB", AppTrue},
 		{"cellC", AppAbsent},
+		// A literal-null by_adapter entry is dropped (like jq select(. != null)),
+		// so the cell is absent — NOT AppTrue.
+		{"cellD", AppAbsent},
 	}
 	for _, c := range cases {
 		if got := m.applicableState("ag", c.cid); got != c.want {

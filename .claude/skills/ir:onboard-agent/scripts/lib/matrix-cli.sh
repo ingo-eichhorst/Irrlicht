@@ -24,6 +24,12 @@ matrix_repo_root() {
 
 # matrix_cli <args...> → run `matrix query <args...>`, preserving its exit code.
 #   exit 2 — toolchain/build problem (or the CLI's own usage/infra exit 2)
+#
+# For the hot path (sweeps, parallel runs) set IR_MATRIX_BIN to a prebuilt
+# binary — then no per-call build happens at all. Otherwise we build to a
+# PROCESS-UNIQUE temp file (not a shared .build/matrix), so two concurrent gate
+# calls can't race the same `-o` target and exec a half-linked binary; and the
+# compiler's stderr is surfaced on failure rather than swallowed.
 matrix_cli() {
   if [[ -n "${IR_MATRIX_BIN:-}" && -x "${IR_MATRIX_BIN}" ]]; then
     "${IR_MATRIX_BIN}" query "$@"
@@ -33,13 +39,20 @@ matrix_cli() {
     echo "matrix-cli: the Go toolchain is required (or set IR_MATRIX_BIN to a prebuilt matrix binary)" >&2
     return 2
   }
-  local repo bin
+  local repo bin build_err rc
   repo="$(matrix_repo_root)"
-  bin="$repo/.build/matrix"
-  mkdir -p "$repo/.build"
-  if ! (cd "$repo/tools/agent-onboarding" && go build -o "$bin" ./cmd/matrix) >/dev/null 2>&1; then
-    echo "matrix-cli: failed to build the matrix binary" >&2
+  bin="$(mktemp "${TMPDIR:-/tmp}/irrlicht-matrix.XXXXXX")" || {
+    echo "matrix-cli: mktemp failed" >&2
+    return 2
+  }
+  if ! build_err="$( (cd "$repo/tools/agent-onboarding" && go build -o "$bin" ./cmd/matrix) 2>&1 )"; then
+    echo "matrix-cli: failed to build the matrix binary:" >&2
+    echo "$build_err" >&2
+    rm -f "$bin"
     return 2
   fi
   "$bin" query "$@"
+  rc=$?
+  rm -f "$bin"
+  return "$rc"
 }

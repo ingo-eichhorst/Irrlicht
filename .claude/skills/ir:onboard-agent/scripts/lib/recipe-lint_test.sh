@@ -115,6 +115,31 @@ assert_eq "driver with no DRIVE_ELICITS → rc 0 (grammar-only)" "0" \
 assert_eq "missing driver file → rc 0 (grammar-only)" "0" \
   "$(recipe_semantic_gaps "$TMP/no-such-driver.sh" "$TMP/sem.json" slash-step fake >/dev/null; echo $?)"
 
+echo "== DRIVE_ELICITS extraction tolerates trailing comments + single quotes (no silent fail-open) =="
+# A trailing comment / single quotes must NOT degrade the semantic check to
+# grammar-only (the manifest-drift class #508 #4 closed; the sed extractor must
+# parse these common forms, not return empty).
+cat > "$TMP/drive-cmt-interactive.sh" <<'SH'
+#!/usr/bin/env bash
+DRIVE_ELICITS="send sleep wait_turn"   # live-TUI set
+DRIVE_SLASH_REQUIRES_STEP_TYPE=true    # headless run stores /cmd as text
+case "$type" in send|slash) :;; *) :;; esac
+SH
+assert_eq "commented DRIVE_ELICITS still parsed" \
+  "$(printf 'send\nsleep\nwait_turn')" "$(driver_elicits_from_file "$TMP/drive-cmt-interactive.sh")"
+assert_eq "commented DRIVE_SLASH_REQUIRES_STEP_TYPE still true" \
+  "true" "$(driver_slash_requires_step_type "$TMP/drive-cmt-interactive.sh")"
+out="$(recipe_semantic_gaps "$TMP/drive-cmt-interactive.sh" "$TMP/sem.json" slash-step fake)"; rc=$?
+assert_eq "commented driver still catches not-elicited slash → rc 1" "1" "$rc"
+assert_eq "commented driver → not-elicited:slash" "not-elicited:slash" "$out"
+cat > "$TMP/drive-sq-interactive.sh" <<'SH'
+#!/usr/bin/env bash
+DRIVE_ELICITS='send sleep wait_turn'
+case "$type" in send) :;; *) :;; esac
+SH
+assert_eq "single-quoted DRIVE_ELICITS parsed" \
+  "$(printf 'send\nsleep\nwait_turn')" "$(driver_elicits_from_file "$TMP/drive-sq-interactive.sh")"
+
 echo "== CLI exit codes =="
 bash "$DIR/recipe-lint.sh" "$TMP/scenarios.json" ok-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
 assert_eq "CLI ok-cell → exit 0 (in grammar + elicited)" "0" "$?"
