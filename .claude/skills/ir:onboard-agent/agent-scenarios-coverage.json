@@ -605,7 +605,7 @@
           "agent_supports": "partial",
           "daemon_capability": "incapable",
           "driver_capability": "n/a",
-          "notes": "opencode retries a quota 429 indefinitely (AI-SDK backoff) and never writes a terminal message.data.error — the turn hangs in working with no settle to observe (verified via mock-openai-429: 24+ retries over 180s). Quota exhaustion is not a terminal/observable state for opencode; not recordable as a clean abort."
+          "notes": "Two distinct blockers verified live with mock-openai-429: (1) a 429 is retried indefinitely by the AI-SDK (never persists message.data.error); (2) a non-retryable 403 DOES persist as message.data.error (APIError isRetryable=false) but on a ZERO-PART assistant message, so the watcher.go scanParts JOIN (watcher.go:482-489) cannot reach msgData/isErrorMessage — the narrow zero-part edge at watcher.go:521-527 is the load-bearing blocker. Records when the watcher broadens to scan messages with .data.error and no terminal part, or when opencode emits a step-start before the API error fires."
         }
       }
     },

@@ -7,10 +7,20 @@
 // POST /v1/chat/completions  — first request streams a normal "ok" completion
 //                              (finish_reason: stop) so turn 1 lands cleanly
 //                              (ready→working→ready). Every subsequent request
-//                              returns HTTP 429 with the OpenAI insufficient_quota
-//                              error body, so opencode's quota-exhausted path
-//                              fires on turn 2 and records the failure on the
-//                              assistant message's `error` field.
+//                              returns --error-status (default 403) with the
+//                              OpenAI insufficient_quota body, so opencode's
+//                              quota-exhausted path fires on turn 2 and records
+//                              the failure on the assistant message's `error`
+//                              field.
+//
+// Why 403 and not the literal 429 the name suggests: real OpenAI returns 429
+// for `insufficient_quota`, but the AI-SDK opencode wraps RETRIES every 429
+// indefinitely (exponential backoff, 24+ requests over 180s, no terminal
+// message.data.error ever written — verified live). To produce a terminal,
+// observable quota error in the rig, the mock returns a status the SDK does
+// NOT retry (403 default; pass --error-status=429 to reproduce the
+// retry-forever behaviour for comparison). The body shape stays faithful to
+// OpenAI's documented insufficient_quota error.
 //
 // Usage:
 //   go run ./tools/agent-onboarding/recording/mock-openai-429/main.go --addr 127.0.0.1:18766
@@ -35,6 +45,7 @@ const modelID = "mock-quota-model"
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:18766", "bind address")
+	errorStatus := flag.Int("error-status", http.StatusForbidden, "HTTP status to return on requests after the first (default 403, non-retryable; set 429 to reproduce AI-SDK retry-forever behaviour)")
 	flag.Parse()
 
 	var reqCount atomic.Int64
@@ -59,9 +70,10 @@ func main() {
 			streamHappyPath(w)
 			return
 		}
-		// OpenAI's documented quota-exhausted 429 body (insufficient_quota).
+		// OpenAI's documented insufficient_quota body, returned with a status
+		// the AI-SDK will NOT retry (403 default; see file header for why).
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusTooManyRequests)
+		w.WriteHeader(*errorStatus)
 		_, _ = fmt.Fprintln(w, `{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}`)
 	})
 
