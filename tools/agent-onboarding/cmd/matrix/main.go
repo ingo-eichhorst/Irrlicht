@@ -35,13 +35,28 @@ const (
 	exitUsage = 2
 )
 
+const usage = `usage:
+  matrix query --gate completeness --agent <a> [--repo-root .] [--scenarios p] [--agents-root r]
+  matrix query --gate consistency [--repo-root .] [--scenarios p] [--agents-root r]
+  matrix query --cells --agent <a> [--repo-root .] [--scenarios p] [--agents-root r]
+  matrix rollup [--check] [--repo-root .] [--scenarios p] [--agents-root r] [--out p]`
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "query" {
-		fmt.Fprintln(stderr, "usage: matrix query --gate completeness|consistency [--agent <a>] [--cells] [--repo-root .] [--scenarios p] [--agents-root r]")
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, usage)
+		return exitUsage
+	}
+	switch args[0] {
+	case "query":
+		// handled below
+	case "rollup":
+		return runRollup(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
 	fs := flag.NewFlagSet("matrix query", flag.ContinueOnError)

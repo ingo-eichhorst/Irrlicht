@@ -203,6 +203,19 @@ axes — add a `record_blocked` value to the assessment (`infra` / `unit_test` /
 `TestAssessmentScenarioConsistency` + `lib/consistency-gate_test.sh` pin this
 in CI / the smoke test.
 
+Both gates are thin clients of the canonical matrix model
+(`tools/agent-onboarding/internal/matrix`, run via the `matrix query` binary);
+the applicability rule, disposition table, and routing all live there. After
+changing any `assessment.json`, regenerate the derived coverage rollup so it
+can't drift from the assessments:
+
+```bash
+( cd tools/agent-onboarding && go run ./cmd/matrix rollup )  # regenerate agent-scenarios-coverage.json
+```
+
+`matrix rollup --check` (and the Go `TestRollupInSync`) fail CI when the
+committed rollup no longer matches the assessments.
+
 Several `name`s legitimately share one `coverage_id` (recipe variants of the
 same canonical cell) — the matrix axis is the coverage id, not the name.
 
@@ -336,6 +349,8 @@ No live agent CLI runs during discovery itself.
   refuses anyway — check the assessment first and save the round-trip.
 - **Don't run with an isolated daemon while a production `irrlichd` is
   up.** Use `--attach` (the subagents do). `precheck.sh` enforces this.
-- **Don't edit `agent-scenarios-coverage.json` from the parent.** It's
-  the maintainer's editorial rollup; subagents surface drift in their
-  summaries.
+- **Don't hand-edit the AXES in `agent-scenarios-coverage.json`.** Since
+  #508 the per-cell `agent_supports`/`daemon_capability`/`driver_capability`
+  are DERIVED from the assessments — regenerate with `matrix rollup` instead.
+  Only the per-cell `notes` and the `legend` block are editorial (carried
+  forward across regeneration); edit those in place if needed.

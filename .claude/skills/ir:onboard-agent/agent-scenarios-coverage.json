@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-05-26",
+  "generated_at": "2026-05-28T07:15:00Z",
   "source_catalog": ".specs/agent-scenarios.md",
   "legend": {
     "agent_supports": [
@@ -16,10 +16,6 @@
       "unknown",
       "n/a"
     ],
-    "driver_capability": [
-      "ready",
-      "gap:<primitive>"
-    ],
     "display_state": [
       "observed",
       "pending-record",
@@ -29,9 +25,17 @@
       "n.a.",
       "unknown"
     ],
+    "driver_capability": [
+      "ready",
+      "gap:\u003cprimitive\u003e"
+    ],
     "notes": "Free-form. Empty when crystal clear. Otherwise names the gotcha, the issue number, or the unmet condition."
   },
   "agents": [
+    {
+      "id": "aider",
+      "onboarded": true
+    },
     {
       "id": "claudecode",
       "onboarded": true
@@ -41,15 +45,11 @@
       "onboarded": true
     },
     {
-      "id": "pi",
-      "onboarded": true
-    },
-    {
-      "id": "aider",
-      "onboarded": true
-    },
-    {
       "id": "opencode",
+      "onboarded": true
+    },
+    {
+      "id": "pi",
       "onboarded": true
     }
   ],
@@ -59,6 +59,12 @@
       "section": "Session lifecycle",
       "feature": "Session start",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "Markdown transcript discovered lazily per cwd; row appears after the first user message lands in .aider.chat.history.md — recorded + validated."
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -71,23 +77,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "Markdown transcript discovered lazily per cwd; row appears after the first user message lands in .aider.chat.history.md — recorded + validated."
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "SQLite-backed; no PID binding required"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -96,6 +96,12 @@
       "section": "Session lifecycle",
       "feature": "Session end",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "idle-flush turn-end adds ~5s before ready settles; markdown file persists after exit"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -108,23 +114,17 @@
           "driver_capability": "ready",
           "notes": "All 3 variants recorded via drive-codex-interactive.sh's sigkill + restart primitives (clean Ctrl-D exit / SIGKILL idle / SIGKILL mid-turn); expected.jsonl validates 14/14 phases. sigkill targets the daemon's PID directly (rollout's lsof write-FD holder, per codex/pid.go) since codex's uniform argv has no per-session marker. Variant 3 sleeps 5 s before the kill to clear codex's ~2.7 s ready→working promotion lag so the mid-turn working state is captured."
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "idle-flush turn-end adds ~5s before ready settles; markdown file persists after exit"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "#296 ghost sessions when no process; #278 ~2.5s tail latency on working→ready"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -133,6 +133,12 @@
       "section": "Session lifecycle",
       "feature": "Long-idle live session",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -145,23 +151,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "no PID binding — liveness relies on DB watcher signal"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -170,6 +170,12 @@
       "section": "Session lifecycle",
       "feature": "Session resume",
       "coverage": {
+        "aider": {
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "gap:resume",
+          "notes": "aider re-loads chat history from .aider.chat.history.md but no formal session-id concept"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -182,23 +188,17 @@
           "driver_capability": "ready",
           "notes": "/resume command + picker (2026)"
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "aider re-loads chat history from .aider.chat.history.md but no formal session-id concept"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "capabilities.json declares yes; ParentSessionID not populated recursively for resume chains"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -207,6 +207,12 @@
       "section": "Session lifecycle",
       "feature": "Session reset (/clear, /new)",
       "coverage": {
+        "aider": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "aider has no /clear analogue; restart creates new history file"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -219,23 +225,17 @@
           "driver_capability": "ready",
           "notes": "/new (or /clear) starts a fresh session that supersedes the old one. Daemon (Source=FilesUnderRoot ~/.codex/sessions) detects the new rollout as a brand-new session_id in ready — the complete reset signal. Both rollouts share one PID, so when the new rollout's PID is discovered the daemon's same-PID cleanup (#169, pid_manager.go:373-399) removes the old session and emits transcript_removed — the SAME path as claudecode, ~7ms after the new pid_discovered (NOT a readyTTL idle sweep). No old_session_ended phase is asserted: a fixture scoping choice (v2_session_birth is the canonical reset proxy, and reset is lazy so the removal isn't anchored to the keystroke), not a codex limitation. Recorded via the reset_session step (both rollout session_ids captured); expected.jsonl 8/8."
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": "aider has no /clear analogue; restart creates new history file"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded — live-TUI reset_session (/new); the prior gap:slash-command was stale (the live-REPL driver landed in #495)."
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -244,6 +244,12 @@
       "section": "Session lifecycle",
       "feature": "Checkpoint rewind",
       "coverage": {
+        "aider": {
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "notes": "/undo reverts the last aider git commit; /reset wipes files + chat; /clear clears chat history. No multi-point checkpoint picker. The /undo path surfaces as a normal chat turn in the transcript and a git HEAD movement — distinguishable from a regular turn only via the slash-command marker, not via session_id change."
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -251,28 +257,22 @@
           "notes": "/rewind (alias /checkpoint, also Esc+Esc) restores files/conversation per prompt — recorded, 8/8 phases pass."
         },
         "codex": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": "No native checkpoint-rewind as of v0.130 (May 2026): no /rewind command, no file-edit checkpoint restore; the experimental /undo was removed (#9618). codex HAS /fork (conversation fork → new linked session_id, original intact) and TUI Esc-Esc backtrack, but that is branching, not file+conversation rollback — do NOT re-mark this `yes` on the strength of /fork. Open feature requests #11626 + #12558 model after Claude Code. Reassess on next major Codex release."
-        },
-        "pi": {
           "agent_supports": "partial",
           "daemon_capability": "full",
-          "driver_capability": "gap:keys",
-          "notes": "Stock Pi CLI has no rewind (pi-mono discussion #1223). Third-party `pi-rewind` extension exists at arpagon/pi-rewind but isn't part of the default install, so irrlicht's observation target — stock Pi — has nothing to record."
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "incapable",
           "driver_capability": "ready",
-          "notes": "/undo reverts the last aider git commit; /reset wipes files + chat; /clear clears chat history. No multi-point checkpoint picker. The /undo path surfaces as a normal chat turn in the transcript and a git HEAD movement — distinguishable from a regular turn only via the slash-command marker, not via session_id change."
+          "notes": "No native checkpoint-rewind as of v0.130 (May 2026): no /rewind command, no file-edit checkpoint restore; the experimental /undo was removed (#9618). codex HAS /fork (conversation fork → new linked session_id, original intact) and TUI Esc-Esc backtrack, but that is branching, not file+conversation rollback — do NOT re-mark this `yes` on the strength of /fork. Open feature requests #11626 + #12558 model after Claude Code. Reassess on next major Codex release."
         },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:slash-command",
-          "notes": "driver+daemon ready, but the send->send->/undo->send recording hits a run_live slash->send composer hand-off race under the slow local model (4 attempts); not recordable on this model."
+          "driver_capability": "ready",
+          "notes": "driver+daemon ready, but the send-\u003esend-\u003e/undo-\u003esend recording hits a run_live slash-\u003esend composer hand-off race under the slow local model (4 attempts); not recordable on this model."
+        },
+        "pi": {
+          "agent_supports": "partial",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "Stock Pi CLI has no rewind (pi-mono discussion #1223). Third-party `pi-rewind` extension exists at arpagon/pi-rewind but isn't part of the default install, so irrlicht's observation target — stock Pi — has nothing to record."
         }
       }
     },
@@ -281,6 +281,12 @@
       "section": "Session lifecycle",
       "feature": "Cloud / background agent (remote process)",
       "coverage": {
+        "aider": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "incapable",
@@ -293,23 +299,17 @@
           "driver_capability": "ready",
           "notes": "Codex Cloud exists; irrlicht has no API-based watcher"
         },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
         "opencode": {
           "agent_supports": "no",
           "daemon_capability": "n/a",
           "driver_capability": "n/a",
           "notes": "opencode sessions are a local ProcessOwnedStore (SQLite keyed to a local process + cwd); no cloud/hosted background-agent concept to observe"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -318,6 +318,12 @@
       "section": "Turn shape",
       "feature": "Basic turn",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "idle-flush turn-end (~5s effective latency on working→ready)"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -330,23 +336,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "idle-flush turn-end (~5s effective latency on working→ready)"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded 2026-05 (4/4)"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -355,6 +355,12 @@
       "section": "Turn shape",
       "feature": "Auto-executed tool call",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "tool calls reduced to '\u003e Applied edit' / '\u003e Running' markdown markers; coarse-grained"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -367,23 +373,54 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "tool calls reduced to '> Applied edit' / '> Running' markdown markers; coarse-grained"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded 2026-05 (4/4); gemma emitted a real write tool call inside the working span"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
+        }
+      }
+    },
+    {
+      "id": "task-list",
+      "section": "Turn shape",
+      "feature": "Task list observability",
+      "coverage": {
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": "no task_list capability"
+        },
+        "claudecode": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "recorded; TodoWrite → TaskDeltas"
+        },
+        "codex": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": "no task_list capability"
+        },
+        "opencode": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "recorded 2026-05; todowrite → TaskDeltas"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "no task_list capability"
         }
       }
     },
@@ -392,6 +429,12 @@
       "section": "Turn shape",
       "feature": "Self-correction iteration",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "aider retries across turns rather than within; idle-flush splits attempts"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -404,23 +447,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "aider retries across turns rather than within; idle-flush splits attempts"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded 2026-05 (4/4); write→read→edit in one contiguous working span (daemon was unknown, proven full)"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -429,6 +466,12 @@
       "section": "Turn shape",
       "feature": "Synchronous slash command (no LLM call)",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -441,23 +484,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded — /help via the live-TUI slash step; a no-LLM local command writes zero parts so the session stays ready (no working flicker)."
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -466,6 +503,12 @@
       "section": "Turn shape",
       "feature": "Long agentic session (stress)",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "idle-flush windows compound on long sessions"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -478,23 +521,17 @@
           "driver_capability": "ready",
           "notes": "#105 stale-tool timer flicker (closed); task_complete dependence creates fallback risk"
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "compaction events risk working→ready→working flicker"
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "idle-flush windows compound on long sessions"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded — prior daemon=bug was a mislabel; routed onto the long-lived run_live path (live marker) so the final settle is captured instead of truncated by the headless per-run process-exit race (#492)."
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "compaction events risk working→ready→working flicker"
         }
       }
     },
@@ -503,6 +540,12 @@
       "section": "Turn shape",
       "feature": "Autonomous loop (self-prompting)",
       "coverage": {
+        "aider": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "notes": "architect mode does limited multi-step but not continuous self-prompt"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -515,23 +558,17 @@
           "driver_capability": "ready",
           "notes": "Codex /goal command (Ralph loop)"
         },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "architect mode does limited multi-step but not continuous self-prompt"
-        },
         "opencode": {
           "agent_supports": "unknown",
           "daemon_capability": "n/a",
           "driver_capability": "ready",
           "notes": "stock opencode has no autonomous self-prompting/goal loop — turns end at session.idle awaiting the next user message; self-prompting is plugin-only (oh-my-opencode); upstream /loop request still open"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -540,6 +577,12 @@
       "section": "Turn shape",
       "feature": "Autonomous loop iteration limit reached",
       "coverage": {
+        "aider": {
+          "agent_supports": "partial",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -552,23 +595,17 @@
           "driver_capability": "ready",
           "notes": "/goal has caps"
         },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": ""
-        },
         "opencode": {
           "agent_supports": "unknown",
           "daemon_capability": "n/a",
           "driver_capability": "ready",
           "notes": "presupposes the autonomous-loop primitive stock opencode lacks → no max-iterations cap to observe"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -577,6 +614,12 @@
       "section": "Turn shape",
       "feature": "Token / quota budget exhausted",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "LLM error blockquote treated as turn_done (#262); quota errors land in same path"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -589,23 +632,17 @@
           "driver_capability": "gap:429-mock",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "partial",
-          "daemon_capability": "incapable",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "LLM error blockquote treated as turn_done (#262); quota errors land in same path"
-        },
         "opencode": {
           "agent_supports": "partial",
           "daemon_capability": "incapable",
           "driver_capability": "n/a",
           "notes": "Two distinct blockers verified live with mock-openai-429: (1) a 429 is retried indefinitely by the AI-SDK (never persists message.data.error); (2) a non-retryable 403 DOES persist as message.data.error (APIError isRetryable=false) but on a ZERO-PART assistant message, so the watcher.go scanParts JOIN (watcher.go:482-489) cannot reach msgData/isErrorMessage — the narrow zero-part edge at watcher.go:521-527 is the load-bearing blocker. Records when the watcher broadens to scan messages with .data.error and no terminal part, or when opencode emits a step-start before the API error fires."
+        },
+        "pi": {
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -614,6 +651,12 @@
       "section": "Turn shape",
       "feature": "Mid-turn user message queued",
       "coverage": {
+        "aider": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "notes": "TUI-based, no queue concept"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -626,23 +669,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": "TUI-based, no queue concept"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded — a message typed mid-turn (mid_turn_send) is queued by the TUI (not written to SQLite until consumed) so the daemon stays working with no flicker, then runs as the next turn."
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -651,6 +688,12 @@
       "section": "Turn shape",
       "feature": "Auto-classified permission approval",
       "coverage": {
+        "aider": {
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "notes": "/yes-always is blanket, not classifier-based"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -663,23 +706,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
+        "opencode": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "recorded — a config-allowed (permission.bash=allow, per-run settings blob) bash tool auto-executes with no prompt; ready-\u003eworking-\u003eready, no waiting."
+        },
         "pi": {
           "agent_supports": "no",
           "daemon_capability": "n/a",
           "driver_capability": "n/a",
           "notes": ""
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "incapable",
-          "driver_capability": "ready",
-          "notes": "/yes-always is blanket, not classifier-based"
-        },
-        "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "recorded — a config-allowed (permission.bash=allow, per-run settings blob) bash tool auto-executes with no prompt; ready->working->ready, no waiting."
         }
       }
     },
@@ -688,6 +725,12 @@
       "section": "Turn shape",
       "feature": "Context compaction",
       "coverage": {
+        "aider": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -700,23 +743,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
+        "opencode": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "recorded — /summarize via the live-TUI slash step; the summarization turn drives a working-\u003eready arc on the same session."
+        },
         "pi": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "Compaction events emitted as bare 'assistant' (not turn-done); risk of working→ready→working flicker per exploration"
-        },
-        "aider": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "recorded — /summarize via the live-TUI slash step; the summarization turn drives a working->ready arc on the same session."
         }
       }
     },
@@ -725,6 +762,12 @@
       "section": "Turn shape",
       "feature": "Turn end via terminal text",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "idle-flush is the de-facto terminal signal; ~5s lag"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -737,23 +780,17 @@
           "driver_capability": "ready",
           "notes": "task_complete handled"
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "stopReason=stop handled (#119 fixed)"
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "idle-flush is the de-facto terminal signal; ~5s lag"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded 2026-05 (4/4); step-finish reason=stop"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "stopReason=stop handled (#119 fixed)"
         }
       }
     },
@@ -762,6 +799,12 @@
       "section": "Turn shape",
       "feature": "Turn aborted by error",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "#262 fixed — error blockquote emits turn_done early"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -774,23 +817,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "#262 fixed — error blockquote emits turn_done early"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded — a reason=length abort (output overflows the context window) emits a step-start then a terminal step-finish reason=length, which parser.go maps to turn_done and the daemon/replay both observe (no message.data.error carrier needed). Driven on the long-lived run_live path."
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -799,6 +836,12 @@
       "section": "Turn shape",
       "feature": "Shell escape command",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "/run command available; observability folds into '\u003e Running' tool marker"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -811,23 +854,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "/run command available; observability folds into '> Running' tool marker"
-        },
         "opencode": {
           "agent_supports": "unknown",
           "daemon_capability": "n/a",
           "driver_capability": "n/a",
           "notes": "no user-level `!cmd` shell escape outside a model turn; shell is the model-invoked bash tool, already covered by auto-executed-tool-call"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -836,6 +873,12 @@
       "section": "Turn shape",
       "feature": "Oversized transcript line",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "RawLineParser; behavior on very long lines unvalidated"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -848,23 +891,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
+        "opencode": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": "applicable:false / blocked — opencode caps tool output (read tool → 2000 chars; bash → ~30-50KB preview with overflow to a tool-output/ sidecar), so a single \u003e=256KB transcript line cannot be induced via opencode tools"
+        },
         "pi": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "RawLineParser; behavior on very long lines unvalidated"
-        },
-        "opencode": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": "applicable:false / blocked — opencode caps tool output (read tool → 2000 chars; bash → ~30-50KB preview with overflow to a tool-output/ sidecar), so a single >=256KB transcript line cannot be induced via opencode tools"
         }
       }
     },
@@ -873,6 +910,12 @@
       "section": "Turn shape",
       "feature": "User-blocking tool call (question)",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "aider can ask via /ask interactively but no JSONL-style tool marker; not detected"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -885,23 +928,17 @@
           "driver_capability": "ready",
           "notes": "no question tool in schema"
         },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "incapable",
-          "driver_capability": "ready",
-          "notes": "aider can ask via /ask interactively but no JSONL-style tool marker; not detected"
-        },
         "opencode": {
           "agent_supports": "no",
           "daemon_capability": "n/a",
           "driver_capability": "n/a",
           "notes": "no AskUserQuestion-style structured blocking-question primitive that surfaces a daemon-observable waiting state (SQLite part schema = step-start/step-finish/text/tool only)"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -910,6 +947,12 @@
       "section": "Turn shape",
       "feature": "User-blocking tool call (plan-mode approval)",
       "coverage": {
+        "aider": {
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "notes": "plan_mode declared in capabilities.json but not detected in parser"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -920,25 +963,19 @@
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "#322 OPEN — <proposed_plan> turns end as 'ready' instead of 'waiting'; #325 OPEN — dismissal leaves session stuck in waiting"
-        },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "incapable",
-          "driver_capability": "ready",
-          "notes": "plan_mode declared in capabilities.json but not detected in parser"
+          "notes": "#322 OPEN — \u003cproposed_plan\u003e turns end as 'ready' instead of 'waiting'; #325 OPEN — dismissal leaves session stuck in waiting"
         },
         "opencode": {
           "agent_supports": "partial",
           "daemon_capability": "incapable",
           "driver_capability": "n/a",
           "notes": "opencode Plan mode is a tool-restriction (read-only) mode, not a blocking approval gate; no daemon-observable waiting→approval transition (parser/watcher have no waiting/ExitPlanMode branch)"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -947,6 +984,12 @@
       "section": "Turn shape",
       "feature": "Tool gate via permission prompt",
       "coverage": {
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": "aider's confirm prompts are stdin/TUI; not visible to irrlicht via transcript"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -954,28 +997,22 @@
           "notes": "PreToolUse/PostToolUse hooks wired via HTTP receiver; #204 closed (late hook bounce-back)"
         },
         "codex": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": "capabilities.json: permission_hooks: false"
-        },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "incapable",
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
           "driver_capability": "ready",
-          "notes": "aider's confirm prompts are stdin/TUI; not visible to irrlicht via transcript"
+          "notes": "capabilities.json: permission_hooks: false"
         },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "incapable",
           "driver_capability": "gap:permission-approval",
           "notes": "frozen — a held tool gate leaves no daemon-observable trace: opencode persists permission state in an ephemeral table the watcher never reads (it reads only part/message/session); the gated call shows only as a normal open tool call."
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -984,6 +1021,12 @@
       "section": "Turn shape",
       "feature": "User ESC interrupt",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "Ctrl-C in aider TUI; abort markdown signature may differ from claude ESC pattern"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -996,23 +1039,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "Ctrl-C in aider TUI; abort markdown signature may differ from claude ESC pattern"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "gap:interrupt",
           "notes": "interrupt step ported + daemon parses reason=interrupted, but the local gemma model never surfaces a reason=interrupted step-finish for a TUI ESC (stalls then finishes on stop, 4 attempts); not elicitable on this provider."
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -1021,6 +1058,12 @@
       "section": "Turn shape",
       "feature": "Streaming partial writes",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "idle-flush may fire during slow remote model calls causing premature ready"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1033,23 +1076,17 @@
           "driver_capability": "ready",
           "notes": "task_complete fallback to assistant_message risks mid-stream flicker"
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "compaction event interspersing risks flicker"
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "idle-flush may fire during slow remote model calls causing premature ready"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded 2026-05 (5/5); WAL-fsnotify watcher held working ~110s, no flicker"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "notes": "compaction event interspersing risks flicker"
         }
       }
     },
@@ -1058,6 +1095,12 @@
       "section": "Subagents",
       "feature": "Foreground subagent",
       "coverage": {
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1065,28 +1108,22 @@
           "notes": "file-based child transcripts; ParentSessionID inferred from filesystem; #133/#134 stop_reason=null fixed; #88 closed"
         },
         "codex": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "capabilities.json: subagents: false"
-        },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
         },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded — a Task-tool subagent persists session.parent_id; the daemon emits parent_linked (SQLite-store spawn proof, no child .jsonl)."
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -1095,6 +1132,12 @@
       "section": "Subagents",
       "feature": "Background subagent",
       "coverage": {
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1102,21 +1145,9 @@
           "notes": "unified rule: session held working while bg child alive; child counted in SubagentCount; reevaluateParent/hasActiveChildren + ComputeSubagentSummary already satisfy the signal"
         },
         "codex": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "opencode": {
@@ -1124,6 +1155,12 @@
           "daemon_capability": "n/a",
           "driver_capability": "n/a",
           "notes": "opencode subagents are FOREGROUND task-tool children the parent awaits (foreground-subagent recorded); no documented fire-and-forget background/async dispatch, and the headless driver can't observe a concurrent mid-turn child"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -1132,35 +1169,35 @@
       "section": "Subagents",
       "feature": "Background process",
       "coverage": {
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "#445/#450 + 265ebf22: parser snapshots the Bash run_in_background backgroundTaskId into BackgroundProcessCount and holds the session working past end_turn; a terminal <task-notification> (the SDK-harness completion shape) drops the process so it settles working→ready once the bg process exits. Recorded + validated 5/5."
+          "notes": "#445/#450 + 265ebf22: parser snapshots the Bash run_in_background backgroundTaskId into BackgroundProcessCount and holds the session working past end_turn; a terminal \u003ctask-notification\u003e (the SDK-harness completion shape) drops the process so it settles working→ready once the bg process exits. Recorded + validated 5/5."
         },
         "codex": {
-          "agent_supports": "yes",
-          "daemon_capability": "incapable",
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
           "driver_capability": "ready",
           "notes": "shell tool can spawn background process; not tracked"
-        },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "incapable",
-          "driver_capability": "ready",
-          "notes": ""
         },
         "opencode": {
           "agent_supports": "no",
           "daemon_capability": "incapable",
           "driver_capability": "n/a",
           "notes": "opencode's bash tool runs synchronously to completion; no run_in_background dispatch + later-completion event observable via the ProcessOwnedStore transport (MetricsReader never sets BackgroundProcessCount)"
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -1169,6 +1206,12 @@
       "section": "Subagents",
       "feature": "Subagent orphan cleanup",
       "coverage": {
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1176,21 +1219,9 @@
           "notes": "deleteWithChildren + orphan transcript predicates"
         },
         "codex": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": ""
         },
         "opencode": {
@@ -1198,6 +1229,12 @@
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded — sigkill orphans the PID-bound parent+child (the subagent is a child session of the same opencode process); the daemon reaps both and the #321 no-spurious-transition invariant holds."
+        },
+        "pi": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "n/a",
+          "notes": ""
         }
       }
     },
@@ -1206,6 +1243,12 @@
       "section": "Multi-session and multi-agent",
       "feature": "Multiple sessions in same cwd",
       "coverage": {
+        "aider": {
+          "agent_supports": "partial",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "notes": "aider uses a single .aider.chat.history.md per cwd; two aiders in same cwd would race that file"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1218,23 +1261,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "gap:start_session",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "partial",
-          "daemon_capability": "incapable",
-          "driver_capability": "ready",
-          "notes": "aider uses a single .aider.chat.history.md per cwd; two aiders in same cwd would race that file"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "bug",
           "driver_capability": "ready",
           "notes": "recorded known_failing — identity isolation holds (two distinct ses_ in one cwd, no flap/merge), but the daemon emits ZERO working transitions for concurrent headless same-cwd sessions (each opencode run exits before the SQLite flush). Filed daemon bug #503."
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -1243,6 +1280,12 @@
       "section": "Multi-session and multi-agent",
       "feature": "Multiple agents in same workspace",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": ""
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1255,23 +1298,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
+        "opencode": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "recorded — prior daemon=bug was a mislabel; 5 adapters coexist in one cwd as independent working-\u003eready arcs, no merge/flap (opencode keyed by SQLite session.id)."
+        },
         "pi": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": ""
-        },
-        "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "recorded — prior daemon=bug was a mislabel; 5 adapters coexist in one cwd as independent working->ready arcs, no merge/flap (opencode keyed by SQLite session.id)."
         }
       }
     },
@@ -1280,6 +1317,12 @@
       "section": "Metrics",
       "feature": "Token accounting",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "incapable",
+          "driver_capability": "ready",
+          "notes": "regex-parsed '\u003e Tokens: N sent, M received'; no cache-bucket distinction"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1292,23 +1335,17 @@
           "driver_capability": "ready",
           "notes": "cumulative cursor → delta math; cached_tokens deducted to avoid double-count"
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "message.usage with cacheRead/cacheWrite; per-turn cost when present"
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "regex-parsed '> Tokens: N sent, M received'; no cache-bucket distinction"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded — prior daemon=bug was a mislabel; token extraction + monotonic accumulation are full (the over-specified third per-turn state arc was de-pinned: a transport WAL-poll coalescing limit, not a token defect)."
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "message.usage with cacheRead/cacheWrite; per-turn cost when present"
         }
       }
     },
@@ -1317,6 +1354,12 @@
       "section": "Metrics",
       "feature": "Model identification",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "regex-parsed '\u003e Model:' / '\u003e Main model:'"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1329,23 +1372,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
-        "pi": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "from message.model"
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "ready",
-          "notes": "regex-parsed '> Model:' / '> Main model:'"
-        },
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "recorded 2026-05 (4/4); model observable live via message.data.model.modelID, but NOT re-derivable in the replay golden (_model left empty on the step-finish line) — transport-inherent replay gap"
+        },
+        "pi": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "from message.model"
         }
       }
     },
@@ -1354,6 +1391,12 @@
       "section": "Metrics",
       "feature": "Model switch mid-session",
       "coverage": {
+        "aider": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
+          "notes": "architect/editor pair detected per turn but inter-turn switch may not refresh"
+        },
         "claudecode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
@@ -1366,23 +1409,17 @@
           "driver_capability": "ready",
           "notes": ""
         },
+        "opencode": {
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "gap:model-select",
+          "notes": "driver model-select step ported (bbf92830) and a live A-\u003eB switch was proven, but no second model is reachable on this 32GB host (opencode's ~21k-token system prompt overflows LM Studio small-context loads; IONOS_API_TOKEN unset). Recipe authored (eea2f166); records when a viable second model exists."
+        },
         "pi": {
           "agent_supports": "yes",
           "daemon_capability": "full",
           "driver_capability": "ready",
           "notes": "no model change detection between turns per parser exploration"
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "architect/editor pair detected per turn but inter-turn switch may not refresh"
-        },
-        "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
-          "driver_capability": "gap:model-select",
-          "notes": "driver model-select step ported (bbf92830) and a live A->B switch was proven, but no second model is reachable on this 32GB host (opencode's ~21k-token system prompt overflows LM Studio small-context loads; IONOS_API_TOKEN unset). Recipe authored (eea2f166); records when a viable second model exists."
         }
       }
     },
@@ -1391,6 +1428,12 @@
       "section": "Metrics",
       "feature": "Architect/Editor model pair",
       "coverage": {
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": "--architect ships two-model pair; markdown parser sees two '\u003e Model:' lines but contribution attribution incomplete"
+        },
         "claudecode": {
           "agent_supports": "no",
           "daemon_capability": "n/a",
@@ -1398,28 +1441,22 @@
           "notes": "single Anthropic model per turn"
         },
         "codex": {
-          "agent_supports": "partial",
+          "agent_supports": "unknown",
           "daemon_capability": "unknown",
           "driver_capability": "ready",
           "notes": "planning agent + executor exists; unclear if surfaced as two contributions"
         },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
-          "daemon_capability": "unknown",
-          "driver_capability": "ready",
-          "notes": "--architect ships two-model pair; markdown parser sees two '> Model:' lines but contribution attribution incomplete"
-        },
         "opencode": {
-          "agent_supports": "yes",
+          "agent_supports": "unknown",
           "daemon_capability": "unknown",
           "driver_capability": "ready",
           "notes": "agent teams can mix models; per-child captured but parent.ModelName semantics unclear"
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -1428,6 +1465,12 @@
       "section": "Metrics",
       "feature": "Provider failover mid-turn",
       "coverage": {
+        "aider": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": "aider can configure fallback models; mid-turn switch surfaced in transcript via '\u003e Switching to model …' (untested in irrlicht)"
+        },
         "claudecode": {
           "agent_supports": "partial",
           "daemon_capability": "incapable",
@@ -1435,28 +1478,22 @@
           "notes": "Multiple provider backends (Anthropic/Vertex/Bedrock) chosen at startup; no documented mid-turn fallback chain and provider-routed model name is identical. Turn-level state arc is observable; failover-qua-failover is not. conf 0.55."
         },
         "codex": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": ""
-        },
-        "aider": {
-          "agent_supports": "yes",
+          "agent_supports": "unknown",
           "daemon_capability": "unknown",
           "driver_capability": "ready",
-          "notes": "aider can configure fallback models; mid-turn switch surfaced in transcript via '> Switching to model …' (untested in irrlicht)"
+          "notes": ""
         },
         "opencode": {
-          "agent_supports": "yes",
+          "agent_supports": "unknown",
           "daemon_capability": "unknown",
           "driver_capability": "ready",
           "notes": "multi-provider model packs; failover observability not validated"
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": ""
         }
       }
     },
@@ -1465,34 +1502,34 @@
       "section": "Metrics",
       "feature": "Subscription / billing-model detection",
       "coverage": {
+        "aider": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
         "claudecode": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "unknown",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         },
         "codex": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "unknown",
-          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
-        },
-        "pi": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "unknown",
-          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
-        },
-        "aider": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "unknown",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         },
         "opencode": {
           "agent_supports": "unknown",
           "daemon_capability": "unknown",
-          "driver_capability": "unknown",
+          "driver_capability": "ready",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
+        "pi": {
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         }
       }
@@ -1502,72 +1539,35 @@
       "section": "Metrics",
       "feature": "Quota burndown (rate-limit usage)",
       "coverage": {
+        "aider": {
+          "agent_supports": "no",
+          "daemon_capability": "n/a",
+          "driver_capability": "ready",
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
+        },
         "claudecode": {
           "agent_supports": "unknown",
           "daemon_capability": "unknown",
-          "driver_capability": "unknown",
+          "driver_capability": "ready",
           "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         },
         "codex": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "unknown",
-          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
-        },
-        "pi": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "unknown",
-          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
-        },
-        "aider": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
-          "driver_capability": "unknown",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         },
         "opencode": {
           "agent_supports": "unknown",
           "daemon_capability": "unknown",
-          "driver_capability": "unknown",
-          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
-        }
-      }
-    },
-    {
-      "id": "task-list",
-      "section": "Turn shape",
-      "feature": "Structured task list / TODO tracking",
-      "coverage": {
-        "claudecode": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "recorded; TodoWrite → TaskDeltas"
-        },
-        "codex": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": "no task_list capability"
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         },
         "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": "no task_list capability"
-        },
-        "aider": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
-          "notes": "no task_list capability"
-        },
-        "opencode": {
-          "agent_supports": "yes",
-          "daemon_capability": "full",
+          "agent_supports": "unknown",
+          "daemon_capability": "unknown",
           "driver_capability": "ready",
-          "notes": "recorded 2026-05; todowrite → TaskDeltas"
+          "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         }
       }
     }
