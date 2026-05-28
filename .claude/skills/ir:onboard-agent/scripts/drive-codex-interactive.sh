@@ -150,6 +150,14 @@ source "$_DRIVE_LIB/slots.sh"
 # shellcheck source=lib/drive/contracts.sh
 source "$_DRIVE_LIB/contracts.sh"
 
+# recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
+# (a subset of its case arms — accepting a step type ≠ producing its effect),
+# and whether slash commands need a dedicated step type. recipe-lint reads these
+# constants directly, so the grammar has ONE owner — this driver — not a
+# parallel manifest. Full tmux-TUI driver (claudecode set + fork).
+DRIVE_ELICITS="send slash wait_turn interrupt keys sleep restart resume reset_session fork sigkill exit_clean start_session session"
+DRIVE_SLASH_REQUIRES_STEP_TYPE=false
+
 # Has the active slot's cwd already had its trust dialog accepted this
 # run? Covers BOTH a concurrent second slot in the same cwd AND a resume
 # relaunch of the same slot (codex won't re-prompt for a dir it already

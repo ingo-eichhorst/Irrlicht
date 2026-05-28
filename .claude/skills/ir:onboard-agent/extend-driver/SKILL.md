@@ -110,14 +110,23 @@ adapting the three agent-specific seams:
 Keep the arm's shape and comment style consistent with the reference and
 with the driver's existing arms. Don't refactor unrelated code.
 
-### 3. Verify the driver still parses + the gap closed
+### 3. Declare the primitive ELICITED
+
+Add `<primitive>` to the driver's top-level `DRIVE_ELICITS` constant
+(#508 #4) so recipe-lint's semantic check treats the new arm as genuinely
+produced, not just accepted. A case arm WITHOUT a matching `DRIVE_ELICITS`
+entry would still trip a `semantic_gap` (exit 4) and block recording.
+
+### 4. Verify the driver still parses + the gap closed
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
 bash -n $SK/scripts/drive-<agent>-interactive.sh    # syntax
 source $SK/scripts/lib/recipe-lint.sh
 driver_step_types_from_file $SK/scripts/drive-<agent>-interactive.sh \
-  | grep -qx '<primitive>' && echo "primitive now handled"
+  | grep -qx '<primitive>' && echo "case arm handled (grammar)"
+driver_elicits_from_file $SK/scripts/drive-<agent>-interactive.sh \
+  | grep -qx '<primitive>' && echo "declared elicited (semantic)"
 ```
 
 If the driver has a `*_test.sh` sibling under `scripts/lib/` or a smoke

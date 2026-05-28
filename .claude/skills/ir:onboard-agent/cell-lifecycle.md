@@ -374,7 +374,7 @@ assess/implement → driver_gap:<primitive>  (recipe + spec committed; NOT appli
 A `driver_gap` is **queued, owned work, not a frozen cell** (#496 RC1).
 `recipe-lint` catches it two ways: a missing `case` arm (grammar gap,
 exit 3) and a step the driver accepts but doesn't elicit (semantic gap,
-exit 4, via `elicitable-primitives.json`). The `extend-driver` verb is the
+exit 4, read from the driver's `DRIVE_ELICITS` constant). The `extend-driver` verb is the
 stage that fills it; `applicable:false` is reserved for cells the agent
 fundamentally can't do.
 

@@ -155,7 +155,8 @@ Not cost-related — these prevent broken runs:
 - Wall-clock `timeout` per cell (hang protection).
 - **`recipe-lint`** (`scripts/lib/recipe-lint.sh`) — refuses a recipe step
   type the driver doesn't implement (driver_gap, exit 3) OR accepts but
-  doesn't elicit (semantic_gap, exit 4, via `elicitable-primitives.json`).
+  doesn't elicit (semantic_gap, exit 4, read from the driver's `DRIVE_ELICITS`
+  constant).
 - **`completeness-gate`** (`scripts/lib/completeness-gate.sh`) — every
   applicable `coverage_id` must reach a terminal verdict; the file-derived
   done-check for a sweep so no cell silently drops.
@@ -193,7 +194,7 @@ Not cost-related — these prevent broken runs:
     discover-agent.sh         — discovery preamble renderer
     templates/drive-interactive.sh.tmpl — full tmux-REPL driver scaffold (#496 RC2)
     lib/recipe-lint.sh        — grammar + semantic (elicitable) gap lint
-    lib/elicitable-primitives.json — per-adapter step types genuinely elicited
+                                (reads each driver's DRIVE_ELICITS constant)
     lib/completeness-gate.sh  — every applicable cell reached a terminal verdict
     lib/cell-integrity.sh     — every recorded cell carries a full artifact set
     lib/catalog-drift.sh      — catalog ⟺ rollup ⟺ scenarios bijection

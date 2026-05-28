@@ -84,6 +84,19 @@ SCRIPT_JSON="$5"
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 
+# recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
+# and whether slash needs a dedicated step type. recipe-lint reads these
+# directly so the grammar has ONE owner here, not a parallel manifest. Hybrid
+# driver: headless `opencode run` (send/wait_turn/sleep/start_session/session)
+# IGNORES in-REPL slash commands — it stores a leading-slash text as a literal
+# user message — so slash_requires_step_type is true. The live-TUI path
+# (run_live) genuinely elicits slash/reset_session/interrupt/keys/restart/
+# sigkill/mid_turn_send, but ONLY via those STEP TYPES (a bare send "/cmd" never
+# reaches the REPL). The `live` no-op marker forces a plain send/wait_turn
+# recipe onto the long-lived run_live path.
+DRIVE_ELICITS="send wait_turn sleep slash reset_session interrupt keys restart sigkill mid_turn_send start_session session live"
+DRIVE_SLASH_REQUIRES_STEP_TYPE=true
+
 # Per-run cwd so each scenario launches a fresh opencode project context.
 # OpenCode keys sessions on the directory column in the SQLite session
 # table; isolating cwd guarantees the session-lookup query at the end

@@ -17,14 +17,12 @@
 #
 # IMPORTANT — how a stubbed arm is caught: every standard arm is PRESENT here
 # (so recipe-lint's GRAMMAR check treats it as handled and will NOT report a
-# driver_gap for it). The real backstop is the SEMANTIC lint: add your <agent>
-# entry to lib/elicitable-primitives.json listing ONLY the step types you
-# actually elicit, and recipe-lint flags any recipe needing a stubbed-but-
-# unlisted primitive as a semantic_gap (exit 4) BEFORE recording. Until that
-# manifest entry exists, the only safety net is the runtime `not_implemented`
-# stub — which aborts AFTER spinning up a daemon + CLI — so add the manifest
-# entry the moment you scaffold (discovery-instructions.md §"Scaffold the
-# per-adapter driver" step 2).
+# driver_gap for it). The real backstop is the SEMANTIC lint: the DRIVE_ELICITS
+# constant below lists ONLY the step types this driver actually elicits, and
+# recipe-lint reads it straight from this file (#508 #4 — no separate manifest)
+# and flags any recipe needing a stubbed-but-unlisted primitive as a
+# semantic_gap (exit 4) BEFORE recording. Keep DRIVE_ELICITS accurate: add a
+# primitive the moment you genuinely port its seam, not when you stub the arm.
 #
 # Standard step types (port each from the reference driver):
 #   send / slash   — type text + Enter (slash is the same keystrokes)
@@ -78,6 +76,16 @@ SCRIPT_JSON="$5"
 
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
+
+# recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
+# read directly by recipe-lint (no separate manifest). Start with ONLY the seams
+# that actually work in this scaffold (send/slash/sleep) and add each primitive
+# as you port its seam — a stubbed `not_implemented` arm must NOT be listed, so
+# recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
+# DRIVE_SLASH_REQUIRES_STEP_TYPE=true if __AGENT__ is headless-first (a bare
+# send "/cmd" stores literal text instead of reaching the REPL).
+DRIVE_ELICITS="send slash sleep"
+DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match

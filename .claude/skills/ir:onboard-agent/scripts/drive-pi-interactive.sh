@@ -146,6 +146,21 @@ source "$_DRIVE_LIB/slots.sh"
 # shellcheck source=lib/drive/contracts.sh
 source "$_DRIVE_LIB/contracts.sh"
 
+# recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
+# (a subset of its case arms — accepting ≠ producing), read directly by
+# recipe-lint so the grammar has ONE owner here, not a parallel manifest.
+# tmux-TUI driver. exit_clean (Ctrl-D → process_exited) + resume (relaunch
+# `pi --session <transcript>`, reopening the SAME <ts>_<uuid>.jsonl across two
+# process lifetimes — one slot, two lifetimes, no new session) for
+# session-resume. reset_session sends pi's in-REPL /new (FRESH transcript,
+# parentSession:null, same process alive — distinct from resume) following the
+# codex /new supersession shape. keys sends raw tmux key names for in-REPL
+# picker UIs (e.g. /tree). start_session launches a second concurrent REPL
+# without tearing down the active one. Any step may carry {"session":N} to route
+# to slot N first.
+DRIVE_ELICITS="send slash wait_turn interrupt keys sleep exit_clean resume reset_session start_session session"
+DRIVE_SLASH_REQUIRES_STEP_TYPE=false
+
 # boot_session brings up a pi REPL in the active slot's tmux session
 # running the given argv, then waits for the "Ready" line. Caller
 # allocates the slot (alloc_slot) before invoking.

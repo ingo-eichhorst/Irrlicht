@@ -137,7 +137,6 @@ if [[ -n "$SCRIPT_JSON" ]]; then
   # shellcheck source=lib/recipe-lint.sh
   . "$SCRIPT_DIR/lib/recipe-lint.sh"
   LINT_DRIVER="$SCRIPT_DIR/drive-$ADAPTER-interactive.sh"
-  LINT_MANIFEST="$SCRIPT_DIR/lib/elicitable-primitives.json"
   if LINT_GAPS="$(recipe_lint_gaps "$LINT_DRIVER" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
     echo "driver_gap: $ADAPTER/$SCENARIO needs step type(s) drive-$ADAPTER-interactive.sh doesn't implement:" >&2
     printf '  - gap:%s\n' $LINT_GAPS >&2
@@ -146,9 +145,10 @@ if [[ -n "$SCRIPT_JSON" ]]; then
   fi
   # Semantic backstop (#496 RC3): a step the driver ACCEPTS but doesn't ELICIT
   # (or a slash command in send-text on a slash-requires adapter) would record
-  # a no-op. Refuse before burning a daemon + CLI.
-  if SEM_GAPS="$(recipe_semantic_gaps "$LINT_MANIFEST" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
-    echo "semantic_gap: $ADAPTER/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per elicitable-primitives.json):" >&2
+  # a no-op. The driver declares what it elicits via DRIVE_ELICITS (#508 #4).
+  # Refuse before burning a daemon + CLI.
+  if SEM_GAPS="$(recipe_semantic_gaps "$LINT_DRIVER" "$SCENARIOS_JSON" "$SCENARIO" "$ADAPTER")"; then :; else
+    echo "semantic_gap: $ADAPTER/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per its DRIVE_ELICITS):" >&2
     # Quote + read-loop: a slash-in-send gap carries the full send-text, which
     # can contain spaces/glob chars — never word-split or pathname-expand it.
     while IFS= read -r p; do [[ -n "$p" ]] && printf '  - %s\n' "$p" >&2; done <<< "$SEM_GAPS"
