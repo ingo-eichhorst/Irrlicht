@@ -423,6 +423,21 @@ while read -r step; do
     interrupt)
       step_interrupt
       ;;
+    keys)
+      # Raw tmux key sequence (NOT literal text) for navigating in-REPL
+      # picker UIs such as pi's /tree checkpoint selector (the
+      # tree-selector overlay from dist/modes/interactive/components/
+      # tree-selector.js). Example:
+      #   {"type":"keys","keys":"Down Down Enter"}
+      # A picker selection is in-place — NOT a session boundary — so this
+      # arm touches NEITHER EXPECTED_TURNS nor the multi-session contract
+      # files (session.uuids / transcript.paths).
+      ks=$(jq -r '.keys' <<<"$step")
+      # shellcheck disable=SC2086 — intentional word-splitting of the key list
+      tmux send-keys -t "$SESSION" $ks
+      echo "[driver] keys[s$ACTIVE]: $ks" >&2
+      sleep 0.5
+      ;;
     sleep)
       secs=$(jq -r '.seconds // 1' <<<"$step")
       echo "[driver] sleep: ${secs}s" >&2

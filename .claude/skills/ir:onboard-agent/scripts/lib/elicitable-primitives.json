@@ -46,13 +46,14 @@
         "slash",
         "wait_turn",
         "interrupt",
+        "keys",
         "sleep",
         "exit_clean",
         "resume",
         "reset_session"
       ],
       "slash_requires_step_type": false,
-      "notes": "tmux-TUI driver. `exit_clean` (Ctrl-D graceful exit → daemon process_exited) + `resume` (relaunch `pi --session <transcript>`, which reopens and APPENDS to the SAME <ts>_<uuid>.jsonl across two process lifetimes so the daemon sees the same session_id row come back) ported from the codex reference for session-resume; one slot, two lifetimes — no new session is minted. `reset_session` (extend-driver, ported from codex's swap_after_slash) sends pi's in-REPL `/new`: pi mints a FRESH <ts>_<uuid2>.jsonl under the same project dir (parentSession:null) while keeping the SAME process alive (no relaunch — distinct from resume). The codex /new supersession shape — the NEW session supersedes the OLD; the old UUID-1 file lingers frozen while the daemon removes the old row via the #169 same-PID cleanup once UUID-2's PID is discovered. It allocates a new slot reusing the same tmux/process and re-arms transcript resolution onto UUID-2, so session.uuids/transcript.paths list BOTH UUIDs and curate captures both rollouts. No `keys` arm — the /tree picker (checkpoint-rewind) needs arrow-key navigation it cannot elicit; that cell is a driver_gap awaiting `keys` via extend-driver."
+      "notes": "tmux-TUI driver. `exit_clean` (Ctrl-D graceful exit → daemon process_exited) + `resume` (relaunch `pi --session <transcript>`, which reopens and APPENDS to the SAME <ts>_<uuid>.jsonl across two process lifetimes so the daemon sees the same session_id row come back) ported from the codex reference for session-resume; one slot, two lifetimes — no new session is minted. `reset_session` (extend-driver, ported from codex's swap_after_slash) sends pi's in-REPL `/new`: pi mints a FRESH <ts>_<uuid2>.jsonl under the same project dir (parentSession:null) while keeping the SAME process alive (no relaunch — distinct from resume). The codex /new supersession shape — the NEW session supersedes the OLD; the old UUID-1 file lingers frozen while the daemon removes the old row via the #169 same-PID cleanup once UUID-2's PID is discovered. It allocates a new slot reusing the same tmux/process and re-arms transcript resolution onto UUID-2, so session.uuids/transcript.paths list BOTH UUIDs and curate captures both rollouts. `keys` (extend-driver, ported from codex's inline `keys` arm) sends a raw tmux key sequence (space-separated tmux key names like `Down Down Enter`, word-split into individual tmux key events — NOT literal text) for navigating in-REPL picker UIs such as pi 0.70.0's /tree checkpoint selector (the tree-selector overlay from dist/modes/interactive/components/tree-selector.js); a picker selection is in-place, NOT a session boundary, so the arm touches neither EXPECTED_TURNS nor the multi-session contract files."
     },
     "aider": {
       "elicits": [
