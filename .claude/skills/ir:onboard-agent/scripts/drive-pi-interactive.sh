@@ -50,15 +50,28 @@
 #                transcript and double-concat it at curate time). Only the
 #                tmux session name rotates.
 #
+# Concurrency (multiple live sessions at once):
+#   start_session — launch a NEW concurrent pi REPL WITHOUT tearing down
+#                   the active one. Defaults to the same cwd as session 1
+#                   (the multiple-sessions-same-cwd case); override with
+#                   {"type":"start_session","cwd":"…"}. Both REPLs live in
+#                   parallel under separate tmux sessions, each minting
+#                   its own <ts>_<uuid>.jsonl under PI_SESSIONS_DIR.
+#   any step may carry {"session": N} to switch the active context to
+#   session slot N (1-based) before executing — e.g. send a turn to
+#   session 1 after start_session moved focus to session 2. A bare
+#   {"type":"session","session":N} just switches focus.
+#
 # Session model: every session lifetime is a 1-based "slot". The initial
 # session is slot 1. resume relaunches in place (same slot, same
 # transcript file); reset_session (/new) allocates a NEW slot reusing the
-# same process (a fresh rollout supersedes the old one). At the end, ALL
-# slots' session_ids + transcripts are
-# written to session.uuids / transcript.paths so run-cell.sh's
-# multi-session curation unions them. A single-session run leaves these
-# with one entry each — same shape, but run-cell.sh's multi-session
-# branch is a no-op when there's only one line.
+# same process (a fresh rollout supersedes the old one); start_session
+# allocates a NEW slot in a fresh tmux/process leaving the prior slot
+# alive. At the end, ALL slots' session_ids + transcripts are written to
+# session.uuids / transcript.paths so run-cell.sh's multi-session
+# curation unions them. A single-session run leaves these with one entry
+# each — same shape, but run-cell.sh's multi-session branch is a no-op
+# when there's only one line.
 #
 # Pi assigns its own session UUID and has no --settings flag; both args
 # are accepted for ABI parity with the other interactive drivers.
@@ -400,10 +413,34 @@ swap_after_slash() {
   sleep 1
 }
 
+step_start_session() {
+  # Launch a NEW concurrent pi REPL WITHOUT tearing down the active one.
+  # The previous slot keeps running (its tmux survives), so the daemon
+  # observes both as independent session rows under the same project dir.
+  # Defaults to session 1's cwd (the multiple-sessions-same-cwd scenario);
+  # pass a directory to launch elsewhere.
+  local req_cwd="$1"
+  # Claim the current slot's transcript BEFORE spawning a concurrent one.
+  # If the prior slot hasn't been resolved (e.g. start_session issued
+  # before its wait_turn), its transcript is undiscovered, and a turn
+  # still streaming there keeps advancing its mtime past the new slot's
+  # just-touched marker — the new slot's resolve_transcript could then
+  # bind to the OLD <ts>_<uuid>.jsonl. Resolving here pins the prior slot
+  # to its file so the new slot's find -newer poll picks up only the
+  # genuinely new transcript.
+  resolve_transcript || true
+  save_active
+  local idx=$(( N_SLOTS + 1 ))
+  local new_cwd="${req_cwd:-$RUN_CWD}"
+  alloc_slot "pi-onboard-$(date +%s)-$$-${idx}" "$new_cwd"
+  echo "[driver] start_session: concurrent session slot #${ACTIVE} (cwd=$new_cwd)" >&2
+  boot_session pi
+}
+
 # Bring up the first session as slot 1. SCRIPT_JSON's resume step
 # relaunches in place; reset_session allocates a further slot (a new
-# rollout under the same process); future session-minting primitives may
-# allocate more.
+# rollout under the same process); start_session allocates a further
+# slot in a fresh tmux/process leaving the prior slot alive.
 alloc_slot "pi-onboard-$(date +%s)-$$" "$RUN_CWD"
 boot_session pi
 
@@ -413,6 +450,24 @@ STEP_OK=true
 while read -r step; do
   if ! $STEP_OK; then break; fi
   type=$(jq -r '.type' <<<"$step")
+
+  # Optional inline session target: switch the active context to slot N
+  # before executing the step. start_session is exempt (it allocates its
+  # own slot). A target slot must already exist.
+  tgt=$(jq -r '.session // empty' <<<"$step")
+  if [[ -n "$tgt" && "$type" != "start_session" && "$tgt" != "$ACTIVE" ]]; then
+    if [[ "$tgt" =~ ^[0-9]+$ && "$tgt" -ge 1 && "$tgt" -le "$N_SLOTS" ]]; then
+      save_active
+      load_slot "$tgt"
+      echo "[driver] switch -> session slot $tgt (uuid=$UUID)" >&2
+    else
+      echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
+      EXIT_REASON="nonzero(2)"
+      STEP_OK=false
+      continue
+    fi
+  fi
+
   case "$type" in
     send|slash)
       step_send "$(jq -r '.text' <<<"$step")"
@@ -451,6 +506,13 @@ while read -r step; do
       ;;
     resume)
       step_resume
+      ;;
+    start_session)
+      step_start_session "$(jq -r '.cwd // empty' <<<"$step")"
+      ;;
+    session)
+      # Pure focus switch — already handled by the inline target block.
+      :
       ;;
     *)
       echo "[driver] unknown step type: $type" >&2
