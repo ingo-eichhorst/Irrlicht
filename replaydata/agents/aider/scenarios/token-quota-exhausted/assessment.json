@@ -2,25 +2,55 @@
   "schema_version": 1,
   "scenario_id": "token-quota-exhausted",
   "agent": "aider",
-  "assessed_at": "2026-05-25T00:00:00Z",
+  "assessed_at": "2026-05-28T00:00:00Z",
   "agent_supports": "yes",
   "daemon_capability": "full",
   "driver_capability": "ready",
   "confidence": 0.8,
   "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n**agent_supports: yes.** Aider 0.86.2 enforces a hard stop when a token/cost budget is hit mid-turn and resolves the turn cleanly. The cap surfaces through litellm's exception classification in `aider/exceptions.py`:\n\n- `RateLimitError` (HTTP 429 / provider quota) is `retry: True` with the description \"The API provider has rate limited you. Try again later or check your quotas.\"\n- `BudgetExceededError` is also `retry: True` (litellm's own budget enforcement).\n- The non-retryable insufficient-credits case (`APIError` with `\"code\":402`) returns `retry: False`, \"Insufficient credits with the API provider.\"\n\nThe send loop in `coders/base_coder.py` (the `while True` around `self.send(...)`) doubles `retry_delay` (start 0.125s) on each retryable error; once `retry_delay > RETRY_TIMEOUT` (60s, `aider/models.py`) it sets `should_retry = False`, writes the error via `io.tool_warning(err_msg)` + `io.tool_error(description)`, and `break`s — ending the turn. The non-retryable cases break immediately. Either way the turn terminates and aider returns to its idle prompt; it does not silently re-enter `working`. There is no separate aider-native \"subscription cost cap\" feature — the budget is enforced provider-side (429) or by litellm (`BudgetExceededError`); aider's only knob is `RETRY_TIMEOUT` governing how long it waits before surfacing the cap.\n\n**daemon_capability: full.** The aider adapter source is `FilesUnderCWD{.aider.chat.history.md}` with a markdown `RawParser` (`agent.go`). `io.tool_error`/`tool_warning` both route through `io._tool_message`, which calls `append_chat_history(..., blockquote=True)` — so the surfaced cap lands in the transcript as a `> ...Error...` blockquote line. irrlicht's parser matches this with `errorRE` (`^>\\s*\\S*(?:Error|Exception)(?:[: ]|$)`) and, while `turnOpen`, calls `flushErrorTurn` → emits `turn_done` with the error as `AssistantText`, flipping `LastEventType` so the state classifier transitions `working → ready` (`parser.go` ~127-205). This is the #262 path the matrix note cites.\n\nThe scenario's sole User-observable signal is \"state reaches `ready`\" — and the daemon reaches it today via the synthesized `turn_done`. The Primitive exercised says the budget cap \"Maps to the adapter's standard turn-end path,\" which is exactly the mechanism the parser already exercises. The canonical spec signal is representable and handled, so this is `full`, not `bug`/`incapable`: a trace exists in the watched Source and the parser handles it. The two narrow gaps below are NON-spec-required, so per the authoring rule they live in `caveats`, not in a downgrade.\n\n**driver_capability: ready.** No new driver step type is required. The error blockquote that aider's turn-end path writes can be elicited with the driver's existing `send` (a prompt) + `wait_turn` primitives by pointing aider at a tiny/bogus budget or an unreachable model (see the aider memory re: bogus-model errors producing `> ...Error...` blockquotes). The recipe needs none of the gapped primitives (restart/reset_session/sigkill/keys/etc.).\n\n## Primitive → capabilities.json key\n\nPrimitive exercised = \"Budget enforcement — the agent CLI enforces a token or time budget and emits a turn-end signal when the cap is hit. Maps to the adapter's standard turn-end path.\" There is no dedicated `budget`/`token_cap` key in `capabilities.json`; the closest cost-related key is `cost_tracking` (`false` — aider has no native cost-cap feature, the budget is provider/litellm-enforced). Because the primitive explicitly routes through the adapter's STANDARD turn-end path rather than a dedicated budget feature, the gating capability for recordability is `headless_mode` (`true`), which is the scenario's only `requires`. Confirmed: `headless_mode: true`, `cost_tracking: false`.\n\n## Caveats are non-spec gaps, not a downgrade\n\nThe capped model call emits no `> Tokens: …` line, so `closeModelCall` never runs and `flushErrorTurn` carries nil Tokens/Contribution: the cap is observed as a generic error-terminated turn, not a distinct budget/quota event, and no per-turn cost is recorded. Neither is part of the spec's user-observable signal (which asserts only state, and `has_waiting_state: false`), so they are caveats — they would only matter to a future budget/quota-specific event kind.",
   "caveats": [
+    "record_blocked=infra (2026-05-28): axes are record-now but the cell is unrecordable in this environment — no aider auth (provider key) AND no deterministic aider quota mock (the claudecode mock-anthropic-429 stub does not transfer to litellm). Recordable once both auth and an aider-side quota mock / fixture-injection primitive exist. Not a driver_gap. (per scenarios.json by_adapter.aider)",
     "feature-invisible-but-spec-compliant: the budget cap reaches `ready` via the generic LLM-error blockquote path (#262), so irrlicht cannot tell a quota/budget cap apart from any other turn-aborting provider error — the spec only requires reaching `ready`, which is observed.",
     "metric-drift-downstream: the capped model call emits no `> Tokens:` line, so `flushErrorTurn` carries nil Tokens/Contribution — no per-turn token/cost is recorded for the budget-capped turn (capabilities.cost_tracking is false); only the error text is surfaced as AssistantText.",
     "Aider retries a 429/RateLimitError with exponential backoff up to RETRY_TIMEOUT (60s) before surfacing it; during retries the session legitimately stays `working`, and only flips to `ready` once retries are exhausted.",
     "Recording is blocked on environment infra (no aider provider auth + no deterministic aider-side quota mock — the claudecode `--bare`/ANTHROPIC_BASE_URL 429 stub does not transfer to litellm-routed aider), NOT on any daemon limit or driver step; expected.jsonl is committed as the documented target until that infra exists."
   ],
   "sources": [
-    {"kind": "file", "ref": "core/adapters/inbound/agents/aider/agent.go", "note": "Source is FilesUnderCWD{.aider.chat.history.md} with a markdown RawParser"},
-    {"kind": "file", "ref": "core/adapters/inbound/agents/aider/parser.go", "note": "parser.go ~127-205: errorRE matches `> ...Error...` blockquotes while turnOpen; flushErrorTurn emits turn_done (nil Tokens) → working→ready (the #262 path); closeModelCall only runs on a `> Tokens:` line"},
-    {"kind": "file", "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/exceptions.py", "note": "aider 0.86.2: RateLimitError retry=True 'check your quotas'; BudgetExceededError retry=True; APIError+402 'Insufficient credits' retry=False"},
-    {"kind": "file", "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/coders/base_coder.py", "note": "send loop: exponential retry_delay, when > RETRY_TIMEOUT should_retry=False → tool_warning+tool_error then break (turn ends)"},
-    {"kind": "file", "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py", "note": "tool_error/tool_warning → _tool_message → append_chat_history(blockquote=True): the error lands in .aider.chat.history.md as a `> ` line"},
-    {"kind": "file", "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/models.py", "note": "RETRY_TIMEOUT = 60 — the retry ceiling before a 429/quota is surfaced"},
-    {"kind": "file", "ref": "replaydata/agents/aider/capabilities.json", "note": "headless_mode: true (scenario's only `requires`, gates recordability); cost_tracking: false — no native budget key, cap is provider/litellm-enforced"}
-  ]
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/aider/agent.go",
+      "note": "Source is FilesUnderCWD{.aider.chat.history.md} with a markdown RawParser"
+    },
+    {
+      "kind": "file",
+      "ref": "core/adapters/inbound/agents/aider/parser.go",
+      "note": "parser.go ~127-205: errorRE matches `> ...Error...` blockquotes while turnOpen; flushErrorTurn emits turn_done (nil Tokens) → working→ready (the #262 path); closeModelCall only runs on a `> Tokens:` line"
+    },
+    {
+      "kind": "file",
+      "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/exceptions.py",
+      "note": "aider 0.86.2: RateLimitError retry=True 'check your quotas'; BudgetExceededError retry=True; APIError+402 'Insufficient credits' retry=False"
+    },
+    {
+      "kind": "file",
+      "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/coders/base_coder.py",
+      "note": "send loop: exponential retry_delay, when > RETRY_TIMEOUT should_retry=False → tool_warning+tool_error then break (turn ends)"
+    },
+    {
+      "kind": "file",
+      "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/io.py",
+      "note": "tool_error/tool_warning → _tool_message → append_chat_history(blockquote=True): the error lands in .aider.chat.history.md as a `> ` line"
+    },
+    {
+      "kind": "file",
+      "ref": "/Users/ingo/.local/share/uv/tools/aider-chat/lib/python3.12/site-packages/aider/models.py",
+      "note": "RETRY_TIMEOUT = 60 — the retry ceiling before a 429/quota is surfaced"
+    },
+    {
+      "kind": "file",
+      "ref": "replaydata/agents/aider/capabilities.json",
+      "note": "headless_mode: true (scenario's only `requires`, gates recordability); cost_tracking: false — no native budget key, cap is provider/litellm-enforced"
+    }
+  ],
+  "record_blocked": "infra"
 }

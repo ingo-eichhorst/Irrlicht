@@ -54,11 +54,22 @@ type AssessmentReport struct {
 	// The recording axis stays MEASURED (events.jsonl + validation), so
 	// it isn't stored here. DisplayState rolls all three up — see
 	// deriveDisplayState in catalog.go.
-	DaemonCapability string             `json:"daemon_capability"` // full / bug / incapable / unknown / n/a
-	DriverCapability string             `json:"driver_capability"` // ready / gap:<primitive>
-	Confidence       float64            `json:"confidence,omitempty"`
-	Body             string             `json:"body"`
-	Sources          []AssessmentSource `json:"sources,omitempty"`
+	DaemonCapability string `json:"daemon_capability"` // full / bug / incapable / unknown / n/a
+	DriverCapability string `json:"driver_capability"` // ready / gap:<primitive>
+	// RecordBlocked documents why a cell whose three axes say record-now
+	// (supports yes/partial, daemon full/bug, driver ready) is nonetheless
+	// not recorded — a reason ORTHOGONAL to the axes: infra (auth/mock
+	// unavailable), unit_test (covered by an agent-agnostic unit test, not a
+	// live recording), driver_bug (driver has the step types but they race /
+	// misbehave — distinct from a gap:* missing step type), or upstream (the
+	// agent CLI / daemon needs work first). Empty for normal cells. The
+	// consistency-gate REQUIRES this whenever a record-now cell is marked
+	// applicable:false, so the deferral reason lives in the assessment
+	// (visible here) instead of only in scenarios.json prose.
+	RecordBlocked string             `json:"record_blocked,omitempty"`
+	Confidence    float64            `json:"confidence,omitempty"`
+	Body          string             `json:"body"`
+	Sources       []AssessmentSource `json:"sources,omitempty"`
 	// Caveats documents known limitations / metric drifts that don't
 	// invalidate the verdict but a maintainer should know about. E.g.
 	// "feature is invisible to file-watching, but spec compliance is

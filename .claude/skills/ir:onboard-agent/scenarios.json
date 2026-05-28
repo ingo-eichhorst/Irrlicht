@@ -1428,91 +1428,96 @@
           "timeout_seconds": 180
         },
         "pi": {
-          "applicable": false,
-          "notes": "DRIVER GAP — not recordable today. STALE-VERDICT OVERRIDE: the prior entry said pi supports=no (stock pi had no rewind). pi 0.70.0 DOES ship an in-place rewind: the `/tree` slash command opens an interactive tree-selector overlay and selecting an earlier entry calls session.navigateTree → SessionManager.branch(), which moves the in-memory leaf pointer only ('existing entries are not modified or deleted') and keeps the SAME append-only .jsonl session file under the SAME session_id — an in-place rewind like claudecode, NOT a fork like codex. So pi is agent_supports=partial (conversation restored; no file/shadow-git checkpoint) / irrlicht_observes=partial (the post-rewind turn arc on the same session_id is observable; the rewind EVENT itself is invisible — branch() writes nothing at selection time, so no transcript transition distinguishes a rewind from forward progress). The blocker for recording is concretely a DRIVER GAP: navigating the /tree picker needs `keys` arrow-key + Enter keystrokes (tree-selector.js handleInput consumes tui.select.up/down + tui.select.confirm), and drive-pi-interactive.sh implements only send/slash/wait_turn/interrupt/sleep — it has NO `keys` step type. Extending the driver with a `keys` step (emit tmux send-keys Up/Down/Enter) is a developer task, out of scope for this cell. The intended_recipe + expected.jsonl are the DOCUMENTED TARGET a future driver extension must reproduce. See replaydata/agents/pi/scenarios/checkpoint-rewind/assessment.json.",
-          "intended_recipe": {
-            "preconditions": [
-              "pi CLI on PATH (verified pi 0.70.0) and authenticated (provider API key in env)",
-              "pi version with /tree in-place rewind — confirmed 0.70.0 (interactive-mode.js /tree → showTreeSelector → session.navigateTree → branch())",
-              "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
-              "BLOCKED: drive-pi-interactive.sh has no `keys` step type, so the /tree picker cannot be navigated; this recipe is the documented target, not runnable today",
-              "PARTIAL observability (per assessment.json): the rewind event itself is invisible (branch() moves the in-memory leaf pointer and writes nothing at selection time); only the post-rewind turn arc on the SAME append-only session_id is observable"
-            ],
-            "setup": [
-              "Driver launches pi in a fresh per-run cwd under <staging>/cwd/.",
-              "pi writes one append-only JSONL session file (FilesUnderRoot, non-lazy) under sessionsDir(); the same file + session_id persists across the rewind — branch() appends the next turn as a child of the rewound entry, it does not mint a new file.",
-              "/tree is sent as a slash step (text + Enter) to open the picker; the picker is then driven with `keys` steps (Up/Down to highlight the turn-1 checkpoint, Enter to confirm). The `keys` step is the missing primitive."
-            ],
-            "script": [
-              {
-                "type": "send",
-                "text": "Reply with exactly the word: one"
-              },
-              {
-                "type": "wait_turn"
-              },
-              {
-                "type": "sleep",
-                "seconds": 3
-              },
-              {
-                "type": "send",
-                "text": "Reply with exactly the word: two"
-              },
-              {
-                "type": "wait_turn"
-              },
-              {
-                "type": "sleep",
-                "seconds": 3
-              },
-              {
-                "type": "slash",
-                "text": "/tree"
-              },
-              {
-                "type": "sleep",
-                "seconds": 3
-              },
-              {
-                "type": "keys",
-                "keys": "Up Up"
-              },
-              {
-                "type": "sleep",
-                "seconds": 1
-              },
-              {
-                "type": "keys",
-                "keys": "Enter"
-              },
-              {
-                "type": "sleep",
-                "seconds": 4
-              },
-              {
-                "type": "send",
-                "text": "Reply with exactly the word: three"
-              },
-              {
-                "type": "wait_turn"
-              },
-              {
-                "type": "sleep",
-                "seconds": 4
-              }
-            ],
-            "verify": [
-              "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the rollout-keyed session in ready",
-              "the rollout session runs two working→ready turns (turn 1 'one', turn 2 'two') — the checkpoints to rewind to",
-              "after /tree selection, NO transcript_removed and NO transcript_new appear — the rewind is invisible to file-watching (branch() writes nothing at selection time); the session stays ready and on the SAME session_id",
-              "the post-rewind turn shows a clean ready → working → ready arc on the SAME rollout session_id (in-place rewind, not a fork) — the 'same session_id if rewound in place' signal from scenario-meanings",
-              "exactly one session_id appears across the whole recording (no fork); a single process_exited at teardown",
-              "final live state is ready"
-            ],
-            "settings": {},
-            "timeout_seconds": 150
-          }
+          "preconditions": [
+            "pi CLI on PATH (verified pi 0.70.0) and authenticated (provider API key in env)",
+            "pi version with /tree in-place rewind — confirmed 0.70.0 (interactive-mode.js /tree → showTreeSelector → session.navigateTree → branch())",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "PARTIAL observability (per assessment.json): the rewind event itself is invisible (branch() moves the in-memory leaf pointer and writes nothing at selection time); only the post-rewind turn arc on the SAME append-only session_id is observable"
+          ],
+          "setup": [
+            "Driver launches pi in a fresh per-run cwd under <staging>/cwd/.",
+            "pi writes one append-only JSONL session file (FilesUnderRoot, non-lazy) under sessionsDir(); the same file + session_id persists across the rewind — branch() appends the next turn as a child of the rewound entry, it does not mint a new file.",
+            "/tree is sent as a slash step (text + Enter) to open the picker; the picker is then driven with `keys` steps (Up/Down to highlight the turn-1 checkpoint, Enter to confirm) using the raw tmux send-keys path provided by the `keys` step type."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: one"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: two"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "slash",
+              "text": "/tree"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "keys",
+              "keys": "Up Up"
+            },
+            {
+              "type": "sleep",
+              "seconds": 1
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: three"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the rollout-keyed session in ready",
+            "the rollout session runs two working→ready turns (turn 1 'one', turn 2 'two') — the checkpoints to rewind to",
+            "after /tree selection, NO transcript_removed and NO transcript_new appear — the rewind is invisible to file-watching (branch() writes nothing at selection time); the session stays ready and on the SAME session_id",
+            "the post-rewind turn shows a clean ready → working → ready arc on the SAME rollout session_id (in-place rewind, not a fork) — the 'same session_id if rewound in place' signal from scenario-meanings",
+            "exactly one session_id appears across the whole recording (no fork); a single process_exited at teardown",
+            "final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 150,
+          "applicable": true,
+          "notes": "pi 0.70.0 ships an in-REPL rewind via the /tree slash command: it opens an interactive tree-selector overlay whose handleInput consumes tui.select.up/down + tui.select.confirm; selecting an earlier entry calls session.navigateTree(entryId) → SessionManager.branch(branchFromId), which only moves the in-memory leafId pointer (\"existing entries are not modified or deleted\") and keeps the SAME append-only .jsonl session file under the SAME session_id — the next turn is appended as a child of the rewound entry. An in-place rewind, like claudecode (NOT a fork like codex). agent_supports=partial: pi restores conversation state but not the working-tree files (no shadow-git in stock pi). The rewind EVENT itself is invisible to file-watch — branch() writes nothing at selection time — so we assert it as a negative invariant over the dwell window between the /tree selection and turn 3. Recipe uses the `keys` step type (raw tmux send-keys) added in commit 88400160 to navigate the /tree picker: send /tree, sleep to let the overlay materialize, `Up Up` to walk back from the latest-highlighted entry to the turn-1 leaf, Enter to commit the rewind. If the live overlay layout differs (oldest-first instead of newest-first), adjust the `Up` count to whatever lands on turn-1. The picker shows newest-first highlighted at the latest entry; `Up Up` from (4/4) `assistant: two` lands on (2/4) `assistant: one` (the turn-1 leaf). The first Enter selects that leaf and pi pops up a `Summarize branch? → No summary / Summarize / Summarize with custom prompt` confirmation dialog; a SECOND Enter accepts the default `No summary` and surfaces `Navigated to selected point`. Only then is it safe to send turn 3 (otherwise the third send is consumed by the dialog)."
         },
         "aider": {
           "applicable": false,
@@ -1727,8 +1732,57 @@
           "timeout_seconds": 180
         },
         "pi": {
-          "applicable": false,
-          "scope_note": "REASSESSED yes/yes (0.72): pi 0.70.0 DOES ship a `/new` reset (interactive-mode.js:2037 → handleClearCommand → runtimeHost.newSession → session-manager.js:484 newSession() mints a fresh UUID `.jsonl` under the same PID, parentSession:null, file flushed lazily). Same supersession shape as codex /new: the NEW session supersedes the OLD; the old UUID-1 file lingers frozen on disk while the daemon removes the old session row via the #169 same-PID cleanup once UUID-2's PID is discovered. The daemon OBSERVES this fully and live (pi Source = FilesUnderRoot ~/.pi/agent/sessions detects UUID-2 the instant its file appears). Recording is nonetheless DEFERRED: drive-pi-interactive.sh lacks the codex-style multi-session capture (no `reset_session` step that re-arms resolve_transcript onto the new rollout slot, and no `session.uuids` PLURAL list). Empirically (standalone dry-run send 'ok' → /new → send 'fresh'): pi correctly wrote TWO distinct UUID files under one PID, but (1) the post-/new `wait_turn` reads the cached stale UUID-1 transcript and times out, and (2) curate-lifecycle-fixture.sh filters the recording to the singular session.uuid (UUID-1), dropping UUID-2 — so a curated fixture can only ever contain UUID-1 and the v2_* phases would be absent. The TARGET 8-phase recipe is the codex-shaped supersession arc: send 'Reply with exactly the word: ok' → wait_turn → sleep 3 → slash '/new' → sleep 3 → send 'Reply with exactly the word: fresh' → wait_turn → sleep 3 (asserting v1 arc on UUID-1, v2_session_birth new UUID after /new, v2 arc on UUID-2, no waiting). Recording deferred until the pi interactive driver gains codex-style multi-session capture (reset_session step + session.uuids) — a developer task, out of scope for the implement stage. expected.jsonl documents the full target arc; assessment.json carries the yes/yes verdict and code citations."
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (~/.pi/ credentials) — verified pi 0.70.0, which ships the in-REPL `/new` reset (interactive-mode.js:2037 → handleClearCommand → runtimeHost.newSession → session-manager.js:484 newSession()).",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record.",
+            "FULL observability (per assessment.json yes/yes 0.72): pi /new is the codex supersession shape — newSession() mints a fresh createSessionId() UUID and a new <ts>_<uuid2>.jsonl under the same PID (parentSession:null, no UUID-1 history, file flushed lazily on the first post-reset message). The daemon (pi Source = FilesUnderRoot ~/.pi/agent/sessions) detects UUID-2 the instant its file appears: a fresh session_id in ready is the user-observable reset signal. The old UUID-1 row is removed via the #169 same-PID cleanup once UUID-2's PID is discovered (~ms after the new pid_discovered, NOT a readyTTL sweep); the old UUID-1 FILE lingers frozen on disk. No transcript_removed fires at the /new keystroke itself (reset is lazy — UUID-2 materializes on the first post-reset prompt)."
+          ],
+          "setup": [
+            "Driver launches pi in a fresh per-run cwd under <staging>/cwd/.",
+            "Pi mints its own session UUID per rollout. The first prompt materializes <ts>_<uuid1>.jsonl; the reset_session step sends pi's in-REPL `/new` (allocating a new driver slot reusing the same tmux/process), and the first prompt AFTER /new materializes a second <ts>_<uuid2>.jsonl with a fresh session_id and no UUID-1 history. The driver re-arms resolve_transcript onto UUID-2 and records BOTH UUIDs into session.uuids / transcript.paths so curate keeps both rollouts."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "reset_session"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            }
+          ],
+          "verify": [
+            "events.jsonl shows a proc-<PID> pre-session entering ready, handing off to the FIRST rollout-keyed session (UUID-1) in ready",
+            "events.jsonl shows the FIRST rollout session running a working→ready turn (turn 1, 'ok')",
+            "after /new, the first post-reset prompt spawns a DIFFERENT rollout session_id (UUID-2, parentSession:null, no UUID-1 history) in ready — the 'new session appears with a different session_id' reset, observed live on the dashboard",
+            "the second turn's working→ready cycle is on the NEW rollout session (UUID-2), not on stale UUID-1",
+            "the old UUID-1 daemon row is removed via the #169 same-PID cleanup once UUID-2's PID is discovered (the old UUID-1 file lingers frozen on disk); no transcript_removed fires at the /new keystroke itself",
+            "no waiting state appears at any point; final live state is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         },
         "aider": {
           "applicable": false,
@@ -1919,8 +1973,62 @@
           "scope_note": "Re-assessed 2026-05-23: the prior applicable:false (driver lacked resume) is STALE. The codex interactive driver now exposes exit_clean + resume (commit 8296cd0), and codex 0.130.0's `codex resume <uuid>` reopens the SAME rollout file (verified empirically) — one session id across two process lifetimes. Same single-session-two-lifetimes shape as claudecode/session-resume, but codex resume is explicit (`codex resume <uuid>`) where claudecode re-passes `--session-id`. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (birth → turn1 working/ready → process_exited → same-id re-bind → turn2 working/ready → final ready) is fixed. If it breaks, check drive-codex-interactive.sh step_resume (UUID resolution + `codex resume <uuid>` relaunch) and confirm codex flushed the rollout on Ctrl-D before relaunch."
         },
         "pi": {
-          "applicable": false,
-          "notes": "DRIVER GAP. Reassessed 2026-05-25 → agent_supports:yes / irrlicht_observes:yes (0.78): pi natively reopens a prior session at relaunch (`pi -c` continue-last / `pi -r` / `pi --session <uuid>`), reusing the SAME uuid.jsonl under ~/.pi/agent/sessions; because the adapter watches that dir (FilesUnderRoot) the daemon sees the same session_id row come back after the first lifetime exits — same observable shape as claudecode/session-resume. BUT this cell cannot be recorded: drive-pi-interactive.sh implements only send/slash/wait_turn/interrupt/sleep — it lacks the `exit_clean` and `resume`/`restart` step types needed to exit pi after turn 1 and relaunch with the same uuid for turn 2, and it tracks only one session UUID + transcript per run. Same gap that froze pi/session-reset. Recording deferred until drive-pi-interactive.sh gains exit_clean + a resume primitive (relaunch-with-same-uuid). expected.jsonl is committed as the documented target arc."
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (auth set up out-of-band).",
+            "irrlichd is recording (--attach against a daemon with --record).",
+            "drive-pi-interactive.sh exposes the `exit_clean` and `resume` step types (added in commit e88e35b1).",
+            "No other pi session is being driven in the same cwd while this records (DiscoverPID matches a running pi to a session by CWD)."
+          ],
+          "setup": [
+            "Pi assigns its own session UUID per launch under ~/.pi/agent/sessions/--<cwd>--/ as <ts>_<uuid>.jsonl, created lazily on the first user message. The driver discovers that transcript during wait_turn.",
+            "The `resume` step Ctrl-D's the running pi (graceful shutdown flushes the transcript -> daemon emits process_exited), kills the tmux session, then relaunches `pi --session <transcript>` in the SAME cwd. Pi reopens and APPENDS to the same <ts>_<uuid>.jsonl, so the daemon-side session_id is stable across both process lifetimes.",
+            "The driver keeps UUID/TRANSCRIPT unchanged across the resume and does NOT allocate a second slot — the single-session curator captures both lifetimes because they share one session_id (session.uuids/transcript.paths each hold one entry).",
+            "No separate exit_clean step precedes resume: the resume step performs the clean Ctrl-D exit itself, which is what emits the first-lifetime process_exited. Adding a standalone exit_clean first would tear down the (only) tmux server, so resume's own `tmux send-keys` would then hit a dead server and abort the driver — drop it."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "resume"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: fresh"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the first launch's session entering ready, then the working/ready cycle for turn 1.",
+            "events.jsonl contains a process_exited event for the session after turn 1 (the Ctrl-D clean exit performed by the resume step).",
+            "the SAME session_id re-binds to a new PID after the resume — NOT a new session_id. This proves pi reopened the existing transcript across PID lifetimes (spec: 'Same session_id reappears').",
+            "second-lifetime working transition fires on the SAME session_id, then back to ready.",
+            "state never enters working between the first-lifetime exit and the second turn (no premature/incorrect waiting state on resume).",
+            "final session state is ready.",
+            "transcript.jsonl carries both turns appended to one <ts>_<uuid>.jsonl — pi --session reopens the same file rather than minting a new one."
+          ],
+          "settings": {},
+          "timeout_seconds": 240,
+          "scope_note": "Re-assessed 2026-05-25 -> agent_supports:yes / daemon_capability:full / driver_capability:ready (0.78): the prior applicable:false (driver lacked exit_clean + resume) is STALE. The pi interactive driver now exposes exit_clean + resume (commit e88e35b1), and `pi --session <transcript>` reopens and APPENDS to the SAME <ts>_<uuid>.jsonl across two process lifetimes — one session_id, two lifetimes. Same single-session-two-lifetimes shape as claudecode/codex session-resume. How it differs between runs: UUID/PID/timestamps/token counts vary; the structural arc (v1 birth -> turn1 working/ready -> process_exited -> same-id re-bind in ready -> turn2 working/ready -> final ready) is fixed. Pi turns can be slow, hence generous wait_turn/sleep budgets. If it breaks, check drive-pi-interactive.sh step_resume (transcript resolution + `pi --session` relaunch in the same cwd so DiscoverPID re-binds the new PID) and confirm pi flushed the transcript on Ctrl-D before relaunch."
         },
         "aider": {
           "applicable": false,
@@ -4912,8 +5020,91 @@
           "timeout_seconds": 240
         },
         "pi": {
-          "applicable": false,
-          "notes": "scope_note: driver_gap (C9). Needs concurrent same-adapter multi-session capture, but drive-pi-interactive.sh is single-session — it supports only send/slash/wait_turn/interrupt/sleep, runs ONE tmux session with ONE resolved transcript and ONE turn counter, and has no start_session step or per-step {\"session\":N} routing. The claudecode and codex recipes for this scenario both depend on start_session + {\"session\":N} (their drivers gained a per-slot session model: step_start_session, slot allocation, claimed-path exclusion); the pi driver has none of it, so two concurrent pi sessions in one cwd cannot be staged for a recording. Extending the pi driver is a developer task (out of scope for this cell). Secondary seam (irrlicht_observes:partial): pi's DiscoverPID = DiscoverPIDByCWD (cwd-only narrowing + highest-PID disambiguate fallback) — UNLIKE codex's per-rollout-file-writer binding and claudecode's metadata-first lookup, two same-cwd pi processes both survive the cwd narrowing, so the daemon cannot cleanly bind each session to its own PID by cwd alone; even with the driver extended, the scenario's 'stable, non-cross-contaminating PID binding' assertion is not guaranteed for pi. expected.jsonl is committed as the documented target (adapted from the codex/claudecode spec, anchored on working transitions to dodge pi's born-ready proc-<PID> placeholder). No recording; no retry."
+          "applicable": true,
+          "preconditions": [
+            "pi CLI on PATH and authenticated (pi runs against its configured model out-of-band)",
+            "tmux available — the interactive driver launches each pi REPL in its own tmux session",
+            "irrlichd is recording — run-cell.sh isolated mode (spawns its own --record daemon), or --attach against a daemon started with --record",
+            "no other pi session is live in the run cwd (a stray same-cwd pi would surface as a third row and break the two-row assertion)"
+          ],
+          "setup": [
+            "Driver auto-starts session 1 (slot 1) as a pi REPL in <staging>/cwd; the first send lazy-materializes session 1's <ts>_<uuid>.jsonl transcript under ~/.pi/agent/sessions/<cwd-slug>/",
+            "The start_session step launches session 2 (slot 2) in the SAME <staging>/cwd in a fresh tmux/process — its first send lazy-materializes a SECOND distinct <ts>_<uuid>.jsonl in the same project dir (pi keys transcripts by UUID, not by cwd)",
+            "Steps carrying {\"session\":1} route send/wait_turn back to session 1 while session 2 stays alive — exercising the concurrent, independent arcs across two distinct UUID rollouts",
+            "LAZY-MATERIALIZATION (discovered live in pi/checkpoint-rewind): pi creates each per-session JSONL only AFTER the first user message commits, with turn 1 batched into that initial write; turn 1's working→ready arc is therefore NOT daemon-observable. The recipe sends a SECOND prompt per session so the spec can anchor identity on an observable working transition",
+            "PID-BINDING SEAM (caveat, not asserted): pi's DiscoverPID = DiscoverPIDByCWD (cwd-only narrowing + highest-PID disambiguate fallback) — two pi processes sharing one cwd both survive the narrowing, so the daemon may flap or mis-bind PIDs; the spec asserts what IS observable (two distinct session_id rows, each with its own birth + working→ready arc) and leaves PID-binding stability documented as a known weakness"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha2"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "start_session"
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: bravo2"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: alpha3",
+              "session": 1
+            },
+            {
+              "type": "wait_turn",
+              "session": 1
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains 2 distinct pi session_ids (UUID-keyed rollouts), both keyed to the same cwd slug under ~/.pi/agent/sessions/",
+            "each session_id has at least one independent working->ready arc; no working transition on one session is attributed to the other",
+            "session 1 has MULTIPLE working->ready arcs (at least one pre-start_session + at least one post-start_session re-drive); session 2 has at least one — proving session 1 stayed observable as a distinct row while session 2 was alive",
+            "every UUID-keyed phase anchors on a WORKING transition (never on ready), to skip pi's transient proc-<PID> presession placeholder (born in ready, never enters working) and pi's variable lazy-materialization behavior (turn 1 sometimes emits a microsecond-fast batched arc, sometimes doesn't)",
+            "PID-binding stability is NOT asserted: pi's cwd-only DiscoverPID is structurally vulnerable to same-cwd ambiguity, though in practice the sticky-once-bound + highest-PID fallback resolves sequential launches correctly (this recording confirmed two distinct PIDs were bound to the two UUID sessions without flapping — see assessment.json for the live observability correction)"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         },
         "opencode": {
           "applicable": true,
