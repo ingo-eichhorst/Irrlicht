@@ -1,33 +1,37 @@
 #!/usr/bin/env bash
-# completeness-gate_test.sh — unit tests for lib/completeness-gate.sh. Plain
-# bash + jq (no framework). Run directly or via scripts/smoke-test.sh. Exits
-# non-zero on any failed assertion.
+# completeness-gate_test.sh — CLI integration test for the thin completeness
+# gate. Plain bash + jq (no framework). Run directly or via scripts/smoke-test.sh.
 #
-# Covers the #496 RC4 forcing function: every coverage_id applicable to an
-# agent must reach a terminal verdict; a cell with no assessment or an
-# assessed-but-unrecorded cell is non-terminal and must be caught.
+# Since #508 the gate's decision logic lives in Go (internal/matrix) with its
+# own exhaustive parity tests (internal/matrix/matrix_test.go ports the exact
+# fixtures this file used to assert against). What's left to verify HERE is the
+# bash↔binary seam: that completeness-gate.sh translates its CLI arguments
+# correctly and propagates the binary's exit codes (0 complete / 1 incomplete /
+# 2 infra). Skips gracefully when the Go toolchain is unavailable.
 
 set -uo pipefail   # NOT -e: assertions capture non-zero return codes
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=completeness-gate.sh
-source "$DIR/completeness-gate.sh"
 
+if ! command -v go >/dev/null 2>&1; then
+  echo "completeness-gate_test: go toolchain not available — skipping (logic covered by internal/matrix tests)"
+  exit 0
+fi
 command -v jq >/dev/null || { echo "completeness-gate_test: jq is required" >&2; exit 2; }
+
+# Pre-build the matrix binary once so each gate call is a fast exec, not a build.
+REPO="$(cd "$DIR/../../../../.." && pwd)"
+BIN="$REPO/.build/matrix"
+mkdir -p "$REPO/.build"
+( cd "$REPO/tools/agent-onboarding" && go build -o "$BIN" ./cmd/matrix ) \
+  || { echo "completeness-gate_test: failed to build matrix binary" >&2; exit 2; }
+export IR_MATRIX_BIN="$BIN"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Capabilities: feat_a/feat_b true, feat_x false; transport=structured_store.
-# A scenario requiring feat_x is N/A; one requiring transport line_based is N/A
-# too (#496 RC7); requiring feat_a (no transport constraint) is applicable.
-cat > "$TMP/capabilities.json" <<'JSON'
-{"agent":"fake","transport":"structured_store","features":{"feat_a":true,"feat_b":true,"feat_x":false}}
-JSON
-
-# Catalog: six cells exercising every disposition + one N/A (requires feat_x).
-# `dual` shares its coverage_id across two recipe names (recorded under the
-# coverage_id dir, proving the candidate-dir fallback).
+# Catalog: cells exercising every disposition + one N/A (requires feat_x) and a
+# transport-N/A cell (requires_transport line_based vs the structured_store agent).
 cat > "$TMP/scenarios.json" <<'JSON'
 {"scenarios":[
   {"name":"rec","coverage_id":"rec","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
@@ -36,92 +40,54 @@ cat > "$TMP/scenarios.json" <<'JSON'
   {"name":"degraded","coverage_id":"degraded","requires":["feat_a"],"by_adapter":{"fake":{"applicable":false}}},
   {"name":"missed","coverage_id":"missed","requires":["feat_a"]},
   {"name":"ready-unrec","coverage_id":"ready-unrec","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"dual","coverage_id":"dual","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"dual-variant","coverage_id":"dual","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
   {"name":"na","coverage_id":"na","requires":["feat_x"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"line-only","coverage_id":"line-only","requires":["feat_a"],"requires_transport":["line_based"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"mixfreeze-a","coverage_id":"mixfreeze","requires":["feat_a"],"by_adapter":{"fake":{"applicable":false}}},
-  {"name":"mixfreeze-b","coverage_id":"mixfreeze","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"divreq-a","coverage_id":"divreq","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"divreq-b","coverage_id":"divreq","requires":["feat_x"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}}
+  {"name":"line-only","coverage_id":"line-only","requires":["feat_a"],"requires_transport":["line_based"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}}
 ]}
 JSON
 
-SDIR="$TMP/scenarios"
-mk_assess() { # <dir> <supports> <daemon> <driver>
-  mkdir -p "$SDIR/$1"
-  printf '{"agent_supports":"%s","daemon_capability":"%s","driver_capability":"%s"}\n' \
-    "$2" "$3" "$4" > "$SDIR/$1/assessment.json"
-}
+ROOT="$TMP/replaydata"
+SDIR="$ROOT/agents/fake/scenarios"
+mkdir -p "$ROOT/agents/fake"
+cat > "$ROOT/agents/fake/capabilities.json" <<'JSON'
+{"agent":"fake","transport":"structured_store","features":{"feat_a":true,"feat_b":true,"feat_x":false}}
+JSON
 
-mk_assess rec yes full ready
-printf '{}\n' > "$SDIR/rec/transcript.jsonl"; printf '{}\n' > "$SDIR/rec/events.jsonl"
+mk_assess() { mkdir -p "$SDIR/$1"; printf '{"agent_supports":"%s","daemon_capability":"%s","driver_capability":"%s"}\n' "$2" "$3" "$4" > "$SDIR/$1/assessment.json"; }
+record()    { mkdir -p "$SDIR/$1"; printf '{}\n' > "$SDIR/$1/transcript.jsonl"; printf '{}\n' > "$SDIR/$1/events.jsonl"; }
+
+mk_assess rec yes full ready; record rec
 mk_assess gap partial full gap:keys
 mk_assess frozen no n/a ready
-mk_assess degraded yes full ready             # recipe applicable:false ⇒ applicable_false
-mk_assess ready-unrec yes full ready          # assessed recordable, NO recording
-mk_assess dual yes full ready
-printf '{}\n' > "$SDIR/dual/transcript.jsonl"; printf '{}\n' > "$SDIR/dual/events.jsonl"
-mk_assess mixfreeze yes full ready            # one variant applicable:false, one recordable, NO recording
-# `missed` and `na` get no dir at all.
+mk_assess degraded yes full ready          # recipe applicable:false ⇒ applicable_false
+mk_assess ready-unrec yes full ready       # assessed recordable, NO recording → non-terminal
+# `missed` + `na` get no dir at all.
 
 fails=0
 pass() { echo "  PASS: $1"; }
 fail() { echo "  FAIL: $1 — expected [$2] got [$3]"; fails=$((fails + 1)); }
 assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"; }
 
-echo "== cg_applicable_coverage_ids: requires vs capabilities =="
-applicable="$(cg_applicable_coverage_ids "$TMP/scenarios.json" "$TMP/capabilities.json")"
-assert_eq "applicable set (dual/mixfreeze collapse; na + line-only excluded; divreq IN via its feat_a variant)" \
-  "$(printf 'degraded\ndivreq\ndual\nfrozen\ngap\nmissed\nmixfreeze\nready-unrec\nrec')" \
-  "$applicable"
-# line-only requires transport line_based; the fake agent is structured_store.
-if printf '%s\n' "$applicable" | grep -qx line-only; then
-  fail "requires_transport excludes line-only for structured_store agent" "absent" "present"
-else
-  pass "requires_transport excludes line-only for structured_store agent"
-fi
-# divreq has a variant requiring feat_x (unmet) AND one requiring feat_a (met):
-# per-variant ANY-applicability must KEEP it (union-then-AND would drop it).
-if printf '%s\n' "$applicable" | grep -qx divreq; then
-  pass "divergent-requires cell kept applicable via its satisfiable variant (#496 RC4 review)"
-else
-  fail "divergent-requires cell kept applicable" "present" "absent"
-fi
-
-echo "== cg_disposition: one verdict per cell =="
-assert_eq "recorded"               recorded               "$(cg_disposition "$TMP/scenarios.json" fake rec "$SDIR")"
-assert_eq "driver_gap"             driver_gap             "$(cg_disposition "$TMP/scenarios.json" fake gap "$SDIR")"
-assert_eq "frozen → applicable_false" applicable_false    "$(cg_disposition "$TMP/scenarios.json" fake frozen "$SDIR")"
-assert_eq "recipe applicable:false → applicable_false" applicable_false "$(cg_disposition "$TMP/scenarios.json" fake degraded "$SDIR")"
-assert_eq "no assessment → unassessed" unassessed         "$(cg_disposition "$TMP/scenarios.json" fake missed "$SDIR")"
-assert_eq "assessed recordable, no recording → assessed_not_recorded" assessed_not_recorded "$(cg_disposition "$TMP/scenarios.json" fake ready-unrec "$SDIR")"
-assert_eq "dual recorded under coverage_id dir" recorded  "$(cg_disposition "$TMP/scenarios.json" fake dual "$SDIR")"
-# mixfreeze: one variant applicable:false, one recordable, assessed record-route,
-# NO recording → assessed_not_recorded. `any(applicable==false)` would wrongly
-# freeze it as applicable_false, masking the recordable variant (#496 RC4 review).
-assert_eq "mixed applicable:false + recordable variant → assessed_not_recorded" assessed_not_recorded "$(cg_disposition "$TMP/scenarios.json" fake mixfreeze "$SDIR")"
-
-echo "== CLI exit code: non-terminal cells fail the gate =="
+echo "== CLI exit codes (bash↔matrix seam) =="
 bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$TMP/root-missing" >/dev/null 2>&1
 assert_eq "missing capabilities → exit 2 (infra)" "2" "$?"
 
-# Build a complete root (cp the fixtures so the CLI's path layout resolves).
-ROOT="$TMP/root"; mkdir -p "$ROOT/agents/fake/scenarios"
-cp "$TMP/capabilities.json" "$ROOT/agents/fake/capabilities.json"
-cp -R "$SDIR/." "$ROOT/agents/fake/scenarios/"
 bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$ROOT" >/dev/null 2>&1
 assert_eq "non-terminal cells present → exit 1" "1" "$?"
 
 # Make every non-terminal cell terminal; the gate should now pass.
-mk_assess_root() { mkdir -p "$ROOT/agents/fake/scenarios/$1"; printf '{"agent_supports":"%s","daemon_capability":"%s","driver_capability":"%s"}\n' "$2" "$3" "$4" > "$ROOT/agents/fake/scenarios/$1/assessment.json"; }
-record_root() { mkdir -p "$ROOT/agents/fake/scenarios/$1"; printf '{}\n' > "$ROOT/agents/fake/scenarios/$1/transcript.jsonl"; printf '{}\n' > "$ROOT/agents/fake/scenarios/$1/events.jsonl"; }
-mk_assess_root missed no n/a ready                                  # → applicable_false
-record_root ready-unrec                                            # → recorded
-record_root mixfreeze                                              # → recorded
-mk_assess_root divreq no n/a ready                                 # → applicable_false (was unassessed)
+mk_assess missed no n/a ready              # → applicable_false
+record ready-unrec                         # → recorded
 bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$ROOT" >/dev/null 2>&1
 assert_eq "all terminal → exit 0" "0" "$?"
+
+echo "== output: GAP line names the next action =="
+out="$(bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$TMP/root-missing" 2>&1)"
+mk_assess ready-unrec yes full ready       # restore one non-terminal cell
+rm -f "$SDIR/ready-unrec/transcript.jsonl" "$SDIR/ready-unrec/events.jsonl"
+out="$(bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$ROOT" 2>&1)"
+grep -q "ready-unrec.*assessed_not_recorded → implement fake ready-unrec" <<<"$out" \
+  && pass "implement hint for assessed_not_recorded" \
+  || fail "implement hint" "implement fake ready-unrec line" "$out"
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then

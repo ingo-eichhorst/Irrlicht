@@ -26,7 +26,7 @@ while IFS= read -r f; do
     echo "$err" >&2
     rc=1
   fi
-done < <(find "$SCRIPT_DIR" -maxdepth 2 -name '*.sh' -type f | sort)
+done < <(find "$SCRIPT_DIR" -maxdepth 3 -name '*.sh' -type f | sort)
 
 echo ""
 echo "== unit tests (lib/reconcile_test.sh) =="
@@ -53,10 +53,14 @@ echo "== unit tests (lib/consistency-gate_test.sh) =="
 bash "$SCRIPT_DIR/lib/consistency-gate_test.sh" || rc=1
 
 echo ""
+echo "== unit tests (lib/drive/drive-lib_test.sh) =="
+bash "$SCRIPT_DIR/lib/drive/drive-lib_test.sh" || rc=1
+
+echo ""
 echo "== shellcheck (advisory) =="
 if command -v shellcheck >/dev/null 2>&1; then
   # -x follows `source`d libs; advisory only — does not change rc.
-  find "$SCRIPT_DIR" -maxdepth 2 -name '*.sh' -type f | sort | while IFS= read -r f; do
+  find "$SCRIPT_DIR" -maxdepth 3 -name '*.sh' -type f | sort | while IFS= read -r f; do
     shellcheck -S warning -x "$f" || true
   done
   echo "  (advisory — see findings above, if any)"

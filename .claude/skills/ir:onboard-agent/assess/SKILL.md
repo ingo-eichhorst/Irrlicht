@@ -462,7 +462,9 @@ is `applicable:false` with honest axes — distinct from `frozen` (an axis says
 irrlicht can't) and from `driver-gap` (a missing step type, fixable by
 `extend-driver`).
 
-Return ONLY this (≤5 lines), no transcripts:
+Return ONLY this (≤5 lines), no transcripts. Shared-field semantics
+(`record_blocked`, `matrix_drift`, the envelope rules) are defined once in
+[`../return-contract.md`](../return-contract.md):
 
 ```
 verdict: supports=<v> daemon=<full|bug|incapable|n/a> driver=<ready|gap:*> (confidence <n>) [record_blocked=<reason>]

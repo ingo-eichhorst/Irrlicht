@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/tools/agent-onboarding/internal/matrix"
 	"irrlicht/tools/agent-onboarding/internal/validate"
 )
 
@@ -181,46 +182,15 @@ func buildCellVerdict(repoRoot, agentSlug, scenarioID string, overlay map[string
 	return cell
 }
 
-// deriveDisplayState rolls the three orthogonal facts — agent support,
-// daemon capability, driver capability — plus the MEASURED recording
-// status up into one display state for the matrix (#476). Precedence is
-// fixed and daemon-before-driver: a product (daemon) problem outranks a
-// tooling (driver) gap because it's the more fundamental blocker.
-//
-//	n.a.            agent doesn't support the feature (or daemon n/a)
-//	unknown         support or daemon capability not yet determined
-//	unobservable    behavior leaves no trace the daemon can ever see
-//	blocked-daemon  observable in principle, but the daemon mis-handles it (bug)
-//	blocked-driver  observable, but the harness lacks a driver primitive (gap:*)
-//	pending-record  full + ready, no recording captured yet
-//	observed        full + ready + a recording exists (drift shown via outline)
-//
-// hasRecording is true when a recording has been captured (measurement
-// status is anything other than the no-recording / no-spec sentinels).
+// deriveDisplayState rolls the three orthogonal facts — agent support, daemon
+// capability, driver capability — plus the MEASURED recording status up into
+// one display state for the matrix (#476). It delegates to the canonical
+// matrix model (#508) so the viewer and the gates can never disagree on what a
+// cell's verdict means; hasRecording is true when a recording has been captured
+// (measurement status is anything other than the no-recording / no-spec
+// sentinels).
 func deriveDisplayState(supports, daemon, driver string, hasRecording bool) string {
-	switch supports {
-	case "no":
-		return "n.a."
-	case "", "unknown":
-		return "unknown"
-	}
-	switch {
-	case daemon == "n/a":
-		return "n.a."
-	case daemon == "incapable":
-		return "unobservable"
-	case daemon == "bug":
-		return "blocked-daemon"
-	case strings.HasPrefix(driver, "gap:"):
-		return "blocked-driver"
-	case daemon == "" || daemon == "unknown":
-		return "unknown"
-	}
-	// daemon == full, driver == ready
-	if !hasRecording {
-		return "pending-record"
-	}
-	return "observed"
+	return matrix.DeriveDisplayState(supports, daemon, driver, hasRecording)
 }
 
 // annotateDisplayState decorates each coverage cell with a derived

@@ -71,19 +71,44 @@ recipe_lint_gaps() {
 
 # --- Semantic lint (#496 RC3): a step type the driver ACCEPTS (a case arm) is
 # not necessarily one it PRODUCES. The grammar check above can't see that; this
-# layer reads scripts/lib/elicitable-primitives.json, which declares per adapter
-# the step types genuinely elicited plus whether slash commands must use a
-# dedicated step type (a bare send "/cmd" being a no-op on a headless driver).
+# layer reads the step types the driver genuinely ELICITS plus whether slash
+# commands must use a dedicated step type (a bare send "/cmd" being a no-op on a
+# headless driver). Since #508 #4 these live in the driver itself as top-level
+# constants (DRIVE_ELICITS / DRIVE_SLASH_REQUIRES_STEP_TYPE), so the grammar has
+# ONE owner — the driver — instead of a parallel hand-kept manifest that drifts.
 
-# elicitable_primitives_for_agent <manifest> <agent>
-#   → newline-separated, sorted-unique step types the adapter genuinely elicits.
-elicitable_primitives_for_agent() {
-  jq -r --arg a "$2" '.adapters[$a].elicits // [] | .[]' "$1" 2>/dev/null | sort -u
+# driver_elicits_from_file <driver-file>
+#   → newline-separated, sorted-unique step types the driver genuinely elicits,
+#     read from its top-level `DRIVE_ELICITS=…` constant (space-separated).
+#     Empty when the file is missing or declares no such constant.
+#
+#   Tolerant of the common assignment forms — double OR single quotes, and a
+#   trailing `# comment` — because a strict anchored match would silently return
+#   empty (→ grammar-only) on a benign edit, re-opening the semantic-lint drift
+#   #508 #4 closed. Step types are `[a-z_]+`, so stripping quotes is safe.
+driver_elicits_from_file() {
+  local file="$1" raw
+  [[ -f "$file" ]] || return 0
+  raw="$(sed -n 's/^DRIVE_ELICITS=//p' "$file" | head -1)"
+  [[ -n "$raw" ]] || return 0
+  raw="${raw%%#*}"        # drop a trailing comment
+  raw="${raw//\"/}"       # strip double quotes
+  raw="${raw//\'/}"       # strip single quotes
+  # Unquoted expansion word-splits on whitespace and ignores leading/trailing.
+  printf '%s\n' $raw | sed '/^$/d' | sort -u
 }
 
-# agent_slash_requires_step_type <manifest> <agent> → "true" | "false"
-agent_slash_requires_step_type() {
-  jq -r --arg a "$2" '.adapters[$a].slash_requires_step_type // false' "$1" 2>/dev/null
+# driver_slash_requires_step_type <driver-file> → "true" | "false"
+#   Reads the driver's top-level `DRIVE_SLASH_REQUIRES_STEP_TYPE=` constant;
+#   anything other than literal `true` (incl. absent) is false. Tolerates quotes
+#   and a trailing comment, like driver_elicits_from_file.
+driver_slash_requires_step_type() {
+  local file="$1" v
+  [[ -f "$file" ]] || { echo false; return 0; }
+  v="$(sed -n 's/^DRIVE_SLASH_REQUIRES_STEP_TYPE=//p' "$file" | head -1)"
+  v="${v%%#*}"             # drop a trailing comment
+  v="${v//[\"\' ]/}"       # strip quotes and whitespace
+  [[ "$v" == "true" ]] && echo true || echo false
 }
 
 # recipe_send_slash_texts <scenarios.json> <scenario> <agent>
@@ -96,7 +121,7 @@ recipe_send_slash_texts() {
   ' "$1" 2>/dev/null
 }
 
-# recipe_semantic_gaps <manifest> <scenarios.json> <scenario> <agent>
+# recipe_semantic_gaps <driver-file> <scenarios.json> <scenario> <agent>
 #   → prints each semantic problem, one per line:
 #       not-elicited:<step>   — a step type the recipe needs that the driver
 #                               dispatches but does not genuinely produce.
@@ -106,18 +131,18 @@ recipe_send_slash_texts() {
 #     run only AFTER the grammar check passes, so `not-elicited` is purely a
 #     produces-vs-accepts gap (every needed step is already a case arm).
 recipe_semantic_gaps() {
-  local manifest="$1" json="$2" scenario="$3" agent="$4"
+  local driver="$1" json="$2" scenario="$3" agent="$4"
   local elicits needed not_elicited slash_req slashes rc=0
-  [[ -f "$manifest" ]] || return 0   # no manifest → grammar-only (back-compat)
-  # No entry for this adapter → no semantic data to judge against (a brand-new
-  # agent before its manifest entry is authored). Stay grammar-only.
-  jq -e --arg a "$agent" '.adapters[$a]' "$manifest" >/dev/null 2>&1 || return 0
-  elicits="$(elicitable_primitives_for_agent "$manifest" "$agent")"
+  [[ -f "$driver" ]] || return 0   # no driver → grammar-only (back-compat)
+  elicits="$(driver_elicits_from_file "$driver")"
+  # No DRIVE_ELICITS constant → no semantic data to judge against (a brand-new
+  # driver before its contract is authored). Stay grammar-only.
+  [[ -n "$elicits" ]] || return 0
   needed="$(recipe_step_types_from_json "$json" "$scenario" "$agent")"
   not_elicited="$(comm -23 <(printf '%s\n' "$needed"   | sed '/^$/d') \
                            <(printf '%s\n' "$elicits" | sed '/^$/d'))"
   while IFS= read -r st; do [[ -n "$st" ]] && { echo "not-elicited:$st"; rc=1; }; done <<< "$not_elicited"
-  slash_req="$(agent_slash_requires_step_type "$manifest" "$agent")"
+  slash_req="$(driver_slash_requires_step_type "$driver")"
   if [[ "$slash_req" == "true" ]]; then
     slashes="$(recipe_send_slash_texts "$json" "$scenario" "$agent")"
     while IFS= read -r t; do [[ -n "$t" ]] && { echo "slash-in-send:$t"; rc=1; }; done <<< "$slashes"
@@ -131,8 +156,8 @@ recipe_semantic_gaps() {
 #   exit 4 — semantic_gap: a step the driver accepts but doesn't elicit, or a
 #            slash command in send-text on a slash-requires-step-type adapter
 # driver-file defaults to scripts/drive-<agent>-interactive.sh next to lib/.
-# manifest-file defaults to lib/elicitable-primitives.json next to this file
-# (overridable as a 5th arg for testing).
+# The driver itself declares its elicited primitives (DRIVE_ELICITS) and slash
+# convention (DRIVE_SLASH_REQUIRES_STEP_TYPE), so there is no separate manifest.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   set -uo pipefail
   json="${1:?usage: recipe-lint.sh <scenarios.json> <scenario> <agent> [driver-file]}"
@@ -140,7 +165,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   agent="${3:?missing <agent>}"
   LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   driver="${4:-$(cd "$LIBDIR/.." && pwd)/drive-${agent}-interactive.sh}"
-  manifest="${5:-$LIBDIR/elicitable-primitives.json}"
 
   # A cell with NO by_adapter.<agent> recipe entry has nothing for this lint to
   # check — but say so explicitly rather than reporting a vacuous "ok" (#496
@@ -162,9 +186,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 3
   fi
 
-  if ! sem="$(recipe_semantic_gaps "$manifest" "$json" "$scenario" "$agent")"; then
+  if ! sem="$(recipe_semantic_gaps "$driver" "$json" "$scenario" "$agent")"; then
     {
-      echo "semantic_gap: $agent/$scenario uses step(s) the driver ACCEPTS but does not ELICIT (per $(basename "$manifest")):"
+      echo "semantic_gap: $agent/$scenario uses step(s) the driver ACCEPTS but does not ELICIT (per $(basename "$driver")'s DRIVE_ELICITS):"
       while IFS= read -r p; do
         case "$p" in
           not-elicited:*)  echo "  - step type '${p#not-elicited:}' is dispatched but produces no effect on $agent" ;;

@@ -50,6 +50,13 @@ SCRIPT_JSON="$5"
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 
+# recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
+# (a subset of its case arms — accepting ≠ producing), read directly by
+# recipe-lint so the grammar has ONE owner here, not a parallel manifest.
+# tmux-TUI driver.
+DRIVE_ELICITS="send slash wait_turn interrupt sleep"
+DRIVE_SLASH_REQUIRES_STEP_TYPE=false
+
 # Per-run git-init'd CWD — same trick as drive-aider.sh; aider walks up
 # from CWD looking for a git root and writes .aider.chat.history.md AT that
 # root (its "git working dir"), not necessarily in CWD.

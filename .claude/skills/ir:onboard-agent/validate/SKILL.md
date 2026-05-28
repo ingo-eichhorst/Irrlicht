@@ -9,6 +9,11 @@ description: >
   recording archives.
 ---
 
+> **Private stage of `implement` (#508 #5).** recipe → spec → record → validate
+> are internal building blocks `implement` runs in order — NOT top-level verbs.
+> The dispatcher never routes here directly; `implement` reads this doc for
+> mechanics. See `skill.md` → "Verb hierarchy".
+
 # Validation (Stage 5)
 
 Runs the spec-grounded validator against one cell's latest recording

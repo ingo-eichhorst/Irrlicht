@@ -53,10 +53,27 @@ five-stage pipeline the subagents implement.
 | verify the rig scripts themselves | `scripts/smoke-test.sh` | nothing — pure script (bash -n + lib/reconcile_test.sh; the rig isn't covered by replay-fixtures/go test) |
 | run an orchestrator scenario | `<orch> [<scenario>]` | inline (see Orchestrators) |
 
-The legacy per-stage verbs (`assess`/`recipe`/`spec`/`record`/`validate`)
-still exist as building blocks under their own `SKILL.md` files;
-`implement` bundles recipe→spec→record→validate behind one contract, so
-you rarely invoke the middle three directly.
+### Verb hierarchy (#508 #5)
+
+Two tiers — the dispatcher routes only to USER VERBS:
+
+```
+USER VERBS (dispatch one subagent each):
+  scenario-create   add a matrix row (a NEW scenario)
+  assess            judge one cell → assessment.json
+  implement         carry one assessed cell to a committed recording
+  extend-driver     port a missing driver step type (unfreeze a driver_gap)
+  --new <slug>      onboard a brand-new agent column (discovery)
+
+STAGES (internal building blocks of `implement` — NOT top-level verbs):
+  recipe → spec → record → validate
+```
+
+The four STAGE dirs (`recipe/ spec/ record/ validate/`) keep their own
+`SKILL.md` because `implement` READS them for mechanics, but you do not
+dispatch them directly — `implement` bundles recipe→spec→record→validate
+behind one contract. Each stage SKILL.md carries a "private stage" banner
+saying so. Treat the user-facing verb set as the five above.
 
 ## Dispatching a subagent
 
@@ -203,6 +220,19 @@ axes — add a `record_blocked` value to the assessment (`infra` / `unit_test` /
 `TestAssessmentScenarioConsistency` + `lib/consistency-gate_test.sh` pin this
 in CI / the smoke test.
 
+Both gates are thin clients of the canonical matrix model
+(`tools/agent-onboarding/internal/matrix`, run via the `matrix query` binary);
+the applicability rule, disposition table, and routing all live there. After
+changing any `assessment.json`, regenerate the derived coverage rollup so it
+can't drift from the assessments:
+
+```bash
+( cd tools/agent-onboarding && go run ./cmd/matrix rollup )  # regenerate agent-scenarios-coverage.json
+```
+
+`matrix rollup --check` (and the Go `TestRollupInSync`) fail CI when the
+committed rollup no longer matches the assessments.
+
 Several `name`s legitimately share one `coverage_id` (recipe variants of the
 same canonical cell) — the matrix axis is the coverage id, not the name.
 
@@ -336,6 +366,8 @@ No live agent CLI runs during discovery itself.
   refuses anyway — check the assessment first and save the round-trip.
 - **Don't run with an isolated daemon while a production `irrlichd` is
   up.** Use `--attach` (the subagents do). `precheck.sh` enforces this.
-- **Don't edit `agent-scenarios-coverage.json` from the parent.** It's
-  the maintainer's editorial rollup; subagents surface drift in their
-  summaries.
+- **Don't hand-edit the AXES in `agent-scenarios-coverage.json`.** Since
+  #508 the per-cell `agent_supports`/`daemon_capability`/`driver_capability`
+  are DERIVED from the assessments — regenerate with `matrix rollup` instead.
+  Only the per-cell `notes` and the `legend` block are editorial (carried
+  forward across regeneration); edit those in place if needed.

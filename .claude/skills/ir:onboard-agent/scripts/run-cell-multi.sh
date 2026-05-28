@@ -104,8 +104,8 @@ for a in "${ADAPTERS[@]}"; do
   # Semantic backstop (#496 RC3): mirror run-cell.sh — a step the driver accepts
   # but doesn't elicit (or a slash command in send-text on a slash-requires
   # adapter) would record a no-op on the cross-adapter path too.
-  if sem="$(recipe_semantic_gaps "$SCRIPT_DIR/lib/elicitable-primitives.json" "$SCENARIOS_JSON" "$SCENARIO" "$a")"; then :; else
-    echo "semantic_gap: $a/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per elicitable-primitives.json):" >&2
+  if sem="$(recipe_semantic_gaps "$SCRIPT_DIR/drive-$a-interactive.sh" "$SCENARIOS_JSON" "$SCENARIO" "$a")"; then :; else
+    echo "semantic_gap: $a/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per its DRIVE_ELICITS):" >&2
     while IFS= read -r p; do [[ -n "$p" ]] && printf '  - %s\n' "$p" >&2; done <<< "$sem"
     exit 4
   fi

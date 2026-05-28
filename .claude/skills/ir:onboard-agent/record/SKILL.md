@@ -10,6 +10,11 @@ description: >
   per cell.
 ---
 
+> **Private stage of `implement` (#508 #5).** recipe → spec → record → validate
+> are internal building blocks `implement` runs in order — NOT top-level verbs.
+> The dispatcher never routes here directly; `implement` reads this doc for
+> mechanics. See `skill.md` → "Verb hierarchy".
+
 # Recording (Stage 4)
 
 Runs the recipe's `script` against a live agent CLI in a tmux

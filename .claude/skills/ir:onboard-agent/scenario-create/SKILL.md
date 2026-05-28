@@ -87,21 +87,15 @@ which adds matrix COLUMNS (a whole new agent). Don't confuse them.
    - **Not to be confused with** — 1–2 sibling scenarios + the
      distinction.
    - **Conceptual flow** — numbered steps.
-3. **`agent-scenarios-coverage.json`** — append a `scenarios[]` row:
-   ```jsonc
-   {
-     "id": "<slug>",
-     "section": "<same section as the catalog row>",
-     "feature": "<same feature title>",
-     "coverage": {
-       // one entry per slug in the top-level `agents[]` array:
-       "<agent>": {"agent_supports": "unknown", "daemon_capability": "unknown", "driver_capability": "ready", "notes": ""}
-     }
-   }
+3. **`agent-scenarios-coverage.json`** — do NOT hand-edit it (#508 #2: the
+   rollup is DERIVED from the assessments). Regenerate it so the new catalog
+   row appears with every adapter at the unassessed default
+   (`unknown`/`unknown`/`ready`, empty notes):
+   ```bash
+   ( cd tools/agent-onboarding && go run ./cmd/matrix rollup )
    ```
-   Every adapter starts `agent_supports: unknown` / `daemon_capability:
-   unknown` — you are not assessing here. (`driver_capability` defaults to
-   `ready`; `assess` flips it to `gap:<primitive>` only on evidence.)
+   You are not assessing here — `assess` later flips the axes on evidence and
+   you re-run `matrix rollup` then.
 4. **`replaydata/agents/features.json`** — ONLY if `requires` needs a
    capability that doesn't exist yet. Append a `features[]` entry
    `{id, title, category, description, added_in}` (category = one of the
@@ -153,12 +147,13 @@ Confirm the slug now appears in all four artifacts: `catalog[]`,
 
 ## Return contract
 
-Return ONLY this (≤5 lines), no transcripts:
+Return ONLY this (≤5 lines), no transcripts. The envelope rules are defined
+once in [`../return-contract.md`](../return-contract.md):
 
 ```
 scenario_id: <slug>
 capability_ids: [<id>, ...]            # requires; mark any you ADDED to features.json
-files_changed: scenarios.json, scenario-meanings.md, agent-scenarios-coverage.json[, features.json]
+files_changed: scenarios.json, scenario-meanings.md, agent-scenarios-coverage.json (regenerated)[, features.json]
 verify: <one-line summary of the topology you wrote>
 next: assess <agent> <slug>  (per adapter, to fill the row)
 ```

@@ -71,6 +71,15 @@ SCRIPT_JSON="$5"
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 
+# recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
+# (a subset of its case arms — accepting ≠ producing), and whether slash needs a
+# dedicated step type. recipe-lint reads these directly so the grammar has ONE
+# owner here, not a parallel manifest. Full tmux-TUI driver; every dispatched
+# step type is genuinely produced — `send|slash` is one arm, so a slash typed
+# via send reaches the REPL.
+DRIVE_ELICITS="send slash wait_turn interrupt keys sleep restart resume reset_session sigkill exit_clean start_session session"
+DRIVE_SLASH_REQUIRES_STEP_TYPE=false
+
 # Per-run CWD so claude writes its transcript under a unique
 # ~/.claude/projects/<slug>/ dir; also keeps the trust dialog isolated to
 # this run's path (claude prompts for trust on first encounter).

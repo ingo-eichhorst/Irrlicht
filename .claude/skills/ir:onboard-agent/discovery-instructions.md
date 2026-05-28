@@ -372,12 +372,14 @@ HATCH in the template (opencode's hybrid headless + `run_live` shape).
 
 ### 2. Declare what the driver actually elicits
 
-Add a `<slug>` entry to `scripts/lib/elicitable-primitives.json` listing
-ONLY the step types you genuinely produce so far (a subset of the stubbed
-arms), plus `slash_requires_step_type` if a bare `send "/cmd"` is a no-op
-(true for headless drivers). recipe-lint's semantic check (#496 RC3) reads
-this — a stubbed-but-not-elicited arm is then caught as a semantic gap
-before a recording is attempted, not recorded as a no-op.
+Set the `DRIVE_ELICITS` constant in the new `drive-<slug>-interactive.sh`
+(near `DRIVER_LOG=`) to ONLY the step types you genuinely produce so far (a
+subset of the stubbed arms), plus `DRIVE_SLASH_REQUIRES_STEP_TYPE=true` if a
+bare `send "/cmd"` is a no-op (true for headless drivers). recipe-lint's
+semantic check (#496 RC3) reads these constants straight from the driver
+(#508 #4 — single ownership, no separate manifest) — a stubbed-but-not-elicited
+arm is then caught as a semantic gap before a recording is attempted, not
+recorded as a no-op.
 
 ### 3. Emit the column driver-gap forecast (the punch-list)
 
@@ -392,7 +394,7 @@ SK=.claude/skills/ir:onboard-agent
 bash $SK/scripts/lib/completeness-gate.sh <slug>
 # the driver's elicited step types vs the full standard set = the punch-list:
 source $SK/scripts/lib/recipe-lint.sh
-echo "elicited:"; elicitable_primitives_for_agent $SK/scripts/lib/elicitable-primitives.json <slug>
+echo "elicited:"; driver_elicits_from_file $SK/scripts/drive-<slug>-interactive.sh
 ```
 
 Record the punch-list in the discovery summary as a list of
