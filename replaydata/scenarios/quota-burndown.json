@@ -50,7 +50,12 @@
       }
     },
     "codex": {
-      "artifacts": {},
+      "artifacts": {
+        "events": "codex/scenarios/quota-burndown/events.jsonl",
+        "transcript": "codex/scenarios/quota-burndown/transcript.jsonl",
+        "manifest": "codex/scenarios/quota-burndown/manifest.json",
+        "golden": "codex/scenarios/quota-burndown/transcript.jsonl.replay.json.golden"
+      },
       "metadata": {
         "agent_supports": "yes",
         "daemon_capability": "full",
