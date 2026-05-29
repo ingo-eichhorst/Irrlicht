@@ -260,7 +260,7 @@
           "agent_supports": "partial",
           "daemon_capability": "full",
           "driver_capability": "ready",
-          "notes": "No native checkpoint-rewind as of v0.130 (May 2026): no /rewind command, no file-edit checkpoint restore; the experimental /undo was removed (#9618). codex HAS /fork (conversation fork → new linked session_id, original intact) and TUI Esc-Esc backtrack, but that is branching, not file+conversation rollback — do NOT re-mark this `yes` on the strength of /fork. Open feature requests #11626 + #12558 model after Claude Code. Reassess on next major Codex release."
+          "notes": "partial: codex 0.130 /fork is the scenario's fork variant — a conversation-only rewind that clones the chat into a fresh linked session_id (original rollout intact); Esc-Esc TUI backtrack does the same. Observable: a new session row appears in ready with a clean working→ready arc on the post-fork turn. Not `yes` because /fork does not revert file edits (open requests #11626/#12558) and the parser skips session_meta so forked_from_id provenance is dropped (parser.go:179 — caveat, not bug; the new row + arc are still observed). /fork recipe authored and lint-clean; reconciled to partial 2026-05-29 (conf 0.82)."
         },
         "opencode": {
           "agent_supports": "yes",
