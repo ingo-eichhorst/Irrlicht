@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Combine
 import Darwin
+import SwiftUI
 @preconcurrency import UserNotifications
 
 enum ConnectionState {
@@ -27,6 +28,15 @@ enum ConnectionState {
         case .connecting:   return "connecting"
         case .reconnecting: return "reconnecting"
         case .disconnected: return "disconnected"
+        }
+    }
+
+    var dotColor: Color {
+        switch self {
+        case .connected:    return .green
+        case .connecting:   return .yellow
+        case .reconnecting: return .yellow
+        case .disconnected: return Color(.tertiaryLabelColor)
         }
     }
 }
