@@ -23,9 +23,11 @@ KIND="${2:-agent}"
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+# The agent capability vocabulary moved into replaydata/scenarios/_meta.json
+# (.capability_vocab) in #511; orchestrators keep their own features.json.
 case "$KIND" in
-  agent)        FEATURES_JSON="$REPO_ROOT/replaydata/agents/features.json" ;;
-  orchestrator) FEATURES_JSON="$REPO_ROOT/replaydata/orchestrators/features.json" ;;
+  agent)        FEATURES_JSON="$REPO_ROOT/replaydata/scenarios/_meta.json"; JQ_FEATURES='.capability_vocab.features[]' ;;
+  orchestrator) FEATURES_JSON="$REPO_ROOT/replaydata/orchestrators/features.json"; JQ_FEATURES='.features[]' ;;
   *) echo "unknown kind: $KIND (want: agent | orchestrator)" >&2; exit 2 ;;
 esac
 
@@ -41,4 +43,4 @@ separately under "candidate_new_features".
 Closed vocabulary (id — title — description):
 EOF
 
-jq -r '.features[] | "  \(.id) — \(.title) — \(.description)"' "$FEATURES_JSON"
+jq -r "$JQ_FEATURES"' | "  \(.id) — \(.title) — \(.description)"' "$FEATURES_JSON"

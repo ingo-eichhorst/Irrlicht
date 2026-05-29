@@ -25,15 +25,19 @@ import (
 // under replaydata/agents/<adapter>/{scenarios,regression}/<name>/ and are
 // referenced from each agent's Artifacts block.
 type Shard struct {
-	ID          string                `json:"id"`   // stable section.index, e.g. "2.19"
-	Name        string                `json:"name"` // row identity / filename / coverage_id
-	Section     string                `json:"section"`
-	Feature     string                `json:"feature"`
-	Description string                `json:"description,omitempty"`
-	Requires    []string              `json:"requires,omitempty"` // informational driver hint (no longer gates applicability)
-	Verify      json.RawMessage       `json:"verify,omitempty"`
-	IdleOnly    *bool                 `json:"idle_only,omitempty"` // observation-only scenario (frontend badge)
-	Agents      map[string]ShardAgent `json:"agents"`
+	ID          string          `json:"id"`   // stable section.index, e.g. "2.19"
+	Name        string          `json:"name"` // row identity / filename / coverage_id
+	Section     string          `json:"section"`
+	Feature     string          `json:"feature"`
+	Description string          `json:"description,omitempty"`
+	Requires    []string        `json:"requires,omitempty"` // informational driver hint (no longer gates applicability)
+	Verify      json.RawMessage `json:"verify,omitempty"`
+	IdleOnly    *bool           `json:"idle_only,omitempty"` // observation-only scenario (frontend badge)
+	// CrossAdapter, when set, is the list of adapters a cross-adapter cell drives
+	// concurrently in one shared workspace (read by run-cell-multi.sh). Only the
+	// multiple-agents-same-workspace cell uses it.
+	CrossAdapter []string              `json:"cross_adapter,omitempty"`
+	Agents       map[string]ShardAgent `json:"agents"`
 }
 
 // ShardAgent is one (scenario, adapter) cell, split into an overview-tier
@@ -86,6 +90,12 @@ type ShardDetails struct {
 type Meta struct {
 	MinVersions          map[string]string `json:"min_versions"`
 	TranscriptExtensions map[string]string `json:"transcript_extensions"`
+	// CapabilityVocab is the closed agent-capability vocabulary (the former
+	// replaydata/agents/features.json), folded in here in #511 so the
+	// discovery preamble has a single home. Kept as a raw blob — the matrix
+	// never reads it (applicability is shard-driven); only discover-agent.sh
+	// formats it.
+	CapabilityVocab json.RawMessage `json:"capability_vocab,omitempty"`
 }
 
 // Dir is the directory holding the scenario shards.
@@ -166,8 +176,8 @@ func Agents(repoRoot string) []string {
 // "2.9", not before it). Falls back to lexical order when either id isn't a
 // well-formed "<int>.<int>".
 func lessShardID(a, b string) bool {
-	as, ai, aok := splitID(a)
-	bs, bi, bok := splitID(b)
+	as, ai, aok := SplitID(a)
+	bs, bi, bok := SplitID(b)
 	if !aok || !bok {
 		return a < b
 	}
@@ -177,9 +187,10 @@ func lessShardID(a, b string) bool {
 	return ai < bi
 }
 
-// splitID parses a "<section>.<index>" id. ok is false when the shape doesn't
-// match (no dot, or non-numeric parts).
-func splitID(id string) (section, index int, ok bool) {
+// SplitID parses a "<section>.<index>" id. ok is false when the shape doesn't
+// match (no dot, or non-numeric parts). Exported so the matrix model reuses
+// this one parser instead of duplicating it (#511).
+func SplitID(id string) (section, index int, ok bool) {
 	parts := strings.SplitN(id, ".", 2)
 	if len(parts) != 2 {
 		return 0, 0, false

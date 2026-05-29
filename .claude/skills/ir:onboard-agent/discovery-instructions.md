@@ -151,24 +151,21 @@ Write three files under `.build/refresh/<slug>/<UTC-ts>/`:
 # Review:
 $EDITOR .build/refresh/<slug>/<ts>/discovery-report.md
 
-# If accepted, merge proposed features into the canonical list:
-jq -s '.[0].features += .[1].features | .[0]' \
-   replaydata/agents/features.json \
-   .build/refresh/<slug>/<ts>/proposed-features.json \
-   > /tmp/merged.json && mv /tmp/merged.json replaydata/agents/features.json
+# If accepted, merge proposed features into the canonical vocabulary, which
+# #511 moved into replaydata/scenarios/_meta.json (.capability_vocab.features):
+META=replaydata/scenarios/_meta.json
+jq --slurpfile p .build/refresh/<slug>/<ts>/proposed-features.json \
+   '.capability_vocab.features += $p[0].features' \
+   "$META" > /tmp/merged.json && mv /tmp/merged.json "$META"
 
-# Copy the proposed capabilities into place:
-mkdir -p replaydata/agents/<slug>
-cp .build/refresh/<slug>/<ts>/proposed-capabilities.json \
-   replaydata/agents/<slug>/capabilities.json
-
-# Add the same new feature keys (as "unknown") to existing adapters'
-# capabilities.json so the cross-reference check stays clean:
-for adapter in claudecode codex pi; do
-  jq '.features += {<new keys: "unknown">}' \
-    replaydata/agents/$adapter/capabilities.json > /tmp/c.json && \
-    mv /tmp/c.json replaydata/agents/$adapter/capabilities.json
-done
+# Register the new adapter as a matrix column (#511: per-adapter capabilities.json
+# is retired — the column set IS the _meta.min_versions keys; transcript_extensions
+# gives its transcript file extension):
+jq --arg a "<slug>" --arg minv "<min-cli-version>" --arg ext "<jsonl|md>" \
+   '.min_versions[$a]=$minv | .transcript_extensions[$a]=$ext' \
+   "$META" > /tmp/m.json && mv /tmp/m.json "$META"
+# (No per-adapter capabilities.json and no per-adapter feature maps anymore —
+# applicability is shard-driven, so existing adapters need no edits here.)
 
 # Add the Go adapter scaffold (Phase-0 plumbing — separate manual step):
 #   core/adapters/inbound/agents/<slug>/{config.go,parser.go,...}
@@ -276,8 +273,8 @@ mkdir -p .build/manual-<slug>/{recordings,workspace}
   git config user.email t@l && git config user.name t && \
   echo "# t" > README.md && git add . && git commit -q -m init)
 
-PROMPT="$(jq -r '.scenarios[] | select(.name=="basic-turn") | .by_adapter.claudecode.prompt' \
-  .claude/skills/ir:onboard-agent/scenarios.json)"
+PROMPT="$(jq -r '.agents.claudecode.details.recipe.prompt' \
+  replaydata/scenarios/basic-turn.json)"
 
 IRRLICHT_RECORDINGS_DIR=$(pwd)/.build/manual-<slug>/recordings \
   $(pwd)/.build/irrlichd --record > .build/manual-<slug>/daemon.log 2>&1 &

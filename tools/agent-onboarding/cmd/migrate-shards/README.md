@@ -6,15 +6,20 @@ One-shot **migration blueprint**: reads the pre-#510 on-disk onboarding layout
 (`replaydata/scenarios/<name>.json` + `_meta.json`).
 
 It generated the committed shards once (P1). The shards are now the live read
-source — `internal/shard`, `internal/matrix`, and the viewer all read them
-(P2/P3) — so this tool is **no longer part of the runtime read path**. It stays
-in the tree as a documented, idempotent blueprint for the next bulk restructure
-and (until #511 deletes the legacy files) as the regenerator behind `-check`.
+source — `internal/shard`, `internal/matrix`, the viewer, AND the bash recording
+pipeline all read them (P2/P3, then #511) — so this tool is **no longer part of
+any read path**. It stays in the tree as a documented, idempotent blueprint for
+how the layout→shard transform worked.
 
-> **Note:** once #511 deletes the legacy inputs, this tool can no longer
-> regenerate (its *inputs* are gone) and `-check` will fail by construction —
-> at that point it is purely a historical reference for how the layout→shard
-> transform worked.
+> **Status (#511): the legacy inputs are gone.** #511 deleted
+> `scenarios.json`, the per-adapter `capabilities.json`, and the per-cell
+> `assessment.json` (the agent capability vocabulary moved into
+> `replaydata/scenarios/_meta.json` `capability_vocab`). With its inputs
+> removed this tool can no longer regenerate, and `-check` now fails by
+> construction (it finds no legacy layout to read). It is kept buildable as a
+> **historical reference only** — do not wire it into CI. The forward-direction
+> integrity checks now live in `internal/shard` (`TestNoOrphanRecordingFolders`),
+> `cmd/matrix rollup --check`, and the bash `lib/cell-integrity.sh` gate.
 
 ## What it reads (the current layout)
 
@@ -80,12 +85,15 @@ first-appearance order (from 1), index incrementing within each section
   whitespace — **without reordering keys** inside the blob (same as P0's
   `recipeHashOf` key-order fix).
 
-## `-check` mode
+## `-check` mode (historical — no longer functional)
 
-`migrate-shards -check` regenerates everything in memory and compares it
-byte-for-byte against the committed files, printing `DIFFERS`/`MISSING`/`EXTRA`
-lines. Exit codes: `0` clean, `1` drift, `2` usage/IO error. Mirrors
-`cmd/matrix rollup --check`.
+`migrate-shards -check` regenerated everything in memory and compared it
+byte-for-byte against the committed files (`DIFFERS`/`MISSING`/`EXTRA`; exit `0`
+clean / `1` drift / `2` usage/IO). **Since #511 deleted the legacy inputs it can
+no longer run** — there is no `scenarios.json` / `capabilities.json` /
+`assessment.json` layout to regenerate from. Use `cmd/matrix rollup --check`
+(coverage rollup) and `internal/shard` `TestNoOrphanRecordingFolders`
+(orphan-recording guard) instead.
 
 ## Usage
 

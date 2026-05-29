@@ -155,9 +155,9 @@ clean:
 
 ```bash
 SK=.claude/skills/ir:onboard-agent
-for s in $(jq -r '.scenarios[] | select(.by_adapter["<agent>"]) | .name' \
-             $SK/scenarios.json); do
-  if $SK/scripts/lib/recipe-lint.sh $SK/scenarios.json "$s" <agent> >/dev/null 2>&1; then
+for s in $(jq -r --arg a "<agent>" 'select(.agents[$a]) | .name' \
+             replaydata/scenarios/*.json); do
+  if $SK/scripts/lib/recipe-lint.sh "$s" <agent> >/dev/null 2>&1; then
     echo "unblocked: $s"
   fi
 done

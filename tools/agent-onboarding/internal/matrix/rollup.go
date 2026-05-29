@@ -88,7 +88,7 @@ func (m *Matrix) BuildRollup(overlay RollupOverlay) RollupDoc {
 		Legend:        overlay.Legend,
 	}
 	if doc.SourceCatalog == "" {
-		doc.SourceCatalog = ".claude/skills/ir:onboard-agent/scenarios.json (catalog)"
+		doc.SourceCatalog = "replaydata/scenarios/*.json (per-scenario shards)"
 	}
 
 	for _, a := range agents {

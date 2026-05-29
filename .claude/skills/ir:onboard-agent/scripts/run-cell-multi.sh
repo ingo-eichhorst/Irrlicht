@@ -48,7 +48,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
-SCENARIOS_JSON="$SKILL_DIR/scenarios.json"
+# shellcheck source=lib/shard-lib.sh
+source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
 
 # Session-id reconciliation helpers (daemon_sid_for_transcript,
 # sid_in_recording, reconcile_slot_csv) — shared + unit-tested in lib/.
@@ -75,8 +76,11 @@ export IRRLICHT_ONBOARD_BIND_ADDR="$ONBOARD_BIND"
 export IRRLICHT_ONBOARD_MULTI=1
 
 # --- Resolve the cross-adapter cell -------------------------------------
-SCEN_JSON="$(jq -e --arg s "$SCENARIO" '.scenarios[] | select(.name==$s)' "$SCENARIOS_JSON")" \
-  || { echo "scenario not found: $SCENARIO" >&2; exit 1; }
+# The cross-adapter cell is one shard (its `cross_adapter` list + per-adapter
+# recipes under .agents[$a].details.recipe). #511: read it from the shard.
+SHARD="$REPO_ROOT/replaydata/scenarios/$SCENARIO.json"
+SCEN_JSON="$(jq -e . "$SHARD" 2>/dev/null)" \
+  || { echo "scenario not found: $SCENARIO (no shard at $SHARD)" >&2; exit 1; }
 # (bash 3.2 — no mapfile; read into the array by hand.)
 ADAPTERS=()
 while IFS= read -r _a; do
@@ -90,13 +94,13 @@ echo "cross-adapter cell: $SCENARIO  adapters=[${ADAPTERS[*]}]"
 
 # Each adapter must be applicable + carry a script.
 for a in "${ADAPTERS[@]}"; do
-  applic="$(jq -r --arg a "$a" 'if .by_adapter[$a].applicable==true then "true" else "false" end' <<<"$SCEN_JSON")"
+  applic="$(jq -r --arg a "$a" 'if .agents[$a].details.recipe.applicable==true then "true" else "false" end' <<<"$SCEN_JSON")"
   [[ "$applic" == "true" ]] || { echo "adapter $a is not applicable:true for $SCENARIO" >&2; exit 1; }
-  has_script="$(jq -r --arg a "$a" '.by_adapter[$a].script | if (.|type)=="array" then "yes" else "no" end' <<<"$SCEN_JSON")"
+  has_script="$(jq -r --arg a "$a" '.agents[$a].details.recipe.script | if (.|type)=="array" then "yes" else "no" end' <<<"$SCEN_JSON")"
   [[ "$has_script" == "yes" ]] || { echo "adapter $a has no script for $SCENARIO" >&2; exit 1; }
   # Driver-gap backstop (#476): refuse a step type this adapter's driver lacks
   # before launching any daemon/CLI, mirroring run-cell.sh's exit 3.
-  if gaps="$(recipe_lint_gaps "$SCRIPT_DIR/drive-$a-interactive.sh" "$SCENARIOS_JSON" "$SCENARIO" "$a")"; then :; else
+  if gaps="$(recipe_lint_gaps "$SCRIPT_DIR/drive-$a-interactive.sh" "$SCENARIO" "$a")"; then :; else
     echo "driver_gap: $a/$SCENARIO needs step type(s) drive-$a-interactive.sh doesn't implement:" >&2
     printf '  - gap:%s\n' $gaps >&2
     exit 3
@@ -104,7 +108,7 @@ for a in "${ADAPTERS[@]}"; do
   # Semantic backstop (#496 RC3): mirror run-cell.sh — a step the driver accepts
   # but doesn't elicit (or a slash command in send-text on a slash-requires
   # adapter) would record a no-op on the cross-adapter path too.
-  if sem="$(recipe_semantic_gaps "$SCRIPT_DIR/drive-$a-interactive.sh" "$SCENARIOS_JSON" "$SCENARIO" "$a")"; then :; else
+  if sem="$(recipe_semantic_gaps "$SCRIPT_DIR/drive-$a-interactive.sh" "$SCENARIO" "$a")"; then :; else
     echo "semantic_gap: $a/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per its DRIVE_ELICITS):" >&2
     while IFS= read -r p; do [[ -n "$p" ]] && printf '  - %s\n' "$p" >&2; done <<< "$sem"
     exit 4
@@ -113,7 +117,7 @@ done
 
 # --- Precheck each adapter (builds bins, checks port, CLI versions) ------
 for a in "${ADAPTERS[@]}"; do
-  ATTACH=0 "$SCRIPT_DIR/precheck.sh" "$a" "$SCENARIOS_JSON"
+  ATTACH=0 "$SCRIPT_DIR/precheck.sh" "$a"
 done
 
 DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
@@ -204,9 +208,9 @@ declare -a DRV_PIDS=() DRV_ADAPTERS=()
 for a in "${ADAPTERS[@]}"; do
   sub="$STAGING/$a"
   mkdir -p "$sub"
-  jq --arg a "$a" '.by_adapter[$a].settings // {}' <<<"$SCEN_JSON" > "$sub/settings.json"
-  script_json="$(jq -c --arg a "$a" '.by_adapter[$a].script' <<<"$SCEN_JSON")"
-  timeout_s="$(jq -r --arg a "$a" '.by_adapter[$a].timeout_seconds // 240' <<<"$SCEN_JSON")"
+  jq --arg a "$a" '.agents[$a].details.recipe.settings // {}' <<<"$SCEN_JSON" > "$sub/settings.json"
+  script_json="$(jq -c --arg a "$a" '.agents[$a].details.recipe.script' <<<"$SCEN_JSON")"
+  timeout_s="$(jq -r --arg a "$a" '.agents[$a].details.recipe.timeout_seconds // 240' <<<"$SCEN_JSON")"
   uuid="$(uuidgen | tr '[:upper:]' '[:lower:]')"
   driver="$SCRIPT_DIR/drive-$a-interactive.sh"
   [[ -x "$driver" ]] || { echo "driver missing: $driver" >&2; exit 1; }
@@ -327,7 +331,7 @@ for idx in "${!ADAPTERS[@]}"; do
       -d "$STAGING/replaydata/agents" \
       "$RECORDING" "${PRIMARY_SID[$idx]}" "${PRIMARY_TRANSCRIPT[$idx]}" "$a" "$SCENARIO"
 
-  ext="$(jq -r '.transcript_extension // "jsonl"' "$REPO_ROOT/replaydata/agents/$a/capabilities.json")"
+  ext="$(meta_transcript_ext "$a")"
   staged_t="$STAGING/replaydata/agents/$a/scenarios/$SCENARIO/transcript.$ext"
   (cd "$REPO_ROOT" && "$REPLAY_BIN" --quiet --out "$STAGING/reports/$a.staged.json" "$staged_t") || true
   [[ -s "$STAGING/reports/$a.staged.json" ]] || { echo "replay failed for $a ($staged_t)" >&2; write_error_manifest "replay_failed" "$(jq -nc --arg a "$a" '{failed_adapter:$a}')"; exit 1; }

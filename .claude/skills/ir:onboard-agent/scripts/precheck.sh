@@ -8,20 +8,23 @@
 # user; auth failures surface through the CLI's own stderr.
 #
 # Usage:
-#   precheck.sh <adapter> <scenarios-json>
+#   precheck.sh <adapter>
 #
-#   adapter: claudecode | codex | pi (the adapter whose CLI version
-#            will be checked against min_versions in scenarios.json)
+#   adapter: claudecode | codex | pi (the adapter whose CLI version is checked
+#            against min_versions in replaydata/scenarios/_meta.json). A second
+#            positional is accepted-but-ignored for back-compat (#511 retired
+#            the old <scenarios-json> arg).
 
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: precheck.sh <adapter> <scenarios-json>" >&2
+if [[ $# -lt 1 ]]; then
+  echo "usage: precheck.sh <adapter>" >&2
   exit 2
 fi
 
 ADAPTER="$1"
-SCENARIOS_JSON="$2"
+# $2 (a scenarios-json path) is accepted but ignored for back-compat: since
+# #511 the pinned min CLI versions live in replaydata/scenarios/_meta.json.
 
 fail() {
   echo "precheck: $*" >&2
@@ -83,14 +86,15 @@ if [[ -n "$(cd "$REPO_ROOT" && git status --porcelain replaydata/agents/ 2>/dev/
   fail "replaydata/agents/ has uncommitted changes; commit or stash first"
 fi
 
-# 4. Adapter CLI present + version check against min_versions in scenarios.json.
+# 4. Adapter CLI present + version check against min_versions in _meta.json.
 if ! command -v jq >/dev/null 2>&1; then
   fail "jq is required (brew install jq)"
 fi
-if [[ ! -f "$SCENARIOS_JSON" ]]; then
-  fail "scenarios.json not found at $SCENARIOS_JSON"
+META_JSON="$REPO_ROOT/replaydata/scenarios/_meta.json"
+if [[ ! -f "$META_JSON" ]]; then
+  fail "_meta.json not found at $META_JSON"
 fi
-MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.min_versions[$a] // empty' "$SCENARIOS_JSON")"
+MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.min_versions[$a] // empty' "$META_JSON")"
 
 # Version-string layout per adapter: <bin>:<awk-field-of-version-token>.
 # claude --version → "X.Y.Z (...)"; codex --version → "codex-cli X.Y.Z";

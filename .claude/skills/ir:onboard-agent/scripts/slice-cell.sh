@@ -36,29 +36,25 @@ ADAPTER="$2"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SCENARIOS_JSON="$SKILL_DIR/scenarios.json"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 MEANINGS_MD="$SKILL_DIR/scenario-meanings.md"
 COVERAGE_JSON="$SKILL_DIR/agent-scenarios-coverage.json"
+# shellcheck source=lib/shard-lib.sh
+source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
 
 fail() {
   echo "slice-cell: $*" >&2
   exit 1
 }
 
-# Match by name first (what run-cell.sh records against), then by
-# coverage_id. Reused for both the projection and the coverage_id lookup.
-JQ_MATCH='([.scenarios[] | select(.name == $s)]) as $byname
-  | (if ($byname | length) > 0 then $byname
-     else [.scenarios[] | select(.coverage_id == $s)] end)'
+# #511: the scenario entry + recipe come from the per-scenario shard. SCENARIO
+# may be a coverage_id (shard name) OR a variant recording-folder name; both
+# resolve to the owning shard. The shard's `name` IS the coverage_id.
+COVERAGE_ID="$(shard_coverage_for_dir "$SCENARIO" "$ADAPTER")"
+SHARD="$(shard_dir)/$COVERAGE_ID.json"
 
-# --- 1. scenarios.json entry + this adapter's recipe -------------------
-SCENARIO_SLICE="$(jq --arg s "$SCENARIO" --arg a "$ADAPTER" "
-  $JQ_MATCH
-  | .[]
-  | {name, description, coverage_id, idle_only, requires, verify, recipe: .by_adapter[\$a]}
-" "$SCENARIOS_JSON")"
-
-if [[ -z "$SCENARIO_SLICE" ]]; then
+# --- 1. shard entry + this adapter's recipe ----------------------------
+if [[ ! -f "$SHARD" ]]; then
   # The arg order here is <scenario-id> <adapter>, scenario first — the
   # reverse of run-cell.sh / the dispatcher (`<agent> <scenario>`). If the
   # first arg is an adapter slug, the caller most likely swapped them.
@@ -66,17 +62,12 @@ if [[ -z "$SCENARIO_SLICE" ]]; then
     claudecode|codex|pi|aider|opencode)
       fail "'$SCENARIO' is an adapter slug, not a scenario. Args are <scenario-id> <adapter> (scenario first) — did you swap them?" ;;
     *)
-      fail "scenario not found in scenarios.json: $SCENARIO (run scenario-create first?)" ;;
+      fail "scenario not found in the shard catalog: $SCENARIO (run scenario-create first?)" ;;
   esac
 fi
-
-# Canonical coverage id for the meanings + coverage lookups. Defaults to
-# name when no coverage_id is set; equals name for every recorded cell.
-COVERAGE_ID="$(jq -r --arg s "$SCENARIO" "
-  $JQ_MATCH
-  | .[0]
-  | if has(\"coverage_id\") and .coverage_id != null then .coverage_id else .name end
-" "$SCENARIOS_JSON")"
+SCENARIO_SLICE="$(jq --arg a "$ADAPTER" '
+  {name, description, coverage_id: .name, idle_only, requires, verify, recipe: .agents[$a].details.recipe}
+' "$SHARD")"
 
 # When the input is a scenario NAME whose coverage_id differs (the 7
 # name != coverage_id scenarios), the recipe below is this scenario's but

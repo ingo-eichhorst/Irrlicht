@@ -49,6 +49,9 @@ SCENARIO="$3"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 
+# shellcheck source=../.claude/skills/ir:onboard-agent/scripts/lib/shard-lib.sh
+source "$REPO_ROOT/.claude/skills/ir:onboard-agent/scripts/lib/shard-lib.sh"
+
 STAGED_DIR="$STAGING/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 TARGET_DIR="$REPO_ROOT/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 RECORDINGS_DIR="$TARGET_DIR/recordings"
@@ -80,14 +83,17 @@ AGENT_VER="unknown"
 if [[ -n "$CLI_BIN" ]] && command -v "$CLI_BIN" >/dev/null 2>&1; then
   AGENT_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1)"
 fi
+# recipe_hash pins the recorded recipe so the viewer can flag drift. The blob
+# is the shard's compact recipe (.agents[$a].details.recipe, source key order
+# preserved) — byte-identical to the Go recipeHashOf input, via shard_recipe.
+# $SCENARIO here is the on-disk recording FOLDER, which for the 2 variant-folder
+# cells is NOT the shard filename (coverage_id) — resolve it first so the hash
+# isn't silently blank (e.g. pi/agent-question-pending → user-blocking-question).
 RECIPE_HASH=""
-SCENARIOS_JSON="$REPO_ROOT/.claude/skills/ir:onboard-agent/scenarios.json"
-if [[ -f "$SCENARIOS_JSON" ]]; then
-  RECIPE_BLOB="$(jq -c --arg s "$SCENARIO" --arg a "$AGENT" \
-    '.scenarios[] | select(.name == $s) | .by_adapter[$a]' "$SCENARIOS_JSON" 2>/dev/null || true)"
-  if [[ -n "$RECIPE_BLOB" && "$RECIPE_BLOB" != "null" ]]; then
-    RECIPE_HASH="$(printf '%s' "$RECIPE_BLOB" | shasum -a 256 | awk '{print $1}')"
-  fi
+RECIPE_COV="$(shard_coverage_for_dir "$SCENARIO" "$AGENT")"
+RECIPE_BLOB="$(shard_recipe "$RECIPE_COV" "$AGENT")"
+if [[ -n "$RECIPE_BLOB" ]]; then
+  RECIPE_HASH="$(printf '%s' "$RECIPE_BLOB" | shasum -a 256 | awk '{print $1}')"
 fi
 
 # 1. Archive the current top-level recording if one exists.

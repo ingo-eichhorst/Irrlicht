@@ -22,6 +22,27 @@ let catalogSource = "";   // "coverage" | "scenarios" — drives the matrix shap
 let recipes = null;       // /api/recipes payload — scenarios.json verbatim
 let recipesByCoverageId = new Map(); // coverage_id → recipe entry
 
+// folderToCoverageId maps one agent's on-disk recording folder to its
+// coverage_id. For most cells the folder IS the coverage_id; for variant-folder
+// cells it differs (codex interrupted-turn → user-esc-interrupt, pi
+// agent-question-pending → user-blocking-question). The match is PER-AGENT: a
+// folder resolves only if THIS agent's shard cell records under it (or the
+// folder name is itself a coverage_id). This is deliberate — the same variant
+// folder name also exists as a regression fixture under OTHER agents (e.g.
+// aider/regression/interrupted-turn), and those must NOT borrow codex's
+// coverage_id/recipe. Falls back to the folder name when nothing matches (an
+// orphan / regression-only recording). Single reverse-lookup shared by the
+// sidebar label, the detail-page title, and the recipe panel.
+function folderToCoverageId(folder, agent) {
+  for (const r of recipesByCoverageId.values()) {
+    const folderForAgent = r.folder_by_agent && r.folder_by_agent[agent];
+    if ((r.name === folder || folderForAgent === folder) && r.coverage_id) {
+      return r.coverage_id;
+    }
+  }
+  return folder;
+}
+
 (async function init() {
   const [scenarios, catResp, recipesResp] = await Promise.all([
     fetch("/api/scenarios").then(r => r.json()),
@@ -90,12 +111,13 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
     const subtreeDet = makeSidebarGroup("subtree-group", `sidebar.subtree.${subtree}`, subtree, totalCount, activePath.subtree === subtree);
     for (const agent of Object.keys(agents).sort()) {
       const agentDet = makeSidebarGroup("agent-group", `sidebar.agent.${subtree}.${agent}`, agent, agents[agent].length, activePath.subtree === subtree && activePath.agent === agent);
-      // Sort by catalog code (e.g. "5.4") so the order mirrors the
-      // overview matrix. Items without a code (regression subtree)
-      // sort to the end, alphabetically.
+      // Sort by catalog code (e.g. "5.4") so the order mirrors the overview
+      // matrix. Resolve the folder→coverage_id per-agent so a variant-folder
+      // cell sorts by the SAME code its label shows. Items without a code
+      // (regression-only / orphan folders) sort to the end, alphabetically.
       agents[agent].sort((a, b) => {
-        const [as, ai] = parseCatalogCode(codeById.get(a.id));
-        const [bs, bi] = parseCatalogCode(codeById.get(b.id));
+        const [as, ai] = parseCatalogCode(codeById.get(folderToCoverageId(a.id, agent)));
+        const [bs, bi] = parseCatalogCode(codeById.get(folderToCoverageId(b.id, agent)));
         if (as !== bs) return as - bs;
         if (ai !== bi) return ai - bi;
         return a.id.localeCompare(b.id);
@@ -109,8 +131,15 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
         const el = document.createElement("button");
         el.className = "scn";
         el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
-        const code = codeById.get(s.id);
-        el.textContent = code ? `${code} ${s.id}` : s.id;
+        // Label by the resolved coverage_id (+ catalog code) so variant-folder
+        // recordings (e.g. agent-question-pending → user-blocking-question) read
+        // like their catalog row instead of the raw folder name. The folder is
+        // kept as a parenthetical when it differs, so the entry is still
+        // identifiable; the breadcrumb on the detail page shows it too.
+        const cid = folderToCoverageId(s.id, s.agent);
+        const code = codeById.get(cid);
+        const labelId = cid === s.id ? s.id : `${cid} (${s.id})`;
+        el.textContent = code ? `${code} ${labelId}` : labelId;
         el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
         agentDet.appendChild(el);
       }
@@ -409,8 +438,10 @@ function renderCoverageMatrix(detail) {
       // coverage_id. Resolve coverage_id → folder via recipesByCoverageId
       // so the pipeline-strip chip lands on the recording detail page
       // (not /scenario/...) when folder name and coverage_id diverge.
+      // folder_by_agent is per-agent (variant-folder aware); fall back to the
+      // recipe name then the coverage_id.
       const recipe = recipesByCoverageId.get(sc.id);
-      const folder = (recipe && recipe.name) || sc.id;
+      const folder = (recipe && recipe.folder_by_agent && recipe.folder_by_agent[agent]) || (recipe && recipe.name) || sc.id;
       const rec = recIndex.get(`${agent}/${folder}`);
       const strip = renderPipelineStrip(agent, sc.id, cov, rec);
       cell.appendChild(strip);
@@ -749,8 +780,11 @@ function buildAgentPlanPanel(sc, agent, recipe) {
     </div>`;
   }
 
-  // Existing recording link if one is committed
-  const rec = scenariosList.find(r => r.subtree === "scenarios" && r.agent === agent && recipe && r.id === recipe.name);
+  // Existing recording link if one is committed. Resolve the on-disk folder
+  // per-agent (variant-folder aware) so cells whose folder != coverage_id still
+  // link their recording; fall back to the recipe name.
+  const recFolder = recipe && ((recipe.folder_by_agent && recipe.folder_by_agent[agent]) || recipe.name);
+  const rec = scenariosList.find(r => r.subtree === "scenarios" && r.agent === agent && recFolder && r.id === recFolder);
   if (rec) {
     html += `<div style="margin-top: 8px;">`;
     html += `<button class="open-rec" data-agent="${agent}" data-id="${rec.id}" style="background: #1f56a8; color: white; border: 0; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 11px;">↻ Open recording: ${agent}/${rec.id}</button>`;
@@ -1192,14 +1226,11 @@ async function loadScenario(s, initialArchive, focus) {
   // map to basic-turn); the detail page shows the canonical
   // coverage_id, with the folder name relegated to the breadcrumb.
   // recipesByCoverageId is populated at init from /api/recipes, so
-  // this resolution is synchronous.
-  let coverageId = s.id;
-  for (const r of recipesByCoverageId.values()) {
-    if (r.name === s.id && r.coverage_id) {
-      coverageId = r.coverage_id;
-      break;
-    }
-  }
+  // this resolution is synchronous. folderToCoverageId resolves variant-folder
+  // recordings (e.g. agent-question-pending → user-blocking-question) so the
+  // heading matches the overview row; the folder stays in the breadcrumb. Keyed
+  // on s.agent so a regression copy under another adapter isn't mis-resolved.
+  const coverageId = folderToCoverageId(s.id, s.agent);
   document.title = `Irrlicht — ${coverageId} (${s.agent})`;
   document.getElementById("title").textContent = coverageId;
   document.getElementById("breadcrumb").textContent = `${s.agent} / ${s.subtree} / ${s.id}`;
@@ -1238,18 +1269,13 @@ async function loadScenario(s, initialArchive, focus) {
   //   3. Container below — holds Playback / Meta / GT / Transitions
   //      / Tools / Validate / Signals. Rendered conditionally based
   //      on dropdown state; empty when "(none)" is selected.
-  // Look up the per-cell recipe entry. /api/recipes returns the full
-  // scenarios.json document; find the matching scenario + adapter
-  // block. coverage_id is the canonical join key; fall back to the
-  // raw scenario name for older entries.
+  // Look up the per-cell recipe entry, joining on the resolved coverage_id
+  // (coverageId, computed above via folderToCoverageId, already handles the
+  // variant-folder cells) and this recording's adapter.
   let recipeEntry = null;
-  if (recipes && Array.isArray(recipes.scenarios)) {
-    for (const sc of recipes.scenarios) {
-      if (sc.coverage_id === s.id || sc.name === s.id) {
-        recipeEntry = sc.by_adapter && sc.by_adapter[s.agent];
-        break;
-      }
-    }
+  const recipeRow = recipesByCoverageId.get(coverageId);
+  if (recipeRow) {
+    recipeEntry = recipeRow.by_adapter && recipeRow.by_adapter[s.agent];
   }
   // Look up the per-cell coverage entry for the Assessment-fallback
   // panel. Used when no assessment.json exists on disk — the panel
@@ -2640,7 +2666,10 @@ function renderPlayback(s, detailData, archiveName) {
       }),
     });
     if (!resp.ok) {
-      alert(`start failed: ${resp.status} ${await resp.text()}`);
+      // Never pop a blocking modal — a scenario with no events.jsonl/usable
+      // transcript (e.g. an un-recorded cell opened via a deep link) just has
+      // nothing to play. Log non-blocking for debugging and bail quietly.
+      console.warn(`replay start failed: ${resp.status} ${await resp.text()}`);
       return;
     }
     const body = await resp.json();
