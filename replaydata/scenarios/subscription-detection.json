@@ -151,6 +151,47 @@
               "note": "Official: Codex billing is tied to a ChatGPT plan (Free/Plus/Pro/Business/Enterprise) with a 5-hour rolling window and a credits path — matches the plan_type + windows + credits shape the parser reads."
             }
           ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated against an OpenAI ChatGPT subscription (Plus/Pro/etc.) — the maintainer's normal `~/.codex` auth qualifies; no special key. The session must be v2+ (Nov 2025 onward) for the rate_limits.plan_type field to be present.",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so the trailing sleep never races a still-running turn",
+            "The subscription/plan signal needs no special step: codex emits a token_count event_msg carrying rate_limits.plan_type once it makes its API call(s), which happens on any normal turn. A short two-turn arc is recorded so at least one token_count lands and the working↔ready arc is unambiguous."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Reply with exactly the word: ok"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "send",
+              "text": "Now reply with exactly the word: done"
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a rate_limit metric event for the rollout session whose PlanType is non-empty (e.g. 'plus') and whose Credits is nil — the daemon surfaced the maintainer's codex subscription tier as the session's billing-model reading",
+            "the rate_limit event's Windows[] carries the primary rate-limit window (UsedPercent >= 0, ResetsAt set), projected from rate_limits.primary on the token_count payload",
+            "events.jsonl shows the clean state arc: the rollout session is born ready, transitions ready -> working when each prompt is sent, and returns to ready once each turn completes (interactive REPL, unlike headless codex exec which exits)",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "settings": {},
+          "timeout_seconds": 180
         }
       }
     }
