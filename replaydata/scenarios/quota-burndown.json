@@ -111,6 +111,69 @@
               "note": "UsedPercent after turn N >= after turn N-1; SampledAt updates on each turn (no stale snapshot replay)."
             }
           ]
+        },
+        "recipe": {
+          "applicable": true,
+          "preconditions": [
+            "codex CLI on PATH and authenticated against an OpenAI ChatGPT subscription (Plus/Pro/etc.) — the maintainer's normal ~/.codex auth qualifies; no special key. The session must be v2+ (Nov 2025 onward) so the rate_limits map (plan_type, primary.used_percent, window_minutes, resets_at) is present on token_count events.",
+            "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+            "The session must stay WITHIN its quota window across the run — do NOT try to exhaust it. Hitting the cap (429 / unable to produce a turn) is the separate sibling cell token-quota-exhausted (gap:429-mock); this cell only watches used_percent rise inside an un-exhausted window. 3 moderate non-plan turns are well below the cap.",
+            "Codex plan-mode sessions may suppress token_count during planning (#322/#325) — a known caveat, not a daemon bug. The recipe uses ordinary (non-plan) turns where the rate_limits signal is emitted; do not enter plan mode."
+          ],
+          "setup": [
+            "The interactive driver launches `codex --no-alt-screen` in a fresh per-run cwd under <staging>/cwd/, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+            "Each send bumps the expected-turn counter; wait_turn blocks until a new event_msg/task_complete line appears in the rollout, so prompts never race a still-running turn and each turn's token_count (carrying the rate_limits window) lands before the next prompt",
+            "No special model or context flags — the default model is fine; the assertion is about the rate-limit usage window rising, not which model produced the tokens. Prompts are deliberately substantive (each asks codex to actually generate a few hundred tokens of prose) so used_percent has a real chance to tick up across turns rather than holding flat on no-op one-word replies"
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Write a concise three-paragraph explanation of how a B-tree index speeds up database lookups, including the role of node fan-out. Keep it under 250 words."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Now write a short Python function that does an iterative in-order traversal of a binary search tree using an explicit stack, with a docstring and one example call. Explain the time and space complexity in two sentences."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 3
+            },
+            {
+              "type": "send",
+              "text": "Finally, summarize the trade-offs between optimistic and pessimistic locking in a multi-paragraph answer, and give one concrete example scenario for each. Keep it under 300 words."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 4
+            }
+          ],
+          "verify": [
+            "events.jsonl contains a presession_created (proc-<PID>) event in ready within ~2000 ms of agent launch",
+            "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready, followed by a pid_discovered bound to that session_id",
+            "events.jsonl contains three state_transition→working / →ready arcs on the SAME rollout session_id, one per prompt (state resets to ready between turns)",
+            "events.jsonl carries a rate_limit metric event on each turn boundary whose Windows[0] is the primary rate-limit window (UsedPercent ≥ 0, WindowMinutes and ResetsAt set), projected from rate_limits.primary on that turn's token_count payload",
+            "Windows[0].UsedPercent after turn 2 ≥ after turn 1, and after turn 3 ≥ after turn 2 — the usage percentage is non-decreasing turn-over-turn (the burndown signal); it never resets to 0 mid-session",
+            "each rate_limit event's SampledAt advances turn-over-turn (T3 > T2 > T1) — the snapshot is re-read each turn, not replayed stale; an equal UsedPercent with an advancing SampledAt still proves the burndown path",
+            "the session never hits the quota cap — every prompt produces a normal completed turn, so this is in-window burndown, NOT token-quota-exhausted",
+            "the rollout session's final live state is ready before the driver tears the REPL down",
+            "events.jsonl contains a process_exited on the rollout session at REPL teardown (single live session, not three exits)",
+            "no state_transition to waiting appears for the rollout session at any point"
+          ],
+          "settings": {},
+          "timeout_seconds": 300
         }
       }
     }

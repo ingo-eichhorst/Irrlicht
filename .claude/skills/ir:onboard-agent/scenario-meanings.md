@@ -537,6 +537,21 @@ Five fields per scenario:
 
 ---
 
+### quota-burndown
+
+- **Essence:** Over a multi-turn session the agent surfaces a provider-managed rate-limit usage window whose used percentage climbs as quota is consumed; irrlicht reflects the rising usage and refreshes the reading each turn, all without the session ever hitting the cap.
+- **User-observable signal:** The session's rate-limit usage percentage is non-decreasing turn-over-turn (after turn N ≥ after turn N-1), and the usage reading's sampled-at timestamp advances each turn (the snapshot is re-read, not replayed stale). The session never sticks; it follows a clean `ready → working → ready` arc per turn and never enters `waiting`.
+- **Primitive exercised:** Rate-limit window reporting — the agent emits a provider-managed usage window (used percent, window size, reset time) on each turn boundary, in a field the parser can extract and the daemon stores sample-on-change. Maps to the adapter's rate-limit / quota window surface (not a cost-per-token reading).
+- **Not to be confused with:** `token-quota-exhausted` — the cap is actually HIT and the session can't produce new turns until reset; quota-burndown stays strictly within the window and only watches the usage rise. `token-accounting` — cumulative input/output token counts, not a provider usage percentage. `subscription-detection` — reads the static plan tier/billing model, not the burning-down usage window.
+- **Conceptual flow:**
+  1. Session is `ready`; user sends a prompt; state `ready → working`.
+  2. Turn completes; the agent reports a rate-limit window with used percent P1 sampled at T1; state `working → ready`.
+  3. User sends a further prompt; another turn runs and completes.
+  4. The agent reports the window again: used percent P2 ≥ P1, sampled at T2 > T1.
+  5. Repeating across turns, the usage percentage rises (or holds steady, never resetting) and each reading carries a fresh sampled-at — without the quota cap being reached.
+
+---
+
 ### model-identification
 
 - **Essence:** The dashboard correctly shows the model name and context window for the model the agent was launched with — not "unknown".
