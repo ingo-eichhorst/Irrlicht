@@ -935,9 +935,9 @@
           "notes": "no AskUserQuestion-style structured blocking-question primitive that surfaces a daemon-observable waiting state (SQLite part schema = step-start/step-finish/text/tool only)"
         },
         "pi": {
-          "agent_supports": "no",
-          "daemon_capability": "n/a",
-          "driver_capability": "n/a",
+          "agent_supports": "yes",
+          "daemon_capability": "full",
+          "driver_capability": "ready",
           "notes": ""
         }
       }

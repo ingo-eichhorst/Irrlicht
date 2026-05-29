@@ -196,9 +196,14 @@ func buildCell(repoRoot, cid string, dirs []string, scenarios []rawScenario, age
 	// variant folder.
 	recFolder, artifacts := resolveArtifacts(agentScenDir, agent, dirs)
 
-	// ASSESSMENT: "catalog-id folder wins" — the cell's assessment is the one
-	// in the <cid> folder when present (this is the value the viewer displays
-	// per-cell), then the recording folder, then any remaining candidate dir.
+	// ASSESSMENT: a recorded cell's verdict MUST follow its recording — a cell
+	// that ships a recording can't be labelled with a verdict from a different
+	// folder that judged a different primitive (e.g. user-blocking-question's
+	// <cid> folder judges the structured-tool path `no/n.a.` while pi's actual
+	// recording lives in the agent-question-pending variant folder and proves
+	// the text-classifier path `yes/full`). So when recorded, the recording
+	// folder wins; only an UNRECORDED cell falls back to "catalog-id folder
+	// wins" (the <cid> folder, then the rest).
 	assessRaw, parsed := resolveAssessment(agentScenDir, cid, recFolder, dirs)
 
 	// RECIPE: the by_adapter[agent] block of the variant that best fits this
@@ -328,13 +333,19 @@ func findRecordings(cellDir, rel string) []string {
 	return out
 }
 
-// resolveAssessment reads the cell's assessment.json under a "catalog-id folder
-// wins" rule: the <cid> folder first (the value the viewer displays per cell),
-// then the recording folder, then any remaining candidate dir. Returns the
-// compacted raw JSON (for Details.Assessment) and the parsed overview fields
-// (for Metadata). Both nil when no assessment exists. An empty-after-compact
-// blob (a zero-byte assessment.json — several exist on disk) counts as no
-// assessment, matching the matrix model's intent.
+// resolveAssessment reads the cell's assessment.json, preferring the folder
+// that owns the cell's verdict:
+//
+//   - RECORDED cell (recFolder != ""): the recording folder wins, so a cell's
+//     shipped verdict always matches the recording it ships. Falls back to the
+//     <cid> folder then the rest only if the recording folder has no assessment.
+//   - UNRECORDED cell: "catalog-id folder wins" — the <cid> folder first (the
+//     value the viewer shows per cell), then any remaining candidate dir.
+//
+// Returns the compacted raw JSON (for Details.Assessment) and the parsed
+// overview fields (for Metadata). Both nil when no assessment exists. An
+// empty-after-compact blob (a zero-byte assessment.json — several exist on
+// disk) counts as no assessment, matching the matrix model's intent.
 func resolveAssessment(agentScenDir, cid, recFolder string, dirs []string) (json.RawMessage, *rawAssessment) {
 	try := func(folder string) (json.RawMessage, *rawAssessment, bool) {
 		if folder == "" {
@@ -355,10 +366,17 @@ func resolveAssessment(agentScenDir, cid, recFolder string, dirs []string) (json
 		return raw, &a, true
 	}
 
-	// Preference order: cid folder, then recording folder, then the rest —
+	// Preference order: recording folder first when the cell is recorded, else
+	// the cid folder; then the cid folder / recording folder, then the rest —
 	// de-duplicated so each folder is tried at most once.
+	var order []string
+	if recFolder != "" {
+		order = append([]string{recFolder, cid}, dirs...)
+	} else {
+		order = append([]string{cid}, dirs...)
+	}
 	seen := map[string]bool{}
-	for _, folder := range append([]string{cid, recFolder}, dirs...) {
+	for _, folder := range order {
 		if folder == "" || seen[folder] {
 			continue
 		}
