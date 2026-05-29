@@ -314,6 +314,27 @@ finalizing the script:
   needs arrow-key nav → genuine `driver_gap`. Applies only to agents
   with a slash/REPL surface.
 
+- **claudecode `/model` mid-conversation cache-confirmation dialog** —
+  `claude`'s `/model <alias>` (e.g. `/model sonnet`) switches DIRECTLY
+  with no picker when issued BEFORE any turn, but MID-CONVERSATION (once
+  the session has cached history) it first pops a one-key confirmation:
+  *"This conversation is cached for the current model. Switching to
+  Sonnet 4.6 means the full history gets re-read… 1. Yes, switch / 2. No,
+  go back."* A recipe that issues `/model` between turns MUST answer it
+  with `{"type":"keys","keys":"1"}` + `{"type":"keys","keys":"Enter"}`
+  after the slash — otherwise the switch is left pending and the NEXT
+  `send`'s keystrokes are swallowed by the dialog's filter (the Enter
+  confirms the highlighted "Yes", so the switch completes but the intended
+  turn never gets prompted → a single-model recording). This is invisible
+  in a quick pre-turn live probe (no history → no dialog), so probe the
+  switch AFTER a real turn. Also: `/model` persists the alias as the
+  global default in `~/.claude/settings.json` (even with `--settings`
+  active), so a model-switch recipe should end with a restoring
+  `/model <original-alias>` (it gets the same cache dialog → same
+  `keys 1`+`Enter`). Pin model A via the recipe `settings: {"model":
+  "<alias>"}` blob — the interactive driver has no `--model` flag, so
+  without this turn 1 runs on whatever the account default is.
+
 If you discover a new quirk while authoring a recipe, add it here
 so the next recipe author doesn't have to re-discover it.
 

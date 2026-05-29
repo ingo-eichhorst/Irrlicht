@@ -4525,8 +4525,8 @@
           "setup": [
             "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/.",
             "The recipe's settings blob pins `model: opus` so claude launches under model A deterministically — turn 1 is attributed to A regardless of the account's persisted global default. This is the load-bearing determinism fix (the prior recipe launched on whatever default the account had, so turn 1 and the picker-selected turn 2 could both be the SAME model — the cause of the old 4/6 known_failing).",
-            "Between turns the driver sends `/model sonnet` as a single `slash` step. claude's /model accepts an inline alias and switches DIRECTLY (footer flips to Sonnet, prints `Set model to Sonnet 4.6`) — NO arrow-key picker, so no `keys` navigation and no driver_gap. Turn 2 then runs under model B.",
-            "A final `slash` step `/model opus` restores the account's global default model after the recording: claude's /model persists the choice as the default for new sessions in ~/.claude/settings.json (it writes there even when --settings is active), so without this restore the recording would leave the user's default flipped to sonnet. The recording's observable assertions are all complete before this restoring step.",
+            "Between turns the driver sends `/model sonnet` as a single `slash` step (inline alias, NO arrow-key picker — no model-navigation `keys`, no driver_gap). MID-CONVERSATION, claude then shows a one-key CACHE-CONFIRMATION dialog ('This conversation is cached for the current model. Switching to Sonnet 4.6 means the full history gets re-read... 1. Yes, switch / 2. No, go back') — NOT shown for a pre-turn switch. The recipe answers it with `keys 1` + `keys Enter` to confirm; the footer then flips to Sonnet (prints `Set model to Sonnet 4.6`). WITHOUT this confirmation the switch is left pending and the next `send` text is swallowed by the dialog filter (the exact bug that produced the old single-model 4/6 recording). Turn 2 then runs under model B.",
+            "A final `slash` step `/model opus` (also followed by `keys 1` + `keys Enter` — the cache dialog fires for the restore too, since there is now even more history) restores the account's global default model after the recording: claude's /model persists the choice as the default for new sessions in ~/.claude/settings.json (it writes there even when --settings is active), so without this restore the recording would leave the user's default flipped to sonnet. The recording's observable assertions are all complete before this restoring step.",
             "Compare ModelName against the NORMALIZED form (lowercased, provider-prefix stripped) — not the typed alias (assessment caveat 2)."
           ],
           "script": [
@@ -4547,6 +4547,18 @@
             },
             {
               "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "1"
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
+            },
+            {
+              "type": "sleep",
               "seconds": 3
             },
             {
@@ -4560,6 +4572,18 @@
             {
               "type": "slash",
               "text": "/model opus"
+            },
+            {
+              "type": "sleep",
+              "seconds": 2
+            },
+            {
+              "type": "keys",
+              "keys": "1"
+            },
+            {
+              "type": "keys",
+              "keys": "Enter"
             },
             {
               "type": "sleep",
@@ -4580,7 +4604,7 @@
             "model": "opus"
           },
           "timeout_seconds": 180,
-          "notes": "FIXED 2026-05-29 (was 4/6 known_failing, issue #405): the prior recipe opened /model and blind-navigated the picker with `keys Down` + `keys Enter`, which did NOT land on a different model — the captured transcript had a SINGLE model (claude-opus-4-7) so phase t2_end (ModelName = model B) failed and cascaded. ROOT CAUSE was twofold: (1) the driver launches claude with only --settings + --session-id, it has NO --model flag, so turn 1 ran on the account's persisted global default, not a pinned model A; and (2) the picker Down+Enter selection is positional/non-deterministic. BOTH are fixed by abandoning the picker entirely: claude's /model accepts an INLINE ALIAS ARGUMENT (`/model sonnet`, `/model opus`) that switches DIRECTLY with no picker (verified live in claude 2.1.156: footer flips and it prints `Set model to Sonnet 4.6`), so the switch is sendable via the existing `slash` step — NO `keys` and NO driver_gap. Model A is pinned deterministically by the recipe's settings blob (`model: opus`) so turn 1 is opus regardless of the account default; the mid-session `/model sonnet` makes turn 2 sonnet — two distinct message.model values (claude-opus-4-8, claude-sonnet-4-6). WHY NO wait_turn after the /model slash or after turn 2: the driver's `slash` step calls step_send which BUMPS the expected-turn counter exactly like `send`, but /model produces no assistant turn — so after the slash EXPECTED is off-by-one and a turn-2 wait_turn would block forever waiting for a turn that never completes. Same compromise as the pi/aider model-switch recipes: turn 1 uses wait_turn (counter still in sync), the slash + turn 2 are covered by a fixed 12s sleep (a one-word `turn-two` reply completes and settles working→ready well within that window — verified live ~3s). WHY the trailing `/model opus`: claude's /model persists the alias as the global default for new sessions in ~/.claude/settings.json EVEN with --settings active (verified live: a /model sonnet flipped the global model key while the session's --settings file stayed opus), so the recording restores the user's opus default as its last step; all six spec phases are observable before it. The /model command itself is a <local-command-stdout> wrapper the parser skips in isLocalCommandContent, so the model_switch_window phase sees state stay ready with no working/waiting flicker. The model A→B promotion lands via MergeMetrics' latest-non-empty/non-unknown-wins rule (session.go L627-628) and PerTurnContribution.Model is set per-turn in applyRequestIDContribution. What differs between runs: token counts/cost, UUID/PID/timestamps, and the exact alias→version mapping (opus/sonnet resolve to whatever the account's latest of each family is — assert change + presence, not a hardcoded pair, per issue #440). What must NOT differ: two distinct message.model values (one per turn, A≠B), two ready→working→ready arcs on one UUID, no waiting/working during the switch window, and ModelName = B (latest) at t2_end."
+          "notes": "FIXED 2026-05-29 (was 4/6 known_failing, issue #405): the prior recipe opened /model and blind-navigated the picker with `keys Down` + `keys Enter`, which did NOT land on a different model — the captured transcript had a SINGLE model (claude-opus-4-7) so phase t2_end (ModelName = model B) failed and cascaded. ROOT CAUSE was twofold: (1) the driver launches claude with only --settings + --session-id, it has NO --model flag, so turn 1 ran on the account's persisted global default, not a pinned model A; and (2) the picker Down+Enter selection is positional/non-deterministic. BOTH are fixed by abandoning the picker entirely: claude's /model accepts an INLINE ALIAS ARGUMENT (`/model sonnet`, `/model opus`) that switches DIRECTLY with no picker (verified live in claude 2.1.156: footer flips and it prints `Set model to Sonnet 4.6`), so the switch is sendable via the existing `slash` step — NO `keys` and NO driver_gap. Model A is pinned deterministically by the recipe's settings blob (`model: opus`) so turn 1 is opus regardless of the account default; the mid-session `/model sonnet` makes turn 2 sonnet — two distinct message.model values (claude-opus-4-8, claude-sonnet-4-6). CACHE-CONFIRMATION DIALOG (the second half of the original bug): when /model is issued MID-CONVERSATION (history already cached), claude does NOT switch directly — it pops a one-key dialog 'This conversation is cached for the current model. Switching to Sonnet 4.6 means the full history gets re-read... 1. Yes, switch / 2. No, go back'. The recipe answers it with `keys 1` + `keys Enter` after each /model slash. The FIRST broken re-record (transcript had a single model + no turn-two) was this dialog eating the turn-two `send` keystrokes: the slash switched, the dialog appeared, and turn-two's text+Enter landed IN the dialog (Enter confirmed 'Yes' so the switch completed, but turn 2 was never prompted). A pre-turn /model (no history) shows no dialog — which is why the live probe switched cleanly but the in-recording mid-session switch did not. Both /model slashes here are mid-conversation, so both get the `keys 1`+`Enter` confirm (the restoring /model opus too). WHY NO wait_turn after the /model slash or after turn 2: the driver's `slash` step calls step_send which BUMPS the expected-turn counter exactly like `send`, but /model produces no assistant turn — so after the slash EXPECTED is off-by-one and a turn-2 wait_turn would block forever waiting for a turn that never completes. Same compromise as the pi/aider model-switch recipes: turn 1 uses wait_turn (counter still in sync), the slash + turn 2 are covered by a fixed 12s sleep (a one-word `turn-two` reply completes and settles working→ready well within that window — verified live ~3s). WHY the trailing `/model opus`: claude's /model persists the alias as the global default for new sessions in ~/.claude/settings.json EVEN with --settings active (verified live: a /model sonnet flipped the global model key while the session's --settings file stayed opus), so the recording restores the user's opus default as its last step; all six spec phases are observable before it. The /model command itself is a <local-command-stdout> wrapper the parser skips in isLocalCommandContent, so the model_switch_window phase sees state stay ready with no working/waiting flicker. The model A→B promotion lands via MergeMetrics' latest-non-empty/non-unknown-wins rule (session.go L627-628) and PerTurnContribution.Model is set per-turn in applyRequestIDContribution. What differs between runs: token counts/cost, UUID/PID/timestamps, and the exact alias→version mapping (opus/sonnet resolve to whatever the account's latest of each family is — assert change + presence, not a hardcoded pair, per issue #440). What must NOT differ: two distinct message.model values (one per turn, A≠B), two ready→working→ready arcs on one UUID, no waiting/working during the switch window, and ModelName = B (latest) at t2_end."
         },
         "codex": {
           "applicable": true,
