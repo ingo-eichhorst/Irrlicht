@@ -2,6 +2,7 @@ package viewer
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -163,18 +164,29 @@ func computeRecipeHash(repoRoot, agent, scenarioName string) string {
 		if !ok {
 			return ""
 		}
-		var v any
-		if err := json.Unmarshal(raw, &v); err != nil {
-			return ""
-		}
-		compact, err := json.Marshal(v) // re-marshal compact to match jq -c spacing
-		if err != nil {
-			return ""
-		}
-		sum := sha256.Sum256(compact)
-		return hex.EncodeToString(sum[:])
+		return recipeHashOf(raw)
 	}
 	return ""
+}
+
+// recipeHashOf returns the sha256 of the compact-JSON form of a recipe block,
+// matching promote-recording.sh's `jq -c … | shasum -a 256`. It uses
+// json.Compact, which strips insignificant whitespace while PRESERVING source
+// key order — exactly what `jq -c` does. The earlier Unmarshal→Marshal round
+// trip sorted object keys alphabetically (Go marshals maps sorted), so its
+// hash only matched jq when the source keys already happened to be alphabetical
+// and silently diverged otherwise. Empty string on empty input or malformed
+// JSON. Reused by the shard readers, which hash a recipe RawMessage directly.
+func recipeHashOf(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return hex.EncodeToString(sum[:])
 }
 
 // extractToolCalls walks transcript.jsonl for Anthropic-style tool_use
