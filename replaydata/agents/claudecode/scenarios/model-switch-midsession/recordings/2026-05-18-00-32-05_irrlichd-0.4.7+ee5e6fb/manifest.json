@@ -3,6 +3,6 @@
   "daemon_version": "0.4.7+ee5e6fb",
   "agent_cli_version": "2.1.156",
   "recipe_hash": "01b0827a3152c99694086ba87e70e4c5093fccb1b3cb2ce208e1383b60bb2197",
-  "expected_pass_rate": "6/6 phases passed",
-  "recording_started_at": "2026-05-29T21:56:02.604287+02:00"
+  "expected_pass_rate": "4/6 phases passed",
+  "recording_started_at": "2026-05-18T00:32:05.95877+02:00"
 }

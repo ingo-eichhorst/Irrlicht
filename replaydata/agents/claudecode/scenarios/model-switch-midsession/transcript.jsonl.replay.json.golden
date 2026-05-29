@@ -8,35 +8,30 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 16,
-    "consumed_events": 16,
-    "total_transitions": 3,
-    "first_event_time": "2026-05-17T22:32:22.66Z",
-    "last_event_time": "2026-05-17T22:32:39.833Z",
-    "wall_clock_session_duration": 17173000000,
+    "total_events": 27,
+    "consumed_events": 27,
+    "total_transitions": 5,
+    "first_event_time": "2026-05-29T19:56:04.384Z",
+    "last_event_time": "2026-05-29T19:56:30.84Z",
+    "wall_clock_session_duration": 26456000000,
     "state_durations": {
-      "ready": 10650000000,
-      "working": 6523000000
+      "ready": 26456000000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
-    "estimated_cost_usd": 0.0931035,
-    "cum_input_tokens": 6,
-    "cum_output_tokens": 8,
-    "cum_cache_read_tokens": 17797,
-    "cum_cache_creation_tokens": 13436,
-    "model_name": "claude-opus-4-7"
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "estimated_cost_usd": 0.0495549,
+    "cum_input_tokens": 6108,
+    "cum_output_tokens": 12,
+    "cum_cache_read_tokens": 34465,
+    "cum_cache_creation_tokens": 17324,
+    "model_name": "claude-sonnet-4-6"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T22:32:22.66Z",
+      "virtual_time": "2026-05-29T19:56:04.384Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -49,22 +44,23 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-05-17T22:32:22.66Z",
+      "event_index": 9,
+      "virtual_time": "2026-05-29T19:56:05.945Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "user",
+      "last_event_type": "turn_done",
       "has_open_tool": false,
-      "is_agent_done": false,
+      "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-one"
     },
     {
       "index": 2,
       "event_index": 9,
-      "virtual_time": "2026-05-17T22:32:29.183Z",
+      "virtual_time": "2026-05-29T19:56:05.945Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -75,6 +71,36 @@
       "needs_user_attention": false,
       "waiting_for_user_input": false,
       "last_assistant_text_head": "turn-one"
+    },
+    {
+      "index": 3,
+      "event_index": 19,
+      "virtual_time": "2026-05-29T19:56:17.985Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-two"
+    },
+    {
+      "index": 4,
+      "event_index": 19,
+      "virtual_time": "2026-05-29T19:56:17.985Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "turn-two"
     }
   ]
 }
