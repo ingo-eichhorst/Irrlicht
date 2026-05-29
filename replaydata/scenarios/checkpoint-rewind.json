@@ -226,7 +226,12 @@
       }
     },
     "codex": {
-      "artifacts": {},
+      "artifacts": {
+        "events": "codex/scenarios/checkpoint-rewind/events.jsonl",
+        "transcript": "codex/scenarios/checkpoint-rewind/transcript.jsonl",
+        "manifest": "codex/scenarios/checkpoint-rewind/manifest.json",
+        "golden": "codex/scenarios/checkpoint-rewind/transcript.jsonl.replay.json.golden"
+      },
       "metadata": {
         "agent_supports": "partial",
         "daemon_capability": "full",
