@@ -106,9 +106,9 @@ func TestSplitID(t *testing.T) {
 		{"2.3.4", 0, 0, false}, // SplitN(2) → "2","3.4"; "3.4" not an int
 	}
 	for _, c := range cases {
-		s, i, ok := splitID(c.id)
+		s, i, ok := SplitID(c.id)
 		if ok != c.ok || (ok && (s != c.section || i != c.idx)) {
-			t.Errorf("splitID(%q) = (%d,%d,%v), want (%d,%d,%v)", c.id, s, i, ok, c.section, c.idx, c.ok)
+			t.Errorf("SplitID(%q) = (%d,%d,%v), want (%d,%d,%v)", c.id, s, i, ok, c.section, c.idx, c.ok)
 		}
 	}
 }

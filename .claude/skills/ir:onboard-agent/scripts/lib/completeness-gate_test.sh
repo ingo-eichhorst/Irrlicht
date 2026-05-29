@@ -30,37 +30,28 @@ export IR_MATRIX_BIN="$BIN"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Catalog: cells exercising every disposition + one N/A (requires feat_x) and a
-# transport-N/A cell (requires_transport line_based vs the structured_store agent).
-cat > "$TMP/scenarios.json" <<'JSON'
-{"scenarios":[
-  {"name":"rec","coverage_id":"rec","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"gap","coverage_id":"gap","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"keys"}]}}},
-  {"name":"frozen","coverage_id":"frozen","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"degraded","coverage_id":"degraded","requires":["feat_a"],"by_adapter":{"fake":{"applicable":false}}},
-  {"name":"missed","coverage_id":"missed","requires":["feat_a"]},
-  {"name":"ready-unrec","coverage_id":"ready-unrec","requires":["feat_a"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"na","coverage_id":"na","requires":["feat_x"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}},
-  {"name":"line-only","coverage_id":"line-only","requires":["feat_a"],"requires_transport":["line_based"],"by_adapter":{"fake":{"script":[{"type":"send"}]}}}
-]}
-JSON
-
+# #510/#511: the matrix reads per-scenario shards (replaydata/scenarios/), so
+# the gate's input is shards, not the retired scenarios.json + capabilities.json.
+# The binary derives the shard dir (repo root) from --agents-root, so we build
+# <root>/replaydata/scenarios/*.json + _meta.json under TMP.
 ROOT="$TMP/replaydata"
-SDIR="$ROOT/agents/fake/scenarios"
-mkdir -p "$ROOT/agents/fake"
-cat > "$ROOT/agents/fake/capabilities.json" <<'JSON'
-{"agent":"fake","transport":"structured_store","features":{"feat_a":true,"feat_b":true,"feat_x":false}}
+SDIR="$ROOT/scenarios"
+mkdir -p "$SDIR" "$ROOT/agents/fake"
+cat > "$SDIR/_meta.json" <<'JSON'
+{"min_versions":{"fake":"0.0.0"},"transcript_extensions":{"fake":"jsonl"}}
 JSON
 
-mk_assess() { mkdir -p "$SDIR/$1"; printf '{"agent_supports":"%s","daemon_capability":"%s","driver_capability":"%s"}\n' "$2" "$3" "$4" > "$SDIR/$1/assessment.json"; }
-record()    { mkdir -p "$SDIR/$1"; printf '{}\n' > "$SDIR/$1/transcript.jsonl"; printf '{}\n' > "$SDIR/$1/events.jsonl"; }
+# shard <name> <agents-json> — one shard for coverage_id <name>.
+shard() { printf '{"id":"1.%s","name":"%s","section":"S","feature":"F","agents":%s}\n' "$RANDOM" "$1" "$2" > "$SDIR/$1.json"; }
+# A recorded cell carries non-empty artifact refs (cellRecorded checks the refs,
+# not the files on disk); an assessed-not-recorded cell has an assessment but
+# no refs; an unassessed cell has neither.
+ASSESS_OK='{"agent_supports":"yes","daemon_capability":"full","driver_capability":"ready"}'
+REC='{"events":"fake/scenarios/rec/events.jsonl","transcript":"fake/scenarios/rec/transcript.jsonl"}'
 
-mk_assess rec yes full ready; record rec
-mk_assess gap partial full gap:keys
-mk_assess frozen no n/a ready
-mk_assess degraded yes full ready          # recipe applicable:false ⇒ applicable_false
-mk_assess ready-unrec yes full ready       # assessed recordable, NO recording → non-terminal
-# `missed` + `na` get no dir at all.
+shard rec            "{\"fake\":{\"artifacts\":$REC,\"details\":{\"assessment\":$ASSESS_OK,\"recipe\":{\"script\":[{\"type\":\"send\"}]}}}}"
+shard unrec-assessed "{\"fake\":{\"details\":{\"assessment\":$ASSESS_OK,\"recipe\":{\"script\":[{\"type\":\"send\"}]}}}}"
+shard unassessed     '{"fake":{"details":{"recipe":{"script":[{"type":"send"}]}}}}'
 
 fails=0
 pass() { echo "  PASS: $1"; }
@@ -68,26 +59,26 @@ fail() { echo "  FAIL: $1 — expected [$2] got [$3]"; fails=$((fails + 1)); }
 assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"; }
 
 echo "== CLI exit codes (bash↔matrix seam) =="
-bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$TMP/root-missing" >/dev/null 2>&1
-assert_eq "missing capabilities → exit 2 (infra)" "2" "$?"
+bash "$DIR/completeness-gate.sh" ghost "$ROOT" >/dev/null 2>&1
+assert_eq "unknown adapter (not in _meta) → exit 2 (infra)" "2" "$?"
 
-bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$ROOT" >/dev/null 2>&1
+bash "$DIR/completeness-gate.sh" fake "$ROOT" >/dev/null 2>&1
 assert_eq "non-terminal cells present → exit 1" "1" "$?"
 
-# Make every non-terminal cell terminal; the gate should now pass.
-mk_assess missed no n/a ready              # → applicable_false
-record ready-unrec                         # → recorded
-bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$ROOT" >/dev/null 2>&1
-assert_eq "all terminal → exit 0" "0" "$?"
-
 echo "== output: GAP line names the next action =="
-out="$(bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$TMP/root-missing" 2>&1)"
-mk_assess ready-unrec yes full ready       # restore one non-terminal cell
-rm -f "$SDIR/ready-unrec/transcript.jsonl" "$SDIR/ready-unrec/events.jsonl"
-out="$(bash "$DIR/completeness-gate.sh" fake "$TMP/scenarios.json" "$ROOT" 2>&1)"
-grep -q "ready-unrec.*assessed_not_recorded → implement fake ready-unrec" <<<"$out" \
+out="$(bash "$DIR/completeness-gate.sh" fake "$ROOT" 2>&1)"
+grep -q "unrec-assessed.*assessed_not_recorded → implement fake unrec-assessed" <<<"$out" \
   && pass "implement hint for assessed_not_recorded" \
-  || fail "implement hint" "implement fake ready-unrec line" "$out"
+  || fail "implement hint" "implement fake unrec-assessed line" "$out"
+grep -q "unassessed.*unassessed → assess fake unassessed" <<<"$out" \
+  && pass "assess hint for unassessed" \
+  || fail "assess hint" "assess fake unassessed line" "$out"
+
+# Make every non-terminal cell terminal; the gate should now pass.
+shard unrec-assessed "{\"fake\":{\"artifacts\":{\"events\":\"e\",\"transcript\":\"t\"},\"details\":{\"assessment\":$ASSESS_OK}}}"   # now recorded
+shard unassessed     '{"fake":{"details":{"assessment":{"agent_supports":"no","daemon_capability":"n/a","driver_capability":"ready"}}}}'  # supports=no → applicable_false
+bash "$DIR/completeness-gate.sh" fake "$ROOT" >/dev/null 2>&1
+assert_eq "all terminal → exit 0" "0" "$?"
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then

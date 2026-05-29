@@ -18,6 +18,14 @@ command -v jq >/dev/null || { echo "recipe-lint_test: jq is required" >&2; exit 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# #511: recipe-lint reads per-scenario shards (replaydata/scenarios/<name>.json
+# → .agents[$a].details.recipe) via shard-lib. Build shard fixtures and point
+# shard-lib at them with IR_SHARD_DIR.
+export IR_SHARD_DIR="$TMP/replaydata/scenarios"
+mkdir -p "$IR_SHARD_DIR"
+# shard <name> <recipe-json> — write a one-cell shard for agent "fake".
+shard() { printf '{"name":"%s","agents":{"fake":{"details":{"recipe":%s}}}}\n' "$1" "$2" > "$IR_SHARD_DIR/$1.json"; }
+
 # Fixture driver: a sparse interactive driver dispatching on $type, with one
 # grouped arm (send|slash) and a default. Mirrors the real drivers' shape,
 # including the #508 #4 DRIVE_ELICITS contract: it dispatches `slash` (a case
@@ -49,15 +57,9 @@ SH
 
 # Fixture catalog: one cell whose recipe stays in grammar, one that needs a
 # missing `sigkill`, and one headless prompt cell (no script).
-cat > "$TMP/scenarios.json" <<'JSON'
-{"scenarios":[
-  {"name":"ok-cell","by_adapter":{"fake":{"script":[
-    {"type":"send","text":"hi"},{"type":"wait_turn"},{"type":"sleep","seconds":4}]}}},
-  {"name":"gap-cell","by_adapter":{"fake":{"script":[
-    {"type":"send","text":"hi"},{"type":"sigkill"},{"type":"resume"}]}}},
-  {"name":"headless","by_adapter":{"fake":{"prompt":"reply ok"}}}
-]}
-JSON
+shard ok-cell  '{"script":[{"type":"send","text":"hi"},{"type":"wait_turn"},{"type":"sleep","seconds":4}]}'
+shard gap-cell '{"script":[{"type":"send","text":"hi"},{"type":"sigkill"},{"type":"resume"}]}'
+shard headless '{"prompt":"reply ok"}'
 
 fails=0
 pass() { echo "  PASS: $1"; }
@@ -71,22 +73,22 @@ assert_eq "handled set is sorted-unique, grouped arm split, default dropped" \
 assert_eq "missing driver file → empty (no crash)" \
   "" "$(driver_step_types_from_file "$TMP/nope.sh")"
 
-echo "== recipe_step_types_from_json =="
+echo "== recipe_step_types =="
 assert_eq "ok-cell needs send/sleep/wait_turn" \
   "$(printf 'send\nsleep\nwait_turn')" \
-  "$(recipe_step_types_from_json "$TMP/scenarios.json" ok-cell fake)"
+  "$(recipe_step_types ok-cell fake)"
 assert_eq "headless cell has no step types" \
-  "" "$(recipe_step_types_from_json "$TMP/scenarios.json" headless fake)"
+  "" "$(recipe_step_types headless fake)"
 
 echo "== recipe_lint_gaps =="
-recipe_lint_gaps "$TMP/drive-fake-interactive.sh" "$TMP/scenarios.json" ok-cell fake >/dev/null
+recipe_lint_gaps "$TMP/drive-fake-interactive.sh" ok-cell fake >/dev/null
 assert_eq "in-grammar cell → rc 0 (no gap)" "0" "$?"
-gaps="$(recipe_lint_gaps "$TMP/drive-fake-interactive.sh" "$TMP/scenarios.json" gap-cell fake)"
+gaps="$(recipe_lint_gaps "$TMP/drive-fake-interactive.sh" gap-cell fake)"
 rc=$?
 assert_eq "gap cell → rc 1" "1" "$rc"
 assert_eq "gap cell → reports the two missing primitives" \
   "$(printf 'resume\nsigkill')" "$gaps"
-recipe_lint_gaps "$TMP/drive-fake-interactive.sh" "$TMP/scenarios.json" headless fake >/dev/null
+recipe_lint_gaps "$TMP/drive-fake-interactive.sh" headless fake >/dev/null
 assert_eq "headless cell → rc 0 (no script, no gap)" "0" "$?"
 
 echo "== recipe_semantic_gaps: accepts-vs-elicits + slash-in-send, read from driver (#508 #4) =="
@@ -95,25 +97,21 @@ echo "== recipe_semantic_gaps: accepts-vs-elicits + slash-in-send, read from dri
 FAKE_DRV="$TMP/drive-fake-interactive.sh"
 # A cell that drives a `slash` step (in grammar, NOT elicited) and a send-text
 # slash command (the no-op trap).
-cat > "$TMP/sem.json" <<'JSON'
-{"scenarios":[
-  {"name":"clean","by_adapter":{"fake":{"script":[{"type":"send","text":"hi"},{"type":"wait_turn"}]}}},
-  {"name":"slash-step","by_adapter":{"fake":{"script":[{"type":"slash","text":"/new"},{"type":"wait_turn"}]}}},
-  {"name":"send-slash","by_adapter":{"fake":{"script":[{"type":"send","text":"/undo"},{"type":"wait_turn"}]}}}
-]}
-JSON
-recipe_semantic_gaps "$FAKE_DRV" "$TMP/sem.json" clean fake >/dev/null
+shard clean      '{"script":[{"type":"send","text":"hi"},{"type":"wait_turn"}]}'
+shard slash-step '{"script":[{"type":"slash","text":"/new"},{"type":"wait_turn"}]}'
+shard send-slash '{"script":[{"type":"send","text":"/undo"},{"type":"wait_turn"}]}'
+recipe_semantic_gaps "$FAKE_DRV" clean fake >/dev/null
 assert_eq "clean cell → rc 0 (every step elicited)" "0" "$?"
-out="$(recipe_semantic_gaps "$FAKE_DRV" "$TMP/sem.json" slash-step fake)"; rc=$?
+out="$(recipe_semantic_gaps "$FAKE_DRV" slash-step fake)"; rc=$?
 assert_eq "slash step not in elicits → rc 1" "1" "$rc"
 assert_eq "slash step → not-elicited:slash" "not-elicited:slash" "$out"
-out="$(recipe_semantic_gaps "$FAKE_DRV" "$TMP/sem.json" send-slash fake)"; rc=$?
+out="$(recipe_semantic_gaps "$FAKE_DRV" send-slash fake)"; rc=$?
 assert_eq "send-text slash on slash_requires adapter → rc 1" "1" "$rc"
 assert_eq "send-slash → slash-in-send:/undo" "slash-in-send:/undo" "$out"
 assert_eq "driver with no DRIVE_ELICITS → rc 0 (grammar-only)" "0" \
-  "$(recipe_semantic_gaps "$TMP/drive-bare-interactive.sh" "$TMP/sem.json" slash-step fake >/dev/null; echo $?)"
+  "$(recipe_semantic_gaps "$TMP/drive-bare-interactive.sh" slash-step fake >/dev/null; echo $?)"
 assert_eq "missing driver file → rc 0 (grammar-only)" "0" \
-  "$(recipe_semantic_gaps "$TMP/no-such-driver.sh" "$TMP/sem.json" slash-step fake >/dev/null; echo $?)"
+  "$(recipe_semantic_gaps "$TMP/no-such-driver.sh" slash-step fake >/dev/null; echo $?)"
 
 echo "== DRIVE_ELICITS extraction tolerates trailing comments + single quotes (no silent fail-open) =="
 # A trailing comment / single quotes must NOT degrade the semantic check to
@@ -129,7 +127,7 @@ assert_eq "commented DRIVE_ELICITS still parsed" \
   "$(printf 'send\nsleep\nwait_turn')" "$(driver_elicits_from_file "$TMP/drive-cmt-interactive.sh")"
 assert_eq "commented DRIVE_SLASH_REQUIRES_STEP_TYPE still true" \
   "true" "$(driver_slash_requires_step_type "$TMP/drive-cmt-interactive.sh")"
-out="$(recipe_semantic_gaps "$TMP/drive-cmt-interactive.sh" "$TMP/sem.json" slash-step fake)"; rc=$?
+out="$(recipe_semantic_gaps "$TMP/drive-cmt-interactive.sh" slash-step fake)"; rc=$?
 assert_eq "commented driver still catches not-elicited slash → rc 1" "1" "$rc"
 assert_eq "commented driver → not-elicited:slash" "not-elicited:slash" "$out"
 cat > "$TMP/drive-sq-interactive.sh" <<'SH'
@@ -141,16 +139,16 @@ assert_eq "single-quoted DRIVE_ELICITS parsed" \
   "$(printf 'send\nsleep\nwait_turn')" "$(driver_elicits_from_file "$TMP/drive-sq-interactive.sh")"
 
 echo "== CLI exit codes =="
-bash "$DIR/recipe-lint.sh" "$TMP/scenarios.json" ok-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
+bash "$DIR/recipe-lint.sh" ok-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
 assert_eq "CLI ok-cell → exit 0 (in grammar + elicited)" "0" "$?"
-bash "$DIR/recipe-lint.sh" "$TMP/scenarios.json" gap-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
+bash "$DIR/recipe-lint.sh" gap-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
 assert_eq "CLI gap-cell → exit 3 (driver_gap)" "3" "$?"
-bash "$DIR/recipe-lint.sh" "$TMP/sem.json" slash-step fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
+bash "$DIR/recipe-lint.sh" slash-step fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
 assert_eq "CLI semantic gap → exit 4" "4" "$?"
-bash "$DIR/recipe-lint.sh" "$TMP/scenarios.json" headless fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
+bash "$DIR/recipe-lint.sh" headless fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
 assert_eq "CLI no-recipe-step (headless prompt) → exit 0" "0" "$?"
-bash "$DIR/recipe-lint.sh" "$TMP/sem.json" no-such-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
-assert_eq "CLI absent cell (no by_adapter entry) → exit 0 with note" "0" "$?"
+bash "$DIR/recipe-lint.sh" no-such-cell fake "$TMP/drive-fake-interactive.sh" >/dev/null 2>&1
+assert_eq "CLI absent cell (no shard recipe) → exit 0 with note" "0" "$?"
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then

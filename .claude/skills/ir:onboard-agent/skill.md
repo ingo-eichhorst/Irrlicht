@@ -165,27 +165,12 @@ Every `requires` id must exist in the canonical features list, else the
 matrix is undefined:
 
 ```bash
-SK=.claude/skills/ir:onboard-agent
+# #511: requires ids come from the per-scenario shards; the canonical capability
+# vocabulary moved into replaydata/scenarios/_meta.json (.capability_vocab).
 comm -23 \
-  <(jq -r '.scenarios[].requires[]' $SK/scenarios.json | sort -u) \
-  <(jq -r '.features[].id' replaydata/agents/features.json | sort -u)
+  <(jq -r '.requires[]?' replaydata/scenarios/*.json | sort -u) \
+  <(jq -r '.capability_vocab.features[].id' replaydata/scenarios/_meta.json | sort -u)
 # any output = a scenario requires an unknown capability — block and report it.
-```
-
-**Orphan catalog rows (completeness-gate blind-spot — found 2026-05-29).** A
-catalog row whose id has no matching `scenarios[]` variant (a documentation-only
-/ N.A. scenario with no recipe — `architect-editor-pair`,
-`provider-failover-midturn`, `quota-burndown`) carries no `requires`, so the
-matrix can't evaluate its applicability and enumerates the cell ONLY for agents
-that already have an `assessment.json` on disk — **silently skipping the rest**.
-The completeness gate then reports a column COMPLETE while an orphan-row cell
-sits unassessed and invisible (this is how `claudecode/quota-burndown` hid: gate
-green, cell never enumerated). Run the guard to make those cells loud:
-
-```bash
-bash .claude/skills/ir:onboard-agent/scripts/lib/catalog-orphan-guard.sh
-# exit 1 lists every (agent, orphan-row) cell the gate would skip. Fix each by
-# assessing it, or by giving the catalog row a real scenarios[] definition.
 ```
 
 > **Retired with the #510 shard migration:** the *catalog-drift gate*
@@ -195,13 +180,7 @@ bash .claude/skills/ir:onboard-agent/scripts/lib/catalog-orphan-guard.sh
 > `TestAssessmentScenarioConsistency` — are gone. Both guarded *drift between
 > separate files*; with one shard per cell there is no separate file to drift
 > against. The structural completeness gate and `matrix rollup --check`
-> (`TestRollupInSync`) remain. **Caveat for this #510-transitional branch:**
-> `catalog[]` and `scenarios[]` are still *separate* arrays here, so the retired
-> bijection check no longer guards them — which is precisely what let the orphan
-> rows above slip in. `catalog-orphan-guard.sh` reinstates the relevant
-> protection (sharper-focused: it flags the *cells* the orphans hide, not just
-> file-level drift) until #511's shard-only model makes orphans impossible by
-> construction.
+> (`TestRollupInSync`) remain.
 
 The completeness gate is a thin client of the canonical matrix model
 (`tools/agent-onboarding/internal/matrix`, run via the `matrix query` binary);
@@ -241,12 +220,13 @@ transport makes it N/A; #496 RC7). Per-cell state:
   `requires_transport`.
 
 ```bash
-SK=.claude/skills/ir:onboard-agent
+# #511: per-adapter capability maps (capabilities.json) were retired —
+# applicability is now shard-driven (a cell exists iff its shard names the
+# adapter). List, per adapter, the scenarios it has a shard cell for:
 for a in claudecode codex pi aider opencode; do
   echo "== $a =="
-  jq -r '.features | to_entries[] | "\(.key)=\(.value)"' replaydata/agents/$a/capabilities.json
+  jq -r --arg a "$a" 'select(.agents[$a]) | .name' replaydata/scenarios/*.json | sort
 done
-ls replaydata/agents/*/scenarios/ 2>/dev/null
 ```
 
 Print a table (rows = adapters, columns = scenarios) with a one-line hint
@@ -277,7 +257,7 @@ round-trip per cell to rediscover the gap:
 ```bash
 SK=.claude/skills/ir:onboard-agent
 # per cell: exit 0 = in grammar, exit 3 = driver_gap (prints the gap:* list)
-$SK/scripts/lib/recipe-lint.sh $SK/scenarios.json <scenario> <agent>
+$SK/scripts/lib/recipe-lint.sh <scenario> <agent>
 # or just inspect what a driver implements (its case "$type" arms):
 source $SK/scripts/lib/recipe-lint.sh
 driver_step_types_from_file $SK/scripts/drive-<agent>-interactive.sh
@@ -295,11 +275,13 @@ report doubles as the column's driver-gap punch-list at onboarding time.
 `run-cell.sh` runs the same lint as a record-time backstop (refuses with
 exit 3).
 
-### Orchestrator matrix (`orchestrator_scenarios[]` × orchestrators)
+### Orchestrator matrix (orchestrator scenarios × orchestrators)
 
 ```bash
-jq -r '.orchestrator_scenarios[] | "\(.name)\t\(.by_orchestrator.gastown.fixture_dir)\t\(.by_orchestrator.gastown.poll_ticks)"' \
-  .claude/skills/ir:onboard-agent/scenarios.json
+# #511: orchestrator scenarios moved to replaydata/orchestrators/scenarios.json
+# (top-level `.scenarios[]`), out of the retired scenarios.json.
+jq -r '.scenarios[] | "\(.name)\t\(.by_orchestrator.gastown.fixture_dir)\t\(.by_orchestrator.gastown.poll_ticks)"' \
+  replaydata/orchestrators/scenarios.json
 find replaydata/orchestrators/gastown/scenarios -name 'state-*.json' 2>/dev/null | sort
 ```
 

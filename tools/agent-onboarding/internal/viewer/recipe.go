@@ -101,20 +101,27 @@ func resolveScenarioFolderForAgent(idx recipeIndex, agent, coverageID string) st
 // shards (one row per coverage_id, so no dedup is needed). Shape:
 //
 //	{"scenarios":[{"name":<coverage_id>,"coverage_id":<coverage_id>,
-//	               "by_adapter":{<agent>:<recipe>}}, ...]}
+//	               "by_adapter":{<agent>:<recipe>},
+//	               "folder_by_agent":{<agent>:<recording-folder>}}, ...]}
 //
-// — the structure the client's recipesByCoverageId map consumes.
+// — the structure the client's recipesByCoverageId map consumes. folder_by_agent
+// gives the on-disk recording folder per agent: it equals the coverage_id for
+// all but the variant-folder cells (e.g. pi user-blocking-question →
+// agent-question-pending), where the client needs it to resolve the recording
+// link/panel (viewer.js) — without it, those cells' detail recording can't be
+// found (the #512 review finding this closes).
 func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 	shards := shard.LoadAll(s.RepoRoot)
 
 	type recipeRow struct {
-		Name       string                     `json:"name"`
-		CoverageID string                     `json:"coverage_id"`
-		ByAdapter  map[string]json.RawMessage `json:"by_adapter"`
+		Name          string                     `json:"name"`
+		CoverageID    string                     `json:"coverage_id"`
+		ByAdapter     map[string]json.RawMessage `json:"by_adapter"`
+		FolderByAgent map[string]string          `json:"folder_by_agent,omitempty"`
 	}
 	rows := make([]recipeRow, 0, len(shards))
 	for _, sh := range shards {
-		row := recipeRow{Name: sh.Name, CoverageID: sh.Name, ByAdapter: map[string]json.RawMessage{}}
+		row := recipeRow{Name: sh.Name, CoverageID: sh.Name, ByAdapter: map[string]json.RawMessage{}, FolderByAgent: map[string]string{}}
 		// Sorted agent keys for deterministic output.
 		agentKeys := make([]string, 0, len(sh.Agents))
 		for a := range sh.Agents {
@@ -125,6 +132,13 @@ func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 			if rec := sh.Agents[a].Details.Recipe; len(rec) > 0 {
 				row.ByAdapter[a] = rec
 			}
+			// Resolve the recording folder for this agent (variant-folder aware);
+			// fall back to the coverage_id when the cell has no recording_dir.
+			folder := sh.Name
+			if rd := sh.Agents[a].RecordingDir; rd != "" {
+				folder = filepath.Base(rd)
+			}
+			row.FolderByAgent[a] = folder
 		}
 		rows = append(rows, row)
 	}

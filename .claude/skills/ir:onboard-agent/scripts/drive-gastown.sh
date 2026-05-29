@@ -33,7 +33,9 @@ SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 
-SCENARIOS_JSON="$SKILL_DIR/scenarios.json"
+# Orchestrator scenarios moved out of scenarios.json into their own home under
+# replaydata/orchestrators/ in #511 (the agent shard catalog never held them).
+ORCH_SCENARIOS_JSON="$REPO_ROOT/replaydata/orchestrators/scenarios.json"
 
 if [[ $# -ne 1 ]]; then
   echo "usage: drive-gastown.sh <scenario-name>" >&2
@@ -44,11 +46,11 @@ SCENARIO="$1"
 
 # Look up the orchestrator scenario; refuse if absent.
 CELL_JSON="$(jq --arg s "$SCENARIO" '
-  .orchestrator_scenarios[]?
+  .scenarios[]?
   | select(.name == $s)
   | select(.by_orchestrator.gastown)
   | {description, verify, fixture_dir: .by_orchestrator.gastown.fixture_dir}
-' "$SCENARIOS_JSON")"
+' "$ORCH_SCENARIOS_JSON")"
 if [[ -z "$CELL_JSON" || "$CELL_JSON" == "null" ]]; then
   echo "orchestrator scenario not found: $SCENARIO" >&2
   exit 1
@@ -56,10 +58,10 @@ fi
 
 # `fixture_dir` is repo-relative; resolve against $REPO_ROOT so the JSON is
 # the single source of truth. If a maintainer relocates fixtures they only
-# update scenarios.json — script keeps working.
+# update replaydata/orchestrators/scenarios.json — script keeps working.
 FIXTURE_REL="$(jq -r '.fixture_dir // empty' <<<"$CELL_JSON")"
 if [[ -z "$FIXTURE_REL" ]]; then
-  echo "scenarios.json: orchestrator_scenarios[$SCENARIO].by_orchestrator.gastown.fixture_dir is missing" >&2
+  echo "orchestrators/scenarios.json: scenarios[$SCENARIO].by_orchestrator.gastown.fixture_dir is missing" >&2
   exit 1
 fi
 COMMITTED_DIR="$REPO_ROOT/$FIXTURE_REL"

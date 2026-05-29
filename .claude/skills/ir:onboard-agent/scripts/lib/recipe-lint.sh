@@ -14,6 +14,13 @@
 # so the lint reads them directly rather than trusting a hand-kept manifest
 # that would drift. This file MUST NOT call `set` (it would leak options
 # into a sourcing shell).
+#
+# #511: recipe step types come from the per-scenario shard
+# (replaydata/scenarios/<coverage_id>.json → .agents[$a].details.recipe),
+# read through shard-lib.sh, instead of the retired scenarios.json.
+
+# shellcheck source=shard-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shard-lib.sh"
 
 # driver_step_types_from_file <driver-file>
 #   → newline-separated, sorted-unique step types the driver handles, read
@@ -37,30 +44,26 @@ driver_step_types_from_file() {
   ' "$file" | sort -u
 }
 
-# recipe_step_types_from_json <scenarios.json> <scenario> <agent>
+# recipe_step_types <scenario> <agent>
 #   → newline-separated, sorted-unique step types the cell's recipe needs.
 #     Empty for a headless `prompt` cell (no script) — which can never hit a
-#     driver-step gap.
-recipe_step_types_from_json() {
-  local json="$1" scenario="$2" agent="$3"
-  jq -r --arg s "$scenario" --arg a "$agent" '
-    .scenarios[] | select(.name == $s) | .by_adapter[$a].script // []
-    | .[].type
-  ' "$json" 2>/dev/null | sort -u
+#     driver-step gap. Reads the shard recipe via shard-lib.
+recipe_step_types() {
+  shard_recipe "$1" "$2" | jq -r '.script // [] | .[].type' 2>/dev/null | sort -u
 }
 
-# recipe_lint_gaps <driver-file> <scenarios.json> <scenario> <agent>
+# recipe_lint_gaps <driver-file> <scenario> <agent>
 #   → prints each needed step type the driver does NOT handle, one per line.
 #     Returns 0 when there are no gaps, 1 when at least one gap is printed.
 recipe_lint_gaps() {
-  local driver="$1" json="$2" scenario="$3" agent="$4"
+  local driver="$1" scenario="$2" agent="$3"
   local handled needed gaps
   # A missing driver file would otherwise yield an empty handled-set, making
   # every needed step look like a gap with no hint why. Say so explicitly —
   # the gap list that follows is then "all steps" because no driver exists.
   [[ -f "$driver" ]] || echo "recipe-lint: interactive driver not found: $driver" >&2
   handled="$(driver_step_types_from_file "$driver")"
-  needed="$(recipe_step_types_from_json "$json" "$scenario" "$agent")"
+  needed="$(recipe_step_types "$scenario" "$agent")"
   # Lines in `needed` absent from `handled`.
   gaps="$(comm -23 <(printf '%s\n' "$needed" | sed '/^$/d') \
                    <(printf '%s\n' "$handled" | sed '/^$/d'))"
@@ -111,17 +114,17 @@ driver_slash_requires_step_type() {
   [[ "$v" == "true" ]] && echo true || echo false
 }
 
-# recipe_send_slash_texts <scenarios.json> <scenario> <agent>
+# recipe_send_slash_texts <scenario> <agent>
 #   → the text of every `send` step whose text is a bare slash command. On an
 #     adapter with slash_requires_step_type, these never reach the REPL.
 recipe_send_slash_texts() {
-  jq -r --arg s "$2" --arg a "$3" '
-    .scenarios[] | select(.name == $s) | .by_adapter[$a].script // []
+  shard_recipe "$1" "$2" | jq -r '
+    .script // []
     | .[] | select(.type == "send" and ((.text // "") | startswith("/"))) | .text
-  ' "$1" 2>/dev/null
+  ' 2>/dev/null
 }
 
-# recipe_semantic_gaps <driver-file> <scenarios.json> <scenario> <agent>
+# recipe_semantic_gaps <driver-file> <scenario> <agent>
 #   → prints each semantic problem, one per line:
 #       not-elicited:<step>   — a step type the recipe needs that the driver
 #                               dispatches but does not genuinely produce.
@@ -131,26 +134,26 @@ recipe_send_slash_texts() {
 #     run only AFTER the grammar check passes, so `not-elicited` is purely a
 #     produces-vs-accepts gap (every needed step is already a case arm).
 recipe_semantic_gaps() {
-  local driver="$1" json="$2" scenario="$3" agent="$4"
+  local driver="$1" scenario="$2" agent="$3"
   local elicits needed not_elicited slash_req slashes rc=0
   [[ -f "$driver" ]] || return 0   # no driver → grammar-only (back-compat)
   elicits="$(driver_elicits_from_file "$driver")"
   # No DRIVE_ELICITS constant → no semantic data to judge against (a brand-new
   # driver before its contract is authored). Stay grammar-only.
   [[ -n "$elicits" ]] || return 0
-  needed="$(recipe_step_types_from_json "$json" "$scenario" "$agent")"
+  needed="$(recipe_step_types "$scenario" "$agent")"
   not_elicited="$(comm -23 <(printf '%s\n' "$needed"   | sed '/^$/d') \
                            <(printf '%s\n' "$elicits" | sed '/^$/d'))"
   while IFS= read -r st; do [[ -n "$st" ]] && { echo "not-elicited:$st"; rc=1; }; done <<< "$not_elicited"
   slash_req="$(driver_slash_requires_step_type "$driver")"
   if [[ "$slash_req" == "true" ]]; then
-    slashes="$(recipe_send_slash_texts "$json" "$scenario" "$agent")"
+    slashes="$(recipe_send_slash_texts "$scenario" "$agent")"
     while IFS= read -r t; do [[ -n "$t" ]] && { echo "slash-in-send:$t"; rc=1; }; done <<< "$slashes"
   fi
   return "$rc"
 }
 
-# CLI: recipe-lint.sh <scenarios.json> <scenario> <agent> [driver-file]
+# CLI: recipe-lint.sh <scenario> <agent> [driver-file]
 #   exit 0 — recipe stays inside the driver's grammar AND every step is elicited
 #   exit 3 — driver_gap: a step type the driver lacks (grammar gap)
 #   exit 4 — semantic_gap: a step the driver accepts but doesn't elicit, or a
@@ -160,24 +163,25 @@ recipe_semantic_gaps() {
 # convention (DRIVE_SLASH_REQUIRES_STEP_TYPE), so there is no separate manifest.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   set -uo pipefail
-  json="${1:?usage: recipe-lint.sh <scenarios.json> <scenario> <agent> [driver-file]}"
-  scenario="${2:?missing <scenario>}"
-  agent="${3:?missing <agent>}"
+  # Every shard read goes through jq; without it shard_has_recipe returns false
+  # and the gate would fail OPEN (report "nothing to lint" for every cell). Fail
+  # hard instead, like cell-integrity.sh / completeness-gate.sh.
+  command -v jq >/dev/null || { echo "recipe-lint: jq is required" >&2; exit 2; }
+  scenario="${1:?usage: recipe-lint.sh <scenario> <agent> [driver-file]}"
+  agent="${2:?missing <agent>}"
   LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  driver="${4:-$(cd "$LIBDIR/.." && pwd)/drive-${agent}-interactive.sh}"
+  driver="${3:-$(cd "$LIBDIR/.." && pwd)/drive-${agent}-interactive.sh}"
 
-  # A cell with NO by_adapter.<agent> recipe entry has nothing for this lint to
-  # check — but say so explicitly rather than reporting a vacuous "ok" (#496
-  # RC3). A missing recipe for an applicable cell is the completeness gate's
-  # job (scripts/lib/completeness-gate.sh), not a driver/recipe grammar issue.
-  if [[ "$(jq -r --arg s "$scenario" --arg a "$agent" \
-        '[.scenarios[] | select(.name==$s) | .by_adapter[$a]] | any(. != null)' \
-        "$json" 2>/dev/null)" != "true" ]]; then
-    echo "recipe-lint: no by_adapter.$agent recipe for '$scenario' — nothing to lint (completeness-gate covers missing recipes)" >&2
+  # A cell with NO recipe for this agent has nothing for this lint to check —
+  # but say so explicitly rather than reporting a vacuous "ok" (#496 RC3). A
+  # missing recipe for an applicable cell is the completeness gate's job
+  # (scripts/lib/completeness-gate.sh), not a driver/recipe grammar issue.
+  if ! shard_has_recipe "$scenario" "$agent"; then
+    echo "recipe-lint: no recipe for $agent/'$scenario' — nothing to lint (completeness-gate covers missing recipes)" >&2
     exit 0
   fi
 
-  if ! gaps="$(recipe_lint_gaps "$driver" "$json" "$scenario" "$agent")"; then
+  if ! gaps="$(recipe_lint_gaps "$driver" "$scenario" "$agent")"; then
     {
       echo "driver_gap: $agent/$scenario needs step type(s) $(basename "$driver") doesn't implement:"
       printf '  - gap:%s\n' $gaps
@@ -186,7 +190,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 3
   fi
 
-  if ! sem="$(recipe_semantic_gaps "$driver" "$json" "$scenario" "$agent")"; then
+  if ! sem="$(recipe_semantic_gaps "$driver" "$scenario" "$agent")"; then
     {
       echo "semantic_gap: $agent/$scenario uses step(s) the driver ACCEPTS but does not ELICIT (per $(basename "$driver")'s DRIVE_ELICITS):"
       while IFS= read -r p; do
