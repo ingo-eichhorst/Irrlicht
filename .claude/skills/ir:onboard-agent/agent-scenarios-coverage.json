@@ -1412,7 +1412,7 @@
         "opencode": {
           "agent_supports": "yes",
           "daemon_capability": "full",
-          "driver_capability": "gap:model-select",
+          "driver_capability": "ready",
           "notes": "driver model-select step ported (bbf92830) and a live A-\u003eB switch was proven, but no second model is reachable on this 32GB host (opencode's ~21k-token system prompt overflows LM Studio small-context loads; IONOS_API_TOKEN unset). Recipe authored (eea2f166); records when a viable second model exists."
         },
         "pi": {
