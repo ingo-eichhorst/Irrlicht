@@ -172,6 +172,22 @@ comm -23 \
 # any output = a scenario requires an unknown capability — block and report it.
 ```
 
+**Orphan catalog rows (completeness-gate blind-spot — found 2026-05-29).** A
+catalog row whose id has no matching `scenarios[]` variant (a documentation-only
+/ N.A. scenario with no recipe — `architect-editor-pair`,
+`provider-failover-midturn`, `quota-burndown`) carries no `requires`, so the
+matrix can't evaluate its applicability and enumerates the cell ONLY for agents
+that already have an `assessment.json` on disk — **silently skipping the rest**.
+The completeness gate then reports a column COMPLETE while an orphan-row cell
+sits unassessed and invisible (this is how `claudecode/quota-burndown` hid: gate
+green, cell never enumerated). Run the guard to make those cells loud:
+
+```bash
+bash .claude/skills/ir:onboard-agent/scripts/lib/catalog-orphan-guard.sh
+# exit 1 lists every (agent, orphan-row) cell the gate would skip. Fix each by
+# assessing it, or by giving the catalog row a real scenarios[] definition.
+```
+
 > **Retired with the #510 shard migration:** the *catalog-drift gate*
 > (`catalog[]` ⟺ rollup bijection) and the *consistency gate*
 > (assessment ⟺ `applicable`-flag agreement) — plus their Go tests
@@ -179,7 +195,13 @@ comm -23 \
 > `TestAssessmentScenarioConsistency` — are gone. Both guarded *drift between
 > separate files*; with one shard per cell there is no separate file to drift
 > against. The structural completeness gate and `matrix rollup --check`
-> (`TestRollupInSync`) remain.
+> (`TestRollupInSync`) remain. **Caveat for this #510-transitional branch:**
+> `catalog[]` and `scenarios[]` are still *separate* arrays here, so the retired
+> bijection check no longer guards them — which is precisely what let the orphan
+> rows above slip in. `catalog-orphan-guard.sh` reinstates the relevant
+> protection (sharper-focused: it flags the *cells* the orphans hide, not just
+> file-level drift) until #511's shard-only model makes orphans impossible by
+> construction.
 
 The completeness gate is a thin client of the canonical matrix model
 (`tools/agent-onboarding/internal/matrix`, run via the `matrix query` binary);
