@@ -1546,8 +1546,8 @@
           "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         },
         "claudecode": {
-          "agent_supports": "unknown",
-          "daemon_capability": "unknown",
+          "agent_supports": "yes",
+          "daemon_capability": "incapable",
           "driver_capability": "ready",
           "notes": "catalog cell awaiting assessment + a scenarios[] recipe (#496 RC5)"
         },
