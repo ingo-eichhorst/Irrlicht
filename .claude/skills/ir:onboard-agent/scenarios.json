@@ -3114,7 +3114,7 @@
     },
     {
       "name": "background-subagent",
-      "description": "Stub entry — claudecode's Task tool blocks the parent until the subagent reports back, so the scenario's defining shape (parent ready while named child continues working) is not producible from the current claude CLI. Forward-looking for any future claudecode background-task primitive or for adapters (OpenCode run_in_background) that already expose the capability.",
+      "description": "Parent claude session dispatches one or more FIRE-AND-FORGET background subagents via the Agent/Task tool with run_in_background:true, then FINISHES ITS OWN REPLY (acknowledges the launch and reports back) WITHOUT waiting for the children's results. The defining, user-observable shape (scenario-meanings.md#background-subagent, the unified rule): the parent's own reply reaches end_turn while a detached, named child keeps working, yet the SESSION stays working — it does NOT go ready when the parent's reply ends — because reevaluateParent holds it on hasActiveChildren; SubagentCount(parent) INCLUDES the live child (ComputeSubagentSummary); the session transitions working→ready ONLY after the last background child drains. This is the SAME daemon mechanism as foreground-subagent — the ONLY difference is the timing: here the parent end_turn lands BEFORE the child drain, where foreground's parent end_turn lands AFTER. Why this recipe shape: the single send launches three staggered run_in_background:true Explore agents (≈8/14/20s of work each) and instructs the parent to acknowledge immediately and report back without waiting, so the parent's end_turn lands mid-child; the ~18s sleep holds the children fresh UNDER the 30s SubagentQuietWindow so the daemon doesn't fast-forward a still-writing child out of the held-working window; the staggered child runtimes make the subagent-count decrement observable as a sequence rather than a single jump. How it differs between runs: child UUIDs, PIDs, token counts, exact assistant wording, and sub-second timing vary; the structural arc (parent ready→working, ≥1 parent_linked, held working across the child lifetime, parent working→ready only after the last child drains) is invariant. Where to look if it breaks: if validation shows the parent going ready while a child is still alive, that is a held-working daemon regression (session_detector_subagent.go reevaluateParent / hasActiveChildren); if the recording shows the parent blocked until the children finished (parent end_turn AFTER child drain), the prompt let the dispatch run foreground — re-craft the send to force run_in_background:true + report-immediately, do NOT accept it.",
       "coverage_id": "background-subagent",
       "requires": [
         "headless_mode",
@@ -3125,8 +3125,47 @@
       },
       "by_adapter": {
         "claudecode": {
-          "applicable": false,
-          "reason": "Task tool blocks the parent; no SendMessage-to-background-child primitive in current claudecode CLI. irrlicht's SubagentCount(parent) also does not currently distinguish background from foreground children — both layers need work upstream before this scenario is recordable."
+          "applicable": true,
+          "preconditions": [
+            "claude CLI on PATH and authenticated (subscription or API key). Verified claude 2.1.156, which exposes the Agent/Task tool's run_in_background:true parameter in the top-level REPL (gated only by CLAUDE_CODE_DISABLE_BACKGROUND_TASKS / in-process-teammate context, neither set here).",
+            "irrlichd is recording — --attach against a daemon started with --record (claudecode hooks POST to a hardcoded :7837, so coexist is refused for claudecode).",
+            "claude session can spawn background subagents (default model has the Agent tool with run_in_background exposed)."
+          ],
+          "setup": [
+            "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (claude's trust dialog appears once and the driver auto-accepts).",
+            "No seed file is needed — the background Explore agents run read-only repo-survey tasks against the worktree the driver launches in; their runtime is paced by the prompt (≈8/14/20s) so the held-working window is observable and stays under the 30s SubagentQuietWindow."
+          ],
+          "script": [
+            {
+              "type": "send",
+              "text": "Launch THREE background subagents in a SINGLE message using the Agent tool with subagent_type: Explore and run_in_background: true for every one of them. Agent 1: list every .go file under core/adapters/inbound/agents/ recursively and, before reporting, double-check your count by re-listing each subdirectory one at a time so the work takes at least 8 seconds. Agent 2: find every struct definition under core/domain/session/ and, before reporting, re-read each file a second time to confirm, so the work takes at least 14 seconds. Agent 3: search for every fmt.Errorf call under core/application/ and, before reporting, re-grep each subdirectory individually to verify the count, so the work takes at least 20 seconds. IMPORTANT: these are FIRE-AND-FORGET background agents. Immediately after launching all three in the one message — do NOT wait for any of them to finish, do NOT call BashOutput or read their results — reply with exactly: 'Launched 3 background agents.' Then end your turn. Do not mention or wait for their results."
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 18
+            },
+            {
+              "type": "wait_turn"
+            },
+            {
+              "type": "sleep",
+              "seconds": 6
+            }
+          ],
+          "verify": [
+            "events.jsonl shows the parent UUID entering ready, then a single ready→working transition driven by the user prompt",
+            "transcript.jsonl contains tool_use blocks with name=Agent carrying run_in_background:true (the fire-and-forget Task dispatch; foreground-subagent omits run_in_background)",
+            "events.jsonl contains at least 1 parent_linked event pointing at the parent UUID — each background child sidechain transcript under <parent>/subagents/agent-*.jsonl was discovered and bound",
+            "the parent's OWN assistant reply reaches end_turn (transcript.jsonl: the parent assistant message with stop_reason end_turn / the 'Launched 3 background agents.' reply) BEFORE any background child transitions working→ready — this is the faithfulness gate distinguishing background from foreground",
+            "no state_transition to ready or waiting fires on the parent UUID between the first parent_linked and the final working→ready — the session is HELD working by the live background children even though the parent's own reply already ended",
+            "events.jsonl shows the background children transitioning working→ready over a staggered window (the dashboard subagent count steps down rather than dropping in one tick), and only AFTER the last child drains does the parent UUID transition working→ready exactly once",
+            "final session state for the parent is ready"
+          ],
+          "settings": {},
+          "timeout_seconds": 240
         },
         "opencode": {
           "applicable": false,
