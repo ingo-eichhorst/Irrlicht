@@ -241,6 +241,21 @@ run_live() {
              IN ('stop','interrupted','length','error','content-filter');" 2>/dev/null || echo 0
   }
 
+  # oc_interrupted_total — like oc_turn_total but counts ONLY step-finish parts
+  # whose reason is exactly "interrupted". oc_interrupt uses this (not the broad
+  # terminal set) so it settles on a GENUINE mid-stream cancel and NOT on a turn
+  # that finished naturally on `stop` (or `length`/`error`/`tool-calls`). The
+  # local provider can stall pre-stream so a bounded ESC lands in the dead zone
+  # and the turn completes on `stop`; counting the broad set there false-settled
+  # the interrupt (#492). Counting interrupted-only makes a no-op ESC fail loudly.
+  oc_interrupted_total() {
+    sqlite3 -cmd ".timeout 5000" "$OPENCODE_DB" \
+      "SELECT count(*) FROM part p JOIN session s ON p.session_id = s.id
+       WHERE s.directory = '$RUN_CWD_SQL' AND (s.parent_id IS NULL OR s.parent_id = '')
+         AND json_extract(p.data,'\$.type') = 'step-finish'
+         AND json_extract(p.data,'\$.reason') = 'interrupted';" 2>/dev/null || echo 0
+  }
+
   # Readiness: opencode swallows keystrokes during its boot splash, so wait
   # for the input affordance to render before the first send, then a margin.
   local waited=0 ready=0
@@ -389,28 +404,45 @@ run_live() {
 
   # oc_interrupt — cancel the in-flight turn by sending a bare Escape to the
   # live TUI (opencode binds Escape to "interrupt"), exactly like the
-  # claudecode/codex step_interrupt arms. The cancelled turn lands a step-finish
-  # with reason="interrupted" (parser.go maps it to turn_done), which the
-  # unified terminal counter (oc_turn_total) now includes — so we detect the
-  # settle on that counter crossing the baseline snapshotted just before Escape.
-  # On settle, ADVANCE the shared TURN_BASELINE too, so a following oc_wait_turn
-  # waits for the NEXT turn rather than re-detecting this interrupted one (the
-  # interrupted step-finish already pushed the count past the old baseline).
+  # claudecode/codex step_interrupt arms. A genuinely cancelled turn lands a
+  # step-finish with reason="interrupted" (parser.go maps it to turn_done).
+  #
+  # We settle ONLY on that interrupted-only counter crossing its baseline — NOT
+  # on the broad terminal counter (oc_turn_total). The distinction is the whole
+  # point of this cell (#492): the local provider can stall ~2min pre-stream, so
+  # a bounded ESC lands in the dead zone (no in-flight stream to cancel) and the
+  # turn then completes NATURALLY on reason=stop. The old code settled on ANY
+  # terminal step-finish, so it false-passed that no-op `stop` as a successful
+  # interrupt and a recording proving the WRONG thing could be promoted. Now:
+  #   - a real interrupted part appears  → settle (return 0)
+  #   - a non-interrupted terminal part appears first (stop/length/error) → the
+  #     ESC was a no-op; FAIL LOUDLY (return 1) so the run is not promoted
+  #   - neither within the budget        → timeout (return 1)
+  # On settle, ADVANCE the shared TURN_BASELINE to the current terminal total so
+  # a following oc_wait_turn waits for the NEXT turn rather than re-detecting
+  # this interrupted one (the interrupted step-finish already bumped the count).
   oc_interrupt() {
-    local base now
-    base=$(oc_turn_total)
+    local ibase tbase inow tnow
+    ibase=$(oc_interrupted_total)
+    tbase=$(oc_turn_total)
     tmux send-keys -t "$SESSION" Escape
-    echo "[driver] live interrupt: sent Escape (terminal baseline=$base)" >&2
+    echo "[driver] live interrupt: sent Escape (interrupted baseline=$ibase, terminal baseline=$tbase)" >&2
     while (( $(remaining_seconds) > 0 )); do
-      now=$(oc_turn_total)
-      if (( now > base )); then
-        echo "[driver] live interrupt: settled, terminal step-finish total=$now (> baseline $base)" >&2
-        TURN_BASELINE=$now
+      inow=$(oc_interrupted_total)
+      if (( inow > ibase )); then
+        echo "[driver] live interrupt: settled on a real step-finish reason=interrupted (interrupted total=$inow > baseline $ibase)" >&2
+        TURN_BASELINE=$(oc_turn_total)
         return 0
+      fi
+      tnow=$(oc_turn_total)
+      if (( tnow > tbase )); then
+        echo "[driver] live interrupt: FAILED — the turn ended on a NON-interrupted terminal step-finish (terminal total=$tnow > baseline $tbase) with NO step-finish reason=interrupted: the Escape was a no-op (model finished naturally / stalled pre-stream). Not promotable." >&2
+        EXIT_REASON="interrupt_noop"
+        return 1
       fi
       sleep 2
     done
-    echo "[driver] live interrupt: timeout (terminal total=$(oc_turn_total), needed > baseline $base)" >&2
+    echo "[driver] live interrupt: timeout (interrupted total=$(oc_interrupted_total), needed > baseline $ibase; no interrupted part landed within the budget)" >&2
     EXIT_REASON="timeout"
     return 1
   }
